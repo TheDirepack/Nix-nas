@@ -1,0 +1,161 @@
+{
+  "users": [
+    {
+      "pk": 1,
+      "username": "admin",
+      "name": "NAS Administrator",
+      "email": "admin@example.test",
+      "is_active": true,
+      "is_superuser": true,
+      "groups_obj": [
+        {
+          "pk": "g-admin",
+          "name": "nas_admin"
+        },
+        {
+          "pk": "g-users",
+          "name": "nas_users"
+        },
+        {
+          "pk": "g-ai",
+          "name": "nas_allow_ai"
+        }
+      ],
+      "attributes": {
+        "nasSyncthingDevice": "{\"id\": \"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH\", \"name\": \"NAS Administrator Device\", \"addresses\": [\"dynamic\"]}"
+      }
+    },
+    {
+      "pk": 2,
+      "username": "alice",
+      "name": "Alice",
+      "email": "alice@example.test",
+      "is_active": true,
+      "is_superuser": false,
+      "groups_obj": [
+        {
+          "pk": "g-users",
+          "name": "nas_users"
+        },
+        {
+          "pk": "g-media",
+          "name": "share-media"
+        },
+        {
+          "pk": "g-vault",
+          "name": "nas_allow_vault"
+        },
+        {
+          "pk": "g-syncthing",
+          "name": "nas_allow_syncthing"
+        }
+      ],
+      "attributes": {
+        "nasSyncthingDevices": "[{\"id\": \"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP\", \"name\": \"Alice Device\", \"addresses\": [\"dynamic\"]}]"
+      }
+    },
+    {
+      "pk": 3,
+      "username": "guest",
+      "name": "Guest",
+      "email": "guest@example.test",
+      "is_active": true,
+      "groups_obj": [
+        {
+          "pk": "g-guests",
+          "name": "nas_guests"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": 4,
+      "username": "disabled",
+      "name": "Disabled",
+      "email": "disabled@example.test",
+      "is_active": false,
+      "groups_obj": [
+        {
+          "pk": "g-users",
+          "name": "nas_users"
+        }
+      ],
+      "attributes": {}
+    }
+  ],
+  "groups": [
+    {
+      "pk": "g-admin",
+      "name": "nas_admin",
+      "users_obj": [
+        {
+          "username": "admin"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": "g-users",
+      "name": "nas_users",
+      "users_obj": [
+        {
+          "username": "admin"
+        },
+        {
+          "username": "alice"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": "g-guests",
+      "name": "nas_guests",
+      "users_obj": [
+        {
+          "username": "guest"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": "g-media",
+      "name": "share-media",
+      "users_obj": [
+        {
+          "username": "alice"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": "g-ai",
+      "name": "nas_allow_ai",
+      "users_obj": [
+        {
+          "username": "admin"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": "g-vault",
+      "name": "nas_allow_vault",
+      "users_obj": [
+        {
+          "username": "alice"
+        }
+      ],
+      "attributes": {}
+    },
+    {
+      "pk": "g-syncthing",
+      "name": "nas_allow_syncthing",
+      "users_obj": [
+        {
+          "username": "alice"
+        }
+      ],
+      "attributes": {}
+    }
+  ]
+}

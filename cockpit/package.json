@@ -1,0 +1,35 @@
+{
+  "name": "nixos-nas-cockpit",
+  "version": "2.2.0-alpha.6",
+  "description": "React and PatternFly Cockpit interface for NixOS NAS",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "NODE_ENV=production node build.js",
+    "check": "node build.js --check",
+    "check:source": "node build.js --check-source",
+    "watch": "node build.js --watch",
+    "test": "node --test ../tests/js/*.test.mjs",
+    "test:browser": "playwright test --config e2e/playwright.config.mjs"
+  },
+  "dependencies": {
+    "@patternfly/patternfly": "6.1.0",
+    "@patternfly/react-core": "6.1.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@patternfly/react-icons": "6.1.0",
+    "@patternfly/react-styles": "6.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.13",
+    "@types/react-dom": "18.3.1",
+    "esbuild": "0.28.1",
+    "esbuild-sass-plugin": "3.7.0",
+    "typescript": "6.0.3",
+    "@playwright/test": "1.62.0",
+    "@axe-core/playwright": "4.12.1"
+  }
+}

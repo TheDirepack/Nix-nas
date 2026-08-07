@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixos-nas.local/schemas/first-run.schema.json",
+  "title": "NixOS NAS first-run configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "createPool": {"type": "boolean"},
+        "device": {"type": "string", "pattern": "^/dev/"},
+        "devices": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^/dev/"}},
+        "topology": {"enum": ["single", "stripe", "mirror", "raidz1", "raidz2", "raidz3"]},
+        "wipeDevice": {"type": "boolean"},
+        "wipeDevices": {"type": "boolean"},
+        "ashift": {"type": "integer", "minimum": 9, "maximum": 16}
+      }
+    },
+    "accounts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/setupAccount"}
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": {"enum": ["off", "on-demand", "always"]}
+    },
+    "deactivateMissingManagedAccounts": {"type": "boolean"},
+    "runPreflight": {"type": "boolean"}
+  },
+  "$defs": {
+    "setupAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["username"],
+      "properties": {
+        "username": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "email": {"type": "string", "minLength": 1},
+        "active": {"type": "boolean"},
+        "groups": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "passwordFile": {"type": "string", "pattern": "^/"},
+        "attributes": {"type": "object"}
+      }
+    }
+  }
+}

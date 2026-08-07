@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "storage": {
+    "createPool": false,
+    "devices": [],
+    "topology": "single",
+    "wipeDevices": false,
+    "ashift": 12
+  },
+  "accounts": [
+    {
+      "username": "operator",
+      "name": "Second NAS Administrator",
+      "email": "operator@nas.local",
+      "groups": [
+        "nas_admin",
+        "nas_allow_files",
+        "nas_allow_ai",
+        "nas_allow_vault",
+        "nas_allow_syncthing"
+      ],
+      "passwordFile": "/run/keys/nas-operator-password"
+    },
+    {
+      "username": "alice",
+      "name": "Alice Example",
+      "email": "alice@nas.local",
+      "groups": [
+        "nas_users",
+        "nas_allow_files",
+        "nas_allow_vault",
+        "nas_allow_syncthing"
+      ],
+      "passwordFile": "/run/keys/nas-alice-password",
+      "attributes": {
+        "nasSyncthingDevices": []
+      }
+    },
+    {
+      "username": "guest",
+      "name": "Guest User",
+      "email": "guest@nas.local",
+      "groups": [
+        "nas_guests"
+      ]
+    }
+  ],
+  "features": {
+    "aiRuntime": "on-demand",
+    "aiWorkspace": "on-demand",
+    "grafana": "on-demand"
+  },
+  "deactivateMissingManagedAccounts": false,
+  "runPreflight": true
+}

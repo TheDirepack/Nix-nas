@@ -1,0 +1,64 @@
+rules:
+  - id: nas-python-shell-true
+    languages: [python]
+    severity: ERROR
+    message: NAS-owned Python must not invoke subprocesses through a shell.
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+
+  - id: nas-python-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: Dynamic code execution is forbidden in privileged NAS Python.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+
+  - id: nas-python-sql-fstring
+    languages: [python]
+    severity: ERROR
+    message: SQL statements must not be constructed with f-strings.
+    pattern-either:
+      - pattern: $DB.execute(f"...")
+      - pattern: $DB.executemany(f"...")
+      - pattern: $DB.executescript(f"...")
+
+  - id: nas-python-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: Unsafe Python deserialization is forbidden in NAS-owned code.
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+      - pattern: marshal.load(...)
+      - pattern: marshal.loads(...)
+
+  - id: nas-python-insecure-tempfile
+    languages: [python]
+    severity: ERROR
+    message: tempfile.mktemp is race-prone; use a securely created temporary file or directory.
+    pattern: tempfile.mktemp(...)
+
+  - id: nas-python-bulk-archive-extract
+    languages: [python]
+    severity: WARNING
+    message: Bulk archive extraction requires an explicit reviewed traversal guard.
+    pattern: $ARCHIVE.extractall(...)
+
+  - id: nas-react-dangerous-html
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: NAS UI must rely on React escaping rather than dangerous raw HTML sinks.
+    pattern-either:
+      - pattern: $EL.innerHTML = $VALUE
+      - pattern: $EL.outerHTML = $VALUE
+      - pattern: $EL.insertAdjacentHTML(...)
+      - pattern: document.write(...)
+      - pattern: document.writeln(...)
+      - pattern: eval(...)
+      - pattern: Function(...)
+      - pattern: $EL.srcdoc = $VALUE
+      - pattern: $EL.setAttribute("srcdoc", $VALUE)
+      - pattern: $EL.setAttribute("on$EVENT", $VALUE)

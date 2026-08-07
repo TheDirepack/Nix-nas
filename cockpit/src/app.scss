@@ -1,0 +1,76 @@
+.nas-page {
+  min-height: 100vh;
+  overflow-wrap: anywhere;
+}
+
+.nas-page__header {
+  align-items: center;
+}
+
+.nas-page__subtitle,
+.nas-muted {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.nas-section-heading {
+  margin-bottom: var(--pf-t--global--spacer--md);
+}
+
+.nas-summary-card {
+  height: 100%;
+}
+
+.nas-status-stack > * + * {
+  margin-top: var(--pf-t--global--spacer--sm);
+}
+
+.nas-code-output {
+  max-height: 20rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.nas-feature-card {
+  height: 100%;
+}
+
+.nas-feature-card--enabled {
+  border-color: var(--pf-t--global--border--color--status--success--default);
+}
+
+.nas-feature-labels,
+.nas-link-list,
+.nas-action-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+.nas-table-wrap {
+  overflow-x: auto;
+}
+
+.nas-table {
+  min-width: 52rem;
+}
+
+.nas-table code {
+  white-space: nowrap;
+}
+
+.nas-table__excluded {
+  opacity: .6;
+}
+
+.nas-password-form {
+  max-width: 56rem;
+}
+
+.nas-device-list code {
+  overflow-wrap: anywhere;
+}
+
+.nas-output-empty {
+  display: none;
+}

@@ -1,0 +1,25 @@
+[book]
+title = "NixOS NAS Help"
+authors = ["NixOS NAS project"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+smart-punctuation = true
+git-repository-icon = "fa-github"
+
+[output.html.search]
+enable = true
+limit-results = 40
+use-boolean-and = true
+boost-title = 3
+boost-hierarchy = 2
+boost-paragraph = 1
+expand = true
+heading-split-level = 3

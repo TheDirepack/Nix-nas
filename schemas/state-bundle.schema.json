@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixos-nas.local/schemas/state-bundle.schema.json",
+  "title": "NixOS NAS mutable state bundle manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "registryVersion",
+    "registryDigest",
+    "producerVersion",
+    "sourceRevision",
+    "createdAt",
+    "hostName",
+    "snapshotEpoch",
+    "snapshotStartedAt",
+    "snapshotCompletedAt",
+    "quiescedUnits",
+    "includeSensitive",
+    "complete",
+    "signatureAlgorithm",
+    "signature",
+    "entries"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "registryVersion": {
+      "const": 1
+    },
+    "registryDigest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "producerVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hostName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "includeSensitive": {
+      "type": "boolean"
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "source",
+          "kind",
+          "sensitive",
+          "status",
+          "payload",
+          "digest",
+          "comparisonDigest"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "path",
+              "database"
+            ]
+          },
+          "sensitive": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "captured",
+              "omitted-sensitive",
+              "absent",
+              "missing-required"
+            ]
+          },
+          "payload": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "comparisonDigest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "signatureAlgorithm": {
+      "const": "hmac-sha256"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "snapshotEpoch": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "snapshotStartedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "snapshotCompletedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "quiescedUnits": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

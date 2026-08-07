@@ -1,0 +1,10 @@
+# Representative Telegraf -> VictoriaMetrics Influx line protocol after the
+# configured SMART converter has normalized health_ok to a numeric field.
+system,host=nas-test uptime=12345i
+cpu,host=nas-test,cpu=cpu-total usage_active=12.5
+disk,host=nas-test,path=/,fstype=zfs used_percent=41.25
+systemd_units,host=nas-test,name=caddy.service active_code=0i
+smart_device,host=nas-test,device=/dev/sda health_ok=1,temp_c=34
+smart_device,host=nas-test,device=/dev/sdb health_ok=0,temp_c=51
+zfs,host=nas-test arc_size=1048576i
+upsd,host=nas-test,ups=ups load_percent=18.0,battery_charge=100.0

@@ -1,0 +1,68 @@
+#!/usr/bin/env expect
+set timeout 7200
+log_user 1
+
+if {$argc < 1} {
+  puts stderr "usage: install.expect qemu-system-x86_64 [arguments...]"
+  exit 2
+}
+
+spawn -noecho {*}$argv
+
+set shell_ready 0
+while {!$shell_ready} {
+  expect {
+    -re {nixos login:} {
+      send -- "root\r"
+    }
+    -re {login:} {
+      send -- "root\r"
+    }
+    -re {Password:} {
+      send -- "\r"
+    }
+    -re {nixos@[^\r\n]*[$] $} {
+      send -- "sudo -i\r"
+    }
+    -re {root@[^\r\n]*# $} {
+      set shell_ready 1
+    }
+    -re {bash-[^#]*# $} {
+      set shell_ready 1
+    }
+    timeout {
+      puts stderr "Timed out waiting for the NixOS installer shell"
+      exit 3
+    }
+    eof {
+      puts stderr "QEMU exited before the NixOS installer shell became ready"
+      exit 4
+    }
+  }
+}
+
+send -- "mkdir -p /mnt-source /mnt-ssh-key && mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 nas-source /mnt-source && mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 nas-ssh-key /mnt-ssh-key && NAS_INSTALL_SSH_PUBLIC_KEY=/mnt-ssh-key/admin.pub bash /mnt-source/tests/vm/install-system.sh; rc=\$?; echo __NAS_INSTALL_RC__\$rc\r"
+expect {
+  -re {NIXOS_NAS_INSTALL_COMPLETE} { }
+  -re {__NAS_INSTALL_RC__([1-9][0-9]*)} {
+    puts stderr "NixOS installation command failed"
+    exit 5
+  }
+  timeout {
+    puts stderr "Timed out while installing NixOS"
+    exit 6
+  }
+  eof {
+    puts stderr "QEMU exited during NixOS installation"
+    exit 7
+  }
+}
+
+expect {
+  -re {__NAS_INSTALL_RC__0} { }
+  timeout { }
+  eof { exit 0 }
+}
+send -- "poweroff\r"
+expect eof
+exit 0

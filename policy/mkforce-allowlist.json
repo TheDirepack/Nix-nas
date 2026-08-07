@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "entries": [
+    {
+      "path": "modules/nas/config/systemd-services.nix",
+      "setting": "UMask",
+      "count": 1,
+      "reason": "CopyParty's upstream NixOS module defines a conflicting UMask; the NAS share-group write policy requires 0007."
+    },
+    {
+      "path": "modules/nas/config/observability.nix",
+      "setting": "AmbientCapabilities",
+      "count": 1,
+      "reason": "The upstream Telegraf unit grants CAP_NET_RAW for the ping input; this configuration has no ping input and explicitly removes the unused ambient capability."
+    }
+  ]
+}

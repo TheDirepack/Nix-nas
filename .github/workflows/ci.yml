@@ -1,0 +1,343 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cockpit:
+    name: Build shared Cockpit dependency graph
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve one dependency graph and build one reviewed bundle
+        run: |
+          set -euo pipefail
+          test -f cockpit/package-lock.json
+          npm --prefix cockpit ci --no-audit --no-fund
+          npm --prefix cockpit audit --audit-level=high
+          npm --prefix cockpit run build
+          npm --prefix cockpit run check
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
+      - name: Retain the exact lock and output bytes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cockpit-bundle
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            cockpit/package-lock.json
+            cockpit/dist
+
+  test:
+    name: Source unit and syntax tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Python unit tests
+        run: |
+          ./scripts/validate-python-syntax.py
+          ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+      - name: Maintainer core integration tests
+        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_core.py'
+      - name: Maintainer matrix integration tests
+        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
+      - name: Maintainer release integration tests
+        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
+      - name: Tooling contract tests
+        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
+      - name: Shell syntax
+        run: |
+          while IFS= read -r -d '' script; do bash -n "$script"; done < <(find scripts tests/vm -type f -name '*.sh' -print0)
+      - name: JavaScript and JSX source
+        run: |
+          for script in cockpit/src/*.js; do node --check "$script"; done
+          node cockpit/build.js --check-source
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
+      - name: JSON and renderer checks
+        run: NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
+
+  test-nonroot:
+    name: Unprivileged unit-test hermeticity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run the fast suite without root-owned state
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /bin/bash nas-ci
+          sudo chown -R nas-ci:nas-ci "$GITHUB_WORKSPACE"
+          sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
+            ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+
+  fuzz:
+    name: Fuzz and property invariants
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Deterministic parser and boundary fuzzing
+        run: |
+          ./scripts/fuzz.py --cases 5000 --seed 0x4e41533232
+          ./scripts/fuzz-executables.py --cases 5 --seed 0x534352495054
+          python3 -m unittest tests.test_fuzz_boundaries -v
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Hypothesis property tests
+        run: nix develop .#test -c python -m unittest tests.test_property_invariants -v
+
+  security:
+    name: Static security and injection checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Project security regression suite
+        run: ./scripts/run-security-tests.py
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Semgrep local rules
+        run: nix develop .#test -c semgrep --config .semgrep.yml --error services scripts cockpit/src web
+      - name: Bandit privileged Python scan
+        run: nix develop .#test -c bandit -q -r services scripts -ll -ii
+
+  browser:
+    name: Browser rendering, layout, XSS, and accessibility
+    needs: cockpit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - name: Restore exact test dependencies
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Install pinned Playwright browser engines
+        run: npm --prefix cockpit exec -- playwright install --with-deps chromium firefox webkit
+      - name: Cross-browser UI security suite
+        run: npm --prefix cockpit run test:browser
+      - name: Retain browser failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-test-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            cockpit/playwright-report
+            cockpit/test-results
+
+  source-archive:
+    name: Packaged-source round trip
+    needs: [test, test-nonroot, fuzz, security]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package the reviewed source tree
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/nas-source-release"
+          mkdir -p "$out"
+          NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
+          archive=$(find "$out" -maxdepth 1 -type f -name '*.zip' -print -quit)
+          test -n "$archive"
+          printf '%s\n' "$archive" > "$RUNNER_TEMP/source-archive-path"
+      - name: Extract as an untrusted release consumer and verify it
+        run: |
+          set -euo pipefail
+          archive=$(cat "$RUNNER_TEMP/source-archive-path")
+          extract="$RUNNER_TEMP/extracted-source"
+          mkdir -p "$extract"
+          python3 - "$archive" "$extract" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          archive = pathlib.Path(sys.argv[1])
+          destination = pathlib.Path(sys.argv[2]).resolve()
+          with zipfile.ZipFile(archive) as zf:
+              names = zf.namelist()
+              if not names:
+                  raise SystemExit("source archive is empty")
+              if len(names) != len(set(names)):
+                  raise SystemExit("source archive contains duplicate members")
+              roots = set()
+              for member in zf.infolist():
+                  raw = member.filename
+                  path = pathlib.PurePosixPath(raw)
+                  if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+                      raise SystemExit(f"unsafe archive member: {raw}")
+                  roots.add(path.parts[0])
+                  kind = (member.external_attr >> 16) & 0o170000
+                  if member.is_dir() or kind not in {0, 0o100000}:
+                      raise SystemExit(f"non-regular archive member: {raw}")
+              if len(roots) != 1:
+                  raise SystemExit(f"source archive must have exactly one root: {sorted(roots)}")
+          PY
+          # Python's zipfile extractor intentionally ignores Unix executable bits.
+          # Use Info-ZIP after validating the member set so shipped scripts retain 0755.
+          unzip -q "$archive" -d "$extract"
+          root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$root"
+          cd "$root"
+          sha256sum -c MANIFEST.sha256
+          NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
+          nix flake check --no-build --show-trace
+      - name: Retain source-archive evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-archive-evidence
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/nas-source-release/*.zip
+            ${{ runner.temp }}/nas-source-release/*.sha256
+            ${{ runner.temp }}/nas-source-release/*.provenance.json
+            ${{ runner.temp }}/nas-source-release/*.MANIFEST.sha256
+
+  static:
+    name: Nix evaluation and lint
+    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Repository preflight
+        env:
+          NAS_PREFLIGHT_REQUIRE_COMPLETE: "1"
+        run: ./scripts/preflight.sh
+      - name: Branch coverage floors (66% aggregate minimum)
+        run: |
+          nix shell nixpkgs#python3Packages.coverage -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          python3 scripts/check-coverage.py coverage.json --total-floor 66
+      - name: Secret transaction fault injection
+        run: nix shell nixpkgs#bats -c bats tests/bats
+      - name: ShellCheck
+        run: nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
+      - name: Python correctness lint
+        run: nix shell nixpkgs#ruff -c ruff check services tests scripts
+      - name: Python formatting
+        run: nix shell nixpkgs#ruff -c ruff format --check services tests scripts
+      - name: Python type checking
+        run: nix shell nixpkgs#pyright -c pyright --project pyproject.toml
+      - name: JavaScript formatting
+        run: nix shell nixpkgs#prettier -c prettier --check "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "web/portal/*.html" "tests/js/*.mjs" prettier.config.mjs
+      - name: Evaluate valid and intentionally-invalid configuration matrix
+        run: ./scripts/nix-config-matrix.sh
+
+  build:
+    name: Build NixOS closures
+    needs: [cockpit, static]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build testable systems
+        run: |
+          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
+          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
+
+  integration:
+    name: Full-stack QEMU integration
+    needs: [cockpit, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_kvm: true
+      - name: Run NixOS VM integration test
+        run: nix build .#checks.x86_64-linux.nas-vm .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
+      - name: Record VM evidence
+        run: |
+          mkdir -p release-evidence
+          printf '%s\n' "${GITHUB_SHA}" > release-evidence/commit.txt
+          printf '%s\n' "nas-vm nas-vm-encrypted" > release-evidence/checks.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qemu-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: release-evidence
+
+  installer:
+    name: Official-ISO install, adversarial scan, and reboot
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    needs: [cockpit, build]
+    runs-on: ubuntu-24.04
+    env:
+      # Configure this repository variable with an immutable ZAP image digest.
+      # The QEMU harness skips ZAP explicitly when it is unset rather than pulling a floating tag.
+      NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
+      NAS_ZAP_MODE: full
+      # This job scans only the disposable loopback-forwarded installer VM.
+      NAS_ZAP_CONFIRM_ACTIVE: "1"
+      NAS_ZAP_OUT_DIR: ${{ runner.temp }}/zap-report
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_kvm: true
+      - name: Install from the official NixOS ISO and reboot-test the appliance
+        run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
+      - name: Record installer evidence
+        run: |
+          mkdir -p release-evidence
+          printf '%s\n' "${GITHUB_SHA}" > release-evidence/commit.txt
+          printf '%s\n' "official-iso-install-reboot" > release-evidence/checks.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installer-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: release-evidence
+      - name: Retain dynamic web-security reports
+        if: always() && env.NAS_ZAP_IMAGE != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-security-reports
+          if-no-files-found: error
+          retention-days: 30
+          path: ${{ runner.temp }}/zap-report

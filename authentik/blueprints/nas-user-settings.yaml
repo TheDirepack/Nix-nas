@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+version: 1
+metadata:
+  name: NAS user settings
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+entries:
+  - model: authentik_rbac.role
+    identifiers:
+      name: NAS automation
+    attrs:
+      permissions:
+        - authentik_core.view_user
+        - authentik_core.add_user
+        - authentik_core.change_user
+        - authentik_core.reset_user_password
+        - authentik_core.view_group
+        - authentik_core.add_group
+        - authentik_core.change_group
+        - authentik_core.enable_group_superuser
+
+  - model: authentik_stages_prompt.prompt
+    identifiers:
+      name: nas-user-settings-syncthing-devices
+    attrs:
+      field_key: attributes.nasSyncthingDevices
+      label: Syncthing devices
+      type: text_area
+      required: false
+      order: 300
+      placeholder: '[{"deviceID":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop","addresses":["dynamic"]}]'
+      placeholder_expression: false
+      initial_value: |
+        import json
+        value = request.user.attributes.get("nasSyncthingDevices", "[]")
+        if isinstance(value, str):
+            return value
+        return json.dumps(value, indent=2, sort_keys=True)
+      initial_value_expression: true
+      sub_text: >-
+        Optional JSON array of your Syncthing devices. Removing an entry removes
+        it from the NAS-managed personal backup folder on the next reconciliation.
+
+  - model: authentik_policies_expression.expressionpolicy
+    identifiers:
+      name: nas-user-settings-validate-syncthing-devices
+    attrs:
+      expression: |
+        import json
+        import re
+
+        raw = request.context.get("prompt_data", {}).get(
+            "attributes.nasSyncthingDevices", ""
+        )
+        if raw in (None, ""):
+            return True
+
+        if isinstance(raw, str):
+            try:
+                devices = json.loads(raw)
+            except (TypeError, ValueError):
+                ak_message("Syncthing devices must be a valid JSON array.")
+                return False
+        else:
+            devices = raw
+
+        if not isinstance(devices, list):
+            ak_message("Syncthing devices must be a JSON array.")
+            return False
+        if len(devices) > 32:
+            ak_message("At most 32 Syncthing devices may be configured.")
+            return False
+
+        device_id = re.compile(
+            r"^[A-Z2-7]{7}(?:-[A-Z2-7]{7}){7}$"
+        )
+        seen = set()
+        for device in devices:
+            if not isinstance(device, dict):
+                ak_message("Every Syncthing device must be a JSON object.")
+                return False
+
+            identifier = device.get("deviceID", device.get("id"))
+            if not isinstance(identifier, str):
+                ak_message("Every device needs a valid Syncthing deviceID.")
+                return False
+            identifier = identifier.strip().upper()
+            if not device_id.fullmatch(identifier):
+                ak_message("Every device needs a valid Syncthing deviceID.")
+                return False
+            if identifier in seen:
+                ak_message("Syncthing deviceIDs must be unique.")
+                return False
+            seen.add(identifier)
+
+            name = device.get("name", "")
+            if not isinstance(name, str) or len(name) > 128:
+                ak_message("Device names must be text no longer than 128 characters.")
+                return False
+
+            addresses = device.get("addresses", ["dynamic"])
+            if not isinstance(addresses, list) or not addresses or len(addresses) > 32:
+                ak_message("Device addresses must be a non-empty array of at most 32 values.")
+                return False
+            if any(
+                not isinstance(address, str)
+                or not address.strip()
+                or len(address) > 512
+                or any(ord(character) < 32 or ord(character) == 127 for character in address)
+                for address in addresses
+            ):
+                ak_message("Every Syncthing device address must be a short printable string.")
+                return False
+
+        return True
+
+  - model: authentik_stages_prompt.promptstage
+    identifiers:
+      name: nas-user-settings-profile
+    attrs:
+      fields:
+        - !Find [authentik_stages_prompt.prompt, [name, nas-user-settings-syncthing-devices]]
+      validation_policies:
+        - !Find [authentik_policies_expression.expressionpolicy, [name, nas-user-settings-validate-syncthing-devices]]
+
+  - model: authentik_stages_user_write.userwritestage
+    identifiers:
+      name: nas-user-settings-write
+    attrs:
+      user_creation_mode: never_create
+
+  - model: authentik_flows.flow
+    identifiers:
+      slug: nas-user-settings
+    attrs:
+      name: NAS user settings
+      title: NAS user settings
+      designation: stage_configuration
+      authentication: require_authenticated
+      layout: stacked
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, nas-user-settings]]
+      stage: !Find [authentik_stages_prompt.promptstage, [name, nas-user-settings-profile]]
+      order: 10
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, nas-user-settings]]
+      stage: !Find [authentik_stages_user_write.userwritestage, [name, nas-user-settings-write]]
+      order: 20

@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ZFS_DEVICE="${1:-${NAS_TEST_ZFS_DEVICE:-/dev/vdb}}"
+KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
+TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-600}"
+
+log() { printf '\n==> %s\n' "$*"; }
+pass() { printf 'PASS: %s\n' "$*"; }
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+on_error() {
+  local rc=$?
+  printf '\nEncrypted VM validation failed with status %s.\n' "$rc" >&2
+  systemctl --failed --no-pager >&2 || true
+  journalctl -b -n 250 --no-pager >&2 || true
+  zpool status >&2 || true
+  exit "$rc"
+}
+trap on_error ERR
+
+wait_active() {
+  local unit=$1
+  timeout "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"
+}
+
+wait_inactive() {
+  local unit=$1
+  timeout "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"
+}
+
+run_as_admin() {
+  runuser -u admin -- env HOME=/home/admin PATH="$PATH" bash -lc "$1"
+}
+
+activate_secrets() {
+  run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | timeout 600 nas-secrets activate-stdin"
+}
+
+log "Verify encrypted fixture starts locked"
+wait_active cockpit.socket
+[[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
+! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
+
+for _ in $(seq 1 60); do
+  [[ -b "$ZFS_DEVICE" ]] && break
+  sleep 1
+done
+[[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
+
+log "Run first-time setup through the encrypted-ZFS path"
+install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
+cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
+{
+  "schemaVersion": 1,
+  "storage": {
+    "createPool": true,
+    "device": "$ZFS_DEVICE",
+    "wipeDevice": true
+  },
+  "accounts": [],
+  "features": {},
+  "runPreflight": false
+}
+EOFSETUP
+chown admin:users /var/lib/nas-test/setup/encrypted-first-run.json
+chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
+run_as_admin "nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'"
+plan_json="$(run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/encrypted-first-run.json")"
+plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
+stale_digest="$(printf '0%.0s' {1..64})"
+if run_as_admin "nas-setup first-run --config /var/lib/nas-test/setup/encrypted-first-run.json --confirm-plan-digest '$stale_digest'" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
+  fail "first-run accepted a stale plan digest"
+fi
+grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err || fail "stale plan digest failure was not diagnostic"
+pass "first-run rejects a stale plan digest before mutation"
+run_as_admin "printf '%s\n' '$KEEPASS_PASSWORD' | timeout 1200 nas-setup first-run \
+  --config /var/lib/nas-test/setup/encrypted-first-run.json \
+  --keepass-password-stdin \
+  --confirm-plan-digest '$plan_digest' \
+  --confirm-storage-device '$ZFS_DEVICE' \
+  --allow-destructive-storage \
+  --skip-preflight" >/tmp/nas-encrypted-first-run.json
+jq -e '
+  .database.result == "created" and
+  .storage.createdPool == true and
+  .storage.createdDataset == true and
+  .storage.encrypted == true and
+  .preflight == false
+' /tmp/nas-encrypted-first-run.json >/dev/null
+wait_active nas-protected-services.target
+wait_active nas-zfs-unlock.service
+wait_active nas-zfs-mount-guard.service
+nas-zfs-mount-check
+[[ "$(zfs get -H -o value encryptionroot tank/nas)" == "tank/nas" ]]
+[[ "$(zfs get -H -o value keyformat tank/nas)" == "hex" ]]
+[[ "$(zfs get -H -o value keylocation tank/nas)" == "file:///run/nas-secrets/zfs/dataset-key" ]]
+[[ "$(zfs get -H -o value keystatus tank/nas)" == "available" ]]
+[[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
+[[ -f /run/nas-secrets/zfs/dataset-key ]]
+[[ "$(stat -c '%a:%U:%G' /run/nas-secrets/zfs/dataset-key)" == "400:root:root" ]]
+nas-setup status | jq -e '
+  .runtimeSecretsActive == true and
+  .poolPresent == true and
+  .datasetPresent == true and
+  .setupState.storage.encrypted == true
+' >/dev/null
+pass "nas-setup created and activated the encrypted storage stack"
+
+! run_as_admin "nas-zfs-create-encrypted-dataset" >/tmp/nas-zfs-create-existing.log 2>&1 || \
+  fail "direct encrypted-dataset command recreated an existing encryption root"
+grep -q 'already exists' /tmp/nas-zfs-create-existing.log
+pass "direct encrypted-dataset command refuses to modify an existing encryption root"
+
+log "Export and verify the offline recovery key"
+rm -f /tmp/nas-zfs-recovery.key
+run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key"
+[[ "$(stat -c '%a:%U:%G' /tmp/nas-zfs-recovery.key)" == "400:root:root" ]]
+cmp -s /tmp/nas-zfs-recovery.key /run/nas-secrets/zfs/dataset-key
+pass "recovery-key export matches the staged KeePassXC key"
+
+log "Lock the dataset and prove reactivation restores it"
+run_as_admin "nas-zfs-lock"
+wait_inactive nas-protected-services.target
+wait_inactive nas-zfs-mount-guard.service
+wait_inactive nas-zfs-unlock.service
+[[ "$(zfs get -H -o value keystatus tank/nas)" == "unavailable" ]]
+[[ "$(zfs get -H -o value mounted tank/nas)" == "no" ]]
+[[ ! -e /run/nas-secrets/zfs/dataset-key ]]
+
+activate_secrets
+wait_active nas-protected-services.target
+nas-zfs-mount-check
+[[ "$(zfs get -H -o value keystatus tank/nas)" == "available" ]]
+[[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
+pass "nas-zfs-lock and secret reactivation complete a full lock/unlock cycle"
+
+systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
+[[ ! -s /tmp/nas-encrypted-failed ]] || { cat /tmp/nas-encrypted-failed >&2; fail "unexpected failed units remain"; }
+printf '\nALL ENCRYPTED ZFS VM TESTS PASSED\n'

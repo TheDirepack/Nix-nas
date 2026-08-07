@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "accounts": [
+    {
+      "username": "alice",
+      "name": "Alice",
+      "email": "alice@nas.local",
+      "active": true,
+      "groups": ["nas_users", "nas_allow_files"],
+      "attributes": {}
+    }
+  ],
+  "deactivateMissingManagedAccounts": false
+}

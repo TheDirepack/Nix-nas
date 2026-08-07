@@ -1,0 +1,2 @@
+{ ... }:
+{ nas.trustedInterfaces = [ "lo" ]; }

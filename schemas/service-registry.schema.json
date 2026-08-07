@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixos-nas.local/schemas/service-registry.schema.json",
+  "title": "NixOS NAS service endpoint registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "endpoints"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "publicPath", "port", "units", "access", "available", "linkKey"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1},
+          "publicPath": {"type": "string", "pattern": "^/.*/$"},
+          "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "units": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_.@-]+\\.(service|socket|timer)$"}},
+          "access": {"enum": ["public", "admin", "ai", "vault", "api-key", "native"]},
+          "available": {"type": "boolean"},
+          "linkKey": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

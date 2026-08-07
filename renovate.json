@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "dependencyDashboard": true,
+  "labels": [
+    "dependencies"
+  ],
+  "enabledManagers": [
+    "nix",
+    "custom.regex",
+    "github-actions"
+  ],
+  "packageRules": [
+    {
+      "description": "Keep OCI deployments immutable and review image changes as PRs",
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": true,
+      "rangeStrategy": "pin"
+    },
+    {
+      "description": "Group Nix flake input maintenance",
+      "matchManagers": [
+        "nix"
+      ],
+      "groupName": "Nix flake inputs"
+    },
+    {
+      "description": "Group GitHub Actions maintenance",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "GitHub Actions"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)hfdownloader-image\\.nix$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>[^\\s]+)\\r?\\n\\s*tag\\s*=\\s*\"(?<currentValue>[^\"]+)\";"
+      ],
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/modules/nas/options/(management|power)\\.nix$/"
+      ],
+      "matchStrings": [
+        "default\\s*=\\s*\"(?<depName>(?:docker\\.io|ghcr\\.io)/[^:\"]+):(?<currentValue>[^@\"]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?\";"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    }
+  ]
+}

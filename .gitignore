@@ -1,0 +1,34 @@
+# Nix and development environments
+result
+result-*
+.direnv/
+.envrc
+.venv/
+
+# Language/tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+
+# Local secrets and first-run input
+secrets/
+setup/first-run.json
+
+# VM/test artifacts
+*.iso
+*.qcow2
+*.log
+.qemu-state/
+
+# Packaged releases
+*.zip
+*.zip.sha256
+# Fuzzing and browser-test artifacts
+.fuzz-crashes/
+cockpit/playwright-report/
+cockpit/test-results/
+coverage.json
+

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NAS</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background:#111; color:#eee; }
+    body { max-width:70rem; margin:0 auto; padding:3rem 1.25rem; }
+    header { margin-bottom:2rem; }
+    h1 { margin:0 0 .35rem; font-size:clamp(2rem,6vw,4rem); }
+    p { color:#bbb; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:1rem; }
+    a { display:block; padding:1.15rem; border:1px solid #444; border-radius:.75rem; color:#fff; text-decoration:none; background:#1b1b1b; }
+    a:hover, a:focus { border-color:#aaa; background:#242424; }
+    strong { display:block; margin-bottom:.35rem; }
+    small { color:#aaa; }
+    footer { margin-top:2rem; font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NAS</h1>
+    <p>Signed in as <strong style="display:inline">{{placeholder "http.request.header.Remote-Name" | html}}</strong>.</p>
+  </header>
+  <main class="grid">
+    {{if contains "nas_admin" (placeholder "http.request.header.Remote-Groups")}}
+    <a href="/shares/"><strong>Files and shares</strong><small>CopyParty volumes, uploads, WebDAV, and share links.</small></a>
+    {{else if contains "nas_allow_files" (placeholder "http.request.header.Remote-Groups")}}
+    <a href="/shares/users/{{placeholder "http.request.header.Remote-User" | urlquery}}/"><strong>Files and shares</strong><small>Your CopyParty volume, uploads, WebDAV, and native share links.</small></a>
+    {{end}}
+    <a href="/settings/"><strong>Account settings</strong><small>Password, MFA, and profile settings in Authentik.</small></a>
+    {{if or (contains "nas_allow_syncthing" (placeholder "http.request.header.Remote-Groups")) (contains "nas_admin" (placeholder "http.request.header.Remote-Groups"))}}
+    <a href="/settings/syncthing"><strong>Syncthing devices</strong><small>Manage the device declarations attached to your account.</small></a>
+    {{end}}
+    {{if or (contains "nas_allow_ai" (placeholder "http.request.header.Remote-Groups")) (contains "nas_admin" (placeholder "http.request.header.Remote-Groups"))}}
+    <a href="/ai/"><strong>AI workspace</strong><small>Open WebUI and approved local models.</small></a>
+    {{end}}
+    {{if or (contains "nas_allow_vault" (placeholder "http.request.header.Remote-Groups")) (contains "nas_admin" (placeholder "http.request.header.Remote-Groups"))}}
+    <a href="/vault/"><strong>Vault</strong><small>Your Vaultwarden account.</small></a>
+    {{end}}
+    {{if contains "nas_admin" (placeholder "http.request.header.Remote-Groups")}}
+    <a href="/console/"><strong>Administration</strong><small>Cockpit appliance management and documentation.</small></a>
+    <a href="/shares/admin/copyparty-config/"><strong>CopyParty configuration</strong><small>Edit native volumes, ACLs, flags, and reload configuration.</small></a>
+    <a href="/syncthing/"><strong>Syncthing administration</strong><small>Global Syncthing UI; ordinary users configure their devices in Authentik.</small></a>
+    <a href="/identity/if/admin/"><strong>Identity administration</strong><small>Users, groups, flows, MFA, providers, and applications.</small></a>
+    {{end}}
+  </main>
+  <footer>Share policy belongs to CopyParty. Identity and user-editable profile settings belong to Authentik.</footer>
+</body>
+</html>
