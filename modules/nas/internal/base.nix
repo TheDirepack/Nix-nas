@@ -119,7 +119,7 @@ let
 in
 {
   inherit
-    cfg serviceRegistry lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
+    cfg lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir
     featureCatalogPath featureSchemaPath featureStatePath featureRuntimePath onDemandGateSocket
     authentikPort cockpitPort syncthingGuiPort vaultwardenPort

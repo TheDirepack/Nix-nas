@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "requires": {
+    "cockpit": "300"
+  },
+  "menu": {
+    "index": {
+      "label": "NAS Overview",
+      "order": 20,
+      "keywords": [
+        "NAS",
+        "ZFS",
+        "accounts",
+        "AI",
+        "backup",
+        "updates"
+      ]
+    },
+    "documentation": {
+      "label": "NAS Help",
+      "order": 21,
+      "path": "docs/index.html",
+      "keywords": [
+        "documentation",
+        "help",
+        "configuration",
+        "copyparty",
+        "syncthing",
+        "recovery"
+      ]
+    }
+  },
+  "content-security-policy": "default-src 'self'; connect-src 'self' ws: wss:; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; worker-src 'self' blob:"
+}

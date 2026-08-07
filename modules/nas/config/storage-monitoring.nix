@@ -269,7 +269,7 @@ PYSQLITEBACKUP
           -D "$pgdata" --auth=trust --no-locale >/dev/null
         ${pkgs.util-linux}/bin/runuser -u postgres -- \
           ${config.services.postgresql.package}/bin/pg_ctl \
-          -D "$pgdata" -o "-k $pgsocket -p 55432 -c listen_addresses=''" \
+          -D "$pgdata" -o "-k $pgsocket -p 55432 -c listen_addresses=\"\"" \
           -w start >/dev/null
         ${pkgs.util-linux}/bin/runuser -u postgres -- \
           ${config.services.postgresql.package}/bin/createdb \

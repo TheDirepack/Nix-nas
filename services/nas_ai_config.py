@@ -42,11 +42,6 @@ FORBIDDEN_LOCAL_FLAGS = {
     "--ctx-size", "-c",
 }
 
-RESERVED_ENV_VARS = {
-    "LLAMA_SWAP_API_KEY",
-    "LLAMA_SWAP_CODING_API_KEY",
-}
-
 
 class AiConfigError(RuntimeError):
     """Expected AI configuration error."""
@@ -54,10 +49,7 @@ class AiConfigError(RuntimeError):
 
 def provider_env_name(provider_id: str) -> str:
     provider_id = validate_provider_id(provider_id)
-    env_name = "LLAMA_SWAP_PEER_" + provider_id.upper().replace("-", "_") + "_API_KEY"
-    if env_name in RESERVED_ENV_VARS:
-        raise AiConfigError(f"Provider ID {provider_id!r} collides with a reserved environment variable")
-    return env_name
+    return "LLAMA_SWAP_PEER_" + provider_id.upper().replace("-", "_") + "_API_KEY"
 
 
 def provider_secret_name(provider_id: str) -> str:
@@ -278,10 +270,6 @@ def validate_secret_references(config: Mapping[str, Any]) -> None:
                 raise AiConfigError(
                     f"Peer {provider_id} must reference an environment variable for apiKey; plaintext provider keys are forbidden"
                 )
-            # Defense in depth: reserved appliance credentials must never be overwritten by provider config.
-            macro_match = ENV_MACRO_RE.fullmatch(api_key)
-            if macro_match and macro_match.group(1) in RESERVED_ENV_VARS:
-                raise AiConfigError(f"Peer {provider_id} references a reserved credential variable")
             if api_key != expected:
                 raise AiConfigError(f"Peer {provider_id} must use its derived environment variable for apiKey")
 

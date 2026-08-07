@@ -231,6 +231,7 @@ pass "nas-setup created storage, KeePass secrets, accounts, shares, and activate
 
 log "Adversarial command, SQL-like input, and HTTP validation"
 rm -f /tmp/nas-command-injection-marker
+# shellcheck disable=SC2016
 if nas-cockpit-api feature 'aiWorkspace;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
   fail "Cockpit API accepted a command-injection-shaped feature identifier"
 fi

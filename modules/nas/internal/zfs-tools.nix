@@ -319,4 +319,4 @@ in
     nasZfsCreateEncryptedDataset
     nasZfsExportRecoveryKey
   ;
-};
+}

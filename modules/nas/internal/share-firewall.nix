@@ -21,4 +21,4 @@ let
 in
 {
   inherit mkTftpVolume;
-};
+}

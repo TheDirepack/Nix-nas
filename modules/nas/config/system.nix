@@ -107,6 +107,7 @@ in
       MaxRetentionSec=30day
       Compress=yes
     '';
+    networking.nftables.enable = lib.mkIf cfg.networking.firewall.enable true;
 
     # Seed mutable upstream configuration only when absent.
     systemd.tmpfiles.rules = [

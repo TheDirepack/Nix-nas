@@ -39,6 +39,7 @@ remote_zfs() {
   local host=$1 action=$2 first=$3 second=${4:-}
   validate_dataset "$first"
   [[ -z "$second" ]] || validate_dataset "$second"
+  # shellcheck disable=SC2016
   printf '%s
 ' \
     'set -Eeuo pipefail' \

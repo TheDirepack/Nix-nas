@@ -39,7 +39,15 @@ BANNED_COMMENT_TEXT = re.compile(
 def source_files() -> list[Path]:
     files = [path for path in ROOT_FILES if path.exists()]
     for directory in CODE_ROOTS:
-        files.extend(path for path in directory.rglob("*") if path.is_file() and path.suffix in SUFFIXES)
+        files.extend(
+            path
+            for path in directory.rglob("*")
+            if path.is_file()
+            and path.suffix in SUFFIXES
+            and "node_modules" not in path.parts
+            and "dist" not in path.parts
+            and ".git" not in path.parts
+        )
     return sorted(set(files))
 
 

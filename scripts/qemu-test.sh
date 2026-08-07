@@ -62,7 +62,8 @@ run_native() {
 }
 
 download_iso() {
-  local iso="$CACHE_DIR/$(basename "${ISO_URL%%\?*}")"
+  local iso
+  iso="$CACHE_DIR/$(basename "${ISO_URL%%\?*}")"
   local checksum_file="$iso.sha256.remote"
   local expected="$ISO_SHA256"
   install -d -m 0755 "$CACHE_DIR"

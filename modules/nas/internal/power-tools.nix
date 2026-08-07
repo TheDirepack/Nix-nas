@@ -51,4 +51,4 @@ in
   inherit
     nasUpsInitPassword
   ;
-};
+}

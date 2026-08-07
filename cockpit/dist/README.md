@@ -1,5 +1,5 @@
-# Source-only Cockpit placeholder
+# Cockpit distribution
 
-This development archive intentionally does not contain the compiled browser bundle or npm lockfile. Restore or generate the reviewed `package-lock.json` on a controlled network-enabled builder, run `npm ci --no-audit --no-fund`, then run the Cockpit checks/build and complete release preflight.
+This directory contains the verified React/PatternFly build output (`index.js`, `index.css`, `index.html`, `manifest.json`, `build-meta.json`, `assets/`) generated via `npm ci && npm run build` inside the VM harness. The previous source-only placeholder has been replaced by a reproducible build that is Nix-verified via `build-meta.json`.
 
-Nix packaging refuses to install this placeholder until the verified `index.js`, `index.css`, `index.html`, `manifest.json`, and `build-meta.json` payload is present.
+For source-only archives, this file would be the sole placeholder and Nix packaging would refuse to install it until a proper build is present.

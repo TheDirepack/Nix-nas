@@ -329,7 +329,8 @@ commit=unavailable
 selection_policy=committed-manifest-allowlist
 if [[ -d .git ]]; then
   commit="$(git rev-parse HEAD)"
-  export NAS_RELEASE_GIT_TREE="$(git rev-parse HEAD^{tree})"
+  NAS_RELEASE_GIT_TREE="$(git rev-parse 'HEAD^{tree}')"
+  export NAS_RELEASE_GIT_TREE
   selection_policy=git-tracked-clean
 fi
 python3 "$repo_root/scripts/lib/release_provenance.py" \

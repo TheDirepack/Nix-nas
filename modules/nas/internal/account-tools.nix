@@ -361,7 +361,7 @@ let
       pkgs.python3
       pkgs.systemd
       pkgs.util-linux
-      config.services.postgresql.package
+      pkgs.postgresql
     ] ++ lib.optional cfg.networking.enable pkgs.networkmanager;
     text = ''
       export NAS_FEATURE_STATE_ROOT=/var/lib/nas-control

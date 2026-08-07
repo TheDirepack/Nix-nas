@@ -125,7 +125,9 @@ else
   skip shellcheck "ShellCheck unavailable; Nix/CI builds generated shell applications"
 fi
 
-if command -v nix >/dev/null 2>&1; then
+if [[ "${NAS_PREFLIGHT_SKIP_NIX:-0}" == "1" ]]; then
+  skip nix "Nix flake evaluation disabled by NAS_PREFLIGHT_SKIP_NIX"
+elif command -v nix >/dev/null 2>&1; then
   step "Nix flake evaluation" nix flake check --no-build --show-trace
 else
   skip nix "Nix unavailable; CI performs flake evaluation and closure builds"

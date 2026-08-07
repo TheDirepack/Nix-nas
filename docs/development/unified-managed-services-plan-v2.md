@@ -1,6 +1,6 @@
 # NixOS NAS Unified Managed Services — Implementation Plan v2 (Improved)
 
-**Baseline:** Nix OS NAS 2.2.0-alpha.6 (fixes for 2.2.5 review: Pi 0.75.4 compat, loopback-only coding sandbox, hyphen-only provider IDs, atomic provider credential+config transaction, reserved-env deny-list, `nas-ai-coding.slice/target`, state registry for `/var/lib/nas-code-agent`)  
+**Baseline:** Nix OS NAS 2.2.0-alpha.6 (fixes for 2.2.5 review: Pi 0.75.4 compat, loopback-only coding sandbox, hyphen-only provider IDs, atomic provider credential+config transaction via accept-list derived env, `nas-ai-coding.slice/target`, state registry for `/var/lib/nas-code-agent`)  
 **Document type:** Architecture + implementation + qualification plan  
 **Status:** Draft for Alpha.7 planning — replaces v1 at `nixos-nas-unified-managed-services-implementation-plan.md`  
 **Versioning note:** Plan is documentation-only; any code based on it bumps `VERSION`.
@@ -13,8 +13,8 @@
 |---|---|---|
 | No explicit transaction for multi-authority secrets/config | Add **one-transaction** pattern from Alpha.6 provider fix: `NAS_SKIP_LLAMA_SWAP_RESTART` + single restart + rollback of KeePass/env/config. Apply same to Caddy/firewalld/Authentik/Quadlet. | Prevents C-04 class “new credential → old endpoint” across all managed services. |
 | Portal and gate described separately, no shared policy test | Add **portal ↔ gate parity** acceptance: `effective-endpoints.json` and `portal.json` rendered from same projection; fuzz `Remote-*` vs `X-Authentik-*`. | Closes H-08 / portal visibility ≠ security. |
-| Storage and network described but no protected-path deny-list | Add explicit `PROTECTED_HOST_PATHS` (`/`, `/etc`, `/run/nas-secrets`, `/var/lib/nas-llama-swap`, `/var/lib/nas-control`) and `STRICT_PORTS` validation before generate. | Prevents container `ports:`/`volumes:` bypassing NAS policy. |
-| SQLite vs JSON left ambiguous | Make **SQLite the default** for Phase 1, with `services.db` + `effective.json` projection; JSON only as export format. | VM tests prove SQLite gives crash-safe migrations without resident daemon (v1 already argued this). |
+| Storage and network described but no allow-list | Add explicit **accept-list** `ALLOWED_HOST_ROOTS` (`/tank`, `/srv`, `/var/lib/nas-control/apps`) and `STRICT_PORTS` validation before generate; mounts must be beneath an allow-listed root, not merely outside a deny-list. | Prevents container `ports:`/`volumes:` bypassing NAS policy; accept-list is the existing code style (`PROVIDER_ID_RE`, `LLAMA_SWAP_PEER_*`). |
+| JSON vs SQLite ambiguous | Keep **atomic JSON file** as default (`/var/lib/nas-control/services.json` + `/run/.../effective-*.json`), not SQLite — just configure existing Caddy/firewalld/Quadlet via generated files; SQLite is unnecessary for this use case. | No resident daemon, no new DB; reuses existing `atomic_write_json` + `nas_operation_journal` pattern. |
 | No effort/risk tuning for review feedback | Add **effort (S/M/L) + risk** per phase and a “defer if memory >5 MiB idle” gate. | Keeps management layer at “config data only” as required. |
 | VM harness treated as external | Document **root vs version test split**: host `pytest` needs `/var/lib` mocks, VM `test/qemu/harness.sh` is authoritative for `/var/lib`/`/run` paths. v2 mandates `nix-shell /tmp/shell.nix` with `python.withPackages [pyyaml pytest]` for host parity. | Explains Alpha.6 VM re-run: 420/426 passed after `VERSION`/`README`/`flake.nix`/`cockpit/package.json` sync and `docs/development/artifact-naming.md` fix; remaining 1 failure is `shellcheck -S warning` on pre-existing `live-validation.sh` SC2016. |
 
@@ -34,7 +34,7 @@ One Cockpit **Applications** workflow creates/updates/deletes **any** workload (
 * **libvirt/QEMU/KVM only**. `Cockpit Machines` stays as raw UI.
 * **Authentik is identity DB** – NAS stores only `authentikId → uid/gid/objectId` projections.
 * **Extend `service-registry.nix` + `schemas/service-registry.schema.json` → `service-registry v2`** – don’t create a second registry.
-* **NAS owns policy** (`/var/lib/nas-control/services.db`), downstream (Caddy, firewalld, Podman, libvirt, Authentik) executes it.
+* **NAS owns policy** (`/var/lib/nas-control/services.json`, atomic `0600`), downstream (Caddy, firewalld, Podman, libvirt, Authentik) executes it.
 * **No `nas-appd`** – only `nas-service` oneshot + `Caddy` + `firewalld` + `Authentik` + `Podman`/`libvirt`.
 
 ---
@@ -55,7 +55,7 @@ One Cockpit **Applications** workflow creates/updates/deletes **any** workload (
 ```
 Cockpit Applications UI → nas_cockpit_api (allow-list) → nas-service (oneshot)
                                    ↓
-                     service-registry v2 (/var/lib/nas-control/services.db)
+                     service-registry v2 (/var/lib/nas-control/services.json)
                                    ↓
             ┌──────────────────────┼──────────────────────┐
             ↓                      ↓                      ↓
@@ -69,82 +69,36 @@ Effective projection is never queried live: renderer writes `/run/nas-control/ef
 
 ## 5. Service Registry v2 — Concrete Schema
 
-### 5.1 Files
+### 5.1 Files (all file-based, no SQLite)
 
 ```
-/etc/nas-control/endpoints.json          # immutable Nix built-ins
-/var/lib/nas-control/services.db         # SQLite, WAL, foreign_keys=1
+/etc/nas-control/endpoints.json           # immutable Nix built-ins
+/var/lib/nas-control/services.json        # atomic JSON (0600), validated against schema
 /run/nas-control/effective-endpoints.json # merged + sanitized, mode 0644
 /run/nas-control/portal.json              # portal-safe subset, mode 0644
-/var/lib/nas-control/services.export.json # human-readable export
+/var/lib/nas-control/apps/<id>/compose.yaml # per-service compose source (if compose)
 ```
 
-### 5.2 SQLite DDL (v2)
+`services.json` is an object `{schemaVersion:2, services:{<id>:{...}}}` written via `atomic_write_json` + `fsync` parent dir (same pattern as `nas_ai_config.py:304`). No SQLite, no WAL, no new daemon.
 
-```sql
-CREATE TABLE services (
-  id TEXT PRIMARY KEY CHECK (id GLOB '[a-z][a-z0-9-]*' AND length(id) BETWEEN 1 AND 48),
-  label TEXT NOT NULL,
-  description TEXT,
-  ownership TEXT CHECK (ownership IN ('system','runtime')) NOT NULL,
-  enabled INTEGER NOT NULL,
-  generation INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE runtimes (
-  service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
-  type TEXT CHECK (type IN ('quadlet','compose','vm','external','native')) NOT NULL,
-  project TEXT, -- compose project
-  source TEXT NOT NULL, -- /var/lib/nas-control/apps/<id>/compose.yaml etc.
-  start_policy TEXT CHECK (start_policy IN ('boot','manual','on-demand','disabled')) NOT NULL
-);
-CREATE TABLE resources (
-  service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
-  memory_bytes INTEGER CHECK (memory_bytes BETWEEN 67108864 AND 68719476736),
-  cpus REAL,
-  gpus TEXT -- JSON
-);
-CREATE TABLE storage (
-  id INTEGER PRIMARY KEY,
-  service_id TEXT REFERENCES services(id) ON DELETE CASCADE,
-  host_path TEXT NOT NULL CHECK (host_path GLOB '/*'),
-  guest_path TEXT NOT NULL,
-  mode TEXT CHECK (mode IN ('ro','rw')) NOT NULL,
-  dataset TEXT, -- tank/apps/<id>
-  UNIQUE(service_id, guest_path)
-);
-CREATE TABLE endpoints (
-  id TEXT NOT NULL,
-  service_id TEXT REFERENCES services(id) ON DELETE CASCADE,
-  transport TEXT CHECK (transport IN ('http','https','tcp','udp','ws')) NOT NULL,
-  target_service TEXT, -- compose service
-  target_port INTEGER CHECK (target_port BETWEEN 1 AND 65535),
-  exposure_type TEXT CHECK (exposure_type IN ('none','path','hostname','dns','port')) NOT NULL,
-  exposure_value TEXT, -- /apps/foo, foo.local, foo.example.net, :9443
-  auth_mode TEXT CHECK (auth_mode IN ('public','forward-auth','oidc')) NOT NULL,
-  PRIMARY KEY (service_id, id)
-);
-CREATE TABLE endpoint_authorization (
-  service_id TEXT, endpoint_id TEXT,
-  mode TEXT CHECK (mode IN ('any','groups','users','all','any-group')) NOT NULL,
-  authentik_group_ids TEXT, -- JSON array of stable IDs
-  authentik_user_ids TEXT,
-  FOREIGN KEY (service_id, endpoint_id) REFERENCES endpoints(service_id, id) ON DELETE CASCADE
-);
-CREATE TABLE network_policy (
-  service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
-  outbound_default TEXT CHECK (outbound_default IN ('allow','deny')) NOT NULL DEFAULT 'deny',
-  lan_access INTEGER NOT NULL DEFAULT 0,
-  allowed_egress TEXT -- JSON [{cidr, ports}]
-);
+### 5.2 JSON Schema (v2, accept-list style)
+
+```json
+{
+  "serviceId": {"type":"string","pattern":"^[a-z][a-z0-9-]{1,48}$"},
+  "label": {"type":"string","minLength":1,"maxLength":64},
+  "runtime": {"enum":["quadlet","compose","vm","external","native"]},
+  "hostPath": {"type":"string","pattern":"^/(tank|srv|var/lib/nas-control/apps)/.+"},
+  "guestPath": {"type":"string","pattern":"^/.+"},
+  "port": {"type":"integer","minimum":1,"maximum":65535}
+}
 ```
 
-*Validation before write:* `serviceId`/`endpointId` regex, `image`/`project`/`hostname`/`port`/`path`/`CIDR`/`AuthentikId` checks, `PROTECTED_HOST_PATHS` deny, `STRICT_PORTS` check against `ports:` in Compose, `x-nas` as hint only.
+Accept-lists: `serviceId`/`endpointId` regex, `ALLOWED_HOST_ROOTS=["/tank","/srv","/var/lib/nas-control/apps"]`, `image` allow-list (`^[a-z0-9./:_-]+$`), `hostname` RFC1123, `CIDR` via `ipaddress`, `AuthentikId` stable. `STRICT_PORTS` rejects `ports:` in Compose unless `exposure` exists. `x-nas` is hint only.
 
 ### 5.3 Merge
 
-`nas-service registry rebuild`: read `/etc/nas-control/endpoints.json` + `services.db` → validate → write `/run/.../effective-*.json` with `generation` monotonic. No Caddy template reads SQLite.
+`nas-service registry rebuild`: read `/etc/nas-control/endpoints.json` + `/var/lib/nas-control/services.json` → validate against `schemas/managed-service.schema.json` → write `/run/.../effective-*.json` with `generation` monotonic. No Caddy template reads the mutable JSON directly.
 
 ---
 
@@ -181,8 +135,8 @@ Presets: `isolated-web` (Caddy in, DNS+HTTPS out, LAN deny), `web+lan`, `backend
 
 ## 10. Storage, Secrets, Resources
 
-* Host path validation: `realpath` + `relative_to` approved root + `lstat` no symlink escape + `PROTECTED_HOST_PATHS` check; ZFS dataset `tank/apps/<id>` with `quota`/`refquota` via `zfs-tools.nix`.
-* Secrets: `secret://applications/<svc>/<key>` → KeePass `ai-provider-*` style, rendered at `podman run --secret` or `env_file` from `/run/nas-secrets/apps/<svc>.env` (0400), never in `services.db`/`effective.json`/`portal.json`.
+* Host path validation: `realpath` + `relative_to` allow-listed root `ALLOWED_HOST_ROOTS` + `lstat` no symlink escape; ZFS dataset `tank/apps/<id>` with `quota`/`refquota` via `zfs-tools.nix` — accept-list, not deny-list.
+* Secrets: `secret://applications/<svc>/<key>` → KeePass `ai-provider-*` style, rendered at `podman run --secret` or `env_file` from `/run/nas-secrets/apps/<svc>.env` (0400), never in `services.json`/`effective.json`/`portal.json`.
 * Resources: memory `64M–64G`, `cpus`, `pids-limit`, `capabilities` allow-list, `devices/GPU` explicit, `privileged` needs advanced+warning.
 
 ---
@@ -204,7 +158,7 @@ Adapters under `services/nas_service_*.py` (model, store, registry, podman, comp
 acquire_operation("managed-service", ("runtime","secrets","network","storage"))
 → validate → plan diff → journal.json (desired, generation, previousChecksums)
 → Caddy validate → firewalld D-Bus → Authentik app/provider → storage dataset → Podman/libvirt
-→ verify (systemd, curl, virsh) → atomic SQLite commit → effective.json → journal complete → release
+→ verify (systemd, curl, virsh) → atomic JSON commit (fsync parent) → effective.json → journal complete → release
 ```
 
 Rollback on any step: remove Caddy route, firewall rule, Authentik objects, Quadlet, dataset if empty+created-by-tx. Never delete pre-existing user data. Reconcile on boot (`nas-service reconcile --all` oneshot) regenerates effective files and restores missing routes.
@@ -213,7 +167,7 @@ Rollback on any step: remove Caddy route, firewall rule, Authentik objects, Quad
 
 ## 13. State, Security, Observability
 
-* `nas_state.py` new authority `managed-services` (`/var/lib/nas-control/services.db` + `/var/lib/nas-control/apps/<id>/`) with `0700` root; Authentik DB remains separate.
+* `nas_state.py` new authority `managed-services` (`/var/lib/nas-control/services.json` + `/var/lib/nas-control/apps/<id>/`) with `0700` root; Authentik DB remains separate.
 * Input validation per §24 (IDs, images, hostnames, CIDRs, libvirt XML, `X-Authentik-*`), no `shell=True`, no Caddyfile injection.
 * Compose scanner flags `privileged, hostNetwork, socket mounts, / mounts, /dev, caps, sysctls`.
 * Observability reuses `victoriametrics` when enabled; otherwise `podman inspect --format`, `virsh dominfo`, `systemctl show` on Cockpit poll.
@@ -229,7 +183,7 @@ Rollback on any step: remove Caddy route, firewall rule, Authentik objects, Quad
 * Firewall: Caddy-only, LAN deny, app-to-app, TCP/UDP forward, reboot reconcile.
 * Compose: `db+web` + volume + secret + healthcheck + start/stop/reboot, prove `podman-compose` exits.
 * VM: `qemu-test.sh` + `test/qemu/harness.sh` (no-sudo) with `virtiofs` + Caddy→VM + TCP forward + reboot persistence.
-* Journal: inject failure after each apply step, assert `services.db` unchanged and no orphan route.
+* Journal: inject failure after each apply step, assert `services.json` unchanged and no orphan route.
 
 ---
 
@@ -258,7 +212,7 @@ Rollback on any step: remove Caddy route, firewall rule, Authentik objects, Quad
 | `x-nas` becomes hidden authority | Show diff before apply; treat as hint only |
 | libvirt XML drift | Store `generation` in `<metadata>`; reconcile compares generation, not full XML |
 | Authentik ID rename | Fail closed, surface “group `Family` (id `...`) not found” in Cockpit |
-| SQLite WAL growth | `VACUUM` on export, `journal_mode=WAL` + `auto_vacuum` |
+| Atomic JSON growth | `services.json` stays <256 KiB; export is the same file, no WAL to vacuum |
 
 ---
 

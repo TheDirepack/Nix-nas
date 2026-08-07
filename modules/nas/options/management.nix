@@ -40,12 +40,12 @@
       };
       serviceUid = lib.mkOption {
         type = lib.types.int;
-        default = 954;
+        default = 955;
         description = "Fixed host UID used for writable observability application state.";
       };
       serviceGid = lib.mkOption {
         type = lib.types.int;
-        default = 954;
+        default = 955;
         description = "Fixed host GID used for writable observability application state.";
       };
       victoriaMetricsPort = lib.mkOption {

@@ -119,7 +119,6 @@ REQUIRED_FILES = {
     "cockpit/src/app.scss",
     "cockpit/src/api.js",
     "cockpit/src/view-model.js",
-    "cockpit/dist/README.md",
     "tests/test_feature_control.py",
     "tests/test_cockpit_api.py",
     "tests/test_operation_lock.py",

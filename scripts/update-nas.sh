@@ -114,7 +114,12 @@ if git_safe rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 if $status_only; then
-  revision=unknown branch=unknown upstream= dirty=null ahead=null behind=null
+  revision=unknown
+  branch=unknown
+  upstream=''
+  dirty=null
+  ahead=null
+  behind=null
   if $inside_git; then
     revision="$(git_safe rev-parse --short=12 HEAD 2>/dev/null || printf unknown)"
     branch="$(git_safe branch --show-current 2>/dev/null || printf unknown)"
@@ -279,7 +284,7 @@ health_check() {
     [[ -S /run/copyparty/http.sock ]]
     listener_present "$cockpit_port" || { echo "Cockpit is not listening on $cockpit_port" >&2; return 1; }
     listener_present 443 || { echo "Caddy is not listening on 443" >&2; return 1; }
-    curl --fail --silent --show-error --max-time 10 http://127.0.0.1:$authentik_port${authentik_path}-/health/ready/ >/dev/null
+    curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${authentik_port}${authentik_path}-/health/ready/" >/dev/null
     curl --fail --silent --show-error --max-time 10 --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
     management_route_reachable
   fi
@@ -294,10 +299,10 @@ update_state_root=/var/lib/nas-update
 state_snapshot=""
 manual_recovery_marker="$update_state_root/manual-recovery-required.json"
 state_snapshot_retain_count="${NAS_UPDATE_STATE_RETAIN_COUNT:-3}"
-[[ "$state_snapshot_retain_count" =~ ^[0-9]+$ ]] && (( state_snapshot_retain_count <= 20 )) || {
+if ! [[ "$state_snapshot_retain_count" =~ ^[0-9]+$ ]] || ! (( state_snapshot_retain_count <= 20 )); then
   echo "NAS_UPDATE_STATE_RETAIN_COUNT must be an integer between 0 and 20." >&2
   exit 2
-}
+fi
 
 prune_state_snapshots() {
   [[ -d "$update_state_root" ]] || return 0

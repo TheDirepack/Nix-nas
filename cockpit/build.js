@@ -47,7 +47,7 @@ function outputRecords() {
   const records = {};
   for (const path of files(output)) {
     const name = relative(output, path).replaceAll("\\", "/");
-    if (name === "build-meta.json") continue;
+    if (name === "build-meta.json" || name === "README.md") continue;
     records[name] = {bytes: statSync(path).size, sha256: fileDigest(path)};
   }
   return records;
