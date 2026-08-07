@@ -96,9 +96,12 @@ activate_secrets() {
 
 require_commands \
   curl findmnt firewall-cmd git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-feature-control \
-  nas-identity-sync nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
+  nas-identity-sync nas-managed-service nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock python3 ss systemctl zfs zpool
+
+nas-managed-service validate >/dev/null
+pass "nas-managed-service store is valid (file-based, accept-list, no SQLite)"
 
 log "Locked-state and configuration checks"
 wait_active cockpit.socket

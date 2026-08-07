@@ -22,6 +22,7 @@
     ./config/systemd-services.nix
     ./config/schedules.nix
     ./config/system.nix
+    ./config/managed-services.nix
   ];
 
   _module.args.nasInternal = import ./internal { inherit config lib pkgs; };

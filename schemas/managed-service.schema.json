@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixos-nas.local/schemas/managed-service.schema.json",
+  "title": "NixOS NAS managed service (file-based, no SQLite)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "services"],
+  "properties": {
+    "schemaVersion": {"const": 2},
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "enabled", "runtime"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]*$"},
+          "description": {"type": "string", "maxLength": 256},
+          "ownership": {"enum": ["system", "runtime"], "default": "runtime"},
+          "enabled": {"type": "boolean"},
+          "generation": {"type": "integer", "minimum": 1},
+          "runtime": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "source", "startPolicy"],
+            "properties": {
+              "type": {"enum": ["quadlet", "compose", "vm", "external", "native"]},
+              "project": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
+              "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+$"},
+              "startPolicy": {"enum": ["boot", "manual", "on-demand", "disabled"]}
+            }
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 68719476736},
+              "cpus": {"type": "number", "minimum": 0.1, "maximum": 64},
+              "gpus": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "storage": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["hostPath", "guestPath", "mode"],
+              "properties": {
+                "hostPath": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"},
+                "guestPath": {"type": "string", "pattern": "^/.+"},
+                "mode": {"enum": ["ro", "rw"]},
+                "dataset": {"type": "string", "pattern": "^tank/.+"}
+              }
+            }
+          },
+          "endpoints": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["transport", "targetPort", "exposure", "auth"],
+              "properties": {
+                "transport": {"enum": ["http", "https", "tcp", "udp", "ws"]},
+                "targetService": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+                "targetPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "exposure": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type"],
+                  "properties": {
+                    "type": {"enum": ["none", "path", "hostname", "dns", "port"]},
+                    "value": {"type": "string", "minLength": 1, "maxLength": 253}
+                  }
+                },
+                "auth": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["mode"],
+                  "properties": {
+                    "mode": {"enum": ["public", "forward-auth", "oidc"]},
+                    "allow": {"enum": ["any", "groups", "users", "all"]},
+                    "groups": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"}},
+                    "users": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}}
+                  }
+                },
+                "portal": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "visible": {"type": "boolean"},
+                    "category": {"enum": ["Files", "Media", "AI", "Home", "Tools", "Monitoring", "Administration", "Other"]},
+                    "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}
+                  }
+                }
+              }
+            }
+          },
+          "network": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outboundDefault": {"enum": ["allow", "deny"]},
+              "lanAccess": {"type": "boolean"},
+              "allowedEgress": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cidr"],
+                  "properties": {
+                    "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]+$"},
+                    "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

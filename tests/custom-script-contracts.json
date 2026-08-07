@@ -104,6 +104,14 @@
         "tests/test_contract_identity.py"
       ]
     },
+    "nas-managed-service": {
+      "fuzzStrategy": "unknown-argv",
+      "source": "services/nas_managed_service.py",
+      "systemTest": "tests/vm/guest-test.sh",
+      "tests": [
+        "tests/test_managed_service.py"
+      ]
+    },
     "nas-migrate-state": {
       "fuzzStrategy": "unknown-argv",
       "sources": [
@@ -510,6 +518,9 @@
     "services/nas_logging.py": [
       "tests/test_logging.py",
       "tests/test_fuzz_boundaries.py"
+    ],
+    "services/nas_managed_service.py": [
+      "tests/test_managed_service.py"
     ],
     "services/nas_migrate_state.py": [
       "tests/test_doctor_migrations.py",
