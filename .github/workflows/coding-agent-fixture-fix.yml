@@ -33,7 +33,7 @@ jobs:
           PY
       - name: Validate focused regression and static gates
         run: |
-          nix develop .#test -c python -m unittest -v tests.test_coding_agent
+          nix develop .#test -c python tests/test_coding_agent.py
           nix shell nixpkgs#ruff -c ruff format tests/test_coding_agent.py
           nix shell nixpkgs#ruff -c ruff check tests/test_coding_agent.py services/nas_coding_agent.py
           nix shell nixpkgs#pyright -c pyright --project pyproject.toml
