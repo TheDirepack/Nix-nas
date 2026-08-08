@@ -82,19 +82,48 @@ class Alpha20CockpitContracts(unittest.TestCase):
     def test_release_ci_runs_the_official_iso_installer_path(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         self.assertIn('tags: ["v*"]', workflow)
-        self.assertIn("Official-ISO install, adversarial scan, and reboot", workflow)
+        self.assertIn("Official-ISO install, final-VM browser, adversarial scan, and reboot", workflow)
         self.assertIn("qemu-test.sh installer", workflow)
+        self.assertIn("qemu-final-browser.sh", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("name: cockpit-bundle", workflow)
-        # Dependency installation is conditional now that node_modules is cached;
-        # the contract is exact-lock installation, never a mutable npm install.
         self.assertGreaterEqual(workflow.count("npm --prefix cockpit ci --no-audit --no-fund"), 1)
         self.assertNotIn("npm --prefix cockpit install", workflow)
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
-        self.assertIn("Browser rendering, layout, XSS, and accessibility", workflow)
+        self.assertIn("Final deterministic browser security gate, then slow fuzz", workflow)
+        self.assertIn("Deterministic common XSS, injection, layout, and accessibility probes", workflow)
+        self.assertIn("Slow hostile-input browser fuzz after deterministic probes", workflow)
         self.assertIn("Full-stack QEMU integration", workflow)
         self.assertIn("checks.x86_64-linux.nas-vm", workflow)
         self.assertIn("Retain dynamic web-security reports", workflow)
+
+    def test_fast_ci_excludes_fuzz_and_slow_ci_parallelizes_it(self) -> None:
+        workflow = text(".github/workflows/ci.yml")
+        self.assertGreaterEqual(workflow.count("--exclude test_fuzz_boundaries.py"), 3)
+        self.assertGreaterEqual(workflow.count("--exclude test_property_invariants.py"), 3)
+        self.assertIn("Slow fuzz/property shard (${{ matrix.shard }})", workflow)
+        self.assertIn("shard: [parser-boundaries, executables, properties]", workflow)
+        self.assertIn("max-parallel: 3", workflow)
+        self.assertIn("test-tier == 'full'", workflow)
+        self.assertIn("test-tier == 'installer'", workflow)
+
+    def test_browser_security_has_deterministic_corpus_fuzz_and_final_vm_modes(self) -> None:
+        config = text("cockpit/e2e/playwright.config.mjs")
+        deterministic = text("cockpit/e2e/common-xss.spec.mjs")
+        fuzz = text("cockpit/e2e/ui-fuzz.spec.mjs")
+        vm = text("cockpit/e2e/final-vm.spec.mjs")
+        harness = text("scripts/qemu-final-browser.sh")
+        self.assertIn('suite === "fuzz"', config)
+        self.assertIn('suite === "vm"', config)
+        self.assertIn("fullyParallel: true", config)
+        self.assertIn("workers: process.env.CI ? 4", config)
+        for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
+            self.assertIn(probe, deterministic)
+        self.assertIn("Array.from({length: 96}", fuzz)
+        self.assertIn("#login-user-input", vm)
+        self.assertIn("NAS_VM_TEST_PASSWORD", vm)
+        self.assertIn("browser-os-overlay.qcow2", harness)
+        self.assertIn("chpasswd", harness)
 
 
 if __name__ == "__main__":
