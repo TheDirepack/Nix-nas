@@ -16,7 +16,7 @@ nas-code-agent = "nas_coding_agent:main"
 nas-doctor = "nas_doctor:main"
 nas-feature-control = "nas_feature_control:main"
 nas-identity-sync = "nas_identity_sync:main"
-nas-managed-service = "nas_service_orchestrator:main"
+nas-managed-service = "nas_service_entrypoint:main"
 nas-migrate-state = "nas_migrate_state:main"
 nas-operation-run = "nas_operation_lock:main"
 nas-setup = "nas_setup:main"
@@ -45,6 +45,8 @@ py-modules = [
   "nas_operation_lock",
   "nas_service_authentik",
   "nas_service_caddy",
+  "nas_service_caddy_runtime",
+  "nas_service_entrypoint",
   "nas_service_firewall",
   "nas_service_orchestrator",
   "nas_service_runtime_compose",
