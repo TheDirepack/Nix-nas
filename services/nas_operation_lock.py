@@ -409,31 +409,48 @@ def _read_coordination_claim(token: str) -> dict[str, Any]:
     return value
 
 
-def _lock_owner_pid(name: str) -> int | None:
-    """Return the Linux PID that owns the class flock, or None when unlocked.
+def _pid_owns_class_flock(pid: int, name: str) -> bool:
+    """Return whether ``pid`` holds the named class flock through a live FD.
 
-    Coordination tokens are only meaningful when the process named by the
-    claim is the process that actually owns each physical flock. Merely seeing
-    a busy lock would allow an unrelated operator to forge a claim while some
-    other operation happened to be running.
+    Checking the claimed process' file descriptors avoids relying on the global
+    ``/proc/locks`` device/inode identity. Overlay-backed filesystems can expose
+    a different userspace ``stat(2)`` identity from the backing inode recorded
+    in ``/proc/locks`` even though the process genuinely owns the flock.
+
+    The verification remains fail-closed: the claimed ancestor must have an FD
+    that resolves to the exact class lock path *and* that FD's kernel ``fdinfo``
+    must report an exclusive FLOCK owned by the same PID.
     """
 
     path = OPERATION_ROOT / f"{_validate_class(name)}.lock"
     try:
-        metadata = path.stat()
-        lock_lines = pathlib.Path("/proc/locks").read_text(encoding="ascii").splitlines()
+        expected = path.resolve(strict=True)
+        fd_root = pathlib.Path(f"/proc/{pid}/fd")
+        descriptors = list(fd_root.iterdir())
     except OSError:
-        return None
-    identity = f"{os.major(metadata.st_dev):x}:{os.minor(metadata.st_dev):02x}:{metadata.st_ino}"
-    for line in lock_lines:
-        fields = line.split()
-        if len(fields) >= 6 and fields[1] == "FLOCK" and fields[3] == "WRITE" and fields[5].lower() == identity.lower():
+        return False
+
+    for descriptor in descriptors:
+        try:
+            if descriptor.resolve(strict=True) != expected:
+                continue
+            fdinfo = pathlib.Path(f"/proc/{pid}/fdinfo/{descriptor.name}").read_text(encoding="ascii")
+        except OSError:
+            continue
+        for line in fdinfo.splitlines():
+            if not line.startswith("lock:"):
+                continue
+            fields = line.split()
+            if "FLOCK" not in fields or "WRITE" not in fields:
+                continue
             try:
-                owner = int(fields[4])
-            except ValueError:
-                return None
-            return owner if owner > 0 else None
-    return None
+                owner_index = fields.index("WRITE") + 1
+                owner = int(fields[owner_index])
+            except (ValueError, IndexError):
+                continue
+            if owner == pid:
+                return True
+    return False
 
 
 def validate_coordination_token(token: str, classes: Sequence[str]) -> None:
@@ -457,7 +474,7 @@ def validate_coordination_token(token: str, classes: Sequence[str]) -> None:
     ):
         raise OperationBusyError("The parent operation coordination proof is not valid for this process")
     for name in normalized:
-        if _lock_owner_pid(name) != pid:
+        if not _pid_owns_class_flock(pid, name):
             raise OperationBusyError(f"The parent operation no longer owns the required class: {name}")
 
 
