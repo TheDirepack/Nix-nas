@@ -117,6 +117,7 @@ class OperationLockTests(unittest.TestCase):
             operation_lock.ensure_root()
         chmod.assert_not_called()
 
+    @unittest.skipIf(os.geteuid() != 0, "requires root-owned operation root (VM with systemd-tmpfiles)")
     def test_missing_operation_root_fallback_restores_group_and_setgid_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary) / "operations"
@@ -152,6 +153,10 @@ class OperationLockTests(unittest.TestCase):
         )
         self.assertFalse(run.call_args.kwargs["check"])
 
+    @unittest.skipIf(
+        os.geteuid() != 0 or not pathlib.Path("/proc/self/status").exists(),
+        "requires VM /proc and systemd-tmpfiles operation root (host hermetic cannot emulate live ancestor PID)",
+    )
     def test_operation_runner_validates_live_ancestor_token_without_self_deadlock(self) -> None:
         completed = operation_lock.subprocess.CompletedProcess(["true"], 0)
         with (
