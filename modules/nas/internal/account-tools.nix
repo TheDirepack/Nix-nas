@@ -201,8 +201,23 @@ let
       rootMode = "0600";
     })
     (mkDatabaseAuthority { name = "authentik-database"; source = "postgresql://authentik"; })
+    (mkPathAuthority {
+      name = "managed-services";
+      source = "/var/lib/nas-control/services.json";
+      owner = "nas-feature-gate";
+      group = "nas-feature-control";
+      rootMode = "0600";
+    })
+    (mkPathAuthority {
+      name = "managed-apps";
+      source = "/var/lib/nas-control/apps";
+      owner = "nas-feature-gate";
+      group = "nas-feature-control";
+      rootMode = "0750";
+      optional = true;
+    })
   ]
-  ++ lib.optionals cfg.networking.enable [
+   ++ lib.optionals cfg.networking.enable [
     (mkPathAuthority {
       name = "networkmanager";
       source = "/etc/NetworkManager/system-connections";

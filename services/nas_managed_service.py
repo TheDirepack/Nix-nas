@@ -447,8 +447,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("validate", help="Validate store and built-ins")
     show = sub.add_parser("show", help="Show effective registry")
     show.add_argument("--json", action="store_true")
+    for cmd in ("plan", "create", "update", "delete", "start", "stop", "restart", "adopt", "export", "import"):
+        sub.add_parser(cmd, help=f"Managed-service {cmd} (not yet implemented)")
     args = parser.parse_args(argv)
     try:
+        if args.command in ("plan", "create", "update", "delete", "start", "stop", "restart", "adopt", "export", "import"):
+            print(f"nas-managed-service: {args.command} is not yet implemented (runtime adapters pending)", file=sys.stderr)
+            return 2
         if args.command == "reconcile":
             effective = write_effective()
             portal = write_portal()
