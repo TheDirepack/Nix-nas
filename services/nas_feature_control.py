@@ -85,7 +85,46 @@ AI_API_KEY_FILE = pathlib.Path(os.environ.get("NAS_AI_API_KEY_FILE", "/run/nas-s
 
 AI_ALLOW_GROUP, AI_DENY_GROUP = CAPABILITY_GROUPS["ai"]
 GATE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
+ENDPOINT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 GATE_SCOPES = frozenset({"", "admin", "authenticated", "network", "ai-api", *CAPABILITY_GROUPS})
+_EFFECTIVE_CACHE: dict[str, Any] = {"generation": 0, "mtime": 0.0, "endpoints": {}}
+_EFFECTIVE_CACHE_PATH = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
+
+
+def _load_effective_cached() -> dict[str, Any]:
+    try:
+        stat = _EFFECTIVE_CACHE_PATH.stat()
+        mtime = stat.st_mtime
+        if mtime == _EFFECTIVE_CACHE["mtime"]:
+            return _EFFECTIVE_CACHE
+        data = json.loads(_EFFECTIVE_CACHE_PATH.read_text(encoding="utf-8"))
+        _EFFECTIVE_CACHE["mtime"] = mtime
+        _EFFECTIVE_CACHE["generation"] = data.get("generation", 0)
+        _EFFECTIVE_CACHE["endpoints"] = data.get("endpoints", {})
+        _EFFECTIVE_CACHE["data"] = data
+        return _EFFECTIVE_CACHE
+    except (OSError, json.JSONDecodeError):
+        try:
+            import nas_managed_service as msvc
+
+            data = msvc.effective_registry()
+            _EFFECTIVE_CACHE["mtime"] = 0.0
+            _EFFECTIVE_CACHE["generation"] = data.get("generation", 0)
+            _EFFECTIVE_CACHE["endpoints"] = data.get("endpoints", {})
+            _EFFECTIVE_CACHE["data"] = data
+            return _EFFECTIVE_CACHE
+        except Exception:
+            return _EFFECTIVE_CACHE
+
+
+def _is_valid_service_scope(scope: str) -> bool:
+    if not scope.startswith("service:"):
+        return False
+    parts = scope.split(":")
+    if len(parts) != 3:
+        return False
+    return bool(SERVICE_ID_RE.fullmatch(parts[1]) and ENDPOINT_ID_RE.fullmatch(parts[2]))
 
 
 @contextlib.contextmanager
@@ -1170,21 +1209,26 @@ def authorize(entry: dict[str, Any], headers: Any, scope: str = "") -> bool:
 
 
 def authorize_service_scope(scope: str, headers: Any) -> bool:
+    if not _is_valid_service_scope(scope):
+        return False
     try:
         _, service_id, endpoint_id = scope.split(":", 2)
     except ValueError:
         return False
     key = f"{service_id}:{endpoint_id}"
-    try:
-        effective_path = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
-        effective = json.loads(effective_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    cached = _load_effective_cached()
+    effective = cached.get("data") or {}
+    if key not in cached.get("endpoints", {}):
         try:
-            import nas_managed_service as msvc
+            effective_path = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
+            effective = json.loads(effective_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            try:
+                import nas_managed_service as msvc
 
-            effective = msvc.effective_registry()
-        except Exception:
-            return False
+                effective = msvc.effective_registry()
+            except Exception:
+                return False
     endpoint = effective.get("endpoints", {}).get(key)
     if not isinstance(endpoint, dict):
         return False
@@ -1194,25 +1238,32 @@ def authorize_service_scope(scope: str, headers: Any) -> bool:
         return True
     groups = split_groups(headers.get("Remote-Groups", ""))
     username = headers.get("Remote-User", "").strip()
+    uid = headers.get("Remote-UID", "").strip()
     if DISABLED_GROUP in groups or not username:
         return False
     if ADMIN_GROUP in groups:
         return True
-    allow = auth.get("allow", "any")
+    allow = auth.get("allow")
     allowed_groups = auth.get("groups") or []
     allowed_users = auth.get("users") or []
+    if allow is None:
+        if not allowed_groups and not allowed_users:
+            return False
+        allow = "any" if allowed_groups or allowed_users else "deny"
     if allow == "any":
         return bool(username)
     if allow == "groups":
         return any(g in groups for g in allowed_groups)
     if allow == "users":
-        return username in allowed_users
+        return username in allowed_users or (uid and uid in allowed_users)
     if allow == "all":
-        return (not allowed_groups or any(g in groups for g in allowed_groups)) and (not allowed_users or username in allowed_users)
+        group_ok = not allowed_groups or any(g in groups for g in allowed_groups)
+        user_ok = not allowed_users or username in allowed_users or (uid and uid in allowed_users)
+        return group_ok and user_ok
     if allowed_groups:
         return any(g in groups for g in allowed_groups)
     if allowed_users:
-        return username in allowed_users
+        return username in allowed_users or (uid and uid in allowed_users)
     return False
 
 

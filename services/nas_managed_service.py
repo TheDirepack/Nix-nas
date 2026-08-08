@@ -209,7 +209,13 @@ def validate_service(service_id: str, data: dict[str, Any]) -> dict[str, Any]:
         if exp_type not in EXPOSURE_TYPE_VALUES:
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure.type must be one of {sorted(EXPOSURE_TYPE_VALUES)}, got {exp_type!r}")
         if exp_type in ("hostname", "dns"):
-            _validate_hostname(exposure.get("value", ""))
+            hostname = exposure.get("value", "")
+            _validate_hostname(hostname)
+            if any(c in hostname for c in ("\r", "\n", "{", "}")):
+                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} hostname contains invalid characters")
+            lan_host = os.environ.get("NAS_LAN_HOST", "nas.local")
+            if hostname == lan_host or hostname.endswith(f".{lan_host}"):
+                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} hostname {hostname!r} collides with NAS host")
         elif exp_type == "port":
             _validate_port(exposure.get("value") if isinstance(exposure.get("value"), int) else int(exposure.get("value", 0)) if str(exposure.get("value", "")).isdigit() else exposure.get("value"))
             val = exposure.get("value")
@@ -221,6 +227,11 @@ def validate_service(service_id: str, data: dict[str, Any]) -> dict[str, Any]:
             val = exposure.get("value", "")
             if not isinstance(val, str) or not val.startswith("/"):
                 raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path exposure must start with '/'")
+            if any(c in val for c in ("\r", "\n", "{", "}")):
+                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path contains invalid characters")
+            reserved_prefixes = ("/api", "/outpost.goauthentik.io", "/identity", "/console", "/shares", "/share", "/dav", "/vault", "/ai", "/syncthing", "/metrics", "/victoriametrics", "/alerts", "/ups", "/notifications", "/settings")
+            if any(val == rp or val.startswith(rp + "/") for rp in reserved_prefixes):
+                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path {val!r} conflicts with reserved NAS path")
         auth = endpoint.get("auth")
         if auth is None or not isinstance(auth, dict):
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth must be object")
@@ -230,16 +241,52 @@ def validate_service(service_id: str, data: dict[str, Any]) -> dict[str, Any]:
         if "allow" in auth and auth["allow"] not in AUTH_ALLOW_VALUES:
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.allow must be one of {sorted(AUTH_ALLOW_VALUES)}")
         for gid in auth.get("groups", []):
-            if not isinstance(gid, str) or not re.fullmatch(r"^[A-Za-z0-9_-]+$", gid):
+            if not isinstance(gid, str) or not re.fullmatch(r"^([A-Za-z0-9_-]+|[0-9a-fA-F-]{36}|\d+)$", gid):
                 raise ManagedServiceError(f"Invalid Authentik group ID {gid!r}")
         for uid in auth.get("users", []):
-            if not isinstance(uid, str) or not re.fullmatch(r"^[A-Za-z0-9._-]+$", uid):
+            if not isinstance(uid, str) or not re.fullmatch(r"^([A-Za-z0-9._-]+|[0-9a-fA-F-]{36}|\d+)$", uid):
                 raise ManagedServiceError(f"Invalid Authentik user ID {uid!r}")
         if "groups" in auth and not isinstance(auth["groups"], list):
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.groups must be array")
         if "users" in auth and not isinstance(auth["users"], list):
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.users must be array")
+        if os.environ.get("NAS_AUTHENTIK_LIVE_VALIDATION") == "1":
+            _validate_authentik_stable_ids(auth)
     return data
+
+
+def _validate_authentik_stable_ids(auth: dict[str, Any]) -> None:
+    api = os.environ.get("NAS_AUTHENTIK_API", "")
+    token = os.environ.get("NAS_AUTHENTIK_TOKEN", "")
+    if not api or not token:
+        return
+    import urllib.request
+    import urllib.error
+
+    for gid in auth.get("groups", []):
+        if re.fullmatch(r"^\d+$", gid) or re.fullmatch(r"^[0-9a-fA-F-]{36}$", gid):
+            try:
+                req = urllib.request.Request(f"{api}/core/groups/{gid}/", headers={"Authorization": f"Bearer {token}"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status != 200:
+                        raise ManagedServiceError(f"Authentik group {gid!r} not found")
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    raise ManagedServiceError(f"Authentik group {gid!r} not found") from exc
+            except OSError:
+                pass
+    for uid in auth.get("users", []):
+        if re.fullmatch(r"^\d+$", uid) or re.fullmatch(r"^[0-9a-fA-F-]{36}$", uid):
+            try:
+                req = urllib.request.Request(f"{api}/core/users/{uid}/", headers={"Authorization": f"Bearer {token}"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status != 200:
+                        raise ManagedServiceError(f"Authentik user {uid!r} not found")
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    raise ManagedServiceError(f"Authentik user {uid!r} not found") from exc
+            except OSError:
+                pass
 
 
 def load_store(path: pathlib.Path = STORE_PATH) -> dict[str, Any]:
