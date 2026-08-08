@@ -8,10 +8,15 @@ instead of being silently ignored or accidentally applied host-wide.
 from __future__ import annotations
 
 import ipaddress
+import json
+import pathlib
 import subprocess
 from typing import Any
 
 from nas_managed_service import ManagedServiceError
+from nas_operation_journal import atomic_write_json
+
+STATE_DIR = pathlib.Path("/var/lib/nas-control/firewall")
 
 
 def _validate_cidr(cidr: str) -> None:
@@ -51,16 +56,14 @@ def plan_firewall(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         transport = endpoint.get("transport")
         exposure = endpoint.get("exposure") or {}
         if transport in ("tcp", "udp") and exposure.get("type") == "port":
-            host_port = int(exposure.get("value"))
-            target_port = int(endpoint.get("targetPort"))
             actions.append(
                 {
                     "type": "forward",
                     "service": service_id,
                     "endpoint": endpoint_id,
                     "protocol": transport,
-                    "hostPort": host_port,
-                    "targetPort": target_port,
+                    "hostPort": int(exposure.get("value")),
+                    "targetPort": int(endpoint.get("targetPort")),
                     "targetAddress": "127.0.0.1",
                 }
             )
@@ -72,6 +75,10 @@ def _forward_spec(action: dict[str, Any]) -> str:
         f"port={int(action['hostPort'])}:proto={action['protocol']}:"
         f"toport={int(action['targetPort'])}:toaddr={action['targetAddress']}"
     )
+
+
+def _state_path(service_id: str) -> pathlib.Path:
+    return STATE_DIR / f"{service_id}.json"
 
 
 def apply_firewall(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
@@ -88,11 +95,13 @@ def apply_firewall(service_id: str, service: dict[str, Any], *, dry_run: bool = 
             "refusing to apply an unsafe host-wide approximation"
         )
 
+    specs: list[str] = []
     changed = False
     for action in plan["actions"]:
         if action["type"] != "forward":
             continue
         spec = _forward_spec(action)
+        specs.append(spec)
         query = subprocess.run(
             ["firewall-cmd", "--permanent", "--query-forward-port", spec],
             capture_output=True,
@@ -103,18 +112,29 @@ def apply_firewall(service_id: str, service: dict[str, Any], *, dry_run: bool = 
             changed = True
     if changed:
         _run(["--reload"])
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(_state_path(service_id), {"schemaVersion": 1, "forwardPorts": specs}, mode=0o600)
     return plan
 
 
 def remove_firewall(service_id: str, service: dict[str, Any] | None = None, *, dry_run: bool = False) -> None:
-    if dry_run or service is None:
+    if dry_run:
         return
-    plan = plan_firewall(service_id, service)
+    state_path = _state_path(service_id)
+    specs: list[str] = []
+    try:
+        value = json.loads(state_path.read_text(encoding="utf-8"))
+        if isinstance(value, dict):
+            specs = [str(item) for item in value.get("forwardPorts", []) if isinstance(item, str)]
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        if service is not None:
+            specs = [
+                _forward_spec(action)
+                for action in plan_firewall(service_id, service)["actions"]
+                if action["type"] == "forward"
+            ]
     changed = False
-    for action in plan["actions"]:
-        if action["type"] != "forward":
-            continue
-        spec = _forward_spec(action)
+    for spec in specs:
         result = subprocess.run(
             ["firewall-cmd", "--permanent", "--query-forward-port", spec],
             capture_output=True,
@@ -125,3 +145,4 @@ def remove_firewall(service_id: str, service: dict[str, Any] | None = None, *, d
             changed = True
     if changed:
         _run(["--reload"])
+    state_path.unlink(missing_ok=True)
