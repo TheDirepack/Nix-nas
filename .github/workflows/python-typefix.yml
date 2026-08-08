@@ -1,0 +1,186 @@
+name: Stage validated Python type fixes
+
+on:
+  push:
+    branches:
+      - fix/ci-runtime-and-code-fixes-20260808
+
+permissions:
+  contents: write
+
+jobs:
+  typefix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/ci-runtime-and-code-fixes-20260808
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply type-safety repairs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing expected patch target in {path}: {old[:80]!r}")
+              p.write_text(text.replace(old, new))
+
+          # Real runtime/API bugs exposed by Pyright.
+          for path in ("services/nas_ai_config.py", "services/nas_state.py"):
+              replace(path, "import os\n", "import os\nimport sys\n")
+              replace(path, "file=os.sys.stderr", "file=sys.stderr")
+
+          replace("services/nas_coding_agent.py", "g.gr_members", "g.gr_mem")
+
+          replace(
+              "services/nas_common.py",
+              '''    if input_text is not None and proc.stdin is not None:\n        payload = input_text.encode("utf-8")\n\n        def write_input() -> None:\n            try:\n                proc.stdin.write(payload)\n                proc.stdin.flush()\n            except BrokenPipeError:\n                pass\n            finally:\n                proc.stdin.close()\n''',
+              '''    if input_text is not None and proc.stdin is not None:\n        payload = input_text.encode("utf-8")\n        stdin = proc.stdin\n\n        def write_input() -> None:\n            try:\n                stdin.write(payload)\n                stdin.flush()\n            except BrokenPipeError:\n                pass\n            finally:\n                stdin.close()\n''',
+          )
+
+          replace("services/nas_doctor.py", 'journal.get("status") if journal else None', '(journal or {}).get("status")')
+          replace("services/nas_doctor.py", 'journal.get("error")', '(journal or {}).get("error")')
+          replace("services/nas_doctor.py", 'state.get("status") if state else None', '(state or {}).get("status")')
+          replace("services/nas_doctor.py", 'state.get("planDigest")', '(state or {}).get("planDigest")')
+
+          replace(
+              "services/nas_identity_model.py",
+              '''        groups = group_names(raw, groups_by_pk)\n        groups.update(explicit_groups_by_uid.get(uid, set()))\n        if raw.get("is_active") is not True:\n            groups.add(DISABLED_GROUP)\n''',
+              '''        user_groups = group_names(raw, groups_by_pk)\n        user_groups.update(explicit_groups_by_uid.get(uid, set()))\n        if raw.get("is_active") is not True:\n            user_groups.add(DISABLED_GROUP)\n''',
+          )
+          replace("services/nas_identity_model.py", "frozenset(groups),", "frozenset(user_groups),")
+          replace(
+              "services/nas_identity_model.py",
+              '    username = validate_uid(raw.get("username"))\n',
+              '''    username_raw = raw.get("username")\n    if not isinstance(username_raw, str):\n        raise SyncError(f"accounts[{index}].username must be a string")\n    username = validate_uid(username_raw)\n''',
+          )
+
+          replace(
+              "services/nas_identity_sync.py",
+              'def desired_syncthing(model: IdentityModel) -> dict[str, Any]:',
+              'def desired_syncthing(\n    model: IdentityModel,\n) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:',
+          )
+          replace(
+              "services/nas_identity_sync.py",
+              '''                        current = created_user\n                        existing_by_name[username] = created_user\n''',
+              '''                        current = dict(created_user)\n                        existing_by_name[username] = dict(created_user)\n''',
+          )
+
+          replace(
+              "services/nas_logging.py",
+              '''    if isinstance(value, (list, tuple, set, frozenset)):\n        items = list(value)\n        output = [sanitize(item, depth=depth + 1) for item in items[:MAX_COLLECTION_ITEMS]]\n        if len(items) > MAX_COLLECTION_ITEMS:\n            output.append("[truncated]")\n        return output\n''',
+              '''    if isinstance(value, (list, tuple, set, frozenset)):\n        items = list(value)\n        list_output = [sanitize(item, depth=depth + 1) for item in items[:MAX_COLLECTION_ITEMS]]\n        if len(items) > MAX_COLLECTION_ITEMS:\n            list_output.append("[truncated]")\n        return list_output\n''',
+          )
+
+          replace("services/nas_managed_service.py", "    if _HAS_JSONSCHEMA:\n", "    if jsonschema is not None:\n")
+
+          replace(
+              "services/nas_service_caddy.py",
+              '''        if target_port is None:\n            raise CaddyError(f"Endpoint {key!r}: targetPort is mandatory")\n        msvc._validate_port(target_port)\n\n        typ = exposure["type"]\n        value = exposure.get("value")\n''',
+              '''        if target_port is None:\n            raise CaddyError(f"Endpoint {key!r}: targetPort is mandatory")\n        msvc._validate_port(target_port)\n        if isinstance(target_port, bool) or not isinstance(target_port, int):\n            raise CaddyError(f"Endpoint {key!r}: targetPort must be an integer")\n\n        typ = exposure["type"]\n        value = exposure.get("value")\n        route_port: int | None = None\n        if typ == "port":\n            if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).isdigit():\n                raise CaddyError(f"Endpoint {key!r}: exposure port is invalid")\n            route_port = int(value)\n''',
+          )
+          replace("services/nas_service_caddy.py", '            "port": int(value) if typ == "port" else None,', '            "port": route_port,')
+
+          replace(
+              "services/nas_alert_router.py",
+              '''        duration_ms=(time.monotonic() - started) * 1000,\n        **result,\n''',
+              '''        duration_ms=(time.monotonic() - started) * 1000,\n        received=result["received"],\n        considered=result["considered"],\n        sent=result["sent"],\n        suppressed=result["suppressed"],\n''',
+          )
+
+          # Test harness typing: preserve dynamic behavior while making contracts explicit.
+          replace("tests/test_ai_secret_transaction.py", "from unittest import mock\n", "from unittest import mock\nfrom typing import Any\n")
+          replace("tests/test_ai_secret_transaction.py", "list[tuple[pathlib.Path, api.PrivateFileSnapshot, str]]", "list[tuple[pathlib.Path, Any, str]]")
+
+          replace(
+              "tests/test_alert_router.py",
+              '''        host, port = server.server_address\n''',
+              '''        host = str(server.server_address[0])\n        port = int(server.server_address[1])\n''',
+          )
+
+          p = Path("tests/test_browser_authz.py")
+          text = p.read_text()
+          for obj, attr, value in [
+              ("webdriver", "Chrome", "DummyChrome"),
+              ("webdriver", "ChromeOptions", "DummyChromeOptions"),
+              ("exceptions", "NoSuchElementException", "DummySeleniumError"),
+              ("exceptions", "WebDriverException", "DummySeleniumError"),
+              ("by", "By", "DummyBy"),
+              ("support_ui", "WebDriverWait", "DummyWait"),
+              ("selenium", "webdriver", "webdriver"),
+              ("common", "exceptions", "exceptions"),
+              ("webdriver_common", "by", "by"),
+              ("support", "ui", "support_ui"),
+          ]:
+              old = f"    {obj}.{attr} = {value}"
+              new = f'    setattr({obj}, "{attr}", {value})'
+              if old not in text:
+                  raise SystemExit(f"missing dynamic module assignment {old}")
+              text = text.replace(old, new)
+          p.write_text(text)
+
+          replace(
+              "tests/test_cockpit_api.py",
+              '''            patches = {\n                "BACKUP_INSTALLED": True,\n                "ZFS_REPLICATION_INSTALLED": True,\n                "SYNCTHING_INSTALLED": True,\n            }\n            with (\n                self.subTest(action=name),\n                mock.patch.multiple(api, **patches),\n''',
+              '''            with (\n                self.subTest(action=name),\n                mock.patch.object(api, "BACKUP_INSTALLED", True),\n                mock.patch.object(api, "ZFS_REPLICATION_INSTALLED", True),\n                mock.patch.object(api, "SYNCTHING_INSTALLED", True),\n''',
+          )
+
+          replace(
+              "tests/test_maintainer_core.py",
+              '''        total_floor = float(namespace["TOTAL_FLOOR"])\n        assert isinstance(floors, dict)\n''',
+              '''        total_floor_raw = namespace["TOTAL_FLOOR"]\n        assert isinstance(total_floor_raw, (int, float))\n        total_floor = float(total_floor_raw)\n        assert isinstance(floors, dict)\n''',
+          )
+
+          replace(
+              "tests/maintainer_test_base.py",
+              "        super().setUpClass()\n",
+              '''        parent_setup = getattr(super(), "setUpClass", None)\n        if parent_setup is not None:\n            parent_setup()\n''',
+          )
+          replace(
+              "tests/maintainer_test_base.py",
+              "        super().tearDownClass()\n",
+              '''        parent_teardown = getattr(super(), "tearDownClass", None)\n        if parent_teardown is not None:\n            parent_teardown()\n''',
+          )
+
+          replace(
+              "tests/slow_managed_service_stateful.py",
+              '''                    value = exposure.get("value")\n                    hostname_counts[value] = hostname_counts.get(value, 0) + 1\n''',
+              '''                    value = exposure.get("value")\n                    if not isinstance(value, str):\n                        raise AssertionError("hostname exposure value is not a string")\n                    hostname_counts[value] = hostname_counts.get(value, 0) + 1\n''',
+          )
+          replace("tests/slow_managed_service_stateful.py", "    class StatefulTests(unittest.TestCase):\n", "    class StatefulTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]\n")
+          replace("tests/slow_managed_service_stateful.py", "    class ProjectionDifferentialTests(unittest.TestCase):\n", "    class ProjectionDifferentialTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]\n")
+
+          replace(
+              "tests/test_property_invariants.py",
+              '''            self.assertIsInstance(value, str)\n            import urllib.parse\n\n            parsed = urllib.parse.urlsplit(value)\n''',
+              '''            if not isinstance(value, str):\n                self.fail("accepted loopback URL is not a string")\n            import urllib.parse\n\n            parsed = urllib.parse.urlsplit(value)\n''',
+          )
+          replace("tests/test_property_invariants.py", "    class PropertyInvariantTests(unittest.TestCase):\n", "    class PropertyInvariantTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]\n")
+          PY
+
+      - name: Format and lint
+        run: |
+          nix shell nixpkgs#ruff -c ruff format services tests scripts
+          nix shell nixpkgs#ruff -c ruff check services tests scripts
+      - name: Type check
+        run: nix shell nixpkgs#pyright -c pyright --project pyproject.toml
+      - name: Commit validated repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- services tests scripts; then
+            echo "No type fixes required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services tests scripts
+          git commit -m "fix: resolve Python type-safety defects"
+          git push origin HEAD:fix/ci-runtime-and-code-fixes-20260808
