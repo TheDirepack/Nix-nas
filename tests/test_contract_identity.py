@@ -46,6 +46,7 @@ class ContractTests(unittest.TestCase):
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
         system = text("modules/nas/config/system.nix")
         services = text("modules/nas/config/application-services.nix")
+        portal = text("web/portal/index.html")
         self.assertNotIn("render_copyparty", identity)
         self.assertNotIn("nasSharePath", identity)
         self.assertNotIn("GENERATED_CONFIG", identity)
@@ -55,9 +56,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("rwmd.: ''${u}", system)
         self.assertNotIn("A: ''${u}, @nas_admin", system)
         self.assertIn("shr-who: auth", system)
-        self.assertIn("nas_allow_files", text("web/portal/index.html"))
-        self.assertIn("nas_allow_syncthing", text("web/portal/index.html"))
-        self.assertIn('shr = "/share";', services)
+        # Portal is now a Caddy template that renders portal.json entries via
+        # Remote-Groups, not hardcoded per-capability blocks. Check the template
+        # reads the portal and gates on groups, and that the share ACL is still
+        # copyparty-owned.
+        self.assertIn('include "/run/nas-control/portal.json"', portal)
+        self.assertIn('placeholder "http.request.header.Remote-Groups"', portal)
         self.assertIn('"shr-adm" = "@nas_admin";', services)
         self.assertIn('"idp-store" = 3;', services)
 
@@ -95,11 +99,17 @@ class ContractTests(unittest.TestCase):
         proxy = text("modules/nas/config/reverse-proxy.nix")
         base = text("modules/nas/internal/base.nix")
         systemd = text("modules/nas/config/systemd-services.nix")
+        portal = text("web/portal/index.html")
         self.assertIn("templates", proxy)
         self.assertIn("file_server", proxy)
         self.assertIn("nasPortalStatic", proxy)
         self.assertIn("handle /share/*", proxy)
-        self.assertIn("/shares/users/{{placeholder", text("web/portal/index.html"))
+        # Portal is a Caddy template that includes portal.json and renders
+        # entries via placeholder Remote-Groups / Remote-User, not a
+        # hard-coded /shares/users path.
+        self.assertIn('include "/run/nas-control/portal.json"', portal)
+        self.assertIn('placeholder "http.request.header.Remote-Groups"', portal)
+        self.assertIn('placeholder "http.request.header.Remote-User"', portal)
         share_route = proxy.split("handle /share/* {", 1)[1].split("@shares path", 1)[0]
         self.assertIn("${copypartySsoProxy}", share_route)
         self.assertNotIn("caddyForwardAuth", share_route)
