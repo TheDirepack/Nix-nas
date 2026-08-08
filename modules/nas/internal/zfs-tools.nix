@@ -231,6 +231,8 @@ let
       zfs=${lib.escapeShellArg "${pkgs.zfs}/bin/zfs"}
       zpool=${lib.escapeShellArg "${pkgs.zfs}/bin/zpool"}
       encryption_enabled=${if cfg.zfsEncryption.enable then "1" else "0"}
+      created_dataset=false
+      bootstrap_committed=false
 
       if [[ "$encryption_enabled" != "1" ]]; then
         echo "Enable nas.zfsEncryption.enable before creating the managed encryption root." >&2
@@ -259,11 +261,28 @@ let
       local_tmp="$(mktemp)"
       root_tmp="$(sudo mktemp /run/nas-zfs-bootstrap.XXXXXX)"
       cleanup() {
+        local rc=$?
+        trap - EXIT HUP INT TERM
+        set +e
         rm -f -- "$local_tmp"
+        if [[ "$rc" -ne 0 && "$created_dataset" == true && "$bootstrap_committed" != true ]]; then
+          # The dataset was created by this invocation and canmount=off kept it
+          # inaccessible to ordinary writers. Remove it rather than leaving an
+          # encryption root whose configured keylocation points at a transient file.
+          if sudo "$zfs" list -H "$dataset" >/dev/null 2>&1; then
+            if sudo "$zfs" destroy -r -- "$dataset" >/dev/null 2>&1; then
+              created_dataset=false
+            else
+              echo "CRITICAL: encrypted dataset bootstrap failed and automatic cleanup could not destroy $dataset." >&2
+              echo "The key remains in KeePassXC. Recover or destroy the dataset before retrying setup." >&2
+            fi
+          fi
+        fi
         sudo rm -f -- "$root_tmp"
         unset key
+        exit "$rc"
       }
-      trap cleanup EXIT
+      trap cleanup EXIT HUP INT TERM
       chmod 0600 "$local_tmp"
       printf '%s' "$key" > "$local_tmp"
       sudo install -m 0400 -o root -g root "$local_tmp" "$root_tmp"
@@ -273,12 +292,37 @@ let
         -o encryption="$algorithm" \
         -o keyformat=hex \
         -o keylocation="file://$root_tmp" \
+        -o canmount=off \
         -o mountpoint="$root" \
         "$dataset"
+      created_dataset=true
+
+      # Fault-injection points are disabled unless explicitly enabled by the VM
+      # security test. They make every post-create transition reproducibly testable
+      # without weakening normal execution.
+      bootstrap_fault() {
+        local step=$1
+        if [[ "''${NAS_TEST_FAULT_INJECTION:-}" == 1 && "''${NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER:-}" == "$step" ]]; then
+          echo "Injected ZFS bootstrap failure after $step" >&2
+          return 97
+        fi
+      }
+
+      bootstrap_fault create
       sudo "$zfs" set keylocation="$final_keylocation" "$dataset"
+      bootstrap_fault keylocation
       sudo "$zfs" set ${zfsKeyFingerprintProperty}="$fingerprint" "$dataset"
-      sudo "$zfs" unmount "$dataset"
+      bootstrap_fault fingerprint
+      sudo "$zfs" set canmount=on "$dataset"
+      bootstrap_fault canmount
+      if [[ "$(sudo "$zfs" get -H -o value mounted "$dataset")" == "yes" ]]; then
+        sudo "$zfs" unmount "$dataset"
+      fi
+      bootstrap_fault unmount
       sudo "$zfs" unload-key "$dataset"
+      bootstrap_fault unload-key
+
+      bootstrap_committed=true
       echo "Created $dataset as a locked ZFS encryption root. Run nas-secrets activate to stage the key, unlock it, and start the NAS services."
     '';
   };
