@@ -237,6 +237,32 @@ class SecretTransactionShellTests(unittest.TestCase):
         )
         self.assert_ok(result)
 
+    def test_symlinked_parent_is_rejected_during_init(self) -> None:
+        result = self.run_scenario(
+            """
+            mkdir -p real-parent/new
+            cp stage/new stage/ready real-parent/new/
+            ln -s real-parent linked-parent
+            ! nas_secret_tx_init "$PWD/root" "$PWD/linked-parent/new" "$PWD/linked-parent/previous"
+            [[ -f root/old && -f real-parent/new/new ]]
+            [[ ! -s systemctl.log ]]
+            """
+        )
+        self.assert_ok(result)
+
+    def test_symlinked_transaction_directory_is_rejected(self) -> None:
+        result = self.run_scenario(
+            """
+            mkdir -p real-tx/new
+            cp stage/new stage/ready real-tx/new/
+            ln -s real-tx tx-link
+            ! nas_secret_tx_init "$PWD/root" "$PWD/tx-link/new" "$PWD/tx-link/previous" nas-protected-services.target "$PWD/tx-link"
+            [[ -f root/old && -f real-tx/new/new ]]
+            [[ ! -s systemctl.log ]]
+            """
+        )
+        self.assert_ok(result)
+
     def test_preexisting_previous_tree_is_rejected_before_service_stop(self) -> None:
         result = self.run_scenario(
             """
@@ -349,7 +375,6 @@ class SecretTransactionShellTests(unittest.TestCase):
             [[ -f root/old ]]
             """
         )
-        # Rollback also cannot stop the target in this injected failure state, so 125 is correct.
         self.assert_ok(result)
 
     def test_first_move_failure_does_not_claim_successful_rollback(self) -> None:
