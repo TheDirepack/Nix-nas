@@ -70,27 +70,31 @@ exercise_rejected_vault_value() {
   pass "malformed $key is rejected before runtime secret commit"
 }
 
+# keepassxc-cli's password-edit mode is line-oriented, so this installed test uses
+# hostile one-line values that can really be written through the CLI. Newline/CR and
+# other control-character cases are exercised directly against the rendered validator
+# functions in tests/test_secret_security.py.
 exercise_rejected_vault_value \
   authentik-bootstrap-password \
-  $'safe-password-value\nAUTHENTIK_BOOTSTRAP_EMAIL=attacker@example.invalid' \
+  'safe-password value' \
   "Authentik bootstrap password has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
   llama-swap-api-key \
-  $'safe-api-key-value\nLLAMA_SWAP_PEER_ATTACKER_API_KEY=stolen' \
+  'safe-api-key;attacker' \
   "llama-swap API key has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
   ntfy-alert-topic \
-  $'safe-topic\nuser = "attacker:password"' \
+  'safe-topic"attacker' \
   "ntfy alert topic has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
   vaultwarden-oidc-client-secret \
-  $'safe-client-secret\nADMIN_TOKEN=attacker' \
+  "safe-client-secret'attacker" \
   "Vaultwarden OIDC client secret has an unsafe or unexpected format"
 
-# The failed attempts must leave no transaction debris containing rejected values.
+# The failed attempts must leave no staged secret files behind.
 if find /run/nas-secret-transactions /run/nas-secret-staging -type f -print -quit 2>/dev/null | grep -q .; then
   fail "failed secret activation left staged secret files behind"
 fi
