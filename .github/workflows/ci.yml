@@ -28,16 +28,19 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
+      - name: Restore exact Cockpit dependencies
+        id: cockpit-deps
+        uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-          restore-keys: npm-${{ runner.os }}-
+          path: cockpit/node_modules
+          key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Cockpit dependencies on cache miss
+        if: steps.cockpit-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Resolve one dependency graph and build one reviewed bundle
         run: |
           set -euo pipefail
           test -f cockpit/package-lock.json
-          npm --prefix cockpit ci --no-audit --no-fund
           npm --prefix cockpit audit --audit-level=high
           npm --prefix cockpit run build
           npm --prefix cockpit run check
@@ -54,7 +57,7 @@ jobs:
             cockpit/dist
 
   test:
-    name: Source unit and syntax tests
+    name: Source unit, coverage, and syntax tests
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -71,10 +74,17 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Python unit tests
+      - name: Python unit tests and branch coverage floor
         run: |
           ./scripts/validate-python-syntax.py
-          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          if-no-files-found: error
+          retention-days: 14
+          path: coverage.json
       - name: Test inventory contract
         run: nix develop .#test -c python3 scripts/validate-test-inventory.py
       - name: Maintainer core integration tests
@@ -115,30 +125,10 @@ jobs:
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
             "$nix_bin" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
 
-  coverage-gate:
-    name: Branch coverage floors
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Branch coverage floors (66% aggregate minimum)
-        run: |
-          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-          nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: coverage-report
-          if-no-files-found: error
-          retention-days: 14
-          path: coverage.json
-
   coverage-diff:
     name: Per-file coverage drift vs main
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    needs: [coverage-gate]
+    needs: [test]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -265,9 +255,21 @@ jobs:
         with:
           name: cockpit-bundle
           path: cockpit
-      - name: Restore exact test dependencies
+      - name: Restore exact Cockpit dependencies
+        id: browser-deps
+        uses: actions/cache@v4
+        with:
+          path: cockpit/node_modules
+          key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Cockpit dependencies on cache miss
+        if: steps.browser-deps.outputs.cache-hit != 'true'
         run: npm --prefix cockpit ci --no-audit --no-fund
-      - name: Install pinned Playwright browser engines
+      - name: Restore pinned Playwright browser engines
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install pinned Playwright browser engines and system dependencies
         run: npm --prefix cockpit exec -- playwright install --with-deps chromium firefox webkit
       - name: Cross-browser UI security suite
         run: npm --prefix cockpit run test:browser
@@ -324,7 +326,7 @@ jobs:
 
   static:
     name: Nix evaluation and lint
-    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive, coverage-gate]
+    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -431,7 +433,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [cockpit, test, test-nonroot, coverage-gate, coverage-diff, caddy-validate, fuzz, security, browser, source-archive, static, build, integration, installer]
+    needs: [cockpit, test, test-nonroot, coverage-diff, caddy-validate, fuzz, security, browser, source-archive, static, build, integration, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
