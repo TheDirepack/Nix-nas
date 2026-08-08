@@ -43,11 +43,21 @@ py-modules = [
   "nas_migrate_state",
   "nas_operation_journal",
   "nas_operation_lock",
+  "nas_service_authentik",
+  "nas_service_caddy",
+  "nas_service_firewall",
+  "nas_service_runtime_compose",
+  "nas_service_runtime_libvirt",
+  "nas_service_runtime_podman",
   "nas_setup",
   "nas_setup_config",
   "nas_state",
   "nas_syncthing_devices"
 ]
+
+[tool.setuptools.packages.find]
+where = ["services"]
+include = ["nas_managed_runtime*"]
 
 [tool.ruff]
 target-version = "py312"
@@ -56,9 +66,6 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 
-# These harnesses intentionally add the repository service/test directories to
-# sys.path before importing NAS-owned modules. Keep E402 scoped to only those
-# bootstrap files so ordinary modules still enforce top-level import ordering.
 [tool.ruff.lint.per-file-ignores]
 "scripts/fuzz.py" = ["E402"]
 "tests/test_adversarial_security.py" = ["E402"]
