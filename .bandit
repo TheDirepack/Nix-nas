@@ -1,4 +1,3 @@
-[bandit]
 # B310 flags urllib.request.urlopen even where the surrounding service contract
 # restricts the target to bounded HTTP(S) integrations. The project security
 # regression suite covers those URL construction paths.
@@ -7,4 +6,6 @@
 # directories (0660 / 02770). Those modes are part of the NAS privilege model:
 # owner/group access is required and access for "other" remains disabled.
 # Keep every other medium/high Bandit rule enabled.
-skips = B103,B310
+skips:
+  - B103
+  - B310
