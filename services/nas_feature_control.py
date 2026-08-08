@@ -1169,6 +1169,53 @@ def authorize(entry: dict[str, Any], headers: Any, scope: str = "") -> bool:
     return ADMIN_GROUP in groups
 
 
+def authorize_service_scope(scope: str, headers: Any) -> bool:
+    try:
+        _, service_id, endpoint_id = scope.split(":", 2)
+    except ValueError:
+        return False
+    key = f"{service_id}:{endpoint_id}"
+    try:
+        effective_path = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
+        effective = json.loads(effective_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        try:
+            import nas_managed_service as msvc
+
+            effective = msvc.effective_registry()
+        except Exception:
+            return False
+    endpoint = effective.get("endpoints", {}).get(key)
+    if not isinstance(endpoint, dict):
+        return False
+    auth = endpoint.get("auth") or {}
+    mode = auth.get("mode", endpoint.get("access", "admin"))
+    if mode == "public":
+        return True
+    groups = split_groups(headers.get("Remote-Groups", ""))
+    username = headers.get("Remote-User", "").strip()
+    if DISABLED_GROUP in groups or not username:
+        return False
+    if ADMIN_GROUP in groups:
+        return True
+    allow = auth.get("allow", "any")
+    allowed_groups = auth.get("groups") or []
+    allowed_users = auth.get("users") or []
+    if allow == "any":
+        return bool(username)
+    if allow == "groups":
+        return any(g in groups for g in allowed_groups)
+    if allow == "users":
+        return username in allowed_users
+    if allow == "all":
+        return (not allowed_groups or any(g in groups for g in allowed_groups)) and (not allowed_users or username in allowed_users)
+    if allowed_groups:
+        return any(g in groups for g in allowed_groups)
+    if allowed_users:
+        return username in allowed_users
+    return False
+
+
 class BoundedThreadingUnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -1235,6 +1282,12 @@ class GateHandler(BaseHTTPRequestHandler):
             return
         feature_id = query.get("feature", [""])[0]
         scope = query.get("scope", [""])[0]
+        if scope.startswith("service:"):
+            if authorize_service_scope(scope, self.headers):
+                self.respond(HTTPStatus.NO_CONTENT)
+            else:
+                self.respond(HTTPStatus.FORBIDDEN, "Not authorized for this service endpoint\n")
+            return
         if (feature_id and GATE_ID_RE.fullmatch(feature_id) is None) or scope not in GATE_SCOPES:
             self.respond(HTTPStatus.BAD_REQUEST, "Invalid authorization query\n")
             return

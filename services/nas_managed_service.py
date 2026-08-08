@@ -321,10 +321,18 @@ def effective_registry(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path
     except FileNotFoundError:
         builtin = {"schemaVersion": 1, "endpoints": {}}
     store = load_store(store_path)
+    builtin_endpoints: dict[str, Any] = {}
+    for eid, ep in builtin.get("endpoints", {}).items():
+        norm = dict(ep)
+        if "publicPath" in ep and "exposure" not in ep:
+            norm["exposure"] = {"type": "path", "value": ep["publicPath"]}
+        if "portal" not in norm and ep.get("linkKey"):
+            norm["portal"] = {"visible": True, "category": "Administration" if ep.get("access") == "admin" else "Other", "icon": ep.get("linkKey", "box")}
+        builtin_endpoints[eid] = norm
     effective = {
         "schemaVersion": SCHEMA_VERSION,
         "generation": store.get("generation", 1),
-        "endpoints": dict(builtin.get("endpoints", {})),
+        "endpoints": dict(builtin_endpoints),
         "services": dict(store.get("services", {})),
     }
     for service_id, service in store.get("services", {}).items():
@@ -383,6 +391,8 @@ def portal_projection(effective: dict[str, Any] | None = None) -> dict[str, Any]
             url = f"https://{exposure.get('value')}/"
         elif exposure.get("type") == "port":
             url = f"https://nas.local:{exposure.get('value')}/"
+        if not url and endpoint.get("publicPath"):
+            url = endpoint.get("publicPath")
         entries.append({
             "id": key,
             "label": endpoint.get("label", key),
