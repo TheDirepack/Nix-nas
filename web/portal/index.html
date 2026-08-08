@@ -24,26 +24,32 @@
     <p>Signed in as <strong style="display:inline">{{placeholder "http.request.header.Remote-Name" | html}}</strong>.</p>
   </header>
   <main class="grid">
-    {{if contains "nas_admin" (placeholder "http.request.header.Remote-Groups")}}
-    <a href="/shares/"><strong>Files and shares</strong><small>CopyParty volumes, uploads, WebDAV, and share links.</small></a>
-    {{else if contains "nas_allow_files" (placeholder "http.request.header.Remote-Groups")}}
-    <a href="/shares/users/{{placeholder "http.request.header.Remote-User" | urlquery}}/"><strong>Files and shares</strong><small>Your CopyParty volume, uploads, WebDAV, and native share links.</small></a>
-    {{end}}
+    {{ $groups := split "," (placeholder "http.request.header.Remote-Groups") }}
+    {{ $portal := include "/run/nas-control/portal.json" | mustFromJson }}
+    {{ range $entry := $portal.entries }}
+      {{ $visible := false }}
+      {{ $access := index $entry "access" }}
+      {{ $mode := index $access "mode" }}
+      {{ if eq $mode "public" }}{{ $visible = true }}{{ end }}
+      {{ if has $groups "nas_admin" }}{{ $visible = true }}{{ end }}
+      {{ $allow := index $access "allow" }}
+      {{ $groups_list := index $access "groups" }}
+      {{ if $groups_list }}
+        {{ range $g := $groups_list }}{{ if has $groups $g }}{{ $visible = true }}{{ end }}{{ end }}
+      {{ end }}
+      {{ $users_list := index $access "users" }}
+      {{ if $users_list }}
+        {{ $user := placeholder "http.request.header.Remote-User" }}
+        {{ range $u := $users_list }}{{ if eq $u $user }}{{ $visible = true }}{{ end }}{{ end }}
+      {{ end }}
+      {{ if not $groups_list }}{{ if not $users_list }}{{ if eq $allow "any" }}{{ $visible = true }}{{ end }}{{ if eq $allow "all" }}{{ $visible = true }}{{ end }}{{ end }}{{ end }}
+      {{ if $visible }}
+        <a href="{{index $entry "url" | html}}"><strong>{{index $entry "label" | html}}</strong><small>{{index $entry "category" | html}} · {{index $entry "id" | html}}</small></a>
+      {{ end }}
+    {{ end }}
     <a href="/settings/"><strong>Account settings</strong><small>Password, MFA, and profile settings in Authentik.</small></a>
-    {{if or (contains "nas_allow_syncthing" (placeholder "http.request.header.Remote-Groups")) (contains "nas_admin" (placeholder "http.request.header.Remote-Groups"))}}
-    <a href="/settings/syncthing"><strong>Syncthing devices</strong><small>Manage the device declarations attached to your account.</small></a>
-    {{end}}
-    {{if or (contains "nas_allow_ai" (placeholder "http.request.header.Remote-Groups")) (contains "nas_admin" (placeholder "http.request.header.Remote-Groups"))}}
-    <a href="/ai/"><strong>AI workspace</strong><small>Open WebUI and approved local models.</small></a>
-    {{end}}
-    {{if or (contains "nas_allow_vault" (placeholder "http.request.header.Remote-Groups")) (contains "nas_admin" (placeholder "http.request.header.Remote-Groups"))}}
-    <a href="/vault/"><strong>Vault</strong><small>Your Vaultwarden account.</small></a>
-    {{end}}
-    {{if contains "nas_admin" (placeholder "http.request.header.Remote-Groups")}}
-    <a href="/console/"><strong>Administration</strong><small>Cockpit appliance management and documentation.</small></a>
+    {{if has $groups "nas_admin"}}
     <a href="/shares/admin/copyparty-config/"><strong>CopyParty configuration</strong><small>Edit native volumes, ACLs, flags, and reload configuration.</small></a>
-    <a href="/syncthing/"><strong>Syncthing administration</strong><small>Global Syncthing UI; ordinary users configure their devices in Authentik.</small></a>
-    <a href="/identity/if/admin/"><strong>Identity administration</strong><small>Users, groups, flows, MFA, providers, and applications.</small></a>
     {{end}}
   </main>
   <footer>Share policy belongs to CopyParty. Identity and user-editable profile settings belong to Authentik.</footer>
