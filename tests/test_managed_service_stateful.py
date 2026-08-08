@@ -158,10 +158,12 @@ if HAS_HYPOTHESIS:
             assert portal["generation"] == effective.get("generation", 1)
 
         @invariant()
-        def duplicate_exposures_fail_closed(self):
+        def duplicate_available_exposures_fail_closed(self):
             effective = msvc.effective_registry(self.builtin, self.store)
             hostname_counts: dict[str, int] = {}
             for endpoint in effective["endpoints"].values():
+                if endpoint.get("available") is False:
+                    continue
                 exposure = endpoint.get("exposure") or {}
                 if exposure.get("type") == "hostname":
                     value = exposure.get("value")
@@ -176,11 +178,12 @@ if HAS_HYPOTHESIS:
             caddy.generate_caddy_fragment(effective)
 
         @invariant()
-        def disabled_endpoints_are_not_reported_available(self):
+        def disabled_endpoints_are_not_reported_available_or_proxied(self):
             effective = msvc.effective_registry(self.builtin, self.store)
             for endpoint in effective["endpoints"].values():
                 endpoint.setdefault("portal", {})["visible"] = True
             portal = msvc.portal_projection(effective)
+            route_ids = {route["id"] for route in caddy.generate_caddy_fragment(effective)["routes"]}
             by_id = {entry["id"]: entry for entry in portal["entries"]}
             for sid, service in self.model.items():
                 if service.get("enabled", False):
@@ -189,6 +192,7 @@ if HAS_HYPOTHESIS:
                     key = f"{sid}:{endpoint_id}"
                     if key in by_id:
                         assert not by_id[key]["available"], f"disabled {key} should not be available"
+                    assert f"nas-managed-{sid}-{endpoint_id}" not in route_ids, f"disabled {key} remained proxied"
 
         @invariant()
         def rejected_write_preserves_previous_store(self):
@@ -256,12 +260,16 @@ if HAS_HYPOTHESIS:
 
                 for sid, service in services.items():
                     key = f"{sid}:web"
+                    route_id = f"nas-managed-{sid}-web"
                     self.assertIn(key, effective["endpoints"])
                     enabled = service["enabled"]
                     self.assertEqual(effective["endpoints"][key]["available"], enabled)
                     self.assertIn(key, by_portal)
                     self.assertEqual(by_portal[key]["available"], enabled)
-                    self.assertIn(f"nas-managed-{sid}-web", route_ids)
+                    if enabled:
+                        self.assertIn(route_id, route_ids)
+                    else:
+                        self.assertNotIn(route_id, route_ids)
 
 else:
 
