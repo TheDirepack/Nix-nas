@@ -24,6 +24,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
 
 for cmd in qemu-system-x86_64 qemu-img ssh curl npm; do need "$cmd"; done
+[[ "$TEST_USER" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] || die "invalid NAS_VM_TEST_USER"
 [[ -s "$OS_DISK" ]] || die "installed VM disk is missing; run qemu-test.sh installer first"
 [[ -s "$SSH_KEY" ]] || die "installer SSH key is missing; run qemu-test.sh installer first"
 
@@ -78,9 +79,11 @@ ssh "${ssh_args[@]}" admin@127.0.0.1 true >/dev/null 2>&1 || {
   die "final browser VM did not become reachable over SSH"
 }
 
-log "Creating an overlay-only pre-authenticated Cockpit test identity"
-printf '%s\n' "$TEST_PASSWORD" | ssh "${ssh_args[@]}" admin@127.0.0.1 \
-  "sudo -n bash -c 'id -u $TEST_USER >/dev/null 2>&1 || useradd --create-home --groups wheel --shell /bin/bash $TEST_USER; read -r pw; printf \"%s:%s\\n\" $TEST_USER \"\$pw\" | chpasswd'"
+log "Creating an overlay-only Cockpit test identity"
+ssh "${ssh_args[@]}" admin@127.0.0.1 \
+  "sudo -n id -u '$TEST_USER' >/dev/null 2>&1 || sudo -n useradd --create-home --groups wheel --shell /bin/bash '$TEST_USER'"
+printf '%s:%s\n' "$TEST_USER" "$TEST_PASSWORD" | \
+  ssh "${ssh_args[@]}" admin@127.0.0.1 'sudo -n chpasswd'
 
 for _ in $(seq 1 90); do
   if curl --fail --insecure --silent --show-error "https://127.0.0.1:$COCKPIT_PORT/" >/dev/null 2>&1; then break; fi
