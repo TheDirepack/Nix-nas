@@ -90,8 +90,8 @@
                   "properties": {
                     "mode": {"enum": ["public", "forward-auth", "oidc"]},
                     "allow": {"enum": ["any", "groups", "users", "all"]},
-                    "groups": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"}},
-                    "users": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}}
+                    "groups": {"type": "array", "items": {"type": "string", "pattern": "^([A-Za-z0-9_-]+|[0-9a-fA-F-]{36}|\\d+)$"}},
+                    "users": {"type": "array", "items": {"type": "string", "pattern": "^([A-Za-z0-9._-]+|[0-9a-fA-F-]{36}|\\d+)$"}}
                   }
                 },
                 "portal": {

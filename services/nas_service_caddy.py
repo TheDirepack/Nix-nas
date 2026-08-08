@@ -34,9 +34,14 @@ def _validate_exposure(exposure: dict[str, Any]) -> None:
     val = exposure.get("value", "")
     if val is None or val == "":
         raise CaddyError(f"exposure value is required for type {typ!r}")
+    if isinstance(val, str) and any(c in val for c in ("\r", "\n", "{", "}")):
+        raise CaddyError(f"Invalid exposure value {val!r}: contains invalid characters")
     if typ in ("hostname", "dns"):
         if not isinstance(val, str) or not HOSTNAME_RE.fullmatch(val):
             raise CaddyError(f"Invalid hostname {val!r}")
+        lan_host = os.environ.get("NAS_LAN_HOST", "nas.local")
+        if val == lan_host or val.endswith(f".{lan_host}"):
+            raise CaddyError(f"Hostname {val!r} collides with NAS host")
     elif typ == "port":
         try:
             port = int(val) if isinstance(val, str) else val
@@ -47,6 +52,9 @@ def _validate_exposure(exposure: dict[str, Any]) -> None:
     elif typ == "path":
         if not isinstance(val, str) or not val.startswith("/"):
             raise CaddyError(f"Invalid path {val!r}: must start with '/'")
+        reserved_prefixes = ("/api", "/outpost.goauthentik.io", "/identity", "/console", "/shares", "/share", "/dav", "/vault", "/ai", "/syncthing", "/metrics", "/victoriametrics", "/alerts", "/ups", "/notifications", "/settings")
+        if any(val == rp or val.startswith(rp + "/") for rp in reserved_prefixes):
+            raise CaddyError(f"Path {val!r} conflicts with reserved NAS path")
 
 
 
@@ -134,9 +142,14 @@ def generate_caddyfile(effective: dict[str, Any] | None = None) -> str:
         port = route["port"]
         target_port = route["targetPort"]
         auth = route["auth"]
-        if host:
+        transport = effective.get("endpoints", {}).get(route["key"], {}).get("transport", "http")
+        if port is not None:
+            lines.append(f"https://nas.local:{port} {{")
+            lines.append(f"  tls internal")
+            lines.append(f"  handle {{")
+        elif host:
             lines.append(f"@nas_{rid} host {host}")
-            handle_prefix = f"handle @nas_{rid} {{"
+            lines.append(f"handle @nas_{rid} {{")
         elif path:
             if path == "/":
                 matcher = "@nas_" + rid
@@ -144,21 +157,38 @@ def generate_caddyfile(effective: dict[str, Any] | None = None) -> str:
                     lines.append(f"@{matcher} path {path} {path}*")
                 else:
                     lines.append(f"@{matcher} path {path}")
-                handle_prefix = f"handle @{matcher} {{"
+                lines.append(f"handle @{matcher} {{")
             else:
                 matcher = "nas_" + rid
                 if prefix:
                     lines.append(f"@{matcher} path {path} {path}*")
                 else:
                     lines.append(f"@{matcher} path {path}")
-                handle_prefix = f"handle @{matcher} {{"
-        elif port is not None:
-            lines.append(f"@nas_{rid} port {port}")
-            handle_prefix = f"handle @nas_{rid} {{"
+                lines.append(f"handle @{matcher} {{")
         else:
             raise CaddyError(f"Route {rid} has no matcher")
-        lines.append(handle_prefix)
         if auth.get("mode") in ("forward-auth", "oidc"):
+            lines.append(f"  request_header -Remote-User")
+            lines.append(f"  request_header -Remote-Groups")
+            lines.append(f"  request_header -Remote-Name")
+            lines.append(f"  request_header -Remote-Email")
+            lines.append(f"  request_header -Remote-UID")
+            lines.append(f"  request_header -X-Authentik-Username")
+            lines.append(f"  request_header -X-Authentik-Groups")
+            lines.append(f"  request_header -X-Authentik-Name")
+            lines.append(f"  request_header -X-Authentik-Email")
+            lines.append(f"  request_header -X-Authentik-Uid")
+            lines.append(f"  forward_auth 127.0.0.1:9000 {{")
+            lines.append(f"    uri /outpost.goauthentik.io/auth/caddy")
+            lines.append(f"    copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid")
+            lines.append(f"  }}")
+            lines.append(f"  @missingAuthentikIdentity not header X-Authentik-Username *")
+            lines.append(f"  respond @missingAuthentikIdentity 403")
+            lines.append(f"  request_header Remote-User {{http.request.header.X-Authentik-Username}}")
+            lines.append(f"  request_header Remote-Groups {{http.request.header.X-Authentik-Groups}}")
+            lines.append(f"  request_header Remote-Name {{http.request.header.X-Authentik-Name}}")
+            lines.append(f"  request_header Remote-Email {{http.request.header.X-Authentik-Email}}")
+            lines.append(f"  request_header Remote-UID {{http.request.header.X-Authentik-Uid}}")
             scope = f"service:{route['key']}"
             lines.append(f"  forward_auth unix/{ON_DEMAND_GATE} {{")
             lines.append(f"    uri /authorize?scope={scope}")
@@ -166,32 +196,45 @@ def generate_caddyfile(effective: dict[str, Any] | None = None) -> str:
             lines.append(f"    header_up Remote-Groups {{http.request.header.Remote-Groups}}")
             lines.append(f"    header_up Remote-Name {{http.request.header.Remote-Name}}")
             lines.append(f"    header_up Remote-Email {{http.request.header.Remote-Email}}")
+            lines.append(f"    header_up Remote-UID {{http.request.header.Remote-UID}}")
             lines.append(f"  }}")
-        lines.append(f"  reverse_proxy 127.0.0.1:{target_port}")
+        if path and prefix:
+            lines.append(f"  uri strip_prefix {path}")
+            lines.append(f"  header_up X-Forwarded-Prefix {path}")
+        if transport == "https":
+            lines.append(f"  reverse_proxy 127.0.0.1:{target_port} {{")
+            lines.append(f"    transport http {{")
+            lines.append(f"      tls")
+            lines.append(f"      tls_insecure_skip_verify")
+            lines.append(f"    }}")
+            lines.append(f"  }}")
+        else:
+            lines.append(f"  reverse_proxy 127.0.0.1:{target_port}")
         lines.append("}")
+        if port is not None:
+            lines.append("}")
         lines.append("")
     return "\n".join(lines)
 
 
-def write_caddy_fragment(path: pathlib.Path | None = None) -> dict[str, Any]:
+def write_caddy_fragment(path: pathlib.Path | None = None, effective: dict[str, Any] | None = None) -> dict[str, Any]:
     if path is None:
         path = pathlib.Path("/run/nas-control/caddy-managed.conf")
-    fragment = generate_caddy_fragment()
-    caddyfile_content = generate_caddyfile(fragment.get("_effective") or None)
-    if "_effective" not in fragment:
-        caddyfile_content = generate_caddyfile(msvc.effective_registry() if not fragment.get("routes") else None)
-        if fragment.get("routes"):
-            caddyfile_content = generate_caddyfile(msvc.effective_registry())
-            routes_for_file = fragment["routes"]
-            tmp_effective = {"endpoints": {r["key"]: {"transport": "http", "targetPort": r["targetPort"], "exposure": r["exposure"], "auth": r["auth"]} for r in routes_for_file}}
-            caddyfile_content = generate_caddyfile(tmp_effective if routes_for_file else msvc.effective_registry())
-    effective = msvc.effective_registry()
+    if effective is None:
+        effective = msvc.effective_registry()
+    fragment = generate_caddy_fragment(effective)
     caddyfile_content = generate_caddyfile(effective)
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".caddy-managed.", dir=parent)
     tmp_path = pathlib.Path(tmp)
+    previous_content: str | None = None
     try:
+        if path.exists():
+            try:
+                previous_content = path.read_text(encoding="utf-8")
+            except OSError:
+                previous_content = None
         with open(fd, "w", encoding="utf-8") as handle:
             handle.write(caddyfile_content)
             handle.flush()
@@ -205,9 +248,12 @@ def write_caddy_fragment(path: pathlib.Path | None = None) -> dict[str, Any]:
             try:
                 os.close(vfd)
                 validate_tmp.write_text(caddyfile_content, encoding="utf-8")
-                result = subprocess.run([caddy_bin, "fmt", "--overwrite", str(validate_tmp)], capture_output=True, text=True, timeout=10)
-                if result.returncode != 0:
-                    raise CaddyError(f"Caddy validation failed: {result.stderr.strip()}")
+                fmt_result = subprocess.run([caddy_bin, "fmt", "--overwrite", str(validate_tmp)], capture_output=True, text=True, timeout=10)
+                if fmt_result.returncode != 0:
+                    raise CaddyError(f"Caddy fmt failed: {fmt_result.stderr.strip()}")
+                adapt_result = subprocess.run([caddy_bin, "adapt", "--adapter", "caddyfile", "--config", str(validate_tmp)], capture_output=True, text=True, timeout=10)
+                if adapt_result.returncode != 0:
+                    raise CaddyError(f"Caddy adapt failed: {adapt_result.stderr.strip()}")
             finally:
                 validate_tmp.unlink(missing_ok=True)
         tmp_path.chmod(0o644)
@@ -219,9 +265,19 @@ def write_caddy_fragment(path: pathlib.Path | None = None) -> dict[str, Any]:
             os.close(dir_fd)
         if os.environ.get("NAS_SKIP_CADDY_RELOAD") != "1" and shutil.which("systemctl"):
             try:
-                subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, timeout=10)
-            except OSError:
-                pass
+                reload_result = subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, text=True, timeout=10)
+                if reload_result.returncode != 0:
+                    if previous_content is not None:
+                        path.write_text(previous_content, encoding="utf-8")
+                        subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, timeout=10)
+                    raise CaddyError(f"Caddy reload failed: {reload_result.stderr.strip()}")
+            except OSError as exc:
+                if previous_content is not None:
+                    try:
+                        path.write_text(previous_content, encoding="utf-8")
+                    except OSError:
+                        pass
+                raise CaddyError(f"Caddy reload OSError: {exc}") from exc
     except CaddyError:
         tmp_path.unlink(missing_ok=True)
         raise
