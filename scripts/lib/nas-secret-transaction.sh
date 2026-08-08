@@ -16,7 +16,17 @@ nas_secret_tx_systemctl() {
 nas_secret_tx_realpath_lexical() {
   local value=$1
   [[ "$value" == /* ]] || return 1
-  realpath -m -- "$value"
+  # Canonicalize dot/dot-dot lexically without following symlinks. Following them
+  # here would hide a symlink from the explicit lstat-style checks below.
+  realpath -m -s -- "$value"
+}
+
+nas_secret_tx_parent_is_physical() {
+  local value=$1 parent lexical physical
+  parent="$(dirname -- "$value")" || return 1
+  lexical="$(realpath -m -s -- "$parent")" || return 1
+  physical="$(realpath -e -- "$parent")" || return 1
+  [[ "$lexical" == "$physical" ]]
 }
 
 nas_secret_tx_paths_overlap() {
@@ -25,7 +35,7 @@ nas_secret_tx_paths_overlap() {
 }
 
 nas_secret_tx_validate_paths() {
-  local root stage previous directory normalized
+  local root stage previous directory normalized physical_directory value
   root="$(nas_secret_tx_realpath_lexical "$1")" || {
     printf 'nas-secret-transaction: secret root must be an absolute path: %s\n' "$1" >&2
     return 1
@@ -51,6 +61,10 @@ nas_secret_tx_validate_paths() {
       printf 'nas-secret-transaction: refusing to operate on filesystem root\n' >&2
       return 1
     }
+    nas_secret_tx_parent_is_physical "$value" || {
+      printf 'nas-secret-transaction: parent path is missing or traverses a symlink: %s\n' "$value" >&2
+      return 1
+    }
   done
   nas_secret_tx_paths_overlap "$root" "$stage" && {
     printf 'nas-secret-transaction: secret root and staged tree must be disjoint\n' >&2
@@ -69,14 +83,26 @@ nas_secret_tx_validate_paths() {
       printf 'nas-secret-transaction: refusing filesystem root as transaction directory\n' >&2
       return 1
     }
+    [[ -d "$directory" && ! -L "$directory" ]] || {
+      printf 'nas-secret-transaction: transaction directory must be a real directory: %s\n' "$directory" >&2
+      return 1
+    }
+    physical_directory="$(realpath -e -- "$directory")" || {
+      printf 'nas-secret-transaction: transaction directory cannot be resolved safely: %s\n' "$directory" >&2
+      return 1
+    }
+    [[ "$physical_directory" == "$directory" ]] || {
+      printf 'nas-secret-transaction: transaction directory traverses a symlink: %s\n' "$directory" >&2
+      return 1
+    }
     # The transaction directory may contain stage/previous, but it must never contain
     # the live secret root or itself be beneath the live root.
     if nas_secret_tx_paths_overlap "$root" "$directory"; then
       printf 'nas-secret-transaction: transaction directory must be disjoint from the live secret root\n' >&2
       return 1
     fi
-    [[ "$stage" == "$directory/"* && "$previous" == "$directory/"* ]] || {
-      printf 'nas-secret-transaction: staged and previous trees must be children of the transaction directory\n' >&2
+    [[ "$(dirname -- "$stage")" == "$directory" && "$(dirname -- "$previous")" == "$directory" ]] || {
+      printf 'nas-secret-transaction: staged and previous trees must be direct children of the transaction directory\n' >&2
       return 1
     }
   fi
