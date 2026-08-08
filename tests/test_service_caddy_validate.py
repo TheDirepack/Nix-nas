@@ -46,6 +46,7 @@ class CaddyValidateTests(unittest.TestCase):
                     "transport": "http",
                     "targetPort": 9000,
                     "exposure": {"type": "port", "value": 8443},
+                    "auth": {"mode": "public"},
                 },
             },
         }

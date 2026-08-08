@@ -29,7 +29,7 @@ if HAS_HYPOTHESIS:
         return {
             "label": label,
             "enabled": enabled,
-            "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml"},
+            "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
             "endpoints": {
                 "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
             },
@@ -196,7 +196,7 @@ if HAS_HYPOTHESIS:
                     services[sid] = {
                         "label": sid,
                         "enabled": enabled,
-                        "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{sid}/compose.yaml"},
+                        "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{sid}/compose.yaml", "startPolicy": "boot"},
                         "endpoints": {
                             "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": f"{sid}.local" if hostname else "x.local"}, "auth": {"mode": "public"}}
                         },

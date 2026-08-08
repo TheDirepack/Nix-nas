@@ -86,7 +86,7 @@ class ManagedServiceTests(unittest.TestCase):
             msvc.validate_service("ok-svc", {"label": "x" * 65, "runtime": {"type": "quadlet", "source": "/var/lib/nas-control/apps/x/"}})
 
     def test_validate_runtime_and_source(self):
-        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        base = {"label": "X", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
         bad_runtime = dict(base)
         bad_runtime["runtime"] = {"type": "k8s", "source": "/var/lib/nas-control/apps/x/"}
         with self.assertRaisesRegex(msvc.ManagedServiceError, "runtime.type invalid"):
@@ -112,30 +112,30 @@ class ManagedServiceTests(unittest.TestCase):
             msvc.validate_service("x", traversal)
 
     def test_validate_endpoints(self):
-        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        base = {"label": "X", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
         bad_endpoint = dict(base)
         bad_endpoint["endpoints"] = {"Bad ID": {"targetPort": 80}}
         with self.assertRaisesRegex(msvc.ManagedServiceError, "endpoint .* invalid"):
             msvc.validate_service("x", bad_endpoint)
         bad_port = dict(base)
-        bad_port["endpoints"] = {"web": {"targetPort": 0}}
+        bad_port["endpoints"] = {"web": {"transport": "http", "targetPort": 0, "exposure": {"type": "hostname", "value": "app.local"}, "auth": {"mode": "public"}}}
         with self.assertRaisesRegex(msvc.ManagedServiceError, "Invalid port"):
             msvc.validate_service("x", bad_port)
         bad_hostname = dict(base)
-        bad_hostname["endpoints"] = {"web": {"targetPort": 80, "exposure": {"type": "hostname", "value": "bad host"}}}
+        bad_hostname["endpoints"] = {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "bad host"}, "auth": {"mode": "public"}}}
         with self.assertRaisesRegex(msvc.ManagedServiceError, "Invalid hostname"):
             msvc.validate_service("x", bad_hostname)
         bad_dns = dict(base)
-        bad_dns["endpoints"] = {"web": {"targetPort": 80, "exposure": {"type": "dns", "value": "bad_dns"}}}
+        bad_dns["endpoints"] = {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "dns", "value": "bad_dns"}, "auth": {"mode": "public"}}}
         with self.assertRaisesRegex(msvc.ManagedServiceError, "Invalid hostname"):
             msvc.validate_service("x", bad_dns)
         bad_group = dict(base)
-        bad_group["endpoints"] = {"web": {"targetPort": 80, "auth": {"mode": "forward-auth", "groups": ["bad group!"]}}}
+        bad_group["endpoints"] = {"web": {"targetPort": 80, "exposure": {"type": "hostname", "value": "app.local"}, "auth": {"mode": "forward-auth", "groups": ["bad group!"]}}}
         with self.assertRaisesRegex(msvc.ManagedServiceError, "Invalid Authentik group"):
             msvc.validate_service("x", bad_group)
         # valid dns endpoint passes
         ok = dict(base)
-        ok["endpoints"] = {"web": {"targetPort": 80, "exposure": {"type": "dns", "value": "app.nas.local"}}}
+        ok["endpoints"] = {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "dns", "value": "app.nas.local"}, "auth": {"mode": "public"}}}
         msvc.validate_service("x", ok)
 
     def test_validate_image_and_port(self):
@@ -166,28 +166,30 @@ class ManagedServiceTests(unittest.TestCase):
     def test_load_store_edge_cases(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = pathlib.Path(tmp) / "missing.json"
-            self.assertEqual(msvc.load_store(missing), {"schemaVersion": 2, "services": {}})
+            result = msvc.load_store(missing)
+            self.assertEqual(result["schemaVersion"], 2)
+            self.assertEqual(result["services"], {})
             bad_json = pathlib.Path(tmp) / "bad.json"
             bad_json.write_text("{not json", encoding="utf-8")
             with self.assertRaisesRegex(msvc.ManagedServiceError, "Invalid JSON"):
                 msvc.load_store(bad_json)
             wrong_version = pathlib.Path(tmp) / "wrong.json"
             wrong_version.write_text('{"schemaVersion": 99, "services": {}}', encoding="utf-8")
-            with self.assertRaisesRegex(msvc.ManagedServiceError, "Unsupported schemaVersion"):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "Unsupported schemaVersion|Schema validation failed"):
                 msvc.load_store(wrong_version)
             not_object = pathlib.Path(tmp) / "not.json"
             not_object.write_text('{"schemaVersion": 2, "services": []}', encoding="utf-8")
-            with self.assertRaisesRegex(msvc.ManagedServiceError, "services must be an object"):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "services must be an object|not of type"):
                 msvc.load_store(not_object)
             unreadable_dir = pathlib.Path(tmp) / "dir"
             unreadable_dir.mkdir()
-            with self.assertRaisesRegex(msvc.ManagedServiceError, "Unable to read"):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "Unable to read|Is a directory"):
                 msvc.load_store(unreadable_dir)
 
     def test_atomic_write_rejects_wrong_schema_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = pathlib.Path(tmp) / "services.json"
-            with self.assertRaisesRegex(msvc.ManagedServiceError, "wrong schemaVersion"):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "wrong schemaVersion|Schema validation failed"):
                 msvc.atomic_write_store({"schemaVersion": 1, "services": {}}, store)
 
     def test_effective_registry_missing_builtin(self):
@@ -279,21 +281,19 @@ class ManagedServiceTests(unittest.TestCase):
 
 
 class ManagedServiceInvariantTests(unittest.TestCase):
-    @unittest.expectedFailure
     def test_bool_as_int_port_must_be_rejected(self):
         with self.assertRaises(msvc.ManagedServiceError):
             msvc._validate_port(True)
         with self.assertRaises(msvc.ManagedServiceError):
             msvc._validate_port(False)
-        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        base = {"label": "X", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
         for bad in (True, False):
             doc = dict(base)
-            doc["endpoints"] = {"web": {"targetPort": bad}}
+            doc["endpoints"] = {"web": {"targetPort": bad, "exposure": {"type": "hostname", "value": "x.local"}, "auth": {"mode": "public"}}}
             with self.subTest(bad=bad):
                 with self.assertRaises(msvc.ManagedServiceError):
                     msvc.validate_service("x", doc)
 
-    @unittest.expectedFailure
     def test_enabled_must_be_bool_not_string_truthy(self):
         base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
         for bad in ("false", "true", "0", "1", 0, 1, None):
@@ -310,7 +310,7 @@ class ManagedServiceInvariantTests(unittest.TestCase):
                 self.assertIsInstance(doc.get("enabled"), bool, f"enabled={bad!r} should be bool-typed or rejected")
 
     def test_nested_wrong_types_raise_managed_error(self):
-        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        base = {"label": "X", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
         cases = [
             {"endpoints": {"web": "not-a-dict"}},
             {"endpoints": {"web": None}},
@@ -329,16 +329,16 @@ class ManagedServiceInvariantTests(unittest.TestCase):
         import nas_service_caddy as caddy
         dup_host = {
             "endpoints": {
-                "a": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "dup.local"}},
-                "b": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "dup.local"}},
+                "a": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "dup.local"}, "auth": {"mode": "public"}},
+                "b": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "dup.local"}, "auth": {"mode": "public"}},
             }
         }
         with self.assertRaisesRegex(ValueError, "Duplicate exposure"):
             caddy.generate_caddy_fragment(dup_host)
         dup_path = {
             "endpoints": {
-                "a": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/shared"}},
-                "b": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/shared"}},
+                "a": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/shared"}, "auth": {"mode": "public"}},
+                "b": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/shared"}, "auth": {"mode": "public"}},
             }
         }
         with self.assertRaisesRegex(ValueError, "Duplicate exposure"):
@@ -349,7 +349,7 @@ class ManagedServiceInvariantTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = pathlib.Path(tmp) / "services.json"
             def writer(idx: int) -> None:
-                data = {"schemaVersion": 2, "services": {f"svc-{idx}": {"label": f"Svc {idx}", "enabled": True, "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/svc-{idx}/compose.yaml"}, "endpoints": {"web": {"transport": "http", "targetPort": 8000 + idx, "exposure": {"type": "hostname", "value": f"svc-{idx}.local"}}}}}}
+                data = {"schemaVersion": 2, "services": {f"svc-{idx}": {"label": f"Svc {idx}", "enabled": True, "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/svc-{idx}/compose.yaml", "startPolicy": "boot"}, "endpoints": {"web": {"transport": "http", "targetPort": 8000 + idx, "exposure": {"type": "hostname", "value": f"svc-{idx}.local"}, "auth": {"mode": "public"}}}}}}
                 msvc.atomic_write_store(data, store)
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
                 futures = [pool.submit(writer, i) for i in range(20)]
@@ -366,8 +366,8 @@ class ManagedServiceInvariantTests(unittest.TestCase):
             builtin = pathlib.Path(tmp) / "builtin.json"
             store = pathlib.Path(tmp) / "store.json"
             builtin.write_text(json.dumps({"schemaVersion": 1, "endpoints": {}}))
-            enabled_svc = {"label": "Enabled", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/enabled/compose.yaml"}, "endpoints": {"web": {"transport": "http", "targetPort": 8080, "exposure": {"type": "hostname", "value": "enabled.local"}, "auth": {"mode": "public"}}}, "portal": {"visible": True}}
-            disabled_svc = {"label": "Disabled", "enabled": False, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/disabled/compose.yaml"}, "endpoints": {"web": {"transport": "http", "targetPort": 8081, "exposure": {"type": "hostname", "value": "disabled.local"}, "auth": {"mode": "public"}}}, "portal": {"visible": True}}
+            enabled_svc = {"label": "Enabled", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/enabled/compose.yaml", "startPolicy": "boot"}, "endpoints": {"web": {"transport": "http", "targetPort": 8080, "exposure": {"type": "hostname", "value": "enabled.local"}, "auth": {"mode": "public"}}}, "portal": {"visible": True}}
+            disabled_svc = {"label": "Disabled", "enabled": False, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/disabled/compose.yaml", "startPolicy": "boot"}, "endpoints": {"web": {"transport": "http", "targetPort": 8081, "exposure": {"type": "hostname", "value": "disabled.local"}, "auth": {"mode": "public"}}}, "portal": {"visible": True}}
             msvc.atomic_write_store({"schemaVersion": 2, "services": {"enabled": enabled_svc, "disabled": disabled_svc}}, store)
             eff = msvc.effective_registry(builtin, store)
             self.assertIn("enabled:web", eff["endpoints"])

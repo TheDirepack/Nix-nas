@@ -15,21 +15,79 @@ import re
 import tempfile
 from typing import Any
 
+try:
+    import jsonschema  # type: ignore[import-untyped]
+
+    _HAS_JSONSCHEMA = True
+except ImportError:
+    jsonschema = None  # type: ignore[assignment]
+    _HAS_JSONSCHEMA = False
+
 STORE_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SERVICE_STORE", "/var/lib/nas-control/services.json"))
 EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
 PORTAL_PATH = pathlib.Path(os.environ.get("NAS_PORTAL_JSON", "/run/nas-control/portal.json"))
 BUILTIN_REGISTRY = pathlib.Path(os.environ.get("NAS_BUILTIN_REGISTRY", "/etc/nas-control/endpoints.json"))
+SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SERVICE_SCHEMA", str(pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json")))
 
 SCHEMA_VERSION = 2
 ALLOWED_HOST_ROOTS = ("/tank", "/srv", "/var/lib/nas-control/apps")
+APPS_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 ENDPOINT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 IMAGE_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-z0-9_.-]+)?(?:@[a-z0-9:]+)?$", re.IGNORECASE)
 HOSTNAME_RE = re.compile(r"^(?:[a-z0-9-]{1,63}\.)*[a-z0-9-]{1,63}$", re.IGNORECASE)
+AUTH_MODE_VALUES = frozenset({"public", "forward-auth", "oidc"})
+AUTH_ALLOW_VALUES = frozenset({"any", "groups", "users", "all"})
+EXPOSURE_TYPE_VALUES = frozenset({"none", "path", "hostname", "dns", "port"})
 
 
 class ManagedServiceError(RuntimeError):
     pass
+
+
+_CACHED_SCHEMA: dict[str, Any] | None = None
+
+
+def _load_schema() -> dict[str, Any] | None:
+    global _CACHED_SCHEMA
+    if _CACHED_SCHEMA is not None:
+        return _CACHED_SCHEMA
+    try:
+        _CACHED_SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _CACHED_SCHEMA = None
+    return _CACHED_SCHEMA
+
+
+def _schema_validate_document(data: dict[str, Any]) -> None:
+    schema = _load_schema()
+    if schema is None:
+        return
+    if _HAS_JSONSCHEMA:
+        try:
+            jsonschema.validate(data, schema)
+        except jsonschema.ValidationError as exc:
+            path = "/" + "/".join(str(p) for p in exc.path) if exc.path else ""
+            raise ManagedServiceError(f"Schema validation failed at {path}: {exc.message}") from exc
+    else:
+        if not isinstance(data.get("schemaVersion"), int) or isinstance(data.get("schemaVersion"), bool):
+            raise ManagedServiceError("schemaVersion must be integer 2")
+        if data.get("schemaVersion") != SCHEMA_VERSION:
+            raise ManagedServiceError(f"Schema validation failed: schemaVersion must be {SCHEMA_VERSION}")
+        services = data.get("services")
+        if not isinstance(services, dict):
+            raise ManagedServiceError("Schema validation failed: services must be object")
+        for sid, svc in services.items():
+            if not isinstance(svc, dict):
+                raise ManagedServiceError(f"Schema validation failed: service {sid!r} must be object")
+            if not isinstance(svc.get("enabled"), bool):
+                raise ManagedServiceError(f"Schema validation failed: service {sid!r} enabled must be boolean, got {type(svc.get('enabled')).__name__}")
+            for eid, ep in (svc.get("endpoints") or {}).items():
+                if not isinstance(ep, dict):
+                    raise ManagedServiceError(f"Schema validation failed: endpoint {eid!r} must be object")
+                tp = ep.get("targetPort")
+                if isinstance(tp, bool) or not isinstance(tp, int):
+                    raise ManagedServiceError(f"Schema validation failed: endpoint {eid!r} targetPort must be integer")
 
 
 def _validate_service_id(value: str) -> str:
@@ -41,12 +99,35 @@ def _validate_service_id(value: str) -> str:
 def _validate_host_path(path: str) -> str:
     if not path.startswith("/"):
         raise ManagedServiceError(f"hostPath must be absolute: {path!r}")
-    # Accept-list: must be beneath an allowed root
     if not any(path == root or path.startswith(root + "/") for root in ALLOWED_HOST_ROOTS):
         raise ManagedServiceError(f"hostPath {path!r} is not beneath allow-list {ALLOWED_HOST_ROOTS}")
-    # No traversal, no symlink escape check here — caller must realpath and lstat
     if ".." in pathlib.PurePosixPath(path).parts:
         raise ManagedServiceError(f"hostPath must not contain '..': {path!r}")
+    p = pathlib.Path(path)
+    try:
+        resolved = p.resolve()
+    except OSError as exc:
+        raise ManagedServiceError(f"hostPath {path!r} cannot be resolved: {exc}") from exc
+    if not any(str(resolved) == root or str(resolved).startswith(root + "/") for root in ALLOWED_HOST_ROOTS):
+        raise ManagedServiceError(f"hostPath {path!r} resolves outside allow-list to {resolved!r}")
+    cur = pathlib.Path("/")
+    for part in p.parts[1:]:
+        cur = cur / part
+        try:
+            st = cur.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ManagedServiceError(f"hostPath {path!r} component {cur!r} cannot be stated: {exc}") from exc
+        import stat as _stat
+
+        if _stat.S_ISLNK(st.st_mode):
+            try:
+                link_target = cur.resolve()
+            except OSError:
+                raise ManagedServiceError(f"hostPath {path!r} component {cur!r} is a symlink that cannot be resolved")
+            if not any(str(link_target) == root or str(link_target).startswith(root + "/") for root in ALLOWED_HOST_ROOTS):
+                raise ManagedServiceError(f"hostPath {path!r} component {cur!r} is a symlink escaping allow-list to {link_target!r}")
     return path
 
 
@@ -62,10 +143,30 @@ def _validate_hostname(hostname: str) -> str:
     return hostname
 
 
-def _validate_port(port: int) -> int:
-    if not isinstance(port, int) or not 1 <= port <= 65535:
+def _validate_port(port: Any) -> int:
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ManagedServiceError(f"Invalid port {port!r}")
     return port
+
+
+def _validate_runtime_source(service_id: str, source: str) -> str:
+    if not isinstance(source, str) or not source:
+        raise ManagedServiceError(f"Service {service_id}: runtime.source must be a non-empty string")
+    p = pathlib.Path(source)
+    if not str(source).startswith("/var/lib/nas-control/apps/"):
+        raise ManagedServiceError(f"Service {service_id}: runtime.source must be under /var/lib/nas-control/apps/")
+    try:
+        resolved = p.resolve()
+    except OSError as exc:
+        raise ManagedServiceError(f"Service {service_id}: runtime.source cannot be resolved: {exc}") from exc
+    service_root = APPS_ROOT / service_id
+    try:
+        resolved.relative_to(service_root.resolve() if service_root.exists() else service_root)
+    except ValueError:
+        raise ManagedServiceError(f"Service {service_id}: runtime.source {source!r} resolves to {resolved!r} outside service root {service_root}")
+    if ".." in pathlib.PurePosixPath(source).parts:
+        raise ManagedServiceError(f"Service {service_id}: runtime.source must not contain '..'")
+    return source
 
 
 def validate_service(service_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -73,33 +174,71 @@ def validate_service(service_id: str, data: dict[str, Any]) -> dict[str, Any]:
     label = data.get("label", "")
     if not isinstance(label, str) or not label or len(label) > 64:
         raise ManagedServiceError(f"Service {service_id}: label must be 1..64 chars")
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ManagedServiceError(f"Service {service_id}: enabled must be boolean, got {type(enabled).__name__}")
     runtime = data.get("runtime", {})
+    if not isinstance(runtime, dict):
+        raise ManagedServiceError(f"Service {service_id}: runtime must be object")
     if runtime.get("type") not in ("quadlet", "compose", "vm", "external", "native"):
         raise ManagedServiceError(f"Service {service_id}: runtime.type invalid")
     source = runtime.get("source", "")
-    if not isinstance(source, str) or not source.startswith("/var/lib/nas-control/apps/"):
-        raise ManagedServiceError(f"Service {service_id}: runtime.source must be under /var/lib/nas-control/apps/")
-    # Storage accept-list
+    _validate_runtime_source(service_id, source)
+    if "image" in runtime:
+        _validate_image(runtime["image"])
     for mount in data.get("storage", []):
+        if not isinstance(mount, dict):
+            raise ManagedServiceError(f"Service {service_id}: storage entry must be object")
         _validate_host_path(mount.get("hostPath", ""))
         guest = mount.get("guestPath", "")
         if not guest.startswith("/"):
             raise ManagedServiceError(f"Service {service_id}: guestPath must be absolute")
-    # Endpoints
+    endpoints = data.get("endpoints")
+    if endpoints is not None and not isinstance(endpoints, dict):
+        raise ManagedServiceError(f"Service {service_id}: endpoints must be object")
     for endpoint_id, endpoint in (data.get("endpoints") or {}).items():
         if not ENDPOINT_ID_RE.fullmatch(endpoint_id):
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} invalid")
+        if not isinstance(endpoint, dict):
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} must be object")
         _validate_port(endpoint.get("targetPort", 0))
-        exposure = endpoint.get("exposure", {})
-        if exposure.get("type") == "hostname":
+        exposure = endpoint.get("exposure")
+        if exposure is None or not isinstance(exposure, dict):
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure must be object with type")
+        exp_type = exposure.get("type")
+        if exp_type not in EXPOSURE_TYPE_VALUES:
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure.type must be one of {sorted(EXPOSURE_TYPE_VALUES)}, got {exp_type!r}")
+        if exp_type in ("hostname", "dns"):
             _validate_hostname(exposure.get("value", ""))
-        elif exposure.get("type") == "dns":
-            _validate_hostname(exposure.get("value", ""))
-        # Authentik IDs are opaque but must be non-empty and not contain shell metachars
-        auth = endpoint.get("auth", {})
+        elif exp_type == "port":
+            _validate_port(exposure.get("value") if isinstance(exposure.get("value"), int) else int(exposure.get("value", 0)) if str(exposure.get("value", "")).isdigit() else exposure.get("value"))
+            val = exposure.get("value")
+            try:
+                _validate_port(int(val) if isinstance(val, str) and val.isdigit() else val)
+            except (ValueError, TypeError):
+                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure port invalid: {val!r}")
+        elif exp_type == "path":
+            val = exposure.get("value", "")
+            if not isinstance(val, str) or not val.startswith("/"):
+                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path exposure must start with '/'")
+        auth = endpoint.get("auth")
+        if auth is None or not isinstance(auth, dict):
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth must be object")
+        mode = auth.get("mode")
+        if mode not in AUTH_MODE_VALUES:
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.mode must be one of {sorted(AUTH_MODE_VALUES)}, got {mode!r}")
+        if "allow" in auth and auth["allow"] not in AUTH_ALLOW_VALUES:
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.allow must be one of {sorted(AUTH_ALLOW_VALUES)}")
         for gid in auth.get("groups", []):
-            if not re.fullmatch(r"^[A-Za-z0-9_-]+$", gid):
+            if not isinstance(gid, str) or not re.fullmatch(r"^[A-Za-z0-9_-]+$", gid):
                 raise ManagedServiceError(f"Invalid Authentik group ID {gid!r}")
+        for uid in auth.get("users", []):
+            if not isinstance(uid, str) or not re.fullmatch(r"^[A-Za-z0-9._-]+$", uid):
+                raise ManagedServiceError(f"Invalid Authentik user ID {uid!r}")
+        if "groups" in auth and not isinstance(auth["groups"], list):
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.groups must be array")
+        if "users" in auth and not isinstance(auth["users"], list):
+            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.users must be array")
     return data
 
 
@@ -107,13 +246,14 @@ def load_store(path: pathlib.Path = STORE_PATH) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return {"schemaVersion": SCHEMA_VERSION, "services": {}}
+        return {"schemaVersion": SCHEMA_VERSION, "generation": 1, "services": {}}
     except OSError as exc:
         raise ManagedServiceError(f"Unable to read {path}: {exc}") from exc
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ManagedServiceError(f"Invalid JSON in {path}: {exc}") from exc
+    _schema_validate_document(data)
     if data.get("schemaVersion") != SCHEMA_VERSION:
         raise ManagedServiceError(f"Unsupported schemaVersion in {path}")
     services = data.get("services", {})
@@ -125,10 +265,24 @@ def load_store(path: pathlib.Path = STORE_PATH) -> dict[str, Any]:
 
 
 def atomic_write_store(data: dict[str, Any], path: pathlib.Path = STORE_PATH) -> None:
+    _schema_validate_document(data)
     if data.get("schemaVersion") != SCHEMA_VERSION:
         raise ManagedServiceError("Refusing to write store with wrong schemaVersion")
     for service_id, service in data.get("services", {}).items():
         validate_service(service_id, service)
+    try:
+        existing_stat = path.stat()
+        orig_mode = existing_stat.st_mode & 0o777
+        orig_uid = existing_stat.st_uid
+        orig_gid = existing_stat.st_gid
+        has_orig = True
+    except FileNotFoundError:
+        orig_mode = 0o600
+        orig_uid = -1
+        orig_gid = -1
+        has_orig = False
+    data = dict(data)
+    data["generation"] = int(data.get("generation", 1)) + 1 if has_orig else int(data.get("generation", 1))
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(data, indent=2, sort_keys=True) + "\n"
@@ -139,7 +293,18 @@ def atomic_write_store(data: dict[str, Any], path: pathlib.Path = STORE_PATH) ->
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        tmp_path.chmod(0o600)
+        try:
+            if has_orig:
+                os.chmod(tmp_path, orig_mode)
+                if orig_uid != -1 and os.geteuid() == 0:
+                    try:
+                        os.chown(tmp_path, orig_uid, orig_gid)
+                    except OSError:
+                        pass
+            else:
+                tmp_path.chmod(0o600)
+        except OSError:
+            pass
         tmp_path.replace(path)
         dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -151,20 +316,17 @@ def atomic_write_store(data: dict[str, Any], path: pathlib.Path = STORE_PATH) ->
 
 
 def effective_registry(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path: pathlib.Path = STORE_PATH) -> dict[str, Any]:
-    """Merge built-in endpoints (immutable) + runtime services (mutable) into effective projection."""
     try:
         builtin = json.loads(builtin_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         builtin = {"schemaVersion": 1, "endpoints": {}}
     store = load_store(store_path)
-    # Built-ins are endpoints, runtime are services with endpoints — merge into one view
     effective = {
         "schemaVersion": SCHEMA_VERSION,
         "generation": store.get("generation", 1),
         "endpoints": dict(builtin.get("endpoints", {})),
         "services": dict(store.get("services", {})),
     }
-    # Runtime services' endpoints are also exposed as endpoints for Caddy/portal
     for service_id, service in store.get("services", {}).items():
         for endpoint_id, endpoint in (service.get("endpoints") or {}).items():
             key = f"{service_id}:{endpoint_id}"
@@ -176,6 +338,7 @@ def effective_registry(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path
                 "targetPort": endpoint.get("targetPort"),
                 "exposure": endpoint.get("exposure"),
                 "auth": endpoint.get("auth"),
+                "portal": endpoint.get("portal", service.get("portal", {})),
                 "available": service.get("enabled", False),
             }
     return effective
@@ -206,17 +369,12 @@ def write_effective(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path: p
 
 
 def portal_projection(effective: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Sanitized portal view: label, url, category, icon, access — no secrets, no host paths."""
     if effective is None:
         effective = effective_registry()
     entries = []
     for key, endpoint in effective.get("endpoints", {}).items():
-        # Only expose portal-visible endpoints
-        # Built-ins have linkKey, runtime have portal.visible
         if endpoint.get("linkKey") is None and not endpoint.get("portal", {}).get("visible", False):
-            # For runtime, check service's portal config
             continue
-        # Build URL from exposure
         exposure = endpoint.get("exposure") or {}
         url = ""
         if exposure.get("type") == "path":
@@ -237,8 +395,15 @@ def portal_projection(effective: dict[str, Any] | None = None) -> dict[str, Any]
     return {"schemaVersion": SCHEMA_VERSION, "generation": effective.get("generation", 1), "entries": sorted(entries, key=lambda x: x["id"])}
 
 
+def _read_effective_or_recompute(effective_path: pathlib.Path) -> dict[str, Any]:
+    try:
+        return json.loads(effective_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return effective_registry()
+
+
 def write_portal(effective_path: pathlib.Path = EFFECTIVE_PATH, portal_path: pathlib.Path = PORTAL_PATH) -> dict[str, Any]:
-    effective = effective_registry()
+    effective = _read_effective_or_recompute(effective_path)
     portal = portal_projection(effective)
     parent = portal_path.parent
     parent.mkdir(parents=True, exist_ok=True)

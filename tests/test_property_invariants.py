@@ -164,7 +164,7 @@ if HAS_HYPOTHESIS:
             doc = {
                 "label": label,
                 "enabled": True,
-                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml"},
+                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
                 "endpoints": {
                     "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
                 },
@@ -184,9 +184,9 @@ if HAS_HYPOTHESIS:
             doc = {
                 "label": label,
                 "enabled": False,
-                "runtime": {"type": "quadlet", "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml"},
+                "runtime": {"type": "quadlet", "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml", "startPolicy": "boot"},
                 "endpoints": {
-                    "api": {"transport": "http", "targetPort": port, "exposure": {"type": "dns", "value": hostname}}
+                    "api": {"transport": "http", "targetPort": port, "exposure": {"type": "dns", "value": hostname}, "auth": {"mode": "public"}}
                 },
             }
             msvc.validate_service(service_id, doc)
@@ -208,9 +208,9 @@ if HAS_HYPOTHESIS:
             doc = {
                 "label": label,
                 "enabled": True,
-                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml"},
+                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
                 "endpoints": {
-                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}}
+                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
                 },
             }
             msvc.validate_service(service_id, doc)

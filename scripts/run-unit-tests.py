@@ -180,7 +180,7 @@ def main() -> int:
         rm = RESULT_RE.search(output or "")
         detail = rm.group(2) if rm and rm.group(2) else ""
         if detail:
-            pairs = dict(re.findall(r"([a-z ]+)=\s*(\d+)", detail))
+            pairs = {k.strip(): v for k, v in re.findall(r"([a-z ]+)=\s*(\d+)", detail)}
             if "failures" in pairs:
                 failures = int(pairs["failures"])
             if "errors" in pairs:
@@ -312,6 +312,12 @@ def main() -> int:
         for path, detail in sorted(failures, key=lambda item: item[0].name):
             print(f"--- {path.relative_to(ROOT).as_posix()} ---", file=sys.stderr)
             print(detail, file=sys.stderr)
+        print(
+            f"unit suite failed: {total_passed} tests passed, {total_failed} failed, {total_errored} errored, "
+            f"{total_skipped} skipped, {total_expected} expectedFailures, {total_unexpected} unexpectedSuccesses, "
+            f"{total_ran} ran across {len(files)} files with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s",
+            file=sys.stderr,
+        )
         return 124 if any("exceeded" in detail for _, detail in failures) else 1
 
     if args.coverage:
