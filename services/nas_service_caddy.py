@@ -70,6 +70,11 @@ def _validate_exposure(exposure: dict[str, Any]) -> None:
 def _collect_routes(effective: dict[str, Any]) -> list[dict[str, Any]]:
     routes: list[dict[str, Any]] = []
     for key, endpoint in effective.get("endpoints", {}).items():
+        # Managed-service projections explicitly mark disabled services as
+        # unavailable. Do not leave an old proxy route reachable merely because
+        # the endpoint metadata still exists in the effective registry.
+        if endpoint.get("available") is False:
+            continue
         if endpoint.get("transport") not in ("http", "https", None):
             continue
         if "publicPath" in endpoint:
