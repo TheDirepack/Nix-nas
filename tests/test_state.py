@@ -101,10 +101,6 @@ class StateBundleTests(unittest.TestCase):
         validate.assert_called_once_with("a" * 32, ("appliance",))
         acquire.assert_not_called()
 
-    @unittest.skipIf(
-        not pathlib.Path("/run/nas-operations").exists(),
-        "requires VM with /run/nas-operations tmpfs (host hermetic fallback cannot fully emulate nested operation lock)",
-    )
     def test_real_nested_operation_runner_accepts_state_validator_success_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             operation_root = pathlib.Path(temporary) / "operations"
@@ -441,10 +437,6 @@ class StateBundleTests(unittest.TestCase):
             self.assertEqual((destination / "public.txt").stat().st_mode & 0o777, 0o640)
             self.assertEqual(destination.stat().st_mode & 0o777, 0o750)
 
-    @unittest.skipIf(
-        os.geteuid() != 0,
-        "requires root-owned chown semantics (VM with nas-state user)",
-    )
     def test_restore_to_absent_authority_uses_registry_owned_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -465,6 +457,7 @@ class StateBundleTests(unittest.TestCase):
             with (
                 mock.patch.object(state.pwd, "getpwnam", return_value=fake_user),
                 mock.patch.object(state.grp, "getgrnam", return_value=fake_group),
+                mock.patch.object(state.os, "geteuid", return_value=0),
                 mock.patch.object(state.os, "chown") as chown,
             ):
                 state.restore_path(source, destination, authority)
@@ -530,7 +523,9 @@ class StateBundleTests(unittest.TestCase):
         ):
             state.reapply_runtime_consumers(snapshot)
 
-        self.assertLess(calls.index(("start", "NetworkManager.service")), calls.index(("reload", "NetworkManager.service")))
+        self.assertLess(
+            calls.index(("start", "NetworkManager.service")), calls.index(("reload", "NetworkManager.service"))
+        )
         self.assertLess(calls.index(("start", "firewalld.service")), calls.index(("reload", "firewalld.service")))
         self.assertEqual(process_calls, [("nmcli", "connection", "reload")])
 
