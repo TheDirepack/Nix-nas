@@ -54,7 +54,8 @@ fi
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
   step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
     --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py \
-    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py
+    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py \
+    --exclude test_secret_security_fuzz.py
   step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_core.py'
   step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_matrix.py'
   step "Maintainer release integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_release.py'
@@ -79,7 +80,9 @@ if command -v node >/dev/null 2>&1; then
   done < <(find cockpit/e2e -type f -name '*.mjs' -print0 2>/dev/null | sort -z)
   node cockpit/build.js --check-source
   cockpit_bundle_available=false
-  if [[ -s cockpit/package-lock.json && -s cockpit/dist/index.js && -s cockpit/dist/index.css && -s cockpit/dist/build-meta.json ]]; then
+  if [[ "${NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE:-0}" == "1" ]]; then
+    skip cockpit-bundle "Cockpit distribution validation deferred to the production bundle build"
+  elif [[ -s cockpit/package-lock.json && -s cockpit/dist/index.js && -s cockpit/dist/index.css && -s cockpit/dist/build-meta.json ]]; then
     node cockpit/build.js --check
     cockpit_bundle_available=true
   else
