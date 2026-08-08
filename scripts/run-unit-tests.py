@@ -166,12 +166,27 @@ def main() -> int:
         if not _llama_cfg.exists():
             _llama_cfg.write_text("models: {}\npeers: {}\nselectors: {}\n", encoding="utf-8")
         env["NAS_LLAMA_SWAP_CONFIG"] = str(_llama_cfg)
-    # Ensure secret root subdirs exist so lstat() checks in _restore_private_file pass
+    # State rollback / journal paths (for nas_state, operation_journal)
+    if "NAS_STATE_ROLLBACK_ROOT" not in env:
+        try:
+            os.makedirs("/var/lib/nas-state", exist_ok=False)
+            os.rmdir("/var/lib/nas-state")
+        except OSError:
+            env["NAS_STATE_ROLLBACK_ROOT"] = str(_hermetic_tmp / "nas-state-rollback")
+    if "NAS_STATE_RESTORE_JOURNAL" not in env:
+        # Use the same hermetic state dir for the journal so it is writable
+        _state_journal_dir = pathlib.Path(env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback")))
+        env["NAS_STATE_RESTORE_JOURNAL"] = str(_state_journal_dir / "restore-operation.json")
+    # Ensure secret and state root subdirs exist so lstat() checks pass
     try:
         pathlib.Path(env["NAS_SECRET_ROOT"]).mkdir(parents=True, exist_ok=True)
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ai").mkdir(parents=True, exist_ok=True)
         # Ready marker for tests that check /run/nas-secrets/ready
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ready").touch(exist_ok=True)
+        if "NAS_STATE_ROLLBACK_ROOT" in env:
+            pathlib.Path(env["NAS_STATE_ROLLBACK_ROOT"]).mkdir(parents=True, exist_ok=True)
+        if "NAS_STATE_RESTORE_JOURNAL" in env:
+            pathlib.Path(env["NAS_STATE_RESTORE_JOURNAL"]).parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
     python_path = [str(ROOT / "services"), str(ROOT / "tests")]

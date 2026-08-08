@@ -133,7 +133,8 @@ in
     environment.etc."nas-control/capabilities.json".text = builtins.toJSON capabilityRegistryDocument;
     environment.etc."nas-control/capability-registry.schema.json".source = ../../../schemas/capability-registry.schema.json;
     environment.etc."nas-control/features.json".text = builtins.toJSON featureCatalog;
-    environment.etc."nas-control/endpoints.json".text = builtins.toJSON {
+    environment.etc."nas-control/endpoints.json".text = builtins.toJSON nasInternal.serviceRegistryV2;
+    environment.etc."nas-control/endpoints-v1.json".text = builtins.toJSON {
       schemaVersion = 1;
       endpoints = serviceRegistry;
     };
