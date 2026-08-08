@@ -11,10 +11,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "tests" / "custom-script-contracts.json"
 
-# Developer-only convenience wrappers are not shipped runtime surfaces. Their
-# underlying executable paths are already covered by the inventory separately.
+# Developer/CI-only harnesses are not shipped runtime command surfaces. Their
+# behavior is asserted by focused tooling/Cockpit contract tests instead of the
+# installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
+    "scripts/qemu-final-browser.sh",
     "scripts/vm-pytest.sh",
+    "scripts/zap-automation-scan.sh",
 }
 
 INSTALLED_FUZZ_STRATEGIES = {
