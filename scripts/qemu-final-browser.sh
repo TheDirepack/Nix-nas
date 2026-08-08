@@ -91,7 +91,10 @@ for _ in $(seq 1 90); do
 done
 curl --fail --insecure --silent --show-error "https://127.0.0.1:$COCKPIT_PORT/" >/dev/null || die "Cockpit did not become reachable"
 
-log "Running browser checks against the real installed Cockpit component"
+# Deterministic regression probes intentionally run before any active fuzzer.
+# This makes common auth/XSS/layout/accessibility regressions cheap to identify
+# and ensures long-running fuzz results are not hiding a basic known failure.
+log "Running deterministic authenticated and unauthenticated browser checks against the final VM"
 CI=1 \
 NAS_BROWSER_SUITE=vm \
 NAS_VM_BASE_URL="https://127.0.0.1:$COCKPIT_PORT" \
@@ -99,4 +102,20 @@ NAS_VM_TEST_USER="$TEST_USER" \
 NAS_VM_TEST_PASSWORD="$TEST_PASSWORD" \
 npm --prefix "$ROOT/cockpit" exec -- playwright test --config e2e/playwright.config.mjs
 
-log "Final installed-VM browser checks passed"
+if [[ -n "${NAS_ZAP_IMAGE:-}" && "${NAS_FINAL_VM_FUZZ:-1}" == 1 ]]; then
+  fuzz_out="${NAS_ZAP_OUT_DIR:-$ROOT/zap-report}/final-vm"
+  install -d -m 0755 "$fuzz_out"
+  log "Running state-aware unauthenticated ZAP Client Spider and active scan"
+  NAS_ZAP_OUT_DIR="$fuzz_out" \
+    "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://127.0.0.1:$COCKPIT_PORT/"
+
+  log "Running state-aware authenticated ZAP Client Spider and active scan"
+  NAS_ZAP_OUT_DIR="$fuzz_out" \
+  NAS_ZAP_AUTH_USER="$TEST_USER" \
+  NAS_ZAP_AUTH_PASSWORD="$TEST_PASSWORD" \
+    "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://127.0.0.1:$COCKPIT_PORT/"
+else
+  log "Skipping final-VM active fuzzing because NAS_ZAP_IMAGE is unset or NAS_FINAL_VM_FUZZ is disabled"
+fi
+
+log "Final installed-VM deterministic and fuzz checks passed"
