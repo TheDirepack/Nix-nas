@@ -324,11 +324,29 @@ class ManagedServiceTests(unittest.TestCase):
             portal = root / "portal.json"
             builtin.write_text(json.dumps({"schemaVersion": 1, "endpoints": {}}), encoding="utf-8")
             msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {}}, store)
+
+            real_load_store = msvc.load_store
+            real_effective_registry = msvc.effective_registry
+            real_write_effective = msvc.write_effective
+            real_write_portal = msvc.write_portal
+
+            def fixture_load_store(*_args, **_kwargs):
+                return real_load_store(store)
+
+            def fixture_effective_registry(*_args, **_kwargs):
+                return real_effective_registry(builtin, store)
+
+            def fixture_write_effective(*_args, **_kwargs):
+                return real_write_effective(builtin, store, effective)
+
+            def fixture_write_portal(*_args, **_kwargs):
+                return real_write_portal(effective, portal)
+
             with (
-                mock.patch.object(msvc, "STORE_PATH", store),
-                mock.patch.object(msvc, "BUILTIN_REGISTRY", builtin),
-                mock.patch.object(msvc, "EFFECTIVE_PATH", effective),
-                mock.patch.object(msvc, "PORTAL_PATH", portal),
+                mock.patch.object(msvc, "load_store", side_effect=fixture_load_store),
+                mock.patch.object(msvc, "effective_registry", side_effect=fixture_effective_registry),
+                mock.patch.object(msvc, "write_effective", side_effect=fixture_write_effective),
+                mock.patch.object(msvc, "write_portal", side_effect=fixture_write_portal),
             ):
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
@@ -336,6 +354,10 @@ class ManagedServiceTests(unittest.TestCase):
                     self.assertEqual(msvc.main(["reconcile"]), 0)
                     self.assertEqual(msvc.main(["show", "--json"]), 0)
                 self.assertIn("effective", output.getvalue())
+                self.assertTrue(effective.is_file())
+                self.assertTrue(portal.is_file())
+                self.assertEqual(json.loads(effective.read_text(encoding="utf-8"))["services"], {})
+
                 errors = io.StringIO()
                 with contextlib.redirect_stderr(errors):
                     self.assertEqual(msvc.main(["plan"]), 2)
