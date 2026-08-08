@@ -174,7 +174,9 @@ nas_secret_tx_swap() {
     printf 'nas-secret-transaction: previous tree already exists: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
     return 1
   }
-  nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET" && NAS_SECRET_TX_WAS_ACTIVE=true || true
+  if nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"; then
+    NAS_SECRET_TX_WAS_ACTIVE=true
+  fi
   NAS_SECRET_TX_SWAP_STARTED=true
   NAS_SECRET_TX_PHASE=stopping
   nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"
