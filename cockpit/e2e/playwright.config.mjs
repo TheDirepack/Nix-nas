@@ -35,6 +35,8 @@ export default defineConfig({
     ? [
         {name: "chromium-final-vm", use: {...devices["Desktop Chrome"]}},
         {name: "firefox-final-vm", use: {...devices["Desktop Firefox"]}},
+        {name: "webkit-final-vm", use: {...devices["Desktop Safari"]}},
+        {name: "chromium-mobile-final-vm", use: {...devices["Pixel 7"]}},
       ]
     : [
         {name: "chromium-desktop", use: {...devices["Desktop Chrome"]}},
