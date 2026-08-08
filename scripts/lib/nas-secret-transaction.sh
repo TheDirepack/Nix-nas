@@ -16,16 +16,7 @@ nas_secret_tx_systemctl() {
 nas_secret_tx_realpath_lexical() {
   local value=$1
   [[ "$value" == /* ]] || return 1
-  python3 - "$value" <<'PY'
-import os
-import sys
-value = os.path.normpath(sys.argv[1])
-# POSIX permits implementation-defined treatment of exactly two leading slashes.
-# Collapse that ambiguity because these paths are used for privileged rm/mv operations.
-if value.startswith("//"):
-    value = "/" + value.lstrip("/")
-print(value)
-PY
+  realpath -m -- "$value"
 }
 
 nas_secret_tx_paths_overlap() {
