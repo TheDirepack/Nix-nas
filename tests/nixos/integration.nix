@@ -28,5 +28,6 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("multi-user.target")
     machine.wait_for_unit("nas-vm-test-repository.service")
     machine.succeed("timeout 1800 nas-vm-guest-test /dev/vdb")
+    machine.succeed("timeout 900 nas-vm-secret-adversarial")
   '';
 }
