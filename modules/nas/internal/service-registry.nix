@@ -2,126 +2,181 @@
 
 let
   cfg = config.nas;
+  mkService = { label, description ? null, enabled, units, port, publicPath, access, linkKey, category ? "Other", icon ? null }:
+    let
+      authMode = if access == "public" then "public" else "forward-auth";
+      authAllow = if access == "admin" then "groups" else if access == "ai" then "groups" else if access == "vault" then "groups" else "any";
+      authGroups = if access == "admin" then ["nas_admin"] else if access == "ai" then ["nas_allow_ai" "nas_admin"] else if access == "vault" then ["nas_allow_vault" "nas_admin"] else if access == "api-key" then [] else [];
+      portalCategory = if linkKey == "identity" then "Administration" else if linkKey == "console" then "Administration" else if linkKey == "aiWorkspace" then "AI" else if linkKey == "syncthing" then "Files" else category;
+      portalIcon = if icon != null then icon else if linkKey != null then linkKey else "box";
+    in {
+      label = label;
+      enabled = enabled;
+      ownership = "system";
+      runtime = {
+        type = "systemd";
+        source = "systemd/${builtins.head units}";
+        startPolicy = "boot";
+        units = units;
+      };
+      endpoints = {
+        main = {
+          transport = "http";
+          targetPort = port;
+          exposure = {
+            type = "path";
+            value = publicPath;
+            prefix = true;
+          };
+          auth = {
+            mode = authMode;
+          } // (if authGroups != [] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then {} else { allow = "any"; });
+          portal = {
+            visible = linkKey != null;
+            category = portalCategory;
+            icon = portalIcon;
+          };
+        };
+      };
+    } // (if description != null then { description = description; } else {});
   registry = {
-    identity = {
+    identity = mkService {
       label = "Authentik identity";
-      publicPath = cfg.identity.authentikPath;
-      port = 9000;
+      enabled = true;
       units = [ "authentik.service" "authentik-worker.service" ];
+      port = 9000;
+      publicPath = cfg.identity.authentikPath;
       access = "public";
-      available = true;
       linkKey = "identity";
+      category = "Administration";
     };
-    cockpit = {
+    cockpit = mkService {
       label = "Cockpit management";
-      publicPath = "/console/";
-      port = 9092;
+      enabled = true;
       units = [ "cockpit.socket" ];
+      port = 9092;
+      publicPath = "/console/";
       access = "admin";
-      available = true;
       linkKey = "console";
+      category = "Administration";
     };
-    aiApi = {
+    aiApi = mkService {
       label = "llama-swap API";
+      enabled = cfg.ai.enable;
+      units = [ "nas-llama-swap.service" ];
+      port = cfg.ai.llamaSwap.port;
       publicPath = "/ai/v1/";
-      port = cfg.ai.llamaSwap.port;
-      units = [ "nas-llama-swap.service" ];
       access = "api-key";
-      available = cfg.ai.enable;
       linkKey = null;
+      category = "AI";
     };
-    aiRuntime = {
+    aiRuntime = mkService {
       label = "llama-swap runtime UI";
-      publicPath = "/ai/runtime/";
-      port = cfg.ai.llamaSwap.port;
+      enabled = cfg.ai.enable;
       units = [ "nas-llama-swap.service" ];
+      port = cfg.ai.llamaSwap.port;
+      publicPath = "/ai/runtime/";
       access = "admin";
-      available = cfg.ai.enable;
       linkKey = "aiRuntime";
+      category = "AI";
     };
-    aiWorkspace = {
+    aiWorkspace = mkService {
       label = "Open WebUI";
-      publicPath = "/ai/";
-      port = cfg.ai.openWebuiPort;
+      enabled = cfg.ai.enable;
       units = [ "open-webui.service" ];
+      port = cfg.ai.openWebuiPort;
+      publicPath = "/ai/";
       access = "ai";
-      available = cfg.ai.enable;
       linkKey = "aiWorkspace";
+      category = "AI";
     };
-    aiDownloader = {
+    aiDownloader = mkService {
       label = "Hugging Face model downloader";
-      publicPath = "/ai/models/";
-      port = cfg.ai.modelDownloader.port;
+      enabled = cfg.ai.enable && cfg.ai.modelDownloader.enable;
       units = [ "podman-hfdownloader.service" ];
+      port = cfg.ai.modelDownloader.port;
+      publicPath = "/ai/models/";
       access = "admin";
-      available = cfg.ai.enable && cfg.ai.modelDownloader.enable;
       linkKey = "aiModels";
+      category = "AI";
     };
-    syncthing = {
+    syncthing = mkService {
       label = "Syncthing administration";
-      publicPath = "/syncthing/";
-      port = 8384;
+      enabled = cfg.syncthing.enable;
       units = [ "syncthing.service" ];
+      port = 8384;
+      publicPath = "/syncthing/";
       access = "admin";
-      available = cfg.syncthing.enable;
       linkKey = "syncthing";
+      category = "Files";
     };
-    vaultwarden = {
+    vaultwarden = mkService {
       label = "Vaultwarden";
-      publicPath = "/vault/";
-      port = 8222;
+      enabled = cfg.vaultwarden.enable;
       units = [ "vaultwarden.service" ];
+      port = 8222;
+      publicPath = "/vault/";
       access = "vault";
-      available = cfg.vaultwarden.enable;
       linkKey = "vaultwarden";
+      category = "Home";
     };
-    victoriametrics = {
+    victoriametrics = mkService {
       label = "VictoriaMetrics";
-      publicPath = "/victoriametrics/";
-      port = cfg.observability.victoriaMetricsPort;
+      enabled = cfg.observability.enable;
       units = [ "victoriametrics.service" ];
+      port = cfg.observability.victoriaMetricsPort;
+      publicPath = "/victoriametrics/";
       access = "admin";
-      available = cfg.observability.enable;
       linkKey = "victoriaMetrics";
+      category = "Monitoring";
     };
-    grafana = {
+    grafana = mkService {
       label = "Grafana";
-      publicPath = "/metrics/";
-      port = cfg.observability.grafana.port;
+      enabled = cfg.observability.enable && cfg.observability.grafana.enable;
       units = [ "grafana.service" ];
+      port = cfg.observability.grafana.port;
+      publicPath = "/metrics/";
       access = "admin";
-      available = cfg.observability.enable && cfg.observability.grafana.enable;
       linkKey = "metrics";
+      category = "Monitoring";
     };
-    alerts = {
+    alerts = mkService {
       label = "Alert status";
-      publicPath = "/alerts/";
-      port = cfg.observability.alertRouterPort;
+      enabled = cfg.observability.enable && cfg.alerting.enable;
       units = [ "nas-alert-router.service" "vmalert-nas.service" ];
+      port = cfg.observability.alertRouterPort;
+      publicPath = "/alerts/";
       access = "admin";
-      available = cfg.observability.enable && cfg.alerting.enable;
       linkKey = "alerts";
+      category = "Monitoring";
     };
-    notifications = {
+    notifications = mkService {
       label = "ntfy notifications";
-      publicPath = "/notifications/";
-      port = cfg.observability.ntfy.port;
+      enabled = cfg.observability.ntfy.enable;
       units = [ "ntfy-sh.service" ];
+      port = cfg.observability.ntfy.port;
+      publicPath = "/notifications/";
       access = "native";
-      available = cfg.observability.ntfy.enable;
       linkKey = "notifications";
+      category = "Monitoring";
     };
-    ups = {
+    ups = mkService {
       label = "NUT web interface";
-      publicPath = "/ups/";
-      port = cfg.power.ups.web.port;
+      enabled = cfg.power.ups.enable && cfg.power.ups.web.enable;
       units = [ "podman-nut-webgui.service" ];
+      port = cfg.power.ups.web.port;
+      publicPath = "/ups/";
       access = "admin";
-      available = cfg.power.ups.enable && cfg.power.ups.web.enable;
       linkKey = "ups";
+      category = "Monitoring";
     };
   };
 in
 {
   serviceRegistry = registry;
+  serviceRegistryV2 = {
+    schemaVersion = 2;
+    generation = 1;
+    services = registry;
+  };
 }
