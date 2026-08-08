@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import pathlib
 import sys
 import unittest
@@ -60,6 +61,60 @@ class StructuredLoggingTests(unittest.TestCase):
         self.assertEqual(value["username"], "operator")
         self.assertEqual(value["uid"], 1000)
         self.assertEqual(value["gid"], 100)
+
+    def test_camel_kebab_dotted_and_snake_secret_names_are_redacted(self) -> None:
+        secret = "TOP-SECRET-SENTINEL"
+        variants = {
+            "clientSecret": secret,
+            "accessToken": secret,
+            "refreshToken": secret,
+            "sessionToken": secret,
+            "privateKey": secret,
+            "apiKey": secret,
+            "providerApiKey": secret,
+            "db-password": secret,
+            "peer.access.token": secret,
+            "nested_secret": secret,
+        }
+        sanitized = nas_logging.sanitize(variants)
+        for key in variants:
+            with self.subTest(key=key):
+                self.assertEqual(sanitized[key], "[redacted]")
+        self.assertNotIn(secret, json.dumps(sanitized))
+
+    def test_nested_secret_keys_are_redacted_at_every_supported_depth(self) -> None:
+        sentinel = "SECRET-NEVER-LOG"
+        value = {
+            "level1": {
+                "level2": {
+                    "clientSecret": sentinel,
+                    "safe": [
+                        {"apiKey": sentinel},
+                        {"message": "visible"},
+                    ],
+                }
+            }
+        }
+        sanitized = nas_logging.sanitize(value)
+        encoded = json.dumps(sanitized)
+        self.assertNotIn(sentinel, encoded)
+        self.assertIn("visible", encoded)
+
+    def test_non_finite_numbers_never_emit_nonstandard_json(self) -> None:
+        stream = io.StringIO()
+        record = nas_logging.log_event(
+            "numeric",
+            stream=stream,
+            metric=math.nan,
+            nested={"positive": math.inf, "negative": -math.inf},
+            duration_ms=math.inf,
+        )
+        raw = stream.getvalue()
+        self.assertNotIn("NaN", raw)
+        self.assertNotIn("Infinity", raw)
+        decoded = json.loads(raw, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+        self.assertEqual(decoded, record)
+        self.assertEqual(decoded["durationMs"], 0)
 
     def test_control_characters_cannot_forge_additional_log_records(self) -> None:
         stream = io.StringIO()
