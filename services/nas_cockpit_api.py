@@ -491,7 +491,7 @@ def _fetch_existing_provider_key(active: Any, provider_id: str, keepass_password
         command,
         check=False,
         timeout_seconds=30,
-        input_text=f"{keepass_password}\n\n",
+        input_text=f"{keepass_password}\n",
         env=fetch_env,
     )
     if result.returncode != 0:
@@ -594,12 +594,8 @@ def _rollback_provider_mutation(
         except Exception:
             failures.append("llama-swap service")
     if failures:
-        diagnostic(
-            "nas-cockpit-api provider rollback incomplete components=" + ",".join(failures)
-        )
-        raise ApiError(
-            "Provider mutation failed and rollback was incomplete; manual recovery is required"
-        )
+        diagnostic("nas-cockpit-api provider rollback incomplete components=" + ",".join(failures))
+        raise ApiError("Provider mutation failed and rollback was incomplete; manual recovery is required")
 
 
 def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
@@ -861,8 +857,6 @@ def overview() -> dict[str, Any]:
         futures = {name: executor.submit(probe) for name, probe in probes.items()}
         for name, future in futures.items():
             try:
-                # Keep this above command_probe's 20s subprocess deadline so
-                # the probe itself owns cancellation and child cleanup.
                 results[name] = future.result(timeout=35)
             except concurrent.futures.CancelledError:
                 results[name] = {"ok": False, "error": "Probe was cancelled"}
@@ -940,9 +934,6 @@ def safe_action(name: str) -> dict[str, Any]:
         raise ApiError("Syncthing support is not installed in this NixOS generation.")
 
     outputs: list[str] = []
-    # Workers that already acquire the appliance coordinator must not inherit a
-    # conflicting lock held by the Cockpit request process. Other simple workers
-    # remain guarded here until they own their own operation boundary.
     guard = contextlib.nullcontext() if spec.worker_owns_operation else operation_guard(name, spec.conflicts)
     with guard:
         for command in spec.commands:
@@ -958,8 +949,6 @@ def set_feature(feature: str, mode: str) -> dict[str, Any]:
     feature = validate_argument(feature, FEATURE_RE, "feature identifier")
     if mode not in {"off", "on-demand", "always"}:
         raise ApiError("Feature mode must be off, on-demand, or always")
-    # nas-feature-control owns the runtime mutation coordinator itself. Holding
-    # the same class in Cockpit would deadlock/fail the child operation.
     return json_command(["nas-feature-control", "set", feature, mode])
 
 
