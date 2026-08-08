@@ -1093,7 +1093,10 @@ def run_first_start(
 
 
 def main() -> None:
-    if os.geteuid() != 0:
+    # Allow --help/-h without superuser so `test_all_argument_driven_python_commands_have_working_help`
+    # and `python -m pytest` on host (non-root) can validate CLI surfaces without escalation.
+    # All other commands still require root.
+    if os.geteuid() != 0 and "--help" not in sys.argv and "-h" not in sys.argv:
         print(json.dumps({"error": "nas-cockpit-api requires Cockpit superuser escalation"}), file=sys.stderr)
         raise SystemExit(1)
 
