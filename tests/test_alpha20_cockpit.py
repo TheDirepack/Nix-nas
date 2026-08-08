@@ -47,6 +47,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("run npm ci, then npm run build", packaging)
         self.assertIn("cockpit/build.js --check-source", preflight)
         self.assertIn("cockpit/build.js --check", preflight)
+        self.assertIn("NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE", preflight)
         self.assertNotIn("unsafe-inline", text("cockpit/src/manifest.json"))
 
     def test_release_archive_excludes_node_modules_but_keeps_distribution(self) -> None:
@@ -79,32 +80,35 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("verify_syncthing_configuration", identity)
         self.assertIn('"schemaVersion": 2', identity)
 
-    def test_ci_is_explicitly_staged_static_build_runtime_final_then_fuzz(self) -> None:
+    def test_ci_uses_direct_dependencies_static_build_runtime_final_then_fuzz(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         self.assertIn('tags: ["v*"]', workflow)
-        for gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
-            self.assertIn(gate, workflow)
-        self.assertIn("Stage 1 gate - source is qualified to build", workflow)
+        for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
+            self.assertNotIn(retired_gate, workflow)
         self.assertIn("Build qualified Cockpit production bundle", workflow)
         self.assertIn("Build qualified NixOS closures", workflow)
         self.assertIn("Post-build full-stack QEMU integration", workflow)
         self.assertIn("Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz", workflow)
-        self.assertIn("Slow source/property fuzz shard (${{ matrix.shard }})", workflow)
+        self.assertIn("Slow source/property/security fuzz shard (${{ matrix.shard }})", workflow)
         self.assertIn("Slow browser deterministic replay plus hostile-input fuzz", workflow)
+        self.assertIn("needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow)
+        self.assertIn("needs: [cockpit-build]", workflow)
+        self.assertIn("needs: [cockpit-build, source-archive]", workflow)
+        self.assertIn("needs: [build, browser, cockpit-build]", workflow)
+        self.assertIn("needs: [integration, cockpit-build]", workflow)
+        self.assertIn("needs: [integration, installer]", workflow)
 
-        prebuild_pos = workflow.index("prebuild-gate:")
         cockpit_build_pos = workflow.index("cockpit-build:")
+        source_archive_pos = workflow.index("source-archive:")
         build_pos = workflow.index("  build:\n")
         integration_pos = workflow.index("integration:")
         installer_pos = workflow.index("installer:")
         fuzz_pos = workflow.index("  fuzz:\n")
-        self.assertLess(prebuild_pos, cockpit_build_pos)
-        self.assertLess(cockpit_build_pos, build_pos)
+        self.assertLess(cockpit_build_pos, source_archive_pos)
+        self.assertLess(source_archive_pos, build_pos)
         self.assertLess(build_pos, integration_pos)
         self.assertLess(integration_pos, installer_pos)
         self.assertLess(installer_pos, fuzz_pos)
-        self.assertIn("needs: [runtime-gate, cockpit-build]", workflow)
-        self.assertIn("needs: [final-system-gate]", workflow)
 
     def test_release_ci_runs_official_installer_and_final_vm_security(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -120,18 +124,24 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Retain smart web-security reports", workflow)
         self.assertIn("checks.x86_64-linux.nas-vm", workflow)
 
-    def test_fast_ci_excludes_fuzz_and_slow_ci_parallelizes_it(self) -> None:
+    def test_fast_ci_excludes_all_fuzz_and_slow_ci_parallelizes_it(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        preflight = text("scripts/preflight.sh")
+        security_runner = text("scripts/run-security-tests.py")
         self.assertGreaterEqual(workflow.count("--exclude test_fuzz_boundaries.py"), 3)
         self.assertGreaterEqual(workflow.count("--exclude test_property_invariants.py"), 3)
-        self.assertIn("shard: [parser-boundaries, executables, properties]", workflow)
-        self.assertIn("max-parallel: 3", workflow)
+        self.assertGreaterEqual(workflow.count("--exclude test_secret_security_fuzz.py"), 3)
+        self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
+        self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
+        self.assertIn("shard: [parser-boundaries, executables, properties, security]", workflow)
+        self.assertIn("max-parallel: 4", workflow)
+        self.assertIn("tests.test_secret_security_fuzz", workflow)
         self.assertIn("timeout-minutes: 240", workflow)
         self.assertIn("test-tier == 'full'", workflow)
         self.assertIn("test-tier == 'installer'", workflow)
         fuzz_block = workflow.split("  fuzz:\n", 1)[1].split("  browser-fuzz:\n", 1)[0]
-        self.assertIn("needs: [final-system-gate]", fuzz_block)
-        self.assertNotIn("pull_request", fuzz_block)
+        self.assertIn("needs: [integration, installer]", fuzz_block)
+        self.assertIn("github.event_name == 'pull_request'", fuzz_block)
 
     def test_cache_policy_distinguishes_dependencies_outputs_results_and_fresh_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
