@@ -83,7 +83,7 @@ jobs:
           node cockpit/build.js --check-source
           node scripts/validate-cockpit-jsx.cjs
           node --test tests/js/*.test.mjs
-          NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 ./scripts/preflight.sh
+          NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
       - name: Mark source qualification reusable
         if: steps.fast-result.outputs.cache-hit != 'true'
         run: |
@@ -227,7 +227,7 @@ jobs:
           use-flakehub: false
       - name: Source-only repository preflight
         if: steps.static-result.outputs.cache-hit != 'true'
-        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 ./scripts/preflight.sh
+        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
       - name: Secret transaction fault injection
         if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#bats -c bats tests/bats
@@ -246,9 +246,9 @@ jobs:
       - name: Evaluate valid and intentionally-invalid configuration matrix
         if: steps.static-result.outputs.cache-hit != 'true'
         run: ./scripts/nix-config-matrix.sh
-      - name: Nix flake evaluation without builds
+      - name: Evaluate complete reference configurations without builds
         if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix flake check --no-build --show-trace
+        run: ./scripts/evaluate-reference-configurations.sh
       - name: Mark static analysis reusable
         if: steps.static-result.outputs.cache-hit != 'true'
         run: |
@@ -436,8 +436,8 @@ jobs:
           test -n "$root"
           cd "$root"
           sha256sum -c MANIFEST.sha256
-          NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
-          nix flake check --no-build --show-trace
+          NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
+          ./scripts/evaluate-reference-configurations.sh
           mkdir -p "$GITHUB_WORKSPACE/.ci-cache"
           printf 'passed\n' > "$GITHUB_WORKSPACE/.ci-cache/source-archive-pass"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
