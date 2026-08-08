@@ -86,10 +86,15 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("qemu-test.sh installer", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("name: cockpit-bundle", workflow)
-        self.assertGreaterEqual(workflow.count("npm --prefix cockpit ci"), 2)
+        # Dependency installation is conditional now that node_modules is cached;
+        # the contract is exact-lock installation, never a mutable npm install.
+        self.assertGreaterEqual(workflow.count("npm --prefix cockpit ci --no-audit --no-fund"), 1)
         self.assertNotIn("npm --prefix cockpit install", workflow)
-        self.assertIn("qemu-evidence", workflow)
-        self.assertIn("installer-evidence", workflow)
+        self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
+        self.assertIn("Browser rendering, layout, XSS, and accessibility", workflow)
+        self.assertIn("Full-stack QEMU integration", workflow)
+        self.assertIn("checks.x86_64-linux.nas-vm", workflow)
+        self.assertIn("Retain dynamic web-security reports", workflow)
 
 
 if __name__ == "__main__":
