@@ -57,6 +57,18 @@ class AiSecretTransactionTests(unittest.TestCase):
         self.assertNotIn(sentinel, rendered)
         self.assertIn("secret command output redacted", rendered)
 
+    def test_existing_provider_snapshot_sends_exactly_one_password_line(self) -> None:
+        active = self.active()
+        with mock.patch.object(
+            api,
+            "run",
+            return_value=self.completed(returncode=0, stdout="old-provider-key\n"),
+        ) as runner:
+            value = api._fetch_existing_provider_key(active, "cloud", "database-password")
+        self.assertEqual(value, "old-provider-key")
+        self.assertEqual(runner.call_args.kwargs["input_text"], "database-password\n")
+        self.assertNotIn("\n\n", runner.call_args.kwargs["input_text"])
+
     def test_private_snapshot_rejects_symlink_and_preserves_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
