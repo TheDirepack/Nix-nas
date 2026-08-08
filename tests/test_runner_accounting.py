@@ -65,22 +65,30 @@ class RunnerAccountingTests(unittest.TestCase):
                         break
                 self.assertTrue(has_import, msg=f"{module} -> {tests} has no import of {module_name}")
 
-    def test_runner_parses_skipped_and_zero_test(self):
+    def test_runner_rejects_zero_and_all_skipped_files_by_default(self):
         text = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
         self.assertIn("ALLOWLIST_ZERO", text)
-        self.assertIn("skipped", text)
+        self.assertIn("ALLOWLIST_ALL_SKIPPED", text)
+        self.assertIn("all discovered tests were skipped", text)
         self.assertIn("expectedFailures", text)
         self.assertIn("unexpectedSuccesses", text)
-        self.assertIn("passed", text)
         self.assertIn("no tests discovered", text)
 
-    def test_caddy_validate_test_exists_and_skips_gracefully(self):
+    def test_caddy_all_skipped_exception_is_backed_by_dedicated_real_binary_job(self):
         path = ROOT / "tests" / "test_service_caddy_validate.py"
         self.assertTrue(path.is_file(), msg="test_service_caddy_validate.py must exist")
-        text = path.read_text(encoding="utf-8")
-        self.assertIn("SkipTest", text)
-        self.assertIn("caddy", text.lower())
-        self.assertIn("generate_caddy_fragment", text)
+        test_text = path.read_text(encoding="utf-8")
+        self.assertIn("SkipTest", test_text)
+        self.assertIn("caddy", test_text.lower())
+        self.assertIn("generate_caddy_fragment", test_text)
+
+        runner = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
+        self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})', runner)
+
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        caddy_block = workflow.split("  caddy-validate:\n", 1)[1].split("\n  static:\n", 1)[0]
+        self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
+        self.assertIn("tests.test_service_caddy_validate", caddy_block)
 
     def test_managed_service_has_fast_contract_and_slow_state_machine(self):
         fast = ROOT / "tests" / "test_managed_service_stateful.py"
