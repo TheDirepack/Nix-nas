@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import pathlib
+import sys
+import unittest
+from unittest import mock
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "services"))
+
+import nas_managed_service as msvc
+import nas_service_runtime_compose as compose
+
+
+class PodmanComposeAdapterTests(unittest.TestCase):
+    def service(self, *, enabled: bool = True, source: str | None = None) -> dict:
+        return {
+            "label": "Example",
+            "enabled": enabled,
+            "runtime": {
+                "type": "compose",
+                "source": source
+                or "/var/lib/nas-control/apps/example/compose.yaml",
+                "startPolicy": "boot",
+            },
+        }
+
+    def test_non_compose_is_not_claimed_by_adapter(self):
+        plan = compose.plan_compose(
+            "example",
+            {
+                "label": "Example",
+                "enabled": True,
+                "runtime": {
+                    "type": "quadlet",
+                    "source": "/var/lib/nas-control/apps/example/app.container",
+                },
+            },
+        )
+        self.assertEqual(plan["actions"], [])
+        self.assertIn("not a Compose service", plan["warnings"][0])
+
+    def test_source_must_stay_under_service_root(self):
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "must be under"):
+            compose.plan_compose(
+                "example",
+                self.service(source="/var/lib/nas-control/apps/other/compose.yaml"),
+            )
+
+    def test_source_must_be_yaml(self):
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "must be a YAML file"):
+            compose.plan_compose(
+                "example",
+                self.service(source="/var/lib/nas-control/apps/example/compose.txt"),
+            )
+
+    def test_plan_uses_stable_project_name(self):
+        plan = compose.plan_compose("example", self.service())
+        self.assertEqual(plan["runtime"], "podman-compose")
+        self.assertEqual(plan["project"], "example")
+        self.assertEqual(plan["actions"][0]["operation"], "up")
+
+    @mock.patch.object(compose.subprocess, "run")
+    def test_apply_enabled_delegates_to_podman_compose(self, run):
+        compose.apply_compose("example", self.service())
+        run.assert_called_once_with(
+            [
+                "podman",
+                "compose",
+                "-p",
+                "example",
+                "-f",
+                "/var/lib/nas-control/apps/example/compose.yaml",
+                "up",
+                "-d",
+            ],
+            check=True,
+        )
+
+    @mock.patch.object(compose.subprocess, "run")
+    def test_apply_disabled_tears_project_down(self, run):
+        compose.apply_compose("example", self.service(enabled=False))
+        run.assert_called_once_with(
+            [
+                "podman",
+                "compose",
+                "-p",
+                "example",
+                "-f",
+                "/var/lib/nas-control/apps/example/compose.yaml",
+                "down",
+                "--remove-orphans",
+            ],
+            check=True,
+        )
+
+    @mock.patch.object(compose.subprocess, "run")
+    def test_dry_run_has_no_side_effects(self, run):
+        plan = compose.apply_compose("example", self.service(), dry_run=True)
+        self.assertEqual(plan["project"], "example")
+        run.assert_not_called()
+
+    @mock.patch.object(compose.subprocess, "run")
+    def test_remove_uses_same_project_name(self, run):
+        compose.remove_compose("example")
+        run.assert_called_once_with(
+            ["podman", "compose", "-p", "example", "down", "--remove-orphans"],
+            check=True,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
