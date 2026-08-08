@@ -9,8 +9,8 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_managed_service as msvc
-import nas_service_caddy as caddy
+import nas_managed_service as msvc  # noqa: E402
+import nas_service_caddy as caddy  # noqa: E402
 
 
 class ManagedServiceProjectionContractTests(unittest.TestCase):
