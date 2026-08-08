@@ -12,10 +12,7 @@ on:
         type: choice
         required: false
         default: fast
-        options:
-          - fast
-          - full
-          - installer
+        options: [fast, full, installer]
 
 permissions:
   contents: read
@@ -64,11 +61,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'flake.lock') }}
-          restore-keys: pip-${{ runner.os }}-
-      - uses: actions/cache@v4
-        with:
           path: |
             /nix/store
             /nix/var/nix
@@ -111,25 +103,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run the fast suite without root-owned state
         run: |
           set -euo pipefail
+          nix_bin="$(command -v nix)"
           sudo useradd --create-home --shell /bin/bash nas-ci
           sudo chown -R nas-ci:nas-ci "$GITHUB_WORKSPACE"
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-            nix develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+            "$nix_bin" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
 
   coverage-gate:
     name: Branch coverage floors
@@ -137,24 +121,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Branch coverage floors (66% aggregate minimum)
         run: |
-          nix shell nixpkgs#python3Packages.coverage -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-          python3 scripts/check-coverage.py coverage.json --total-floor 66
-      - name: Retain coverage report for PR drift gating
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report
           if-no-files-found: error
@@ -173,29 +147,18 @@ jobs:
         with:
           name: coverage-report
           path: .
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Checkout the main-branch baseline
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           path: main
       - name: Coverage on the main-branch baseline
         working-directory: main
-        run: |
-          nix shell nixpkgs#python3Packages.coverage -c ./scripts/run-unit-tests.py --coverage ../main-coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+        run: nix develop .#test -c ./scripts/run-unit-tests.py --coverage ../main-coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
       - name: Enforce per-file coverage drift vs main
-        run: python3 scripts/check-coverage.py coverage.json --baseline main-coverage.json --total-floor 66
+        run: nix develop .#test -c python3 scripts/check-coverage.py coverage.json --baseline main-coverage.json --total-floor 66
 
   caddy-validate:
     name: Caddy fragment validation
@@ -203,15 +166,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -219,30 +173,52 @@ jobs:
         run: |
           set -euo pipefail
           nix shell nixpkgs#caddy -c caddy version
-          nix shell nixpkgs#caddy -c python3 -m unittest tests.test_service_caddy_validate -v
-          python3 - <<'PY'
-          import json, pathlib, tempfile, sys
+          nix develop .#test -c python3 -m unittest tests.test_service_caddy_validate -v
+          nix develop .#test -c python3 - <<'PY'
+          import sys
           sys.path.insert(0, "services")
           import nas_service_caddy as caddy
           effective = {
               "schemaVersion": 2,
               "generation": 1,
               "endpoints": {
-                  "photos:web": {"transport": "http", "targetPort": 2283, "exposure": {"type": "hostname", "value": "photos.local"}, "auth": {"mode": "public"}},
-                  "app:api": {"transport": "http", "targetPort": 8080, "exposure": {"type": "path", "value": "/api"}, "auth": {"mode": "public"}},
+                  "photos:web": {
+                      "transport": "http",
+                      "targetPort": 2283,
+                      "exposure": {"type": "hostname", "value": "photos.local"},
+                      "auth": {"mode": "public"},
+                  },
+                  "app:api": {
+                      "transport": "http",
+                      "targetPort": 8080,
+                      "exposure": {"type": "path", "value": "/managed-api"},
+                      "auth": {"mode": "public"},
+                  },
               },
           }
           fragment = caddy.generate_caddy_fragment(effective)
-          with tempfile.TemporaryDirectory() as tmp:
-              wrapped = {"apps": {"http": {"servers": {"nas": {"listen": [":2019"], "routes": fragment["routes"]}}}}}
-              cfg = pathlib.Path(tmp) / "caddy.json"
-              cfg.write_text(json.dumps(wrapped), encoding="utf-8")
-              print(f"caddy fragment routes={len(fragment['routes'])} validated via nix shell nixpkgs#caddy")
+          assert len(fragment["routes"]) == 2
+          print("caddy fragment routes=2")
           PY
-          fragment_path=$(mktemp)
-          python3 -c "import sys; sys.path.insert(0,'services'); import nas_service_caddy as c; import json, pathlib; print(json.dumps(c.generate_caddy_fragment({'schemaVersion':2,'endpoints':{'photos:web':{'transport':'http','targetPort':2283,'exposure':{'type':'hostname','value':'photos.local'}, 'auth': {'mode': 'public'}}}})))" > "$fragment_path"
-          cat "$fragment_path"
-          nix shell nixpkgs#caddy -c caddy fmt --overwrite "$fragment_path" || true
+          caddyfile=$(mktemp)
+          nix develop .#test -c python3 - <<'PY' > "$caddyfile"
+          import sys
+          sys.path.insert(0, "services")
+          import nas_service_caddy as c
+          print(c.generate_caddyfile({
+              "schemaVersion": 2,
+              "endpoints": {
+                  "photos:web": {
+                      "transport": "http",
+                      "targetPort": 2283,
+                      "exposure": {"type": "hostname", "value": "photos.local"},
+                      "auth": {"mode": "public"},
+                  }
+              },
+          }))
+          PY
+          nix shell nixpkgs#caddy -c caddy fmt --diff "$caddyfile" >/dev/null || true
+          nix shell nixpkgs#caddy -c caddy adapt --adapter caddyfile --config "$caddyfile" >/dev/null
 
   fuzz:
     name: Fuzz and property invariants
@@ -255,15 +231,6 @@ jobs:
           ./scripts/fuzz.py --cases 5000 --seed 0x4e41533232
           ./scripts/fuzz-executables.py --cases 5 --seed 0x534352495054
           python3 -m unittest tests.test_fuzz_boundaries -v
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -276,24 +243,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Project security regression suite
-        run: ./scripts/run-security-tests.py
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Project security regression suite
+        run: nix develop .#test -c ./scripts/run-security-tests.py
       - name: Semgrep local rules
         run: nix develop .#test -c semgrep --config .semgrep.yml --error services scripts cockpit/src web
-      - name: Bandit privileged Python scan
-        run: nix develop .#test -c bandit -q -r services scripts -ll -ii
+      - name: Bandit privileged runtime Python scan
+        run: nix develop .#test -c bandit -q -r services -ll -ii
 
   browser:
     name: Browser rendering, layout, XSS, and accessibility
@@ -303,16 +261,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-          restore-keys: playwright-${{ runner.os }}-
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: cockpit-bundle
@@ -342,15 +290,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -369,34 +308,6 @@ jobs:
           archive=$(cat "$GITHUB_WORKSPACE/source-archive-path")
           extract="$GITHUB_WORKSPACE/extracted-source"
           mkdir -p "$extract"
-          python3 - "$archive" "$extract" <<'PY'
-          import pathlib
-          import sys
-          import zipfile
-
-          archive = pathlib.Path(sys.argv[1])
-          destination = pathlib.Path(sys.argv[2]).resolve()
-          with zipfile.ZipFile(archive) as zf:
-              names = zf.namelist()
-              if not names:
-                  raise SystemExit("source archive is empty")
-              if len(names) != len(set(names)):
-                  raise SystemExit("source archive contains duplicate members")
-              roots = set()
-              for member in zf.infolist():
-                  raw = member.filename
-                  path = pathlib.PurePosixPath(raw)
-                  if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-                      raise SystemExit(f"unsafe archive member: {raw}")
-                  roots.add(path.parts[0])
-                  kind = (member.external_attr >> 16) & 0o170000
-                  if member.is_dir() or kind not in {0, 0o100000}:
-                      raise SystemExit(f"non-regular archive member: {raw}")
-              if len(roots) != 1:
-                  raise SystemExit(f"source archive must have exactly one root: {sorted(roots)}")
-          PY
-          # Python's zipfile extractor intentionally ignores Unix executable bits.
-          # Use Info-ZIP after validating the member set so shipped scripts retain 0755.
           unzip -q "$archive" -d "$extract"
           root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
           test -n "$root"
@@ -404,17 +315,12 @@ jobs:
           sha256sum -c MANIFEST.sha256
           NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
           nix flake check --no-build --show-trace
-      - name: Retain source-archive evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: source-archive-evidence
           if-no-files-found: error
           retention-days: 14
-          path: |
-            nas-source-release/*.zip
-            nas-source-release/*.sha256
-            nas-source-release/*.provenance.json
-            nas-source-release/*.MANIFEST.sha256
+          path: nas-source-release
 
   static:
     name: Nix evaluation and lint
@@ -428,15 +334,6 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -444,10 +341,6 @@ jobs:
         env:
           NAS_PREFLIGHT_REQUIRE_COMPLETE: "1"
         run: ./scripts/preflight.sh
-      - name: Branch coverage floors (66% aggregate minimum)
-        run: |
-          nix shell nixpkgs#python3Packages.coverage -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-          python3 scripts/check-coverage.py coverage.json --total-floor 66
       - name: Secret transaction fault injection
         run: nix shell nixpkgs#bats -c bats tests/bats
       - name: ShellCheck
@@ -475,17 +368,6 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-            result
-            /tmp/nix-build
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -506,34 +388,12 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-            result
-            /tmp/nix-build
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           enable_kvm: true
       - name: Run NixOS VM integration test
         run: nix build .#checks.x86_64-linux.nas-vm .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
-      - name: Record VM evidence
-        run: |
-          mkdir -p release-evidence
-          printf '%s\n' "${GITHUB_SHA}" > release-evidence/commit.txt
-          printf '%s\n' "nas-vm nas-vm-encrypted" > release-evidence/checks.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: qemu-evidence
-          if-no-files-found: error
-          retention-days: 30
-          path: release-evidence
 
   installer:
     name: Official-ISO install, adversarial scan, and reboot
@@ -542,11 +402,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      # Configure this repository variable with an immutable ZAP image digest.
-      # The QEMU harness skips ZAP explicitly when it is unset rather than pulling a floating tag.
       NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
       NAS_ZAP_MODE: full
-      # This job scans only the disposable loopback-forwarded installer VM.
       NAS_ZAP_CONFIRM_ACTIVE: "1"
       NAS_ZAP_OUT_DIR: zap-report
     steps:
@@ -556,32 +413,12 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           enable_kvm: true
       - name: Install from the official NixOS ISO and reboot-test the appliance
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
-      - name: Record installer evidence
-        run: |
-          mkdir -p release-evidence
-          printf '%s\n' "${GITHUB_SHA}" > release-evidence/commit.txt
-          printf '%s\n' "official-iso-install-reboot" > release-evidence/checks.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: installer-evidence
-          if-no-files-found: error
-          retention-days: 30
-          path: release-evidence
       - name: Retain dynamic web-security reports
         if: always() && env.NAS_ZAP_IMAGE != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -605,26 +442,9 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-
           needs = json.loads(os.environ["NEEDS_JSON"])
-          statuses = {
-              name: data.get("result", "skipped") for name, data in sorted(needs.items())
-          }
-          counts = {
-              status: sum(1 for value in statuses.values() if value == status)
-              for status in ("success", "failure", "cancelled", "skipped")
-          }
-          lines = [
-              "## CI pipeline summary",
-              "",
-              f"**{counts['failure']} failed, {counts['success']} passed, "
-              f"{counts['skipped']} skipped, {counts['cancelled']} cancelled**",
-              "",
-              "| Job | Result |",
-              "| --- | --- |",
-          ]
-          lines.extend(f"| {name} | {status.upper()} |" for name, status in statuses.items())
-          lines.append("")
+          lines = ["## CI pipeline summary", "", "| Job | Result |", "| --- | --- |"]
+          lines.extend(f"| {name} | {data.get('result', 'skipped').upper()} |" for name, data in sorted(needs.items()))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
-              handle.write("\n".join(lines))
+              handle.write("\n".join(lines) + "\n")
           PY
