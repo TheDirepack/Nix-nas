@@ -113,11 +113,11 @@ nas_secret_tx_validate_paths() {
 }
 
 # Secret activation transaction phases:
-#   initialized -> stopping -> stopped -> old-moved -> new-installed -> committed
+#   initialized -> stopping -> stopped -> old-moved -> new-installed -> committing -> committed
 # Recovery before old-moved may restart the prior consumers directly. After
 # old-moved, rollback must restore the previous secret tree before restarting.
-# committed is terminal: the new tree is authoritative and cleanup may remove
-# the old staging copy. No phase may skip forward across a filesystem swap.
+# Once commit starts deleting the previous tree, rollback is no longer safe; any
+# cleanup failure is surfaced as status 125 with the new tree remaining authoritative.
 # A failure before commit runs rollback, which removes the staged/new tree, restores
 # the previous tree when one existed, and restarts the protected target only when it
 # was active before the swap and the restored secret tree is marked ready. A rollback
@@ -152,6 +152,14 @@ nas_secret_tx_swap() {
     printf 'nas-secret-transaction: staged tree must not be a symlink: %s\n' "$NAS_SECRET_TX_STAGE" >&2
     return 1
   }
+  nas_secret_tx_privileged test -f "$NAS_SECRET_TX_STAGE/ready" || {
+    printf 'nas-secret-transaction: staged tree is missing its ready marker\n' >&2
+    return 1
+  }
+  nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_STAGE/ready" || {
+    printf 'nas-secret-transaction: staged ready marker must not be a symlink\n' >&2
+    return 1
+  }
   if nas_secret_tx_privileged test -e "$NAS_SECRET_TX_ROOT"; then
     nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT" || {
       printf 'nas-secret-transaction: live secret root is not a directory: %s\n' "$NAS_SECRET_TX_ROOT" >&2
@@ -179,6 +187,13 @@ nas_secret_tx_swap() {
   nas_secret_tx_privileged mv "$NAS_SECRET_TX_STAGE" "$NAS_SECRET_TX_ROOT"
   NAS_SECRET_TX_NEW_INSTALLED=true
   NAS_SECRET_TX_PHASE=new-installed
+  if ! nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT" \
+    || ! nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT" \
+    || ! nas_secret_tx_privileged test -f "$NAS_SECRET_TX_ROOT/ready" \
+    || ! nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT/ready"; then
+    printf 'nas-secret-transaction: installed secret tree failed post-swap validation\n' >&2
+    return 1
+  fi
 }
 
 nas_secret_tx_remove_directory() {
@@ -237,10 +252,21 @@ nas_secret_tx_commit() {
     printf 'nas-secret-transaction: transaction is already committed\n' >&2
     return 1
   }
+  # From this point onward rollback is unsafe because cleanup may delete some or
+  # all of the prior tree. Mark the new tree authoritative before destructive cleanup.
   NAS_SECRET_TX_COMMITTED=true
+  NAS_SECRET_TX_PHASE=committing
+  if ! nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_PREVIOUS"; then
+    NAS_SECRET_TX_PHASE=commit-cleanup-failed
+    printf 'nas-secret-transaction: committed new tree but could not remove previous tree\n' >&2
+    return 125
+  fi
+  if ! nas_secret_tx_remove_directory; then
+    NAS_SECRET_TX_PHASE=commit-cleanup-failed
+    printf 'nas-secret-transaction: committed new tree but could not remove transaction directory\n' >&2
+    return 125
+  fi
   NAS_SECRET_TX_PHASE=committed
-  nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_PREVIOUS"
-  nas_secret_tx_remove_directory
 }
 
 nas_secret_tx_cleanup() {
@@ -249,8 +275,15 @@ nas_secret_tx_cleanup() {
     printf 'nas-secret-transaction: cleanup status must be an exit status from 0 through 255\n' >&2
     return 125
   }
-  if [[ $rc -ne 0 && "${NAS_SECRET_TX_COMMITTED:-false}" != true ]]; then
+  if [[ "${NAS_SECRET_TX_COMMITTED:-false}" != true ]]; then
+    # An uncommitted transaction is never a success, even if a caller accidentally
+    # reaches EXIT with status 0. Restore the prior state and make the programming
+    # error visible instead of leaving a swapped-but-uncommitted tree live.
     nas_secret_tx_rollback || return 125
+    if [[ $rc -eq 0 ]]; then
+      printf 'nas-secret-transaction: transaction exited successfully without commit; rolled back\n' >&2
+      return 125
+    fi
   fi
   return "$rc"
 }

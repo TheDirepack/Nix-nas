@@ -112,6 +112,42 @@ pass "nas-setup created and activated the encrypted storage stack"
 grep -q 'already exists' /tmp/nas-zfs-create-existing.log
 pass "direct encrypted-dataset command refuses to modify an existing encryption root"
 
+log "Fault-inject every encrypted dataset bootstrap transition"
+# Keep the known-good encryption root out of the command's configured name while the
+# failure matrix repeatedly creates and tears down a brand-new tank/nas. Locking first
+# means the preserved dataset is unmounted and no protected consumer can write to it.
+run_as_admin "nas-zfs-lock"
+wait_inactive nas-protected-services.target
+zfs rename tank/nas tank/nas-preserved
+[[ "$(zfs get -H -o value mounted tank/nas-preserved)" == "no" ]]
+for step in create keylocation fingerprint canmount unmount unload-key; do
+  rm -f "/tmp/nas-zfs-fault-$step.out" "/tmp/nas-zfs-fault-$step.err"
+  if run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | env NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER='$step' nas-zfs-create-encrypted-dataset" \
+    >"/tmp/nas-zfs-fault-$step.out" 2>"/tmp/nas-zfs-fault-$step.err"; then
+    fail "ZFS bootstrap fault injection unexpectedly succeeded after $step"
+  fi
+  grep -Fq "Injected ZFS bootstrap failure after $step" "/tmp/nas-zfs-fault-$step.err" || {
+    cat "/tmp/nas-zfs-fault-$step.err" >&2
+    fail "ZFS bootstrap did not reach injected failure point $step"
+  }
+  ! zfs list -H tank/nas >/dev/null 2>&1 || {
+    zfs list -r tank >&2 || true
+    fail "failed ZFS bootstrap after $step left the transient tank/nas dataset behind"
+  }
+  zfs list -H tank/nas-preserved >/dev/null || fail "fault injection damaged the preserved encryption root"
+  if find /run -maxdepth 1 -name 'nas-zfs-bootstrap.*' -type f -print -quit | grep -q .; then
+    fail "failed ZFS bootstrap after $step leaked a temporary root key file"
+  fi
+  pass "failure after $step removes the newly-created encrypted dataset and temporary key"
+done
+zfs rename tank/nas-preserved tank/nas
+activate_secrets
+wait_active nas-protected-services.target
+wait_active nas-zfs-unlock.service
+wait_active nas-zfs-mount-guard.service
+nas-zfs-mount-check
+pass "encrypted bootstrap fault matrix preserves and recovers the original dataset"
+
 log "Export and verify the offline recovery key"
 rm -f /tmp/nas-zfs-recovery.key
 run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key"

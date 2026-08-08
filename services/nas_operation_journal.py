@@ -8,6 +8,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from nas_logging import sanitize
+
 
 class JournalError(RuntimeError):
     pass
@@ -19,7 +21,7 @@ def atomic_write_json(path: pathlib.Path, value: Mapping[str, Any], mode: int = 
     replaced = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True)
+            json.dump(value, handle, indent=2, sort_keys=True, allow_nan=False)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -49,6 +51,12 @@ def load_json(path: pathlib.Path) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise JournalError(f"Operation journal is not a JSON object: {path}")
     return value
+
+
+def _journal_value(value: Any) -> Any:
+    """Bound journal data and redact secret-like nested fields before persistence."""
+
+    return sanitize(value)
 
 
 @dataclass
@@ -81,6 +89,9 @@ class OperationJournal:
             journal = cls(path, existing)
             journal.save()
             return journal
+        metadata_value = _journal_value(dict(metadata or {}))
+        if not isinstance(metadata_value, dict):
+            raise JournalError("Operation journal metadata must remain an object after sanitation")
         value: dict[str, Any] = {
             "schemaVersion": 1,
             "workflow": workflow,
@@ -88,7 +99,7 @@ class OperationJournal:
             "status": "pending",
             "startedAt": now,
             "updatedAt": now,
-            "metadata": dict(metadata or {}),
+            "metadata": metadata_value,
             "steps": {},
         }
         journal = cls(path, value)
@@ -112,7 +123,7 @@ class OperationJournal:
             raise JournalError(f"Journal is not awaiting manual recovery: {path}")
         existing["status"] = "reconciled"
         existing["recoveryAcknowledgedAt"] = int(time.time())
-        existing["recoveryNote"] = note
+        existing["recoveryNote"] = _journal_value(note)
         journal = cls(path, existing)
         journal.save()
         return journal
@@ -143,7 +154,7 @@ class OperationJournal:
         record = steps.setdefault(step, {})
         record.update({"status": "complete", "completedAt": int(time.time())})
         if result is not None:
-            record["result"] = result
+            record["result"] = _journal_value(result)
         record.pop("error", None)
         self.value["currentStep"] = None
         self.save()
@@ -151,14 +162,14 @@ class OperationJournal:
     def fail_step(self, step: str, error: str, *, manual_recovery: bool = False) -> None:
         steps = self.value.setdefault("steps", {})
         record = steps.setdefault(step, {})
-        record.update({"status": "failed", "failedAt": int(time.time()), "error": error})
+        record.update({"status": "failed", "failedAt": int(time.time()), "error": _journal_value(error)})
         self.value["status"] = "manual-recovery-required" if manual_recovery else "failed"
         self.value["currentStep"] = step
         self.save()
 
     def fail(self, error: str, *, manual_recovery: bool = False) -> None:
         self.value["status"] = "manual-recovery-required" if manual_recovery else "failed"
-        self.value["error"] = error
+        self.value["error"] = _journal_value(error)
         self.value["failedAt"] = int(time.time())
         self.save()
 
@@ -167,5 +178,5 @@ class OperationJournal:
         self.value["completedAt"] = int(time.time())
         self.value["currentStep"] = None
         if result is not None:
-            self.value["result"] = result
+            self.value["result"] = _journal_value(result)
         self.save()

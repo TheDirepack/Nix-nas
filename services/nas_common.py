@@ -187,6 +187,11 @@ def run_command(
     make the parent buffer arbitrary output in memory. A timed-out command runs in
     its own session and the entire process group is terminated, preventing wrapper
     descendants from surviving a privileged orchestration timeout.
+
+    When stdin is supplied, successful output remains available to callers that
+    intentionally read a value from a child process, but failure output is replaced
+    with a fixed diagnostic. Secret-bearing children must never be able to reflect
+    protected stdin into an exception, journal entry, syslog message, or UI error.
     """
 
     command = [str(item) for item in cmd]
@@ -282,7 +287,11 @@ def run_command(
         return text + ("\n[output truncated]" if truncated else "")
 
     if timed_out:
+        if input_text is not None:
+            return CommandResult(124, "", "Command timed out after receiving protected standard input")
         return CommandResult(124, decoded(stdout_buffer, stdout_truncated), "Command timed out")
+    if proc.returncode != 0 and input_text is not None:
+        return CommandResult(proc.returncode, "", "Command failed after receiving protected standard input")
     return CommandResult(
         proc.returncode,
         decoded(stdout_buffer, stdout_truncated),

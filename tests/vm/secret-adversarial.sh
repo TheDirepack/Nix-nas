@@ -75,6 +75,21 @@ exercise_rejected_vault_value() {
 # other control-character cases are exercised directly against the rendered validator
 # functions in tests/test_secret_security.py.
 exercise_rejected_vault_value \
+  authentik-secret-key \
+  'not-128-hex' \
+  "Authentik secret key has an unsafe or unexpected format"
+
+exercise_rejected_vault_value \
+  authentik-bootstrap-token \
+  'not-64-hex' \
+  "Authentik bootstrap token has an unsafe or unexpected format"
+
+exercise_rejected_vault_value \
+  state-bundle-signing-key \
+  'not-64-hex' \
+  "State bundle signing key has an unsafe or unexpected format"
+
+exercise_rejected_vault_value \
   authentik-bootstrap-password \
   'safe-password value' \
   "Authentik bootstrap password has an unsafe or unexpected format"
@@ -85,6 +100,11 @@ exercise_rejected_vault_value \
   "llama-swap API key has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
+  open-webui-secret \
+  'safe-webui-secret;attacker' \
+  "Open WebUI signing secret has an unsafe or unexpected format"
+
+exercise_rejected_vault_value \
   ntfy-alert-topic \
   'safe-topic"attacker' \
   "ntfy alert topic has an unsafe or unexpected format"
@@ -93,6 +113,11 @@ exercise_rejected_vault_value \
   vaultwarden-oidc-client-secret \
   "safe-client-secret'attacker" \
   "Vaultwarden OIDC client secret has an unsafe or unexpected format"
+
+exercise_rejected_vault_value \
+  vaultwarden-admin \
+  'safe-admin-token;attacker' \
+  "Vaultwarden administrator token has an unsafe or unexpected format"
 
 # The failed attempts must leave no staged secret files behind.
 if find /run/nas-secret-transactions /run/nas-secret-staging -type f -print -quit 2>/dev/null | grep -q .; then
