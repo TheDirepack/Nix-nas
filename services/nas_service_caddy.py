@@ -100,9 +100,21 @@ def _atomic_write(path:pathlib.Path,content:str,mode:int=0o644)->bool:
     finally:
         if not replaced:pathlib.Path(name).unlink(missing_ok=True)
     return True
+def _snapshot(path:pathlib.Path)->tuple[bool,str]:
+    try:return True,path.read_text(encoding="utf-8")
+    except FileNotFoundError:return False,""
+def _restore(path:pathlib.Path,snapshot:tuple[bool,str])->None:
+    existed,content=snapshot
+    if existed:_atomic_write(path,content)
+    else:path.unlink(missing_ok=True)
 def write_caddy_fragments(effective:dict[str,Any],*,path_fragment:pathlib.Path=PATH_FRAGMENT,host_fragment:pathlib.Path=HOST_FRAGMENT,lan_host:str|None=None,authentik_port:int|None=None,authentik_path:str|None=None,admin_group:str|None=None,gate_socket:str|None=None)->dict[str,Any]:
-    rendered=generate_caddy_fragments(effective,lan_host=lan_host or os.environ.get("NAS_LAN_HOST","nas.local"),authentik_port=authentik_port or int(os.environ.get("NAS_AUTHENTIK_PORT","9000")),authentik_path=authentik_path or os.environ.get("NAS_AUTHENTIK_PATH","/identity/"),admin_group=admin_group or os.environ.get("NAS_IDENTITY_ADMIN_GROUP","nas_admin"),gate_socket=gate_socket or os.environ.get("NAS_ON_DEMAND_SOCKET","/run/nas-on-demand/gate.sock"));changed=_atomic_write(path_fragment,rendered["paths"]) or _atomic_write(host_fragment,rendered["hosts"])
-    if changed:
+    rendered=generate_caddy_fragments(effective,lan_host=lan_host or os.environ.get("NAS_LAN_HOST","nas.local"),authentik_port=authentik_port or int(os.environ.get("NAS_AUTHENTIK_PORT","9000")),authentik_path=authentik_path or os.environ.get("NAS_AUTHENTIK_PATH","/identity/"),admin_group=admin_group or os.environ.get("NAS_IDENTITY_ADMIN_GROUP","nas_admin"),gate_socket=gate_socket or os.environ.get("NAS_ON_DEMAND_SOCKET","/run/nas-on-demand/gate.sock"))
+    old_paths=_snapshot(path_fragment);old_hosts=_snapshot(host_fragment)
+    path_changed=_atomic_write(path_fragment,rendered["paths"])
+    host_changed=_atomic_write(host_fragment,rendered["hosts"])
+    changed=path_changed or host_changed
+    if not changed:return {"changed":False,"pathFragment":str(path_fragment),"hostFragment":str(host_fragment)}
+    try:
         config=pathlib.Path(os.environ.get("NAS_CADDY_CONFIG","/etc/caddy/caddy_config"));caddy=shutil.which("caddy")
         if caddy and config.exists() and os.environ.get("NAS_SKIP_CADDY_VALIDATE")!="1":
             check=run_command([caddy,"validate","--config",str(config),"--adapter","caddyfile"],timeout_seconds=60,max_output_bytes=512*1024)
@@ -112,7 +124,10 @@ def write_caddy_fragments(effective:dict[str,Any],*,path_fragment:pathlib.Path=P
             if active.returncode==0:
                 rr=run_command(["systemctl","reload","caddy.service"],timeout_seconds=60,max_output_bytes=256*1024)
                 if rr.returncode: raise RuntimeError(f"unable to reload Caddy: {(rr.stderr or rr.stdout)[:1000]}")
-    return {"changed":changed,"pathFragment":str(path_fragment),"hostFragment":str(host_fragment)}
+    except Exception:
+        _restore(path_fragment,old_paths);_restore(host_fragment,old_hosts)
+        raise
+    return {"changed":True,"pathFragment":str(path_fragment),"hostFragment":str(host_fragment)}
 def _compat_routes(effective:dict[str,Any])->list[dict[str,Any]]:
     routes=[]
     for key,endpoint in (effective.get("endpoints") or {}).items():
