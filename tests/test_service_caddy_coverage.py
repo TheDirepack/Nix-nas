@@ -13,16 +13,38 @@ sys.path.insert(0, str(ROOT / "services"))
 import nas_service_caddy as caddy  # noqa: E402
 
 
-def endpoint(*, transport: str = "http", exposure: dict | None = None) -> dict:
-    return {
+def endpoint(*, transport: str = "http", exposure: dict | None = None, available: bool | None = None) -> dict:
+    result = {
         "transport": transport,
         "targetPort": 8443,
         "exposure": exposure or {"type": "hostname", "value": "app.example"},
         "auth": {"mode": "public"},
     }
+    if available is not None:
+        result["available"] = available
+    return result
 
 
 class CaddyCoverageTests(unittest.TestCase):
+    def test_explicitly_unavailable_endpoint_is_not_routed(self) -> None:
+        effective = {
+            "endpoints": {
+                "enabled:web": endpoint(
+                    exposure={"type": "hostname", "value": "enabled.example"},
+                    available=True,
+                ),
+                "disabled:web": endpoint(
+                    exposure={"type": "hostname", "value": "disabled.example"},
+                    available=False,
+                ),
+            }
+        }
+        fragment = caddy.generate_caddy_fragment(effective)
+        self.assertEqual([route["id"] for route in fragment["routes"]], ["nas-managed-enabled-web"])
+        rendered = caddy.generate_caddyfile(effective)
+        self.assertIn("https://enabled.example", rendered)
+        self.assertNotIn("disabled.example", rendered)
+
     def test_https_and_exact_path_rendering_cover_proxy_variants(self) -> None:
         effective = {
             "endpoints": {
