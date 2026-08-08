@@ -261,28 +261,35 @@ let
       local_tmp="$(mktemp)"
       root_tmp="$(sudo mktemp /run/nas-zfs-bootstrap.XXXXXX)"
       cleanup() {
-        local rc=$?
+        local rc=$? cleanup_failed=false
         trap - EXIT HUP INT TERM
         set +e
-        rm -f -- "$local_tmp"
+        rm -f -- "$local_tmp" || cleanup_failed=true
         if [[ "$rc" -ne 0 && "$created_dataset" == true && "$bootstrap_committed" != true ]]; then
           # The dataset was created by this invocation and canmount=off kept it
           # inaccessible to ordinary writers. Remove it rather than leaving an
           # encryption root whose configured keylocation points at a transient file.
           if sudo "$zfs" list -H "$dataset" >/dev/null 2>&1; then
-            if sudo "$zfs" destroy -r -- "$dataset" >/dev/null 2>&1; then
+            if sudo "$zfs" destroy -r "$dataset" >/dev/null 2>&1; then
               created_dataset=false
             else
               echo "CRITICAL: encrypted dataset bootstrap failed and automatic cleanup could not destroy $dataset." >&2
               echo "The key remains in KeePassXC. Recover or destroy the dataset before retrying setup." >&2
+              cleanup_failed=true
             fi
           fi
         fi
-        sudo rm -f -- "$root_tmp"
+        sudo rm -f -- "$root_tmp" || cleanup_failed=true
         unset key
+        if $cleanup_failed; then
+          exit 125
+        fi
         exit "$rc"
       }
-      trap cleanup EXIT HUP INT TERM
+      trap cleanup EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
       chmod 0600 "$local_tmp"
       printf '%s' "$key" > "$local_tmp"
       sudo install -m 0400 -o root -g root "$local_tmp" "$root_tmp"
