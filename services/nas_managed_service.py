@@ -70,7 +70,7 @@ def _schema_validate_document(data: dict[str, Any]) -> None:
     schema = _load_schema()
     if schema is None:
         return
-    if _HAS_JSONSCHEMA:
+    if jsonschema is not None:
         try:
             jsonschema.validate(data, schema)
         except jsonschema.ValidationError as exc:

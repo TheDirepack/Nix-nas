@@ -105,9 +105,16 @@ def _collect_routes(effective: dict[str, Any]) -> list[dict[str, Any]]:
         if target_port is None:
             raise CaddyError(f"Endpoint {key!r}: targetPort is mandatory")
         msvc._validate_port(target_port)
+        if isinstance(target_port, bool) or not isinstance(target_port, int):
+            raise CaddyError(f"Endpoint {key!r}: targetPort must be an integer")
 
         typ = exposure["type"]
         value = exposure.get("value")
+        route_port: int | None = None
+        if typ == "port":
+            if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).isdigit():
+                raise CaddyError(f"Endpoint {key!r}: exposure port is invalid")
+            route_port = int(value)
         prefix = exposure.get("prefix", True)
         if not isinstance(prefix, bool):
             prefix = True
@@ -117,7 +124,7 @@ def _collect_routes(effective: dict[str, Any]) -> list[dict[str, Any]]:
             "host": value if typ in ("hostname", "dns") else None,
             "path": value if typ == "path" else None,
             "path_prefix": prefix,
-            "port": int(value) if typ == "port" else None,
+            "port": route_port,
             "targetPort": int(target_port),
             "auth": auth,
             "exposure": exposure,

@@ -190,7 +190,7 @@ def _check_coding_access() -> None:
                 pw = pwd.getpwnam(sudo_user)
                 user_groups.add(pw.pw_name)
                 for g in grp.getgrall():
-                    if sudo_user in g.gr_members:
+                    if sudo_user in g.gr_mem:
                         user_groups.add(g.gr_name)
                 result = subprocess.run(["id", "-nG", sudo_user], capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:

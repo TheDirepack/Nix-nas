@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import pathlib
 import re
 import shlex
@@ -1019,7 +1020,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(value, sort_keys=True))
         return 0
     except (AiConfigError, json.JSONDecodeError, OSError) as exc:
-        print(f"nas-ai-config: {exc}", file=os.sys.stderr)
+        print(f"nas-ai-config: {exc}", file=sys.stderr)
         return 1
 
 

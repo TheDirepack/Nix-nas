@@ -77,14 +77,14 @@ def _setup_checks() -> list[Check]:
                 "Inspect and restore the setup journal/state from a trusted backup",
             )
         ]
-    journal_status = journal.get("status") if journal else None
+    journal_status = (journal or {}).get("status")
     if journal_status == "manual-recovery-required":
         checks.append(
             Check(
                 "setup.journal",
                 "critical",
                 "First-start requires manual recovery",
-                str(journal.get("error") or "journal stopped at a non-compensatable boundary"),
+                str((journal or {}).get("error") or "journal stopped at a non-compensatable boundary"),
                 "Use nas-setup status and reconcile-first-run before retrying",
             )
         )
@@ -94,7 +94,7 @@ def _setup_checks() -> list[Check]:
                 "setup.journal",
                 "warning",
                 "First-start journal records a failed attempt",
-                str(journal.get("error") or "unknown failure"),
+                str((journal or {}).get("error") or "unknown failure"),
             )
         )
     elif journal_status in {"running", "prepared"}:
@@ -106,9 +106,9 @@ def _setup_checks() -> list[Check]:
             Check("setup.journal", "warning", "First-start journal has an unknown status", str(journal_status))
         )
 
-    state_status = state.get("status") if state else None
+    state_status = (state or {}).get("status")
     if state_status in {"complete", "complete-unverified"}:
-        digest = state.get("planDigest")
+        digest = (state or {}).get("planDigest")
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             checks.append(Check("setup.state", "critical", "Completed setup state has no valid plan digest"))
         elif state_status == "complete-unverified":

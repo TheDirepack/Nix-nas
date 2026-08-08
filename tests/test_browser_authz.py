@@ -42,16 +42,16 @@ def load_authz():
     class DummySeleniumError(Exception):
         pass
 
-    webdriver.Chrome = DummyChrome
-    webdriver.ChromeOptions = DummyChromeOptions
-    exceptions.NoSuchElementException = DummySeleniumError
-    exceptions.WebDriverException = DummySeleniumError
-    by.By = DummyBy
-    support_ui.WebDriverWait = DummyWait
-    selenium.webdriver = webdriver
-    common.exceptions = exceptions
-    webdriver_common.by = by
-    support.ui = support_ui
+    setattr(webdriver, "Chrome", DummyChrome)
+    setattr(webdriver, "ChromeOptions", DummyChromeOptions)
+    setattr(exceptions, "NoSuchElementException", DummySeleniumError)
+    setattr(exceptions, "WebDriverException", DummySeleniumError)
+    setattr(by, "By", DummyBy)
+    setattr(support_ui, "WebDriverWait", DummyWait)
+    setattr(selenium, "webdriver", webdriver)
+    setattr(common, "exceptions", exceptions)
+    setattr(webdriver_common, "by", by)
+    setattr(support, "ui", support_ui)
 
     replacements = {
         "selenium": selenium,

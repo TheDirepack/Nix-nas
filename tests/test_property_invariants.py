@@ -30,7 +30,7 @@ else:
 if HAS_HYPOTHESIS:
     SAFE_MANAGED_HOSTNAME = st.from_regex(r"[a-z0-9][a-z0-9-]{0,9}\.example\.test", fullmatch=True)
 
-    class PropertyInvariantTests(unittest.TestCase):
+    class PropertyInvariantTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(st.text(max_size=9000))
         def test_group_parser_is_total_and_bounded(self, value: str) -> None:
@@ -115,7 +115,8 @@ if HAS_HYPOTHESIS:
             self.assertIsInstance(accepted, bool)
             if not accepted:
                 return
-            self.assertIsInstance(value, str)
+            if not isinstance(value, str):
+                self.fail("accepted loopback URL is not a string")
             import urllib.parse
 
             parsed = urllib.parse.urlsplit(value)
@@ -284,7 +285,7 @@ if HAS_HYPOTHESIS:
 else:
 
     @unittest.skip("Hypothesis is not installed; CI runs the property-test tier with it")
-    class PropertyInvariantTests(unittest.TestCase):
+    class PropertyInvariantTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         def test_hypothesis_tier_placeholder(self) -> None:
             pass
 

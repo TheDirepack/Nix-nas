@@ -166,6 +166,8 @@ if HAS_HYPOTHESIS:
                 exposure = endpoint.get("exposure") or {}
                 if exposure.get("type") == "hostname":
                     value = exposure.get("value")
+                    if not isinstance(value, str):
+                        raise AssertionError("hostname exposure value is not a string")
                     hostname_counts[value] = hostname_counts.get(value, 0) + 1
             duplicates = any(count > 1 for count in hostname_counts.values())
             if duplicates:
@@ -203,7 +205,7 @@ if HAS_HYPOTHESIS:
             else:
                 raise AssertionError("invalid schemaVersion unexpectedly committed")
 
-    class StatefulTests(unittest.TestCase):
+    class StatefulTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         @settings(
             max_examples=30,
             deadline=None,
@@ -213,7 +215,7 @@ if HAS_HYPOTHESIS:
         def test_stateful_machine(self):
             run_state_machine_as_test(ManagedServiceStateMachine)
 
-    class ProjectionDifferentialTests(unittest.TestCase):
+    class ProjectionDifferentialTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         @settings(
             max_examples=80,
             deadline=None,
@@ -270,12 +272,12 @@ if HAS_HYPOTHESIS:
 else:
 
     @unittest.skip("Hypothesis is not installed; CI runs this file in the slow property tier")
-    class StatefulTests(unittest.TestCase):
+    class StatefulTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         def test_hypothesis_required(self):
             pass
 
     @unittest.skip("Hypothesis is not installed; CI runs this file in the slow property tier")
-    class ProjectionDifferentialTests(unittest.TestCase):
+    class ProjectionDifferentialTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         def test_hypothesis_required(self):
             pass
 

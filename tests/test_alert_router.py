@@ -122,7 +122,8 @@ class AlertRouterTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), router.Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        host, port = server.server_address
+        host = str(server.server_address[0])
+        port = int(server.server_address[1])
         try:
             cases = [
                 ({"Transfer-Encoding": "chunked"}, 400),

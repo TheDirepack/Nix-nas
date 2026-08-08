@@ -25,14 +25,11 @@ class CockpitApiTests(unittest.TestCase):
     def test_every_allowlisted_action_runs_only_its_declared_commands(self):
         for name, spec in api.ACTIONS.items():
             calls: list[tuple[str, ...]] = []
-            patches = {
-                "BACKUP_INSTALLED": True,
-                "ZFS_REPLICATION_INSTALLED": True,
-                "SYNCTHING_INSTALLED": True,
-            }
             with (
                 self.subTest(action=name),
-                mock.patch.multiple(api, **patches),
+                mock.patch.object(api, "BACKUP_INSTALLED", True),
+                mock.patch.object(api, "ZFS_REPLICATION_INSTALLED", True),
+                mock.patch.object(api, "SYNCTHING_INSTALLED", True),
                 mock.patch.object(
                     api,
                     "run",

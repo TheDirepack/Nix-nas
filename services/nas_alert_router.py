@@ -385,7 +385,10 @@ def process_alerts(
         authority="nas-alert-router",
         result="success",
         duration_ms=(time.monotonic() - started) * 1000,
-        **result,
+        received=result["received"],
+        considered=result["considered"],
+        sent=result["sent"],
+        suppressed=result["suppressed"],
     )
     return result
 

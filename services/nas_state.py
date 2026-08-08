@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import sys
 import pathlib
 import pwd
 import grp
@@ -1477,7 +1478,7 @@ def main() -> None:
             }
         print(json.dumps(value, indent=2, sort_keys=True))
     except (StateError, OperationBusyError) as exc:
-        print(f"nas-state: {exc}", file=os.sys.stderr)
+        print(f"nas-state: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 
