@@ -111,24 +111,28 @@ if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
   step "release manifest" sha256sum -c MANIFEST.sha256
 fi
 
-if command -v ruff >/dev/null 2>&1; then
-  step "Ruff" ruff check services tests scripts
-  step "Ruff format" ruff format --check services tests scripts
+if [[ "${NAS_PREFLIGHT_SKIP_TOOLING:-0}" == "1" ]]; then
+  skip tooling "Ruff, Pyright, and ShellCheck are owned by dedicated CI steps"
 else
-  skip ruff "Ruff unavailable; CI runs it"
-fi
+  if command -v ruff >/dev/null 2>&1; then
+    step "Ruff" ruff check services tests scripts
+    step "Ruff format" ruff format --check services tests scripts
+  else
+    skip ruff "Ruff unavailable; CI runs it"
+  fi
 
-if command -v pyright >/dev/null 2>&1; then
-  step "Pyright" pyright
-else
-  skip pyright "Pyright unavailable; CI runs it"
-fi
+  if command -v pyright >/dev/null 2>&1; then
+    step "Pyright" pyright
+  else
+    skip pyright "Pyright unavailable; CI runs it"
+  fi
 
-if command -v shellcheck >/dev/null 2>&1; then
-  mapfile -d '' shell_files < <(find scripts tests/vm -type f -name '*.sh' -print0 | sort -z)
-  step "ShellCheck" shellcheck "${shell_files[@]}"
-else
-  skip shellcheck "ShellCheck unavailable; Nix/CI builds generated shell applications"
+  if command -v shellcheck >/dev/null 2>&1; then
+    mapfile -d '' shell_files < <(find scripts tests/vm -type f -name '*.sh' -print0 | sort -z)
+    step "ShellCheck" shellcheck "${shell_files[@]}"
+  else
+    skip shellcheck "ShellCheck unavailable; Nix/CI builds generated shell applications"
+  fi
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_NIX:-0}" == "1" ]]; then
