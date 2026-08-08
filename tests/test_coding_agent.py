@@ -5,6 +5,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -130,6 +131,137 @@ class CodingAgentTests(unittest.TestCase):
         services = (ROOT / "modules" / "ai" / "services.nix").read_text(encoding="utf-8")
         self.assertIn("globalTTL: ${toString cfg.llamaSwap.globalTtl}", internal)
         self.assertIn("elif cmp -s ${legacyDefaultConfig}", services)
+
+    def test_workspace_validation_rejects_missing_and_file_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            missing = root / "missing"
+            with self.assertRaisesRegex(coding.CodingAgentError, "does not exist"):
+                coding.validate_workspace(str(missing), (root,))
+            plain_file = root / "file"
+            plain_file.write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(coding.CodingAgentError, "not a directory"):
+                coding.validate_workspace(str(plain_file), (root,))
+
+    def test_run_checked_raises_on_nonzero_exit(self) -> None:
+        with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1)) as run:
+            with self.assertRaisesRegex(coding.CodingAgentError, "Command failed with status 1"):
+                coding.run_checked(["false"])
+        run.assert_called_once_with(["false"], check=False)
+
+    def test_session_command_requires_absolute_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            with mock.patch.dict(os.environ, {"NAS_PI_SESSION_EXEC": "relative-exec"}, clear=True):
+                with self.assertRaisesRegex(coding.CodingAgentError, "not configured"):
+                    coding.session_command(root, [])
+            with mock.patch.dict(os.environ, {"NAS_PI_SESSION_EXEC": ""}, clear=True):
+                with self.assertRaisesRegex(coding.CodingAgentError, "not configured"):
+                    coding.session_command(root, [])
+
+    def test_session_command_clamps_max_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            session_exec = root / "session"
+            session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "not-a-number"},
+            ):
+                command = coding.session_command(root, [])
+            self.assertIn("RuntimeMaxSec=14400", command)
+            with mock.patch.dict(
+                os.environ,
+                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "10"},
+            ):
+                command = coding.session_command(root, [])
+            self.assertIn("RuntimeMaxSec=14400", command)
+            with mock.patch.dict(
+                os.environ,
+                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "7200"},
+            ):
+                command = coding.session_command(root, [])
+            self.assertIn("RuntimeMaxSec=7200", command)
+
+    def test_heartbeat_wakes_feature_until_stopped(self) -> None:
+        stop = threading.Event()
+        with mock.patch.object(coding.subprocess, "run") as run:
+            stop.set()
+            coding.heartbeat(stop, "nas-feature-control", 1)
+        run.assert_not_called()
+
+    def test_heartbeat_loop_runs_while_not_stopped(self) -> None:
+        stop = threading.Event()
+        with mock.patch.object(coding.subprocess, "run") as run:
+            with mock.patch.object(threading.Event, "wait", side_effect=[False, True]):
+                coding.heartbeat(stop, "nas-feature-control", 1)
+        self.assertTrue(run.called)
+        self.assertIn("nas-feature-control", run.call_args.args[0])
+
+    def test_check_coding_access_grants_admin_and_denies_others(self) -> None:
+        class FakeGroup:
+            def __init__(self, name: str, members: list[str]) -> None:
+                self.gr_name = name
+                self.gr_members = members
+
+        grp = mock.Mock()
+        pwd = mock.Mock()
+        pwd.getpwnam.return_value = mock.Mock(pw_name="max")
+        grp.getgrall.return_value = []
+        modules = {"grp": grp, "pwd": pwd}
+        with mock.patch.dict(os.environ, {"SUDO_USER": "max", "USER": "max"}, clear=True):
+            with mock.patch.dict(sys.modules, modules):
+                # nas_admin bypass via capability registry
+                grp.getgrall.return_value = [FakeGroup("nas_admin", ["max"])]
+                coding._check_coding_access()
+                # denied user raises
+                grp.getgrall.return_value = [FakeGroup("wheel", ["someone-else"])]
+                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")):
+                    with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
+                        coding._check_coding_access()
+                # id command fallback grants via nas_admin
+                grp.getgrall.return_value = []
+                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="nas_admin\n")):
+                    coding._check_coding_access()
+                # id command fails -> only primary group present
+                grp.getgrall.return_value = []
+                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="err")):
+                    with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
+                        coding._check_coding_access()
+                # pwd lookup failure falls through to deny
+                grp.getgrall.return_value = []
+                pwd.getpwnam.side_effect = KeyError("max")
+                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")):
+                    with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
+                        coding._check_coding_access()
+
+    def test_check_coding_access_root_and_missing_user(self) -> None:
+        with mock.patch.dict(os.environ, {"SUDO_USER": "root"}, clear=True):
+            coding._check_coding_access()
+        with mock.patch.dict(os.environ, {"SUDO_USER": ""}, clear=True):
+            coding._check_coding_access()
+
+    def test_main_non_root_and_missing_credential(self) -> None:
+        with mock.patch.object(os, "geteuid", return_value=1000):
+            self.assertEqual(coding.main(["/tmp/repo"]), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            missing_credential = root / "missing-cred"
+            with (
+                mock.patch.object(os, "geteuid", return_value=0),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "NAS_CODING_WORKSPACE_ROOTS_JSON": json.dumps([str(root)]),
+                        "NAS_PI_CREDENTIAL": str(missing_credential),
+                        "SUDO_USER": "root",
+                    },
+                    clear=True,
+                ),
+            ):
+                self.assertEqual(coding.main([str(repo)]), 1)
 
 
 if __name__ == "__main__":

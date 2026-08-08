@@ -523,7 +523,7 @@
       "tests/test_managed_service.py"
     ],
     "services/nas_service_caddy.py": [
-      "tests/test_managed_service.py"
+      "tests/test_service_caddy.py"
     ],
     "services/nas_migrate_state.py": [
       "tests/test_doctor_migrations.py",
