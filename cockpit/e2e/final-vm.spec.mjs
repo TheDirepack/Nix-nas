@@ -10,6 +10,16 @@ if (!username || !password) {
 
 test.describe.configure({mode: "parallel"});
 
+const VIEWPORTS = [
+  {width: 320, height: 568},
+  {width: 375, height: 667},
+  {width: 768, height: 900},
+  {width: 1366, height: 768},
+  {width: 1920, height: 1080},
+];
+const TEXT_SCALES = [1, 1.5, 2];
+const INTERACTIVE = 'button, a[href], select, input, textarea, [role="dialog"], [role="alert"]';
+
 async function expectLogin(page) {
   await expect(page.locator("#login-user-input")).toBeVisible();
   await expect(page.locator("#login-password-input")).toBeVisible();
@@ -21,11 +31,10 @@ async function login(page) {
   await page.goto("/");
   const user = page.locator("#login-user-input");
   const pass = page.locator("#login-password-input");
-  const button = page.locator("#login-button");
   await expect(user).toBeVisible();
   await user.fill(username);
   await pass.fill(password);
-  await button.click();
+  await page.locator("#login-button").click();
   await expect(page.locator("#login-user-input")).toHaveCount(0, {timeout: 30_000});
 }
 
@@ -37,12 +46,75 @@ async function openNasOverview(page) {
   await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible({timeout: 30_000});
 }
 
-function documentMetrics() {
-  return {
+async function expectNoSeriousAxeViolations(page) {
+  const result = await new AxeBuilder({page})
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  const blocking = result.violations.filter(item => ["serious", "critical"].includes(item.impact));
+  expect(blocking).toEqual([]);
+}
+
+async function expectLayoutHealthy(page, viewport) {
+  const metrics = await page.evaluate(() => ({
     viewport: document.documentElement.clientWidth,
     pageWidth: document.documentElement.scrollWidth,
     bodyWidth: document.body.scrollWidth,
-  };
+  }));
+  expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewport + 1);
+  expect(metrics.bodyWidth).toBeLessThanOrEqual(metrics.viewport + 1);
+
+  const boxes = await page.locator(INTERACTIVE).evaluateAll(nodes => nodes
+    .filter(node => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    })
+    .slice(0, 100)
+    .map((node, index) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        index,
+        tag: node.tagName,
+        id: node.id || "",
+        text: (node.getAttribute("aria-label") || node.textContent || "").trim().slice(0, 80),
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      };
+    }));
+
+  for (const box of boxes) {
+    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(box.y + box.height).toBeGreaterThanOrEqual(-1);
+  }
+
+  const collisions = [];
+  for (let left = 0; left < boxes.length; left += 1) {
+    for (let right = left + 1; right < boxes.length; right += 1) {
+      const a = boxes[left];
+      const b = boxes[right];
+      const overlapWidth = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+      const overlapHeight = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+      if (overlapWidth > 4 && overlapHeight > 4) {
+        collisions.push({a, b, overlapWidth, overlapHeight});
+      }
+    }
+  }
+  expect(collisions, `unexpected interactive element overlaps: ${JSON.stringify(collisions.slice(0, 8))}`).toEqual([]);
+}
+
+async function exerciseLayoutMatrix(page) {
+  for (const viewport of VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    for (const scale of TEXT_SCALES) {
+      await page.evaluate(value => {
+        document.documentElement.style.fontSize = `${value * 100}%`;
+      }, scale);
+      await expectLayoutHealthy(page, viewport);
+    }
+  }
 }
 
 test("anonymous clients see only the Cockpit login boundary", async ({page}) => {
@@ -51,6 +123,13 @@ test("anonymous clients see only the Cockpit login boundary", async ({page}) => 
   await page.goto("/");
   await expectLogin(page);
   expect(errors).toEqual([]);
+});
+
+test("anonymous login boundary remains accessible and responsive at common sizes and 200 percent text", async ({page}) => {
+  await page.goto("/");
+  await expectLogin(page);
+  await expectNoSeriousAxeViolations(page);
+  await exerciseLayoutMatrix(page);
 });
 
 test("direct anonymous attempts to reach the NAS component remain login-protected", async ({page}) => {
@@ -95,54 +174,21 @@ test("hostile anonymous login values stay inert", async ({page}) => {
 });
 
 test("final VM exposes the installed Cockpit NAS component after real authentication", async ({page}) => {
-  const pageErrors = [];
-  page.on("pageerror", error => pageErrors.push(String(error)));
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
   await openNasOverview(page);
   await expect(page.getByRole("heading", {name: "Service policies"})).toBeVisible();
-  expect(pageErrors).toEqual([]);
+  expect(errors).toEqual([]);
 });
 
 test("final VM component has no serious or critical accessibility violations", async ({page}) => {
   await openNasOverview(page);
-  const result = await new AxeBuilder({page})
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-    .analyze();
-  const blocking = result.violations.filter(item => ["serious", "critical"].includes(item.impact));
-  expect(blocking).toEqual([]);
+  await expectNoSeriousAxeViolations(page);
 });
 
-test("final VM has no overlap or document overflow across common layouts and 200 percent text", async ({page}) => {
+test("final VM has no overlap overflow or clipping across common layouts and 200 percent text", async ({page}) => {
   await openNasOverview(page);
-  for (const viewport of [
-    {width: 320, height: 568},
-    {width: 375, height: 667},
-    {width: 768, height: 900},
-    {width: 1366, height: 768},
-    {width: 1920, height: 1080},
-  ]) {
-    await page.setViewportSize(viewport);
-    for (const scale of [1, 1.5, 2]) {
-      await page.evaluate(value => { document.documentElement.style.fontSize = `${value * 100}%`; }, scale);
-      const metrics = await page.evaluate(documentMetrics);
-      expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewport + 1);
-      expect(metrics.bodyWidth).toBeLessThanOrEqual(metrics.viewport + 1);
-
-      const visible = page.locator('button, a[href], select, input, textarea, [role="dialog"], [role="alert"]:visible');
-      const boxes = [];
-      for (let index = 0, count = await visible.count(); index < Math.min(count, 80); index += 1) {
-        const item = visible.nth(index);
-        if (!(await item.isVisible())) continue;
-        const box = await item.boundingBox();
-        if (box) boxes.push(box);
-      }
-      for (const box of boxes) {
-        expect(box.width).toBeGreaterThan(0);
-        expect(box.height).toBeGreaterThan(0);
-        expect(box.x).toBeLessThanOrEqual(viewport.width + 1);
-        expect(box.x + box.width).toBeGreaterThanOrEqual(-1);
-      }
-    }
-  }
+  await exerciseLayoutMatrix(page);
 });
 
 test("final VM visible controls remain keyboard reachable and DOM ids are unique", async ({page}) => {
@@ -150,18 +196,30 @@ test("final VM visible controls remain keyboard reachable and DOM ids are unique
   await openNasOverview(page);
   const ids = await page.locator("[id]").evaluateAll(nodes => nodes.map(node => node.id).filter(Boolean));
   expect(new Set(ids).size).toBe(ids.length);
-  const controls = page.locator('button, a[href], select, input, textarea, [tabindex]:not([tabindex="-1"])');
-  expect(await controls.count()).toBeGreaterThan(4);
-  await page.keyboard.press("Tab");
-  expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+
+  const focusTrail = [];
+  for (let index = 0; index < 16; index += 1) {
+    await page.keyboard.press("Tab");
+    const active = await page.evaluate(() => {
+      const node = document.activeElement;
+      if (!node || node === document.body) return "";
+      const rect = node.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return "";
+      return `${node.tagName}:${node.id || node.getAttribute("aria-label") || node.textContent || ""}`.slice(0, 120);
+    });
+    if (active) focusTrail.push(active);
+  }
+  expect(focusTrail.length).toBeGreaterThan(4);
+  expect(new Set(focusTrail).size).toBeGreaterThan(3);
 });
 
-test("final VM confirmation dialog stays usable at extreme zoom", async ({page}) => {
+test("final VM confirmation dialog stays usable at extreme zoom and restores focus", async ({page}) => {
   await page.setViewportSize({width: 320, height: 568});
   await openNasOverview(page);
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
   const trigger = page.getByRole("button", {name: "Run system health checks"});
   await expect(trigger).toBeVisible();
+  await trigger.focus();
   await trigger.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -174,6 +232,7 @@ test("final VM confirmation dialog stays usable at extreme zoom", async ({page})
   await expect(cancel).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });
 
 test("final VM rejects scriptable navigation schemes in NAS links", async ({page}) => {
