@@ -42,15 +42,20 @@ step "documentation links" ./scripts/validate-doc-links.py
 step "custom executable test inventory" ./scripts/validate-test-inventory.py
 step "static security boundaries" ./scripts/security-static-scan.py
 step "Python syntax" ./scripts/validate-python-syntax.py
-if [[ "${NAS_PREFLIGHT_SKIP_FUZZ:-0}" != "1" ]]; then
+
+# Fuzzing is deliberately opt-in. CI owns long-running fuzz/property work in
+# the final slow stage, after static checks, builds, runtime integration, and
+# final-system deterministic qualification have succeeded.
+if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" ]]; then
   step "deterministic boundary fuzz smoke" ./scripts/fuzz.py --cases "${NAS_PREFLIGHT_FUZZ_CASES:-250}"
   step "custom executable fuzz smoke" ./scripts/fuzz-executables.py --cases "${NAS_PREFLIGHT_EXECUTABLE_FUZZ_CASES:-1}"
-else
-  skip deterministic-fuzz "Deterministic fuzz smoke disabled by NAS_PREFLIGHT_SKIP_FUZZ"
 fi
+
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
   step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
-    --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+    --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py \
+    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py \
+    --exclude test_secret_security_fuzz.py
   step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_core.py'
   step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_matrix.py'
   step "Maintainer release integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_release.py'
@@ -75,7 +80,9 @@ if command -v node >/dev/null 2>&1; then
   done < <(find cockpit/e2e -type f -name '*.mjs' -print0 2>/dev/null | sort -z)
   node cockpit/build.js --check-source
   cockpit_bundle_available=false
-  if [[ -s cockpit/package-lock.json && -s cockpit/dist/index.js && -s cockpit/dist/index.css && -s cockpit/dist/build-meta.json ]]; then
+  if [[ "${NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE:-0}" == "1" ]]; then
+    skip cockpit-bundle "Cockpit distribution validation deferred to the production bundle build"
+  elif [[ -s cockpit/package-lock.json && -s cockpit/dist/index.js && -s cockpit/dist/index.css && -s cockpit/dist/build-meta.json ]]; then
     node cockpit/build.js --check
     cockpit_bundle_available=true
   else
@@ -84,8 +91,7 @@ if command -v node >/dev/null 2>&1; then
   if [[ -d cockpit/node_modules/typescript ]] || node -e 'require.resolve("typescript")' >/dev/null 2>&1; then
     node scripts/validate-cockpit-jsx.cjs
   elif $cockpit_bundle_available; then
-    printf 'JSX parser check covered by the verified shared Cockpit bundle artifact.
-'
+    printf 'JSX parser check covered by the verified shared Cockpit bundle artifact.\n'
   else
     skip cockpit-jsx-syntax "TypeScript parser unavailable and no verified Cockpit bundle exists"
   fi
@@ -105,32 +111,36 @@ if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
   step "release manifest" sha256sum -c MANIFEST.sha256
 fi
 
-if command -v ruff >/dev/null 2>&1; then
-  step "Ruff" ruff check services tests scripts
-  step "Ruff format" ruff format --check services tests scripts
+if [[ "${NAS_PREFLIGHT_SKIP_TOOLING:-0}" == "1" ]]; then
+  skip tooling "Ruff, Pyright, and ShellCheck are owned by dedicated CI steps"
 else
-  skip ruff "Ruff unavailable; CI runs it"
-fi
+  if command -v ruff >/dev/null 2>&1; then
+    step "Ruff" ruff check services tests scripts
+    step "Ruff format" ruff format --check services tests scripts
+  else
+    skip ruff "Ruff unavailable; CI runs it"
+  fi
 
-if command -v pyright >/dev/null 2>&1; then
-  step "Pyright" pyright
-else
-  skip pyright "Pyright unavailable; CI runs it"
-fi
+  if command -v pyright >/dev/null 2>&1; then
+    step "Pyright" pyright
+  else
+    skip pyright "Pyright unavailable; CI runs it"
+  fi
 
-if command -v shellcheck >/dev/null 2>&1; then
-  mapfile -d '' shell_files < <(find scripts tests/vm -type f -name '*.sh' -print0 | sort -z)
-  step "ShellCheck" shellcheck "${shell_files[@]}"
-else
-  skip shellcheck "ShellCheck unavailable; Nix/CI builds generated shell applications"
+  if command -v shellcheck >/dev/null 2>&1; then
+    mapfile -d '' shell_files < <(find scripts tests/vm -type f -name '*.sh' -print0 | sort -z)
+    step "ShellCheck" shellcheck "${shell_files[@]}"
+  else
+    skip shellcheck "ShellCheck unavailable; Nix/CI builds generated shell applications"
+  fi
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_NIX:-0}" == "1" ]]; then
-  skip nix "Nix flake evaluation disabled by NAS_PREFLIGHT_SKIP_NIX"
+  skip nix "Nix reference configuration evaluation disabled by NAS_PREFLIGHT_SKIP_NIX"
 elif command -v nix >/dev/null 2>&1; then
-  step "Nix flake evaluation" nix flake check --no-build --show-trace
+  step "Nix reference configuration evaluation" bash ./scripts/evaluate-reference-configurations.sh
 else
-  skip nix "Nix unavailable; CI performs flake evaluation and closure builds"
+  skip nix "Nix unavailable; CI performs reference configuration evaluation and closure builds"
 fi
 
 if ((${#incomplete[@]})); then

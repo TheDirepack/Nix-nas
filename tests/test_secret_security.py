@@ -4,7 +4,6 @@ import pathlib
 import re
 import shlex
 import subprocess
-import tempfile
 import textwrap
 import unittest
 
@@ -30,8 +29,6 @@ def rendered_shell_helpers(*names: str) -> str:
         next_function = re.search(r"\n      [a-zA-Z0-9_]+\(\) \{", source[position + 1 :])
         end = len(source) if next_function is None else position + 1 + next_function.start()
         block = source[position:end]
-        # Nix indented strings escape a shell interpolation as ''${...}; remove
-        # only that Nix escape so the function can execute as ordinary Bash.
         block = textwrap.dedent(block).replace("''${", "${")
         output.append(block.rstrip())
     return "\n\n".join(output) + "\n"
@@ -127,7 +124,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
             ('require_huggingface_token "$huggingface_token"', "HF_TOKEN=%s"),
             ('require_secret_atom "$vaultwarden_client_secret"', "SSO_CLIENT_SECRET='%s'"),
             ('require_secret_atom "$ntfy_password"', "NTFY_AUTH_USERS=admin:$ntfy_hash:admin"),
-            ('require_ntfy_topic "$ntfy_topic"', 'printf \'%s\' "$ntfy_topic"'),
+            ('require_ntfy_topic "$ntfy_topic"', "printf '%s' \"$ntfy_topic\""),
         )
         for guard, render in required_pairs:
             with self.subTest(render=render):

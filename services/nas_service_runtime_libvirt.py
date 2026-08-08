@@ -17,9 +17,7 @@ def plan_libvirt(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         return {"actions": [], "warnings": [f"Service {service_id} is not a VM service"]}
     source = runtime.get("source", "")
     if not source.startswith(f"/var/lib/nas-control/apps/{service_id}/"):
-        raise ManagedServiceError(
-            f"VM source for {service_id} must be under /var/lib/nas-control/apps/{service_id}/"
-        )
+        raise ManagedServiceError(f"VM source for {service_id} must be under /var/lib/nas-control/apps/{service_id}/")
     return {
         "service": service_id,
         "runtime": "vm",
@@ -27,9 +25,7 @@ def plan_libvirt(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def apply_libvirt(
-    service_id: str, service: dict[str, Any], *, dry_run: bool = False
-) -> dict[str, Any]:
+def apply_libvirt(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
     plan = plan_libvirt(service_id, service)
     if dry_run:
         return plan
@@ -60,13 +56,11 @@ def remove_libvirt(service_id: str, *, dry_run: bool = False) -> None:
     if dry_run:
         return
     subprocess.run(["virsh", "destroy", service_id], check=False)
-    subprocess.run(
-        ["virsh", "undefine", service_id, "--remove-all-storage"], check=True
-    )
+    subprocess.run(["virsh", "undefine", service_id, "--remove-all-storage"], check=True)
 
 
 def _render_domain(service_id: str, service: dict[str, Any]) -> str:
     resources = service.get("resources", {})
     memory = resources.get("memoryBytes", 2147483648)
     cpus = int(resources.get("cpus", 2))
-    return f"""<domain type='kvm'><name>{service_id}</name><metadata><nas:service xmlns:nas="https://nixos-nas.local/service"><id>{service_id}</id><generation>{service.get('generation', 1)}</generation></nas:service></metadata><memory unit='B'>{memory}</memory><vcpu>{cpus}</vcpu><os><type arch='x86_64'>hvm</type></os><devices><emulator>/run/current-system/sw/bin/qemu-kvm</emulator></devices></domain>"""
+    return f"""<domain type='kvm'><name>{service_id}</name><metadata><nas:service xmlns:nas="https://nixos-nas.local/service"><id>{service_id}</id><generation>{service.get("generation", 1)}</generation></nas:service></metadata><memory unit='B'>{memory}</memory><vcpu>{cpus}</vcpu><os><type arch='x86_64'>hvm</type></os><devices><emulator>/run/current-system/sw/bin/qemu-kvm</emulator></devices></domain>"""

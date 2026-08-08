@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
-import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-
-import json
-
 CONTRACTS = ROOT / "tests" / "custom-script-contracts.json"
 
 
@@ -26,13 +23,8 @@ def _imports_in_file(test_path: pathlib.Path) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.add(node.module.split(".")[0])
-    text = test_path.read_text(encoding="utf-8")
-    for name in imports.copy():
-        if name not in text:
-            pass
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".")[0])
     return imports
 
 
@@ -52,14 +44,12 @@ class RunnerAccountingTests(unittest.TestCase):
                     test_path = ROOT / test_rel
                     self.assertTrue(test_path.is_file(), msg=f"declared test {test_rel} missing")
                     imports = _imports_in_file(test_path)
-                    if module_name in imports:
+                    if module_name in imports or module_name in test_path.read_text(encoding="utf-8"):
                         found_import = True
                         break
-                    text = test_path.read_text(encoding="utf-8")
-                    if module_name in text:
-                        found_import = True
-                        break
-                self.assertTrue(found_import, msg=f"{mod_path} mapping {test_files} has no import coverage for {module_name}")
+                self.assertTrue(
+                    found_import, msg=f"{mod_path} mapping {test_files} has no import coverage for {module_name}"
+                )
 
     def test_python_modules_mapping_has_real_import(self):
         raw = json.loads(CONTRACTS.read_text(encoding="utf-8"))
@@ -72,39 +62,55 @@ class RunnerAccountingTests(unittest.TestCase):
                     if not test_path.is_file():
                         continue
                     imports = _imports_in_file(test_path)
-                    if module_name in imports:
-                        has_import = True
-                        break
-                    if module_name in test_path.read_text(encoding="utf-8"):
+                    if module_name in imports or module_name in test_path.read_text(encoding="utf-8"):
                         has_import = True
                         break
                 self.assertTrue(has_import, msg=f"{module} -> {tests} has no import of {module_name}")
 
-    def test_runner_parses_skipped_and_zero_test(self):
-        script = ROOT / "scripts" / "run-unit-tests.py"
-        text = script.read_text(encoding="utf-8")
+    def test_runner_rejects_zero_and_all_skipped_files_by_default(self):
+        text = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
         self.assertIn("ALLOWLIST_ZERO", text)
-        self.assertIn("skipped", text)
+        self.assertIn("ALLOWLIST_ALL_SKIPPED", text)
+        self.assertIn("all discovered tests were skipped", text)
         self.assertIn("expectedFailures", text)
         self.assertIn("unexpectedSuccesses", text)
-        self.assertIn("passed", text)
         self.assertIn("no tests discovered", text)
 
-    def test_caddy_validate_test_exists_and_skips_gracefully(self):
+    def test_caddy_all_skipped_exception_is_backed_by_dedicated_real_binary_job(self):
         path = ROOT / "tests" / "test_service_caddy_validate.py"
         self.assertTrue(path.is_file(), msg="test_service_caddy_validate.py must exist")
-        text = path.read_text(encoding="utf-8")
-        self.assertIn("SkipTest", text)
-        self.assertIn("caddy", text.lower())
-        self.assertIn("generate_caddy_fragment", text)
+        test_text = path.read_text(encoding="utf-8")
+        self.assertIn("SkipTest", test_text)
+        self.assertIn("caddy", test_text.lower())
+        self.assertIn("generate_caddy_fragment", test_text)
 
-    def test_stateful_test_exists(self):
-        path = ROOT / "tests" / "test_managed_service_stateful.py"
-        self.assertTrue(path.is_file(), msg="test_managed_service_stateful.py must exist")
-        text = path.read_text(encoding="utf-8")
-        self.assertIn("RuleBasedStateMachine", text)
-        self.assertIn("portal", text.lower())
-        self.assertIn("effective", text.lower())
+        runner = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
+        self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})', runner)
+
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        caddy_block = workflow.split("  caddy-validate:\n", 1)[1].split("\n  static:\n", 1)[0]
+        self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
+        self.assertIn("tests.test_service_caddy_validate", caddy_block)
+
+    def test_managed_service_has_fast_contract_and_slow_state_machine(self):
+        fast = ROOT / "tests" / "test_managed_service_stateful.py"
+        slow = ROOT / "tests" / "slow_managed_service_stateful.py"
+        property_tier = ROOT / "tests" / "test_property_invariants.py"
+        self.assertTrue(fast.is_file(), msg="fast managed-service projection contract must exist")
+        self.assertTrue(slow.is_file(), msg="slow managed-service state machine must exist")
+
+        fast_text = fast.read_text(encoding="utf-8")
+        self.assertIn("ManagedServiceProjectionContractTests", fast_text)
+        self.assertIn("portal_projection", fast_text)
+        self.assertIn("generate_caddy_fragment", fast_text)
+
+        slow_text = slow.read_text(encoding="utf-8")
+        self.assertIn("RuleBasedStateMachine", slow_text)
+        self.assertIn("run_state_machine_as_test", slow_text)
+        self.assertIn("ProjectionDifferentialTests", slow_text)
+
+        property_text = property_tier.read_text(encoding="utf-8")
+        self.assertIn("slow_managed_service_stateful", property_text)
 
 
 if __name__ == "__main__":

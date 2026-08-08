@@ -437,7 +437,9 @@ def fixture_model(path: pathlib.Path) -> IdentityModel:
     return build_model(data)
 
 
-def desired_syncthing(model: IdentityModel) -> dict[str, Any]:
+def desired_syncthing(
+    model: IdentityModel,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     return desired_syncthing_model(model, SHARE_ROOT)
 
 
@@ -903,8 +905,8 @@ def apply_account_plan(
                         )
                         if not isinstance(created_user, Mapping):
                             raise SyncError(f"Authentik did not return the created user {username}")
-                        current = created_user
-                        existing_by_name[username] = created_user
+                        current = dict(created_user)
+                        existing_by_name[username] = dict(created_user)
                         created.append(username)
                         action = "created"
                     else:

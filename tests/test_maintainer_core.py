@@ -38,7 +38,9 @@ class MaintainerCoreTests(MaintainerScriptMixin, unittest.TestCase):
         namespace: dict[str, object] = {"__name__": "coverage_constants"}
         exec(compile(checker.read_text(encoding="utf-8"), str(checker), "exec"), namespace)
         floors = namespace["FLOORS"]
-        total_floor = float(namespace["TOTAL_FLOOR"])
+        total_floor_raw = namespace["TOTAL_FLOOR"]
+        assert isinstance(total_floor_raw, (int, float))
+        total_floor = float(total_floor_raw)
         assert isinstance(floors, dict)
         report = pathlib.Path(self._temporary.name) / "synthetic-coverage.json"
         passing = {

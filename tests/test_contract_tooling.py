@@ -123,7 +123,7 @@ class ContractTests(unittest.TestCase):
         script = text("scripts/live-validation.sh")
         prefix = script.split('case "${1:-}" in', 1)[0]
         value = 'Unicode ✓ Ü quote" slash\\ colon:#='
-        command = prefix + "\nprintf '%s' \"$(curl_config_escape \"$1\")\"\n"
+        command = prefix + '\nprintf \'%s\' "$(curl_config_escape "$1")"\n'
         result = subprocess.run(
             ["bash", "-c", command, "bash", value],
             cwd=ROOT,
@@ -135,7 +135,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Unicode ✓ Ü", result.stdout)
         self.assertIn('\\"', result.stdout)
-        self.assertIn('\\\\', result.stdout)
+        self.assertIn("\\\\", result.stdout)
 
     def test_complete_release_provenance_hashes_the_actual_staged_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -163,19 +163,32 @@ class ContractTests(unittest.TestCase):
                 [
                     "python3",
                     "scripts/lib/release_provenance.py",
-                    "--out", str(out),
-                    "--version", "2.2.0-alpha.5",
-                    "--artifact-name", "Nix OS NAS 2.2.5 release",
-                    "--archive-root", "nixos-nas-test",
-                    "--validation", "complete",
-                    "--archive-hash", "a" * 64,
-                    "--manifest-hash", "b" * 64,
-                    "--flake-hash", "c" * 64,
-                    "--commit", "d" * 40,
-                    "--selection-policy", "git-tracked-clean",
-                    "--status", str(status),
-                    "--stage-root", str(stage),
-                    "--git-tree", "e" * 40,
+                    "--out",
+                    str(out),
+                    "--version",
+                    "2.2.0-alpha.5",
+                    "--artifact-name",
+                    "Nix OS NAS 2.2.5 release",
+                    "--archive-root",
+                    "nixos-nas-test",
+                    "--validation",
+                    "complete",
+                    "--archive-hash",
+                    "a" * 64,
+                    "--manifest-hash",
+                    "b" * 64,
+                    "--flake-hash",
+                    "c" * 64,
+                    "--commit",
+                    "d" * 40,
+                    "--selection-policy",
+                    "git-tracked-clean",
+                    "--status",
+                    str(status),
+                    "--stage-root",
+                    str(stage),
+                    "--git-tree",
+                    "e" * 40,
                 ],
                 cwd=ROOT,
                 capture_output=True,
@@ -195,11 +208,20 @@ class ContractTests(unittest.TestCase):
                 hashlib.sha256(fixtures["cockpit/dist/build-meta.json"]).hexdigest(),
             )
             evidence = provenance["evidence"]
-            self.assertEqual(evidence["qemuCommitSha256"], hashlib.sha256(fixtures["release-evidence/qemu/commit.txt"]).hexdigest())
-            self.assertEqual(evidence["qemuChecksSha256"], hashlib.sha256(fixtures["release-evidence/qemu/checks.txt"]).hexdigest())
-            self.assertEqual(evidence["installerCommitSha256"], hashlib.sha256(fixtures["release-evidence/installer/commit.txt"]).hexdigest())
-            self.assertEqual(evidence["installerChecksSha256"], hashlib.sha256(fixtures["release-evidence/installer/checks.txt"]).hexdigest())
-
+            self.assertEqual(
+                evidence["qemuCommitSha256"], hashlib.sha256(fixtures["release-evidence/qemu/commit.txt"]).hexdigest()
+            )
+            self.assertEqual(
+                evidence["qemuChecksSha256"], hashlib.sha256(fixtures["release-evidence/qemu/checks.txt"]).hexdigest()
+            )
+            self.assertEqual(
+                evidence["installerCommitSha256"],
+                hashlib.sha256(fixtures["release-evidence/installer/commit.txt"]).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["installerChecksSha256"],
+                hashlib.sha256(fixtures["release-evidence/installer/checks.txt"]).hexdigest(),
+            )
 
     def test_live_validation_curl_helpers_round_trip_special_credentials(self):
         received: list[str | None] = []
@@ -248,7 +270,7 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(received.pop(0), f"Bearer {token}")
 
-                unicode_value = 'snowman-☃-check-✓'
+                unicode_value = "snowman-☃-check-✓"
                 command = prefix + '\ncurl_config_escape "$1"\n'
                 result = subprocess.run(
                     ["bash", "-c", command, "bash", unicode_value],

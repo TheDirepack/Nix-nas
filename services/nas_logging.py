@@ -101,10 +101,10 @@ def sanitize(value: Any, *, key: str = "", depth: int = 0) -> Any:
         return output
     if isinstance(value, (list, tuple, set, frozenset)):
         items = list(value)
-        output = [sanitize(item, depth=depth + 1) for item in items[:MAX_COLLECTION_ITEMS]]
+        list_output = [sanitize(item, depth=depth + 1) for item in items[:MAX_COLLECTION_ITEMS]]
         if len(items) > MAX_COLLECTION_ITEMS:
-            output.append("[truncated]")
-        return output
+            list_output.append("[truncated]")
+        return list_output
     return _bounded_text(value)
 
 

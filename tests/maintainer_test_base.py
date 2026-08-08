@@ -12,7 +12,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 class MaintainerScriptMixin:
     @classmethod
     def setUpClass(cls) -> None:
-        super().setUpClass()
+        parent_setup = getattr(super(), "setUpClass", None)
+        if parent_setup is not None:
+            parent_setup()
         cls._temporary = tempfile.TemporaryDirectory()
         cls.clean_root = pathlib.Path(cls._temporary.name) / "repo"
         shutil.copytree(
@@ -37,7 +39,9 @@ class MaintainerScriptMixin:
     @classmethod
     def tearDownClass(cls) -> None:
         cls._temporary.cleanup()
-        super().tearDownClass()
+        parent_teardown = getattr(super(), "tearDownClass", None)
+        if parent_teardown is not None:
+            parent_teardown()
 
     def run_clean(self, *command: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()

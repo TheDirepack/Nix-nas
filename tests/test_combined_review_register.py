@@ -33,7 +33,9 @@ class CombinedReviewRegisterTests(unittest.TestCase):
             path.read_text(encoding="utf-8", errors="ignore")
             for root in (ROOT / "cockpit", ROOT / "services", ROOT / "modules")
             for path in root.rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".woff", ".woff2", ".png", ".jpg", ".jpeg", ".svg", ".ico"}
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix not in {".woff", ".woff2", ".png", ".jpg", ".jpeg", ".svg", ".ico"}
             and "assets" not in path.parts
         )
         self.assertNotIn("nas-update-check", sources)

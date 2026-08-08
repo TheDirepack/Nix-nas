@@ -21,111 +21,84 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  cockpit:
-    name: Build shared Cockpit dependency graph
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Restore reviewed Cockpit build
-        id: cockpit-build
-        uses: actions/cache@v4
-        with:
-          path: cockpit/dist
-          key: cockpit-build-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/package.json', 'cockpit/build.js', 'cockpit/src/**', 'scripts/validate-cockpit-jsx.cjs', 'tests/js/**') }}
-      - name: Restore exact Cockpit dependencies
-        id: cockpit-deps
-        if: steps.cockpit-build.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
-        with:
-          path: cockpit/node_modules
-          key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install Cockpit dependencies on cache miss
-        if: steps.cockpit-build.outputs.cache-hit != 'true' && steps.cockpit-deps.outputs.cache-hit != 'true'
-        run: npm --prefix cockpit ci --no-audit --no-fund
-      - name: Refresh dependency vulnerability audit
-        run: npm --prefix cockpit audit --audit-level=high
-      - name: Build and test Cockpit on build-cache miss
-        if: steps.cockpit-build.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          test -f cockpit/package-lock.json
-          npm --prefix cockpit run build
-          npm --prefix cockpit run check
-          node scripts/validate-cockpit-jsx.cjs
-          node --test tests/js/*.test.mjs
-      - name: Retain the exact lock and output bytes
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: cockpit-bundle
-          if-no-files-found: error
-          retention-days: 14
-          path: |
-            cockpit/package-lock.json
-            cockpit/dist
+env:
+  CI_CACHE_SCHEMA: ci-v4-node24-ubuntu2404
 
+jobs:
+  # Fast deterministic qualification runs in parallel. Downstream jobs depend
+  # directly on the qualifications they require; there are no synthetic gate
+  # jobs whose only purpose is to repeat GitHub's dependency semantics.
   test:
-    name: Source unit, coverage, and syntax tests
+    name: Fast source unit, coverage, and syntax
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Restore exact fast-suite result and coverage
-        id: unit-cache
-        uses: actions/cache@v4
+      - name: Restore complete source qualification
+        id: fast-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             coverage.json
-            .ci-cache/unit-pass
-          key: unit-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**/*.py', 'tests/**/*.py') }}
+            .ci-cache/fast-source-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-fast-source-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**', 'tests/**', 'cockpit/src/**', 'tests/js/**', 'web/**', 'schemas/**', 'pyproject.toml') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.fast-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        if: steps.fast-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
-      - name: Python unit tests and branch coverage floor
-        if: steps.unit-cache.outputs.cache-hit != 'true'
+      - name: Fast Python unit tests and branch coverage floor
+        if: steps.fast-result.outputs.cache-hit != 'true'
         run: |
           ./scripts/validate-python-syntax.py
-          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 \
+            --exclude test_maintainer_core.py \
+            --exclude test_maintainer_matrix.py \
+            --exclude test_maintainer_release.py \
+            --exclude test_contract_tooling.py \
+            --exclude test_fuzz_boundaries.py \
+            --exclude test_property_invariants.py \
+            --exclude test_secret_security_fuzz.py
+          nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
+      - name: Test inventory contract
+        if: steps.fast-result.outputs.cache-hit != 'true'
+        run: nix develop .#test -c python3 scripts/validate-test-inventory.py
+      - name: Maintainer contract tests
+        if: steps.fast-result.outputs.cache-hit != 'true'
+        run: |
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_core.py'
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
+      - name: Source syntax and renderer contracts
+        if: steps.fast-result.outputs.cache-hit != 'true'
+        run: |
+          while IFS= read -r -d '' script; do bash -n "$script"; done < <(find scripts tests/vm -type f -name '*.sh' -print0)
+          for script in cockpit/src/*.js; do node --check "$script"; done
+          node cockpit/build.js --check-source
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
+          NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
+      - name: Mark source qualification reusable
+        if: steps.fast-result.outputs.cache-hit != 'true'
+        run: |
           mkdir -p .ci-cache
-          printf 'passed\n' > .ci-cache/unit-pass
-      - name: Enforce branch coverage floor
-        run: nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
+          printf 'passed\n' > .ci-cache/fast-source-pass
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: success()
         with:
           name: coverage-report
           if-no-files-found: error
           retention-days: 14
           path: coverage.json
-      - name: Test inventory contract
-        run: nix develop .#test -c python3 scripts/validate-test-inventory.py
-      - name: Maintainer core integration tests
-        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_core.py'
-      - name: Maintainer matrix integration tests
-        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
-      - name: Maintainer release integration tests
-        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
-      - name: Tooling contract tests
-        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
-      - name: Shell syntax
-        run: |
-          while IFS= read -r -d '' script; do bash -n "$script"; done < <(find scripts tests/vm -type f -name '*.sh' -print0)
-      - name: JavaScript and JSX source
-        run: |
-          for script in cockpit/src/*.js; do node --check "$script"; done
-          node cockpit/build.js --check-source
-          node scripts/validate-cockpit-jsx.cjs
-          node --test tests/js/*.test.mjs
-      - name: JSON and renderer checks
-        run: NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
 
   test-nonroot:
-    name: Unprivileged unit-test hermeticity
+    name: Fast unprivileged hermeticity
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -135,17 +108,17 @@ jobs:
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore unprivileged-suite pass
         id: nonroot-result
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ci-cache/nonroot-pass
-          key: nonroot-pass-${{ runner.os }}-${{ steps.nonroot-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**/*.py', 'tests/**/*.py') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-nonroot-${{ runner.os }}-${{ steps.nonroot-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**/*.py', 'tests/**/*.py', 'schemas/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.nonroot-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
         if: steps.nonroot-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -155,14 +128,153 @@ jobs:
           set -euo pipefail
           nix_bin="$(command -v nix)"
           sudo useradd --create-home --shell /bin/bash nas-ci
-          sudo chown -R nas-ci:nas-ci "$GITHUB_WORKSPACE"
+          sudo install -d -o nas-ci -g nas-ci /home/nas-ci/worktree
+          sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
+          sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-            "$nix_bin" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-          sudo -u nas-ci mkdir -p .ci-cache
-          printf 'passed\n' | sudo -u nas-ci tee .ci-cache/nonroot-pass >/dev/null
+            bash -c 'cd /home/nas-ci/worktree && exec "$1" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py' bash "$nix_bin"
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/nonroot-pass
+
+  security:
+    name: Fast deterministic security and injection checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore passing deterministic security qualification
+        id: security-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-cache/security-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-security-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', '.bandit', '.semgrep.yml', 'services/**', 'scripts/run-security-tests.py', 'tests/test_security*.py', 'tests/test_secret_security.py', 'tests/test_secret_journal_security.py', 'tests/test_secret_transaction.py', 'cockpit/src/**', 'web/**') }}
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.security-result.outputs.cache-hit != 'true'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.security-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Project deterministic security regression suite
+        if: steps.security-result.outputs.cache-hit != 'true'
+        run: nix develop .#test -c ./scripts/run-security-tests.py
+      - name: Semgrep local rules
+        if: steps.security-result.outputs.cache-hit != 'true'
+        run: nix develop .#test -c semgrep --config .semgrep.yml --error services scripts cockpit/src web
+      - name: Bandit privileged runtime Python scan
+        if: steps.security-result.outputs.cache-hit != 'true'
+        run: nix develop .#test -c bandit -q -c .bandit -r services -ll -ii
+      - name: Mark deterministic security qualification reusable
+        if: steps.security-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/security-pass
+
+  caddy-validate:
+    name: Fast Caddy generator validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore passing Caddy validation
+        id: caddy-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-cache/caddy-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-caddy-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/nas_service_caddy.py', 'tests/test_service_caddy.py', 'tests/test_service_caddy_coverage.py', 'tests/test_service_caddy_validate.py', 'modules/nas/config/managed-services.nix') }}
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.caddy-result.outputs.cache-hit != 'true'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.caddy-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Validate generated Caddy fragment with real Caddy
+        if: steps.caddy-result.outputs.cache-hit != 'true'
+        run: |
+          nix shell nixpkgs#caddy -c caddy version
+          nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/caddy-pass
+
+  static:
+    name: Fast Nix evaluation, lint, type and formatting checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore static-analysis pass
+        id: static-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-cache/static-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-static-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'schemas/**', 'cockpit/src/**', 'cockpit/e2e/**', 'web/**', 'pyproject.toml', 'prettier.config.mjs') }}
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.static-result.outputs.cache-hit != 'true'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.static-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Source-only repository preflight
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
+      - name: Secret transaction fault injection
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: nix shell nixpkgs#bats -c bats tests/bats
+      - name: ShellCheck
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
+      - name: Python lint formatting and types
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: |
+          nix shell nixpkgs#ruff -c ruff check services tests scripts
+          nix shell nixpkgs#ruff -c ruff format --check services tests scripts
+          nix shell nixpkgs#pyright -c pyright --project pyproject.toml
+      - name: JavaScript formatting
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: nix shell nixpkgs#prettier -c prettier --check "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "web/portal/*.html" "tests/js/*.mjs" prettier.config.mjs
+      - name: Evaluate valid and intentionally-invalid configuration matrix
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: ./scripts/nix-config-matrix.sh
+      - name: Evaluate complete reference configurations without builds
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: ./scripts/evaluate-reference-configurations.sh
+      - name: Mark static analysis reusable
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/static-pass
+
+  dependency-audit:
+    name: Fast fresh dependency vulnerability audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore exact Node 24 Cockpit dependencies
+        id: audit-deps
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/node_modules
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install dependencies on cache miss
+        if: steps.audit-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Query the current npm vulnerability database
+        run: npm --prefix cockpit audit --audit-level=high
 
   coverage-diff:
-    name: Per-file coverage drift vs main
+    name: PR per-file coverage drift vs main
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     needs: [test]
     runs-on: ubuntu-24.04
@@ -180,139 +292,106 @@ jobs:
       - name: Resolve main baseline revision
         id: main-baseline
         run: echo "sha=$(git -C main rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Restore completed coverage comparison
+        id: coverage-diff-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-cache/coverage-diff-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-diff-${{ runner.os }}-${{ github.sha }}-${{ steps.main-baseline.outputs.sha }}
       - name: Restore main coverage baseline
         id: main-coverage
-        uses: actions/cache@v4
+        if: steps.coverage-diff-result.outputs.cache-hit != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: main-coverage.json
-          key: coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.coverage-diff-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        if: steps.coverage-diff-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
-      - name: Coverage on the main-branch baseline
-        if: steps.main-coverage.outputs.cache-hit != 'true'
+      - name: Coverage on the main-branch fast baseline
+        if: steps.coverage-diff-result.outputs.cache-hit != 'true' && steps.main-coverage.outputs.cache-hit != 'true'
         working-directory: main
-        run: nix develop .#test -c ./scripts/run-unit-tests.py --coverage ../main-coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+        run: |
+          nix develop .#test -c ./scripts/run-unit-tests.py --coverage ../main-coverage.json --quiet --jobs 4 \
+            --exclude test_maintainer_core.py \
+            --exclude test_maintainer_matrix.py \
+            --exclude test_maintainer_release.py \
+            --exclude test_contract_tooling.py \
+            --exclude test_fuzz_boundaries.py \
+            --exclude test_property_invariants.py \
+            --exclude test_secret_security_fuzz.py
       - name: Enforce per-file coverage drift vs main
+        if: steps.coverage-diff-result.outputs.cache-hit != 'true'
         run: nix develop .#test -c python3 scripts/check-coverage.py coverage.json --baseline main-coverage.json --total-floor 66
-
-  caddy-validate:
-    name: Caddy fragment validation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Validate generated Caddy fragment with caddy binary
+      - name: Mark coverage comparison reusable
+        if: steps.coverage-diff-result.outputs.cache-hit != 'true'
         run: |
-          set -euo pipefail
-          nix shell nixpkgs#caddy -c caddy version
-          nix develop .#test -c python3 -m unittest tests.test_service_caddy_validate -v
-          nix develop .#test -c python3 - <<'PY'
-          import sys
-          sys.path.insert(0, "services")
-          import nas_service_caddy as caddy
-          effective = {
-              "schemaVersion": 2,
-              "generation": 1,
-              "endpoints": {
-                  "photos:web": {
-                      "transport": "http",
-                      "targetPort": 2283,
-                      "exposure": {"type": "hostname", "value": "photos.local"},
-                      "auth": {"mode": "public"},
-                  },
-                  "app:api": {
-                      "transport": "http",
-                      "targetPort": 8080,
-                      "exposure": {"type": "path", "value": "/managed-api"},
-                      "auth": {"mode": "public"},
-                  },
-              },
-          }
-          fragment = caddy.generate_caddy_fragment(effective)
-          assert len(fragment["routes"]) == 2
-          print("caddy fragment routes=2")
-          PY
-          caddyfile=$(mktemp)
-          nix develop .#test -c python3 - <<'PY' > "$caddyfile"
-          import sys
-          sys.path.insert(0, "services")
-          import nas_service_caddy as c
-          print(c.generate_caddyfile({
-              "schemaVersion": 2,
-              "endpoints": {
-                  "photos:web": {
-                      "transport": "http",
-                      "targetPort": 2283,
-                      "exposure": {"type": "hostname", "value": "photos.local"},
-                      "auth": {"mode": "public"},
-                  }
-              },
-          }))
-          PY
-          nix shell nixpkgs#caddy -c caddy fmt --diff "$caddyfile" >/dev/null || true
-          nix shell nixpkgs#caddy -c caddy adapt --adapter caddyfile --config "$caddyfile" >/dev/null
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/coverage-diff-pass
 
-  fuzz:
-    name: Fuzz and property invariants
+  # The first expensive producer waits directly for every fast qualification.
+  # coverage-diff is PR-only, so a skipped result is explicitly acceptable.
+  cockpit-build:
+    name: Build qualified Cockpit production bundle
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
+      needs.test.result == 'success' &&
+      needs.test-nonroot.result == 'success' &&
+      needs.security.result == 'success' &&
+      needs.caddy-validate.result == 'success' &&
+      needs.static.result == 'success' &&
+      needs.dependency-audit.result == 'success' &&
+      (needs.coverage-diff.result == 'success' || needs.coverage-diff.result == 'skipped')
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Deterministic parser and boundary fuzzing
+      - name: Restore reviewed Cockpit build
+        id: cockpit-build-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/dist
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-build-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/package.json', 'cockpit/build.js', 'cockpit/src/**') }}
+      - name: Restore exact Node 24 dependencies
+        id: cockpit-deps
+        if: steps.cockpit-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/node_modules
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Cockpit dependencies on cache miss
+        if: steps.cockpit-build-cache.outputs.cache-hit != 'true' && steps.cockpit-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Build production bundle
+        if: steps.cockpit-build-cache.outputs.cache-hit != 'true'
         run: |
-          ./scripts/fuzz.py --cases 5000 --seed 0x4e41533232
-          ./scripts/fuzz-executables.py --cases 5 --seed 0x534352495054
-          python3 -m unittest tests.test_fuzz_boundaries -v
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+          npm --prefix cockpit run build
+          npm --prefix cockpit run check
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
+      - name: Retain exact Cockpit artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Hypothesis property tests
-        run: nix develop .#test -c python -m unittest tests.test_property_invariants -v
+          name: cockpit-bundle
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            cockpit/package-lock.json
+            cockpit/dist
 
-  security:
-    name: Static security and injection checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Project security regression suite
-        run: nix develop .#test -c ./scripts/run-security-tests.py
-      - name: Semgrep local rules
-        run: nix develop .#test -c semgrep --config .semgrep.yml --error services scripts cockpit/src web
-      - name: Bandit privileged runtime Python scan
-        run: nix develop .#test -c bandit -q -r services -ll -ii
-
-  browser:
-    name: Browser rendering, layout, XSS, and accessibility
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer'
-    needs: cockpit
+  source-archive:
+    name: Package and round-trip qualified source
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+    needs: [cockpit-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -321,42 +400,140 @@ jobs:
         with:
           name: cockpit-bundle
           path: cockpit
-      - name: Compute weekly browser cache epoch
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Restore verified source archive
+        id: source-archive-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            nas-source-release
+            .ci-cache/source-archive-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'schemas/**', 'cockpit/package-lock.json', 'cockpit/dist/**', 'web/**', 'docs/**', 'MANIFEST.sha256') }}
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.source-archive-result.outputs.cache-hit != 'true'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.source-archive-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Package and verify as an untrusted consumer
+        if: steps.source-archive-result.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          node cockpit/build.js --check
+          out="$GITHUB_WORKSPACE/nas-source-release"
+          mkdir -p "$out"
+          NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
+          archive=$(find "$out" -maxdepth 1 -type f -name '*.zip' -print -quit)
+          test -n "$archive"
+          extract="$GITHUB_WORKSPACE/extracted-source"
+          mkdir -p "$extract"
+          unzip -q "$archive" -d "$extract"
+          root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$root"
+          cd "$root"
+          sha256sum -c MANIFEST.sha256
+          NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
+          ./scripts/evaluate-reference-configurations.sh
+          mkdir -p "$GITHUB_WORKSPACE/.ci-cache"
+          printf 'passed\n' > "$GITHUB_WORKSPACE/.ci-cache/source-archive-pass"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-archive-evidence
+          if-no-files-found: error
+          retention-days: 14
+          path: nas-source-release
+
+  build:
+    name: Build qualified NixOS closures
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+    needs: [cockpit-build, source-archive]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Restore successful system-build result
+        id: system-build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-cache/system-build-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-system-build-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'schemas/**', 'cockpit/dist/**', 'web/**') }}
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.system-build.outputs.cache-hit != 'true'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.system-build.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Build testable systems
+        if: steps.system-build.outputs.cache-hit != 'true'
+        run: |
+          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
+          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/system-build-pass
+
+  browser:
+    name: Post-build deterministic Cockpit layout, XSS, and accessibility
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+    needs: [build, cockpit-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - name: Compute weekly browser epoch
         id: browser-epoch
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-      - name: Restore passing browser-suite result
+      - name: Restore deterministic browser result
         id: browser-result
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: cockpit/.ci-cache/browser-pass
-          key: browser-pass-${{ runner.os }}-${{ steps.browser-epoch.outputs.week }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/e2e/**', 'cockpit/dist/**') }}
-      - name: Restore exact Cockpit dependencies
+          key: ${{ env.CI_CACHE_SCHEMA }}-browser-deterministic-${{ runner.os }}-${{ steps.browser-epoch.outputs.week }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/e2e/ui-security.spec.mjs', 'cockpit/e2e/common-xss.spec.mjs', 'cockpit/e2e/playwright.config.mjs', 'cockpit/dist/**') }}
+      - name: Restore exact dependencies
         id: browser-deps
         if: steps.browser-result.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: cockpit/node_modules
-          key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install Cockpit dependencies on cache miss
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install dependencies on cache miss
         if: steps.browser-result.outputs.cache-hit != 'true' && steps.browser-deps.outputs.cache-hit != 'true'
         run: npm --prefix cockpit ci --no-audit --no-fund
-      - name: Restore pinned Playwright browser engines
+      - name: Restore Playwright engines
         id: playwright-browsers
         if: steps.browser-result.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install pinned Playwright browser engines on cache miss
+          key: ${{ env.CI_CACHE_SCHEMA }}-playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Playwright engines on cache miss
         if: steps.browser-result.outputs.cache-hit != 'true' && steps.playwright-browsers.outputs.cache-hit != 'true'
         run: npm --prefix cockpit exec -- playwright install chromium firefox webkit
       - name: Install Playwright system dependencies
         if: steps.browser-result.outputs.cache-hit != 'true'
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
-      - name: Cross-browser UI security suite
+      - name: Deterministic common XSS, overlap, formatting, layout, and accessibility probes
         if: steps.browser-result.outputs.cache-hit != 'true'
+        env:
+          NAS_BROWSER_SUITE: deterministic
         run: npm --prefix cockpit run test:browser
-      - name: Mark browser suite reusable
+      - name: Mark deterministic browser suite reusable
         if: steps.browser-result.outputs.cache-hit != 'true'
         run: |
           mkdir -p cockpit/.ci-cache
@@ -372,155 +549,12 @@ jobs:
             cockpit/playwright-report
             cockpit/test-results
 
-  source-archive:
-    name: Packaged-source round trip
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer'
-    needs: [test, test-nonroot, fuzz, security]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Package the reviewed source tree
-        run: |
-          set -euo pipefail
-          out="$GITHUB_WORKSPACE/nas-source-release"
-          mkdir -p "$out"
-          NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
-          archive=$(find "$out" -maxdepth 1 -type f -name '*.zip' -print -quit)
-          test -n "$archive"
-          printf '%s\n' "$archive" > "$GITHUB_WORKSPACE/source-archive-path"
-      - name: Extract as an untrusted release consumer and verify it
-        run: |
-          set -euo pipefail
-          archive=$(cat "$GITHUB_WORKSPACE/source-archive-path")
-          extract="$GITHUB_WORKSPACE/extracted-source"
-          mkdir -p "$extract"
-          unzip -q "$archive" -d "$extract"
-          root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
-          test -n "$root"
-          cd "$root"
-          sha256sum -c MANIFEST.sha256
-          NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
-          nix flake check --no-build --show-trace
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: source-archive-evidence
-          if-no-files-found: error
-          retention-days: 14
-          path: nas-source-release
-
-  static:
-    name: Nix evaluation and lint
-    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: cockpit-bundle
-          path: cockpit
-      - run: git add -f cockpit/package-lock.json cockpit/dist
-      - name: Restore static-analysis pass
-        id: static-result
-        uses: actions/cache@v4
-        with:
-          path: .ci-cache/static-pass
-          key: static-pass-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'cockpit/src/**', 'cockpit/e2e/**', 'web/**', 'pyproject.toml', 'prettier.config.mjs') }}
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        if: steps.static-result.outputs.cache-hit != 'true'
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        if: steps.static-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Repository preflight
-        if: steps.static-result.outputs.cache-hit != 'true'
-        env:
-          NAS_PREFLIGHT_REQUIRE_COMPLETE: "1"
-        run: ./scripts/preflight.sh
-      - name: Secret transaction fault injection
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix shell nixpkgs#bats -c bats tests/bats
-      - name: ShellCheck
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
-      - name: Python correctness lint
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix shell nixpkgs#ruff -c ruff check services tests scripts
-      - name: Python formatting
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix shell nixpkgs#ruff -c ruff format --check services tests scripts
-      - name: Python type checking
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix shell nixpkgs#pyright -c pyright --project pyproject.toml
-      - name: JavaScript formatting
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: nix shell nixpkgs#prettier -c prettier --check "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "web/portal/*.html" "tests/js/*.mjs" prettier.config.mjs
-      - name: Evaluate valid and intentionally-invalid configuration matrix
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: ./scripts/nix-config-matrix.sh
-      - name: Mark static analysis reusable
-        if: steps.static-result.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p .ci-cache
-          printf 'passed\n' > .ci-cache/static-pass
-
-  build:
-    name: Build NixOS closures
-    needs: [cockpit, static]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: cockpit-bundle
-          path: cockpit
-      - run: git add -f cockpit/package-lock.json cockpit/dist
-      - name: Restore successful system-build result
-        id: system-build
-        uses: actions/cache@v4
-        with:
-          path: .ci-cache/system-build-pass
-          key: system-build-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'cockpit/dist/**', 'web/**') }}
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        if: steps.system-build.outputs.cache-hit != 'true'
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build and VM cache
-        if: steps.system-build.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Build testable systems
-        if: steps.system-build.outputs.cache-hit != 'true'
-        run: |
-          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
-          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
-      - name: Mark system build reusable
-        if: steps.system-build.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p .ci-cache
-          printf 'passed\n' > .ci-cache/system-build-pass
-
   integration:
-    name: Full-stack QEMU integration
-    needs: [cockpit, build]
+    name: Post-build full-stack QEMU integration
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+    needs: [build, browser, cockpit-build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -528,15 +562,15 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - name: Compute weekly VM-test cache epoch
+      - name: Compute weekly VM-test epoch
         id: vm-epoch
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore passing QEMU integration result
         id: vm-result
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ci-cache/qemu-integration-pass
-          key: qemu-integration-${{ runner.os }}-${{ steps.vm-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/nixos/**', 'tests/vm/**', 'cockpit/dist/**', 'web/**') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-qemu-${{ runner.os }}-${{ steps.vm-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/nixos/**', 'tests/vm/**', 'schemas/**', 'cockpit/dist/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.vm-result.outputs.cache-hit != 'true'
         with:
@@ -544,29 +578,24 @@ jobs:
           enable_kvm: true
       - name: Enable incremental Nix build and VM cache
         if: steps.vm-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
-      - name: Run NixOS VM integration test
-        if: steps.vm-result.outputs.cache-hit != 'true'
-        run: nix build .#checks.x86_64-linux.nas-vm .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
-      - name: Mark QEMU integration reusable
+      - name: Run NixOS VM integration tests
         if: steps.vm-result.outputs.cache-hit != 'true'
         run: |
+          nix build .#checks.x86_64-linux.nas-vm .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/qemu-integration-pass
 
   installer:
-    name: Official-ISO install, adversarial scan, and reboot
+    name: Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz
     if: (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    needs: [cockpit, build]
+    needs: [integration, cockpit-build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 420
     env:
-      NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
-      NAS_ZAP_MODE: full
-      NAS_ZAP_CONFIRM_ACTIVE: "1"
       NAS_ZAP_OUT_DIR: zap-report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -575,25 +604,26 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - name: Compute weekly installer cache epoch
+      - name: Compute weekly installer epoch
         id: installer-epoch
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-      - name: Restore verified NixOS installer media
-        uses: actions/cache@v4
+      - name: Restore only immutable installer media and extracted boot files
+        id: installer-media
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cache/nixos-nas-qemu/*.iso
             ~/.cache/nixos-nas-qemu/*.sha256.remote
             ~/.cache/nixos-nas-qemu/iso-boot
-          key: qemu-installer-media-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-nixos-26.05
+          key: ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ hashFiles('scripts/qemu-test.sh') }}
           restore-keys: |
-            qemu-installer-media-${{ runner.os }}-
-      - name: Restore passing installer result
+            ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-
+      - name: Restore passing installer/final-system qualification
         id: installer-result
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ci-cache/installer-pass
-          key: installer-pass-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/qemu-test.sh', 'scripts/**', 'tests/**', 'cockpit/dist/**', 'web/**') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-installer-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ vars.NAS_ZAP_IMAGE }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'schemas/**', 'scripts/qemu-test.sh', 'scripts/qemu-final-browser.sh', 'scripts/zap-automation-scan.sh', 'tests/vm/**', 'cockpit/package-lock.json', 'cockpit/e2e/**', 'cockpit/dist/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.installer-result.outputs.cache-hit != 'true'
         with:
@@ -601,44 +631,225 @@ jobs:
           enable_kvm: true
       - name: Enable incremental Nix build and VM cache
         if: steps.installer-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
+      - name: Restore exact final-browser dependencies
+        id: installer-browser-deps
+        if: steps.installer-result.outputs.cache-hit != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/node_modules
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install final-browser dependencies on cache miss
+        if: steps.installer-result.outputs.cache-hit != 'true' && steps.installer-browser-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Restore final-VM Playwright engines
+        id: installer-playwright
+        if: steps.installer-result.outputs.cache-hit != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ env.CI_CACHE_SCHEMA }}-playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install final-VM Playwright engines on cache miss
+        if: steps.installer-result.outputs.cache-hit != 'true' && steps.installer-playwright.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit exec -- playwright install chromium firefox webkit
+      - name: Install final-VM Playwright system dependencies
+        if: steps.installer-result.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
       - name: Install from the official NixOS ISO and reboot-test the appliance
         if: steps.installer-result.outputs.cache-hit != 'true'
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
-      - name: Mark installer run reusable
+      - name: Final VM deterministic layout/accessibility/security checks then state-aware fuzz
         if: steps.installer-result.outputs.cache-hit != 'true'
+        env:
+          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
+          NAS_FINAL_VM_FUZZ: "1"
+          NAS_ZAP_AUTOMATION_MINUTES: "90"
+          NAS_ZAP_BROWSER_WORKERS: "2"
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs -c bash ./scripts/qemu-final-browser.sh
+      - name: Mark installer and final-system qualification reusable
+        if: steps.installer-result.outputs.cache-hit != 'true' && success()
         run: |
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/installer-pass
-      - name: Retain dynamic web-security reports
-        if: always() && env.NAS_ZAP_IMAGE != '' && steps.installer-result.outputs.cache-hit != 'true'
+      - name: Retain smart web-security reports
+        if: always() && steps.installer-result.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zap-security-reports
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 30
           path: zap-report
+      - name: Retain final-VM browser evidence
+        if: always() && steps.installer-result.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: final-vm-browser-evidence
+          if-no-files-found: ignore
+          retention-days: 30
+          path: |
+            cockpit/playwright-report
+            cockpit/test-results
+            ~/.cache/nixos-nas-qemu/state/browser-console.log
+
+  # Slow fuzzing starts only after QEMU integration. On release/installer runs it
+  # also waits for the official installer; on PRs installer is skipped and the
+  # explicit result check below permits the slow shards to proceed.
+  fuzz:
+    name: Slow source/property/security fuzz shard (${{ matrix.shard }})
+    if: >-
+      always() && needs.integration.result == 'success' &&
+      (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
+    needs: [integration, installer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [parser-boundaries, executables, properties, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compute weekly fuzz epoch
+        id: fuzz-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore passing fuzz shard
+        id: fuzz-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-cache/fuzz-${{ matrix.shard }}-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-fuzz-${{ matrix.shard }}-${{ runner.os }}-${{ steps.fuzz-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'scripts/fuzz.py', 'scripts/fuzz-executables.py', 'services/**/*.py', 'tests/test_fuzz_boundaries.py', 'tests/test_property_invariants.py', 'tests/test_secret_security_fuzz.py') }}
+      - name: Parser and boundary fuzzing
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'parser-boundaries'
+        run: |
+          ./scripts/fuzz.py --cases 50000 --seed 0x4e41533232
+          python3 -m unittest tests.test_fuzz_boundaries -v
+      - name: Executable fuzzing
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'executables'
+        run: ./scripts/fuzz-executables.py --cases 50 --seed 0x534352495054
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && (matrix.shard == 'properties' || matrix.shard == 'security')
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && (matrix.shard == 'properties' || matrix.shard == 'security')
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Hypothesis property tests
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'properties'
+        run: nix develop .#test -c python -m unittest tests.test_property_invariants -v
+      - name: Randomized secret-security fuzz tests
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'security'
+        run: nix develop .#test -c python -m unittest tests.test_secret_security_fuzz -v
+      - name: Mark fuzz shard reusable
+        if: steps.fuzz-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/fuzz-${{ matrix.shard }}-pass
+
+  browser-fuzz:
+    name: Slow browser deterministic replay plus hostile-input fuzz
+    if: >-
+      always() && needs.integration.result == 'success' &&
+      (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
+    needs: [integration, installer, cockpit-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - name: Compute weekly browser-fuzz epoch
+        id: browser-fuzz-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore passing slow-browser qualification
+        id: browser-fuzz-result
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/.ci-cache/browser-fuzz-pass
+          key: ${{ env.CI_CACHE_SCHEMA }}-browser-fuzz-${{ runner.os }}-${{ steps.browser-fuzz-epoch.outputs.week }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/e2e/ui-security.spec.mjs', 'cockpit/e2e/common-xss.spec.mjs', 'cockpit/e2e/ui-fuzz.spec.mjs', 'cockpit/e2e/playwright.config.mjs', 'cockpit/dist/**') }}
+      - name: Restore exact dependencies
+        id: browser-fuzz-deps
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/node_modules
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install dependencies on cache miss
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true' && steps.browser-fuzz-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Restore Playwright engines
+        id: browser-fuzz-browsers
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ env.CI_CACHE_SCHEMA }}-playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Playwright engines on cache miss
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true' && steps.browser-fuzz-browsers.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit exec -- playwright install chromium firefox webkit
+      - name: Install Playwright system dependencies
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
+      - name: Replay all deterministic XSS overlap formatting layout and accessibility checks
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        env:
+          NAS_BROWSER_SUITE: deterministic
+        run: npm --prefix cockpit run test:browser
+      - name: Run slow hostile-input browser fuzz after deterministic replay
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        env:
+          NAS_BROWSER_SUITE: fuzz
+        run: npm --prefix cockpit run test:browser
+      - name: Mark slow-browser qualification reusable
+        if: steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p cockpit/.ci-cache
+          printf 'passed\n' > cockpit/.ci-cache/browser-fuzz-pass
+      - name: Retain slow-browser evidence
+        if: always() && steps.browser-fuzz-result.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-fuzz-evidence
+          if-no-files-found: ignore
+          retention-days: 30
+          path: |
+            cockpit/playwright-report
+            cockpit/test-results
 
   summary:
     name: Pipeline summary
     if: always()
-    needs: [cockpit, test, test-nonroot, coverage-diff, caddy-validate, fuzz, security, browser, source-archive, static, build, integration, installer]
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, cockpit-build, source-archive, build, browser, integration, installer, fuzz, browser-fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Emit compact markdown summary
+      - name: Emit summary and fail on any real failure
         env:
           NEEDS_JSON: ${{ toJson(needs) }}
         run: |
           python3 - <<'PY'
-          import json
-          import os
+          import json, os
           needs = json.loads(os.environ["NEEDS_JSON"])
           lines = ["## CI pipeline summary", "", "| Job | Result |", "| --- | --- |"]
-          lines.extend(f"| {name} | {data.get('result', 'skipped').upper()} |" for name, data in sorted(needs.items()))
+          bad = []
+          for name, data in sorted(needs.items()):
+              result = data.get("result", "skipped")
+              lines.append(f"| {name} | {result.upper()} |")
+              if result in {"failure", "cancelled"}:
+                  bad.append(name)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
               handle.write("\n".join(lines) + "\n")
+          if bad:
+              raise SystemExit("pipeline contains failed/cancelled jobs: " + ", ".join(bad))
           PY

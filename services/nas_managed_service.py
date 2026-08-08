@@ -27,14 +27,21 @@ STORE_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SERVICE_STORE", "/var/lib/
 EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
 PORTAL_PATH = pathlib.Path(os.environ.get("NAS_PORTAL_JSON", "/run/nas-control/portal.json"))
 BUILTIN_REGISTRY = pathlib.Path(os.environ.get("NAS_BUILTIN_REGISTRY", "/etc/nas-control/endpoints.json"))
-SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SERVICE_SCHEMA", str(pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json")))
+SCHEMA_PATH = pathlib.Path(
+    os.environ.get(
+        "NAS_MANAGED_SERVICE_SCHEMA",
+        str(pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json"),
+    )
+)
 
 SCHEMA_VERSION = 2
 ALLOWED_HOST_ROOTS = ("/tank", "/srv", "/var/lib/nas-control/apps")
 APPS_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 ENDPOINT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
-IMAGE_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-z0-9_.-]+)?(?:@[a-z0-9:]+)?$", re.IGNORECASE)
+IMAGE_RE = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-z0-9_.-]+)?(?:@[a-z0-9:]+)?$", re.IGNORECASE
+)
 HOSTNAME_RE = re.compile(r"^(?:[a-z0-9-]{1,63}\.)*[a-z0-9-]{1,63}$", re.IGNORECASE)
 AUTH_MODE_VALUES = frozenset({"public", "forward-auth", "oidc"})
 AUTH_ALLOW_VALUES = frozenset({"any", "groups", "users", "all"})
@@ -63,7 +70,7 @@ def _schema_validate_document(data: dict[str, Any]) -> None:
     schema = _load_schema()
     if schema is None:
         return
-    if _HAS_JSONSCHEMA:
+    if jsonschema is not None:
         try:
             jsonschema.validate(data, schema)
         except jsonschema.ValidationError as exc:
@@ -81,7 +88,9 @@ def _schema_validate_document(data: dict[str, Any]) -> None:
             if not isinstance(svc, dict):
                 raise ManagedServiceError(f"Schema validation failed: service {sid!r} must be object")
             if not isinstance(svc.get("enabled"), bool):
-                raise ManagedServiceError(f"Schema validation failed: service {sid!r} enabled must be boolean, got {type(svc.get('enabled')).__name__}")
+                raise ManagedServiceError(
+                    f"Schema validation failed: service {sid!r} enabled must be boolean, got {type(svc.get('enabled')).__name__}"
+                )
             for eid, ep in (svc.get("endpoints") or {}).items():
                 if not isinstance(ep, dict):
                     raise ManagedServiceError(f"Schema validation failed: endpoint {eid!r} must be object")
@@ -126,8 +135,12 @@ def _validate_host_path(path: str) -> str:
                 link_target = cur.resolve()
             except OSError:
                 raise ManagedServiceError(f"hostPath {path!r} component {cur!r} is a symlink that cannot be resolved")
-            if not any(str(link_target) == root or str(link_target).startswith(root + "/") for root in ALLOWED_HOST_ROOTS):
-                raise ManagedServiceError(f"hostPath {path!r} component {cur!r} is a symlink escaping allow-list to {link_target!r}")
+            if not any(
+                str(link_target) == root or str(link_target).startswith(root + "/") for root in ALLOWED_HOST_ROOTS
+            ):
+                raise ManagedServiceError(
+                    f"hostPath {path!r} component {cur!r} is a symlink escaping allow-list to {link_target!r}"
+                )
     return path
 
 
@@ -163,7 +176,9 @@ def _validate_runtime_source(service_id: str, source: str) -> str:
     try:
         resolved.relative_to(service_root.resolve() if service_root.exists() else service_root)
     except ValueError:
-        raise ManagedServiceError(f"Service {service_id}: runtime.source {source!r} resolves to {resolved!r} outside service root {service_root}")
+        raise ManagedServiceError(
+            f"Service {service_id}: runtime.source {source!r} resolves to {resolved!r} outside service root {service_root}"
+        )
     if ".." in pathlib.PurePosixPath(source).parts:
         raise ManagedServiceError(f"Service {service_id}: runtime.source must not contain '..'")
     return source
@@ -204,42 +219,85 @@ def validate_service(service_id: str, data: dict[str, Any]) -> dict[str, Any]:
         _validate_port(endpoint.get("targetPort", 0))
         exposure = endpoint.get("exposure")
         if exposure is None or not isinstance(exposure, dict):
-            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure must be object with type")
+            raise ManagedServiceError(
+                f"Service {service_id}: endpoint {endpoint_id!r} exposure must be object with type"
+            )
         exp_type = exposure.get("type")
         if exp_type not in EXPOSURE_TYPE_VALUES:
-            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure.type must be one of {sorted(EXPOSURE_TYPE_VALUES)}, got {exp_type!r}")
+            raise ManagedServiceError(
+                f"Service {service_id}: endpoint {endpoint_id!r} exposure.type must be one of {sorted(EXPOSURE_TYPE_VALUES)}, got {exp_type!r}"
+            )
         if exp_type in ("hostname", "dns"):
             hostname = exposure.get("value", "")
             _validate_hostname(hostname)
             if any(c in hostname for c in ("\r", "\n", "{", "}")):
-                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} hostname contains invalid characters")
+                raise ManagedServiceError(
+                    f"Service {service_id}: endpoint {endpoint_id!r} hostname contains invalid characters"
+                )
             lan_host = os.environ.get("NAS_LAN_HOST", "nas.local")
             if hostname == lan_host or hostname.endswith(f".{lan_host}"):
-                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} hostname {hostname!r} collides with NAS host")
+                raise ManagedServiceError(
+                    f"Service {service_id}: endpoint {endpoint_id!r} hostname {hostname!r} collides with NAS host"
+                )
         elif exp_type == "port":
-            _validate_port(exposure.get("value") if isinstance(exposure.get("value"), int) else int(exposure.get("value", 0)) if str(exposure.get("value", "")).isdigit() else exposure.get("value"))
+            _validate_port(
+                exposure.get("value")
+                if isinstance(exposure.get("value"), int)
+                else int(exposure.get("value", 0))
+                if str(exposure.get("value", "")).isdigit()
+                else exposure.get("value")
+            )
             val = exposure.get("value")
             try:
                 _validate_port(int(val) if isinstance(val, str) and val.isdigit() else val)
             except (ValueError, TypeError):
-                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} exposure port invalid: {val!r}")
+                raise ManagedServiceError(
+                    f"Service {service_id}: endpoint {endpoint_id!r} exposure port invalid: {val!r}"
+                )
         elif exp_type == "path":
             val = exposure.get("value", "")
             if not isinstance(val, str) or not val.startswith("/"):
-                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path exposure must start with '/'")
+                raise ManagedServiceError(
+                    f"Service {service_id}: endpoint {endpoint_id!r} path exposure must start with '/'"
+                )
             if any(c in val for c in ("\r", "\n", "{", "}")):
-                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path contains invalid characters")
-            reserved_prefixes = ("/api", "/outpost.goauthentik.io", "/identity", "/console", "/shares", "/share", "/dav", "/vault", "/ai", "/syncthing", "/metrics", "/victoriametrics", "/alerts", "/ups", "/notifications", "/settings")
+                raise ManagedServiceError(
+                    f"Service {service_id}: endpoint {endpoint_id!r} path contains invalid characters"
+                )
+            reserved_prefixes = (
+                "/api",
+                "/outpost.goauthentik.io",
+                "/identity",
+                "/console",
+                "/shares",
+                "/share",
+                "/dav",
+                "/vault",
+                "/ai",
+                "/syncthing",
+                "/metrics",
+                "/victoriametrics",
+                "/alerts",
+                "/ups",
+                "/notifications",
+                "/settings",
+            )
             if any(val == rp or val.startswith(rp + "/") for rp in reserved_prefixes):
-                raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} path {val!r} conflicts with reserved NAS path")
+                raise ManagedServiceError(
+                    f"Service {service_id}: endpoint {endpoint_id!r} path {val!r} conflicts with reserved NAS path"
+                )
         auth = endpoint.get("auth")
         if auth is None or not isinstance(auth, dict):
             raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth must be object")
         mode = auth.get("mode")
         if mode not in AUTH_MODE_VALUES:
-            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.mode must be one of {sorted(AUTH_MODE_VALUES)}, got {mode!r}")
+            raise ManagedServiceError(
+                f"Service {service_id}: endpoint {endpoint_id!r} auth.mode must be one of {sorted(AUTH_MODE_VALUES)}, got {mode!r}"
+            )
         if "allow" in auth and auth["allow"] not in AUTH_ALLOW_VALUES:
-            raise ManagedServiceError(f"Service {service_id}: endpoint {endpoint_id!r} auth.allow must be one of {sorted(AUTH_ALLOW_VALUES)}")
+            raise ManagedServiceError(
+                f"Service {service_id}: endpoint {endpoint_id!r} auth.allow must be one of {sorted(AUTH_ALLOW_VALUES)}"
+            )
         for gid in auth.get("groups", []):
             if not isinstance(gid, str) or not re.fullmatch(r"^([A-Za-z0-9_-]+|[0-9a-fA-F-]{36}|\d+)$", gid):
                 raise ManagedServiceError(f"Invalid Authentik group ID {gid!r}")
@@ -362,7 +420,9 @@ def atomic_write_store(data: dict[str, Any], path: pathlib.Path = STORE_PATH) ->
         tmp_path.unlink(missing_ok=True)
 
 
-def effective_registry(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path: pathlib.Path = STORE_PATH) -> dict[str, Any]:
+def effective_registry(
+    builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path: pathlib.Path = STORE_PATH
+) -> dict[str, Any]:
     try:
         builtin = json.loads(builtin_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -374,7 +434,11 @@ def effective_registry(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path
         if "publicPath" in ep and "exposure" not in ep:
             norm["exposure"] = {"type": "path", "value": ep["publicPath"]}
         if "portal" not in norm and ep.get("linkKey"):
-            norm["portal"] = {"visible": True, "category": "Administration" if ep.get("access") == "admin" else "Other", "icon": ep.get("linkKey", "box")}
+            norm["portal"] = {
+                "visible": True,
+                "category": "Administration" if ep.get("access") == "admin" else "Other",
+                "icon": ep.get("linkKey", "box"),
+            }
         builtin_endpoints[eid] = norm
     effective = {
         "schemaVersion": SCHEMA_VERSION,
@@ -399,7 +463,11 @@ def effective_registry(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path
     return effective
 
 
-def write_effective(builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path: pathlib.Path = STORE_PATH, effective_path: pathlib.Path = EFFECTIVE_PATH) -> dict[str, Any]:
+def write_effective(
+    builtin_path: pathlib.Path = BUILTIN_REGISTRY,
+    store_path: pathlib.Path = STORE_PATH,
+    effective_path: pathlib.Path = EFFECTIVE_PATH,
+) -> dict[str, Any]:
     effective = effective_registry(builtin_path, store_path)
     parent = effective_path.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -440,16 +508,22 @@ def portal_projection(effective: dict[str, Any] | None = None) -> dict[str, Any]
             url = f"https://nas.local:{exposure.get('value')}/"
         if not url and endpoint.get("publicPath"):
             url = endpoint.get("publicPath")
-        entries.append({
-            "id": key,
-            "label": endpoint.get("label", key),
-            "url": url,
-            "category": endpoint.get("portal", {}).get("category", "Other"),
-            "icon": endpoint.get("portal", {}).get("icon", "box"),
-            "available": endpoint.get("available", False),
-            "access": endpoint.get("auth") or {"mode": endpoint.get("access", "admin")},
-        })
-    return {"schemaVersion": SCHEMA_VERSION, "generation": effective.get("generation", 1), "entries": sorted(entries, key=lambda x: x["id"])}
+        entries.append(
+            {
+                "id": key,
+                "label": endpoint.get("label", key),
+                "url": url,
+                "category": endpoint.get("portal", {}).get("category", "Other"),
+                "icon": endpoint.get("portal", {}).get("icon", "box"),
+                "available": endpoint.get("available", False),
+                "access": endpoint.get("auth") or {"mode": endpoint.get("access", "admin")},
+            }
+        )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "generation": effective.get("generation", 1),
+        "entries": sorted(entries, key=lambda x: x["id"]),
+    }
 
 
 def _read_effective_or_recompute(effective_path: pathlib.Path) -> dict[str, Any]:
@@ -459,7 +533,9 @@ def _read_effective_or_recompute(effective_path: pathlib.Path) -> dict[str, Any]
         return effective_registry()
 
 
-def write_portal(effective_path: pathlib.Path = EFFECTIVE_PATH, portal_path: pathlib.Path = PORTAL_PATH) -> dict[str, Any]:
+def write_portal(
+    effective_path: pathlib.Path = EFFECTIVE_PATH, portal_path: pathlib.Path = PORTAL_PATH
+) -> dict[str, Any]:
     effective = _read_effective_or_recompute(effective_path)
     portal = portal_projection(effective)
     parent = portal_path.parent
@@ -498,8 +574,22 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_parser(cmd, help=f"Managed-service {cmd} (not yet implemented)")
     args = parser.parse_args(argv)
     try:
-        if args.command in ("plan", "create", "update", "delete", "start", "stop", "restart", "adopt", "export", "import"):
-            print(f"nas-managed-service: {args.command} is not yet implemented (runtime adapters pending)", file=sys.stderr)
+        if args.command in (
+            "plan",
+            "create",
+            "update",
+            "delete",
+            "start",
+            "stop",
+            "restart",
+            "adopt",
+            "export",
+            "import",
+        ):
+            print(
+                f"nas-managed-service: {args.command} is not yet implemented (runtime adapters pending)",
+                file=sys.stderr,
+            )
             return 2
         if args.command == "reconcile":
             effective = write_effective()

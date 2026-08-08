@@ -194,7 +194,9 @@ if ! $inside_git && [[ -f MANIFEST.sha256 ]]; then
 fi
 
 protected_was_active=false
-systemctl is-active --quiet nas-protected-services.target && protected_was_active=true || true
+if systemctl is-active --quiet nas-protected-services.target; then
+  protected_was_active=true
+fi
 if $apply && ! $protected_was_active && ! $allow_inactive_protected_stack; then
   echo "Protected services are stopped. Unlock KeePassXC and run nas-secrets activate, or pass --allow-inactive-protected-stack." >&2
   exit 1

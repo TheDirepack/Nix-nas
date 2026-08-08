@@ -165,12 +165,18 @@ class Alpha18HardeningContracts(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-    def test_ci_has_fixed_runner_concurrency_and_coverage_floors(self) -> None:
+    def test_ci_has_fixed_runner_concurrency_and_direct_dependency_ordering(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         self.assertIn("cancel-in-progress: true", workflow)
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertIn("check-coverage.py", workflow)
-        self.assertIn("NAS_PREFLIGHT_REQUIRE_COMPLETE", workflow)
+        for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
+            self.assertNotIn(retired_gate, workflow)
+        self.assertIn(
+            "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
+        )
+        self.assertIn("needs: [build, browser, cockpit-build]", workflow)
+        self.assertIn("needs: [integration, installer]", workflow)
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
         pyproject = text("pyproject.toml")

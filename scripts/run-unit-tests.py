@@ -18,6 +18,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
 RAN_RE = re.compile(r"Ran (\d+) tests? in")
 ALLOWLIST_ZERO = frozenset()
+# This file is also run by the dedicated Caddy CI job after installing the real
+# Caddy binary. Generic source/non-root jobs may lack that external executable,
+# so an all-skipped result there is allowed only for this explicit capability
+# test. Every other discovered test file must execute at least one real test.
+ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})
 FAILURES_RE = re.compile(r"failures=(\d+)")
 ERRORS_RE = re.compile(r"errors=(\d+)")
 SKIPPED_RE = re.compile(r"skipped=(\d+)")
@@ -201,7 +206,15 @@ def main() -> int:
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ai").mkdir(parents=True, exist_ok=True)
         # Ready marker for tests that check /run/nas-secrets/ready
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ready").touch(exist_ok=True)
-        for key in ["NAS_STATE_ROLLBACK_ROOT", "NAS_FEATURE_STATE", "NAS_FEATURE_JOURNAL", "NAS_FEATURE_LAST_GOOD", "NAS_SETUP_STATE", "NAS_SETUP_JOURNAL", "NAS_OPERATION_ROOT"]:
+        for key in [
+            "NAS_STATE_ROLLBACK_ROOT",
+            "NAS_FEATURE_STATE",
+            "NAS_FEATURE_JOURNAL",
+            "NAS_FEATURE_LAST_GOOD",
+            "NAS_SETUP_STATE",
+            "NAS_SETUP_JOURNAL",
+            "NAS_OPERATION_ROOT",
+        ]:
             if key in env:
                 p = pathlib.Path(env[key])
                 # If it's a file path, ensure parent exists; if dir, ensure dir exists
@@ -353,6 +366,12 @@ def main() -> int:
             total_skipped += skip_c
             failures.append((path, "no tests discovered\n" + (output or "")[-16000:]))
             print(f"FAIL {relative}: no tests discovered after {elapsed:.1f}s", file=sys.stderr)
+            return
+        if ran > 0 and skip_c == ran and path.name not in ALLOWLIST_ALL_SKIPPED:
+            total_ran += ran
+            total_skipped += skip_c
+            failures.append((path, "all discovered tests were skipped\n" + (output or "")[-16000:]))
+            print(f"FAIL {relative}: all {ran} discovered tests were skipped after {elapsed:.1f}s", file=sys.stderr)
             return
         total_ran += ran
         total_failed += fail_c

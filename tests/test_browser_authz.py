@@ -42,16 +42,16 @@ def load_authz():
     class DummySeleniumError(Exception):
         pass
 
-    webdriver.Chrome = DummyChrome
-    webdriver.ChromeOptions = DummyChromeOptions
-    exceptions.NoSuchElementException = DummySeleniumError
-    exceptions.WebDriverException = DummySeleniumError
-    by.By = DummyBy
-    support_ui.WebDriverWait = DummyWait
-    selenium.webdriver = webdriver
-    common.exceptions = exceptions
-    webdriver_common.by = by
-    support.ui = support_ui
+    setattr(webdriver, "Chrome", DummyChrome)
+    setattr(webdriver, "ChromeOptions", DummyChromeOptions)
+    setattr(exceptions, "NoSuchElementException", DummySeleniumError)
+    setattr(exceptions, "WebDriverException", DummySeleniumError)
+    setattr(by, "By", DummyBy)
+    setattr(support_ui, "WebDriverWait", DummyWait)
+    setattr(selenium, "webdriver", webdriver)
+    setattr(common, "exceptions", exceptions)
+    setattr(webdriver_common, "by", by)
+    setattr(support, "ui", support_ui)
 
     replacements = {
         "selenium": selenium,
@@ -64,7 +64,9 @@ def load_authz():
         "selenium.webdriver.support.ui": support_ui,
     }
     with mock.patch.dict(sys.modules, replacements):
-        spec = importlib.util.spec_from_file_location("nas_browser_authz_tested", ROOT / "tests" / "browser" / "authz.py")
+        spec = importlib.util.spec_from_file_location(
+            "nas_browser_authz_tested", ROOT / "tests" / "browser" / "authz.py"
+        )
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module

@@ -131,15 +131,15 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
         if not isinstance(username, str):
             continue
         uid = validate_uid(username)
-        groups = group_names(raw, groups_by_pk)
-        groups.update(explicit_groups_by_uid.get(uid, set()))
+        user_groups = group_names(raw, groups_by_pk)
+        user_groups.update(explicit_groups_by_uid.get(uid, set()))
         if raw.get("is_active") is not True:
-            groups.add(DISABLED_GROUP)
+            user_groups.add(DISABLED_GROUP)
         user = User(
             uid,
             str(raw.get("email") or f"{uid}@invalid.local"),
             str(raw.get("name") or uid),
-            frozenset(groups),
+            frozenset(user_groups),
             attrs_map(raw.get("attributes")),
         )
         raw_by_uid[uid] = raw
@@ -284,7 +284,10 @@ def normalized_account_plan(raw: Any, index: int) -> dict[str, Any]:
     )
     if unknown:
         raise SyncError(f"accounts[{index}] contains unknown field(s): {', '.join(unknown)}")
-    username = validate_uid(raw.get("username"))
+    username_raw = raw.get("username")
+    if not isinstance(username_raw, str):
+        raise SyncError(f"accounts[{index}].username must be a string")
+    username = validate_uid(username_raw)
     if username == "akadmin":
         raise SyncError("akadmin is the Authentik bootstrap account and cannot be managed by account plans")
     name = raw.get("name", username)

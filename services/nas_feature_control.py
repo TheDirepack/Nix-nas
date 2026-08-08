@@ -89,7 +89,9 @@ SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 ENDPOINT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 GATE_SCOPES = frozenset({"", "admin", "authenticated", "network", "ai-api", *CAPABILITY_GROUPS})
 _EFFECTIVE_CACHE: dict[str, Any] = {"generation": 0, "mtime": 0.0, "endpoints": {}}
-_EFFECTIVE_CACHE_PATH = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
+_EFFECTIVE_CACHE_PATH = pathlib.Path(
+    os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
+)
 
 
 def _load_effective_cached() -> dict[str, Any]:
@@ -1220,7 +1222,9 @@ def authorize_service_scope(scope: str, headers: Any) -> bool:
     effective = cached.get("data") or {}
     if key not in cached.get("endpoints", {}):
         try:
-            effective_path = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
+            effective_path = pathlib.Path(
+                os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
+            )
             effective = json.loads(effective_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             try:

@@ -79,7 +79,9 @@ class AiConfigTests(unittest.TestCase):
                 }
             }
             path.write_text(yaml.safe_dump(config), encoding="utf-8")
-            with self.assertRaisesRegex(ai.AiConfigError, r"(must use its derived environment variable|reserved credential)"):
+            with self.assertRaisesRegex(
+                ai.AiConfigError, r"(must use its derived environment variable|reserved credential)"
+            ):
                 ai.load_config(path)
 
     def test_role_routes_to_local_and_remote_targets_with_strategy(self):
@@ -376,7 +378,6 @@ class AiConfigTests(unittest.TestCase):
             ai.validate_selector_namespace(
                 {"models": {}, "peers": {}, "selectors": {"coding/default": {"targets": ["coding/default"]}}}
             )
-        # non-string selector IDs are rejected by _require_mapping earlier
         with self.assertRaisesRegex(ai.AiConfigError, "must be an object"):
             ai.validate_selector_namespace({"models": {}, "peers": {}, "selectors": {1: {}}})
 
@@ -424,9 +425,7 @@ class AiConfigTests(unittest.TestCase):
                     "apiKey": "${env.LLAMA_SWAP_API_KEY}",
                 }
             },
-            "selectors": {
-                "coding/default": {"targets": ["cloud/coder"], "strategy": "warm", "settings": "not-a-dict"}
-            },
+            "selectors": {"coding/default": {"targets": ["cloud/coder"], "strategy": "warm", "settings": "not-a-dict"}},
         }
         view = ai.public_view(config)
         self.assertEqual(view["codingRoles"]["coding/default"]["spillover"], 1)
@@ -491,7 +490,6 @@ class AiConfigTests(unittest.TestCase):
             ai.set_role("coding/research", ["solo/only"], path=path)
             view = ai.delete_provider("solo", path=path)
             self.assertEqual(view["codingRoles"]["coding/research"]["targets"], [])
-            # second delete is a no-op
             view = ai.delete_provider("solo", path=path)
             self.assertEqual(view["providers"], [])
 
@@ -563,7 +561,7 @@ class AiConfigTests(unittest.TestCase):
 
     def test_main_cli_dispatch_and_error_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = self.make_config(temporary)
+            self.make_config(temporary)
             with mock.patch.object(ai, "load_config", return_value={"models": {}, "peers": {}, "selectors": {}}):
                 with mock.patch.object(ai, "public_view", return_value={"ok": True}) as public_view:
                     self.assertEqual(ai.main(["show"]), 0)
@@ -575,7 +573,10 @@ class AiConfigTests(unittest.TestCase):
                 self.assertTrue(set_provider.called)
             self.assertEqual(ai.main(["set-provider", "bad_id", "https://x.test", "[]"]), 1)
             with mock.patch.object(ai, "load_config", return_value={"models": {}, "peers": {}, "selectors": {}}):
-                with mock.patch.object(ai, "atomic_write"), mock.patch.object(ai, "public_view", return_value={"ok": True}):
+                with (
+                    mock.patch.object(ai, "atomic_write"),
+                    mock.patch.object(ai, "public_view", return_value={"ok": True}),
+                ):
                     self.assertEqual(ai.main(["delete-provider", "openrouter"]), 0)
             self.assertEqual(ai.main(["set-role", "coding/default", "not-json"]), 1)
             self.assertEqual(ai.main(["set-advanced", "[]"]), 1)
@@ -602,7 +603,7 @@ class AiConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ai.AiConfigError, "list of at most"):
             ai.validate_local_extra_args(["ok"] * 65)
         with self.assertRaisesRegex(ai.AiConfigError, "short non-empty strings"):
-            ai.validate_local_extra_args(["", ])
+            ai.validate_local_extra_args([""])
         with self.assertRaisesRegex(ai.AiConfigError, "short non-empty strings"):
             ai.validate_local_extra_args(["x" * 513])
         with self.assertRaisesRegex(ai.AiConfigError, "short non-empty strings"):
@@ -753,20 +754,31 @@ class AiConfigTests(unittest.TestCase):
             env_file.write_text("LLAMA_SWAP_PEER_OPENROUTER_API_KEY=old-secret\n", encoding="utf-8")
             orig_bytes = path.read_bytes()
             with mock.patch.dict(os.environ, {"NAS_SECRET_ROOT": str(secret_root), "NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
-                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "old-secret")):
-                    with mock.patch.object(ai, "atomic_write", side_effect=[None, ai.AiConfigError("restart failed")]) as aw:
+                with mock.patch.object(
+                    ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "old-secret")
+                ):
+                    with mock.patch.object(
+                        ai, "atomic_write", side_effect=[None, ai.AiConfigError("restart failed")]
+                    ) as aw:
+
                         def fake_atomic(*args, **kwargs):
                             if aw.call_count == 1:
                                 return None
                             raise ai.AiConfigError("restart failed")
-                        with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("restart failed")):
+
+                        with mock.patch.object(
+                            ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("restart failed")
+                        ):
                             with self.assertRaises(ai.AiConfigError):
                                 ai.set_provider("openrouter", "https://example.test", ["m"], credential=True, path=path)
                     self.assertEqual(path.read_bytes(), orig_bytes)
                     self.assertIn("old-secret", env_file.read_text(encoding="utf-8"))
-                # Now simulate failure after write via restart mock
-                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "old-secret")):
-                    with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("health failed")):
+                with mock.patch.object(
+                    ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "old-secret")
+                ):
+                    with mock.patch.object(
+                        ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("health failed")
+                    ):
                         with self.assertRaises(ai.AiConfigError):
                             ai.set_provider("openrouter2", "https://example2.test", ["m2"], credential=False, path=path)
                     self.assertEqual(path.read_bytes(), orig_bytes)
@@ -790,8 +802,12 @@ class AiConfigTests(unittest.TestCase):
             ai.set_provider("cloud", "https://cloud.example", ["coder"], credential=False, path=path)
             orig_bytes = path.read_bytes()
             with mock.patch.dict(os.environ, {"NAS_SECRET_ROOT": str(secret_root), "NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
-                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "keep-me")):
-                    with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("restart fail")):
+                with mock.patch.object(
+                    ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "keep-me")
+                ):
+                    with mock.patch.object(
+                        ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("restart fail")
+                    ):
                         with self.assertRaises(ai.AiConfigError):
                             ai.delete_provider("cloud", path=path)
                     self.assertEqual(path.read_bytes(), orig_bytes)

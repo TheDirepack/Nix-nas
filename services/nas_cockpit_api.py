@@ -354,7 +354,11 @@ def _json_string(request: dict[str, Any], key: str, *, required: bool = False, m
 
 def _json_string_list(request: dict[str, Any], key: str, *, required: bool = False) -> list[str]:
     value = request.get(key, [])
-    if not isinstance(value, list) or len(value) > ai_config.MAX_MODELS or any(not isinstance(item, str) for item in value):
+    if (
+        not isinstance(value, list)
+        or len(value) > ai_config.MAX_MODELS
+        or any(not isinstance(item, str) for item in value)
+    ):
         raise ApiError(f"Invalid {key}")
     if required and not value:
         raise ApiError(f"{key} is required")
@@ -466,7 +470,9 @@ def _restore_secret_env(content: bytes | None, active: Any) -> None:
         return
     try:
         current = _snapshot_private_file(path, "llama-swap runtime secret environment")
-        snapshot = PrivateFileSnapshot(True, content, current.mode if current.exists else 0o400, current.uid, current.gid)
+        snapshot = PrivateFileSnapshot(
+            True, content, current.mode if current.exists else 0o400, current.uid, current.gid
+        )
         _restore_private_file(path, snapshot, "llama-swap runtime secret environment")
     except ApiError:
         raise
@@ -495,7 +501,9 @@ def _fetch_existing_provider_key(active: Any, provider_id: str, keepass_password
         env=fetch_env,
     )
     if result.returncode != 0:
-        diagnostic(f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}")
+        diagnostic(
+            f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}"
+        )
         raise ApiError("Unable to snapshot the existing provider credential before mutation")
     value = result.stdout.strip()
     if not value or len(value) > 4096 or "\n" in value or "\r" in value or "\x00" in value:
@@ -762,8 +770,10 @@ def set_ai_local_model(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("Local model TTL must be an integer")
     if not isinstance(tools, bool):
         raise ApiError("Local model tools capability must be boolean")
-    if not isinstance(extra_args, list) or len(extra_args) > ai_config.MAX_LOCAL_ARGS or any(
-        not isinstance(item, str) for item in extra_args
+    if (
+        not isinstance(extra_args, list)
+        or len(extra_args) > ai_config.MAX_LOCAL_ARGS
+        or any(not isinstance(item, str) for item in extra_args)
     ):
         raise ApiError("Invalid extraArgs")
     try:
