@@ -12,6 +12,24 @@
       "setting": "AmbientCapabilities",
       "count": 1,
       "reason": "The upstream Telegraf unit grants CAP_NET_RAW for the ping input; this configuration has no ping input and explicitly removes the unused ambient capability."
+    },
+    {
+      "path": "modules/nas/config/host-platform.nix",
+      "setting": "nixpkgs.config.allowUnfreePredicate",
+      "count": 1,
+      "reason": "NixOS 26.05 sets nixpkgs.config read-only for allowUnfree; host-platform must force the GPU allowlist predicate."
+    },
+    {
+      "path": "modules/nas/config/host-platform.nix",
+      "setting": "nixpkgs.config.cudaSupport",
+      "count": 1,
+      "reason": "NixOS 26.05 sets nixpkgs.config read-only; host-platform must force cudaSupport based on nas.hardware.llamaCpp.backend."
+    },
+    {
+      "path": "modules/nas/config/host-platform.nix",
+      "setting": "nixpkgs.config.rocmSupport",
+      "count": 1,
+      "reason": "NixOS 26.05 sets nixpkgs.config read-only; host-platform must force rocmSupport based on nas.hardware.llamaCpp.backend."
     }
   ]
 }
