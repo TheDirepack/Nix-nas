@@ -154,8 +154,8 @@ class OperationLockTests(unittest.TestCase):
         self.assertFalse(run.call_args.kwargs["check"])
 
     @unittest.skipIf(
-        os.geteuid() != 0 or not pathlib.Path("/proc/self/status").exists(),
-        "requires VM /proc and systemd-tmpfiles operation root (host hermetic cannot emulate live ancestor PID)",
+        not pathlib.Path("/proc/self/status").exists(),
+        "requires Linux /proc to verify live ancestor flock ownership",
     )
     def test_operation_runner_validates_live_ancestor_token_without_self_deadlock(self) -> None:
         completed = operation_lock.subprocess.CompletedProcess(["true"], 0)
@@ -164,6 +164,7 @@ class OperationLockTests(unittest.TestCase):
             mock.patch.object(operation_lock, "OPERATION_ROOT", pathlib.Path(temporary)),
         ):
             with operation_lock.acquire_operation("parent", ("runtime",)) as parent:
+                self.assertTrue(operation_lock._pid_owns_class_flock(os.getpid(), "runtime"))
                 with (
                     mock.patch.object(operation_lock, "acquire_operation") as acquire,
                     mock.patch.object(operation_lock.subprocess, "run", return_value=completed),
@@ -230,11 +231,12 @@ class OperationLockTests(unittest.TestCase):
                 operation_lock.current_coordination_token()
 
     def test_parent_token_rejects_unrelated_physical_lock_owner(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
-            operation_lock, "OPERATION_ROOT", pathlib.Path(temporary)
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.object(operation_lock, "OPERATION_ROOT", pathlib.Path(temporary)),
         ):
             with operation_lock.acquire_operation("parent", ("identity",)) as active:
-                with mock.patch.object(operation_lock, "_lock_owner_pid", return_value=os.getpid() + 1000):
+                with mock.patch.object(operation_lock, "_pid_owns_class_flock", return_value=False):
                     with self.assertRaises(operation_lock.OperationBusyError):
                         operation_lock.validate_coordination_token(active.coordination_token, ("identity",))
 
