@@ -28,17 +28,29 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
+      - name: Restore reviewed Cockpit build
+        id: cockpit-build
+        uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-          restore-keys: npm-${{ runner.os }}-
-      - name: Resolve one dependency graph and build one reviewed bundle
+          path: cockpit/dist
+          key: cockpit-build-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/package.json', 'cockpit/build.js', 'cockpit/src/**', 'scripts/validate-cockpit-jsx.cjs', 'tests/js/**') }}
+      - name: Restore exact Cockpit dependencies
+        id: cockpit-deps
+        if: steps.cockpit-build.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: cockpit/node_modules
+          key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Cockpit dependencies on cache miss
+        if: steps.cockpit-build.outputs.cache-hit != 'true' && steps.cockpit-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Refresh dependency vulnerability audit
+        run: npm --prefix cockpit audit --audit-level=high
+      - name: Build and test Cockpit on build-cache miss
+        if: steps.cockpit-build.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           test -f cockpit/package-lock.json
-          npm --prefix cockpit ci --no-audit --no-fund
-          npm --prefix cockpit audit --audit-level=high
           npm --prefix cockpit run build
           npm --prefix cockpit run check
           node scripts/validate-cockpit-jsx.cjs
@@ -54,27 +66,42 @@ jobs:
             cockpit/dist
 
   test:
-    name: Source unit and syntax tests
+    name: Source unit, coverage, and syntax tests
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/cache@v4
+      - name: Restore exact fast-suite result and coverage
+        id: unit-cache
+        uses: actions/cache@v4
         with:
           path: |
-            /nix/store
-            /nix/var/nix
-            ~/.cache/nix
-            ~/.cache/nixpkgs
-          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-keys: nix-${{ runner.os }}-
+            coverage.json
+            .ci-cache/unit-pass
+          key: unit-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**/*.py', 'tests/**/*.py') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Python unit tests
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Python unit tests and branch coverage floor
+        if: steps.unit-cache.outputs.cache-hit != 'true'
         run: |
           ./scripts/validate-python-syntax.py
-          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/unit-pass
+      - name: Enforce branch coverage floor
+        run: nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          if-no-files-found: error
+          retention-days: 14
+          path: coverage.json
       - name: Test inventory contract
         run: nix develop .#test -c python3 scripts/validate-test-inventory.py
       - name: Maintainer core integration tests
@@ -103,10 +130,27 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compute weekly cache epoch
+        id: nonroot-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore unprivileged-suite pass
+        id: nonroot-result
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/nonroot-pass
+          key: nonroot-pass-${{ runner.os }}-${{ steps.nonroot-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**/*.py', 'tests/**/*.py') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.nonroot-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.nonroot-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Run the fast suite without root-owned state
+        if: steps.nonroot-result.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           nix_bin="$(command -v nix)"
@@ -114,31 +158,13 @@ jobs:
           sudo chown -R nas-ci:nas-ci "$GITHUB_WORKSPACE"
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
             "$nix_bin" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-
-  coverage-gate:
-    name: Branch coverage floors
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Branch coverage floors (66% aggregate minimum)
-        run: |
-          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-          nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: coverage-report
-          if-no-files-found: error
-          retention-days: 14
-          path: coverage.json
+          sudo -u nas-ci mkdir -p .ci-cache
+          printf 'passed\n' | sudo -u nas-ci tee .ci-cache/nonroot-pass >/dev/null
 
   coverage-diff:
     name: Per-file coverage drift vs main
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    needs: [coverage-gate]
+    needs: [test]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -147,14 +173,29 @@ jobs:
         with:
           name: coverage-report
           path: .
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           path: main
+      - name: Resolve main baseline revision
+        id: main-baseline
+        run: echo "sha=$(git -C main rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Restore main coverage baseline
+        id: main-coverage
+        uses: actions/cache@v4
+        with:
+          path: main-coverage.json
+          key: coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Coverage on the main-branch baseline
+        if: steps.main-coverage.outputs.cache-hit != 'true'
         working-directory: main
         run: nix develop .#test -c ./scripts/run-unit-tests.py --coverage ../main-coverage.json --quiet --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
       - name: Enforce per-file coverage drift vs main
@@ -169,6 +210,11 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Validate generated Caddy fragment with caddy binary
         run: |
           set -euo pipefail
@@ -234,6 +280,11 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Hypothesis property tests
         run: nix develop .#test -c python -m unittest tests.test_property_invariants -v
 
@@ -246,6 +297,11 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Project security regression suite
         run: nix develop .#test -c ./scripts/run-security-tests.py
       - name: Semgrep local rules
@@ -265,14 +321,48 @@ jobs:
         with:
           name: cockpit-bundle
           path: cockpit
-      - name: Restore exact test dependencies
+      - name: Compute weekly browser cache epoch
+        id: browser-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore passing browser-suite result
+        id: browser-result
+        uses: actions/cache@v4
+        with:
+          path: cockpit/.ci-cache/browser-pass
+          key: browser-pass-${{ runner.os }}-${{ steps.browser-epoch.outputs.week }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/e2e/**', 'cockpit/dist/**') }}
+      - name: Restore exact Cockpit dependencies
+        id: browser-deps
+        if: steps.browser-result.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: cockpit/node_modules
+          key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Cockpit dependencies on cache miss
+        if: steps.browser-result.outputs.cache-hit != 'true' && steps.browser-deps.outputs.cache-hit != 'true'
         run: npm --prefix cockpit ci --no-audit --no-fund
-      - name: Install pinned Playwright browser engines
-        run: npm --prefix cockpit exec -- playwright install --with-deps chromium firefox webkit
+      - name: Restore pinned Playwright browser engines
+        id: playwright-browsers
+        if: steps.browser-result.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install pinned Playwright browser engines on cache miss
+        if: steps.browser-result.outputs.cache-hit != 'true' && steps.playwright-browsers.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit exec -- playwright install chromium firefox webkit
+      - name: Install Playwright system dependencies
+        if: steps.browser-result.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
       - name: Cross-browser UI security suite
+        if: steps.browser-result.outputs.cache-hit != 'true'
         run: npm --prefix cockpit run test:browser
+      - name: Mark browser suite reusable
+        if: steps.browser-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p cockpit/.ci-cache
+          printf 'passed\n' > cockpit/.ci-cache/browser-pass
       - name: Retain browser failure evidence
-        if: always()
+        if: always() && steps.browser-result.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: browser-test-evidence
@@ -293,6 +383,11 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Package the reviewed source tree
         run: |
           set -euo pipefail
@@ -324,7 +419,7 @@ jobs:
 
   static:
     name: Nix evaluation and lint
-    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive, coverage-gate]
+    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -334,27 +429,53 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Restore static-analysis pass
+        id: static-result
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/static-pass
+          key: static-pass-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'cockpit/src/**', 'cockpit/e2e/**', 'web/**', 'pyproject.toml', 'prettier.config.mjs') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.static-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        if: steps.static-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Repository preflight
+        if: steps.static-result.outputs.cache-hit != 'true'
         env:
           NAS_PREFLIGHT_REQUIRE_COMPLETE: "1"
         run: ./scripts/preflight.sh
       - name: Secret transaction fault injection
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#bats -c bats tests/bats
       - name: ShellCheck
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
       - name: Python correctness lint
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#ruff -c ruff check services tests scripts
       - name: Python formatting
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#ruff -c ruff format --check services tests scripts
       - name: Python type checking
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#pyright -c pyright --project pyproject.toml
       - name: JavaScript formatting
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#prettier -c prettier --check "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "web/portal/*.html" "tests/js/*.mjs" prettier.config.mjs
       - name: Evaluate valid and intentionally-invalid configuration matrix
+        if: steps.static-result.outputs.cache-hit != 'true'
         run: ./scripts/nix-config-matrix.sh
+      - name: Mark static analysis reusable
+        if: steps.static-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/static-pass
 
   build:
     name: Build NixOS closures
@@ -368,13 +489,32 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Restore successful system-build result
+        id: system-build
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/system-build-pass
+          key: system-build-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'cockpit/dist/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.system-build.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build and VM cache
+        if: steps.system-build.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Build testable systems
+        if: steps.system-build.outputs.cache-hit != 'true'
         run: |
           nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
           nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
+      - name: Mark system build reusable
+        if: steps.system-build.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/system-build-pass
 
   integration:
     name: Full-stack QEMU integration
@@ -388,12 +528,34 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Compute weekly VM-test cache epoch
+        id: vm-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore passing QEMU integration result
+        id: vm-result
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/qemu-integration-pass
+          key: qemu-integration-${{ runner.os }}-${{ steps.vm-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/nixos/**', 'tests/vm/**', 'cockpit/dist/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.vm-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           enable_kvm: true
+      - name: Enable incremental Nix build and VM cache
+        if: steps.vm-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Run NixOS VM integration test
+        if: steps.vm-result.outputs.cache-hit != 'true'
         run: nix build .#checks.x86_64-linux.nas-vm .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
+      - name: Mark QEMU integration reusable
+        if: steps.vm-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/qemu-integration-pass
 
   installer:
     name: Official-ISO install, adversarial scan, and reboot
@@ -413,14 +575,46 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Compute weekly installer cache epoch
+        id: installer-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore verified NixOS installer media
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/nixos-nas-qemu/*.iso
+            ~/.cache/nixos-nas-qemu/*.sha256.remote
+            ~/.cache/nixos-nas-qemu/iso-boot
+          key: qemu-installer-media-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-nixos-26.05
+          restore-keys: |
+            qemu-installer-media-${{ runner.os }}-
+      - name: Restore passing installer result
+        id: installer-result
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/installer-pass
+          key: installer-pass-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/qemu-test.sh', 'scripts/**', 'tests/**', 'cockpit/dist/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        if: steps.installer-result.outputs.cache-hit != 'true'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           enable_kvm: true
+      - name: Enable incremental Nix build and VM cache
+        if: steps.installer-result.outputs.cache-hit != 'true'
+        uses: DeterminateSystems/magic-nix-cache-action@v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
       - name: Install from the official NixOS ISO and reboot-test the appliance
+        if: steps.installer-result.outputs.cache-hit != 'true'
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
+      - name: Mark installer run reusable
+        if: steps.installer-result.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/installer-pass
       - name: Retain dynamic web-security reports
-        if: always() && env.NAS_ZAP_IMAGE != ''
+        if: always() && env.NAS_ZAP_IMAGE != '' && steps.installer-result.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zap-security-reports
@@ -431,7 +625,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [cockpit, test, test-nonroot, coverage-gate, coverage-diff, caddy-validate, fuzz, security, browser, source-archive, static, build, integration, installer]
+    needs: [cockpit, test, test-nonroot, coverage-diff, caddy-validate, fuzz, security, browser, source-archive, static, build, integration, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
