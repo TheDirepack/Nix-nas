@@ -107,13 +107,13 @@ if [[ -n "${NAS_ZAP_IMAGE:-}" && "${NAS_FINAL_VM_FUZZ:-1}" == 1 ]]; then
   install -d -m 0755 "$fuzz_out"
   log "Running state-aware unauthenticated ZAP Client Spider and active scan"
   NAS_ZAP_OUT_DIR="$fuzz_out" \
-    "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://127.0.0.1:$COCKPIT_PORT/"
+    bash "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://127.0.0.1:$COCKPIT_PORT/"
 
   log "Running state-aware authenticated ZAP Client Spider and active scan"
   NAS_ZAP_OUT_DIR="$fuzz_out" \
   NAS_ZAP_AUTH_USER="$TEST_USER" \
   NAS_ZAP_AUTH_PASSWORD="$TEST_PASSWORD" \
-    "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://127.0.0.1:$COCKPIT_PORT/"
+    bash "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://127.0.0.1:$COCKPIT_PORT/"
 else
   log "Skipping final-VM active fuzzing because NAS_ZAP_IMAGE is unset or NAS_FINAL_VM_FUZZ is disabled"
 fi
