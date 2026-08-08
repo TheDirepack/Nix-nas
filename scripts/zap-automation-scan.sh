@@ -39,12 +39,14 @@ USAGE
 }
 
 die() { printf 'error: %s\n' "$*" >&2; exit 2; }
+need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
 
 case "$MODE" in
   unauthenticated|authenticated) ;;
   -h|--help|help) usage; exit 0 ;;
   *) usage >&2; die "unknown scan mode: $MODE" ;;
 esac
+for cmd in python3 timeout; do need "$cmd"; done
 [[ -n "$TARGET" ]] || die "target URL is required"
 [[ "$TARGET" =~ ^https?:// ]] || die "target must use http:// or https://"
 [[ "$IMAGE" =~ @sha256:[0-9a-fA-F]{64}$ ]] || die "NAS_ZAP_IMAGE must be pinned to an immutable sha256 digest"
@@ -82,27 +84,25 @@ if [[ -z "$RUNTIME" ]]; then
   fi
 fi
 case "$RUNTIME" in docker|podman) ;; *) die "NAS_CONTAINER_RUNTIME must be docker or podman" ;; esac
-command -v "$RUNTIME" >/dev/null 2>&1 || die "$RUNTIME is not installed"
+need "$RUNTIME"
 
 install -d -m 0755 "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd -P)"
 plan="$OUT_DIR/zap-automation-$MODE.yaml"
 report_prefix="zap-automation-$MODE"
 
-# JSON is valid YAML and lets the stdlib encoder handle credentials/URLs safely.
-python3 - "$MODE" "$TARGET" "$DURATION" "$BROWSERS" "$USER_NAME" "$USER_PASSWORD" "$plan" "$report_prefix" <<'PY_PLAN'
+# JSON is valid YAML. Auth credentials stay as environment-variable references
+# so the generated plan and uploaded reports never contain the plaintext secret.
+python3 - "$MODE" "$TARGET" "$DURATION" "$BROWSERS" "$plan" "$report_prefix" <<'PY_PLAN'
 from __future__ import annotations
 
 import json
 import sys
 
-mode, target, duration_text, browsers_text, username, password, output, prefix = sys.argv[1:]
+mode, target, duration_text, browsers_text, output, prefix = sys.argv[1:]
 duration = int(duration_text)
 browsers = int(browsers_text)
-context = {
-    "name": "nas-target",
-    "urls": [target],
-}
+context = {"name": "nas-target", "urls": [target]}
 user_name = None
 if mode == "authenticated":
     user_name = "nas-browser-user"
@@ -122,7 +122,10 @@ if mode == "authenticated":
             "users": [
                 {
                     "name": user_name,
-                    "credentials": {"username": username, "password": password},
+                    "credentials": {
+                        "username": "${NAS_ZAP_AUTH_USER}",
+                        "password": "${NAS_ZAP_AUTH_PASSWORD}",
+                    },
                 }
             ],
         }
@@ -201,11 +204,12 @@ with open(output, "w", encoding="utf-8") as handle:
     json.dump(plan, handle, indent=2)
     handle.write("\n")
 PY_PLAN
-chmod 0600 "$plan"
+chmod 0644 "$plan"
 
 runtime_args=(run --rm --network host -v "$OUT_DIR:/zap/wrk:rw")
-# Pass credentials only as process environment for variable-safe plan generation;
-# they are already materialized in the root/runner-readable temporary plan.
+if [[ "$MODE" == authenticated ]]; then
+  runtime_args+=(-e NAS_ZAP_AUTH_USER -e NAS_ZAP_AUTH_PASSWORD)
+fi
 process_timeout="${NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS:-$((DURATION * 60 + 600))}"
 [[ "$process_timeout" =~ ^[1-9][0-9]*$ ]] || die "NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS must be a positive integer"
 (( process_timeout <= 18000 )) || die "NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS must not exceed 18000"
