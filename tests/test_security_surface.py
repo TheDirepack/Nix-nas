@@ -79,6 +79,41 @@ class SecuritySurfaceTests(unittest.TestCase):
         self.assertIn("generated-shell-eval", rules)
         self.assertIn("sqlite-meta-command-injection", rules)
 
+    def test_static_scanner_detects_shell_tracing_that_can_leak_secrets(self):
+        spec = importlib.util.spec_from_file_location(
+            "security_static_scan_xtrace", ROOT / "scripts" / "security-static-scan.py"
+        )
+        assert spec and spec.loader
+        scanner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scanner
+        spec.loader.exec_module(scanner)
+        with tempfile.TemporaryDirectory() as tmp:
+            shell = pathlib.Path(tmp) / "bad.sh"
+            shell.write_text("set -x\nprintf '%s\\n' \"$secret\"\n", encoding="utf-8")
+            shell_rules = {finding.rule for finding in scanner.scan_shell(shell)}
+            self.assertIn("shell-xtrace-secret-leak", shell_rules)
+
+            combined = pathlib.Path(tmp) / "combined.sh"
+            combined.write_text("set -euxo pipefail\n", encoding="utf-8")
+            self.assertIn(
+                "shell-xtrace-secret-leak",
+                {finding.rule for finding in scanner.scan_shell(combined)},
+            )
+
+            safe = pathlib.Path(tmp) / "safe.sh"
+            safe.write_text("set -euo pipefail\nset +x\n", encoding="utf-8")
+            self.assertNotIn(
+                "shell-xtrace-secret-leak",
+                {finding.rule for finding in scanner.scan_shell(safe)},
+            )
+
+            nix = pathlib.Path(tmp) / "bad.nix"
+            nix.write_text("text = ''\n  bash -x ./secret-helper.sh\n'';\n", encoding="utf-8")
+            self.assertIn(
+                "generated-shell-xtrace-secret-leak",
+                {finding.rule for finding in scanner.scan_nix(nix)},
+            )
+
     def test_static_scanner_detects_additional_browser_execution_sinks(self):
         spec = importlib.util.spec_from_file_location(
             "security_static_scan_web", ROOT / "scripts" / "security-static-scan.py"

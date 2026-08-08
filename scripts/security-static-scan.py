@@ -25,12 +25,21 @@ class Finding:
 
 
 SHELL_EVAL_RE = re.compile(r"(?:^|&&|\|\||[;|&()])\s*(?:(?:if|elif|while|until|then|do)\s+)?eval(?:\s|$)")
+SHELL_XTRACE_RE = re.compile(
+    r"(?:^|&&|\|\||[;|&()])\s*(?:set\s+(?:-[A-Za-z]*x[A-Za-z]*|-o\s+xtrace)(?:\s|$)|(?:bash|sh)\s+-[A-Za-z]*x[A-Za-z]*(?:\s|$))"
+)
 
 
 def shell_eval_in_command_position(line: str) -> bool:
     """Return true only when the shell eval builtin appears as a command."""
 
     return SHELL_EVAL_RE.search(line) is not None
+
+
+def shell_xtrace_enabled(line: str) -> bool:
+    """Return true when shell tracing is enabled and could expose secret expansions."""
+
+    return SHELL_XTRACE_RE.search(line) is not None
 
 
 def relative(path: pathlib.Path) -> str:
@@ -151,6 +160,8 @@ def scan_shell(path: pathlib.Path) -> list[Finding]:
             continue
         if shell_eval_in_command_position(line):
             findings.append(Finding(path, lineno, "shell-eval", line.strip()[:160]))
+        if shell_xtrace_enabled(line):
+            findings.append(Finding(path, lineno, "shell-xtrace-secret-leak", line.strip()[:160]))
         if re.search(r"\bmktemp\s+-u(?:\s|$)", line):
             findings.append(Finding(path, lineno, "insecure-temporary-file", line.strip()[:160]))
         if re.search(r"\bprintf\s+[\"']?\$[A-Za-z_{]", line):
@@ -167,6 +178,8 @@ def scan_nix(path: pathlib.Path) -> list[Finding]:
             continue
         if shell_eval_in_command_position(line):
             findings.append(Finding(path, lineno, "generated-shell-eval", line.strip()[:160]))
+        if shell_xtrace_enabled(line):
+            findings.append(Finding(path, lineno, "generated-shell-xtrace-secret-leak", line.strip()[:160]))
         if re.search(r"\b(?:bash|sh)\s+-c\s+[\"']?\$", line):
             findings.append(Finding(path, lineno, "generated-shell-command-injection", line.strip()[:160]))
         # SQLite dot commands are parsed by sqlite3 itself, not parameterized SQL. Never

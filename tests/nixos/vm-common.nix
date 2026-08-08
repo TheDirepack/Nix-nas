@@ -36,6 +36,20 @@ let
     ];
     text = builtins.readFile ../vm/guest-test.sh;
   };
+  secretAdversarialTest = pkgs.writeShellApplication {
+    name = "nas-vm-secret-adversarial";
+    runtimeInputs = with pkgs; [
+      bash
+      coreutils
+      findutils
+      gawk
+      gnugrep
+      keepassxc
+      systemd
+      util-linux
+    ];
+    text = builtins.readFile ../vm/secret-adversarial.sh;
+  };
   reconfigureTest = pkgs.writeShellApplication {
     name = "nas-vm-reconfigure-test";
     runtimeInputs = with pkgs; [
@@ -102,7 +116,7 @@ in
     power.ups.enable = lib.mkForce false;
   };
 
-  environment.systemPackages = [ guestTest encryptedGuestTest reconfigureTest pkgs.parted pkgs.e2fsprogs ];
+  environment.systemPackages = [ guestTest secretAdversarialTest encryptedGuestTest reconfigureTest pkgs.parted pkgs.e2fsprogs ];
 
   systemd.services.nas-vm-test-repository = {
     description = "Materialize the NAS source tree for in-VM validation";

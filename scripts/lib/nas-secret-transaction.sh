@@ -16,11 +16,17 @@ nas_secret_tx_systemctl() {
 nas_secret_tx_realpath_lexical() {
   local value=$1
   [[ "$value" == /* ]] || return 1
-  python3 - "$value" <<'PY'
-import os
-import sys
-print(os.path.normpath(sys.argv[1]))
-PY
+  # Canonicalize dot/dot-dot lexically without following symlinks. Following them
+  # here would hide a symlink from the explicit lstat-style checks below.
+  realpath -m -s -- "$value"
+}
+
+nas_secret_tx_parent_is_physical() {
+  local value=$1 parent lexical physical
+  parent="$(dirname -- "$value")" || return 1
+  lexical="$(realpath -m -s -- "$parent")" || return 1
+  physical="$(realpath -e -- "$parent")" || return 1
+  [[ "$lexical" == "$physical" ]]
 }
 
 nas_secret_tx_paths_overlap() {
@@ -29,7 +35,7 @@ nas_secret_tx_paths_overlap() {
 }
 
 nas_secret_tx_validate_paths() {
-  local root stage previous directory normalized
+  local root stage previous directory normalized physical_directory value
   root="$(nas_secret_tx_realpath_lexical "$1")" || {
     printf 'nas-secret-transaction: secret root must be an absolute path: %s\n' "$1" >&2
     return 1
@@ -55,6 +61,10 @@ nas_secret_tx_validate_paths() {
       printf 'nas-secret-transaction: refusing to operate on filesystem root\n' >&2
       return 1
     }
+    nas_secret_tx_parent_is_physical "$value" || {
+      printf 'nas-secret-transaction: parent path is missing or traverses a symlink: %s\n' "$value" >&2
+      return 1
+    }
   done
   nas_secret_tx_paths_overlap "$root" "$stage" && {
     printf 'nas-secret-transaction: secret root and staged tree must be disjoint\n' >&2
@@ -73,12 +83,28 @@ nas_secret_tx_validate_paths() {
       printf 'nas-secret-transaction: refusing filesystem root as transaction directory\n' >&2
       return 1
     }
+    [[ -d "$directory" && ! -L "$directory" ]] || {
+      printf 'nas-secret-transaction: transaction directory must be a real directory: %s\n' "$directory" >&2
+      return 1
+    }
+    physical_directory="$(realpath -e -- "$directory")" || {
+      printf 'nas-secret-transaction: transaction directory cannot be resolved safely: %s\n' "$directory" >&2
+      return 1
+    }
+    [[ "$physical_directory" == "$directory" ]] || {
+      printf 'nas-secret-transaction: transaction directory traverses a symlink: %s\n' "$directory" >&2
+      return 1
+    }
     # The transaction directory may contain stage/previous, but it must never contain
     # the live secret root or itself be beneath the live root.
-    if [[ "$root" == "$directory" || "$root" == "$directory/"* || "$directory" == "$root/"* ]]; then
+    if nas_secret_tx_paths_overlap "$root" "$directory"; then
       printf 'nas-secret-transaction: transaction directory must be disjoint from the live secret root\n' >&2
       return 1
     fi
+    [[ "$(dirname -- "$stage")" == "$directory" && "$(dirname -- "$previous")" == "$directory" ]] || {
+      printf 'nas-secret-transaction: staged and previous trees must be direct children of the transaction directory\n' >&2
+      return 1
+    }
   fi
   NAS_SECRET_TX_ROOT=$root
   NAS_SECRET_TX_STAGE=$stage
@@ -101,8 +127,8 @@ nas_secret_tx_validate_paths() {
 nas_secret_tx_init() {
   nas_secret_tx_validate_paths "$1" "$2" "$3" "${5:-}" || return 1
   NAS_SECRET_TX_TARGET=${4:-nas-protected-services.target}
-  [[ -n "$NAS_SECRET_TX_TARGET" && "$NAS_SECRET_TX_TARGET" != *$'\n'* && "$NAS_SECRET_TX_TARGET" != *$'\r'* ]] || {
-    printf 'nas-secret-transaction: invalid protected target name\n' >&2
+  [[ "$NAS_SECRET_TX_TARGET" =~ ^[A-Za-z0-9_.@:-]+\.target$ && "$NAS_SECRET_TX_TARGET" != -* ]] || {
+    printf 'nas-secret-transaction: invalid protected target name: %s\n' "$NAS_SECRET_TX_TARGET" >&2
     return 1
   }
   NAS_SECRET_TX_PHASE=initialized
@@ -122,6 +148,20 @@ nas_secret_tx_swap() {
     printf 'nas-secret-transaction: staged tree is unavailable: %s\n' "$NAS_SECRET_TX_STAGE" >&2
     return 1
   }
+  nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_STAGE" || {
+    printf 'nas-secret-transaction: staged tree must not be a symlink: %s\n' "$NAS_SECRET_TX_STAGE" >&2
+    return 1
+  }
+  if nas_secret_tx_privileged test -e "$NAS_SECRET_TX_ROOT"; then
+    nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT" || {
+      printf 'nas-secret-transaction: live secret root is not a directory: %s\n' "$NAS_SECRET_TX_ROOT" >&2
+      return 1
+    }
+    nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT" || {
+      printf 'nas-secret-transaction: live secret root must not be a symlink: %s\n' "$NAS_SECRET_TX_ROOT" >&2
+      return 1
+    }
+  fi
   nas_secret_tx_privileged test ! -e "$NAS_SECRET_TX_PREVIOUS" || {
     printf 'nas-secret-transaction: previous tree already exists: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
     return 1
@@ -164,16 +204,16 @@ nas_secret_tx_rollback() {
     nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_ROOT" || failed=true
   fi
   if [[ "$NAS_SECRET_TX_OLD_MOVED" == true ]]; then
-    if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_PREVIOUS"; then
+    if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_PREVIOUS" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_PREVIOUS"; then
       nas_secret_tx_privileged mv "$NAS_SECRET_TX_PREVIOUS" "$NAS_SECRET_TX_ROOT" || failed=true
     else
-      printf 'nas-secret-transaction: previous secret tree disappeared during rollback: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
+      printf 'nas-secret-transaction: previous secret tree disappeared or became unsafe during rollback: %s\n' "$NAS_SECRET_TX_PREVIOUS" >&2
       failed=true
     fi
   fi
   nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_STAGE" || failed=true
   if [[ "$NAS_SECRET_TX_WAS_ACTIVE" == true ]]; then
-    if nas_secret_tx_privileged test -f "$NAS_SECRET_TX_ROOT/ready"; then
+    if nas_secret_tx_privileged test -f "$NAS_SECRET_TX_ROOT/ready" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT/ready"; then
       nas_secret_tx_systemctl start "$NAS_SECRET_TX_TARGET" >/dev/null 2>&1 || failed=true
     else
       printf 'nas-secret-transaction: restored secret tree is not ready; protected target remains stopped\n' >&2
@@ -205,8 +245,8 @@ nas_secret_tx_commit() {
 
 nas_secret_tx_cleanup() {
   local rc=$1
-  [[ "$rc" =~ ^[0-9]+$ ]] || {
-    printf 'nas-secret-transaction: cleanup status must be numeric\n' >&2
+  [[ "$rc" =~ ^[0-9]+$ && "$rc" -le 255 ]] || {
+    printf 'nas-secret-transaction: cleanup status must be an exit status from 0 through 255\n' >&2
     return 125
   }
   if [[ $rc -ne 0 && "${NAS_SECRET_TX_COMMITTED:-false}" != true ]]; then
