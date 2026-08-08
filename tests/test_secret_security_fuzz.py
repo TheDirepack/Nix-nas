@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import random
+import shlex
 import string
 import subprocess
 import sys
@@ -110,14 +111,12 @@ class SecretSecurityFuzzTests(unittest.TestCase):
             lines = [
                 "set -Eeuo pipefail",
                 'export NAS_SECRET_TX_PRIVILEGE=""',
-                f"source {LIBRARY!s}",
+                f"source {shlex.quote(str(LIBRARY))}",
                 "failures=0",
             ]
             for root, stage, previous, txdir in cases:
-                target = "nas-protected-services.target"
-                command = "nas_secret_tx_init " + " ".join(
-                    subprocess.list2cmdline([value]) for value in (root, stage, previous, target, txdir)
-                )
+                values = (root, stage, previous, "nas-protected-services.target", txdir)
+                command = "nas_secret_tx_init " + " ".join(shlex.quote(value) for value in values)
                 lines.append(f"if {command} >/dev/null 2>&1; then failures=$((failures+1)); fi")
             lines.append('[[ "$failures" -eq 0 ]]')
             result = subprocess.run(
@@ -151,15 +150,18 @@ class SecretSecurityFuzzTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
             root, stage, previous = base / "root", base / "stage", base / "previous"
-            script = ["set -Eeuo pipefail", 'export NAS_SECRET_TX_PRIVILEGE=""', f"source {LIBRARY!s}"]
-            script.append(f"root={subprocess.list2cmdline([str(root)])}")
-            script.append(f"stage={subprocess.list2cmdline([str(stage)])}")
-            script.append(f"previous={subprocess.list2cmdline([str(previous)])}")
-            script.append("failures=0")
+            script = [
+                "set -Eeuo pipefail",
+                'export NAS_SECRET_TX_PRIVILEGE=""',
+                f"source {shlex.quote(str(LIBRARY))}",
+                f"root={shlex.quote(str(root))}",
+                f"stage={shlex.quote(str(stage))}",
+                f"previous={shlex.quote(str(previous))}",
+                "failures=0",
+            ]
             for target in bad:
-                quoted = subprocess.list2cmdline([target])
                 script.append(
-                    f'if nas_secret_tx_init "$root" "$stage" "$previous" {quoted} >/dev/null 2>&1; then failures=$((failures+1)); fi'
+                    f'if nas_secret_tx_init "$root" "$stage" "$previous" {shlex.quote(target)} >/dev/null 2>&1; then failures=$((failures+1)); fi'
                 )
             script.append('[[ "$failures" -eq 0 ]]')
             result = subprocess.run(
