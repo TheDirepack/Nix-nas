@@ -24,6 +24,7 @@ else:
     import nas_setup_config as setup_config
     import nas_state as nas_state
     import nas_syncthing_devices as syncthing_devices
+    from tests.slow_managed_service_stateful import ProjectionDifferentialTests, StatefulTests
 
 
 if HAS_HYPOTHESIS:
