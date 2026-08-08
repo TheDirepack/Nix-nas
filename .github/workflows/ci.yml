@@ -57,20 +57,32 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Python unit tests
         run: |
           ./scripts/validate-python-syntax.py
-          ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
       - name: Test inventory contract
-        run: python3 scripts/validate-test-inventory.py
+        run: nix develop .#test -c python3 scripts/validate-test-inventory.py
       - name: Maintainer core integration tests
-        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_core.py'
+        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_core.py'
       - name: Maintainer matrix integration tests
-        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
+        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
       - name: Maintainer release integration tests
-        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
+        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
       - name: Tooling contract tests
-        run: ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
+        run: nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
       - name: Shell syntax
         run: |
           while IFS= read -r -d '' script; do bash -n "$script"; done < <(find scripts tests/vm -type f -name '*.sh' -print0)
@@ -89,13 +101,25 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run the fast suite without root-owned state
         run: |
           set -euo pipefail
           sudo useradd --create-home --shell /bin/bash nas-ci
           sudo chown -R nas-ci:nas-ci "$GITHUB_WORKSPACE"
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-            ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+            nix develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
 
   coverage-gate:
     name: Branch coverage floors

@@ -39,7 +39,7 @@
       {{ end }}
       {{ $users_list := index $access "users" }}
       {{ if $users_list }}
-        {{ $user := placeholder "http.request.header.Remote-User" }}
+        {{ $user := placeholder "http.request.header.Remote-User" | urlquery }}
         {{ range $u := $users_list }}{{ if eq $u $user }}{{ $visible = true }}{{ end }}{{ end }}
       {{ end }}
       {{ if not $groups_list }}{{ if not $users_list }}{{ if eq $allow "any" }}{{ $visible = true }}{{ end }}{{ if eq $allow "all" }}{{ $visible = true }}{{ end }}{{ end }}{{ end }}
