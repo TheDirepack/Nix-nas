@@ -15,6 +15,7 @@ INVENTORY = ROOT / "tests" / "custom-script-contracts.json"
 # behavior is asserted by focused tooling/Cockpit contract tests instead of the
 # installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
+    "scripts/evaluate-reference-configurations.sh",
     "scripts/qemu-final-browser.sh",
     "scripts/vm-pytest.sh",
     "scripts/zap-automation-scan.sh",
