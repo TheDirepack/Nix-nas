@@ -52,11 +52,9 @@ Replaced non-standard JSON `forward_auth` handler with Caddyfile `forward_auth` 
 
 ## What is still not done (honest)
 
-- No Podman/Compose/VM/firewalld/Authentik runtime adapters
-- No Cockpit wizard (`plan`/`create`/`update`/`delete`/`start`/`stop` CLI beyond `reconcile`/`validate`/`show`)
-- No `nas-state` registration for managed-service state
-- No `podman-compose` provider selection, no `x-nas` handling
-- UI still `2.2.0-alpha.7` source-only (not install-ready)
+- Runtime adapters are `plan`/`apply` stubs — not yet called by `managed-services.nix` reconciliation (no `podman-compose` provider config in `virtualization.nix`, no `x-nas` handling, no firewalld `StrictForwardPorts` wiring, no Authentik app provisioning beyond `plan`).
+- No Cockpit wizard UI (`cockpit/src/app.jsx` still has no Applications create/edit); the API (`managed-services`, `managed-service-validate` in `overview()`) is now the only backend.
+- UI still `2.2.0-alpha.7` source-only (not install-ready).
 
-Next milestone (per review): a synthetic runtime endpoint appears for exactly the correct Authentik user in the portal and is denied for everyone else, with no Podman/VM involved — this is now testable via the stateful/property tests.
+Next milestone (per review): wire a synthetic runtime endpoint through the adapters and prove it appears for exactly the correct Authentik user in the portal and is denied for everyone else, with the existing `stateful`/`property` tests as the gate.
 
