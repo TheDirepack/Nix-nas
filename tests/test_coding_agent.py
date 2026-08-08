@@ -104,16 +104,21 @@ class CodingAgentTests(unittest.TestCase):
         self.assertNotIn('ANTHROPIC_API_KEY', module)
         self.assertIn('NAS_AUTHENTICATED_IDENTITY_JSON', coding_agent_py)
         self.assertIn('NAS_CODING_INSECURE_UID_AUTH', coding_agent_py)
-        # Optional: if nix is available, verify the module parses
+        # Optional: if nix is available, verify the module parses (VM only)
         import shutil, subprocess
 
         if shutil.which("nix") and shutil.which("nix-instantiate"):
-            result = subprocess.run(
-                ["nix-instantiate", "--parse", str(ROOT / "modules" / "ai" / "coding-agent.nix")],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            try:
+                result = subprocess.run(
+                    ["nix-instantiate", "--parse", str(ROOT / "modules" / "ai" / "coding-agent.nix")],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except Exception as exc:  # pragma: no cover - host without nix
+                self.skipTest(f"nix parse not available: {exc}")
+            if "Permission denied" in (result.stderr or "") or "creating directory" in (result.stderr or ""):
+                self.skipTest("nix store not available on host (VM-only check)")
             self.assertEqual(result.returncode, 0, f"nix parse failed: {result.stderr}")
 
     def test_main_wakes_feature_then_runs_transient_session(self) -> None:
