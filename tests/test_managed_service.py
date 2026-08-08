@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -30,6 +33,16 @@ def service_template(runtime_type: str = "compose") -> dict:
             "source": f"/var/lib/nas-control/apps/x/{suffix}",
             "startPolicy": "manual",
         },
+    }
+
+
+def visible_endpoint(exposure: dict | None = None) -> dict:
+    return {
+        "transport": "http",
+        "targetPort": 8080,
+        "exposure": exposure or {"type": "path", "value": "/managed"},
+        "auth": {"mode": "public"},
+        "portal": {"visible": True, "category": "Tools", "icon": "box"},
     }
 
 
@@ -103,6 +116,30 @@ class ManagedServiceTests(unittest.TestCase):
                 with self.assertRaisesRegex(msvc.ManagedServiceError, message):
                     msvc.validate_service("x", service)
 
+    def test_validation_rejects_malformed_runtime_auth_and_storage_fields(self):
+        service = service_template()
+        service["runtime"] = []
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "runtime must be object"):
+            msvc.validate_service("x", service)
+
+        service = service_template()
+        service["storage"] = ["not-an-object"]
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "storage entry"):
+            msvc.validate_service("x", service)
+
+        for auth, message in (
+            ({"mode": "public", "allow": "nobody"}, "auth.allow"),
+            ({"mode": "public", "groups": "admins"}, "auth.groups"),
+            ({"mode": "public", "users": "alice"}, "auth.users"),
+            ({"mode": "public", "groups": ["bad group!"]}, "group ID"),
+            ({"mode": "public", "users": ["bad user!"]}, "user ID"),
+        ):
+            service = service_template()
+            service["endpoints"] = {"web": {**visible_endpoint(), "auth": auth}}
+            with self.subTest(auth=auth):
+                with self.assertRaisesRegex(msvc.ManagedServiceError, message):
+                    msvc.validate_service("x", service)
+
     def test_reserved_path_detection(self):
         service = service_template()
         service["endpoints"] = {
@@ -173,6 +210,62 @@ class ManagedServiceTests(unittest.TestCase):
             msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {"x": service}}, store)
             self.assertFalse(msvc.effective_registry(builtin, store)["endpoints"]["x:web"]["available"])
 
+    def test_write_effective_and_portal_are_atomic_and_cover_projection_types(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            builtin = root / "builtin.json"
+            store = root / "services.json"
+            effective_path = root / "run" / "effective.json"
+            portal_path = root / "run" / "portal.json"
+            builtin.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "endpoints": {
+                            "builtin:web": {
+                                "label": "Builtin",
+                                "publicPath": "/builtin",
+                                "linkKey": "console",
+                                "access": "admin",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            service = service_template()
+            service["endpoints"] = {
+                "path": visible_endpoint({"type": "path", "value": "/managed"}),
+                "host": visible_endpoint({"type": "hostname", "value": "managed.example"}),
+                "hidden": {**visible_endpoint({"type": "path", "value": "/hidden"}), "portal": {"visible": False}},
+            }
+            msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {"x": service}}, store)
+
+            effective = msvc.write_effective(builtin, store, effective_path)
+            self.assertEqual(json.loads(effective_path.read_text(encoding="utf-8")), effective)
+            self.assertEqual(effective_path.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(effective["endpoints"]["builtin:web"]["exposure"]["value"], "/builtin")
+            self.assertEqual(effective["endpoints"]["builtin:web"]["portal"]["category"], "Administration")
+
+            portal = msvc.write_portal(effective_path, portal_path)
+            self.assertEqual(json.loads(portal_path.read_text(encoding="utf-8")), portal)
+            self.assertEqual(portal_path.stat().st_mode & 0o777, 0o644)
+            by_id = {entry["id"]: entry for entry in portal["entries"]}
+            self.assertEqual(by_id["builtin:web"]["url"], "/builtin")
+            self.assertEqual(by_id["x:path"]["url"], "/managed")
+            self.assertEqual(by_id["x:host"]["url"], "https://managed.example/")
+            self.assertNotIn("x:hidden", by_id)
+
+    def test_read_effective_recomputes_when_runtime_projection_is_missing_or_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "effective.json"
+            expected = {"schemaVersion": 2, "generation": 9, "endpoints": {}, "services": {}}
+            with mock.patch.object(msvc, "effective_registry", return_value=expected) as recompute:
+                self.assertEqual(msvc._read_effective_or_recompute(path), expected)
+                path.write_text("{broken", encoding="utf-8")
+                self.assertEqual(msvc._read_effective_or_recompute(path), expected)
+            self.assertEqual(recompute.call_count, 2)
+
     def test_portal_projection_port_url_branch(self):
         effective = {
             "schemaVersion": 2,
@@ -221,6 +314,38 @@ class ManagedServiceTests(unittest.TestCase):
             self.assertIn("x", msvc.effective_registry(builtin, store)["services"])
             msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {}}, store)
             self.assertNotIn("x", msvc.effective_registry(builtin, store)["services"])
+
+    def test_cli_reconcile_validate_show_and_unimplemented_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            store = root / "services.json"
+            builtin = root / "builtin.json"
+            effective = root / "effective.json"
+            portal = root / "portal.json"
+            builtin.write_text(json.dumps({"schemaVersion": 1, "endpoints": {}}), encoding="utf-8")
+            msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {}}, store)
+            with (
+                mock.patch.object(msvc, "STORE_PATH", store),
+                mock.patch.object(msvc, "BUILTIN_REGISTRY", builtin),
+                mock.patch.object(msvc, "EFFECTIVE_PATH", effective),
+                mock.patch.object(msvc, "PORTAL_PATH", portal),
+            ):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(msvc.main(["validate"]), 0)
+                    self.assertEqual(msvc.main(["reconcile"]), 0)
+                    self.assertEqual(msvc.main(["show", "--json"]), 0)
+                self.assertIn("effective", output.getvalue())
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    self.assertEqual(msvc.main(["plan"]), 2)
+                self.assertIn("not yet implemented", errors.getvalue())
+
+                store.write_text("{bad", encoding="utf-8")
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    self.assertEqual(msvc.main(["validate"]), 1)
+                self.assertIn("Invalid JSON", errors.getvalue())
 
     def test_caddy_collision_detection(self):
         effective = {
