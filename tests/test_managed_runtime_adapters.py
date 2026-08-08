@@ -134,6 +134,39 @@ class ManagedRuntimeAdapterTests(unittest.TestCase):
         self.assertIn("scope=service:app:web", rendered)
         self.assertIn("127.0.0.1:20000", rendered)
 
+    def test_caddy_writes_path_and_host_fragments(self):
+        path_ep = service()["endpoints"]["web"]
+        path_ep["hostPort"] = 20000
+        path_ep.update({"serviceId":"app","endpointId":"web","available":True,"builtin":False})
+        host_ep = service()["endpoints"]["web"]
+        host_ep["hostPort"] = 20001
+        host_ep["exposure"] = {"type":"hostname","value":"photos.local"}
+        host_ep.update({"serviceId":"photos","endpointId":"web","available":True,"builtin":False})
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"NAS_SKIP_CADDY_VALIDATE":"1","NAS_SKIP_CADDY_RELOAD":"1"}):
+            paths = pathlib.Path(tmp) / "paths.caddy"
+            hosts = pathlib.Path(tmp) / "hosts.caddy"
+            result_value = caddy.write_caddy_fragments({"endpoints":{"app:web":path_ep,"photos:web":host_ep}}, path_fragment=paths, host_fragment=hosts)
+            self.assertTrue(result_value["changed"])
+            self.assertIn("/apps/app", paths.read_text(encoding="utf-8"))
+            self.assertIn("photos.local", hosts.read_text(encoding="utf-8"))
+
+    def test_caddy_restores_fragments_when_validation_fails(self):
+        ep = service()["endpoints"]["web"]
+        ep["hostPort"] = 20000
+        ep.update({"serviceId":"app","endpointId":"web","available":True,"builtin":False})
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = pathlib.Path(tmp) / "paths.caddy"
+            hosts = pathlib.Path(tmp) / "hosts.caddy"
+            config = pathlib.Path(tmp) / "Caddyfile"
+            paths.write_text("old paths\n", encoding="utf-8")
+            hosts.write_text("old hosts\n", encoding="utf-8")
+            config.write_text("{}\n", encoding="utf-8")
+            with mock.patch.object(caddy.shutil, "which", return_value="/bin/caddy"), mock.patch.object(caddy, "run_command", return_value=result(1, err="bad config")), mock.patch.dict("os.environ", {"NAS_CADDY_CONFIG":str(config),"NAS_SKIP_CADDY_RELOAD":"1"}):
+                with self.assertRaises(RuntimeError):
+                    caddy.write_caddy_fragments({"endpoints":{"app:web":ep}}, path_fragment=paths, host_fragment=hosts)
+            self.assertEqual(paths.read_text(encoding="utf-8"), "old paths\n")
+            self.assertEqual(hosts.read_text(encoding="utf-8"), "old hosts\n")
+
     def test_runtime_address_allocation_is_deterministic_and_conflict_checked(self):
         store = {"schemaVersion":2,"generation":1,"services":{"app":msvc.normalize_service("app", service())}}
         msvc.allocate_runtime_addresses(store)
