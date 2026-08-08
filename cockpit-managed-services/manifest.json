@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "requires": {"cockpit": "300"},
+  "menu": {
+    "index": {
+      "label": "Applications",
+      "order": 22,
+      "keywords": ["applications", "containers", "compose", "virtual machines", "services"]
+    }
+  },
+  "content-security-policy": "default-src 'self'; connect-src 'self' ws: wss:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+}
