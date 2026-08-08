@@ -37,11 +37,15 @@ in
 
     environment.etc."nas-control/effective-endpoints.json".source = effectivePath;
 
-    # Managed-service hostname and port exposures are complete Caddy site blocks,
-    # so the generated file must be imported at the top level rather than from
-    # inside the appliance's nas.local virtual host.
+    # The generated file defines complete hostname/port site blocks plus the
+    # nas_managed_paths snippet. Import complete sites globally, then import the
+    # path-only snippet inside the appliance's existing nas.local site so we do
+    # not create an ambiguous duplicate nas.local site definition.
     services.caddy.extraConfig = lib.mkAfter ''
       import ${fragmentPath}
+    '';
+    services.caddy.virtualHosts.${config.networking.hostName + ".local"}.extraConfig = lib.mkAfter ''
+      import nas_managed_paths
     '';
     systemd.services.caddy.restartTriggers = [ fragmentPath ];
   };
