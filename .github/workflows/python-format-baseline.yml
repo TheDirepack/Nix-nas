@@ -1,0 +1,42 @@
+name: Normalize Python formatting baseline
+
+on:
+  push:
+    branches:
+      - fix/ci-runtime-and-code-fixes-20260808
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/ci-runtime-and-code-fixes-20260808
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Format Python sources and tests
+        run: nix shell nixpkgs#ruff -c ruff format services tests scripts
+
+      - name: Commit normalized formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- services tests scripts; then
+            echo "Python formatting is already normalized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services tests scripts
+          git commit -m "style: normalize Python formatting"
+          git push origin HEAD:fix/ci-runtime-and-code-fixes-20260808
