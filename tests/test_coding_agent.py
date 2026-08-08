@@ -244,7 +244,7 @@ class CodingAgentTests(unittest.TestCase):
         class FakeGroup:
             def __init__(self, name: str, members: list[str]) -> None:
                 self.gr_name = name
-                self.gr_members = members
+                self.gr_mem = members
 
         grp = mock.Mock()
         pwd = mock.Mock()
@@ -280,7 +280,7 @@ class CodingAgentTests(unittest.TestCase):
         class FakeGroup:
             def __init__(self, name: str, members: list[str]) -> None:
                 self.gr_name = name
-                self.gr_members = members
+                self.gr_mem = members
 
         grp = mock.Mock()
         pwd = mock.Mock()
