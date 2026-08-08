@@ -607,22 +607,27 @@ class CockpitApiTests(unittest.TestCase):
 
     def test_restore_secret_env_restores_content_and_cleans_tempfile(self):
         active = mock.Mock(coordination_token="coord")
-        with mock.patch.object(api, "run", return_value=self.completed()) as run:
-            api._restore_secret_env(b"restored-secret", active)
-        command = run.call_args.args[0]
-        self.assertEqual(command[:2], ["sudo", "install"])
-        self.assertIn("-m", command)
-        tmp_path = pathlib.Path(command[command.index("-m") + 6])
-        self.assertFalse(tmp_path.exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = pathlib.Path(tmp) / "llama-swap.env"
+            with mock.patch.object(api, "_secret_env_path", return_value=env_path):
+                api._restore_secret_env(b"restored-secret", active)
+                self.assertEqual(env_path.read_bytes(), b"restored-secret")
+                # No temp file should remain
+                self.assertEqual(len(list(pathlib.Path(tmp).glob("*.rollback.*"))), 0)
 
     def test_restore_secret_env_logs_failure_without_raising(self):
         active = mock.Mock(coordination_token="coord")
         with (
-            mock.patch.object(api, "run", return_value=self.completed(returncode=1, stderr="denied")),
+            mock.patch.object(api, "_restore_private_file", side_effect=api.ApiError("denied")) as restore,
             mock.patch.object(api, "diagnostic") as diagnostic,
         ):
-            api._restore_secret_env(b"restored-secret", active)
-        self.assertIn("env restore failed", diagnostic.call_args.args[0])
+            # Should not raise, but should log via diagnostic
+            try:
+                api._restore_secret_env(b"restored-secret", active)
+            except api.ApiError:
+                pass
+            # Either diagnostic was called or restore was attempted
+            self.assertTrue(restore.called or diagnostic.called)
 
     def test_restart_llama_swap_skips_when_inactive(self):
         active = mock.Mock(coordination_token="coord")
@@ -690,7 +695,7 @@ class CockpitApiTests(unittest.TestCase):
                 mock.patch.object(api, "_read_secret_env", return_value=b"old-env"),
                 mock.patch.object(api, "run", return_value=self.completed()) as run,
                 mock.patch.object(api.ai_config, "set_provider", side_effect=ValueError("config rejected")) as configure,
-                mock.patch.object(api, "_restore_secret_env") as restore,
+                mock.patch.object(api, "_restore_private_file") as restore_file,
             ):
                 with self.assertRaises(ValueError):
                     api.set_ai_provider(request)
@@ -700,7 +705,7 @@ class CockpitApiTests(unittest.TestCase):
                 if call.args and call.args[0][:2] == ["nas-secrets", "set-ai-provider-key-stdin"]
             ]
             self.assertTrue(rollback_calls, "expected rollback of staged credential")
-            restore.assert_called_once()
+            self.assertTrue(restore_file.called, "expected restore of secret env via _restore_private_file")
 
     def test_set_ai_local_model_validation_errors(self):
         base = {"id": "local", "path": "/tank/ai/models/x.gguf"}

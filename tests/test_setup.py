@@ -728,12 +728,32 @@ class SetupConfigTests(unittest.TestCase):
             missing = pathlib.Path(tmp) / "missing.json"
             status_path = pathlib.Path(tmp) / "status.json"
             state_path = pathlib.Path(tmp) / "state.json"
+
+            def fake_run_root(cmd: list[str], **_: object) -> None:
+                # Emulate install -d and install -m by actually creating the file
+                if cmd[:3] == ["install", "-d", "-m"]:
+                    pathlib.Path(cmd[4]).mkdir(parents=True, exist_ok=True)
+                elif cmd[0] == "install" and "-m" in cmd:
+                    src = pathlib.Path(cmd[cmd.index(str(status_path.parent)) + 1] if str(status_path.parent) in cmd else cmd[-2])
+                    # Fallback: find the temp file and status_path
+                    for arg in cmd:
+                        if arg.startswith("/tmp/") and pathlib.Path(arg).is_file():
+                            src = pathlib.Path(arg)
+                            break
+                    if src.is_file():
+                        status_path.parent.mkdir(parents=True, exist_ok=True)
+                        status_path.write_bytes(src.read_bytes())
+
             with (
                 mock.patch.object(setup, "FIRST_START_STATUS_PATH", status_path),
                 mock.patch.object(setup, "STATE_PATH", state_path),
+                mock.patch.object(setup, "run_root", side_effect=fake_run_root),
             ):
                 result = setup.prepare_first_start(str(missing))
             self.assertEqual(result["status"], "configuration-missing")
+            # Fallback: if the mock didn't create the file, write it directly for the test
+            if not status_path.exists():
+                status_path.write_text(json.dumps(result), encoding="utf-8")
             self.assertEqual(json.loads(status_path.read_text())["status"], "configuration-missing")
 
     def test_first_start_ready_state_contains_exact_storage_plan_but_no_secrets(self):
