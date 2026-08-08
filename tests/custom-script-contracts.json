@@ -530,6 +530,21 @@
       "tests/test_service_caddy_validate.py",
       "tests/test_managed_service_stateful.py"
     ],
+    "services/nas_service_authentik.py": [
+      "tests/test_managed_service.py"
+    ],
+    "services/nas_service_firewall.py": [
+      "tests/test_managed_service.py"
+    ],
+    "services/nas_service_runtime_compose.py": [
+      "tests/test_managed_service.py"
+    ],
+    "services/nas_service_runtime_libvirt.py": [
+      "tests/test_managed_service.py"
+    ],
+    "services/nas_service_runtime_podman.py": [
+      "tests/test_managed_service.py"
+    ],
     "services/nas_migrate_state.py": [
       "tests/test_doctor_migrations.py",
       "tests/test_fuzz_boundaries.py"

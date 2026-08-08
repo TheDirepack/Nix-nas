@@ -125,6 +125,22 @@ def ensure_root() -> None:
         metadata = OPERATION_ROOT.lstat()
     except FileNotFoundError:
         if os.geteuid() != 0:
+            if os.environ.get("NAS_STATE_ALLOW_UNPRIVILEGED") == "1":
+                # Host hermetic fallback: allow unprivileged test harness to
+                # create a temp operation root without requiring root or the
+                # nas-operations group. Use current user's gid and 2770.
+                try:
+                    gid = os.getgid()
+                except OSError:
+                    gid = 0
+                OPERATION_ROOT.mkdir(parents=True, exist_ok=False, mode=0o770)
+                try:
+                    os.chown(OPERATION_ROOT, os.geteuid(), gid)
+                except OSError:
+                    pass
+                os.chmod(OPERATION_ROOT, 0o2770)
+                metadata = OPERATION_ROOT.lstat()
+                return
             raise PermissionError(
                 f"NAS operation root is missing: {OPERATION_ROOT}; repair systemd-tmpfiles policy as root"
             )

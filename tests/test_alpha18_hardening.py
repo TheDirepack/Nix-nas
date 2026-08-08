@@ -206,7 +206,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         cockpit = text("services/nas_cockpit_api.py")
         schema = text("schemas/service-registry.schema.json")
         for service in ("identity", "cockpit", "aiApi", "syncthing", "vaultwarden", "grafana"):
-            self.assertIn(f"{service} = {{", registry)
+            self.assertIn(f"{service} = mkService", registry)
         self.assertIn("endpoints.json", system)
         self.assertIn("NAS_ENDPOINT_REGISTRY", cockpit)
         self.assertIn('"additionalProperties": false', schema)

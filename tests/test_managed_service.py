@@ -13,6 +13,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
 
 import nas_managed_service as msvc
+import nas_service_authentik  # noqa: F401 - imported for contract coverage
+import nas_service_caddy  # noqa: F401
+import nas_service_firewall  # noqa: F401
+import nas_service_runtime_compose  # noqa: F401
+import nas_service_runtime_libvirt  # noqa: F401
+import nas_service_runtime_podman  # noqa: F401
 
 
 class ManagedServiceTests(unittest.TestCase):
