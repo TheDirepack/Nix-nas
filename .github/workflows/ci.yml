@@ -30,14 +30,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Restore reviewed Cockpit build
         id: cockpit-build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: cockpit/dist
           key: cockpit-build-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/package.json', 'cockpit/build.js', 'cockpit/src/**', 'scripts/validate-cockpit-jsx.cjs', 'tests/js/**') }}
       - name: Restore exact Cockpit dependencies
         id: cockpit-deps
         if: steps.cockpit-build.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: cockpit/node_modules
           key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Restore exact fast-suite result and coverage
         id: unit-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             coverage.json
@@ -83,7 +83,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -135,7 +135,7 @@ jobs:
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore unprivileged-suite pass
         id: nonroot-result
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ci-cache/nonroot-pass
           key: nonroot-pass-${{ runner.os }}-${{ steps.nonroot-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/**/*.py', 'scripts/**/*.py', 'tests/**/*.py') }}
@@ -145,7 +145,7 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
         if: steps.nonroot-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -155,11 +155,13 @@ jobs:
           set -euo pipefail
           nix_bin="$(command -v nix)"
           sudo useradd --create-home --shell /bin/bash nas-ci
-          sudo chown -R nas-ci:nas-ci "$GITHUB_WORKSPACE"
+          sudo install -d -o nas-ci -g nas-ci /home/nas-ci/worktree
+          sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
+          sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-            "$nix_bin" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
-          sudo -u nas-ci mkdir -p .ci-cache
-          printf 'passed\n' | sudo -u nas-ci tee .ci-cache/nonroot-pass >/dev/null
+            bash -c 'cd /home/nas-ci/worktree && exec "$1" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py' bash "$nix_bin"
+          mkdir -p .ci-cache
+          printf 'passed\n' > .ci-cache/nonroot-pass
 
   coverage-diff:
     name: Per-file coverage drift vs main
@@ -182,7 +184,7 @@ jobs:
         run: echo "sha=$(git -C main rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Restore main coverage baseline
         id: main-coverage
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: main-coverage.json
           key: coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}
@@ -190,7 +192,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -211,7 +213,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -281,7 +283,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -298,7 +300,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -307,7 +309,7 @@ jobs:
       - name: Semgrep local rules
         run: nix develop .#test -c semgrep --config .semgrep.yml --error services scripts cockpit/src web
       - name: Bandit privileged runtime Python scan
-        run: nix develop .#test -c bandit -q -r services -ll -ii
+        run: nix develop .#test -c bandit -q -c .bandit -r services -ll -ii
 
   browser:
     name: Browser rendering, layout, XSS, and accessibility
@@ -326,14 +328,14 @@ jobs:
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore passing browser-suite result
         id: browser-result
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: cockpit/.ci-cache/browser-pass
           key: browser-pass-${{ runner.os }}-${{ steps.browser-epoch.outputs.week }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/e2e/**', 'cockpit/dist/**') }}
       - name: Restore exact Cockpit dependencies
         id: browser-deps
         if: steps.browser-result.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: cockpit/node_modules
           key: cockpit-node-modules-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
@@ -343,7 +345,7 @@ jobs:
       - name: Restore pinned Playwright browser engines
         id: playwright-browsers
         if: steps.browser-result.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
@@ -384,7 +386,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -431,7 +433,7 @@ jobs:
       - run: git add -f cockpit/package-lock.json cockpit/dist
       - name: Restore static-analysis pass
         id: static-result
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ci-cache/static-pass
           key: static-pass-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'cockpit/src/**', 'cockpit/e2e/**', 'web/**', 'pyproject.toml', 'prettier.config.mjs') }}
@@ -441,7 +443,7 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
         if: steps.static-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -491,7 +493,7 @@ jobs:
       - run: git add -f cockpit/package-lock.json cockpit/dist
       - name: Restore successful system-build result
         id: system-build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ci-cache/system-build-pass
           key: system-build-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'cockpit/dist/**', 'web/**') }}
@@ -501,7 +503,7 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build and VM cache
         if: steps.system-build.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -533,7 +535,7 @@ jobs:
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore passing QEMU integration result
         id: vm-result
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ci-cache/qemu-integration-pass
           key: qemu-integration-${{ runner.os }}-${{ steps.vm-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/nixos/**', 'tests/vm/**', 'cockpit/dist/**', 'web/**') }}
@@ -544,7 +546,7 @@ jobs:
           enable_kvm: true
       - name: Enable incremental Nix build and VM cache
         if: steps.vm-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
@@ -579,21 +581,17 @@ jobs:
         id: installer-epoch
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Restore verified NixOS installer media
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: |
-            ~/.cache/nixos-nas-qemu/*.iso
-            ~/.cache/nixos-nas-qemu/*.sha256.remote
-            ~/.cache/nixos-nas-qemu/iso-boot
-          key: qemu-installer-media-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-nixos-26.05
-          restore-keys: |
-            qemu-installer-media-${{ runner.os }}-
+          path: ~/.cache/nixos-nas-qemu
+          key: nixos-installer-media-${{ runner.os }}-${{ hashFiles('scripts/qemu-test.sh') }}
+          restore-keys: nixos-installer-media-${{ runner.os }}-
       - name: Restore passing installer result
         id: installer-result
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ci-cache/installer-pass
-          key: installer-pass-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/qemu-test.sh', 'scripts/**', 'tests/**', 'cockpit/dist/**', 'web/**') }}
+          key: installer-pass-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/vm/**', 'cockpit/dist/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.installer-result.outputs.cache-hit != 'true'
         with:
@@ -601,15 +599,15 @@ jobs:
           enable_kvm: true
       - name: Enable incremental Nix build and VM cache
         if: steps.installer-result.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@v14
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
       - name: Install from the official NixOS ISO and reboot-test the appliance
         if: steps.installer-result.outputs.cache-hit != 'true'
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
-      - name: Mark installer run reusable
-        if: steps.installer-result.outputs.cache-hit != 'true'
+      - name: Mark installer test reusable
+        if: steps.installer-result.outputs.cache-hit != 'true' && success()
         run: |
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/installer-pass
