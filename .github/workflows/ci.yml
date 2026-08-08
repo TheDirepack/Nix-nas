@@ -25,12 +25,11 @@ env:
   CI_CACHE_SCHEMA: ci-v4-node24-ubuntu2404
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Stage 1: pre-build qualification. Nothing below this stage builds the final
-  # Cockpit bundle or a NixOS closure.
-  # ---------------------------------------------------------------------------
+  # Fast deterministic qualification runs in parallel. Downstream jobs depend
+  # directly on the qualifications they require; there are no synthetic gate
+  # jobs whose only purpose is to repeat GitHub's dependency semantics.
   test:
-    name: Pre-build source unit, coverage, and syntax
+    name: Fast source unit, coverage, and syntax
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -63,7 +62,8 @@ jobs:
             --exclude test_maintainer_release.py \
             --exclude test_contract_tooling.py \
             --exclude test_fuzz_boundaries.py \
-            --exclude test_property_invariants.py
+            --exclude test_property_invariants.py \
+            --exclude test_secret_security_fuzz.py
           nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
       - name: Test inventory contract
         if: steps.fast-result.outputs.cache-hit != 'true'
@@ -83,7 +83,7 @@ jobs:
           node cockpit/build.js --check-source
           node scripts/validate-cockpit-jsx.cjs
           node --test tests/js/*.test.mjs
-          NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
+          NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 ./scripts/preflight.sh
       - name: Mark source qualification reusable
         if: steps.fast-result.outputs.cache-hit != 'true'
         run: |
@@ -98,7 +98,7 @@ jobs:
           path: coverage.json
 
   test-nonroot:
-    name: Pre-build unprivileged hermeticity
+    name: Fast unprivileged hermeticity
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -132,12 +132,12 @@ jobs:
           sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
           sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
           sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-            bash -c 'cd /home/nas-ci/worktree && exec "$1" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py' bash "$nix_bin"
+            bash -c 'cd /home/nas-ci/worktree && exec "$1" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py' bash "$nix_bin"
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/nonroot-pass
 
   security:
-    name: Pre-build static security and injection checks
+    name: Fast deterministic security and injection checks
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -147,7 +147,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ci-cache/security-pass
-          key: ${{ env.CI_CACHE_SCHEMA }}-security-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', '.bandit', '.semgrep.yml', 'services/**', 'scripts/run-security-tests.py', 'tests/test_security*.py', 'cockpit/src/**', 'web/**') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-security-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', '.bandit', '.semgrep.yml', 'services/**', 'scripts/run-security-tests.py', 'tests/test_security*.py', 'tests/test_secret_security.py', 'tests/test_secret_journal_security.py', 'tests/test_secret_transaction.py', 'cockpit/src/**', 'web/**') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.security-result.outputs.cache-hit != 'true'
         with:
@@ -158,7 +158,7 @@ jobs:
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
-      - name: Project security regression suite
+      - name: Project deterministic security regression suite
         if: steps.security-result.outputs.cache-hit != 'true'
         run: nix develop .#test -c ./scripts/run-security-tests.py
       - name: Semgrep local rules
@@ -174,7 +174,7 @@ jobs:
           printf 'passed\n' > .ci-cache/security-pass
 
   caddy-validate:
-    name: Pre-build Caddy generator validation
+    name: Fast Caddy generator validation
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -184,7 +184,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ci-cache/caddy-pass
-          key: ${{ env.CI_CACHE_SCHEMA }}-caddy-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/nas_service_caddy.py', 'tests/test_service_caddy.py', 'tests/test_service_caddy_validate.py', 'modules/nas/config/managed-services.nix') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-caddy-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'services/nas_service_caddy.py', 'tests/test_service_caddy.py', 'tests/test_service_caddy_coverage.py', 'tests/test_service_caddy_validate.py', 'modules/nas/config/managed-services.nix') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.caddy-result.outputs.cache-hit != 'true'
         with:
@@ -199,12 +199,12 @@ jobs:
         if: steps.caddy-result.outputs.cache-hit != 'true'
         run: |
           nix shell nixpkgs#caddy -c caddy version
-          nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_validate -v
+          nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/caddy-pass
 
   static:
-    name: Pre-build Nix evaluation, lint, type and formatting checks
+    name: Fast Nix evaluation, lint, type and formatting checks
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -227,7 +227,7 @@ jobs:
           use-flakehub: false
       - name: Source-only repository preflight
         if: steps.static-result.outputs.cache-hit != 'true'
-        run: NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/preflight.sh
+        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 ./scripts/preflight.sh
       - name: Secret transaction fault injection
         if: steps.static-result.outputs.cache-hit != 'true'
         run: nix shell nixpkgs#bats -c bats tests/bats
@@ -256,7 +256,7 @@ jobs:
           printf 'passed\n' > .ci-cache/static-pass
 
   dependency-audit:
-    name: Pre-build fresh dependency vulnerability audit
+    name: Fast fresh dependency vulnerability audit
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -274,7 +274,7 @@ jobs:
         run: npm --prefix cockpit audit --audit-level=high
 
   coverage-diff:
-    name: Pre-build per-file coverage drift vs main
+    name: PR per-file coverage drift vs main
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     needs: [test]
     runs-on: ubuntu-24.04
@@ -325,7 +325,8 @@ jobs:
             --exclude test_maintainer_release.py \
             --exclude test_contract_tooling.py \
             --exclude test_fuzz_boundaries.py \
-            --exclude test_property_invariants.py
+            --exclude test_property_invariants.py \
+            --exclude test_secret_security_fuzz.py
       - name: Enforce per-file coverage drift vs main
         if: steps.coverage-diff-result.outputs.cache-hit != 'true'
         run: nix develop .#test -c python3 scripts/check-coverage.py coverage.json --baseline main-coverage.json --total-floor 66
@@ -335,36 +336,21 @@ jobs:
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/coverage-diff-pass
 
-  prebuild-gate:
-    name: Stage 1 gate - source is qualified to build
-    if: always()
-    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Require every applicable pre-build check
-        env:
-          RESULTS: ${{ toJson(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          results = {k: v.get("result") for k, v in json.loads(os.environ["RESULTS"]).items()}
-          required = ["test", "test-nonroot", "security", "caddy-validate", "static", "dependency-audit"]
-          failed = [name for name in required if results.get(name) != "success"]
-          coverage = results.get("coverage-diff")
-          if coverage not in {"success", "skipped"}:
-              failed.append("coverage-diff")
-          if failed:
-              raise SystemExit("pre-build gate failed: " + ", ".join(failed))
-          PY
-
-  # ---------------------------------------------------------------------------
-  # Stage 2: produce immutable build/release artifacts only after Stage 1 passes.
-  # ---------------------------------------------------------------------------
+  # The first expensive producer waits directly for every fast qualification.
+  # coverage-diff is PR-only, so a skipped result is explicitly acceptable.
   cockpit-build:
     name: Build qualified Cockpit production bundle
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [prebuild-gate]
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
+      needs.test.result == 'success' &&
+      needs.test-nonroot.result == 'success' &&
+      needs.security.result == 'success' &&
+      needs.caddy-validate.result == 'success' &&
+      needs.static.result == 'success' &&
+      needs.dependency-audit.result == 'success' &&
+      (needs.coverage-diff.result == 'success' || needs.coverage-diff.result == 'skipped')
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -405,11 +391,16 @@ jobs:
   source-archive:
     name: Package and round-trip qualified source
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [prebuild-gate]
+    needs: [cockpit-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
       - name: Restore verified source archive
         id: source-archive-result
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -417,7 +408,7 @@ jobs:
           path: |
             nas-source-release
             .ci-cache/source-archive-pass
-          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'schemas/**', 'cockpit/**', 'web/**', 'docs/**', 'MANIFEST.sha256') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/**', 'schemas/**', 'cockpit/package-lock.json', 'cockpit/dist/**', 'web/**', 'docs/**', 'MANIFEST.sha256') }}
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: steps.source-archive-result.outputs.cache-hit != 'true'
         with:
@@ -432,6 +423,7 @@ jobs:
         if: steps.source-archive-result.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          node cockpit/build.js --check
           out="$GITHUB_WORKSPACE/nas-source-release"
           mkdir -p "$out"
           NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
@@ -458,7 +450,7 @@ jobs:
   build:
     name: Build qualified NixOS closures
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [prebuild-gate, cockpit-build, source-archive]
+    needs: [cockpit-build, source-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -492,32 +484,10 @@ jobs:
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/system-build-pass
 
-  build-gate:
-    name: Stage 2 gate - all build artifacts exist
-    if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast')
-    needs: [cockpit-build, source-archive, build]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Require all build producers
-        env:
-          RESULTS: ${{ toJson(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          results = {k: v.get("result") for k, v in json.loads(os.environ["RESULTS"]).items()}
-          failed = [k for k, v in results.items() if v != "success"]
-          if failed:
-              raise SystemExit("build gate failed: " + ", ".join(failed))
-          PY
-
-  # ---------------------------------------------------------------------------
-  # Stage 3: tests that require built artifacts/closures.
-  # ---------------------------------------------------------------------------
   browser:
-    name: Post-build deterministic Cockpit bundle layout, XSS, and accessibility
+    name: Post-build deterministic Cockpit layout, XSS, and accessibility
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build-gate, cockpit-build]
+    needs: [build, cockpit-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -582,7 +552,7 @@ jobs:
   integration:
     name: Post-build full-stack QEMU integration
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build-gate, browser]
+    needs: [build, browser, cockpit-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -619,34 +589,10 @@ jobs:
           mkdir -p .ci-cache
           printf 'passed\n' > .ci-cache/qemu-integration-pass
 
-  runtime-gate:
-    name: Stage 3 gate - built system passed runtime qualification
-    if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast')
-    needs: [browser, integration]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Require post-build browser and QEMU tests
-        env:
-          RESULTS: ${{ toJson(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          results = {k: v.get("result") for k, v in json.loads(os.environ["RESULTS"]).items()}
-          failed = [k for k, v in results.items() if v != "success"]
-          if failed:
-              raise SystemExit("runtime gate failed: " + ", ".join(failed))
-          PY
-
-  # ---------------------------------------------------------------------------
-  # Stage 4: release/installer qualification. This is the real installed VM.
-  # The same deterministic browser/layout/accessibility probes run here before
-  # any live ZAP active scan.
-  # ---------------------------------------------------------------------------
   installer:
     name: Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz
     if: (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    needs: [runtime-gate, cockpit-build]
+    needs: [integration, cockpit-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 420
     env:
@@ -748,42 +694,24 @@ jobs:
             cockpit/test-results
             ~/.cache/nixos-nas-qemu/state/browser-console.log
 
-  final-system-gate:
-    name: Stage 4 gate - final system is ready for slow qualification
-    if: always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast')
-    needs: [runtime-gate, installer]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Require runtime gate and installer when applicable
-        env:
-          RUNTIME: ${{ needs.runtime-gate.result }}
-          INSTALLER: ${{ needs.installer.result }}
-        run: |
-          test "$RUNTIME" = success
-          case "$INSTALLER" in
-            success|skipped) ;;
-            *) echo "installer qualification failed: $INSTALLER" >&2; exit 1 ;;
-          esac
-
-  # ---------------------------------------------------------------------------
-  # Stage 5: expensive fuzz/soak. These jobs never run in the fast tier and do
-  # not start until every applicable deterministic/build/runtime gate passed.
-  # ---------------------------------------------------------------------------
+  # Slow fuzzing starts only after QEMU integration. On release/installer runs it
+  # also waits for the official installer; on PRs installer is skipped and the
+  # explicit result check below permits the slow shards to proceed.
   fuzz:
-    name: Slow source/property fuzz shard (${{ matrix.shard }})
+    name: Slow source/property/security fuzz shard (${{ matrix.shard }})
     if: >-
-      always() && needs.final-system-gate.result == 'success' &&
-      ((github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')) ||
-       github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [final-system-gate]
+      always() && needs.integration.result == 'success' &&
+      (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
+    needs: [integration, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 4
       matrix:
-        shard: [parser-boundaries, executables, properties]
+        shard: [parser-boundaries, executables, properties, security]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compute weekly fuzz epoch
@@ -794,7 +722,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .ci-cache/fuzz-${{ matrix.shard }}-pass
-          key: ${{ env.CI_CACHE_SCHEMA }}-fuzz-${{ matrix.shard }}-${{ runner.os }}-${{ steps.fuzz-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'scripts/fuzz.py', 'scripts/fuzz-executables.py', 'services/**/*.py', 'tests/test_fuzz_boundaries.py', 'tests/test_property_invariants.py') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-fuzz-${{ matrix.shard }}-${{ runner.os }}-${{ steps.fuzz-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'scripts/fuzz.py', 'scripts/fuzz-executables.py', 'services/**/*.py', 'tests/test_fuzz_boundaries.py', 'tests/test_property_invariants.py', 'tests/test_secret_security_fuzz.py') }}
       - name: Parser and boundary fuzzing
         if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'parser-boundaries'
         run: |
@@ -804,11 +732,11 @@ jobs:
         if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'executables'
         run: ./scripts/fuzz-executables.py --cases 50 --seed 0x534352495054
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'properties'
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && (matrix.shard == 'properties' || matrix.shard == 'security')
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'properties'
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && (matrix.shard == 'properties' || matrix.shard == 'security')
         uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
@@ -816,6 +744,9 @@ jobs:
       - name: Hypothesis property tests
         if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'properties'
         run: nix develop .#test -c python -m unittest tests.test_property_invariants -v
+      - name: Randomized secret-security fuzz tests
+        if: steps.fuzz-result.outputs.cache-hit != 'true' && matrix.shard == 'security'
+        run: nix develop .#test -c python -m unittest tests.test_secret_security_fuzz -v
       - name: Mark fuzz shard reusable
         if: steps.fuzz-result.outputs.cache-hit != 'true'
         run: |
@@ -825,10 +756,11 @@ jobs:
   browser-fuzz:
     name: Slow browser deterministic replay plus hostile-input fuzz
     if: >-
-      always() && needs.final-system-gate.result == 'success' &&
-      ((github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')) ||
-       github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [final-system-gate, cockpit-build]
+      always() && needs.integration.result == 'success' &&
+      (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
+    needs: [integration, installer, cockpit-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
@@ -896,9 +828,9 @@ jobs:
             cockpit/test-results
 
   summary:
-    name: Pipeline summary and aggregate gate
+    name: Pipeline summary
     if: always()
-    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, prebuild-gate, cockpit-build, source-archive, build, build-gate, browser, integration, runtime-gate, installer, final-system-gate, fuzz, browser-fuzz]
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, cockpit-build, source-archive, build, browser, integration, installer, fuzz, browser-fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
