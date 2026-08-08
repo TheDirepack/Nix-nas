@@ -79,6 +79,15 @@ in
       };
     }
     (lib.mkIf (cfg.enable && code.enable && piPackageAvailable) {
+      security.sudo.extraConfig = ''
+        Defaults env_keep += "NAS_AUTHENTICATED_IDENTITY_JSON NAS_CODING_INSECURE_UID_AUTH"
+      '';
+
+      environment.etc."systemd/resolved.conf.d/10-pi-netns.conf".text = ''
+        [Resolve]
+        DNSStubListenerExtra=${piHostVethIp}
+      '';
+
       environment.systemPackages = [ piPackage launcher ];
 
       systemd.slices.nas-ai-coding = {
@@ -120,17 +129,16 @@ in
             ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s ${piNsVethIp}/30 -j MASQUERADE 2>/dev/null || ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s ${piNsVethIp}/30 -j MASQUERADE
             ${pkgs.iptables}/bin/iptables -C FORWARD -s ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || ${pkgs.iptables}/bin/iptables -A FORWARD -s ${piNsVethIp}/30 -j ACCEPT
             ${pkgs.iptables}/bin/iptables -C FORWARD -d ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || ${pkgs.iptables}/bin/iptables -A FORWARD -d ${piNsVethIp}/30 -j ACCEPT
-            mkdir -p /run/netns
-            touch ${piNetnsPath}
-            mount --bind /proc/self/ns/net ${piNetnsPath} 2>/dev/null || true
+            mkdir -p /etc/netns/pi
+            printf 'nameserver ${piHostVethIp}\n' > /etc/netns/pi/resolv.conf
           '';
           ExecStop = pkgs.writeShellScript "nas-pi-netns-teardown" ''
             set -euo pipefail
             ${pkgs.iptables}/bin/iptables -t nat -D POSTROUTING -s ${piNsVethIp}/30 -j MASQUERADE 2>/dev/null || true
             ${pkgs.iptables}/bin/iptables -D FORWARD -s ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || true
             ${pkgs.iptables}/bin/iptables -D FORWARD -d ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || true
-            umount ${piNetnsPath} 2>/dev/null || true
-            rm -f ${piNetnsPath}
+            rm -f /etc/netns/pi/resolv.conf
+            rmdir /etc/netns/pi 2>/dev/null || true
             ${pkgs.iproute2}/bin/ip netns del pi 2>/dev/null || true
             ${pkgs.iproute2}/bin/ip link del pi-veth0 2>/dev/null || true
           '';

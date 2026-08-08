@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0-alpha.7 — 2026-08-08
+
+- Fix Pi network namespace construction (remove `mount --bind /proc/self/ns/net` that overwrote `/run/netns/pi`), provide DNS inside the namespace via `/etc/netns/pi/resolv.conf` pointing at `10.200.1.1` and `systemd-resolved` `DNSStubListenerExtra`, and clean up teardown without `umount` of the ip-managed namespace.
+- Harden coding-agent authorization to require Authentik-validated identity JSON (`NAS_AUTHENTICATED_IDENTITY_JSON` from the portal gate, checked via `capability_allowed("coding")`), remove the unconditional `root`/`SUDO_USER` bypass, and keep Linux group sync as an opt-in insecure fallback (`NAS_CODING_INSECURE_UID_AUTH=1`) for terminal `sudo` callers. Add the `coding` capability to the development fallback registry so `nas_admin` bypass and `nas_allow_coding` checks work without a registry file in tests.
+- Preserve the provider credential lifecycle hardening from the in-progress `nas_ai_config.py` work (explicit `PRESENT`/`ABSENT`/`UNKNOWN` credential probe and atomic env-file updates).
+- Synchronize `VERSION`, `README`, `flake.nix`, and `cockpit/package.json` to `2.2.0-alpha.7` per `docs/development/artifact-naming.md`.
+
 ## 2.2.0-alpha.6 — 2026-08-07
 
 - Harden the Alpha.5 Pi coding-agent and runtime provider subsystem against the 2.2.5 review's critical findings: align Pi launcher with the pinned 0.75.4 interface, confine coding sessions to `nas-ai-coding.slice`/`nas-ai-coding-sessions.target` with loopback-only egress and `InaccessiblePaths` for host secrets, make provider ID mapping injective (hyphen-only `^[a-z][a-z0-9-]{0,47}$`), and make provider credential + endpoint updates one atomic transaction with `NAS_SKIP_LLAMA_SWAP_RESTART` deferred restart and full rollback of Keepass, env, and config on failure.

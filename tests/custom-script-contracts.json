@@ -503,7 +503,8 @@
     ],
     "services/nas_feature_model.py": [
       "tests/test_feature_control.py",
-      "tests/test_contract_operations.py"
+      "tests/test_contract_operations.py",
+      "tests/test_property_invariants.py"
     ],
     "services/nas_identity_model.py": [
       "tests/test_identity_sync.py",
@@ -520,10 +521,14 @@
       "tests/test_fuzz_boundaries.py"
     ],
     "services/nas_managed_service.py": [
-      "tests/test_managed_service.py"
+      "tests/test_managed_service.py",
+      "tests/test_managed_service_stateful.py",
+      "tests/test_property_invariants.py"
     ],
     "services/nas_service_caddy.py": [
-      "tests/test_managed_service.py"
+      "tests/test_service_caddy.py",
+      "tests/test_service_caddy_validate.py",
+      "tests/test_managed_service_stateful.py"
     ],
     "services/nas_migrate_state.py": [
       "tests/test_doctor_migrations.py",

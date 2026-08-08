@@ -11,7 +11,6 @@ import secrets
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Sequence
 
 
@@ -130,55 +129,96 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _check_coding_access() -> None:
-    """Require the calling user to be in nas_allow_coding or nas_admin via Authentik."""
-    # Original user is in SUDO_USER when run via sudo; fallback to current user
-    original_user = os.environ.get("SUDO_USER") or os.environ.get("USER") or ""
-    if not original_user or original_user == "root":
-        # Called directly as root (e.g., via systemd or Cockpit superuser) — allow but log
-        return
-    try:
-        import grp
-        import pwd
-
-        user_groups = set()
-        # Get user's primary and supplementary groups via grp
+    identity_json = os.environ.get("NAS_AUTHENTICATED_IDENTITY_JSON", "")
+    if identity_json.strip():
         try:
-            pw = pwd.getpwnam(original_user)
-            user_groups.add(pw.pw_name)
-            # Get all groups the user is a member of
-            for g in grp.getgrall():
-                if original_user in g.gr_members:
-                    user_groups.add(g.gr_name)
-            # Also check via id command as fallback
-            result = subprocess.run(["id", "-nG", original_user], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                user_groups.update(result.stdout.strip().split())
-        except (KeyError, OSError):
-            pass
+            data = json.loads(identity_json)
+        except json.JSONDecodeError as exc:
+            print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
+            raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]") from exc
+        if not isinstance(data, dict):
+            print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
+            raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
+        groups_raw = data.get("groups", [])
+        if not isinstance(groups_raw, list) or not all(isinstance(entry, str) for entry in groups_raw):
+            print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
+            raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
+        groups: set[str] = set(groups_raw)
+        if data.get("admin") is True or data.get("role") == "admin":
+            groups.add("nas_admin")
+            try:
+                from nas_common import ADMIN_GROUP as _ADMIN_GROUP
 
-        # Check via capability registry (nas_allow_coding or nas_admin)
-        # Use the same logic as nas_common.capability_allowed
+                groups.add(_ADMIN_GROUP)
+            except ImportError:
+                pass
+        username = data.get("username", "")
+        if not isinstance(username, str):
+            username = str(username)
+        print("nas-code-agent: auth mode=identity-json", file=sys.stderr)
+        try:
+            from nas_common import ADMIN_GROUP, capability_allowed
+
+            if capability_allowed(groups, "coding") or ADMIN_GROUP in groups or "nas_admin" in groups:
+                return
+        except ImportError:
+            if "nas_allow_coding" in groups or "nas_admin" in groups:
+                return
+        raise CodingAgentError(
+            f"User {username!r} denied: coding capability required (groups: {sorted(groups)}) [mode=identity-json]"
+        )
+    sudo_user = os.environ.get("SUDO_USER", "")
+    insecure = os.environ.get("NAS_CODING_INSECURE_UID_AUTH", "") == "1"
+    if sudo_user:
+        if not insecure:
+            print("nas-code-agent: auth mode=uid-deny (insecure flag not set)", file=sys.stderr)
+            raise CodingAgentError(
+                f"User {sudo_user!r} denied: coding agent requires authenticated identity (NAS_AUTHENTICATED_IDENTITY_JSON missing). "
+                "Invoke via Cockpit/Caddy-authenticated path or set NAS_CODING_INSECURE_UID_AUTH=1 for legacy UID fallback [mode=uid-deny]"
+            )
+        print("nas-code-agent: auth mode=insecure-uid", file=sys.stderr)
+        user_groups: set[str] = set()
+        try:
+            import grp
+            import pwd
+
+            try:
+                pw = pwd.getpwnam(sudo_user)
+                user_groups.add(pw.pw_name)
+                for g in grp.getgrall():
+                    if sudo_user in g.gr_members:
+                        user_groups.add(g.gr_name)
+                result = subprocess.run(["id", "-nG", sudo_user], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    user_groups.update(result.stdout.strip().split())
+            except (KeyError, OSError):
+                pass
+        except Exception:
+            pass
         try:
             from nas_common import capability_allowed
 
             if capability_allowed(user_groups, "coding"):
                 return
-            # Also allow via nas_admin (administrator bypass)
             if "nas_admin" in user_groups:
                 return
         except ImportError:
-            # Fallback to direct group check
             if "nas_allow_coding" in user_groups or "nas_admin" in user_groups:
                 return
-
         raise CodingAgentError(
-            f"User {original_user!r} is not in nas_allow_coding or nas_admin; "
-            f"request access via Authentik and Cockpit (groups: {sorted(user_groups)})"
+            f"User {sudo_user!r} is not in nas_allow_coding or nas_admin; "
+            f"request access via Authentik and Cockpit (groups: {sorted(user_groups)}) [mode=insecure-uid]"
         )
-    except CodingAgentError:
-        raise
-    except Exception as exc:
-        raise CodingAgentError(f"Unable to verify coding access for {original_user!r}: {exc}") from exc
+    print("nas-code-agent: auth mode=no-identity (deny)", file=sys.stderr)
+    if os.geteuid() == 0:
+        raise CodingAgentError(
+            "Coding agent denied: no authenticated identity and no SUDO_USER (euid==0 direct root invocation denied). "
+            "Invoke via Cockpit/Caddy-authenticated path with NAS_AUTHENTICATED_IDENTITY_JSON [mode=no-identity]"
+        )
+    raise CodingAgentError(
+        "Coding agent denied: no authenticated identity and no SUDO_USER. "
+        "Invoke via Cockpit/Caddy-authenticated path [mode=no-identity]"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

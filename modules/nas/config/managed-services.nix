@@ -21,7 +21,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nasInternal.nasPythonApplication}/bin/nas-managed-service reconcile";
-        RemainAfterExit = true;
+        RemainAfterExit = false;
       };
     };
 

@@ -20,6 +20,7 @@ else:
     import nas_common as common
     import nas_logging as nas_logging
     import nas_feature_model as feature_model
+    import nas_managed_service as msvc
     import nas_setup_config as setup_config
     import nas_state as nas_state
     import nas_syncthing_devices as syncthing_devices
@@ -151,6 +152,85 @@ if HAS_HYPOTHESIS:
                 )
             )
             self.assertIn(alert.severity, {"critical", "warning", "info"})
+
+        @settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+        @given(
+            service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
+            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            port=st.integers(min_value=1, max_value=65535),
+            hostname=st.from_regex(r"[a-z0-9-]{1,10}\.local", fullmatch=True),
+        )
+        def test_managed_service_valid_doc_is_accepted(self, service_id: str, label: str, port: int, hostname: str) -> None:
+            doc = {
+                "label": label,
+                "enabled": True,
+                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
+                "endpoints": {
+                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
+                },
+            }
+            result = msvc.validate_service(service_id, doc)
+            self.assertEqual(result, doc)
+
+        @settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(
+            service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
+            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            port=st.integers(min_value=1, max_value=65535),
+            hostname=st.from_regex(r"[a-z0-9-]{1,10}\.local", fullmatch=True),
+        )
+        def test_managed_service_serialize_deserialize_preserves(self, service_id: str, label: str, port: int, hostname: str) -> None:
+            import json
+            doc = {
+                "label": label,
+                "enabled": False,
+                "runtime": {"type": "quadlet", "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml", "startPolicy": "boot"},
+                "endpoints": {
+                    "api": {"transport": "http", "targetPort": port, "exposure": {"type": "dns", "value": hostname}, "auth": {"mode": "public"}}
+                },
+            }
+            msvc.validate_service(service_id, doc)
+            encoded = json.dumps(doc, sort_keys=True)
+            decoded = json.loads(encoded)
+            result = msvc.validate_service(service_id, decoded)
+            self.assertEqual(result["label"], label)
+            self.assertEqual(result["endpoints"]["api"]["targetPort"], port)
+
+        @settings(max_examples=150, deadline=None)
+        @given(
+            service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
+            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            port=st.integers(min_value=1, max_value=65535),
+            hostname=st.from_regex(r"[a-z0-9-]{1,10}\.local", fullmatch=True),
+            mutate=st.sampled_from(["port_zero", "port_overflow", "bad_hostname", "bad_source"]),
+        )
+        def test_managed_service_mutated_field_is_rejected(self, service_id: str, label: str, port: int, hostname: str, mutate: str) -> None:
+            doc = {
+                "label": label,
+                "enabled": True,
+                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
+                "endpoints": {
+                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
+                },
+            }
+            msvc.validate_service(service_id, doc)
+            if mutate == "port_zero":
+                doc["endpoints"]["web"]["targetPort"] = 0  # type: ignore
+            elif mutate == "port_overflow":
+                doc["endpoints"]["web"]["targetPort"] = 70000  # type: ignore
+            elif mutate == "bad_hostname":
+                doc["endpoints"]["web"]["exposure"] = {"type": "hostname", "value": "bad host"}  # type: ignore
+            elif mutate == "bad_source":
+                doc["runtime"]["source"] = "/etc/passwd"  # type: ignore
+            with self.assertRaises(msvc.ManagedServiceError):
+                msvc.validate_service(service_id, doc)
+
+        @settings(max_examples=120, deadline=None)
+        @given(st.from_regex(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,12}", fullmatch=True))
+        def test_username_valid_generator_always_accepted(self, username: str) -> None:
+            normalized = syncthing_devices.validate_username(username)
+            self.assertEqual(normalized, username)
+            self.assertRegex(normalized, syncthing_devices.USERNAME_RE)
 else:
 
     @unittest.skip("Hypothesis is not installed; CI runs the property-test tier with it")

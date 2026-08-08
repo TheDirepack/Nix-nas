@@ -403,22 +403,168 @@ def peer_targets(config: Mapping[str, Any]) -> list[str]:
     return sorted(set(targets))
 
 
-def _provider_credential_staged(provider_id: str) -> bool | None:
-    """Return whether the provider env var is present in the staged runtime environment."""
+CREDENTIAL_PRESENT = "PRESENT"
+CREDENTIAL_ABSENT = "ABSENT"
+CREDENTIAL_UNKNOWN = "UNKNOWN"
+
+
+def _probe_provider_credential(provider_id: str) -> tuple[str, str | None]:
     try:
         expected = provider_env_name(provider_id)
     except AiConfigError:
-        return None
+        return (CREDENTIAL_UNKNOWN, None)
     secret_root = pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets"))
     env_path = secret_root / "ai" / "llama-swap.env"
     try:
         content = env_path.read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError, PermissionError):
-        return None
+    except FileNotFoundError:
+        return (CREDENTIAL_ABSENT, None)
+    except (OSError, PermissionError):
+        return (CREDENTIAL_UNKNOWN, None)
+    except Exception:
+        return (CREDENTIAL_UNKNOWN, None)
     for line in content.splitlines():
         if line.startswith(expected + "="):
-            return True
-    return False
+            return (CREDENTIAL_PRESENT, line.split("=", 1)[1])
+    return (CREDENTIAL_ABSENT, None)
+
+
+def _provider_credential_staged(provider_id: str) -> bool | None:
+    state, _ = _probe_provider_credential(provider_id)
+    if state == CREDENTIAL_PRESENT:
+        return True
+    if state == CREDENTIAL_ABSENT:
+        return False
+    return None
+
+
+def _write_provider_credential(provider_id: str, value: str) -> None:
+    env_name = provider_env_name(provider_id)
+    secret_root = pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets"))
+    env_path = secret_root / "ai" / "llama-swap.env"
+    try:
+        existing = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    except (OSError, PermissionError):
+        raise AiConfigError(f"Unable to read credential store for {provider_id!r}")
+    lines: list[str] = []
+    replaced = False
+    for line in existing.splitlines():
+        if line.startswith(env_name + "="):
+            if not replaced:
+                lines.append(f"{env_name}={value}")
+                replaced = True
+        else:
+            lines.append(line)
+    if not replaced:
+        lines.append(f"{env_name}={value}")
+    content = "\n".join(lines) + "\n"
+    parent = env_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".llama-swap.env.", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, env_path)
+        os.chmod(env_path, 0o400)
+    finally:
+        pathlib.Path(tmp).unlink(missing_ok=True)
+
+
+def _remove_provider_credential(provider_id: str) -> None:
+    env_name = provider_env_name(provider_id)
+    secret_root = pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets"))
+    env_path = secret_root / "ai" / "llama-swap.env"
+    if not env_path.is_file():
+        return
+    try:
+        content = env_path.read_text(encoding="utf-8")
+    except (OSError, PermissionError):
+        raise AiConfigError(f"Unable to read credential store for {provider_id!r}")
+    lines = [line for line in content.splitlines() if not line.startswith(env_name + "=")]
+    new_content = "\n".join(lines) + ("\n" if lines else "")
+    parent = env_path.parent
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".llama-swap.env.", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(new_content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, env_path)
+        os.chmod(env_path, 0o400)
+    finally:
+        pathlib.Path(tmp).unlink(missing_ok=True)
+
+
+def _restore_provider_credential(provider_id: str, state: str, value: str | None) -> None:
+    if state == CREDENTIAL_PRESENT and value is not None:
+        _write_provider_credential(provider_id, value)
+    elif state == CREDENTIAL_ABSENT:
+        _remove_provider_credential(provider_id)
+
+
+def _read_config_bytes(path: pathlib.Path) -> bytes | None:
+    if not path.is_file():
+        return None
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise AiConfigError(f"Unable to read prior config for rollback: {exc}") from exc
+
+
+def _restore_config_bytes(path: pathlib.Path, old_bytes: bytes | None) -> None:
+    if old_bytes is None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    parent = path.parent
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".config.yaml.restore.", text=False)
+    try:
+        os.write(fd, old_bytes)
+        os.fsync(fd)
+        os.close(fd)
+        os.replace(tmp, path)
+        try:
+            dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    except Exception:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        pathlib.Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _maybe_restart_and_healthcheck() -> None:
+    if os.environ.get("NAS_SKIP_LLAMA_SWAP_RESTART") == "1":
+        return
+    try:
+        is_active = subprocess.run(["systemctl", "is-active", "--quiet", "nas-llama-swap.service"], check=False)
+    except (OSError, FileNotFoundError):
+        return
+    if is_active.returncode != 0:
+        return
+    try:
+        restarted = subprocess.run(["systemctl", "restart", "nas-llama-swap.service"], check=False)
+    except (OSError, FileNotFoundError) as exc:
+        raise AiConfigError(f"llama-swap restart failed: {exc}") from exc
+    if restarted.returncode != 0:
+        raise AiConfigError("llama-swap restart failed after config update")
+    try:
+        healthy = subprocess.run(["systemctl", "is-active", "--quiet", "nas-llama-swap.service"], check=False)
+    except (OSError, FileNotFoundError):
+        return
+    if healthy.returncode != 0:
+        raise AiConfigError("llama-swap failed to start after provider update")
 
 
 def public_view(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -492,52 +638,95 @@ def set_provider(
     provider_id = validate_provider_id(provider_id)
     url = validate_proxy_url(url)
     model_list = validate_models(models)
-    config = load_config(path)
-    peers = _require_mapping(config.get("peers"), "peers")
-    old = _require_mapping(peers.get(provider_id), f"peer {provider_id}")
-    peer: dict[str, Any] = {"proxy": url, "models": model_list}
-    validated_timeouts = validate_timeouts(timeouts)
-    validated_filters = validate_filters(filters)
-    if validated_timeouts:
-        peer["timeouts"] = validated_timeouts
-    elif isinstance(old.get("timeouts"), dict):
-        peer["timeouts"] = old["timeouts"]
-    if validated_filters:
-        peer["filters"] = validated_filters
-    elif isinstance(old.get("filters"), dict):
-        peer["filters"] = old["filters"]
-    if credential:
-        peer["apiKey"] = "${env." + provider_env_name(provider_id) + "}"
-    elif old.get("apiKey"):
-        # Keep an existing credential reference unless the caller explicitly clears it separately.
-        peer["apiKey"] = old["apiKey"]
-    peers[provider_id] = peer
-    config["peers"] = peers
-    atomic_write(config, path)
-    return public_view(config)
+    old_state, old_value = _probe_provider_credential(provider_id)
+    if old_state == CREDENTIAL_UNKNOWN:
+        raise AiConfigError(f"Unable to determine prior credential state for provider {provider_id!r}; aborting to avoid credential loss")
+    old_config_bytes = _read_config_bytes(path)
+    did_write = False
+    try:
+        config = load_config(path) if path.is_file() else {"models": {}, "peers": {}, "selectors": {}}
+        if not isinstance(config, dict):
+            raise AiConfigError("llama-swap configuration must be an object")
+        peers = _require_mapping(config.get("peers"), "peers")
+        old = _require_mapping(peers.get(provider_id), f"peer {provider_id}")
+        peer: dict[str, Any] = {"proxy": url, "models": model_list}
+        validated_timeouts = validate_timeouts(timeouts)
+        validated_filters = validate_filters(filters)
+        if validated_timeouts:
+            peer["timeouts"] = validated_timeouts
+        elif isinstance(old.get("timeouts"), dict):
+            peer["timeouts"] = old["timeouts"]
+        if validated_filters:
+            peer["filters"] = validated_filters
+        elif isinstance(old.get("filters"), dict):
+            peer["filters"] = old["filters"]
+        if credential:
+            peer["apiKey"] = "${env." + provider_env_name(provider_id) + "}"
+        elif old.get("apiKey"):
+            peer["apiKey"] = old["apiKey"]
+        peers[provider_id] = peer
+        config["peers"] = peers
+        atomic_write(config, path)
+        did_write = True
+        _maybe_restart_and_healthcheck()
+        return public_view(config)
+    except Exception as exc:
+        if did_write:
+            try:
+                _restore_config_bytes(path, old_config_bytes)
+            except Exception:
+                pass
+            try:
+                _restore_provider_credential(provider_id, old_state, old_value)
+            except Exception:
+                pass
+        if isinstance(exc, AiConfigError):
+            raise
+        raise AiConfigError(str(exc)) from exc
 
 
 def delete_provider(provider_id: str, *, path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
     provider_id = validate_provider_id(provider_id)
-    config = load_config(path)
-    peers = _require_mapping(config.get("peers"), "peers")
-    peers.pop(provider_id, None)
-    config["peers"] = peers
-    selectors = _require_mapping(config.get("selectors"), "selectors")
-    prefix = provider_id + "/"
-    for role in ROLE_IDS:
-        raw = _require_mapping(selectors.get(role), f"selector {role}")
-        targets = raw.get("targets", [])
-        if isinstance(targets, list):
-            kept = [target for target in targets if not (isinstance(target, str) and target.startswith(prefix))]
-            if kept:
-                raw["targets"] = kept
-                selectors[role] = raw
-            elif role in selectors:
-                selectors.pop(role, None)
-    config["selectors"] = selectors
-    atomic_write(config, path)
-    return public_view(config)
+    old_state, old_value = _probe_provider_credential(provider_id)
+    if old_state == CREDENTIAL_UNKNOWN:
+        raise AiConfigError(f"Unable to determine prior credential state for provider {provider_id!r}; aborting to avoid credential loss")
+    old_config_bytes = _read_config_bytes(path)
+    did_write = False
+    try:
+        config = load_config(path)
+        peers = _require_mapping(config.get("peers"), "peers")
+        peers.pop(provider_id, None)
+        config["peers"] = peers
+        selectors = _require_mapping(config.get("selectors"), "selectors")
+        prefix = provider_id + "/"
+        for role in ROLE_IDS:
+            raw = _require_mapping(selectors.get(role), f"selector {role}")
+            targets = raw.get("targets", [])
+            if isinstance(targets, list):
+                kept = [target for target in targets if not (isinstance(target, str) and target.startswith(prefix))]
+                if kept:
+                    raw["targets"] = kept
+                    selectors[role] = raw
+                elif role in selectors:
+                    selectors.pop(role, None)
+        config["selectors"] = selectors
+        atomic_write(config, path)
+        did_write = True
+        _maybe_restart_and_healthcheck()
+        return public_view(config)
+    except Exception as exc:
+        if did_write:
+            try:
+                _restore_config_bytes(path, old_config_bytes)
+            except Exception:
+                pass
+            try:
+                _restore_provider_credential(provider_id, old_state, old_value)
+            except Exception:
+                pass
+        if isinstance(exc, AiConfigError):
+            raise
+        raise AiConfigError(str(exc)) from exc
 
 
 def set_local_model(
@@ -559,71 +748,99 @@ def set_local_model(
     if not isinstance(tools, bool):
         raise AiConfigError("Local model tools capability must be boolean")
     args = validate_local_extra_args(extra_args)
-    config = load_config(path)
-    models = _require_mapping(config.get("models"), "models")
-    existing = _require_mapping(models.get(model_id), f"model {model_id}")
-    existing_metadata = existing.get("metadata", {}) if isinstance(existing.get("metadata", {}), dict) else {}
-    if existing and existing_metadata.get("nasManaged") is not True:
-        raise AiConfigError(f"Local model {model_id} is administrator-managed outside Cockpit and cannot be overwritten")
-    command_parts = [
-        llama_server_path(),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "${PORT}",
-        "--model",
-        str(resolved),
-        "--ctx-size",
-        str(context),
-        *args,
-    ]
-    command = " ".join(
-        item if item == "${PORT}" else shlex.quote(item)
-        for item in command_parts
-    )
-    models[model_id] = {
-        "cmd": command,
-        "ttl": ttl,
-        "metadata": {
-            "nasManaged": True,
-            "modelPath": str(resolved),
-            "extraArgs": args,
-            "context": context,
+    old_config_bytes = _read_config_bytes(path)
+    did_write = False
+    try:
+        config = load_config(path)
+        models = _require_mapping(config.get("models"), "models")
+        existing = _require_mapping(models.get(model_id), f"model {model_id}")
+        existing_metadata = existing.get("metadata", {}) if isinstance(existing.get("metadata", {}), dict) else {}
+        if existing and existing_metadata.get("nasManaged") is not True:
+            raise AiConfigError(f"Local model {model_id} is administrator-managed outside Cockpit and cannot be overwritten")
+        command_parts = [
+            llama_server_path(),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "${PORT}",
+            "--model",
+            str(resolved),
+            "--ctx-size",
+            str(context),
+            *args,
+        ]
+        command = " ".join(
+            item if item == "${PORT}" else shlex.quote(item)
+            for item in command_parts
+        )
+        models[model_id] = {
+            "cmd": command,
             "ttl": ttl,
-        },
-        "capabilities": {"in": ["text"], "out": ["text"], "tools": tools, "context": context},
-    }
-    config["models"] = models
-    atomic_write(config, path)
-    return public_view(config)
+            "metadata": {
+                "nasManaged": True,
+                "modelPath": str(resolved),
+                "extraArgs": args,
+                "context": context,
+                "ttl": ttl,
+            },
+            "capabilities": {"in": ["text"], "out": ["text"], "tools": tools, "context": context},
+        }
+        config["models"] = models
+        atomic_write(config, path)
+        did_write = True
+        _maybe_restart_and_healthcheck()
+        return public_view(config)
+    except Exception as exc:
+        if did_write:
+            try:
+                _restore_config_bytes(path, old_config_bytes)
+            except Exception:
+                pass
+        if isinstance(exc, AiConfigError):
+            raise
+        raise AiConfigError(str(exc)) from exc
 
 
 def delete_local_model(model_id: str, *, path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
     model_id = validate_local_model_id(model_id)
-    config = load_config(path)
-    models = _require_mapping(config.get("models"), "models")
-    existing = _require_mapping(models.get(model_id), f"model {model_id}")
-    metadata = existing.get("metadata", {}) if isinstance(existing.get("metadata", {}), dict) else {}
-    if not existing:
-        raise AiConfigError(f"Local model {model_id} does not exist")
-    if metadata.get("nasManaged") is not True:
-        raise AiConfigError(f"Local model {model_id} is administrator-managed outside Cockpit and cannot be deleted")
-    models.pop(model_id, None)
-    config["models"] = models
-    selectors = _require_mapping(config.get("selectors"), "selectors")
-    for role in ROLE_IDS:
-        raw = _require_mapping(selectors.get(role), f"selector {role}")
-        targets = raw.get("targets", [])
-        if isinstance(targets, list):
-            kept = [target for target in targets if target != model_id]
-            if kept:
-                raw["targets"] = kept
-                selectors[role] = raw
-            elif role in selectors:
-                selectors.pop(role, None)
-    config["selectors"] = selectors
-    atomic_write(config, path)
-    return public_view(config)
+    old_config_bytes = _read_config_bytes(path)
+    did_write = False
+    try:
+        config = load_config(path)
+        models = _require_mapping(config.get("models"), "models")
+        existing = _require_mapping(models.get(model_id), f"model {model_id}")
+        metadata = existing.get("metadata", {}) if isinstance(existing.get("metadata", {}), dict) else {}
+        if not existing:
+            raise AiConfigError(f"Local model {model_id} does not exist")
+        if metadata.get("nasManaged") is not True:
+            raise AiConfigError(f"Local model {model_id} is administrator-managed outside Cockpit and cannot be deleted")
+        models.pop(model_id, None)
+        config["models"] = models
+        selectors = _require_mapping(config.get("selectors"), "selectors")
+        for role in ROLE_IDS:
+            raw = _require_mapping(selectors.get(role), f"selector {role}")
+            targets = raw.get("targets", [])
+            if isinstance(targets, list):
+                kept = [target for target in targets if target != model_id]
+                if kept:
+                    raw["targets"] = kept
+                    selectors[role] = raw
+                elif role in selectors:
+                    selectors.pop(role, None)
+        config["selectors"] = selectors
+        atomic_write(config, path)
+        did_write = True
+        _maybe_restart_and_healthcheck()
+        return public_view(config)
+    except Exception as exc:
+        if did_write:
+            try:
+                _restore_config_bytes(path, old_config_bytes)
+            except Exception:
+                pass
+        if isinstance(exc, AiConfigError):
+            raise
+        raise AiConfigError(str(exc)) from exc
 
 
 def set_role(
@@ -639,55 +856,83 @@ def set_role(
         raise AiConfigError("A coding model role requires at least one target")
     validated = [validate_model_id(target) for target in targets]
     strategy, settings = validate_selector_settings(strategy, spillover)
-    config = load_config(path)
-    available = set(peer_targets(config))
-    unknown = [target for target in validated if target not in available]
-    if unknown:
-        raise AiConfigError("Unknown model target(s): " + ", ".join(unknown))
-    selectors = _require_mapping(config.get("selectors"), "selectors")
-    selector: dict[str, Any] = {"strategy": strategy, "targets": list(dict.fromkeys(validated))}
-    if settings:
-        selector["settings"] = settings
-    selectors[role] = selector
-    config["selectors"] = selectors
-    atomic_write(config, path)
-    return public_view(config)
+    old_config_bytes = _read_config_bytes(path)
+    did_write = False
+    try:
+        config = load_config(path)
+        available = set(peer_targets(config))
+        unknown = [target for target in validated if target not in available]
+        if unknown:
+            raise AiConfigError("Unknown model target(s): " + ", ".join(unknown))
+        selectors = _require_mapping(config.get("selectors"), "selectors")
+        selector: dict[str, Any] = {"strategy": strategy, "targets": list(dict.fromkeys(validated))}
+        if settings:
+            selector["settings"] = settings
+        selectors[role] = selector
+        config["selectors"] = selectors
+        atomic_write(config, path)
+        did_write = True
+        _maybe_restart_and_healthcheck()
+        return public_view(config)
+    except Exception as exc:
+        if did_write:
+            try:
+                _restore_config_bytes(path, old_config_bytes)
+            except Exception:
+                pass
+        if isinstance(exc, AiConfigError):
+            raise
+        raise AiConfigError(str(exc)) from exc
 
 
 def replace_advanced(values: Mapping[str, object], *, path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
-    config = load_config(path)
-    if "healthCheckTimeout" in values:
-        timeout = values["healthCheckTimeout"]
-        if not isinstance(timeout, int) or not 15 <= timeout <= 3600:
-            raise AiConfigError("healthCheckTimeout must be an integer between 15 and 3600")
-        config["healthCheckTimeout"] = timeout
-    if "globalTTL" in values:
-        ttl = values["globalTTL"]
-        if isinstance(ttl, bool) or not isinstance(ttl, int) or not 0 <= ttl <= 604800:
-            raise AiConfigError("globalTTL must be an integer between 0 and 604800")
-        config["globalTTL"] = ttl
-    if "unloadTimeout" in values:
-        timeout = values["unloadTimeout"]
-        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 <= timeout <= 3600:
-            raise AiConfigError("unloadTimeout must be an integer between 0 and 3600")
-        config["unloadTimeout"] = timeout
-    if "logLevel" in values:
-        level = values["logLevel"]
-        if level not in {"debug", "info", "warn", "error"}:
-            raise AiConfigError("logLevel must be debug, info, warn, or error")
-        config["logLevel"] = level
-    if "captureBuffer" in values:
-        capture = values["captureBuffer"]
-        if not isinstance(capture, int) or not 0 <= capture <= 1024:
-            raise AiConfigError("captureBuffer must be an integer between 0 and 1024 MiB")
-        config["captureBuffer"] = capture
-    if "metricsMaxInMemory" in values:
-        count = values["metricsMaxInMemory"]
-        if not isinstance(count, int) or not 0 <= count <= 1_000_000:
-            raise AiConfigError("metricsMaxInMemory must be an integer between 0 and 1000000")
-        config["metricsMaxInMemory"] = count
-    atomic_write(config, path)
-    return public_view(config)
+    old_config_bytes = _read_config_bytes(path)
+    did_write = False
+    try:
+        config = load_config(path)
+        if "healthCheckTimeout" in values:
+            timeout = values["healthCheckTimeout"]
+            if not isinstance(timeout, int) or not 15 <= timeout <= 3600:
+                raise AiConfigError("healthCheckTimeout must be an integer between 15 and 3600")
+            config["healthCheckTimeout"] = timeout
+        if "globalTTL" in values:
+            ttl = values["globalTTL"]
+            if isinstance(ttl, bool) or not isinstance(ttl, int) or not 0 <= ttl <= 604800:
+                raise AiConfigError("globalTTL must be an integer between 0 and 604800")
+            config["globalTTL"] = ttl
+        if "unloadTimeout" in values:
+            timeout = values["unloadTimeout"]
+            if isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 <= timeout <= 3600:
+                raise AiConfigError("unloadTimeout must be an integer between 0 and 3600")
+            config["unloadTimeout"] = timeout
+        if "logLevel" in values:
+            level = values["logLevel"]
+            if level not in {"debug", "info", "warn", "error"}:
+                raise AiConfigError("logLevel must be debug, info, warn, or error")
+            config["logLevel"] = level
+        if "captureBuffer" in values:
+            capture = values["captureBuffer"]
+            if not isinstance(capture, int) or not 0 <= capture <= 1024:
+                raise AiConfigError("captureBuffer must be an integer between 0 and 1024 MiB")
+            config["captureBuffer"] = capture
+        if "metricsMaxInMemory" in values:
+            count = values["metricsMaxInMemory"]
+            if not isinstance(count, int) or not 0 <= count <= 1_000_000:
+                raise AiConfigError("metricsMaxInMemory must be an integer between 0 and 1000000")
+            config["metricsMaxInMemory"] = count
+        atomic_write(config, path)
+        did_write = True
+        _maybe_restart_and_healthcheck()
+        return public_view(config)
+    except Exception as exc:
+        if did_write:
+            try:
+                _restore_config_bytes(path, old_config_bytes)
+            except Exception:
+                pass
+        if isinstance(exc, AiConfigError):
+            raise
+        raise AiConfigError(str(exc)) from exc
 
 
 def parser() -> argparse.ArgumentParser:

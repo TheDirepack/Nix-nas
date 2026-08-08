@@ -1,101 +1,234 @@
 #!/usr/bin/env python3
-"""Caddy adapter for managed-services — generates validated Caddy JSON fragments from effective registry."""
+"""Caddy adapter for managed-services — generates Caddyfile fragments from effective registry."""
 
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 from typing import Any
 
 import nas_managed_service as msvc
 
 HOSTNAME_RE = re.compile(r"^(?:[a-z0-9-]{1,63}\.)*[a-z0-9-]{1,63}$", re.IGNORECASE)
-PORT_RE = re.compile(r"^[0-9]+$")
+
+ON_DEMAND_GATE = os.environ.get("NAS_ON_DEMAND_GATE_SOCKET", "/run/nas-control/on-demand-gate.sock")
+
+
+class CaddyError(ValueError, RuntimeError):
+    pass
 
 
 def _validate_exposure(exposure: dict[str, Any]) -> None:
     typ = exposure.get("type")
+    if typ is None:
+        raise CaddyError("exposure.type is mandatory")
+    if typ not in ("path", "hostname", "dns", "port", "none"):
+        raise CaddyError(f"Invalid exposure type {typ!r}")
+    if typ == "none":
+        raise CaddyError("exposure type 'none' must not produce a route")
     val = exposure.get("value", "")
-    if typ == "hostname" or typ == "dns":
-        if not HOSTNAME_RE.fullmatch(val):
-            raise ValueError(f"Invalid hostname {val!r}")
+    if val is None or val == "":
+        raise CaddyError(f"exposure value is required for type {typ!r}")
+    if typ in ("hostname", "dns"):
+        if not isinstance(val, str) or not HOSTNAME_RE.fullmatch(val):
+            raise CaddyError(f"Invalid hostname {val!r}")
     elif typ == "port":
-        if not PORT_RE.fullmatch(str(val)) or not 1 <= int(val) <= 65535:
-            raise ValueError(f"Invalid port {val!r}")
+        try:
+            port = int(val) if isinstance(val, str) else val
+            if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+                raise CaddyError(f"Invalid port {val!r}")
+        except (ValueError, TypeError):
+            raise CaddyError(f"Invalid port {val!r}")
     elif typ == "path":
-        if not val.startswith("/"):
-            raise ValueError(f"Invalid path {val!r}")
-    elif typ not in ("none", None):
-        raise ValueError(f"Invalid exposure type {typ!r}")
+        if not isinstance(val, str) or not val.startswith("/"):
+            raise CaddyError(f"Invalid path {val!r}: must start with '/'")
+
+
+
+def _collect_routes(effective: dict[str, Any]) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    for key, endpoint in effective.get("endpoints", {}).items():
+        if endpoint.get("transport") not in ("http", "https", None):
+            continue
+        if "publicPath" in endpoint:
+            continue
+        exposure = endpoint.get("exposure")
+        if exposure is None or not isinstance(exposure, dict):
+            raise CaddyError(f"Endpoint {key!r}: exposure is mandatory")
+        _validate_exposure(exposure)
+        if exposure.get("type") == "none":
+            raise CaddyError(f"Endpoint {key!r}: exposure type 'none' must not produce a route")
+        auth = endpoint.get("auth")
+        if auth is None or not isinstance(auth, dict):
+            raise CaddyError(f"Endpoint {key!r}: auth is mandatory for HTTP endpoints")
+        mode = auth.get("mode")
+        if mode not in ("public", "forward-auth", "oidc"):
+            raise CaddyError(f"Endpoint {key!r}: unknown auth mode {mode!r} — failing closed")
+        target_port = endpoint.get("targetPort")
+        if target_port is None:
+            raise CaddyError(f"Endpoint {key!r}: targetPort is mandatory")
+        msvc._validate_port(target_port)
+        route_id = f"nas-managed-{key.replace(':', '-')}"
+        typ = exposure.get("type")
+        value = exposure.get("value", "")
+        prefix = exposure.get("prefix", True)
+        if not isinstance(prefix, bool):
+            prefix = True
+        host = None
+        path = None
+        port: int | None = None
+        if typ in ("hostname", "dns"):
+            host = value
+        elif typ == "path":
+            path = value
+        elif typ == "port":
+            port = int(value) if isinstance(value, str) else int(value)
+        route: dict[str, Any] = {
+            "id": route_id,
+            "key": key,
+            "host": host,
+            "path": path,
+            "path_prefix": prefix,
+            "port": port,
+            "targetPort": int(target_port),
+            "auth": auth,
+            "exposure": exposure,
+        }
+        routes.append(route)
+    routes.sort(key=lambda r: r["id"])
+    seen: set[tuple[Any, ...]] = set()
+    for route in routes:
+        dedup_key = (route["host"], route["path"], route["port"])
+        if dedup_key in seen:
+            raise CaddyError(f"Duplicate exposure {dedup_key} for route {route['id']}")
+        seen.add(dedup_key)
+        if route["host"] is None and route["path"] is None and route["port"] is None:
+            raise CaddyError(f"Route {route['id']} has no matcher — refusing catch-all")
+    return routes
 
 
 def generate_caddy_fragment(effective: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Generate a deterministic Caddy JSON fragment for managed-service endpoints."""
     if effective is None:
         effective = msvc.effective_registry()
-    routes = []
-    for key, endpoint in effective.get("endpoints", {}).items():
-        # Only handle HTTP endpoints with exposure
-        if endpoint.get("transport") not in ("http", "https", None):
-            continue
-        exposure = endpoint.get("exposure") or {}
-        if exposure.get("type") == "none":
-            continue
-        try:
-            _validate_exposure(exposure)
-        except ValueError:
-            continue
-        # Skip built-ins that are already handled by Nix's Caddy config
-        if "publicPath" in endpoint:
-            continue
-        # Generate a deterministic route ID
-        route_id = f"nas-managed-{key.replace(':', '-')}"
-        host = None
-        path = None
-        port = None
-        if exposure.get("type") == "hostname" or exposure.get("type") == "dns":
-            host = exposure.get("value")
-        elif exposure.get("type") == "path":
-            path = exposure.get("value")
-        elif exposure.get("type") == "port":
-            port = int(exposure.get("value"))
-        # Build a minimal Caddy route (validation will catch conflicts)
-        route = {
-            "id": route_id,
-            "match": [],
-            "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": f"127.0.0.1:{endpoint.get('targetPort')}"}]}],
-        }
-        if host:
-            route["match"].append({"host": [host]})
-        if path:
-            route["match"].append({"path": [path]})
-        if port:
-            route["match"].append({"port": [port]})
-        # Auth: if forward-auth, add forward_auth handler
-        auth = endpoint.get("auth") or {}
-        if auth.get("mode") == "forward-auth":
-            route["handle"].insert(0, {"handler": "forward_auth", "uri": "/auth", "copy_headers": {"Remote-User": "{http.auth.user.id}"}})
-        routes.append(route)
-    # Sort for determinism and check for conflicts
-    routes.sort(key=lambda r: r["id"])
-    # Conflict detection: duplicate host/path/port
-    seen = set()
-    for route in routes:
-        key = (tuple(route["match"][0].get("host", [])) if route["match"] and "host" in route["match"][0] else (),
-               tuple(route["match"][0].get("path", [])) if route["match"] and "path" in route["match"][0] else (),
-               tuple(route["match"][0].get("port", [])) if route["match"] and "port" in route["match"][0] else ())
-        if key in seen:
-            raise ValueError(f"Duplicate exposure {key} for route {route['id']}")
-        seen.add(key)
+    routes = _collect_routes(effective)
     return {"routes": routes}
 
 
+def generate_caddyfile(effective: dict[str, Any] | None = None) -> str:
+    if effective is None:
+        effective = msvc.effective_registry()
+    routes = _collect_routes(effective)
+    if not routes:
+        return "# No managed-service HTTP endpoints\n"
+    lines: list[str] = ["# Generated by nas-managed-service — do not edit", ""]
+    for route in routes:
+        rid = route["id"]
+        host = route["host"]
+        path = route["path"]
+        prefix = route["path_prefix"]
+        port = route["port"]
+        target_port = route["targetPort"]
+        auth = route["auth"]
+        if host:
+            lines.append(f"@nas_{rid} host {host}")
+            handle_prefix = f"handle @nas_{rid} {{"
+        elif path:
+            if path == "/":
+                matcher = "@nas_" + rid
+                if prefix:
+                    lines.append(f"@{matcher} path {path} {path}*")
+                else:
+                    lines.append(f"@{matcher} path {path}")
+                handle_prefix = f"handle @{matcher} {{"
+            else:
+                matcher = "nas_" + rid
+                if prefix:
+                    lines.append(f"@{matcher} path {path} {path}*")
+                else:
+                    lines.append(f"@{matcher} path {path}")
+                handle_prefix = f"handle @{matcher} {{"
+        elif port is not None:
+            lines.append(f"@nas_{rid} port {port}")
+            handle_prefix = f"handle @nas_{rid} {{"
+        else:
+            raise CaddyError(f"Route {rid} has no matcher")
+        lines.append(handle_prefix)
+        if auth.get("mode") in ("forward-auth", "oidc"):
+            scope = f"service:{route['key']}"
+            lines.append(f"  forward_auth unix/{ON_DEMAND_GATE} {{")
+            lines.append(f"    uri /authorize?scope={scope}")
+            lines.append(f"    header_up Remote-User {{http.request.header.Remote-User}}")
+            lines.append(f"    header_up Remote-Groups {{http.request.header.Remote-Groups}}")
+            lines.append(f"    header_up Remote-Name {{http.request.header.Remote-Name}}")
+            lines.append(f"    header_up Remote-Email {{http.request.header.Remote-Email}}")
+            lines.append(f"  }}")
+        lines.append(f"  reverse_proxy 127.0.0.1:{target_port}")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def write_caddy_fragment(path: pathlib.Path | None = None) -> dict[str, Any]:
-    """Write the fragment to a file for Caddy to load (or for tests)."""
-    fragment = generate_caddy_fragment()
     if path is None:
-        path = pathlib.Path("/run/nas-control/caddy-managed.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(fragment, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path = pathlib.Path("/run/nas-control/caddy-managed.conf")
+    fragment = generate_caddy_fragment()
+    caddyfile_content = generate_caddyfile(fragment.get("_effective") or None)
+    if "_effective" not in fragment:
+        caddyfile_content = generate_caddyfile(msvc.effective_registry() if not fragment.get("routes") else None)
+        if fragment.get("routes"):
+            caddyfile_content = generate_caddyfile(msvc.effective_registry())
+            routes_for_file = fragment["routes"]
+            tmp_effective = {"endpoints": {r["key"]: {"transport": "http", "targetPort": r["targetPort"], "exposure": r["exposure"], "auth": r["auth"]} for r in routes_for_file}}
+            caddyfile_content = generate_caddyfile(tmp_effective if routes_for_file else msvc.effective_registry())
+    effective = msvc.effective_registry()
+    caddyfile_content = generate_caddyfile(effective)
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".caddy-managed.", dir=parent)
+    tmp_path = pathlib.Path(tmp)
+    try:
+        with open(fd, "w", encoding="utf-8") as handle:
+            handle.write(caddyfile_content)
+            handle.flush()
+            import os as _os
+
+            _os.fsync(handle.fileno())
+        caddy_bin = shutil.which("caddy")
+        if caddy_bin and os.environ.get("NAS_SKIP_CADDY_VALIDATE") != "1":
+            vfd, vtmp = tempfile.mkstemp(prefix="caddy-validate-", suffix=".caddyfile")
+            validate_tmp = pathlib.Path(vtmp)
+            try:
+                os.close(vfd)
+                validate_tmp.write_text(caddyfile_content, encoding="utf-8")
+                result = subprocess.run([caddy_bin, "fmt", "--overwrite", str(validate_tmp)], capture_output=True, text=True, timeout=10)
+                if result.returncode != 0:
+                    raise CaddyError(f"Caddy validation failed: {result.stderr.strip()}")
+            finally:
+                validate_tmp.unlink(missing_ok=True)
+        tmp_path.chmod(0o644)
+        tmp_path.replace(path)
+        dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        if os.environ.get("NAS_SKIP_CADDY_RELOAD") != "1" and shutil.which("systemctl"):
+            try:
+                subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, timeout=10)
+            except OSError:
+                pass
+    except CaddyError:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise CaddyError(str(exc)) from exc
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
     return fragment

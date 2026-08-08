@@ -5,7 +5,10 @@ The test suite is intentionally layered so cheap failures are found before a VM 
 - `test_*.py` — fast unit, transaction, negative-path, protocol, and contract tests.
 - `test_adversarial_security.py` — hostile SQL-like, shell, XSS, path-traversal, control-character, and malformed-HTTP inputs at privileged boundaries.
 - `test_fuzz_boundaries.py` — deterministic seeded fuzz smoke tests that run without third-party dependencies.
-- `test_property_invariants.py` — Hypothesis properties for parsers, secrets, identifiers, and alert normalization; CI supplies Hypothesis through the pinned Nix test shell.
+- `test_property_invariants.py` — Hypothesis properties for parsers, secrets, identifiers, alert normalization, and managed-service validation (positive generators, round-trip, and metamorphic rejection); CI supplies Hypothesis through the pinned Nix test shell.
+- `test_managed_service_stateful.py` — RuleBasedStateMachine for managed-service lifecycle (add/modify/disable/enable/delete/reconcile) with reference-model invariants and differential projection checks (effective/portal/caddy drift).
+- `test_service_caddy_validate.py` — generates a Caddy fragment via `nas_service_caddy.generate_caddy_fragment()` and validates it with `caddy validate/adapt/fmt` when the `caddy` binary is present; otherwise skips with `unittest.SkipTest` (CI provides `caddy` via `nix shell nixpkgs#caddy`).
+- `test_runner_accounting.py` — meta-test that every `services/*.py` mapping in `custom-script-contracts.json` has an importing behavioral test (AST import check) and that the runner correctly parses skipped/xfail accounting.
 - `custom-script-contracts.json` — inventory binding every NAS-owned runtime executable and every Python control-plane module to focused tests. Installed commands also require an installed-system test and fuzz strategy. `scripts/validate-test-inventory.py` fails when new custom code appears without a declared test contract.
 - `bats/` — fault injection around secret-tree transactions.
 - `browser/authz.py` — installed-system browser authorization and responsive-layout checks against real Cockpit and Authentik sessions.
