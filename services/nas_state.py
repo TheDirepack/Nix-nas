@@ -142,6 +142,15 @@ def default_authorities() -> tuple[Authority, ...]:
             sensitive=True,
         ),
         Authority("authentik-database", "postgresql://authentik", kind="database", sensitive=True),
+        Authority(
+            "managed-services",
+            os.environ.get("NAS_MANAGED_SERVICES_STATE_ROOT", "/var/lib/nas-control/services.json"),
+        ),
+        Authority(
+            "managed-apps",
+            os.environ.get("NAS_MANAGED_APPS_STATE_ROOT", "/var/lib/nas-control/apps"),
+            optional=True,
+        ),
     )
 
 
