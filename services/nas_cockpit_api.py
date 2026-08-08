@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import sys
 import syslog
 import tempfile
@@ -43,6 +44,7 @@ FIRST_START_CONFLICTS = ("appliance", "first-start", "identity", "runtime", "sec
 FEATURE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 MAX_ARGUMENT_LENGTH = 128
 MAX_JSON_INPUT_BYTES = 128 * 1024
+MAX_PRIVATE_SNAPSHOT_BYTES = 4 * 1024 * 1024
 
 
 class ApiError(RuntimeError):
@@ -58,6 +60,15 @@ class ActionSpec:
     requires_replication: bool = False
     requires_syncthing: bool = False
     worker_owns_operation: bool = False
+
+
+@dataclass(frozen=True)
+class PrivateFileSnapshot:
+    exists: bool
+    content: bytes = b""
+    mode: int = 0o600
+    uid: int = 0
+    gid: int = 0
 
 
 ACTIONS: dict[str, ActionSpec] = {
@@ -154,9 +165,18 @@ def diagnostic(message: str) -> None:
     syslog.syslog(syslog.LOG_ERR, message[:2000])
 
 
+def _secret_command(command: list[str] | tuple[str, ...]) -> bool:
+    if not command:
+        return False
+    return pathlib.PurePath(str(command[0])).name == "nas-secrets"
+
+
 def operation_error(command: list[str] | tuple[str, ...], result: CommandResult) -> ApiError:
     reference = secrets.token_hex(6)
-    detail = (result.stderr or result.stdout).strip()[:1000]
+    if _secret_command(command):
+        detail = "[secret command output redacted]"
+    else:
+        detail = (result.stderr or result.stdout).strip()[:1000]
     diagnostic(
         f"nas-cockpit-api reference={reference} command={list(command)!r} rc={result.returncode} detail={detail!r}"
     )
@@ -349,58 +369,237 @@ def _coordinated_secret_command(active: Any, command: list[str], input_text: str
         raise operation_error(command, result)
 
 
-def _read_secret_env() -> bytes | None:
-    path = pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets")) / "ai" / "llama-swap.env"
+def _snapshot_private_file(path: pathlib.Path, label: str) -> PrivateFileSnapshot:
     try:
-        return path.read_bytes()
-    except OSError:
-        return None
+        before = path.lstat()
+    except FileNotFoundError:
+        return PrivateFileSnapshot(False)
+    except OSError as exc:
+        raise ApiError(f"Unable to snapshot {label}") from exc
+    if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        raise ApiError(f"Refusing unsafe {label} path")
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ApiError(f"Unable to snapshot {label}") from exc
+    try:
+        current = os.fstat(fd)
+        if current.st_dev != before.st_dev or current.st_ino != before.st_ino or not stat.S_ISREG(current.st_mode):
+            raise ApiError(f"{label} changed while it was being snapshotted")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            content = handle.read(MAX_PRIVATE_SNAPSHOT_BYTES + 1)
+        if len(content) > MAX_PRIVATE_SNAPSHOT_BYTES:
+            raise ApiError(f"{label} is unexpectedly large")
+        return PrivateFileSnapshot(
+            True,
+            content,
+            stat.S_IMODE(current.st_mode),
+            current.st_uid,
+            current.st_gid,
+        )
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _fsync_parent(path: pathlib.Path) -> None:
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _restore_private_file(path: pathlib.Path, snapshot: PrivateFileSnapshot, label: str) -> None:
+    parent = path.parent
+    try:
+        parent_info = parent.lstat()
+    except OSError as exc:
+        raise ApiError(f"Unable to restore {label}: parent directory unavailable") from exc
+    if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+        raise ApiError(f"Unable to restore {label}: unsafe parent directory")
+    if not snapshot.exists:
+        try:
+            path.unlink(missing_ok=True)
+            _fsync_parent(path)
+        except OSError as exc:
+            raise ApiError(f"Unable to restore absent {label}") from exc
+        return
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.rollback.", dir=parent)
+    temporary_path = pathlib.Path(temporary)
+    replaced = False
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(snapshot.content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, snapshot.mode)
+        if os.geteuid() == 0:
+            os.chown(temporary_path, snapshot.uid, snapshot.gid)
+        os.replace(temporary_path, path)
+        replaced = True
+        _fsync_parent(path)
+    except OSError as exc:
+        raise ApiError(f"Unable to restore {label}") from exc
+    finally:
+        if not replaced:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _secret_env_path() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets")) / "ai" / "llama-swap.env"
+
+
+def _read_secret_env() -> bytes | None:
+    snapshot = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
+    return snapshot.content if snapshot.exists else None
 
 
 def _restore_secret_env(content: bytes | None, active: Any) -> None:
-    path = pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets")) / "ai" / "llama-swap.env"
-    env = dict(os.environ)
-    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+    del active
+    path = _secret_env_path()
     if content is None:
         return
-    # Restore with correct permissions via sudo install
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(content)
-        tmp.flush()
-        tmp_path = tmp.name
     try:
-        result = run(
-            ["sudo", "install", "-m", "0400", "-o", "nas-ai", "-g", "nas-ai", tmp_path, str(path)],
-            check=False,
-            timeout_seconds=30,
-            env=env,
-        )
-        if result.returncode != 0:
-            diagnostic(f"nas-cockpit-api env restore failed rc={result.returncode}")
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        current = _snapshot_private_file(path, "llama-swap runtime secret environment")
+        snapshot = PrivateFileSnapshot(True, content, current.mode if current.exists else 0o400, current.uid, current.gid)
+        _restore_private_file(path, snapshot, "llama-swap runtime secret environment")
+    except ApiError:
+        raise
 
 
-def _restart_llama_swap(active: Any) -> None:
+def _provider_reference_configured(config: dict[str, Any], provider_id: str) -> bool:
+    peers = config.get("peers")
+    if not isinstance(peers, dict):
+        return False
+    peer = peers.get(provider_id)
+    if not isinstance(peer, dict):
+        return False
+    expected = "${env." + ai_config.provider_env_name(provider_id) + "}"
+    return peer.get("apiKey") == expected
+
+
+def _fetch_existing_provider_key(active: Any, provider_id: str, keepass_password: str) -> str:
+    fetch_env = dict(os.environ)
+    fetch_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+    command = ["nas-secrets", "show-ai-provider-key-stdin", provider_id]
+    result = run(
+        command,
+        check=False,
+        timeout_seconds=30,
+        input_text=f"{keepass_password}\n\n",
+        env=fetch_env,
+    )
+    if result.returncode != 0:
+        diagnostic(f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}")
+        raise ApiError("Unable to snapshot the existing provider credential before mutation")
+    value = result.stdout.strip()
+    if not value or len(value) > 4096 or "\n" in value or "\r" in value or "\x00" in value:
+        raise ApiError("Existing provider credential is missing or malformed; refusing mutation")
+    return value
+
+
+def _write_provider_key(active: Any, provider_id: str, keepass_password: str, value: str | None) -> None:
     env = dict(os.environ)
     env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-    # Use the operation coordinator wrapper via systemctl restart
-    result = run(["systemctl", "is-active", "--quiet", "nas-llama-swap.service"], check=False, timeout_seconds=10, env=env)
-    was_active = result.returncode == 0
-    # If config/env changed while service is active, restart once to load both atomically.
-    # If service is not active, the next on-demand start will pick up new files; no immediate restart needed.
-    if not was_active:
+    env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
+    if value is None:
+        command = ["nas-secrets", "clear-ai-provider-key-stdin", provider_id]
+        input_text = f"{keepass_password}\n"
+    else:
+        command = ["nas-secrets", "set-ai-provider-key-stdin", provider_id]
+        input_text = f"{keepass_password}\n{value}\n"
+    result = run(command, check=False, timeout_seconds=120, input_text=input_text, env=env)
+    if result.returncode != 0:
+        raise operation_error(command, result)
+
+
+def _llama_swap_active(active: Any) -> bool:
+    env = dict(os.environ)
+    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+    result = run(
+        ["systemctl", "is-active", "--quiet", "nas-llama-swap.service"],
+        check=False,
+        timeout_seconds=10,
+        env=env,
+    )
+    return result.returncode == 0
+
+
+def _restart_llama_swap(active: Any, *, was_active: bool | None = None) -> None:
+    env = dict(os.environ)
+    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+    should_restart = _llama_swap_active(active) if was_active is None else was_active
+    if not should_restart:
         return
-    result = run(["systemctl", "restart", "nas-llama-swap.service"], check=False, timeout_seconds=60, env=env)
+    result = run(
+        ["systemctl", "restart", "nas-llama-swap.service"],
+        check=False,
+        timeout_seconds=60,
+        env=env,
+    )
     if result.returncode != 0:
         raise operation_error(["systemctl", "restart", "nas-llama-swap.service"], result)
-    # Health check: service is active and, if port check available, reachable.
-    result = run(["systemctl", "is-active", "--quiet", "nas-llama-swap.service"], check=False, timeout_seconds=10, env=env)
+    result = run(
+        ["systemctl", "is-active", "--quiet", "nas-llama-swap.service"],
+        check=False,
+        timeout_seconds=10,
+        env=env,
+    )
     if result.returncode != 0:
         raise ApiError("llama-swap failed to start after provider update")
+
+
+def _rollback_provider_mutation(
+    *,
+    active: Any,
+    provider_id: str,
+    keepass_password: str,
+    old_config: PrivateFileSnapshot,
+    old_env: PrivateFileSnapshot | None,
+    had_credential: bool,
+    old_keepass_key: str | None,
+    credential_attempted: bool,
+    config_attempted: bool,
+    service_was_active: bool,
+) -> None:
+    failures: list[str] = []
+    if credential_attempted:
+        try:
+            _write_provider_key(
+                active,
+                provider_id,
+                keepass_password,
+                old_keepass_key if had_credential else None,
+            )
+        except Exception:
+            failures.append("KeePass credential")
+    if old_env is not None:
+        try:
+            _restore_private_file(_secret_env_path(), old_env, "llama-swap runtime secret environment")
+        except Exception:
+            failures.append("runtime secret environment")
+    if config_attempted:
+        try:
+            _restore_private_file(pathlib.Path(ai_config.CONFIG_PATH), old_config, "llama-swap configuration")
+        except Exception:
+            failures.append("llama-swap configuration")
+    if service_was_active:
+        try:
+            _restart_llama_swap(active, was_active=True)
+        except Exception:
+            failures.append("llama-swap service")
+    if failures:
+        diagnostic(
+            "nas-cockpit-api provider rollback incomplete components=" + ",".join(failures)
+        )
+        raise ApiError(
+            "Provider mutation failed and rollback was incomplete; manual recovery is required"
+        )
 
 
 def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
@@ -424,49 +623,42 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
     if "\n" in keepass_password or "\r" in keepass_password or "\n" in api_key or "\r" in api_key:
         raise ApiError("Provider credentials must be single-line values")
 
-    old_env: bytes | None = None
-    old_config_text: str | None = None
     old_keepass_key: str | None = None
-    credential_staged = False
     try:
         with acquire_operation("ai-provider-set", ("secrets", "runtime")) as active:
-            # Capture previous config for rollback
-            try:
-                old_config_text = pathlib.Path(ai_config.CONFIG_PATH).read_text(encoding="utf-8")
-            except OSError:
-                old_config_text = None
+            old_config = _snapshot_private_file(pathlib.Path(ai_config.CONFIG_PATH), "llama-swap configuration")
+            before = ai_config.load_config()
+            had_credential = _provider_reference_configured(before, provider_id)
+            old_env: PrivateFileSnapshot | None = None
+            credential_attempted = False
+            config_attempted = False
+            service_was_active = _llama_swap_active(active)
             if api_key:
-                old_env = _read_secret_env()
-                # Try to capture old KeePass value for rollback (best effort)
+                old_env = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
+                if had_credential:
+                    old_keepass_key = _fetch_existing_provider_key(active, provider_id, keepass_password)
                 try:
-                    fetch_env = dict(os.environ)
-                    fetch_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                    fetch = run(
-                        ["nas-secrets", "show-ai-provider-key-stdin", provider_id],
-                        check=False,
-                        timeout_seconds=30,
-                        input_text=f"{keepass_password}\n\n",
-                        env=fetch_env,
-                    )
-                    if fetch.returncode == 0:
-                        old_keepass_key = fetch.stdout.strip() or None
-                except Exception:
-                    old_keepass_key = None
-                # Stage credential without restarting so config+env commit together
-                stage_env = dict(os.environ)
-                stage_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                stage_env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
-                result = run(
-                    ["nas-secrets", "set-ai-provider-key-stdin", provider_id],
-                    check=False,
-                    timeout_seconds=120,
-                    input_text=f"{keepass_password}\n{api_key}\n",
-                    env=stage_env,
-                )
-                if result.returncode != 0:
-                    raise operation_error(["nas-secrets", "set-ai-provider-key-stdin", provider_id], result)
-                credential_staged = True
+                    credential_attempted = True
+                    _write_provider_key(active, provider_id, keepass_password, api_key)
+                except Exception as original:
+                    try:
+                        _rollback_provider_mutation(
+                            active=active,
+                            provider_id=provider_id,
+                            keepass_password=keepass_password,
+                            old_config=old_config,
+                            old_env=old_env,
+                            had_credential=had_credential,
+                            old_keepass_key=old_keepass_key,
+                            credential_attempted=credential_attempted,
+                            config_attempted=False,
+                            service_was_active=False,
+                        )
+                    except ApiError as rollback_error:
+                        raise rollback_error from original
+                    raise
             try:
+                config_attempted = True
                 value = ai_config.set_provider(
                     provider_id,
                     url,
@@ -475,82 +667,25 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
                     timeouts=timeouts,
                     filters=filters,
                 )
-            except Exception as exc:
-                # Roll back staged credential and config on failure to avoid new-key/old-url split.
-                if credential_staged:
-                    try:
-                        if old_keepass_key:
-                            rollback_env = dict(os.environ)
-                            rollback_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                            rollback_env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
-                            run(
-                                ["nas-secrets", "set-ai-provider-key-stdin", provider_id],
-                                check=False,
-                                timeout_seconds=120,
-                                input_text=f"{keepass_password}\n{old_keepass_key}\n",
-                                env=rollback_env,
-                            )
-                        else:
-                            rollback_env = dict(os.environ)
-                            rollback_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                            rollback_env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
-                            run(
-                                ["nas-secrets", "clear-ai-provider-key-stdin", provider_id],
-                                check=False,
-                                timeout_seconds=120,
-                                input_text=f"{keepass_password}\n",
-                                env=rollback_env,
-                            )
-                        if old_env is not None:
-                            _restore_secret_env(old_env, active)
-                    except Exception:
-                        pass
-                    # Restore old config file if it existed
-                    if old_config_text is not None:
-                        try:
-                            tmp = tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8")
-                            tmp.write(old_config_text)
-                            tmp.flush()
-                            os.fsync(tmp.fileno())
-                            tmp_path = tmp.name
-                            tmp.close()
-                            pathlib.Path(ai_config.CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
-                            os.replace(tmp_path, str(ai_config.CONFIG_PATH))
-                            # fsync parent
-                            try:
-                                fd = os.open(str(pathlib.Path(ai_config.CONFIG_PATH).parent), os.O_RDONLY | os.O_DIRECTORY)
-                                try:
-                                    os.fsync(fd)
-                                finally:
-                                    os.close(fd)
-                            except OSError:
-                                pass
-                        except Exception:
-                            pass
-                raise
-            # Single restart after both credential and config are committed
-            if credential_staged:
-                _restart_llama_swap(active)
-            else:
-                # Even without credential change, config change may need reload via watch-config,
-                # but ensure service health if it is running.
+                _restart_llama_swap(active, was_active=service_was_active)
+                return value
+            except Exception as original:
                 try:
-                    _restart_llama_swap(active)
-                except ApiError:
-                    # If restart fails, rollback config
-                    if old_config_text is not None:
-                        try:
-                            tmp = tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8")
-                            tmp.write(old_config_text)
-                            tmp.flush()
-                            os.fsync(tmp.fileno())
-                            tmp_path = tmp.name
-                            tmp.close()
-                            os.replace(tmp_path, str(ai_config.CONFIG_PATH))
-                        except Exception:
-                            pass
-                    raise
-            return value
+                    _rollback_provider_mutation(
+                        active=active,
+                        provider_id=provider_id,
+                        keepass_password=keepass_password,
+                        old_config=old_config,
+                        old_env=old_env,
+                        had_credential=had_credential,
+                        old_keepass_key=old_keepass_key,
+                        credential_attempted=credential_attempted,
+                        config_attempted=config_attempted,
+                        service_was_active=service_was_active,
+                    )
+                except ApiError as rollback_error:
+                    raise rollback_error from original
+                raise
     except (OperationBusyError, ai_config.AiConfigError, OSError, ApiError) as exc:
         if isinstance(exc, ApiError):
             raise
@@ -565,116 +700,49 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
 def delete_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
     provider_id = _json_string(request, "id", required=True, max_length=48)
     keepass_password = _json_string(request, "keepassPassword", max_length=MAX_PASSWORD_LENGTH)
-    try:
-        provider_id = ai_config.validate_provider_id(provider_id)
-        current = ai_config.public_view(ai_config.load_config())
-    except (ai_config.AiConfigError, OSError) as exc:
-        raise ApiError(str(exc)) from exc
-    provider = next((item for item in current.get("providers", []) if item.get("id") == provider_id), None)
-    has_credential = bool(provider and (provider.get("credentialReferenceConfigured") or provider.get("credentialConfigured")))
-    if has_credential and not keepass_password:
-        raise ApiError("KeePassXC database password is required to remove the stored provider credential")
-    if "\n" in keepass_password or "\r" in keepass_password:
-        raise ApiError("KeePassXC database password must be a single line")
-
-    old_config_text: str | None = None
-    old_env: bytes | None = None
     old_keepass_key: str | None = None
     try:
+        provider_id = ai_config.validate_provider_id(provider_id)
         with acquire_operation("ai-provider-delete", ("secrets", "runtime")) as active:
-            try:
-                old_config_text = pathlib.Path(ai_config.CONFIG_PATH).read_text(encoding="utf-8")
-            except OSError:
-                old_config_text = None
+            old_config = _snapshot_private_file(pathlib.Path(ai_config.CONFIG_PATH), "llama-swap configuration")
+            before = ai_config.load_config()
+            has_credential = _provider_reference_configured(before, provider_id)
+            if has_credential and not keepass_password:
+                raise ApiError("KeePassXC database password is required to remove the stored provider credential")
+            if "\n" in keepass_password or "\r" in keepass_password:
+                raise ApiError("KeePassXC database password must be a single line")
+            old_env: PrivateFileSnapshot | None = None
             if has_credential:
-                old_env = _read_secret_env()
-                try:
-                    fetch_env = dict(os.environ)
-                    fetch_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                    fetch = run(
-                        ["nas-secrets", "show-ai-provider-key-stdin", provider_id],
-                        check=False,
-                        timeout_seconds=30,
-                        input_text=f"{keepass_password}\n\n",
-                        env=fetch_env,
-                    )
-                    if fetch.returncode == 0:
-                        old_keepass_key = fetch.stdout.strip() or None
-                except Exception:
-                    old_keepass_key = None
-            # Delete provider from config first (no restart yet)
+                old_env = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
+                old_keepass_key = _fetch_existing_provider_key(active, provider_id, keepass_password)
+            service_was_active = _llama_swap_active(active)
+            credential_attempted = False
+            config_attempted = False
             try:
+                config_attempted = True
                 value = ai_config.delete_provider(provider_id)
-            except Exception as exc:
-                raise ApiError(str(exc)) from exc
-            # Now clear the stored credential with restart deferred
-            if has_credential:
-                clear_env = dict(os.environ)
-                clear_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                clear_env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
-                result = run(
-                    ["nas-secrets", "clear-ai-provider-key-stdin", provider_id],
-                    check=False,
-                    timeout_seconds=120,
-                    input_text=f"{keepass_password}\n",
-                    env=clear_env,
-                )
-                if result.returncode != 0:
-                    # Roll back config on secret cleanup failure (journal for retry)
-                    if old_config_text is not None:
-                        try:
-                            tmp = tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8")
-                            tmp.write(old_config_text)
-                            tmp.flush()
-                            os.fsync(tmp.fileno())
-                            tmp_path = tmp.name
-                            tmp.close()
-                            os.replace(tmp_path, str(ai_config.CONFIG_PATH))
-                            try:
-                                fd = os.open(str(pathlib.Path(ai_config.CONFIG_PATH).parent), os.O_RDONLY | os.O_DIRECTORY)
-                                try:
-                                    os.fsync(fd)
-                                finally:
-                                    os.close(fd)
-                            except OSError:
-                                pass
-                        except Exception:
-                            pass
-                    raise operation_error(["nas-secrets", "clear-ai-provider-key-stdin", provider_id], result)
-            # Single restart after both config and secret are committed; journal cleanup retry on failure
-            try:
-                _restart_llama_swap(active)
-            except Exception as exc:
-                # Attempt to restore previous state on restart/health failure
-                if old_config_text is not None:
-                    try:
-                        tmp = tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8")
-                        tmp.write(old_config_text)
-                        tmp.flush()
-                        os.fsync(tmp.fileno())
-                        tmp_path = tmp.name
-                        tmp.close()
-                        os.replace(tmp_path, str(ai_config.CONFIG_PATH))
-                    except Exception:
-                        pass
-                if has_credential and old_keepass_key:
-                    try:
-                        restore_env = dict(os.environ)
-                        restore_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-                        restore_env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
-                        run(
-                            ["nas-secrets", "set-ai-provider-key-stdin", provider_id],
-                            check=False,
-                            timeout_seconds=120,
-                            input_text=f"{keepass_password}\n{old_keepass_key}\n",
-                            env=restore_env,
-                        )
-                        if old_env is not None:
-                            _restore_secret_env(old_env, active)
-                    except Exception:
-                        pass
+                if has_credential:
+                    credential_attempted = True
+                    _write_provider_key(active, provider_id, keepass_password, None)
+                _restart_llama_swap(active, was_active=service_was_active)
+                return value
+            except Exception as original:
+                try:
+                    _rollback_provider_mutation(
+                        active=active,
+                        provider_id=provider_id,
+                        keepass_password=keepass_password,
+                        old_config=old_config,
+                        old_env=old_env,
+                        had_credential=has_credential,
+                        old_keepass_key=old_keepass_key,
+                        credential_attempted=credential_attempted,
+                        config_attempted=config_attempted,
+                        service_was_active=service_was_active,
+                    )
+                except ApiError as rollback_error:
+                    raise rollback_error from original
                 raise
-            return value
     except (OperationBusyError, ai_config.AiConfigError, OSError, ApiError) as exc:
         if isinstance(exc, ApiError):
             raise
