@@ -59,6 +59,8 @@ select = ["E4", "E7", "E9", "F"]
 # These harnesses intentionally add the repository service/test directories to
 # sys.path before importing NAS-owned modules. Keep E402 scoped to only those
 # bootstrap files so ordinary modules still enforce top-level import ordering.
+# The property tier imports unittest classes from its non-discovered slow module
+# solely so unittest can discover them; F401 is therefore intentional there.
 [tool.ruff.lint.per-file-ignores]
 "scripts/fuzz.py" = ["E402"]
 "tests/slow_managed_service_stateful.py" = ["E402"]
@@ -73,6 +75,7 @@ select = ["E4", "E7", "E9", "F"]
 "tests/test_logging.py" = ["E402"]
 "tests/test_managed_service_hardening.py" = ["E402"]
 "tests/test_managed_service_stateful.py" = ["E402"]
+"tests/test_property_invariants.py" = ["F401"]
 "tests/test_secret_security_fuzz.py" = ["E402"]
 "tests/test_secret_subprocess_redaction.py" = ["E402"]
 "tests/test_security_surface.py" = ["E402"]
