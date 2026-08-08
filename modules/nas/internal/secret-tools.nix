@@ -119,10 +119,16 @@ let
       }
 
       remove_value() {
-        local path
-        path="$(entry_path "$1")"
+        local key="$1" path
+        if ! has_secret "$key"; then
+          return 0
+        fi
+        path="$(entry_path "$key")"
         kp_args
-        printf '%s\n' "$keepass_password" | keepassxc-cli rm "''${KP_ARGS[@]}" "$database" "$path" >/dev/null 2>&1 || true
+        if ! printf '%s\n' "$keepass_password" | keepassxc-cli rm "''${KP_ARGS[@]}" "$database" "$path" >/dev/null 2>&1; then
+          echo "Unable to remove KeePassXC entry: $path" >&2
+          return 1
+        fi
       }
 
       get_secret() {
@@ -143,6 +149,38 @@ let
       get_secret_optional() {
         has_secret "$1" || return 0
         get_secret "$1"
+      }
+
+      require_secret_atom() {
+        local value="$1" label="$2" minimum="''${3:-8}" maximum="''${4:-4096}"
+        if (( ''${#value} < minimum || ''${#value} > maximum )) || [[ ! "$value" =~ ^[A-Za-z0-9._~+/=:@-]+$ ]]; then
+          echo "$label has an unsafe or unexpected format in KeePassXC." >&2
+          return 1
+        fi
+      }
+
+      require_secret_hex() {
+        local value="$1" expected="$2" label="$3"
+        if (( ''${#value} != expected )) || [[ ! "$value" =~ ^[0-9A-Fa-f]+$ ]]; then
+          echo "$label has an unsafe or unexpected format in KeePassXC." >&2
+          return 1
+        fi
+      }
+
+      require_ntfy_topic() {
+        local value="$1"
+        if (( ''${#value} < 8 || ''${#value} > 128 )) || [[ ! "$value" =~ ^[A-Za-z0-9_-]+$ ]]; then
+          echo "ntfy alert topic has an unsafe or unexpected format in KeePassXC." >&2
+          return 1
+        fi
+      }
+
+      require_huggingface_token() {
+        local value="$1"
+        [[ -z "$value" || "$value" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || {
+          echo "Hugging Face token has an unsafe or unexpected format in KeePassXC." >&2
+          return 1
+        }
       }
 
       validate_ai_provider_id() {
@@ -194,10 +232,7 @@ PY_AI_PROVIDERS
       stage_ai_provider_runtime_key() {
         local provider="$1" value="$2" env_name existing temp
         env_name="$(ai_provider_env_name "$provider")"
-        [[ "$value" =~ ^[A-Za-z0-9._~+/=:@-]{8,4096}$ ]] || {
-          echo "AI provider API key contains unsupported characters." >&2
-          exit 1
-        }
+        require_secret_atom "$value" "AI provider API key" 8 4096
         [[ -f "$secret_root/ready" ]] || return 0
         existing="$secret_root/ai/llama-swap.env"
         [[ -f "$existing" ]] || return 0
@@ -366,8 +401,10 @@ PY_AI_PROVIDERS
         authentik_password="$(get_secret authentik-bootstrap-password)"
         local authentik_api_token
         authentik_api_token="$(get_secret authentik-api-token)"
-        [[ "$authentik_secret" =~ ^[0-9A-Fa-f]{128}$ ]] || { echo "Authentik secret key has an unexpected format." >&2; exit 1; }
-        [[ "$authentik_token" =~ ^[0-9A-Fa-f]{64}$ ]] || { echo "Authentik token has an unexpected format." >&2; exit 1; }
+        require_secret_hex "$authentik_secret" 128 "Authentik secret key"
+        require_secret_hex "$authentik_token" 64 "Authentik bootstrap token"
+        require_secret_atom "$authentik_password" "Authentik bootstrap password" 20 4096
+        require_secret_atom "$authentik_api_token" "Authentik API token" 20 4096
         cat > "$local_stage/authentik/environment" <<AUTHENTIK_ENV
 AUTHENTIK_SECRET_KEY=$authentik_secret
 AUTHENTIK_BOOTSTRAP_TOKEN=$authentik_token
@@ -377,7 +414,7 @@ AUTHENTIK_ENV
         printf '%s' "$authentik_api_token" > "$local_stage/authentik/api-token"
         printf '%s' "$authentik_token" > "$local_stage/authentik/bootstrap-token"
         state_bundle_signing_key="$(get_secret state-bundle-signing-key)"
-        [[ "$state_bundle_signing_key" =~ ^[0-9A-Fa-f]{64}$ ]] || { echo "State bundle signing key has an unexpected format." >&2; exit 1; }
+        require_secret_hex "$state_bundle_signing_key" 64 "State bundle signing key"
         printf '%s' "$state_bundle_signing_key" > "$local_stage/state/bundle-signing-key"
         if [[ "$authentik_api_token" == "$authentik_token" ]]; then
           bootstrap_token_reused=true
@@ -393,6 +430,8 @@ TOKEN_WARNING
         ${lib.optionalString cfg.observability.ntfy.enable ''
         ntfy_password="$(get_secret ntfy-admin-password)"
         ntfy_topic="$(get_secret ntfy-alert-topic)"
+        require_secret_atom "$ntfy_password" "ntfy administrator password" 20 4096
+        require_ntfy_topic "$ntfy_topic"
         ntfy_hash="$(bcrypt_password admin "$ntfy_password")"
         cat > "$local_stage/observability/ntfy-environment" <<NTFY_ENV
 NTFY_AUTH_USERS=admin:$ntfy_hash:admin
@@ -414,6 +453,11 @@ NTFY_ENV
         open_webui_secret="$(get_secret open-webui-secret)"
         open_webui_admin_password="$(get_secret open-webui-admin-password)"
         huggingface_token="$(get_secret_optional huggingface-token)"
+        require_secret_atom "$llama_swap_api_key" "llama-swap API key" 8 4096
+        ${lib.optionalString cfg.ai.codingAgent.enable ''require_secret_atom "$coding_agent_api_key" "Pi coding-agent API key" 8 4096''}
+        require_secret_atom "$open_webui_secret" "Open WebUI signing secret" 8 4096
+        require_secret_atom "$open_webui_admin_password" "Open WebUI bootstrap password" 8 4096
+        require_huggingface_token "$huggingface_token"
         printf 'LLAMA_SWAP_API_KEY=%s\n' "$llama_swap_api_key" > "$local_stage/ai/llama-swap.env"
         ${lib.optionalString cfg.ai.codingAgent.enable ''
         printf 'LLAMA_SWAP_CODING_API_KEY=%s\n' "$coding_agent_api_key" >> "$local_stage/ai/llama-swap.env"
@@ -426,10 +470,7 @@ NTFY_ENV
             echo "llama-swap provider $provider_id requires a KeePass API key that is not configured." >&2
             exit 1
           }
-          [[ "$provider_key" =~ ^[A-Za-z0-9._~+/=:@-]{8,4096}$ ]] || {
-            echo "llama-swap provider $provider_id API key contains unsupported characters." >&2
-            exit 1
-          }
+          require_secret_atom "$provider_key" "llama-swap provider $provider_id API key" 8 4096
           printf '%s=%s\n' "$provider_env" "$provider_key" >> "$local_stage/ai/llama-swap.env"
         done < <(ai_provider_pairs)
         printf '%s' "$llama_swap_api_key" > "$local_stage/ai/gate-api-key"
@@ -439,6 +480,8 @@ NTFY_ENV
         ${lib.optionalString cfg.vaultwarden.enable ''
         vaultwarden_client_secret="$(get_secret vaultwarden-oidc-client-secret)"
         vaultwarden_admin_token="$(get_secret vaultwarden-admin)"
+        require_secret_atom "$vaultwarden_client_secret" "Vaultwarden OIDC client secret" 8 4096
+        require_secret_atom "$vaultwarden_admin_token" "Vaultwarden administrator token" 8 4096
         vaultwarden_admin_hash="$(hash_password "$vaultwarden_admin_token")"
         printf "ADMIN_TOKEN='%s'\nSSO_CLIENT_SECRET='%s'\n" "$vaultwarden_admin_hash" "$vaultwarden_client_secret" > "$local_stage/vaultwarden/environment"
         ''}
@@ -546,7 +589,6 @@ NTFY_ENV
         echo "Protected services stopped and runtime secrets removed. KeePassXC was not modified."
       }
 
-
       command_check_authentik_token() {
         acquire_lock
         prompt_unlock
@@ -628,10 +670,7 @@ NTFY_ENV
           echo "Unexpected extra input while setting the AI provider API key." >&2
           exit 1
         fi
-        [[ "$token" =~ ^[A-Za-z0-9._~+/=:@-]{8,4096}$ ]] || {
-          echo "AI provider API key contains unsupported characters." >&2
-          exit 1
-        }
+        require_secret_atom "$token" "AI provider API key" 8 4096
         store_value "ai-provider-$provider" "$token"
         stage_ai_provider_runtime_key "$provider" "$token"
         unset token
