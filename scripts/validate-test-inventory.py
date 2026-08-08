@@ -11,6 +11,12 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "tests" / "custom-script-contracts.json"
 
+# Developer-only convenience wrappers are not shipped runtime surfaces. Their
+# underlying executable paths are already covered by the inventory separately.
+NON_RUNTIME_REPOSITORY_EXECUTABLES = {
+    "scripts/vm-pytest.sh",
+}
+
 INSTALLED_FUZZ_STRATEGIES = {
     "alert-header",
     "disabled-state",
@@ -72,6 +78,8 @@ def repository_executables() -> dict[str, set[str]]:
                 continue
             if first.startswith(b"#!"):
                 relative = path.relative_to(ROOT).as_posix()
+                if relative in NON_RUNTIME_REPOSITORY_EXECUTABLES:
+                    continue
                 commands.setdefault(relative, set()).add(relative)
     build = ROOT / "cockpit" / "build.js"
     if build.read_bytes().startswith(b"#!"):
