@@ -32,6 +32,7 @@ _DEFAULT_CAPABILITY_REGISTRY: dict[str, dict[str, Any]] = {
         ("files", "copyparty", ["/shares/"]),
         ("webdav", "copyparty", ["/dav/"]),
         ("ai", "open-webui", ["/ai/"]),
+        ("coding", "pi", []),
         ("vault", "vaultwarden", ["/vault/"]),
         ("syncthing", "syncthing", ["/settings/syncthing"]),
     )

@@ -17,6 +17,13 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
 RAN_RE = re.compile(r"Ran (\d+) tests? in")
+ALLOWLIST_ZERO = frozenset()
+FAILURES_RE = re.compile(r"failures=(\d+)")
+ERRORS_RE = re.compile(r"errors=(\d+)")
+SKIPPED_RE = re.compile(r"skipped=(\d+)")
+EXPECTED_RE = re.compile(r"expected failures=(\d+)")
+UNEXPECTED_RE = re.compile(r"unexpected successes=(\d+)")
+RESULT_RE = re.compile(r"^(OK|FAILED)(?: \(([^)]+)\))?\s*$", re.MULTILINE)
 SERIAL_TEST_FILES = frozenset(
     {
         "test_cli_surfaces.py",
@@ -151,8 +158,40 @@ def main() -> int:
             return 2
         coverage_cleanup()
 
-    total_tests = 0
+    total_ran = 0
+    total_passed = 0
+    total_failed = 0
+    total_errored = 0
+    total_skipped = 0
+    total_expected = 0
+    total_unexpected = 0
     started = time.monotonic()
+
+    def _parse_counts(output: str) -> tuple[int, int, int, int, int, int]:
+        ran = 0
+        m = RAN_RE.search(output or "")
+        if m:
+            ran = int(m.group(1))
+        failures = 0
+        errors = 0
+        skipped = 0
+        expected = 0
+        unexpected = 0
+        rm = RESULT_RE.search(output or "")
+        detail = rm.group(2) if rm and rm.group(2) else ""
+        if detail:
+            pairs = dict(re.findall(r"([a-z ]+)=\s*(\d+)", detail))
+            if "failures" in pairs:
+                failures = int(pairs["failures"])
+            if "errors" in pairs:
+                errors = int(pairs["errors"])
+            if "skipped" in pairs:
+                skipped = int(pairs["skipped"])
+            if "expected failures" in pairs:
+                expected = int(pairs["expected failures"])
+            if "unexpected successes" in pairs:
+                unexpected = int(pairs["unexpected successes"])
+        return ran, failures, errors, skipped, expected, unexpected
 
     def command_for(unittest_command: list[str]) -> list[str]:
         if args.coverage:
@@ -201,19 +240,60 @@ def main() -> int:
     failures: list[tuple[pathlib.Path, str]] = []
 
     def record(result: tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None]) -> None:
-        nonlocal total_tests
+        nonlocal total_ran, total_passed, total_failed, total_errored, total_skipped, total_expected, total_unexpected
         path, completed, elapsed, count, output = result
         relative = path.relative_to(ROOT).as_posix()
+        ran, fail_c, err_c, skip_c, exp_c, unexp_c = _parse_counts(output or "")
+        passed_c = ran - fail_c - err_c - skip_c - exp_c - unexp_c
+        if passed_c < 0:
+            passed_c = 0
         if completed is None:
+            total_ran += ran
+            total_failed += fail_c
+            total_errored += err_c
+            total_skipped += skip_c
+            total_expected += exp_c
+            total_unexpected += unexp_c
             failures.append((path, f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"))
             print(f"FAIL {relative}: exceeded {args.timeout}s", file=sys.stderr)
             return
         if completed.returncode != 0:
+            total_ran += ran
+            total_failed += fail_c
+            total_errored += err_c
+            total_skipped += skip_c
+            total_expected += exp_c
+            total_unexpected += unexp_c
+            total_passed += passed_c
             failures.append((path, f"rc={completed.returncode}\n{(output or '')[-16000:]}"))
             print(f"FAIL {relative}: rc={completed.returncode} after {elapsed:.1f}s", file=sys.stderr)
             return
-        total_tests += count
-        print(f"PASS {relative}: {count} test(s), {elapsed:.1f}s")
+        if ran == 0 and path.name not in ALLOWLIST_ZERO:
+            total_ran += ran
+            total_skipped += skip_c
+            failures.append((path, "no tests discovered\n" + (output or "")[-16000:]))
+            print(f"FAIL {relative}: no tests discovered after {elapsed:.1f}s", file=sys.stderr)
+            return
+        total_ran += ran
+        total_failed += fail_c
+        total_errored += err_c
+        total_skipped += skip_c
+        total_expected += exp_c
+        total_unexpected += unexp_c
+        total_passed += passed_c
+        detail_parts = []
+        if skip_c:
+            detail_parts.append(f"skipped={skip_c}")
+        if exp_c:
+            detail_parts.append(f"expected failures={exp_c}")
+        if unexp_c:
+            detail_parts.append(f"unexpected successes={unexp_c}")
+        if fail_c:
+            detail_parts.append(f"failures={fail_c}")
+        if err_c:
+            detail_parts.append(f"errors={err_c}")
+        detail_str = f" ({', '.join(detail_parts)})" if detail_parts else ""
+        print(f"PASS {relative}: {passed_c} test(s) passed, {ran} ran{detail_str}, {elapsed:.1f}s")
 
     serial_files = [path for path in files if path.name in SERIAL_TEST_FILES]
     parallel_files = [path for path in files if path.name not in SERIAL_TEST_FILES]
@@ -261,8 +341,11 @@ def main() -> int:
         print(exported.stdout.strip())
 
     print(
-        f"unit suite passed: {total_tests} tests across {len(files)} files "
-        f"with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s"
+        f"unit suite passed: {total_passed} tests across {len(files)} files "
+        f"with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s "
+        f"(passed={total_passed}, failed={total_failed}, errored={total_errored}, "
+        f"skipped={total_skipped}, expectedFailures={total_expected}, "
+        f"unexpectedSuccesses={total_unexpected}, ran={total_ran})"
     )
     return 0
 

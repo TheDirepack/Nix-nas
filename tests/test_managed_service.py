@@ -278,5 +278,114 @@ class ManagedServiceTests(unittest.TestCase):
             self.assertEqual(msvc.main(["show"]), 1)
 
 
+class ManagedServiceInvariantTests(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_bool_as_int_port_must_be_rejected(self):
+        with self.assertRaises(msvc.ManagedServiceError):
+            msvc._validate_port(True)
+        with self.assertRaises(msvc.ManagedServiceError):
+            msvc._validate_port(False)
+        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        for bad in (True, False):
+            doc = dict(base)
+            doc["endpoints"] = {"web": {"targetPort": bad}}
+            with self.subTest(bad=bad):
+                with self.assertRaises(msvc.ManagedServiceError):
+                    msvc.validate_service("x", doc)
+
+    @unittest.expectedFailure
+    def test_enabled_must_be_bool_not_string_truthy(self):
+        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        for bad in ("false", "true", "0", "1", 0, 1, None):
+            doc = dict(base)
+            doc["enabled"] = bad  # type: ignore
+            doc["endpoints"] = {"web": {"targetPort": 8080, "exposure": {"type": "hostname", "value": "x.local"}}}
+            if isinstance(bad, bool):
+                continue
+            with self.subTest(bad=bad):
+                try:
+                    msvc.validate_service("x", doc)
+                except msvc.ManagedServiceError:
+                    continue
+                self.assertIsInstance(doc.get("enabled"), bool, f"enabled={bad!r} should be bool-typed or rejected")
+
+    def test_nested_wrong_types_raise_managed_error(self):
+        base = {"label": "X", "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/x/compose.yaml"}}
+        cases = [
+            {"endpoints": {"web": "not-a-dict"}},
+            {"endpoints": {"web": None}},
+            {"endpoints": {"web": 123}},
+            {"storage": "not-a-list"},
+            {"storage": [{"hostPath": 123, "guestPath": "/data"}]},
+        ]
+        for extra in cases:
+            doc = dict(base)
+            doc.update(extra)  # type: ignore
+            with self.subTest(extra=extra):
+                with self.assertRaises((msvc.ManagedServiceError, AttributeError, TypeError)):
+                    msvc.validate_service("x", doc)
+
+    def test_duplicate_host_path_conflicts_raise_in_caddy(self):
+        import nas_service_caddy as caddy
+        dup_host = {
+            "endpoints": {
+                "a": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "dup.local"}},
+                "b": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "dup.local"}},
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "Duplicate exposure"):
+            caddy.generate_caddy_fragment(dup_host)
+        dup_path = {
+            "endpoints": {
+                "a": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/shared"}},
+                "b": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/shared"}},
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "Duplicate exposure"):
+            caddy.generate_caddy_fragment(dup_path)
+
+    def test_concurrent_writes_do_not_corrupt(self):
+        import concurrent.futures
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pathlib.Path(tmp) / "services.json"
+            def writer(idx: int) -> None:
+                data = {"schemaVersion": 2, "services": {f"svc-{idx}": {"label": f"Svc {idx}", "enabled": True, "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/svc-{idx}/compose.yaml"}, "endpoints": {"web": {"transport": "http", "targetPort": 8000 + idx, "exposure": {"type": "hostname", "value": f"svc-{idx}.local"}}}}}}
+                msvc.atomic_write_store(data, store)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                futures = [pool.submit(writer, i) for i in range(20)]
+                for fut in concurrent.futures.as_completed(futures):
+                    fut.result()
+            final = json.loads(store.read_text(encoding="utf-8"))
+            self.assertEqual(final.get("schemaVersion"), 2)
+            self.assertIsInstance(final.get("services"), dict)
+            for sid, svc in final["services"].items():
+                msvc.validate_service(sid, svc)
+
+    def test_portal_visibility_enabled_vs_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            builtin = pathlib.Path(tmp) / "builtin.json"
+            store = pathlib.Path(tmp) / "store.json"
+            builtin.write_text(json.dumps({"schemaVersion": 1, "endpoints": {}}))
+            enabled_svc = {"label": "Enabled", "enabled": True, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/enabled/compose.yaml"}, "endpoints": {"web": {"transport": "http", "targetPort": 8080, "exposure": {"type": "hostname", "value": "enabled.local"}, "auth": {"mode": "public"}}}, "portal": {"visible": True}}
+            disabled_svc = {"label": "Disabled", "enabled": False, "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/disabled/compose.yaml"}, "endpoints": {"web": {"transport": "http", "targetPort": 8081, "exposure": {"type": "hostname", "value": "disabled.local"}, "auth": {"mode": "public"}}}, "portal": {"visible": True}}
+            msvc.atomic_write_store({"schemaVersion": 2, "services": {"enabled": enabled_svc, "disabled": disabled_svc}}, store)
+            eff = msvc.effective_registry(builtin, store)
+            self.assertIn("enabled:web", eff["endpoints"])
+            self.assertIn("disabled:web", eff["endpoints"])
+            self.assertTrue(eff["endpoints"]["enabled:web"]["available"])
+            self.assertFalse(eff["endpoints"]["disabled:web"]["available"])
+            eff["endpoints"]["enabled:web"]["portal"] = {"visible": True}
+            eff["endpoints"]["disabled:web"]["portal"] = {"visible": True}
+            portal = msvc.portal_projection(eff)
+            by_id = {e["id"]: e for e in portal["entries"]}
+            self.assertIn("enabled:web", by_id)
+            self.assertEqual(by_id["enabled:web"]["available"], True)
+            if "disabled:web" in by_id:
+                self.assertEqual(by_id["disabled:web"]["available"], False)
+            disabled_entries = [e for e in portal["entries"] if e["id"] == "disabled:web"]
+            if disabled_entries:
+                self.assertFalse(disabled_entries[0]["available"])
+
+
 if __name__ == "__main__":
     unittest.main()

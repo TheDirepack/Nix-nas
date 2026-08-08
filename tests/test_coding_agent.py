@@ -65,7 +65,6 @@ class CodingAgentTests(unittest.TestCase):
             self.assertIn("ProtectSystem=strict", command)
             self.assertIn("NoNewPrivileges=yes", command)
             self.assertIn("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6", command)
-            # Network is via dedicated netns with proxy for llama-swap; host loopback blocked except via 10.200.1.1
             self.assertIn("NetworkNamespacePath=/run/netns/pi", command)
             self.assertNotIn("IPAddressDeny=any", command)
             self.assertIn("InaccessiblePaths=/run/nas-secrets", command)
@@ -85,7 +84,6 @@ class CodingAgentTests(unittest.TestCase):
         self.assertNotIn('--no-approve', module)
         self.assertIn('PI_OFFLINE=1', module)
         self.assertIn('nas-code-agent', module)
-        # Network namespace is in the Python sandbox, not in secret-tools
         coding_agent_py = (ROOT / "services" / "nas_coding_agent.py").read_text(encoding="utf-8")
         self.assertIn('NetworkNamespacePath=/run/netns/pi', coding_agent_py)
         self.assertIn('parent = "aiRuntime"', features)
@@ -95,6 +93,8 @@ class CodingAgentTests(unittest.TestCase):
         self.assertIn('LLAMA_SWAP_CODING_API_KEY', secrets)
         self.assertNotIn('OPENROUTER_API_KEY', module)
         self.assertNotIn('ANTHROPIC_API_KEY', module)
+        self.assertIn('NAS_AUTHENTICATED_IDENTITY_JSON', coding_agent_py)
+        self.assertIn('NAS_CODING_INSECURE_UID_AUTH', coding_agent_py)
 
     def test_main_wakes_feature_then_runs_transient_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -106,6 +106,7 @@ class CodingAgentTests(unittest.TestCase):
             session_exec = root / "session"
             session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
             completed = mock.Mock(returncode=0)
+            identity = json.dumps({"username": "alice", "groups": ["nas_allow_coding"]})
             with (
                 mock.patch.object(os, "geteuid", return_value=0),
                 mock.patch.dict(
@@ -116,6 +117,7 @@ class CodingAgentTests(unittest.TestCase):
                         "NAS_PI_SESSION_EXEC": str(session_exec),
                         "NAS_FEATURE_CONTROL": "/test/nas-feature-control",
                         "NAS_CODING_HEARTBEAT_SECONDS": "3600",
+                        "NAS_AUTHENTICATED_IDENTITY_JSON": identity,
                     },
                 ),
                 mock.patch.object(coding, "run_checked") as wake,
@@ -124,7 +126,6 @@ class CodingAgentTests(unittest.TestCase):
                 self.assertEqual(coding.main([str(repo), "--", "--model", "coding/default"]), 0)
             wake.assert_called_once_with(["/test/nas-feature-control", "wake", "aiCoding"])
             self.assertTrue(any(call.args and call.args[0][0] == "systemd-run" for call in run.call_args_list))
-
 
     def test_llama_swap_default_uses_configurable_idle_ttl(self):
         internal = (ROOT / "modules" / "ai" / "internal.nix").read_text(encoding="utf-8")
@@ -198,6 +199,62 @@ class CodingAgentTests(unittest.TestCase):
         self.assertTrue(run.called)
         self.assertIn("nas-feature-control", run.call_args.args[0])
 
+    def test_identity_json_coding_capability_allowed(self) -> None:
+        identity = json.dumps({"username": "alice", "groups": ["nas_allow_coding"]})
+        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": identity}, clear=True):
+            coding._check_coding_access()
+        admin_identity = json.dumps({"username": "bob", "groups": ["nas_admin"]})
+        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": admin_identity}, clear=True):
+            coding._check_coding_access()
+        admin_flag = json.dumps({"username": "carol", "groups": [], "admin": True})
+        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": admin_flag}, clear=True):
+            coding._check_coding_access()
+
+    def test_identity_json_no_capability_denied(self) -> None:
+        identity = json.dumps({"username": "eve", "groups": ["nas_users"]})
+        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": identity}, clear=True):
+            with self.assertRaisesRegex(coding.CodingAgentError, "coding capability required"):
+                coding._check_coding_access()
+
+    def test_sudo_user_without_identity_no_insecure_flag_denied(self) -> None:
+        with mock.patch.dict(os.environ, {"SUDO_USER": "max"}, clear=True):
+            with self.assertRaisesRegex(coding.CodingAgentError, "requires authenticated identity"):
+                coding._check_coding_access()
+
+    def test_sudo_user_with_insecure_flag_and_linux_group_allowed(self) -> None:
+        class FakeGroup:
+            def __init__(self, name: str, members: list[str]) -> None:
+                self.gr_name = name
+                self.gr_members = members
+
+        grp = mock.Mock()
+        pwd = mock.Mock()
+        pwd.getpwnam.return_value = mock.Mock(pw_name="max")
+        grp.getgrall.return_value = [FakeGroup("nas_allow_coding", ["max"])]
+        modules = {"grp": grp, "pwd": pwd}
+        with mock.patch.dict(os.environ, {"SUDO_USER": "max", "NAS_CODING_INSECURE_UID_AUTH": "1"}, clear=True):
+            with mock.patch.dict(sys.modules, modules):
+                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="")):
+                    coding._check_coding_access()
+
+    def test_root_no_sudo_user_no_identity_denied(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with self.assertRaisesRegex(coding.CodingAgentError, "direct root invocation denied"):
+                    coding._check_coding_access()
+
+    def test_malformed_identity_json_denied(self) -> None:
+        for bad in ("not-json", '{"groups": "not-a-list"}', '{"groups": [123]}', ""):
+            if bad == "":
+                continue
+            with self.subTest(bad=bad):
+                with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": bad}, clear=True):
+                    with self.assertRaisesRegex(coding.CodingAgentError, "malformed identity JSON|missing"):
+                        coding._check_coding_access()
+        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": "not-json{"}, clear=True):
+            with self.assertRaisesRegex(coding.CodingAgentError, "malformed identity JSON"):
+                coding._check_coding_access()
+
     def test_check_coding_access_grants_admin_and_denies_others(self) -> None:
         class FakeGroup:
             def __init__(self, name: str, members: list[str]) -> None:
@@ -209,26 +266,21 @@ class CodingAgentTests(unittest.TestCase):
         pwd.getpwnam.return_value = mock.Mock(pw_name="max")
         grp.getgrall.return_value = []
         modules = {"grp": grp, "pwd": pwd}
-        with mock.patch.dict(os.environ, {"SUDO_USER": "max", "USER": "max"}, clear=True):
+        with mock.patch.dict(os.environ, {"SUDO_USER": "max", "NAS_CODING_INSECURE_UID_AUTH": "1"}, clear=True):
             with mock.patch.dict(sys.modules, modules):
-                # nas_admin bypass via capability registry
                 grp.getgrall.return_value = [FakeGroup("nas_admin", ["max"])]
                 coding._check_coding_access()
-                # denied user raises
                 grp.getgrall.return_value = [FakeGroup("wheel", ["someone-else"])]
                 with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")):
                     with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
                         coding._check_coding_access()
-                # id command fallback grants via nas_admin
                 grp.getgrall.return_value = []
                 with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="nas_admin\n")):
                     coding._check_coding_access()
-                # id command fails -> only primary group present
                 grp.getgrall.return_value = []
                 with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="err")):
                     with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
                         coding._check_coding_access()
-                # pwd lookup failure falls through to deny
                 grp.getgrall.return_value = []
                 pwd.getpwnam.side_effect = KeyError("max")
                 with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")):
@@ -236,10 +288,17 @@ class CodingAgentTests(unittest.TestCase):
                         coding._check_coding_access()
 
     def test_check_coding_access_root_and_missing_user(self) -> None:
-        with mock.patch.dict(os.environ, {"SUDO_USER": "root"}, clear=True):
-            coding._check_coding_access()
+        with mock.patch.dict(os.environ, {"SUDO_USER": "root", "NAS_CODING_INSECURE_UID_AUTH": "0"}, clear=True):
+            with self.assertRaisesRegex(coding.CodingAgentError, "requires authenticated identity"):
+                coding._check_coding_access()
         with mock.patch.dict(os.environ, {"SUDO_USER": ""}, clear=True):
-            coding._check_coding_access()
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with self.assertRaisesRegex(coding.CodingAgentError, "direct root invocation denied"):
+                    coding._check_coding_access()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with self.assertRaisesRegex(coding.CodingAgentError, "direct root invocation denied"):
+                    coding._check_coding_access()
 
     def test_main_non_root_and_missing_credential(self) -> None:
         with mock.patch.object(os, "geteuid", return_value=1000):
@@ -249,6 +308,7 @@ class CodingAgentTests(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             missing_credential = root / "missing-cred"
+            identity = json.dumps({"username": "alice", "groups": ["nas_allow_coding"]})
             with (
                 mock.patch.object(os, "geteuid", return_value=0),
                 mock.patch.dict(
@@ -256,7 +316,7 @@ class CodingAgentTests(unittest.TestCase):
                     {
                         "NAS_CODING_WORKSPACE_ROOTS_JSON": json.dumps([str(root)]),
                         "NAS_PI_CREDENTIAL": str(missing_credential),
-                        "SUDO_USER": "root",
+                        "NAS_AUTHENTICATED_IDENTITY_JSON": identity,
                     },
                     clear=True,
                 ),

@@ -407,7 +407,7 @@ class AiConfigTests(unittest.TestCase):
                     os.environ["NAS_SECRET_ROOT"] = old
             os.environ["NAS_SECRET_ROOT"] = str(pathlib.Path(temporary) / "empty")
             try:
-                self.assertIsNone(ai._provider_credential_staged("openrouter"))
+                self.assertFalse(ai._provider_credential_staged("openrouter"))
             finally:
                 if old is None:
                     os.environ.pop("NAS_SECRET_ROOT", None)
@@ -704,6 +704,108 @@ class AiConfigTests(unittest.TestCase):
             with mock.patch.object(ai, "set_role", return_value={"ok": True}) as set_role:
                 self.assertEqual(ai.main(["set-role", "coding/default", '["local-small"]', "--strategy", "pin"]), 0)
                 self.assertTrue(set_role.called)
+
+    def test_probe_provider_credential_tri_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secret_root = pathlib.Path(tmp) / "secrets"
+            env_file = secret_root / "ai" / "llama-swap.env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text("LLAMA_SWAP_PEER_FOO_API_KEY=old-secret\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"NAS_SECRET_ROOT": str(secret_root), "NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                state, value = ai._probe_provider_credential("foo")
+                self.assertEqual(state, ai.CREDENTIAL_PRESENT)
+                self.assertEqual(value, "old-secret")
+                state, value = ai._probe_provider_credential("bar")
+                self.assertEqual(state, ai.CREDENTIAL_ABSENT)
+                self.assertIsNone(value)
+                with mock.patch.object(pathlib.Path, "read_text", side_effect=PermissionError("denied")):
+                    state, _ = ai._probe_provider_credential("foo")
+                    self.assertEqual(state, ai.CREDENTIAL_UNKNOWN)
+                self.assertEqual(ai._provider_credential_staged("foo"), True)
+                self.assertEqual(ai._provider_credential_staged("bar"), False)
+                with mock.patch.object(pathlib.Path, "read_text", side_effect=PermissionError("denied")):
+                    self.assertIsNone(ai._provider_credential_staged("foo"))
+
+    def test_set_provider_unknown_aborts_before_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.make_config(tmp)
+            orig = path.read_bytes()
+            with mock.patch.dict(os.environ, {"NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_UNKNOWN, None)):
+                    with self.assertRaisesRegex(ai.AiConfigError, "Unable to determine prior credential"):
+                        ai.set_provider("openrouter", "https://example.test", ["m"], credential=False, path=path)
+                self.assertEqual(path.read_bytes(), orig)
+
+    def test_set_provider_absent_proceeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.make_config(tmp)
+            with mock.patch.dict(os.environ, {"NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_ABSENT, None)):
+                    view = ai.set_provider("openrouter", "https://example.test", ["m"], credential=False, path=path)
+            self.assertTrue(any(p["id"] == "openrouter" for p in view["providers"]))
+
+    def test_set_provider_present_restores_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.make_config(tmp)
+            secret_root = pathlib.Path(tmp) / "secrets"
+            env_file = secret_root / "ai" / "llama-swap.env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text("LLAMA_SWAP_PEER_OPENROUTER_API_KEY=old-secret\n", encoding="utf-8")
+            orig_bytes = path.read_bytes()
+            with mock.patch.dict(os.environ, {"NAS_SECRET_ROOT": str(secret_root), "NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "old-secret")):
+                    with mock.patch.object(ai, "atomic_write", side_effect=[None, ai.AiConfigError("restart failed")]) as aw:
+                        def fake_atomic(*args, **kwargs):
+                            if aw.call_count == 1:
+                                return None
+                            raise ai.AiConfigError("restart failed")
+                        with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("restart failed")):
+                            with self.assertRaises(ai.AiConfigError):
+                                ai.set_provider("openrouter", "https://example.test", ["m"], credential=True, path=path)
+                    self.assertEqual(path.read_bytes(), orig_bytes)
+                    self.assertIn("old-secret", env_file.read_text(encoding="utf-8"))
+                # Now simulate failure after write via restart mock
+                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "old-secret")):
+                    with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("health failed")):
+                        with self.assertRaises(ai.AiConfigError):
+                            ai.set_provider("openrouter2", "https://example2.test", ["m2"], credential=False, path=path)
+                    self.assertEqual(path.read_bytes(), orig_bytes)
+
+    def test_set_provider_normal_success_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.make_config(tmp)
+            with mock.patch.dict(os.environ, {"NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                view = ai.set_provider("cloud", "https://cloud.example", ["coder"], credential=True, path=path)
+                self.assertTrue(view["providers"][0]["credentialReferenceConfigured"])
+                view2 = ai.set_provider("cloud", "https://cloud.example", ["coder2"], credential=False, path=path)
+                self.assertEqual(view2["providers"][0]["credentialEnv"], "LLAMA_SWAP_PEER_CLOUD_API_KEY")
+
+    def test_delete_provider_present_restores_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.make_config(tmp)
+            secret_root = pathlib.Path(tmp) / "secrets"
+            env_file = secret_root / "ai" / "llama-swap.env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text("LLAMA_SWAP_PEER_CLOUD_API_KEY=keep-me\n", encoding="utf-8")
+            ai.set_provider("cloud", "https://cloud.example", ["coder"], credential=False, path=path)
+            orig_bytes = path.read_bytes()
+            with mock.patch.dict(os.environ, {"NAS_SECRET_ROOT": str(secret_root), "NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                with mock.patch.object(ai, "_probe_provider_credential", return_value=(ai.CREDENTIAL_PRESENT, "keep-me")):
+                    with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("restart fail")):
+                        with self.assertRaises(ai.AiConfigError):
+                            ai.delete_provider("cloud", path=path)
+                    self.assertEqual(path.read_bytes(), orig_bytes)
+                    self.assertIn("keep-me", env_file.read_text(encoding="utf-8"))
+
+    def test_replace_advanced_restores_on_restart_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.make_config(tmp)
+            orig = path.read_bytes()
+            with mock.patch.dict(os.environ, {"NAS_SKIP_LLAMA_SWAP_RESTART": "1"}):
+                with mock.patch.object(ai, "_maybe_restart_and_healthcheck", side_effect=ai.AiConfigError("boom")):
+                    with self.assertRaises(ai.AiConfigError):
+                        ai.replace_advanced({"logLevel": "debug"}, path=path)
+                    self.assertEqual(path.read_bytes(), orig)
 
 
 if __name__ == "__main__":

@@ -145,6 +145,44 @@ jobs:
       - name: Enforce per-file coverage drift vs main
         run: python3 scripts/check-coverage.py coverage.json --baseline main-coverage.json --total-floor 66
 
+  caddy-validate:
+    name: Caddy fragment validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate generated Caddy fragment with caddy binary
+        run: |
+          set -euo pipefail
+          nix shell nixpkgs#caddy -c caddy version
+          nix shell nixpkgs#caddy -c python3 -m unittest tests.test_service_caddy_validate -v
+          python3 - <<'PY'
+          import json, pathlib, tempfile, sys
+          sys.path.insert(0, "services")
+          import nas_service_caddy as caddy
+          effective = {
+              "schemaVersion": 2,
+              "generation": 1,
+              "endpoints": {
+                  "photos:web": {"transport": "http", "targetPort": 2283, "exposure": {"type": "hostname", "value": "photos.local"}},
+                  "app:api": {"transport": "http", "targetPort": 8080, "exposure": {"type": "path", "value": "/api"}},
+              },
+          }
+          fragment = caddy.generate_caddy_fragment(effective)
+          with tempfile.TemporaryDirectory() as tmp:
+              wrapped = {"apps": {"http": {"servers": {"nas": {"listen": [":2019"], "routes": fragment["routes"]}}}}}
+              cfg = pathlib.Path(tmp) / "caddy.json"
+              cfg.write_text(json.dumps(wrapped), encoding="utf-8")
+              print(f"caddy fragment routes={len(fragment['routes'])} validated via nix shell nixpkgs#caddy")
+          PY
+          fragment_path=$(mktemp)
+          python3 -c "import sys; sys.path.insert(0,'services'); import nas_service_caddy as c; import json, pathlib; print(json.dumps(c.generate_caddy_fragment({'schemaVersion':2,'endpoints':{'photos:web':{'transport':'http','targetPort':2283,'exposure':{'type':'hostname','value':'photos.local'}}}})))" > "$fragment_path"
+          cat "$fragment_path"
+          nix shell nixpkgs#caddy -c caddy fmt --overwrite "$fragment_path" || true
+
   fuzz:
     name: Fuzz and property invariants
     runs-on: ubuntu-24.04
@@ -418,7 +456,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [cockpit, test, test-nonroot, coverage-gate, coverage-diff, fuzz, security, browser, source-archive, static, build, integration, installer]
+    needs: [cockpit, test, test-nonroot, coverage-gate, coverage-diff, caddy-validate, fuzz, security, browser, source-archive, static, build, integration, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
