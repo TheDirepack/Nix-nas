@@ -170,7 +170,8 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("cancel-in-progress: true", workflow)
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertIn("check-coverage.py", workflow)
-        self.assertIn("NAS_PREFLIGHT_REQUIRE_COMPLETE", workflow)
+        for gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
+            self.assertIn(gate, workflow)
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
         pyproject = text("pyproject.toml")
