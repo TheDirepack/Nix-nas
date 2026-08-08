@@ -218,8 +218,8 @@ jobs:
               "schemaVersion": 2,
               "generation": 1,
               "endpoints": {
-                  "photos:web": {"transport": "http", "targetPort": 2283, "exposure": {"type": "hostname", "value": "photos.local"}},
-                  "app:api": {"transport": "http", "targetPort": 8080, "exposure": {"type": "path", "value": "/api"}},
+                  "photos:web": {"transport": "http", "targetPort": 2283, "exposure": {"type": "hostname", "value": "photos.local"}, "auth": {"mode": "public"}},
+                  "app:api": {"transport": "http", "targetPort": 8080, "exposure": {"type": "path", "value": "/api"}, "auth": {"mode": "public"}},
               },
           }
           fragment = caddy.generate_caddy_fragment(effective)
@@ -230,7 +230,7 @@ jobs:
               print(f"caddy fragment routes={len(fragment['routes'])} validated via nix shell nixpkgs#caddy")
           PY
           fragment_path=$(mktemp)
-          python3 -c "import sys; sys.path.insert(0,'services'); import nas_service_caddy as c; import json, pathlib; print(json.dumps(c.generate_caddy_fragment({'schemaVersion':2,'endpoints':{'photos:web':{'transport':'http','targetPort':2283,'exposure':{'type':'hostname','value':'photos.local'}}}})))" > "$fragment_path"
+          python3 -c "import sys; sys.path.insert(0,'services'); import nas_service_caddy as c; import json, pathlib; print(json.dumps(c.generate_caddy_fragment({'schemaVersion':2,'endpoints':{'photos:web':{'transport':'http','targetPort':2283,'exposure':{'type':'hostname','value':'photos.local'}, 'auth': {'mode': 'public'}}}})))" > "$fragment_path"
           cat "$fragment_path"
           nix shell nixpkgs#caddy -c caddy fmt --overwrite "$fragment_path" || true
 
