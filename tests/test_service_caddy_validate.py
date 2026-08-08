@@ -39,7 +39,7 @@ class CaddyValidateTests(unittest.TestCase):
                 "app:api": {
                     "transport": "http",
                     "targetPort": 8080,
-                    "exposure": {"type": "path", "value": "/api"},
+                    "exposure": {"type": "path", "value": "/managed-api"},
                     "auth": {"mode": "forward-auth"},
                 },
                 "other:svc": {
