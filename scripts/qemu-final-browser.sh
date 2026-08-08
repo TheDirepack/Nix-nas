@@ -80,8 +80,9 @@ ssh "${ssh_args[@]}" admin@127.0.0.1 true >/dev/null 2>&1 || {
 }
 
 log "Creating an overlay-only Cockpit test identity"
-ssh "${ssh_args[@]}" admin@127.0.0.1 \
-  "sudo -n id -u '$TEST_USER' >/dev/null 2>&1 || sudo -n useradd --create-home --groups wheel --shell /bin/bash '$TEST_USER'"
+printf '%s\n' "$TEST_USER" | \
+  ssh "${ssh_args[@]}" admin@127.0.0.1 \
+    'IFS= read -r test_user; sudo -n id -u "$test_user" >/dev/null 2>&1 || sudo -n useradd --create-home --groups wheel --shell /bin/bash "$test_user"'
 printf '%s:%s\n' "$TEST_USER" "$TEST_PASSWORD" | \
   ssh "${ssh_args[@]}" admin@127.0.0.1 'sudo -n chpasswd'
 
