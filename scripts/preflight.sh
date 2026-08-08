@@ -42,15 +42,19 @@ step "documentation links" ./scripts/validate-doc-links.py
 step "custom executable test inventory" ./scripts/validate-test-inventory.py
 step "static security boundaries" ./scripts/security-static-scan.py
 step "Python syntax" ./scripts/validate-python-syntax.py
-if [[ "${NAS_PREFLIGHT_SKIP_FUZZ:-0}" != "1" ]]; then
+
+# Fuzzing is deliberately opt-in. CI owns long-running fuzz/property work in
+# the final slow stage, after static checks, builds, runtime integration, and
+# final-system deterministic qualification have succeeded.
+if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" ]]; then
   step "deterministic boundary fuzz smoke" ./scripts/fuzz.py --cases "${NAS_PREFLIGHT_FUZZ_CASES:-250}"
   step "custom executable fuzz smoke" ./scripts/fuzz-executables.py --cases "${NAS_PREFLIGHT_EXECUTABLE_FUZZ_CASES:-1}"
-else
-  skip deterministic-fuzz "Deterministic fuzz smoke disabled by NAS_PREFLIGHT_SKIP_FUZZ"
 fi
+
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
   step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
-    --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py
+    --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py \
+    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py
   step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_core.py'
   step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_matrix.py'
   step "Maintainer release integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_release.py'
@@ -84,8 +88,7 @@ if command -v node >/dev/null 2>&1; then
   if [[ -d cockpit/node_modules/typescript ]] || node -e 'require.resolve("typescript")' >/dev/null 2>&1; then
     node scripts/validate-cockpit-jsx.cjs
   elif $cockpit_bundle_available; then
-    printf 'JSX parser check covered by the verified shared Cockpit bundle artifact.
-'
+    printf 'JSX parser check covered by the verified shared Cockpit bundle artifact.\n'
   else
     skip cockpit-jsx-syntax "TypeScript parser unavailable and no verified Cockpit bundle exists"
   fi
