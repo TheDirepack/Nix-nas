@@ -157,8 +157,13 @@ class GenerateFragmentTests(unittest.TestCase):
                 }
             }
         }
+        # Behavioral: fragment dict is the contract, caddyfile string is rendering
+        fragment = caddy.generate_caddy_fragment(effective)
+        self.assertEqual(fragment["routes"][0]["path"], "/photos")
+        self.assertEqual(fragment["routes"][0]["targetPort"], 8080)
+        self.assertTrue(fragment["routes"][0]["path_prefix"])
         caddyfile = caddy.generate_caddyfile(effective)
-        self.assertIn("/photos", caddyfile)
+        self.assertIn("/photos", caddyfile)  # smoke: rendering contains path
         self.assertIn("reverse_proxy 127.0.0.1:8080", caddyfile)
 
     def test_port_exposure_generates_caddyfile(self):
@@ -186,6 +191,9 @@ class GenerateFragmentTests(unittest.TestCase):
                 }
             }
         }
+        fragment = caddy.generate_caddy_fragment(effective)
+        self.assertEqual(fragment["routes"][0]["auth"]["mode"], "forward-auth")
+        self.assertEqual(fragment["routes"][0]["key"], "app:web")
         caddyfile = caddy.generate_caddyfile(effective)
         self.assertIn("forward_auth", caddyfile)
         self.assertIn("app:web", caddyfile)
@@ -288,9 +296,12 @@ class WriteFragmentTests(unittest.TestCase):
             }
             with mock.patch.object(msvc, "effective_registry", return_value=effective):
                 with mock.patch.dict("os.environ", {"NAS_SKIP_CADDY_VALIDATE": "1", "NAS_SKIP_CADDY_RELOAD": "1"}):
-                    caddy.write_caddy_fragment(target)
+                    fragment = caddy.write_caddy_fragment(target)
+            # Behavioral: fragment dict is the source of truth
+            self.assertEqual(fragment["routes"][0]["host"], "app.local")
+            self.assertEqual(fragment["routes"][0]["targetPort"], 8080)
             content = target.read_text(encoding="utf-8")
-            self.assertIn("app.local", content)
+            self.assertIn("app.local", content)  # smoke: file rendering
             self.assertIn("8080", content)
 
     def test_default_path_uses_run_control_location(self):
