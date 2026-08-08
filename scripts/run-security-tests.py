@@ -34,6 +34,9 @@ CHECKS = (
             "unittest",
             "tests.test_security_surface",
             "tests.test_adversarial_security",
+            "tests.test_secret_transaction",
+            "tests.test_secret_security_fuzz",
+            "tests.test_logging",
             "-v",
         ),
     ),
@@ -88,9 +91,9 @@ def main() -> int:
         if result.returncode != 0:
             print(f"security check failed: {check.name}", file=sys.stderr)
             if result.stdout:
-                print(result.stdout[-8000:], file=sys.stderr)
+                print(result.stdout[-16000:], file=sys.stderr)
             if result.stderr:
-                print(result.stderr[-8000:], file=sys.stderr)
+                print(result.stderr[-16000:], file=sys.stderr)
             return 1
         print(f"security check ok: {check.name}")
 
