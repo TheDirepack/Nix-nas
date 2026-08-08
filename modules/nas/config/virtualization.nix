@@ -8,6 +8,11 @@ in
 {
   config = {
     virtualisation.podman.enable = true;
+
+    # podman compose is only a frontend. Keep podman-compose as the single
+    # explicitly installed provider so Docker is never selected implicitly.
+    environment.systemPackages = [ pkgs.podman-compose ];
+
     virtualisation.libvirtd = lib.mkIf cfg.virtualization.enable {
       enable = true;
       onShutdown = "shutdown";
