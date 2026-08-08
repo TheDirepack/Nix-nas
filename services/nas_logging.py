@@ -8,8 +8,6 @@ secret-like fields are redacted before serialization.
 from __future__ import annotations
 
 import json
-import math
-import re
 import sys
 from datetime import datetime, timezone
 from typing import Any, Mapping, TextIO
@@ -49,20 +47,10 @@ _SENSITIVE_SUFFIXES = (
     "_private_key",
     "_cookie",
 )
-_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
-
-
-def _normalized_key(key: str) -> str:
-    # Structured APIs in this project use a mix of snake_case, kebab-case,
-    # dotted names, and camelCase. Normalize all of those before applying the
-    # exact/suffix sensitive-name policy so e.g. clientSecret and providerApiKey
-    # cannot bypass redaction merely through naming style.
-    with_boundaries = _CAMEL_BOUNDARY_RE.sub("_", key)
-    return with_boundaries.lower().replace("-", "_").replace(".", "_")
 
 
 def _sensitive_key(key: str) -> bool:
-    lowered = _normalized_key(key)
+    lowered = key.lower().replace("-", "_").replace(".", "_")
     return lowered in _SENSITIVE_KEYS or lowered.endswith(_SENSITIVE_SUFFIXES)
 
 
@@ -78,12 +66,8 @@ def sanitize(value: Any, *, key: str = "", depth: int = 0) -> Any:
 
     if key and _sensitive_key(key):
         return "[redacted]"
-    if value is None or isinstance(value, (bool, int)):
+    if value is None or isinstance(value, (bool, int, float)):
         return value
-    if isinstance(value, float):
-        # Strict JSON has no NaN/Infinity. Converting them to bounded strings
-        # keeps journald output parseable by non-Python consumers.
-        return value if math.isfinite(value) else _bounded_text(value)
     if isinstance(value, (bytes, bytearray, memoryview)):
         # Process output is text-oriented. Decode invalid bytes deterministically
         # instead of leaking Python's implementation-specific b'...' repr.
@@ -142,10 +126,9 @@ def log_event(
         "recoveryRequired": bool(recovery_required),
     }
     if duration_ms is not None:
-        number = float(duration_ms)
-        record["durationMs"] = max(0, round(number, 3)) if math.isfinite(number) else 0
+        record["durationMs"] = max(0, round(float(duration_ms), 3))
     for key, value in fields.items():
         record[_bounded_text(key)] = sanitize(value, key=key)
     target = sys.stderr if stream is None else stream
-    print(json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False), file=target, flush=True)
+    print(json.dumps(record, sort_keys=True, separators=(",", ":")), file=target, flush=True)
     return record
