@@ -579,7 +579,7 @@ class AiConfigTests(unittest.TestCase):
                     self.assertEqual(ai.main(["delete-provider", "openrouter"]), 0)
             self.assertEqual(ai.main(["set-role", "coding/default", "not-json"]), 1)
             self.assertEqual(ai.main(["set-advanced", "[]"]), 1)
-            self.assertEqual(ai.main(["set-advanced", '{"logLevel": "info"}']), 1)
+            self.assertEqual(ai.main(["set-advanced", '{"logLevel": "invalid"}']), 1)
             self.assertEqual(ai.main(["set-local-model", "m", "/tmp/m.gguf", "--context", "8192"]), 1)
             self.assertEqual(ai.main(["delete-local-model", "m"]), 1)
 
