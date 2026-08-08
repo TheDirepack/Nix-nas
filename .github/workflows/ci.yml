@@ -103,6 +103,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -130,6 +139,15 @@ jobs:
         with:
           name: coverage-report
           path: .
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -151,6 +169,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -194,6 +221,15 @@ jobs:
           ./scripts/fuzz.py --cases 5000 --seed 0x4e41533232
           ./scripts/fuzz-executables.py --cases 5 --seed 0x534352495054
           python3 -m unittest tests.test_fuzz_boundaries -v
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -208,6 +244,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Project security regression suite
         run: ./scripts/run-security-tests.py
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -253,6 +298,15 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -330,6 +384,15 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -368,6 +431,15 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -388,6 +460,15 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -427,6 +508,15 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+            /nix/var/nix
+            ~/.cache/nix
+            ~/.cache/nixpkgs
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: nix-${{ runner.os }}-
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
