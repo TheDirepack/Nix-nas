@@ -20,11 +20,32 @@ const VIEWPORTS = [
 const TEXT_SCALES = [1, 1.5, 2];
 const INTERACTIVE = 'button, a[href], select, input, textarea, [role="dialog"], [role="alert"]';
 
+function isNasComponentFrame(frame) {
+  try {
+    const url = new URL(frame.url());
+    return /\/cockpit\/@[^/]+\/nixos-nas(?:\/|$)/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function getNasComponentFrame(page) {
+  await expect
+    .poll(
+      () => page.frames().filter(isNasComponentFrame).length,
+      {timeout: 30_000, message: "Cockpit never loaded the installed nixos-nas package frame"},
+    )
+    .toBe(1);
+  const frame = page.frames().find(isNasComponentFrame);
+  if (!frame) throw new Error("nixos-nas Cockpit frame disappeared after discovery");
+  return frame;
+}
+
 async function expectLogin(page) {
   await expect(page.locator("#login-user-input")).toBeVisible();
   await expect(page.locator("#login-password-input")).toBeVisible();
   await expect(page.locator("#login-button")).toBeVisible();
-  await expect(page.getByRole("heading", {name: "NAS Overview"})).toHaveCount(0);
+  expect(page.frames().some(isNasComponentFrame)).toBe(false);
 }
 
 async function login(page) {
@@ -40,13 +61,19 @@ async function login(page) {
 
 async function openNasOverview(page) {
   await login(page);
-  const link = page.getByText("NAS Overview", {exact: true}).first();
+  const link = page.getByText("NAS Overview", {exact: true}).filter({visible: true}).first();
   await expect(link).toBeVisible({timeout: 30_000});
   await link.click();
-  await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible({timeout: 30_000});
+  const frame = await getNasComponentFrame(page);
+  await expect(frame.getByRole("heading", {name: "NAS Overview"})).toBeVisible({timeout: 30_000});
+  return frame;
 }
 
 async function expectNoSeriousAxeViolations(page) {
+  // axe-core traverses same-origin frames from the Cockpit shell.  The caller
+  // first proves that the real nixos-nas frame exists so this cannot silently
+  // degrade into a shell-only accessibility check.
+  await getNasComponentFrame(page);
   const result = await new AxeBuilder({page})
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
@@ -54,8 +81,8 @@ async function expectNoSeriousAxeViolations(page) {
   expect(blocking).toEqual([]);
 }
 
-async function expectLayoutHealthy(page, viewport) {
-  const metrics = await page.evaluate(() => ({
+async function expectLayoutHealthy(frame, viewport) {
+  const metrics = await frame.evaluate(() => ({
     viewport: document.documentElement.clientWidth,
     pageWidth: document.documentElement.scrollWidth,
     bodyWidth: document.body.scrollWidth,
@@ -63,7 +90,7 @@ async function expectLayoutHealthy(page, viewport) {
   expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewport + 1);
   expect(metrics.bodyWidth).toBeLessThanOrEqual(metrics.viewport + 1);
 
-  const boxes = await page.locator(INTERACTIVE).evaluateAll(nodes => nodes
+  const boxes = await frame.locator(INTERACTIVE).evaluateAll(nodes => nodes
     .filter(node => {
       const style = getComputedStyle(node);
       const rect = node.getBoundingClientRect();
@@ -105,14 +132,14 @@ async function expectLayoutHealthy(page, viewport) {
   expect(collisions, `unexpected interactive element overlaps: ${JSON.stringify(collisions.slice(0, 8))}`).toEqual([]);
 }
 
-async function exerciseLayoutMatrix(page) {
+async function exerciseLayoutMatrix(page, frame) {
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize(viewport);
     for (const scale of TEXT_SCALES) {
-      await page.evaluate(value => {
+      await frame.evaluate(value => {
         document.documentElement.style.fontSize = `${value * 100}%`;
       }, scale);
-      await expectLayoutHealthy(page, viewport);
+      await expectLayoutHealthy(frame, viewport);
     }
   }
 }
@@ -128,8 +155,20 @@ test("anonymous clients see only the Cockpit login boundary", async ({page}) => 
 test("anonymous login boundary remains accessible and responsive at common sizes and 200 percent text", async ({page}) => {
   await page.goto("/");
   await expectLogin(page);
-  await expectNoSeriousAxeViolations(page);
-  await exerciseLayoutMatrix(page);
+  const result = await new AxeBuilder({page})
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  const blocking = result.violations.filter(item => ["serious", "critical"].includes(item.impact));
+  expect(blocking).toEqual([]);
+  for (const viewport of VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    for (const scale of TEXT_SCALES) {
+      await page.evaluate(value => {
+        document.documentElement.style.fontSize = `${value * 100}%`;
+      }, scale);
+      await expectLayoutHealthy(page.mainFrame(), viewport);
+    }
+  }
 });
 
 test("direct anonymous attempts to reach the NAS component remain login-protected", async ({page}) => {
@@ -145,7 +184,7 @@ test("invalid credentials cannot expose the NAS component", async ({page}) => {
   await page.locator("#login-password-input").fill("definitely-not-a-password");
   await page.locator("#login-button").click();
   await expect(page.locator("#login-user-input")).toBeVisible();
-  await expect(page.getByRole("heading", {name: "NAS Overview"})).toHaveCount(0);
+  expect(page.frames().some(isNasComponentFrame)).toBe(false);
 });
 
 test("hostile anonymous login values stay inert", async ({page}) => {
@@ -169,6 +208,7 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     await page.locator("#login-button").click();
     await expect(page.locator("#login-user-input")).toBeVisible();
     expect(await page.evaluate(() => globalThis.__nas_login_xss)).toBe(0);
+    expect(page.frames().some(isNasComponentFrame)).toBe(false);
   }
   expect(errors).toEqual([]);
 });
@@ -176,8 +216,8 @@ test("hostile anonymous login values stay inert", async ({page}) => {
 test("final VM exposes the installed Cockpit NAS component after real authentication", async ({page}) => {
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
-  await openNasOverview(page);
-  await expect(page.getByRole("heading", {name: "Service policies"})).toBeVisible();
+  const frame = await openNasOverview(page);
+  await expect(frame.getByRole("heading", {name: "Service policies"})).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -187,20 +227,20 @@ test("final VM component has no serious or critical accessibility violations", a
 });
 
 test("final VM has no overlap overflow or clipping across common layouts and 200 percent text", async ({page}) => {
-  await openNasOverview(page);
-  await exerciseLayoutMatrix(page);
+  const frame = await openNasOverview(page);
+  await exerciseLayoutMatrix(page, frame);
 });
 
 test("final VM visible controls remain keyboard reachable and DOM ids are unique", async ({page}) => {
   await page.setViewportSize({width: 360, height: 740});
-  await openNasOverview(page);
-  const ids = await page.locator("[id]").evaluateAll(nodes => nodes.map(node => node.id).filter(Boolean));
+  const frame = await openNasOverview(page);
+  const ids = await frame.locator("[id]").evaluateAll(nodes => nodes.map(node => node.id).filter(Boolean));
   expect(new Set(ids).size).toBe(ids.length);
 
   const focusTrail = [];
   for (let index = 0; index < 16; index += 1) {
     await page.keyboard.press("Tab");
-    const active = await page.evaluate(() => {
+    const active = await frame.evaluate(() => {
       const node = document.activeElement;
       if (!node || node === document.body) return "";
       const rect = node.getBoundingClientRect();
@@ -215,19 +255,19 @@ test("final VM visible controls remain keyboard reachable and DOM ids are unique
 
 test("final VM confirmation dialog stays usable at extreme zoom and restores focus", async ({page}) => {
   await page.setViewportSize({width: 320, height: 568});
-  await openNasOverview(page);
-  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
-  const trigger = page.getByRole("button", {name: "Run system health checks"});
+  const frame = await openNasOverview(page);
+  await frame.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+  const trigger = frame.getByRole("button", {name: "Run system health checks"});
   await expect(trigger).toBeVisible();
   await trigger.focus();
   await trigger.click();
-  const dialog = page.getByRole("dialog");
+  const dialog = frame.getByRole("dialog");
   await expect(dialog).toBeVisible();
   const box = await dialog.boundingBox();
   expect(box).not.toBeNull();
   expect(box.x).toBeGreaterThanOrEqual(-1);
   expect(box.x + box.width).toBeLessThanOrEqual(321);
-  const cancel = page.getByRole("button", {name: "Cancel"});
+  const cancel = frame.getByRole("button", {name: "Cancel"});
   await cancel.focus();
   await expect(cancel).toBeFocused();
   await page.keyboard.press("Escape");
@@ -236,8 +276,8 @@ test("final VM confirmation dialog stays usable at extreme zoom and restores foc
 });
 
 test("final VM rejects scriptable navigation schemes in NAS links", async ({page}) => {
-  await openNasOverview(page);
-  const hrefs = await page.locator("a[href]").evaluateAll(nodes => nodes.map(node => node.getAttribute("href") || ""));
+  const frame = await openNasOverview(page);
+  const hrefs = await frame.locator("a[href]").evaluateAll(nodes => nodes.map(node => node.getAttribute("href") || ""));
   for (const href of hrefs) {
     const value = href.trim().toLowerCase();
     expect(value.startsWith("javascript:")).toBe(false);
@@ -246,9 +286,9 @@ test("final VM rejects scriptable navigation schemes in NAS links", async ({page
   }
 });
 
-test("final VM CSP blocks inline script execution in the component frame", async ({page}) => {
-  await openNasOverview(page);
-  const result = await page.evaluate(() => {
+test("final VM CSP blocks inline script execution in the NAS component frame", async ({page}) => {
+  const frame = await openNasOverview(page);
+  const result = await frame.evaluate(() => {
     globalThis.__nas_inline_probe = 0;
     const script = document.createElement("script");
     script.textContent = "globalThis.__nas_inline_probe = 1";
