@@ -313,10 +313,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}/nas-source-release/*.zip
-            ${{ runner.temp }}/nas-source-release/*.sha256
-            ${{ runner.temp }}/nas-source-release/*.provenance.json
-            ${{ runner.temp }}/nas-source-release/*.MANIFEST.sha256
+            ${{ env.RUNNER_TEMP }}/nas-source-release/*.zip
+            ${{ env.RUNNER_TEMP }}/nas-source-release/*.sha256
+            ${{ env.RUNNER_TEMP }}/nas-source-release/*.provenance.json
+            ${{ env.RUNNER_TEMP }}/nas-source-release/*.MANIFEST.sha256
 
   static:
     name: Nix evaluation and lint
@@ -419,7 +419,7 @@ jobs:
       NAS_ZAP_MODE: full
       # This job scans only the disposable loopback-forwarded installer VM.
       NAS_ZAP_CONFIRM_ACTIVE: "1"
-      NAS_ZAP_OUT_DIR: ${{ runner.temp }}/zap-report
+      NAS_ZAP_OUT_DIR: ${{ env.RUNNER_TEMP }}/zap-report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -451,7 +451,7 @@ jobs:
           name: zap-security-reports
           if-no-files-found: error
           retention-days: 30
-          path: ${{ runner.temp }}/zap-report
+          path: ${{ env.RUNNER_TEMP }}/zap-report
 
   summary:
     name: Pipeline summary
