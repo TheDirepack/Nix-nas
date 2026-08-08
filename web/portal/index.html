@@ -25,24 +25,50 @@
   </header>
   <main class="grid">
     {{ $groups := split "," (placeholder "http.request.header.Remote-Groups") }}
+    {{ $user := placeholder "http.request.header.Remote-User" }}
+    {{ $uid := placeholder "http.request.header.Remote-UID" }}
     {{ $portal := include "/run/nas-control/portal.json" | mustFromJson }}
     {{ range $entry := $portal.entries }}
       {{ $visible := false }}
       {{ $access := index $entry "access" }}
       {{ $mode := index $access "mode" }}
-      {{ if eq $mode "public" }}{{ $visible = true }}{{ end }}
-      {{ if has $groups "nas_admin" }}{{ $visible = true }}{{ end }}
       {{ $allow := index $access "allow" }}
       {{ $groups_list := index $access "groups" }}
-      {{ if $groups_list }}
-        {{ range $g := $groups_list }}{{ if has $groups $g }}{{ $visible = true }}{{ end }}{{ end }}
-      {{ end }}
       {{ $users_list := index $access "users" }}
-      {{ if $users_list }}
-        {{ $user := placeholder "http.request.header.Remote-User" | urlquery }}
-        {{ range $u := $users_list }}{{ if eq $u $user }}{{ $visible = true }}{{ end }}{{ end }}
+      {{ $group_match := false }}
+      {{ $user_match := false }}
+
+      {{ if $groups_list }}
+        {{ range $g := $groups_list }}
+          {{ if has $groups $g }}{{ $group_match = true }}{{ end }}
+        {{ end }}
       {{ end }}
-      {{ if not $groups_list }}{{ if not $users_list }}{{ if eq $allow "any" }}{{ $visible = true }}{{ end }}{{ if eq $allow "all" }}{{ $visible = true }}{{ end }}{{ end }}{{ end }}
+      {{ if $users_list }}
+        {{ range $u := $users_list }}
+          {{ if eq $u $user }}{{ $user_match = true }}{{ end }}
+          {{ if and $uid (eq $u $uid) }}{{ $user_match = true }}{{ end }}
+        {{ end }}
+      {{ end }}
+
+      {{ if eq $mode "public" }}
+        {{ $visible = true }}
+      {{ else if has $groups "nas_admin" }}
+        {{ $visible = true }}
+      {{ else if eq $allow "any" }}
+        {{ $visible = true }}
+      {{ else if eq $allow "groups" }}
+        {{ $visible = $group_match }}
+      {{ else if eq $allow "users" }}
+        {{ $visible = $user_match }}
+      {{ else if eq $allow "all" }}
+        {{ $group_ok := or (not $groups_list) $group_match }}
+        {{ $user_ok := or (not $users_list) $user_match }}
+        {{ if and $group_ok $user_ok }}{{ $visible = true }}{{ end }}
+      {{ else }}
+        {{ if $groups_list }}{{ $visible = $group_match }}{{ end }}
+        {{ if and (not $visible) $users_list }}{{ $visible = $user_match }}{{ end }}
+      {{ end }}
+
       {{ if $visible }}
         <a href="{{index $entry "url" | html}}"><strong>{{index $entry "label" | html}}</strong><small>{{index $entry "category" | html}} · {{index $entry "id" | html}}</small></a>
       {{ end }}
@@ -52,6 +78,6 @@
     <a href="/shares/admin/copyparty-config/"><strong>CopyParty configuration</strong><small>Edit native volumes, ACLs, flags, and reload configuration.</small></a>
     {{end}}
   </main>
-  <footer>Share policy belongs to CopyParty. Identity and user-editable profile settings belong to Authentik.</footer>
+  <footer>Identity and group membership belong to Authentik; NAS service policy controls service visibility and access.</footer>
 </body>
 </html>
