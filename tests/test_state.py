@@ -102,7 +102,7 @@ class StateBundleTests(unittest.TestCase):
         acquire.assert_not_called()
 
     @unittest.skipIf(
-        os.environ.get("GITHUB_ACTIONS") == "true" and not pathlib.Path("/run/nas-operations").exists(),
+        not pathlib.Path("/run/nas-operations").exists(),
         "requires VM with /run/nas-operations tmpfs (host hermetic fallback cannot fully emulate nested operation lock)",
     )
     def test_real_nested_operation_runner_accepts_state_validator_success_contract(self) -> None:
@@ -442,7 +442,7 @@ class StateBundleTests(unittest.TestCase):
             self.assertEqual(destination.stat().st_mode & 0o777, 0o750)
 
     @unittest.skipIf(
-        os.environ.get("GITHUB_ACTIONS") == "true" and os.geteuid() != 0,
+        os.geteuid() != 0,
         "requires root-owned chown semantics (VM with nas-state user)",
     )
     def test_restore_to_absent_authority_uses_registry_owned_identity(self) -> None:
