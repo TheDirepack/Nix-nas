@@ -101,7 +101,7 @@ class CaddyValidateTests(unittest.TestCase):
             raise unittest.SkipTest("caddy binary not present")
         with tempfile.TemporaryDirectory() as tmp:
             caddyfile = pathlib.Path(tmp) / "Caddyfile"
-            caddyfile.write_text("{\n admin off\n}\n:2019 {\n respond \"ok\" 200\n}\n", encoding="utf-8")
+            caddyfile.write_text('{\n admin off\n}\n:2019 {\n respond "ok" 200\n}\n', encoding="utf-8")
             result = subprocess.run(
                 [caddy_bin, "adapt", "--adapter", "caddyfile", "--config", str(caddyfile)],
                 capture_output=True,

@@ -64,7 +64,9 @@ def load_authz():
         "selenium.webdriver.support.ui": support_ui,
     }
     with mock.patch.dict(sys.modules, replacements):
-        spec = importlib.util.spec_from_file_location("nas_browser_authz_tested", ROOT / "tests" / "browser" / "authz.py")
+        spec = importlib.util.spec_from_file_location(
+            "nas_browser_authz_tested", ROOT / "tests" / "browser" / "authz.py"
+        )
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module

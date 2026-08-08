@@ -49,12 +49,8 @@ class CaddyCoverageTests(unittest.TestCase):
         effective = {
             "endpoints": {
                 "secure": endpoint(transport="https"),
-                "exact": endpoint(
-                    exposure={"type": "path", "value": "/exact", "prefix": False}
-                ),
-                "coerced": endpoint(
-                    exposure={"type": "path", "value": "/coerced", "prefix": "yes"}
-                ),
+                "exact": endpoint(exposure={"type": "path", "value": "/exact", "prefix": False}),
+                "coerced": endpoint(exposure={"type": "path", "value": "/coerced", "prefix": "yes"}),
             }
         }
         rendered = caddy.generate_caddyfile(effective)
@@ -69,7 +65,9 @@ class CaddyCoverageTests(unittest.TestCase):
             target = pathlib.Path(temporary) / "managed.caddy"
             completed = SimpleNamespace(returncode=0, stdout="", stderr="")
             with (
-                mock.patch.object(caddy.shutil, "which", side_effect=lambda name: "/bin/caddy" if name == "caddy" else None),
+                mock.patch.object(
+                    caddy.shutil, "which", side_effect=lambda name: "/bin/caddy" if name == "caddy" else None
+                ),
                 mock.patch.object(caddy.subprocess, "run", return_value=completed) as run,
                 mock.patch.dict(caddy.os.environ, {"NAS_SKIP_CADDY_RELOAD": "1"}, clear=False),
             ):
@@ -84,7 +82,9 @@ class CaddyCoverageTests(unittest.TestCase):
             target.write_text("old-content\n", encoding="utf-8")
             failed = SimpleNamespace(returncode=1, stdout="", stderr="bad format")
             with (
-                mock.patch.object(caddy.shutil, "which", side_effect=lambda name: "/bin/caddy" if name == "caddy" else None),
+                mock.patch.object(
+                    caddy.shutil, "which", side_effect=lambda name: "/bin/caddy" if name == "caddy" else None
+                ),
                 mock.patch.object(caddy.subprocess, "run", return_value=failed),
                 mock.patch.dict(caddy.os.environ, {"NAS_SKIP_CADDY_RELOAD": "1"}, clear=False),
             ):
@@ -99,7 +99,9 @@ class CaddyCoverageTests(unittest.TestCase):
             failed = SimpleNamespace(returncode=1, stdout="", stderr="reload failed")
             success = SimpleNamespace(returncode=0, stdout="", stderr="")
             with (
-                mock.patch.object(caddy.shutil, "which", side_effect=lambda name: "/bin/systemctl" if name == "systemctl" else None),
+                mock.patch.object(
+                    caddy.shutil, "which", side_effect=lambda name: "/bin/systemctl" if name == "systemctl" else None
+                ),
                 mock.patch.object(caddy.subprocess, "run", side_effect=[failed, success]) as run,
                 mock.patch.dict(caddy.os.environ, {"NAS_SKIP_CADDY_VALIDATE": "1"}, clear=False),
             ):

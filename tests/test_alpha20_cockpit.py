@@ -91,7 +91,9 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz", workflow)
         self.assertIn("Slow source/property/security fuzz shard (${{ matrix.shard }})", workflow)
         self.assertIn("Slow browser deterministic replay plus hostile-input fuzz", workflow)
-        self.assertIn("needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow)
+        self.assertIn(
+            "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
+        )
         self.assertIn("needs: [cockpit-build]", workflow)
         self.assertIn("needs: [cockpit-build, source-archive]", workflow)
         self.assertIn("needs: [build, browser, cockpit-build]", workflow)

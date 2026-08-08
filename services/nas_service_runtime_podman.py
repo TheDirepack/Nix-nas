@@ -72,9 +72,7 @@ def remove_podman(service_id: str, *, dry_run: bool = False) -> None:
 
 
 def _render_quadlet(service_id: str, service: dict[str, Any]) -> str:
-    image = service.get("image") or service.get("runtime", {}).get(
-        "image", "docker.io/library/busybox:latest"
-    )
+    image = service.get("image") or service.get("runtime", {}).get("image", "docker.io/library/busybox:latest")
     lines = ["[Container]", f"Image={image}", f"ContainerName={service_id}"]
     for mount in service.get("storage", []):
         host = mount.get("hostPath", "")

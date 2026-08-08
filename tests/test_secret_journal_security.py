@@ -46,9 +46,7 @@ class SecretJournalSecurityTests(unittest.TestCase):
         sentinel = "RESULT-SECRET-SENTINEL"
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "operation.json"
-            journal = journal_module.OperationJournal.open(
-                path, workflow="secret-test", fingerprint="abc123"
-            )
+            journal = journal_module.OperationJournal.open(path, workflow="secret-test", fingerprint="abc123")
             journal.start_step("stage")
             journal.complete_step(
                 "stage",

@@ -24,7 +24,6 @@ except ImportError:
 
 
 if HAS_HYPOTHESIS:
-
     SAFE_HOSTNAME = st.from_regex(r"[a-z0-9][a-z0-9-]{0,7}\.example\.test", fullmatch=True)
 
     def _valid_service_doc(service_id: str, label: str, port: int, hostname: str, enabled: bool) -> dict:

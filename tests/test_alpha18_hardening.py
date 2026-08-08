@@ -172,7 +172,9 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("check-coverage.py", workflow)
         for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
             self.assertNotIn(retired_gate, workflow)
-        self.assertIn("needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow)
+        self.assertIn(
+            "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
+        )
         self.assertIn("needs: [build, browser, cockpit-build]", workflow)
         self.assertIn("needs: [integration, installer]", workflow)
 

@@ -103,11 +103,61 @@ class ManagedServiceTests(unittest.TestCase):
 
     def test_validate_endpoints(self):
         cases = [
-            ({"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "bogus", "value": "/x"}, "auth": {"mode": "public"}}}, "exposure.type"),
-            ({"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "x"}, "auth": {"mode": "public"}}}, "path"),
-            ({"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "BAD_HOST"}, "auth": {"mode": "public"}}}, "hostname"),
-            ({"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "port", "value": 70000}, "auth": {"mode": "public"}}}, "port"),
-            ({"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/x"}, "auth": {"mode": "bogus"}}}, "auth.mode"),
+            (
+                {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "bogus", "value": "/x"},
+                        "auth": {"mode": "public"},
+                    }
+                },
+                "exposure.type",
+            ),
+            (
+                {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "path", "value": "x"},
+                        "auth": {"mode": "public"},
+                    }
+                },
+                "path",
+            ),
+            (
+                {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "hostname", "value": "BAD_HOST"},
+                        "auth": {"mode": "public"},
+                    }
+                },
+                "hostname",
+            ),
+            (
+                {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "port", "value": 70000},
+                        "auth": {"mode": "public"},
+                    }
+                },
+                "port",
+            ),
+            (
+                {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "path", "value": "/x"},
+                        "auth": {"mode": "bogus"},
+                    }
+                },
+                "auth.mode",
+            ),
         ]
         for endpoints, message in cases:
             with self.subTest(message=message):
@@ -192,7 +242,10 @@ class ManagedServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = pathlib.Path(tmp) / "services.json"
             builtin = pathlib.Path(tmp) / "builtin.json"
-            builtin.write_text(json.dumps({"schemaVersion": 1, "endpoints": {"builtin:web": {"publicPath": "/builtin"}}}), encoding="utf-8")
+            builtin.write_text(
+                json.dumps({"schemaVersion": 1, "endpoints": {"builtin:web": {"publicPath": "/builtin"}}}),
+                encoding="utf-8",
+            )
             service = service_template()
             service["endpoints"] = {
                 "web": {
@@ -374,8 +427,18 @@ class ManagedServiceTests(unittest.TestCase):
             "schemaVersion": 2,
             "generation": 1,
             "endpoints": {
-                "a:web": {"transport": "http", "targetPort": 80, "exposure": {"type": "port", "value": 8080}, "auth": {"mode": "public"}},
-                "b:web": {"transport": "http", "targetPort": 81, "exposure": {"type": "port", "value": 8080}, "auth": {"mode": "public"}},
+                "a:web": {
+                    "transport": "http",
+                    "targetPort": 80,
+                    "exposure": {"type": "port", "value": 8080},
+                    "auth": {"mode": "public"},
+                },
+                "b:web": {
+                    "transport": "http",
+                    "targetPort": 81,
+                    "exposure": {"type": "port", "value": 8080},
+                    "auth": {"mode": "public"},
+                },
             },
         }
         with self.assertRaisesRegex(nas_service_caddy.CaddyError, "Duplicate exposure"):

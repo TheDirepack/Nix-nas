@@ -32,9 +32,9 @@ class ReferenceConfigurationEvaluatorTests(unittest.TestCase):
             fake_nix.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -eu\n"
-                "printf '%s\\n' \"$*\" >> \"$NAS_TEST_NIX_LOG\"\n"
-                "case \"$*\" in\n"
-                "  *\"${NAS_TEST_NIX_FAIL_ON:-__never__}\"*) exit 42 ;;\n"
+                'printf \'%s\\n\' "$*" >> "$NAS_TEST_NIX_LOG"\n'
+                'case "$*" in\n'
+                '  *"${NAS_TEST_NIX_FAIL_ON:-__never__}"*) exit 42 ;;\n'
                 "esac\n",
                 encoding="utf-8",
             )

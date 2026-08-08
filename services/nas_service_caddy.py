@@ -58,10 +58,22 @@ def _validate_exposure(exposure: dict[str, Any]) -> None:
         if not isinstance(val, str) or not val.startswith("/"):
             raise CaddyError(f"Invalid path {val!r}: must start with '/'")
         reserved_prefixes = (
-            "/api", "/outpost.goauthentik.io", "/identity", "/console",
-            "/shares", "/share", "/dav", "/vault", "/ai", "/syncthing",
-            "/metrics", "/victoriametrics", "/alerts", "/ups",
-            "/notifications", "/settings",
+            "/api",
+            "/outpost.goauthentik.io",
+            "/identity",
+            "/console",
+            "/shares",
+            "/share",
+            "/dav",
+            "/vault",
+            "/ai",
+            "/syncthing",
+            "/metrics",
+            "/victoriametrics",
+            "/alerts",
+            "/ups",
+            "/notifications",
+            "/settings",
         )
         if any(val == prefix or val.startswith(prefix + "/") for prefix in reserved_prefixes):
             raise CaddyError(f"Path {val!r} conflicts with reserved NAS path")
@@ -136,32 +148,41 @@ def _render_auth(lines: list[str], route: dict[str, Any], indent: str) -> None:
     if auth.get("mode") not in ("forward-auth", "oidc"):
         return
     for header in (
-        "Remote-User", "Remote-Groups", "Remote-Name", "Remote-Email", "Remote-UID",
-        "X-Authentik-Username", "X-Authentik-Groups", "X-Authentik-Name",
-        "X-Authentik-Email", "X-Authentik-Uid",
+        "Remote-User",
+        "Remote-Groups",
+        "Remote-Name",
+        "Remote-Email",
+        "Remote-UID",
+        "X-Authentik-Username",
+        "X-Authentik-Groups",
+        "X-Authentik-Name",
+        "X-Authentik-Email",
+        "X-Authentik-Uid",
     ):
         lines.append(f"{indent}request_header -{header}")
-    lines.extend([
-        f"{indent}forward_auth 127.0.0.1:9000 {{",
-        f"{indent}  uri /outpost.goauthentik.io/auth/caddy",
-        f"{indent}  copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid",
-        f"{indent}}}",
-        f"{indent}@missingAuthentikIdentity not header X-Authentik-Username *",
-        f"{indent}respond @missingAuthentikIdentity 403",
-        f"{indent}request_header Remote-User {{http.request.header.X-Authentik-Username}}",
-        f"{indent}request_header Remote-Groups {{http.request.header.X-Authentik-Groups}}",
-        f"{indent}request_header Remote-Name {{http.request.header.X-Authentik-Name}}",
-        f"{indent}request_header Remote-Email {{http.request.header.X-Authentik-Email}}",
-        f"{indent}request_header Remote-UID {{http.request.header.X-Authentik-Uid}}",
-        f"{indent}forward_auth unix/{ON_DEMAND_GATE} {{",
-        f"{indent}  uri /authorize?scope=service:{route['key']}",
-        f"{indent}  header_up Remote-User {{http.request.header.Remote-User}}",
-        f"{indent}  header_up Remote-Groups {{http.request.header.Remote-Groups}}",
-        f"{indent}  header_up Remote-Name {{http.request.header.Remote-Name}}",
-        f"{indent}  header_up Remote-Email {{http.request.header.Remote-Email}}",
-        f"{indent}  header_up Remote-UID {{http.request.header.Remote-UID}}",
-        f"{indent}}}",
-    ])
+    lines.extend(
+        [
+            f"{indent}forward_auth 127.0.0.1:9000 {{",
+            f"{indent}  uri /outpost.goauthentik.io/auth/caddy",
+            f"{indent}  copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid",
+            f"{indent}}}",
+            f"{indent}@missingAuthentikIdentity not header X-Authentik-Username *",
+            f"{indent}respond @missingAuthentikIdentity 403",
+            f"{indent}request_header Remote-User {{http.request.header.X-Authentik-Username}}",
+            f"{indent}request_header Remote-Groups {{http.request.header.X-Authentik-Groups}}",
+            f"{indent}request_header Remote-Name {{http.request.header.X-Authentik-Name}}",
+            f"{indent}request_header Remote-Email {{http.request.header.X-Authentik-Email}}",
+            f"{indent}request_header Remote-UID {{http.request.header.X-Authentik-Uid}}",
+            f"{indent}forward_auth unix/{ON_DEMAND_GATE} {{",
+            f"{indent}  uri /authorize?scope=service:{route['key']}",
+            f"{indent}  header_up Remote-User {{http.request.header.Remote-User}}",
+            f"{indent}  header_up Remote-Groups {{http.request.header.Remote-Groups}}",
+            f"{indent}  header_up Remote-Name {{http.request.header.Remote-Name}}",
+            f"{indent}  header_up Remote-Email {{http.request.header.Remote-Email}}",
+            f"{indent}  header_up Remote-UID {{http.request.header.Remote-UID}}",
+            f"{indent}}}",
+        ]
+    )
 
 
 def _render_proxy(lines: list[str], route: dict[str, Any], indent: str) -> None:
@@ -171,14 +192,16 @@ def _render_proxy(lines: list[str], route: dict[str, Any], indent: str) -> None:
         lines.append(f"{indent}request_header X-Forwarded-Prefix {path}")
     target = route["targetPort"]
     if route["transport"] == "https":
-        lines.extend([
-            f"{indent}reverse_proxy 127.0.0.1:{target} {{",
-            f"{indent}  transport http {{",
-            f"{indent}    tls",
-            f"{indent}    tls_insecure_skip_verify",
-            f"{indent}  }}",
-            f"{indent}}}",
-        ])
+        lines.extend(
+            [
+                f"{indent}reverse_proxy 127.0.0.1:{target} {{",
+                f"{indent}  transport http {{",
+                f"{indent}    tls",
+                f"{indent}    tls_insecure_skip_verify",
+                f"{indent}  }}",
+                f"{indent}}}",
+            ]
+        )
     else:
         lines.append(f"{indent}reverse_proxy 127.0.0.1:{target}")
 
@@ -253,13 +276,17 @@ def write_caddy_fragment(path: pathlib.Path | None = None, effective: dict[str, 
                 validate_tmp.write_text(caddyfile_content, encoding="utf-8")
                 fmt_result = subprocess.run(
                     [caddy_bin, "fmt", "--overwrite", str(validate_tmp)],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if fmt_result.returncode != 0:
                     raise CaddyError(f"Caddy fmt failed: {fmt_result.stderr.strip()}")
                 adapt_result = subprocess.run(
                     [caddy_bin, "adapt", "--adapter", "caddyfile", "--config", str(validate_tmp)],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if adapt_result.returncode != 0:
                     raise CaddyError(f"Caddy adapt failed: {adapt_result.stderr.strip()}")

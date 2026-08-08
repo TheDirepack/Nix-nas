@@ -39,8 +39,9 @@ class CodingAgentTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"NAS_CODING_WORKSPACE_ROOTS_JSON": json.dumps([str(root)])}):
                 self.assertEqual(coding.configured_roots(), (root.resolve(),))
             for malformed in ("not-json", "[]", '["/missing"]'):
-                with self.subTest(value=malformed), mock.patch.dict(
-                    os.environ, {"NAS_CODING_WORKSPACE_ROOTS_JSON": malformed}
+                with (
+                    self.subTest(value=malformed),
+                    mock.patch.dict(os.environ, {"NAS_CODING_WORKSPACE_ROOTS_JSON": malformed}),
                 ):
                     with self.assertRaises((coding.CodingAgentError, FileNotFoundError)):
                         coding.configured_roots()

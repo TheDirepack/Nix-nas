@@ -124,7 +124,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
             ('require_huggingface_token "$huggingface_token"', "HF_TOKEN=%s"),
             ('require_secret_atom "$vaultwarden_client_secret"', "SSO_CLIENT_SECRET='%s'"),
             ('require_secret_atom "$ntfy_password"', "NTFY_AUTH_USERS=admin:$ntfy_hash:admin"),
-            ('require_ntfy_topic "$ntfy_topic"', 'printf \'%s\' "$ntfy_topic"'),
+            ('require_ntfy_topic "$ntfy_topic"', "printf '%s' \"$ntfy_topic\""),
         )
         for guard, render in required_pairs:
             with self.subTest(render=render):

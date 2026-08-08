@@ -140,7 +140,9 @@ class StateBundleTests(unittest.TestCase):
         with (
             mock.patch.object(state, "parser") as parser,
             mock.patch.object(
-                state, "validate_coordination_token", side_effect=state.OperationBusyError("coordination proof is invalid")
+                state,
+                "validate_coordination_token",
+                side_effect=state.OperationBusyError("coordination proof is invalid"),
             ),
             mock.patch.object(state, "export_bundle") as export,
             mock.patch.dict(os.environ, {state.COORDINATION_TOKEN_ENV: "0" * 32}, clear=True),

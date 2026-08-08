@@ -734,7 +734,9 @@ class SetupConfigTests(unittest.TestCase):
                 if cmd[:3] == ["install", "-d", "-m"]:
                     pathlib.Path(cmd[4]).mkdir(parents=True, exist_ok=True)
                 elif cmd[0] == "install" and "-m" in cmd:
-                    src = pathlib.Path(cmd[cmd.index(str(status_path.parent)) + 1] if str(status_path.parent) in cmd else cmd[-2])
+                    src = pathlib.Path(
+                        cmd[cmd.index(str(status_path.parent)) + 1] if str(status_path.parent) in cmd else cmd[-2]
+                    )
                     # Fallback: find the temp file and status_path
                     for arg in cmd:
                         if arg.startswith("/tmp/") and pathlib.Path(arg).is_file():
@@ -829,7 +831,9 @@ class SetupConfigTests(unittest.TestCase):
         )
 
     def test_command_runner_bounds_environment_and_reports_failures(self):
-        completed = mock.Mock(returncode=0, stdout="abcdefgh\n[output truncated]", stderr="stderr-v\n[output truncated]")
+        completed = mock.Mock(
+            returncode=0, stdout="abcdefgh\n[output truncated]", stderr="stderr-v\n[output truncated]"
+        )
         with (
             mock.patch.object(setup, "COMMAND_MAX_OUTPUT_BYTES", 8),
             mock.patch.object(setup, "run_command", return_value=completed) as runner,

@@ -180,9 +180,7 @@ def main() -> int:
             env["NAS_STATE_ROLLBACK_ROOT"] = str(_hermetic_tmp / "nas-state-rollback")
     if "NAS_STATE_RESTORE_JOURNAL" not in env:
         # Use the same hermetic state dir for the journal so it is writable
-        _state_journal_dir = pathlib.Path(
-            env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback"))
-        )
+        _state_journal_dir = pathlib.Path(env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback")))
         env["NAS_STATE_RESTORE_JOURNAL"] = str(_state_journal_dir / "restore-operation.json")
     # Feature control / setup / operation roots (all under /var/lib or /run on host)
     _hermetic_map = {

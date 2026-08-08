@@ -64,11 +64,11 @@ class SecretTransactionShellTests(unittest.TestCase):
             script = textwrap.dedent(
                 f"""\
                 set -Eeuo pipefail
-                export PATH={work / 'bin'}:$PATH
+                export PATH={work / "bin"}:$PATH
                 export NAS_SECRET_TX_PRIVILEGE=""
                 export NAS_SECRET_TX_SYSTEMCTL={systemctl!s}
-                export NAS_TX_LOG={work / 'systemctl.log'!s}
-                export NAS_TX_MV_COUNT={work / 'mv.count'!s}
+                export NAS_TX_LOG={work / "systemctl.log"!s}
+                export NAS_TX_MV_COUNT={work / "mv.count"!s}
                 source {LIBRARY!s}
                 {body}
                 """

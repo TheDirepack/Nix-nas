@@ -47,7 +47,9 @@ class RunnerAccountingTests(unittest.TestCase):
                     if module_name in imports or module_name in test_path.read_text(encoding="utf-8"):
                         found_import = True
                         break
-                self.assertTrue(found_import, msg=f"{mod_path} mapping {test_files} has no import coverage for {module_name}")
+                self.assertTrue(
+                    found_import, msg=f"{mod_path} mapping {test_files} has no import coverage for {module_name}"
+                )
 
     def test_python_modules_mapping_has_real_import(self):
         raw = json.loads(CONTRACTS.read_text(encoding="utf-8"))

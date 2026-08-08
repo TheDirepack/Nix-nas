@@ -35,9 +35,7 @@ def plan_firewall(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         )
     for eid, ep in (service.get("endpoints") or {}).items():
         if ep.get("transport") in ("tcp", "udp"):
-            actions.append(
-                {"type": "forward", "service": service_id, "endpoint": eid, "port": ep.get("targetPort")}
-            )
+            actions.append({"type": "forward", "service": service_id, "endpoint": eid, "port": ep.get("targetPort")})
     return {"service": service_id, "actions": actions}
 
 

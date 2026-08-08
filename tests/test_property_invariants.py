@@ -155,20 +155,37 @@ if HAS_HYPOTHESIS:
             )
             self.assertIn(alert.severity, {"critical", "warning", "info"})
 
-        @settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+        @settings(
+            max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
+        )
         @given(
             service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
-            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            label=st.text(
+                min_size=1,
+                max_size=32,
+                alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\"),
+            ),
             port=st.integers(min_value=1, max_value=65535),
             hostname=SAFE_MANAGED_HOSTNAME,
         )
-        def test_managed_service_valid_doc_is_accepted(self, service_id: str, label: str, port: int, hostname: str) -> None:
+        def test_managed_service_valid_doc_is_accepted(
+            self, service_id: str, label: str, port: int, hostname: str
+        ) -> None:
             doc = {
                 "label": label,
                 "enabled": True,
-                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
+                "runtime": {
+                    "type": "compose",
+                    "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml",
+                    "startPolicy": "boot",
+                },
                 "endpoints": {
-                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
+                    "web": {
+                        "transport": "http",
+                        "targetPort": port,
+                        "exposure": {"type": "hostname", "value": hostname},
+                        "auth": {"mode": "public"},
+                    }
                 },
             }
             result = msvc.validate_service(service_id, doc)
@@ -177,18 +194,34 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(
             service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
-            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            label=st.text(
+                min_size=1,
+                max_size=32,
+                alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\"),
+            ),
             port=st.integers(min_value=1, max_value=65535),
             hostname=SAFE_MANAGED_HOSTNAME,
         )
-        def test_managed_service_serialize_deserialize_preserves(self, service_id: str, label: str, port: int, hostname: str) -> None:
+        def test_managed_service_serialize_deserialize_preserves(
+            self, service_id: str, label: str, port: int, hostname: str
+        ) -> None:
             import json
+
             doc = {
                 "label": label,
                 "enabled": False,
-                "runtime": {"type": "quadlet", "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml", "startPolicy": "boot"},
+                "runtime": {
+                    "type": "quadlet",
+                    "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml",
+                    "startPolicy": "boot",
+                },
                 "endpoints": {
-                    "api": {"transport": "http", "targetPort": port, "exposure": {"type": "dns", "value": hostname}, "auth": {"mode": "public"}}
+                    "api": {
+                        "transport": "http",
+                        "targetPort": port,
+                        "exposure": {"type": "dns", "value": hostname},
+                        "auth": {"mode": "public"},
+                    }
                 },
             }
             msvc.validate_service(service_id, doc)
@@ -201,18 +234,33 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=150, deadline=None)
         @given(
             service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
-            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            label=st.text(
+                min_size=1,
+                max_size=32,
+                alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\"),
+            ),
             port=st.integers(min_value=1, max_value=65535),
             hostname=SAFE_MANAGED_HOSTNAME,
             mutate=st.sampled_from(["port_zero", "port_overflow", "bad_hostname", "bad_source"]),
         )
-        def test_managed_service_mutated_field_is_rejected(self, service_id: str, label: str, port: int, hostname: str, mutate: str) -> None:
+        def test_managed_service_mutated_field_is_rejected(
+            self, service_id: str, label: str, port: int, hostname: str, mutate: str
+        ) -> None:
             doc = {
                 "label": label,
                 "enabled": True,
-                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
+                "runtime": {
+                    "type": "compose",
+                    "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml",
+                    "startPolicy": "boot",
+                },
                 "endpoints": {
-                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
+                    "web": {
+                        "transport": "http",
+                        "targetPort": port,
+                        "exposure": {"type": "hostname", "value": hostname},
+                        "auth": {"mode": "public"},
+                    }
                 },
             }
             msvc.validate_service(service_id, doc)
