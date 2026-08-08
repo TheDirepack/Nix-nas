@@ -312,9 +312,13 @@ jobs:
         run: nix develop .#test -c bandit -q -c .bandit -r services -ll -ii
 
   browser:
-    name: Browser rendering, layout, XSS, and accessibility
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer'
-    needs: cockpit
+    name: Final browser rendering, layout, XSS, and accessibility gate
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer') &&
+      needs.integration.result == 'success' &&
+      (needs.installer.result == 'success' || needs.installer.result == 'skipped')
+    needs: [integration, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -331,7 +335,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: cockpit/.ci-cache/browser-pass
-          key: browser-pass-${{ runner.os }}-${{ steps.browser-epoch.outputs.week }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/e2e/**', 'cockpit/dist/**') }}
+          key: browser-pass-${{ runner.os }}-${{ steps.browser-epoch.outputs.week }}-${{ hashFiles('flake.lock', 'flake.nix', 'modules/**', 'services/**', 'scripts/**', 'tests/nixos/**', 'tests/vm/**', 'cockpit/package-lock.json', 'cockpit/e2e/**', 'cockpit/dist/**', 'web/**') }}
       - name: Restore exact Cockpit dependencies
         id: browser-deps
         if: steps.browser-result.outputs.cache-hit != 'true'
@@ -355,7 +359,7 @@ jobs:
       - name: Install Playwright system dependencies
         if: steps.browser-result.outputs.cache-hit != 'true'
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
-      - name: Cross-browser UI security suite
+      - name: Cross-browser UI security suite after system validation
         if: steps.browser-result.outputs.cache-hit != 'true'
         run: npm --prefix cockpit run test:browser
       - name: Mark browser suite reusable
@@ -421,7 +425,7 @@ jobs:
 
   static:
     name: Nix evaluation and lint
-    needs: [cockpit, test, test-nonroot, fuzz, security, browser, source-archive]
+    needs: [cockpit, test, test-nonroot, fuzz, security, source-archive]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
