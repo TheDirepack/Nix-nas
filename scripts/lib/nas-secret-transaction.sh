@@ -177,16 +177,21 @@ nas_secret_tx_swap() {
   if nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"; then
     NAS_SECRET_TX_WAS_ACTIVE=true
   fi
+
+  # Every irreversible operation is checked explicitly. Callers frequently
+  # disable errexit around this function so they can capture its status and run
+  # rollback; relying on the caller's shell options here would let a failed stop
+  # or move fall through and incorrectly advance the transaction phase flags.
   NAS_SECRET_TX_SWAP_STARTED=true
   NAS_SECRET_TX_PHASE=stopping
-  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"
+  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET" || return $?
   NAS_SECRET_TX_PHASE=stopped
   if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT"; then
-    nas_secret_tx_privileged mv "$NAS_SECRET_TX_ROOT" "$NAS_SECRET_TX_PREVIOUS"
+    nas_secret_tx_privileged mv "$NAS_SECRET_TX_ROOT" "$NAS_SECRET_TX_PREVIOUS" || return $?
     NAS_SECRET_TX_OLD_MOVED=true
   fi
   NAS_SECRET_TX_PHASE=old-moved
-  nas_secret_tx_privileged mv "$NAS_SECRET_TX_STAGE" "$NAS_SECRET_TX_ROOT"
+  nas_secret_tx_privileged mv "$NAS_SECRET_TX_STAGE" "$NAS_SECRET_TX_ROOT" || return $?
   NAS_SECRET_TX_NEW_INSTALLED=true
   NAS_SECRET_TX_PHASE=new-installed
   if ! nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT" \
