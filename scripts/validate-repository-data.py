@@ -59,7 +59,7 @@ def main() -> int:
                 "schemas/first-run.schema.json": 1,
                 "schemas/account-plan.schema.json": 1,
                 "schemas/state-bundle.schema.json": 2,
-                "schemas/service-registry.schema.json": 1,
+                "schemas/service-registry.schema.json": 2,
                 "schemas/capability-registry.schema.json": 1,
             }
             if (
