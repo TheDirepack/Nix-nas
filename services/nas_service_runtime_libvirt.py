@@ -52,17 +52,30 @@ def apply_libvirt(
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
         if service.get("enabled"):
-            subprocess.run(["virsh", "start", service_id], check=True)
+            # Starting an already-running adopted VM is not a destructive error.
+            active = subprocess.run(
+                ["virsh", "domstate", service_id], capture_output=True, text=True
+            )
+            if active.returncode != 0 or active.stdout.strip().lower() != "running":
+                subprocess.run(["virsh", "start", service_id], check=True)
     return plan
 
 
 def remove_libvirt(service_id: str, *, dry_run: bool = False) -> None:
+    """Remove NAS ownership of a VM without deleting user storage.
+
+    Managed-service deletion must never imply data deletion.  Disk/image cleanup
+    belongs to an explicit storage operation that can distinguish NAS-created
+    disposable media from adopted or persistent user data.
+    """
     if dry_run:
         return
-    subprocess.run(["virsh", "destroy", service_id], check=False)
-    subprocess.run(
-        ["virsh", "undefine", service_id, "--remove-all-storage"], check=True
-    )
+    state = subprocess.run(["virsh", "domstate", service_id], capture_output=True, text=True)
+    if state.returncode == 0 and state.stdout.strip().lower() == "running":
+        subprocess.run(["virsh", "destroy", service_id], check=True)
+    result = subprocess.run(["virsh", "undefine", service_id], capture_output=True, text=True)
+    if result.returncode != 0 and "failed to get domain" not in result.stderr.lower():
+        raise ManagedServiceError(f"Unable to undefine VM {service_id}: {result.stderr.strip()}")
 
 
 def _render_domain(service_id: str, service: dict[str, Any]) -> str:
