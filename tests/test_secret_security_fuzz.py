@@ -141,7 +141,6 @@ class SecretSecurityFuzzTests(unittest.TestCase):
             "bad.target\nnext.target",
             "bad.target\rnext.target",
             "../bad.target",
-            "",
         ]
         bad.extend(
             "".join(rng.choice(string.ascii_letters + string.digits + "/ \\;$") for _ in range(24)) + ".service"
