@@ -1,132 +1,122 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nixos-nas.local/schemas/managed-service.schema.json",
-  "title": "NixOS NAS managed service (file-based, no SQLite)",
+  "title": "NixOS NAS managed services",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "services"],
+  "required": ["schemaVersion", "generation", "services"],
   "properties": {
     "schemaVersion": {"const": 2},
     "generation": {"type": "integer", "minimum": 1},
-    "services": {
+    "services": {"type": "object", "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,47}$"}, "additionalProperties": {"$ref": "#/$defs/service"}}
+  },
+  "$defs": {
+    "service": {
       "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["label", "enabled", "runtime"],
-        "properties": {
-          "label": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]*$"},
-          "description": {"type": "string", "maxLength": 256},
-          "ownership": {"enum": ["system", "runtime"], "default": "runtime"},
-          "enabled": {"type": "boolean"},
-          "generation": {"type": "integer", "minimum": 1},
-          "portal": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "visible": {"type": "boolean"},
-              "category": {"enum": ["Files", "Media", "AI", "Home", "Tools", "Monitoring", "Administration", "Other"]},
-              "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}
-            }
-          },
-          "runtime": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "source", "startPolicy"],
-            "properties": {
-              "type": {"enum": ["quadlet", "compose", "vm", "external", "native"]},
-              "project": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
-              "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+$"},
-              "startPolicy": {"enum": ["boot", "manual", "on-demand", "disabled"]}
-            }
-          },
-          "resources": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 68719476736},
-              "cpus": {"type": "number", "minimum": 0.1, "maximum": 64},
-              "gpus": {"type": "array", "items": {"type": "string"}}
-            }
-          },
-          "storage": {
-            "type": "array",
-            "maxItems": 16,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["hostPath", "guestPath", "mode"],
-              "properties": {
-                "hostPath": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"},
-                "guestPath": {"type": "string", "pattern": "^/.+"},
-                "mode": {"enum": ["ro", "rw"]},
-                "dataset": {"type": "string", "pattern": "^tank/.+"}
-              }
-            }
-          },
-          "endpoints": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["transport", "targetPort", "exposure", "auth"],
-              "properties": {
-                "transport": {"enum": ["http", "https", "tcp", "udp", "ws"]},
-                "targetService": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
-                "targetPort": {"type": "integer", "minimum": 1, "maximum": 65535},
-                "exposure": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["type"],
-                  "properties": {
-                    "type": {"enum": ["none", "path", "hostname", "dns", "port"]},
-                    "value": {"type": "string", "minLength": 1, "maxLength": 253}
-                  }
-                },
-                "auth": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["mode"],
-                  "properties": {
-                    "mode": {"enum": ["public", "forward-auth", "oidc"]},
-                    "allow": {"enum": ["any", "groups", "users", "all"]},
-                    "groups": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"}},
-                    "users": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}}
-                  }
-                },
-                "portal": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "visible": {"type": "boolean"},
-                    "category": {"enum": ["Files", "Media", "AI", "Home", "Tools", "Monitoring", "Administration", "Other"]},
-                    "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}
-                  }
-                }
-              }
-            }
-          },
-          "network": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "outboundDefault": {"enum": ["allow", "deny"]},
-              "lanAccess": {"type": "boolean"},
-              "allowedEgress": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["cidr"],
-                  "properties": {
-                    "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]+$"},
-                    "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}}
-                  }
-                }
-              }
-            }
-          }
-        }
+      "additionalProperties": false,
+      "required": ["label", "ownership", "enabled", "generation", "runtime", "storage", "endpoints", "network"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 64},
+        "description": {"type": "string", "maxLength": 256},
+        "ownership": {"enum": ["system", "runtime"]},
+        "enabled": {"type": "boolean"},
+        "generation": {"type": "integer", "minimum": 1},
+        "runtime": {"$ref": "#/$defs/runtime"},
+        "resources": {"$ref": "#/$defs/resources"},
+        "storage": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/storage"}},
+        "endpoints": {"type": "object", "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,47}$"}, "additionalProperties": {"$ref": "#/$defs/endpoint"}},
+        "network": {"$ref": "#/$defs/network"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "startPolicy"],
+      "properties": {
+        "type": {"enum": ["container", "compose", "vm", "external", "native"]},
+        "source": {"type": "string", "maxLength": 4096},
+        "image": {"type": "string", "minLength": 1, "maxLength": 512},
+        "project": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"},
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,63}$"},
+        "systemdUnit": {"type": "string", "pattern": "^[A-Za-z0-9_.@-]+\\.(service|socket|target)$"},
+        "startPolicy": {"enum": ["boot", "manual", "disabled"]},
+        "command": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 4096}},
+        "environment": {"type": "object", "maxProperties": 128, "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "additionalProperties": {"type": "string", "maxLength": 16384}}
+      }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 274877906944},
+        "cpus": {"type": "number", "minimum": 0.1, "maximum": 256},
+        "gpus": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+      }
+    },
+    "storage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hostPath", "guestPath", "mode"],
+      "properties": {
+        "hostPath": {"type": "string", "minLength": 2, "maxLength": 4096},
+        "guestPath": {"type": "string", "pattern": "^/", "maxLength": 4096},
+        "mode": {"enum": ["ro", "rw"]},
+        "dataset": {"type": "string", "maxLength": 1024},
+        "targetService": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$"}
+      }
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transport", "targetPort", "exposure", "auth"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "maxLength": 64},
+        "description": {"type": "string", "maxLength": 256},
+        "transport": {"enum": ["http", "https", "tcp", "udp", "ws"]},
+        "targetService": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$"},
+        "targetHost": {"type": "string", "minLength": 1, "maxLength": 253},
+        "targetPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "hostPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "upstreamTlsInsecure": {"type": "boolean"},
+        "exposure": {"$ref": "#/$defs/exposure"},
+        "auth": {"$ref": "#/$defs/auth"},
+        "portal": {"$ref": "#/$defs/portal"}
+      }
+    },
+    "exposure": {
+      "type": "object", "additionalProperties": false, "required": ["type"],
+      "properties": {
+        "type": {"enum": ["none", "path", "hostname", "dns", "port"]},
+        "value": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 253}, {"type": "integer", "minimum": 1, "maximum": 65535}]},
+        "stripPrefix": {"type": "boolean"}
+      }
+    },
+    "auth": {
+      "type": "object", "additionalProperties": false, "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["public", "forward-auth", "native"]},
+        "allow": {"enum": ["any", "groups", "users"]},
+        "groups": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "users": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "adminBypass": {"type": "boolean", "enum": [true]}
+      }
+    },
+    "portal": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "visible": {"type": "boolean"},
+        "category": {"enum": ["Files", "Media", "AI", "Home", "Tools", "Monitoring", "Administration", "Other"]},
+        "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}
+      }
+    },
+    "network": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "outboundDefault": {"enum": ["allow", "deny"]},
+        "lanAccess": {"type": "boolean"},
+        "allowedEgress": {"type": "array", "maxItems": 64, "items": {"type": "object", "additionalProperties": false, "required": ["cidr"], "properties": {"cidr": {"type": "string", "minLength": 3, "maxLength": 64}, "ports": {"type": "array", "maxItems": 64, "items": {"type": "integer", "minimum": 1, "maximum": 65535}}, "protocol": {"enum": ["tcp", "udp", "any"]}}}},
+        "hostAccess": {"type": "boolean"},
+        "allowedServices": {"type": "array", "maxItems": 64, "items": {"type": "object", "additionalProperties": false, "required": ["service"], "properties": {"service": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"}, "ports": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 65535}}, "protocol": {"enum": ["tcp", "udp", "any"]}}}},
+        "vmSubnet": {"type": "string", "minLength": 9, "maxLength": 32},
+        "vmAddress": {"type": "string", "minLength": 7, "maxLength": 15},
+        "vmMac": {"type": "string", "pattern": "^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"}
       }
     }
   }

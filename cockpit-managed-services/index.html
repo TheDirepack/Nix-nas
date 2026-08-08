@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NAS Applications</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="../base1/cockpit.js"></script>
+</head>
+<body>
+  <header><div><h1>Applications</h1><p>Podman, Compose, libvirt, exposure, Authentik access, storage, resources, and firewall policy from one NAS definition.</p></div><button id="refresh">Refresh</button></header>
+  <div id="notice" role="status"></div>
+  <main>
+    <section class="panel list-panel">
+      <div class="section-title"><h2>Managed services</h2><button id="new-service">New</button></div>
+      <div id="services" class="services"></div>
+    </section>
+    <section class="panel editor-panel">
+      <div class="section-title"><h2 id="editor-title">New service</h2><span id="runtime-state"></span></div>
+      <form id="editor">
+        <div class="grid two">
+          <label>Service ID<input id="service-id" required pattern="[a-z][a-z0-9-]{0,47}" placeholder="immich"></label>
+          <label>Label<input id="label" required maxlength="64" placeholder="Immich"></label>
+          <label>Runtime<select id="runtime"><option value="container">Container</option><option value="compose">Podman Compose</option><option value="vm">VM (libvirt/QEMU)</option><option value="native">Native systemd unit</option><option value="external">External endpoint</option></select></label>
+          <label>Start policy<select id="start-policy"><option value="boot">Start at boot</option><option value="manual">Manual</option><option value="disabled">Disabled</option></select></label>
+          <label class="runtime container">OCI image<input id="image" placeholder="ghcr.io/example/app:latest"></label>
+          <label class="runtime compose vm">Managed source path<input id="source" placeholder="/var/lib/nas-control/apps/immich/compose.yaml"></label>
+          <label class="runtime vm">VM name<input id="vm-name" placeholder="nas-home-assistant"></label>
+          <label class="runtime native">systemd unit<input id="systemd-unit" placeholder="example.service"></label>
+        </div>
+        <label class="runtime compose vm">Paste source to validate/stage before plan<textarea id="source-text" rows="8" placeholder="Compose YAML or libvirt domain XML"></textarea></label>
+        <fieldset><legend>Primary endpoint</legend>
+          <div class="grid three">
+            <label>Endpoint ID<input id="endpoint-id" value="web"></label>
+            <label>Transport<select id="transport"><option>http</option><option>https</option><option>ws</option><option>tcp</option><option>udp</option></select></label>
+            <label>Target port<input id="target-port" type="number" min="1" max="65535" value="8080"></label>
+            <label>Compose target service<input id="target-service" placeholder="web"></label>
+            <label>Target host<input id="target-host" placeholder="auto for VM / loopback"></label>
+            <label>Exposure<select id="exposure"><option value="path">NAS path</option><option value="hostname">Local hostname</option><option value="dns">DNS hostname</option><option value="port">Dedicated port</option><option value="none">None</option></select></label>
+            <label>Exposure value<input id="exposure-value" value="/apps/example/"></label>
+            <label>Authentication<select id="auth-mode"><option value="forward-auth">Authentik</option><option value="public">Public</option><option value="native">Application-native</option></select></label>
+            <label>Authorization<select id="auth-allow"><option value="any">Any authenticated user</option><option value="groups">Selected groups</option><option value="users">Selected users</option></select></label>
+            <label>Allowed groups<input id="auth-groups" placeholder="family,media"></label>
+            <label>Allowed users<input id="auth-users" placeholder="alice,bob"></label>
+            <label><input id="portal-visible" type="checkbox" checked> Show in user portal</label>
+            <label>Portal category<select id="portal-category"><option>Other</option><option>Files</option><option>Media</option><option>AI</option><option>Home</option><option>Tools</option><option>Monitoring</option><option>Administration</option></select></label>
+          </div>
+        </fieldset>
+        <fieldset><legend>Resources and network</legend>
+          <div class="grid three">
+            <label>Memory MiB<input id="memory" type="number" min="64" placeholder="2048"></label>
+            <label>CPUs<input id="cpus" type="number" min="0.1" step="0.1" placeholder="2"></label>
+            <label>GPU/device entries<input id="gpus" placeholder="/dev/dri/renderD128 or 0000:03:00.0"></label>
+            <label>Outbound<select id="outbound"><option value="allow">Allow</option><option value="deny">Deny by default</option></select></label>
+            <label><input id="lan-access" type="checkbox"> Allow private LAN access</label>
+            <label><input id="host-access" type="checkbox"> Allow arbitrary host access</label>
+          </div>
+          <label>Allowed egress (JSON array)<textarea id="allowed-egress" rows="3">[]</textarea></label>
+          <label>Allowed application dependencies (JSON array)<textarea id="allowed-services" rows="3">[]</textarea></label>
+        </fieldset>
+        <fieldset><legend>Storage</legend><label>Mounts (JSON array)<textarea id="storage" rows="5">[]</textarea></label></fieldset>
+        <details><summary>Advanced full endpoint/runtime environment JSON</summary>
+          <label>Additional endpoints (JSON object)<textarea id="extra-endpoints" rows="6">{}</textarea></label>
+          <label>Environment (JSON object)<textarea id="environment" rows="5">{}</textarea></label>
+        </details>
+        <div class="actions"><button type="button" id="plan">Preview changes</button><button type="submit" class="primary">Apply</button><button type="button" id="delete" class="danger">Delete</button></div>
+      </form>
+      <pre id="plan-output" aria-label="Change plan"></pre>
+      <div class="lifecycle"><button data-action="start">Start</button><button data-action="stop">Stop</button><button data-action="restart">Restart</button></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
