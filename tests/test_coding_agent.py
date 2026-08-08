@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -12,7 +14,7 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
 
-import nas_coding_agent as coding
+import nas_coding_agent as coding  # noqa: E402
 
 
 class CodingAgentTests(unittest.TestCase):
@@ -73,40 +75,31 @@ class CodingAgentTests(unittest.TestCase):
             self.assertNotIn("local-client-secret", rendered)
 
     def test_nix_integration_keeps_llama_swap_authoritative_and_agent_unprivileged(self) -> None:
-        # Declarative wiring smoke test — keep one existence guard per file, not per-line
-        # exact-match. Behavioral coverage for Pi sandbox is in
-        # test_transient_session_command_contains_sandbox_and_only_credential_path
-        # and VM's `nix eval` of the built closure, not string exact-match.
         module = (ROOT / "modules" / "ai" / "coding-agent.nix").read_text(encoding="utf-8")
         features = (ROOT / "modules" / "nas" / "internal" / "feature-catalog.nix").read_text(encoding="utf-8")
         capabilities = (ROOT / "modules" / "nas" / "internal" / "capability-registry.nix").read_text(encoding="utf-8")
         secrets = (ROOT / "modules" / "nas" / "internal" / "secret-tools.nix").read_text(encoding="utf-8")
         coding_agent_py = (ROOT / "services" / "nas_coding_agent.py").read_text(encoding="utf-8")
-        # Llama-swap is the single provider authority: baseUrl uses piHostVethIp + port + /v1, not hardcoded IP
         self.assertIn("piHostVethIp", module)
         self.assertIn("cfg.llamaSwap.port", module)
         self.assertIn("/v1", module)
         self.assertIn('apiKey = "LLAMA_SWAP_CODING_API_KEY"', module)
         self.assertNotIn('defaultProjectTrust = "never"', module)
-        # Pi launcher flags are allowlisted individually, not as one brittle string
         for flag in ("--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"):
             self.assertIn(flag, module)
-        self.assertNotIn('--no-approve', module)
-        self.assertIn('PI_OFFLINE=1', module)
-        self.assertIn('nas-code-agent', module)
-        self.assertIn('NetworkNamespacePath=/run/netns/pi', coding_agent_py)
+        self.assertNotIn("--no-approve", module)
+        self.assertIn("PI_OFFLINE=1", module)
+        self.assertIn("nas-code-agent", module)
+        self.assertIn("NetworkNamespacePath=/run/netns/pi", coding_agent_py)
         self.assertIn('parent = "aiRuntime"', features)
         self.assertIn('access = "coding"', features)
         self.assertIn('allowGroup = "nas_allow_coding"', capabilities)
-        self.assertIn('coding-agent-api-key', secrets)
-        self.assertIn('LLAMA_SWAP_CODING_API_KEY', secrets)
-        self.assertNotIn('OPENROUTER_API_KEY', module)
-        self.assertNotIn('ANTHROPIC_API_KEY', module)
-        self.assertIn('NAS_AUTHENTICATED_IDENTITY_JSON', coding_agent_py)
-        self.assertIn('NAS_CODING_INSECURE_UID_AUTH', coding_agent_py)
-        # Optional: if nix is available, verify the module parses (VM only)
-        import shutil, subprocess
-
+        self.assertIn("coding-agent-api-key", secrets)
+        self.assertIn("LLAMA_SWAP_CODING_API_KEY", secrets)
+        self.assertNotIn("OPENROUTER_API_KEY", module)
+        self.assertNotIn("ANTHROPIC_API_KEY", module)
+        self.assertIn("NAS_AUTHENTICATED_IDENTITY_JSON", coding_agent_py)
+        self.assertIn("NAS_CODING_INSECURE_UID_AUTH", coding_agent_py)
         if shutil.which("nix") and shutil.which("nix-instantiate"):
             try:
                 result = subprocess.run(
@@ -259,7 +252,9 @@ class CodingAgentTests(unittest.TestCase):
         modules = {"grp": grp, "pwd": pwd}
         with mock.patch.dict(os.environ, {"SUDO_USER": "max", "NAS_CODING_INSECURE_UID_AUTH": "1"}, clear=True):
             with mock.patch.dict(sys.modules, modules):
-                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="")):
+                with mock.patch.object(
+                    coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="")
+                ):
                     coding._check_coding_access()
 
     def test_root_no_sudo_user_no_identity_denied(self) -> None:
@@ -296,19 +291,29 @@ class CodingAgentTests(unittest.TestCase):
                 grp.getgrall.return_value = [FakeGroup("nas_admin", ["max"])]
                 coding._check_coding_access()
                 grp.getgrall.return_value = [FakeGroup("wheel", ["someone-else"])]
-                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")):
+                with mock.patch.object(
+                    coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")
+                ):
                     with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
                         coding._check_coding_access()
                 grp.getgrall.return_value = []
-                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="nas_admin\n")):
+                with mock.patch.object(
+                    coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="nas_admin\n")
+                ):
                     coding._check_coding_access()
                 grp.getgrall.return_value = []
-                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="err")):
+                with mock.patch.object(
+                    coding.subprocess,
+                    "run",
+                    return_value=mock.Mock(returncode=1, stdout="", stderr="err"),
+                ):
                     with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
                         coding._check_coding_access()
                 grp.getgrall.return_value = []
                 pwd.getpwnam.side_effect = KeyError("max")
-                with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")):
+                with mock.patch.object(
+                    coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")
+                ):
                     with self.assertRaisesRegex(coding.CodingAgentError, "not in nas_allow_coding"):
                         coding._check_coding_access()
 
