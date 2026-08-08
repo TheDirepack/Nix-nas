@@ -78,10 +78,9 @@ def session_command(workspace: pathlib.Path, pi_args: Sequence[str]) -> list[str
         "ProtectControlGroups=yes",
         "RestrictSUIDSGID=yes",
         "LockPersonality=yes",
+        # Network allowed for Pi web/GitHub; host loopback blocked except via proxy (10.200.1.1)
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-        "IPAddressDeny=any",
-        "IPAddressAllow=127.0.0.1/32",
-        "IPAddressAllow=::1/128",
+        "NetworkNamespacePath=/run/netns/pi",
         f"Slice={slice_name}",
         f"PartOf={target_name}",
         f"BindsTo={target_name}",
@@ -130,12 +129,65 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def _check_coding_access() -> None:
+    """Require the calling user to be in nas_allow_coding or nas_admin via Authentik."""
+    # Original user is in SUDO_USER when run via sudo; fallback to current user
+    original_user = os.environ.get("SUDO_USER") or os.environ.get("USER") or ""
+    if not original_user or original_user == "root":
+        # Called directly as root (e.g., via systemd or Cockpit superuser) — allow but log
+        return
+    try:
+        import grp
+        import pwd
+
+        user_groups = set()
+        # Get user's primary and supplementary groups via grp
+        try:
+            pw = pwd.getpwnam(original_user)
+            user_groups.add(pw.pw_name)
+            # Get all groups the user is a member of
+            for g in grp.getgrall():
+                if original_user in g.gr_members:
+                    user_groups.add(g.gr_name)
+            # Also check via id command as fallback
+            result = subprocess.run(["id", "-nG", original_user], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                user_groups.update(result.stdout.strip().split())
+        except (KeyError, OSError):
+            pass
+
+        # Check via capability registry (nas_allow_coding or nas_admin)
+        # Use the same logic as nas_common.capability_allowed
+        try:
+            from nas_common import capability_allowed
+
+            if capability_allowed(user_groups, "coding"):
+                return
+            # Also allow via nas_admin (administrator bypass)
+            if "nas_admin" in user_groups:
+                return
+        except ImportError:
+            # Fallback to direct group check
+            if "nas_allow_coding" in user_groups or "nas_admin" in user_groups:
+                return
+
+        raise CodingAgentError(
+            f"User {original_user!r} is not in nas_allow_coding or nas_admin; "
+            f"request access via Authentik and Cockpit (groups: {sorted(user_groups)})"
+        )
+    except CodingAgentError:
+        raise
+    except Exception as exc:
+        raise CodingAgentError(f"Unable to verify coding access for {original_user!r}: {exc}") from exc
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if os.geteuid() != 0:
         print("nas-code-agent: run through sudo/root so systemd can create the sandboxed service", file=sys.stderr)
         return 1
     try:
+        _check_coding_access()
         roots = configured_roots()
         workspace = validate_workspace(args.workspace, roots)
         credential = pathlib.Path(os.environ.get("NAS_PI_CREDENTIAL", "/run/nas-secrets/ai/coding-agent-api-key"))

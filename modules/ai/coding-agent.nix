@@ -7,11 +7,14 @@ let
   piPackageAvailable = builtins.hasAttr "pi-coding-agent" pkgs;
   piPackage = if piPackageAvailable then pkgs."pi-coding-agent" else null;
   stateDir = "/var/lib/nas-code-agent";
+  piNetnsPath = "/run/netns/pi";
+  piHostVethIp = "10.200.1.1";
+  piNsVethIp = "10.200.1.2";
   providerName = "nas-llama-swap";
   roleModels = lib.unique (builtins.attrValues code.modelRoles);
   modelsFile = pkgs.writeText "nas-pi-models.json" (builtins.toJSON {
     providers.${providerName} = {
-      baseUrl = "http://127.0.0.1:${toString cfg.llamaSwap.port}/v1";
+      baseUrl = "http://${piHostVethIp}:${toString cfg.llamaSwap.port}/v1";
       apiKey = "LLAMA_SWAP_CODING_API_KEY";
       api = "openai-completions";
       models = map (id: {
@@ -61,6 +64,8 @@ let
       export NAS_PI_STATE_DIR=${lib.escapeShellArg stateDir}
       export NAS_FEATURE_CONTROL=${lib.escapeShellArg "${nasPythonApplication}/bin/nas-feature-control"}
       export NAS_CODING_HEARTBEAT_SECONDS=${toString code.heartbeatSeconds}
+      export NAS_CAPABILITY_REGISTRY_FILE=${lib.escapeShellArg "${nasInternal.capabilityRegistryFile}"}
+      export NAS_CAPABILITY_REGISTRY_REQUIRED=1
       exec ${nasPythonApplication}/bin/nas-code-agent "$@"
     '';
   };
@@ -87,9 +92,63 @@ in
         description = "Active Pi coding-agent sessions";
         wantedBy = lib.mkOverride 90 [ ];
         partOf = [ "nas-protected-services.target" ];
-        requires = [ "nas-ai-coding-prepare.service" ];
-        after = [ "nas-ai-coding-prepare.service" ];
+        requires = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
+        after = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
         unitConfig.StopWhenUnneeded = false;
+      };
+
+      systemd.services.nas-pi-netns = {
+        description = "Create Pi coding-agent network namespace (internet via NAT, host loopback blocked except llama-swap proxy)";
+        wantedBy = lib.mkOverride 90 [ "nas-ai-coding-sessions.target" ];
+        before = [ "nas-ai-coding-sessions.target" ];
+        partOf = [ "nas-protected-services.target" ];
+        after = [ "nas-ai-storage.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = pkgs.writeShellScript "nas-pi-netns-setup" ''
+            set -euo pipefail
+            ${pkgs.iproute2}/bin/ip netns add pi 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip link add pi-veth0 type veth peer name pi-veth1 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip link set pi-veth1 netns pi 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip addr add ${piHostVethIp}/30 dev pi-veth0 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip link set pi-veth0 up 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip netns exec pi ${pkgs.iproute2}/bin/ip addr add ${piNsVethIp}/30 dev pi-veth1 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip netns exec pi ${pkgs.iproute2}/bin/ip link set pi-veth1 up 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip netns exec pi ${pkgs.iproute2}/bin/ip link set lo up 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip netns exec pi ${pkgs.iproute2}/bin/ip route add default via ${piHostVethIp} 2>/dev/null || true
+            ${pkgs.iptables}/bin/iptables -t nat -C POSTROUTING -s ${piNsVethIp}/30 -j MASQUERADE 2>/dev/null || ${pkgs.iptables}/bin/iptables -t nat -A POSTROUTING -s ${piNsVethIp}/30 -j MASQUERADE
+            ${pkgs.iptables}/bin/iptables -C FORWARD -s ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || ${pkgs.iptables}/bin/iptables -A FORWARD -s ${piNsVethIp}/30 -j ACCEPT
+            ${pkgs.iptables}/bin/iptables -C FORWARD -d ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || ${pkgs.iptables}/bin/iptables -A FORWARD -d ${piNsVethIp}/30 -j ACCEPT
+            mkdir -p /run/netns
+            touch ${piNetnsPath}
+            mount --bind /proc/self/ns/net ${piNetnsPath} 2>/dev/null || true
+          '';
+          ExecStop = pkgs.writeShellScript "nas-pi-netns-teardown" ''
+            set -euo pipefail
+            ${pkgs.iptables}/bin/iptables -t nat -D POSTROUTING -s ${piNsVethIp}/30 -j MASQUERADE 2>/dev/null || true
+            ${pkgs.iptables}/bin/iptables -D FORWARD -s ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || true
+            ${pkgs.iptables}/bin/iptables -D FORWARD -d ${piNsVethIp}/30 -j ACCEPT 2>/dev/null || true
+            umount ${piNetnsPath} 2>/dev/null || true
+            rm -f ${piNetnsPath}
+            ${pkgs.iproute2}/bin/ip netns del pi 2>/dev/null || true
+            ${pkgs.iproute2}/bin/ip link del pi-veth0 2>/dev/null || true
+          '';
+        };
+      };
+
+      systemd.services.nas-llama-swap-pi-proxy = {
+        description = "Proxy host llama-swap to Pi netns (10.200.1.1:${toString cfg.llamaSwap.port} -> 127.0.0.1:${toString cfg.llamaSwap.port})";
+        wantedBy = lib.mkOverride 90 [ "nas-ai-coding-sessions.target" ];
+        after = [ "nas-pi-netns.service" "nas-llama-swap.service" ];
+        partOf = [ "nas-protected-services.target" ];
+        requires = [ "nas-pi-netns.service" ];
+        serviceConfig = {
+          Type = "simple";
+          Restart = "always";
+          RestartSec = "2s";
+          ExecStart = "${pkgs.socat}/bin/socat TCP-LISTEN:${toString cfg.llamaSwap.port},fork,bind=${piHostVethIp},reuseaddr TCP:127.0.0.1:${toString cfg.llamaSwap.port}";
+        };
       };
 
       systemd.services.nas-ai-coding-prepare = {
