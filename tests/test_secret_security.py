@@ -71,6 +71,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
             "short",
             "safe\nEVIL=1",
             "safe\rEVIL=1",
+            "safe\tvalue",
             "safe value with spaces",
             "'quoted-secret'",
             '"quoted-secret"',
@@ -79,7 +80,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
             "semi;colon",
             "pipe|value",
             "back\\slash",
-            "nul\x00byte-value",
+            "control\x1fvalue",
             "x" * 4097,
         )
         marker = pathlib.Path("/tmp/nas-secret-injection")
