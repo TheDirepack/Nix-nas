@@ -64,8 +64,6 @@ def _validated_username(value: object) -> str:
 
 
 def ensure_user_state(username: str) -> pathlib.Path:
-    """Create the authoritative per-user Pi state directory without symlink escapes."""
-
     username = _validated_username(username)
     root_raw = os.environ.get("NAS_PI_USER_STATE_ROOT", "/tank/apps/pi/users")
     root = pathlib.Path(root_raw)
@@ -108,8 +106,6 @@ def _bind_arg(source: pathlib.Path, target: str, *, read_only: bool = False) -> 
 
 
 def session_command(workspace: pathlib.Path, user_state: pathlib.Path, pi_args: Sequence[str]) -> list[str]:
-    """Build one disposable, read-only-root Pi container invocation."""
-
     image = os.environ.get("NAS_PI_IMAGE", "")
     if not IMAGE_RE.fullmatch(image):
         raise CodingAgentError("NAS Pi container image is not configured")
@@ -178,10 +174,10 @@ def session_command(workspace: pathlib.Path, user_state: pathlib.Path, pi_args: 
     return command
 
 
-def heartbeat(stop: threading.Event, feature_control: str, interval: int) -> None:
+def heartbeat(stop: threading.Event, managed_service: str, interval: int) -> None:
     while not stop.wait(interval):
         subprocess.run(
-            [feature_control, "wake", "aiCoding"],
+            [managed_service, "touch", "ai-runtime"],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -201,8 +197,6 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _check_coding_access() -> str:
-    """Authorize the caller and return the stable username used for user-scoped storage."""
-
     identity_json = os.environ.get("NAS_AUTHENTICATED_IDENTITY_JSON", "")
     if identity_json.strip():
         try:
@@ -309,11 +303,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Coding-agent llama-swap client credential is unavailable; activate NAS secrets first"
             )
         user_state = ensure_user_state(username)
-        feature_control = os.environ.get("NAS_FEATURE_CONTROL", "nas-feature-control")
-        run_checked([feature_control, "wake", "aiCoding"])
+        managed_service = os.environ.get("NAS_MANAGED_SERVICE", "nas-managed-service")
+        run_checked([managed_service, "start", "ai-runtime"])
         interval = max(30, int(os.environ.get("NAS_CODING_HEARTBEAT_SECONDS", "120")))
         stop = threading.Event()
-        worker = threading.Thread(target=heartbeat, args=(stop, feature_control, interval), daemon=True)
+        worker = threading.Thread(target=heartbeat, args=(stop, managed_service, interval), daemon=True)
         worker.start()
         try:
             pi_args = list(args.pi_args)
