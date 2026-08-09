@@ -3,6 +3,7 @@
 let
   cfg = config.nas;
   mkService = {
+    serviceId,
     label,
     description ? null,
     enabled,
@@ -19,7 +20,8 @@ let
     let
       authMode = if access == "public" then "public" else "forward-auth";
       authAllow = if access == "admin" then "groups" else if access == "ai" then "groups" else if access == "vault" then "groups" else "any";
-      authGroups = if access == "admin" then ["nas_admin"] else if access == "ai" then ["nas_allow_ai" "nas_admin"] else if access == "vault" then ["nas_allow_vault" "nas_admin"] else if access == "api-key" then [] else [];
+      authGroups = if access == "admin" then ["nas_admin"] else if access == "ai" then ["nas_allow_ai" "nas_admin"] else if access == "vault" then ["nas_allow_vault" "nas_admin"] else [];
+      authCapability = if access == "admin" || access == "ai" || access == "vault" then "application.${serviceId}.access" else null;
       portalCategory = if linkKey == "identity" then "Administration" else if linkKey == "console" then "Administration" else if linkKey == "aiWorkspace" then "AI" else if linkKey == "syncthing" then "Files" else category;
       portalIcon = if icon != null then icon else if linkKey != null then linkKey else "box";
       lifecycle = { mode = lifecycleMode; } // (if lifecycleMode == "on-demand" then { idleSeconds = idleSeconds; } else { });
@@ -45,7 +47,9 @@ let
           };
           auth = {
             mode = authMode;
-          } // (if authGroups != [] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then {} else { allow = "any"; });
+          }
+          // (if authCapability != null then { capability = authCapability; } else {})
+          // (if authGroups != [] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then {} else { allow = "any"; });
           portal = {
             visible = linkKey != null;
             category = portalCategory;
@@ -56,6 +60,7 @@ let
     } // (if description != null then { description = description; } else {});
   registry = {
     identity = mkService {
+      serviceId = "identity";
       label = "Authentik identity";
       enabled = true;
       units = [ "authentik.service" "authentik-worker.service" ];
@@ -67,6 +72,7 @@ let
       lifecycleMode = "persistent";
     };
     cockpit = mkService {
+      serviceId = "cockpit";
       label = "Cockpit management";
       enabled = true;
       units = [ "cockpit.socket" ];
@@ -78,6 +84,7 @@ let
       lifecycleMode = "persistent";
     };
     aiApi = mkService {
+      serviceId = "aiApi";
       label = "llama-swap API";
       enabled = cfg.ai.enable;
       units = [ "nas-llama-swap.service" ];
@@ -90,6 +97,7 @@ let
       idleSeconds = 600;
     };
     aiRuntime = mkService {
+      serviceId = "aiRuntime";
       label = "llama-swap runtime UI";
       enabled = cfg.ai.enable;
       units = [ "nas-llama-swap.service" ];
@@ -102,6 +110,7 @@ let
       idleSeconds = 600;
     };
     aiWorkspace = mkService {
+      serviceId = "aiWorkspace";
       label = "Open WebUI";
       enabled = cfg.ai.enable;
       units = [ "open-webui.service" ];
@@ -114,6 +123,7 @@ let
       idleSeconds = 600;
     };
     aiDownloader = mkService {
+      serviceId = "aiDownloader";
       label = "Hugging Face model downloader";
       enabled = cfg.ai.enable && cfg.ai.modelDownloader.enable;
       units = [ "podman-hfdownloader.service" ];
@@ -126,6 +136,7 @@ let
       idleSeconds = 600;
     };
     syncthing = mkService {
+      serviceId = "syncthing";
       label = "Syncthing administration";
       enabled = cfg.syncthing.enable;
       units = [ "syncthing.service" ];
@@ -137,6 +148,7 @@ let
       lifecycleMode = "persistent";
     };
     vaultwarden = mkService {
+      serviceId = "vaultwarden";
       label = "Vaultwarden";
       enabled = cfg.vaultwarden.enable;
       units = [ "vaultwarden.service" ];
@@ -148,6 +160,7 @@ let
       lifecycleMode = "persistent";
     };
     victoriametrics = mkService {
+      serviceId = "victoriametrics";
       label = "VictoriaMetrics";
       enabled = cfg.observability.enable;
       units = [ "victoriametrics.service" ];
@@ -159,6 +172,7 @@ let
       lifecycleMode = "persistent";
     };
     grafana = mkService {
+      serviceId = "grafana";
       label = "Grafana";
       enabled = cfg.observability.enable && cfg.observability.grafana.enable;
       units = [ "grafana.service" ];
@@ -171,6 +185,7 @@ let
       idleSeconds = 600;
     };
     alerts = mkService {
+      serviceId = "alerts";
       label = "Alert status";
       enabled = cfg.observability.enable && cfg.alerting.enable;
       units = [ "nas-alert-router.service" "vmalert-nas.service" ];
@@ -182,6 +197,7 @@ let
       lifecycleMode = "persistent";
     };
     notifications = mkService {
+      serviceId = "notifications";
       label = "ntfy notifications";
       enabled = cfg.observability.ntfy.enable;
       units = [ "ntfy-sh.service" ];
@@ -193,6 +209,7 @@ let
       lifecycleMode = "persistent";
     };
     ups = mkService {
+      serviceId = "ups";
       label = "NUT web interface";
       enabled = cfg.power.ups.enable && cfg.power.ups.web.enable;
       units = [ "podman-nut-webgui.service" ];
