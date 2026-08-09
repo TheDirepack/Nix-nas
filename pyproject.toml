@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 [project.scripts]
 nas-ai-config = "nas_ai_config:main"
 nas-alert-router = "nas_alert_router:main"
+nas-authentik-v2-groups = "nas_authentik_v2_groups:main"
 nas-cockpit-api = "nas_cockpit_api:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-copyparty-projection = "nas_copyparty_projection:main"
@@ -31,6 +32,7 @@ package-dir = {"" = "services"}
 py-modules = [
   "nas_ai_config",
   "nas_alert_router",
+  "nas_authentik_v2_groups",
   "nas_common",
   "nas_cockpit_api",
   "nas_coding_agent",
