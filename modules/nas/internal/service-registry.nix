@@ -2,22 +2,37 @@
 
 let
   cfg = config.nas;
-  mkService = { label, description ? null, enabled, units, port, publicPath, access, linkKey, category ? "Other", icon ? null }:
+  mkService = {
+    label,
+    description ? null,
+    enabled,
+    units,
+    port,
+    publicPath,
+    access,
+    linkKey,
+    category ? "Other",
+    icon ? null,
+    lifecycleMode ? "persistent",
+    idleSeconds ? null,
+  }:
     let
       authMode = if access == "public" then "public" else "forward-auth";
       authAllow = if access == "admin" then "groups" else if access == "ai" then "groups" else if access == "vault" then "groups" else "any";
       authGroups = if access == "admin" then ["nas_admin"] else if access == "ai" then ["nas_allow_ai" "nas_admin"] else if access == "vault" then ["nas_allow_vault" "nas_admin"] else if access == "api-key" then [] else [];
       portalCategory = if linkKey == "identity" then "Administration" else if linkKey == "console" then "Administration" else if linkKey == "aiWorkspace" then "AI" else if linkKey == "syncthing" then "Files" else category;
       portalIcon = if icon != null then icon else if linkKey != null then linkKey else "box";
+      lifecycle = { mode = lifecycleMode; } // (if lifecycleMode == "on-demand" then { idleSeconds = idleSeconds; } else { });
+      startPolicy = if !enabled then "disabled" else if lifecycleMode == "persistent" then "boot" else if lifecycleMode == "on-demand" then "on-demand" else "manual";
     in {
       label = label;
       enabled = enabled;
       ownership = "system";
+      inherit lifecycle;
       runtime = {
         type = "systemd";
         source = "systemd/${builtins.head units}";
-        startPolicy = "boot";
-        units = units;
+        inherit startPolicy units;
       };
       endpoints = {
         main = {
@@ -49,6 +64,7 @@ let
       access = "public";
       linkKey = "identity";
       category = "Administration";
+      lifecycleMode = "persistent";
     };
     cockpit = mkService {
       label = "Cockpit management";
@@ -59,6 +75,7 @@ let
       access = "admin";
       linkKey = "console";
       category = "Administration";
+      lifecycleMode = "persistent";
     };
     aiApi = mkService {
       label = "llama-swap API";
@@ -69,6 +86,8 @@ let
       access = "api-key";
       linkKey = null;
       category = "AI";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
     aiRuntime = mkService {
       label = "llama-swap runtime UI";
@@ -79,6 +98,8 @@ let
       access = "admin";
       linkKey = "aiRuntime";
       category = "AI";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
     aiWorkspace = mkService {
       label = "Open WebUI";
@@ -89,6 +110,8 @@ let
       access = "ai";
       linkKey = "aiWorkspace";
       category = "AI";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
     aiDownloader = mkService {
       label = "Hugging Face model downloader";
@@ -99,6 +122,8 @@ let
       access = "admin";
       linkKey = "aiModels";
       category = "AI";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
     syncthing = mkService {
       label = "Syncthing administration";
@@ -109,6 +134,7 @@ let
       access = "admin";
       linkKey = "syncthing";
       category = "Files";
+      lifecycleMode = "persistent";
     };
     vaultwarden = mkService {
       label = "Vaultwarden";
@@ -119,6 +145,7 @@ let
       access = "vault";
       linkKey = "vaultwarden";
       category = "Home";
+      lifecycleMode = "persistent";
     };
     victoriametrics = mkService {
       label = "VictoriaMetrics";
@@ -129,6 +156,7 @@ let
       access = "admin";
       linkKey = "victoriaMetrics";
       category = "Monitoring";
+      lifecycleMode = "persistent";
     };
     grafana = mkService {
       label = "Grafana";
@@ -139,6 +167,8 @@ let
       access = "admin";
       linkKey = "metrics";
       category = "Monitoring";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
     alerts = mkService {
       label = "Alert status";
@@ -149,6 +179,7 @@ let
       access = "admin";
       linkKey = "alerts";
       category = "Monitoring";
+      lifecycleMode = "persistent";
     };
     notifications = mkService {
       label = "ntfy notifications";
@@ -159,6 +190,7 @@ let
       access = "native";
       linkKey = "notifications";
       category = "Monitoring";
+      lifecycleMode = "persistent";
     };
     ups = mkService {
       label = "NUT web interface";
@@ -169,6 +201,8 @@ let
       access = "admin";
       linkKey = "ups";
       category = "Monitoring";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
   };
 in
