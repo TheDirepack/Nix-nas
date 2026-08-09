@@ -529,7 +529,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nixosConfigurations.nas-qemu", flake)
         self.assertIn("checks.x86_64-linux", flake)
         self.assertIn("latest-nixos-minimal-x86_64-linux.iso", host)
-        self.assertIn('[[ $MODE == boot ]] || ensure_iso', run_vm)
+        self.assertIn("[[ $MODE == boot ]] || ensure_iso", run_vm)
         self.assertIn("sha256sum --check --status", host)
         self.assertIn("nixos-install", text("tests/vm/install-system.sh"))
         self.assertIn("nas-vm-guest-test /dev/vdb", host)
