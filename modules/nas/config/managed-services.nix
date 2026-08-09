@@ -55,23 +55,24 @@ in
       pathConfig.PathChanged = storePath;
     };
 
-    # The existing lifecycle reaper remains temporarily while daemon/session
-    # activation is migrated onto the schema runtime. It consumes the same
-    # effective state generated above and no longer owns desired-state parsing.
     systemd.services.nas-managed-services-reap = {
-      description = "Stop idle Managed Services V2 on-demand applications";
+      description = "Reap idle V2 daemon and session leases";
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = secretReady;
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${nasInternal.nasPythonApplication}/bin/nas-managed-service reap";
+        ExecStart = ''
+          ${nasInternal.nasPythonApplication}/bin/nas-v2-runtime reap \
+            --spec ${storePath} \
+            --schema ${schemaPath}
+        '';
         NoNewPrivileges = true;
         PrivateTmp = true;
       };
     };
 
     systemd.timers.nas-managed-services-reap = {
-      description = "Periodically reap idle Managed Services V2 on-demand applications";
+      description = "Periodically reap idle Managed Services V2 workloads";
       wantedBy = [ "nas-protected-services.target" ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = secretReady;
