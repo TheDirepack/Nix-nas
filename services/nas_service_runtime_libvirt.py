@@ -38,10 +38,20 @@ def _domain_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
     return path
 
 
+def _validate_lifecycle(service_id: str, service: dict[str, Any]) -> None:
+    lifecycle = service.get("lifecycle") or {}
+    if lifecycle.get("mode") == "session" and service.get("enabled"):
+        raise ManagedServiceError(
+            f"Service {service_id}: session lifecycle is not supported for libvirt domains; "
+            "use an explicit disposable clone/overlay workflow"
+        )
+
+
 def plan_libvirt(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime = service.get("runtime", {})
     if runtime.get("type") != "vm":
         return {"actions": [], "warnings": [f"Service {service_id} is not a VM service"]}
+    _validate_lifecycle(service_id, service)
     source = _domain_source(service_id, service)
     enabled = bool(service.get("enabled"))
     return {
@@ -50,6 +60,7 @@ def plan_libvirt(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         "source": str(source),
         "domain": service_id,
         "enabled": enabled,
+        "lifecycle": (service.get("lifecycle") or {}).get("mode"),
         "resolvedStorage": service.get("resolvedStorage", []),
         "actions": [
             {"type": "virsh-define", "domain": service_id, "source": str(source)},
