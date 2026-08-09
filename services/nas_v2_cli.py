@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import sys
 
 import nas_v2_apply as apply_engine
 import nas_v2_lifecycle as lifecycle
@@ -19,6 +21,16 @@ def _load(args: argparse.Namespace) -> dict:
 
 def _print(value: object) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def _runtime_executable() -> str:
+    configured = os.environ.get("NAS_V2_RUNTIME_BIN")
+    if configured:
+        path = pathlib.Path(configured)
+        if not path.is_absolute():
+            raise RuntimeError("NAS_V2_RUNTIME_BIN must be an absolute path")
+        return str(path)
+    return str(pathlib.Path(sys.argv[0]).resolve())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             result["schedules"] = reconcile_schedules(
                 document,
+                runtime_path=_runtime_executable(),
                 spec_path=str(args.spec),
                 schema_path=str(args.schema),
                 dry_run=dry_run,
