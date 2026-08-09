@@ -60,6 +60,7 @@ py-modules = [
   "nas_migrate_state",
   "nas_operation_journal",
   "nas_operation_lock",
+  "nas_service_runtime_exec",
   "nas_service_runtime_python",
   "nas_setup",
   "nas_setup_config",
@@ -69,6 +70,7 @@ py-modules = [
   "nas_v2_caddy",
   "nas_v2_cli",
   "nas_v2_lifecycle",
+  "nas_v2_listeners",
   "nas_v2_runtime",
   "nas_v2_schedules"
 ]
