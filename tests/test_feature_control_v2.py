@@ -72,6 +72,27 @@ class FeatureControlV2Tests(unittest.TestCase):
         self.assertTrue(feature_v2.authorize_service_scope("service:demo:web", headers))
         mocked_legacy.assert_called_once()
 
+    @patch.object(feature_v2, "_ORIGINAL_AUTHORIZE_SERVICE_SCOPE")
+    @patch.object(feature_v2, "_load_effective")
+    def test_capability_endpoint_can_bridge_explicit_legacy_group(self, mocked_effective, mocked_legacy) -> None:
+        effective = self.effective()
+        effective["endpoints"]["demo:web"]["auth"].update({"allow": "groups", "groups": ["nas_allow_demo"]})
+        mocked_effective.return_value = effective
+        mocked_legacy.return_value = True
+        headers = Headers({"Remote-User": "alice", "Remote-Groups": "nas_allow_demo"})
+        self.assertTrue(feature_v2.authorize_service_scope("service:demo:web", headers))
+        mocked_legacy.assert_called_once_with("service:demo:web", headers)
+
+    @patch.object(feature_v2, "_ORIGINAL_AUTHORIZE_SERVICE_SCOPE")
+    @patch.object(feature_v2, "_load_effective")
+    def test_capability_endpoint_without_legacy_assignments_does_not_broaden_access(
+        self, mocked_effective, mocked_legacy
+    ) -> None:
+        mocked_effective.return_value = self.effective()
+        headers = Headers({"Remote-User": "alice", "Remote-Groups": "nas_users"})
+        self.assertFalse(feature_v2.authorize_service_scope("service:demo:web", headers))
+        mocked_legacy.assert_not_called()
+
     def test_disabled_service_blocks_even_authorized_endpoint(self) -> None:
         effective = self.effective(enabled=False)
         self.assertFalse(feature_v2._authorized_use("demo", effective))
