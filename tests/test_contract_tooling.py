@@ -476,6 +476,7 @@ class ContractTests(unittest.TestCase):
         matrix = text("scripts/nix-config-matrix.sh")
         negative = text("scripts/nix-negative-tests.sh")
         host_platform = text("modules/nas/config/host-platform.nix")
+        consumer = text("tests/nixos/module-consumer.nix")
         for name in [
             "nas-module-consumer",
             "nas-profile-core-storage",
@@ -501,6 +502,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("failed for the wrong reason", negative)
         self.assertIn('name == "open-webui"', host_platform)
         self.assertNotIn("allowUnfree = true", host_platform)
+        self.assertIn("TestFixtureOnlyKeyMaterial", consumer)
 
     def test_qemu_harness_covers_native_and_installed_paths(self):
         flake = text("flake.nix")
