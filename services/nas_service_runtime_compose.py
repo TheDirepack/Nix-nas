@@ -33,6 +33,15 @@ def _compose_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
     return path
 
 
+def _validate_lifecycle(service_id: str, service: dict[str, Any]) -> None:
+    lifecycle = service.get("lifecycle") or {}
+    if lifecycle.get("mode") == "session" and service.get("enabled"):
+        raise ManagedServiceError(
+            f"Service {service_id}: session lifecycle is not supported for Compose; "
+            "use a dedicated disposable session runtime"
+        )
+
+
 def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime = service.get("runtime", {})
     if runtime.get("type") != "compose":
@@ -41,6 +50,7 @@ def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
             "warnings": [f"Service {service_id} is not a Compose service"],
         }
 
+    _validate_lifecycle(service_id, service)
     source = _compose_source(service_id, service)
     enabled = bool(service.get("enabled"))
     return {
@@ -49,6 +59,7 @@ def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         "source": str(source),
         "project": service_id,
         "enabled": enabled,
+        "lifecycle": (service.get("lifecycle") or {}).get("mode"),
         "actions": [
             {
                 "type": "podman-compose",
@@ -84,7 +95,9 @@ def apply_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = F
 def remove_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> None:
     if dry_run:
         return
-    plan = plan_compose(service_id, service)
+    candidate = dict(service)
+    candidate["enabled"] = False
+    plan = plan_compose(service_id, candidate)
     if not plan["actions"]:
         return
     subprocess.run(
