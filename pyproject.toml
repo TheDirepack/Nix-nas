@@ -24,6 +24,7 @@ nas-migrate-state = "nas_migrate_state:main"
 nas-operation-run = "nas_operation_lock:main"
 nas-setup = "nas_setup:main"
 nas-state = "nas_state:main"
+nas-v2-runtime = "nas_v2_runtime:main"
 
 [tool.setuptools.dynamic]
 version = {file = ["VERSION"]}
@@ -59,10 +60,12 @@ py-modules = [
   "nas_migrate_state",
   "nas_operation_journal",
   "nas_operation_lock",
+  "nas_service_runtime_python",
   "nas_setup",
   "nas_setup_config",
   "nas_state",
-  "nas_syncthing_devices"
+  "nas_syncthing_devices",
+  "nas_v2_runtime"
 ]
 
 [tool.ruff]
@@ -93,6 +96,7 @@ select = ["E4", "E7", "E9", "F"]
 "tests/test_service_caddy.py" = ["E402"]
 "tests/test_service_caddy_validate.py" = ["E402"]
 "tests/test_syncthing_devices.py" = ["E402"]
+"tests/test_v2_runtime.py" = ["E402"]
 
 [tool.pyright]
 include = ["services", "scripts", "tests"]
