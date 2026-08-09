@@ -31,6 +31,13 @@
             "consistency": {"enum": ["filesystem", "zfs-snapshot", "postgres", "native", "none"], "default": "filesystem"}
           }
         },
+        "fileBrowser": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visible": {"type": "boolean", "default": true}
+          }
+        },
         "quotaBytes": {"type": "integer", "minimum": 0},
         "description": {"type": "string", "maxLength": 256}
       },
