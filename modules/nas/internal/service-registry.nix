@@ -19,6 +19,7 @@ let
     ownership ? "v2",
     expose ? true,
     dependsOn ? [ ],
+    resources ? { },
   }:
     let
       authMode = if access == "public" then "public" else if access == "api-key" then "api-key" else "forward-auth";
@@ -52,7 +53,7 @@ let
       };
     in
     {
-      inherit label enabled ownership lifecycle dependsOn;
+      inherit label enabled ownership lifecycle dependsOn resources;
       runtime = {
         type = "systemd";
         source = "systemd/${builtins.head units}";
@@ -73,9 +74,26 @@ let
     category = "AI";
     lifecycleMode = "on-demand";
     idleSeconds = 600;
+    dependsOn = [ "ai-config" ];
+    # llama-swap/llama.cpp can run on CPU, so GPU availability accelerates the
+    # service but does not make the application unavailable on a GPU-less host.
+    # The generic V2 device resolver decides which concrete GPU nodes/CDI
+    # resources to grant; this definition is not vendor- or runtime-specific.
+    resources.gpus = [ "optional:auto" ];
   };
 
   registry = {
+    # V2 bootstrap/control-plane substrates are referenceable dependencies, but
+    # V2 never owns their shutdown lifecycle.
+    "storage-core" = mkService {
+      serviceId = "storage-core";
+      label = "NAS mounted storage";
+      enabled = true;
+      units = [ "nas-zfs-mount-guard.service" ];
+      lifecycleMode = "persistent";
+      ownership = "system";
+      expose = false;
+    };
     identity = mkService {
       serviceId = "identity";
       label = "Authentik identity";
@@ -112,6 +130,9 @@ let
       expose = false;
     };
 
+    # Application workloads and their prerequisites are ordinary V2 graph
+    # nodes. Their relationships are data, so any future runtime can depend on
+    # any other runtime without service-specific wake code.
     copyparty = mkService {
       serviceId = "copyparty";
       label = "CopyParty files";
@@ -119,8 +140,27 @@ let
       units = [ "copyparty.service" ];
       lifecycleMode = "persistent";
       expose = false;
+      dependsOn = [ "storage-core" ];
     };
 
+    "ai-storage" = mkService {
+      serviceId = "ai-storage";
+      label = "AI storage preparation";
+      enabled = cfg.ai.enable;
+      units = [ "nas-ai-storage.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "storage-core" ];
+    };
+    "ai-config" = mkService {
+      serviceId = "ai-config";
+      label = "AI runtime configuration";
+      enabled = cfg.ai.enable;
+      units = [ "nas-ai-config-init.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "ai-storage" ];
+    };
     "ai-runtime" = aiRuntimeBase // {
       endpoints = aiRuntimeBase.endpoints // {
         api = {
@@ -166,7 +206,18 @@ let
       category = "AI";
       lifecycleMode = "on-demand";
       idleSeconds = 600;
+      dependsOn = [ "ai-storage" ];
     };
+    "ai-coding" = mkService {
+      serviceId = "ai-coding";
+      label = "Pi coding sessions";
+      enabled = cfg.ai.enable && cfg.ai.codingAgent.enable;
+      units = [ "nas-ai-coding-prepare.service" "nas-ai-coding-sessions.target" ];
+      lifecycleMode = "session";
+      expose = false;
+      dependsOn = [ "ai-runtime" ];
+    };
+
     syncthing = mkService {
       serviceId = "syncthing";
       label = "Syncthing";
@@ -178,7 +229,7 @@ let
       linkKey = "syncthing";
       category = "Files";
       lifecycleMode = "persistent";
-      dependsOn = [ "identity" ];
+      dependsOn = [ "identity" "storage-core" ];
     };
     "vaultwarden-ca" = mkService {
       serviceId = "vaultwarden-ca";
@@ -248,7 +299,7 @@ let
       linkKey = "alerts";
       category = "Monitoring";
       lifecycleMode = "persistent";
-      dependsOn = [ "victoriametrics" ];
+      dependsOn = [ "victoriametrics" ] ++ (if cfg.observability.ntfy.enable then [ "notifications" ] else [ ]);
     };
     notifications = mkService {
       serviceId = "notifications";
@@ -274,6 +325,26 @@ let
       category = "Monitoring";
       lifecycleMode = "on-demand";
       idleSeconds = 600;
+    };
+
+    # Appliance jobs that are optional and do not bootstrap V2 are also V2
+    # services. The native systemd timer remains the scheduler/runtime.
+    "automatic-updates" = mkService {
+      serviceId = "automatic-updates";
+      label = "Scheduled update checks";
+      enabled = cfg.autoUpdate.enable && cfg.installationReady && cfg.scheduler.backend == "systemd";
+      units = [ "nas-auto-update.timer" ];
+      lifecycleMode = "persistent";
+      expose = false;
+    };
+    backups = mkService {
+      serviceId = "backups";
+      label = "Scheduled critical-state backups";
+      enabled = cfg.backup.enable && cfg.scheduler.backend == "systemd";
+      units = [ "restic-backups-nas-boot-system.timer" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "storage-core" ];
     };
   };
 
@@ -353,9 +424,9 @@ let
     };
   };
 
-  # Temporary read-only aliases for older Nix modules that still use the
-  # feature-catalog names. These aliases are intentionally NOT emitted into the
-  # V2 services document, so they cannot become duplicate lifecycle owners.
+  # Temporary read-only aliases for older Nix modules that still consume
+  # feature-catalog names. They are NOT emitted into V2 and cannot become
+  # duplicate lifecycle owners.
   serviceRegistryCompat = registry // {
     aiRuntime = registry."ai-runtime";
     aiWorkspace = registry."ai-workspace";
@@ -366,7 +437,7 @@ in
   serviceRegistry = serviceRegistryCompat;
   serviceRegistryV2 = {
     schemaVersion = 2;
-    generation = 4;
+    generation = 5;
     inherit storageResources;
     services = registry;
   };
