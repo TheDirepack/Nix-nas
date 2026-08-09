@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Managed Services V2 authorization and wake layer for feature control.
 
-The mature feature controller remains the HTTP gate. V2 capability-backed
-endpoints are authorized by Authentik groups, API-key endpoints retain their
-native bearer/X-API-Key contract, and successful access drives the
-dependency-aware V2 application lifecycle. On-demand dependencies start before
-the requested service and their idle leases are refreshed together. Session
-apps are never auto-woken by a static endpoint.
+The mature feature controller remains the HTTP transport gate. V2
+capability-backed endpoints are authorized by Authentik groups, API-key
+endpoints retain their native bearer/X-API-Key contract, and successful access
+drives the generic V2 engine. Dependency ordering, devices, storage, network,
+and runtime selection are all service-definition data rather than app-specific
+wake code.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _load_effective() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         pass
     try:
-        import nas_managed_service_dependencies as managed_v2
+        import nas_managed_service_engine as managed_v2
 
         return managed_v2.effective_registry()
     except Exception:
@@ -45,7 +45,7 @@ def _load_effective() -> dict[str, Any]:
 
 
 def _authorized_use(service_id: str, effective: dict[str, Any]) -> bool:
-    """Apply dependency-aware lifecycle policy after authorization succeeds."""
+    """Apply the generic V2 lifecycle after authorization succeeds."""
 
     service = effective.get("services", {}).get(service_id)
     if not isinstance(service, dict) or not service.get("enabled"):
@@ -59,9 +59,10 @@ def _authorized_use(service_id: str, effective: dict[str, Any]) -> bool:
     if mode != "on-demand":
         return False
     try:
-        import nas_managed_service_dependencies as managed_v2
+        import nas_managed_service_engine as managed_v2
+        import nas_managed_service_v2 as base_v2
 
-        state = managed_v2._v2._read_lifecycle_state()
+        state = base_v2._read_lifecycle_state()
         if service_id in state.get("services", {}):
             managed_v2.touch_service(service_id)
         else:
