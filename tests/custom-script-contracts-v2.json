@@ -43,6 +43,9 @@
     "services/nas_managed_service_v2.py": [
       "tests/test_managed_service_v2.py"
     ],
+    "services/nas_managed_network.py": [
+      "tests/test_managed_network.py"
+    ],
     "services/nas_feature_control_v2.py": [
       "tests/test_feature_control_v2.py"
     ],
