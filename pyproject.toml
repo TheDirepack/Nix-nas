@@ -13,6 +13,7 @@ nas-ai-config = "nas_ai_config:main"
 nas-alert-router = "nas_alert_router:main"
 nas-cockpit-api = "nas_cockpit_api:main"
 nas-code-agent = "nas_coding_agent:main"
+nas-copyparty-projection = "nas_copyparty_projection:main"
 nas-doctor = "nas_doctor:main"
 nas-feature-control = "nas_feature_control:main"
 nas-identity-sync = "nas_identity_sync:main"
@@ -33,6 +34,7 @@ py-modules = [
   "nas_common",
   "nas_cockpit_api",
   "nas_coding_agent",
+  "nas_copyparty_projection",
   "nas_doctor",
   "nas_feature_control",
   "nas_feature_model",
