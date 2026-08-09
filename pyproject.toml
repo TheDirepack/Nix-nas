@@ -46,6 +46,7 @@ py-modules = [
   "nas_identity_model",
   "nas_identity_sync",
   "nas_logging",
+  "nas_managed_devices",
   "nas_managed_network",
   "nas_managed_resources",
   "nas_managed_service",
