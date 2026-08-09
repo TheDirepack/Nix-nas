@@ -5,7 +5,7 @@ let
     authentikPort
     caddyForwardAuth
     caddyCapabilityAuth
-    caddyOnDemandAuth
+    caddyManagedServiceAuth
     caddyOnDemandTransport
     cfg
     cockpitPort
@@ -89,7 +89,7 @@ in
       ${lib.optionalString cfg.ai.enable ''
       @aiApi path /ai/v1 /ai/v1/*
       handle @aiApi {
-        ${caddyOnDemandAuth "aiRuntime" "ai-api"}
+        ${caddyManagedServiceAuth "ai-runtime" "api"}
         uri strip_prefix /ai
         reverse_proxy 127.0.0.1:${toString cfg.ai.llamaSwap.port} {
           ${caddyOnDemandTransport}
@@ -101,7 +101,7 @@ in
       handle @aiRuntime {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "aiRuntime" "admin"}
+          ${caddyManagedServiceAuth "ai-runtime" "main"}
           uri strip_prefix /ai/runtime
           reverse_proxy 127.0.0.1:${toString cfg.ai.llamaSwap.port} {
             header_up X-Forwarded-Prefix /ai/runtime
@@ -116,7 +116,7 @@ in
       handle @aiModels {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "aiDownloader" "admin"}
+          ${caddyManagedServiceAuth "ai-downloader" "main"}
           header Referrer-Policy "same-origin"
           uri strip_prefix /ai/models
           reverse_proxy 127.0.0.1:${toString cfg.ai.modelDownloader.port} {
@@ -132,7 +132,7 @@ in
       handle @aiWorkspace {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "aiWorkspace" "ai"}
+          ${caddyManagedServiceAuth "ai-workspace" "main"}
           request_header Remote-Role user
           @aiAdministrator header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)${identityAdminGroup}([[:space:]]*[|,]|$)
           request_header @aiAdministrator Remote-Role admin
@@ -159,7 +159,7 @@ in
       handle @hfdAbsoluteAssets {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "aiDownloader" "admin"}
+          ${caddyManagedServiceAuth "ai-downloader" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.ai.modelDownloader.port} {
             ${caddyOnDemandTransport}
           }
@@ -174,7 +174,7 @@ in
       handle @hfdAbsoluteWebSocket {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "aiDownloader" "admin"}
+          ${caddyManagedServiceAuth "ai-downloader" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.ai.modelDownloader.port} {
             ${caddyOnDemandTransport}
           }
@@ -187,7 +187,7 @@ in
       handle @hfdAbsoluteApi {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "aiDownloader" "admin"}
+          ${caddyManagedServiceAuth "ai-downloader" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.ai.modelDownloader.port} {
             ${caddyOnDemandTransport}
           }
@@ -200,7 +200,7 @@ in
       handle /ups/* {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "upsWeb" "admin"}
+          ${caddyManagedServiceAuth "ups" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.power.ups.web.port} {
             header_down X-Frame-Options SAMEORIGIN
             ${caddyOnDemandTransport}
@@ -215,7 +215,7 @@ in
       handle /alerts/* {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "alerts" "admin"}
+          ${caddyManagedServiceAuth "alerts" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.observability.alertRouterPort} {
             header_down X-Frame-Options SAMEORIGIN
             ${caddyOnDemandTransport}
@@ -228,7 +228,7 @@ in
       handle /victoriametrics/* {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "observability" "admin"}
+          ${caddyManagedServiceAuth "victoriametrics" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.observability.victoriaMetricsPort} {
             header_down X-Frame-Options SAMEORIGIN
             ${caddyOnDemandTransport}
@@ -241,7 +241,7 @@ in
       handle /metrics/* {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "grafana" "admin"}
+          ${caddyManagedServiceAuth "grafana" "main"}
           reverse_proxy 127.0.0.1:${toString cfg.observability.grafana.port} {
             header_up X-WEBAUTH-USER {http.request.header.Remote-User}
             header_up X-WEBAUTH-NAME {http.request.header.Remote-Name}
@@ -294,7 +294,7 @@ in
       handle /syncthing/* {
         route {
           ${caddyForwardAuth}
-          ${caddyOnDemandAuth "syncthing" "admin"}
+          ${caddyManagedServiceAuth "syncthing" "main"}
           uri strip_prefix /syncthing
           reverse_proxy 127.0.0.1:${toString syncthingGuiPort} {
             header_up Host {upstream_hostport}
