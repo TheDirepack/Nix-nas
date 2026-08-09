@@ -3,9 +3,13 @@
   "executables": {
     "nas-managed-service": {
       "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_managed_service_v2.py",
+      "source": "services/nas_managed_service_dependencies.py",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": ["tests/test_managed_service.py", "tests/test_managed_service_v2.py"]
+      "tests": [
+        "tests/test_managed_service.py",
+        "tests/test_managed_service_v2.py",
+        "tests/test_managed_service_dependencies.py"
+      ]
     },
     "nas-feature-control": {
       "fuzzStrategy": "feature-id",
@@ -38,6 +42,7 @@
   "pythonModules": {
     "services/nas_managed_resources.py": ["tests/test_managed_resources.py"],
     "services/nas_managed_service_v2.py": ["tests/test_managed_service_v2.py"],
+    "services/nas_managed_service_dependencies.py": ["tests/test_managed_service_dependencies.py"],
     "services/nas_managed_network.py": ["tests/test_managed_network.py"],
     "services/nas_feature_control_v2.py": ["tests/test_feature_control_v2.py"],
     "services/nas_copyparty_projection.py": ["tests/test_copyparty_projection.py"],
