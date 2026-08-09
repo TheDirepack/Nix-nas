@@ -3,11 +3,14 @@
 let
   inherit (nasInternal)
     authentikApiTokenFile
+    authentikPort
+    cfg
     nasPythonApplication
     secretRoot
   ;
   storePath = "/var/lib/nas-control/services.json";
   effectivePath = "/run/nas-control/effective-endpoints.json";
+  authentikUrl = "http://127.0.0.1:${toString authentikPort}${lib.removeSuffix "/" cfg.identity.authentikPath}";
 in
 {
   config = {
@@ -26,6 +29,10 @@ in
         "authentik.service"
         "nas-managed-services-reconcile.service"
       ];
+      environment = {
+        NAS_AUTHENTIK_URL = authentikUrl;
+        NAS_AUTHENTIK_TOKEN_FILE = authentikApiTokenFile;
+      };
       unitConfig.ConditionPathExists = [
         "${secretRoot}/ready"
         authentikApiTokenFile
