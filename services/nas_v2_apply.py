@@ -3,10 +3,20 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import nas_v2_runtime as compiler
 from nas_managed_network import apply_firewalld
+from nas_v2_listeners import reconcile_listeners
+
+
+def _apply_runtime(service_id: str, service: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if service["runtime"]["type"] == "exec":
+        from nas_service_runtime_exec import apply_exec
+
+        return apply_exec(service_id, service, dry_run=dry_run)
+    return compiler._apply_runtime(service_id, service, dry_run=dry_run)
 
 
 def apply_document(
@@ -32,8 +42,10 @@ def apply_document(
         if network is not None:
             policy = {key: value for key, value in network.items() if key not in {"identity", "mode"}}
             result["networks"][service_id] = apply_firewalld(service_id, policy, dry_run=dry_run)
-        result["runtimes"][service_id] = compiler._apply_runtime(service_id, service, dry_run=dry_run)
+        result["runtimes"][service_id] = _apply_runtime(service_id, service, dry_run=dry_run)
 
+    firewall_zone = os.environ.get("NAS_V2_FIREWALL_ZONE", "nas-lan")
+    result["listeners"] = reconcile_listeners(document, zone=firewall_zone, dry_run=dry_run)
     if dry_run:
         return result
 
