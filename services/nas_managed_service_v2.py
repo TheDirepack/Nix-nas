@@ -8,10 +8,10 @@ reaping are oneshot operations driven by systemd paths/timers or explicit
 commands.
 
 Built-in Nix services and runtime-created applications are exposed through the
-same effective registry. During migration, ``ownership=system`` built-ins remain
-lifecycle-controlled by their existing Nix/feature-control units so two
-controllers never race over shared systemd units. Runtime-owned services use the
-V2 lifecycle engine directly.
+same effective registry. Built-ins explicitly declare whether they are
+``ownership=system`` control-plane/runtime substrate or ``ownership=v2``
+applications. Only V2/runtime-owned services are lifecycle-controlled here, so
+one native unit never has two competing controllers.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from nas_managed_resources import (
 _ORIGINAL_EFFECTIVE_REGISTRY = _legacy.effective_registry
 
 LIFECYCLE_MODES = frozenset({"persistent", "on-demand", "session"})
+BUILTIN_OWNERSHIP_VALUES = frozenset({"system", "v2"})
 _START_POLICY_TO_LIFECYCLE = {"boot": "persistent", "on-demand": "on-demand", "manual": "session"}
 DEFAULT_IDLE_SECONDS = 600
 LIFECYCLE_STATE_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_LIFECYCLE_STATE", "/run/nas-control/lifecycle.json"))
@@ -78,7 +79,9 @@ def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, 
     idle_seconds = lifecycle.get("idleSeconds")
     if mode == "on-demand":
         if isinstance(idle_seconds, bool) or not isinstance(idle_seconds, int) or not 30 <= idle_seconds <= 604800:
-            raise ManagedResourceError(f"Service {service_id}: on-demand lifecycle requires idleSeconds between 30 and 604800")
+            raise ManagedResourceError(
+                f"Service {service_id}: on-demand lifecycle requires idleSeconds between 30 and 604800"
+            )
         normalized["idleSeconds"] = idle_seconds
     elif idle_seconds is not None:
         raise ManagedResourceError(f"Service {service_id}: idleSeconds is only valid for on-demand lifecycle")
@@ -94,7 +97,9 @@ def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, 
     return normalized
 
 
-def _resolved_mount(service_id: str, attachment: dict[str, Any], resources: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _resolved_mount(
+    service_id: str, attachment: dict[str, Any], resources: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     normalized = validate_storage_attachment(service_id, attachment, resources)
     resource = resources[normalized["resource"]]
     mount: dict[str, Any] = {
@@ -164,7 +169,9 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
                 raise ManagedResourceError(f"Service {service_id}: {exc}") from exc
             owner = claimed_subnets.get(identity["subnet"])
             if owner is not None and owner != service_id:
-                raise ManagedResourceError(f"Services {owner!r} and {service_id!r} resolve to the same managed network subnet")
+                raise ManagedResourceError(
+                    f"Services {owner!r} and {service_id!r} resolve to the same managed network subnet"
+                )
             claimed_subnets[identity["subnet"]] = service_id
             resolved_network["identity"] = identity
             service["resolvedNetwork"] = resolved_network
@@ -187,7 +194,12 @@ def _normalize_builtin_service(service_id: str, raw: Any) -> dict[str, Any]:
     service = copy.deepcopy(raw)
     if not isinstance(service.get("enabled"), bool):
         raise ManagedResourceError(f"Built-in service {service_id!r}: enabled must be boolean")
-    service["ownership"] = "system"
+    ownership = service.get("ownership", "system")
+    if ownership not in BUILTIN_OWNERSHIP_VALUES:
+        raise ManagedResourceError(
+            f"Built-in service {service_id!r}: ownership must be one of {sorted(BUILTIN_OWNERSHIP_VALUES)}, got {ownership!r}"
+        )
+    service["ownership"] = ownership
     service["principal"] = validate_application_principal(
         service.get("principal", application_principal(service_id)), service_id=service_id
     )
@@ -221,7 +233,9 @@ def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
         legacy_mounts = []
         for mount in resolved:
             if isinstance(mount, dict) and "hostPath" in mount:
-                legacy_mounts.append({key: value for key, value in mount.items() if key in {"hostPath", "guestPath", "mode", "dataset"}})
+                legacy_mounts.append(
+                    {key: value for key, value in mount.items() if key in {"hostPath", "guestPath", "mode", "dataset"}}
+                )
             else:
                 legacy_mounts.append(mount)
         service["storage"] = legacy_mounts
@@ -236,7 +250,13 @@ def load_store(path: pathlib.Path = _legacy.STORE_PATH) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return {"schemaVersion": _legacy.SCHEMA_VERSION, "generation": 1, "storageResources": {}, "networkProfiles": {}, "services": {}}
+        return {
+            "schemaVersion": _legacy.SCHEMA_VERSION,
+            "generation": 1,
+            "storageResources": {},
+            "networkProfiles": {},
+            "services": {},
+        }
     except OSError as exc:
         raise _legacy.ManagedServiceError(f"Unable to read {path}: {exc}") from exc
     try:
@@ -254,7 +274,9 @@ def load_store(path: pathlib.Path = _legacy.STORE_PATH) -> dict[str, Any]:
     return normalized
 
 
-def _flatten_endpoint(service_id: str, service: dict[str, Any], endpoint_id: str, endpoint: dict[str, Any]) -> dict[str, Any]:
+def _flatten_endpoint(
+    service_id: str, service: dict[str, Any], endpoint_id: str, endpoint: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "label": f"{service.get('label', service_id)}:{endpoint_id}",
         "serviceId": service_id,
@@ -270,7 +292,9 @@ def _flatten_endpoint(service_id: str, service: dict[str, Any], endpoint_id: str
     }
 
 
-def effective_registry(builtin_path: pathlib.Path = _legacy.BUILTIN_REGISTRY, store_path: pathlib.Path = _legacy.STORE_PATH) -> dict[str, Any]:
+def effective_registry(
+    builtin_path: pathlib.Path = _legacy.BUILTIN_REGISTRY, store_path: pathlib.Path = _legacy.STORE_PATH
+) -> dict[str, Any]:
     builtin = _load_builtin_registry(builtin_path)
     store = load_store(store_path)
     builtin_resources: dict[str, dict[str, Any]] = {}
@@ -283,20 +307,29 @@ def effective_registry(builtin_path: pathlib.Path = _legacy.BUILTIN_REGISTRY, st
         if not isinstance(raw_builtin_services, dict):
             raise _legacy.ManagedServiceError("Built-in V2 services must be an object")
         try:
-            builtin_services = {service_id: _normalize_builtin_service(service_id, service) for service_id, service in raw_builtin_services.items()}
+            builtin_services = {
+                service_id: _normalize_builtin_service(service_id, service)
+                for service_id, service in raw_builtin_services.items()
+            }
             builtin_resources = validate_storage_resources(builtin.get("storageResources"))
             builtin_network_profiles = _normalize_network_profiles(builtin.get("networkProfiles", {}))
         except ManagedResourceError as exc:
             raise _legacy.ManagedServiceError(str(exc)) from exc
         collisions = set(builtin_services).intersection(store.get("services", {}))
         if collisions:
-            raise _legacy.ManagedServiceError(f"Runtime V2 services must not shadow built-in services: {sorted(collisions)}")
+            raise _legacy.ManagedServiceError(
+                f"Runtime V2 services must not shadow built-in services: {sorted(collisions)}"
+            )
         resource_collisions = set(builtin_resources).intersection(store.get("storageResources", {}))
         if resource_collisions:
-            raise _legacy.ManagedServiceError(f"Runtime V2 storage resources must not shadow built-in resources: {sorted(resource_collisions)}")
+            raise _legacy.ManagedServiceError(
+                f"Runtime V2 storage resources must not shadow built-in resources: {sorted(resource_collisions)}"
+            )
         profile_collisions = set(builtin_network_profiles).intersection(store.get("networkProfiles", {}))
         if profile_collisions:
-            raise _legacy.ManagedServiceError(f"Runtime V2 network profiles must not shadow built-in profiles: {sorted(profile_collisions)}")
+            raise _legacy.ManagedServiceError(
+                f"Runtime V2 network profiles must not shadow built-in profiles: {sorted(profile_collisions)}"
+            )
         merged_services = {**builtin_services, **store.get("services", {})}
         effective = {
             "schemaVersion": 2,
@@ -310,7 +343,9 @@ def effective_registry(builtin_path: pathlib.Path = _legacy.BUILTIN_REGISTRY, st
                 raise _legacy.ManagedServiceError(f"Service {service_id!r}: endpoints must be an object")
             for endpoint_id, endpoint in endpoints.items():
                 if isinstance(endpoint, dict):
-                    effective["endpoints"][f"{service_id}:{endpoint_id}"] = _flatten_endpoint(service_id, service, endpoint_id, endpoint)
+                    effective["endpoints"][f"{service_id}:{endpoint_id}"] = _flatten_endpoint(
+                        service_id, service, endpoint_id, endpoint
+                    )
     resources = {**builtin_resources, **store.get("storageResources", {})}
     network_profiles = {**builtin_network_profiles, **store.get("networkProfiles", {})}
     effective["storageResources"] = resources
@@ -345,12 +380,16 @@ def _write_lifecycle_state(value: dict[str, Any], path: pathlib.Path = LIFECYCLE
         tmp.unlink(missing_ok=True)
 
 
+def _lifecycle_owned_by_v2(service: dict[str, Any]) -> bool:
+    return service.get("ownership", "runtime") in {"v2", "runtime"}
+
+
 def touch_service(service_id: str, *, now: int | None = None) -> dict[str, Any]:
     service = effective_registry().get("services", {}).get(service_id)
     if not isinstance(service, dict):
         raise ManagedResourceError(f"Unknown managed service {service_id!r}")
-    if service.get("ownership") == "system":
-        raise ManagedResourceError(f"Service {service_id!r} is still lifecycle-owned by the system compatibility layer")
+    if not _lifecycle_owned_by_v2(service):
+        raise ManagedResourceError(f"Service {service_id!r} is not lifecycle-owned by V2")
     if not service.get("enabled"):
         raise ManagedResourceError(f"Service {service_id!r} is disabled")
     if service.get("lifecycle", {}).get("mode") != "on-demand":
@@ -365,7 +404,11 @@ def touch_service(service_id: str, *, now: int | None = None) -> dict[str, Any]:
 def _systemd_units(service_id: str, service: dict[str, Any]) -> list[str]:
     runtime = service.get("runtime") or {}
     units = runtime.get("units") or []
-    if not isinstance(units, list) or not units or any(not isinstance(unit, str) or SYSTEMD_UNIT_RE.fullmatch(unit) is None for unit in units):
+    if (
+        not isinstance(units, list)
+        or not units
+        or any(not isinstance(unit, str) or SYSTEMD_UNIT_RE.fullmatch(unit) is None for unit in units)
+    ):
         raise ManagedResourceError(f"Service {service_id}: systemd runtime requires a non-empty validated units array")
     return units
 
@@ -376,12 +419,15 @@ def _apply_runtime(service_id: str, service: dict[str, Any], *, enabled: bool) -
     candidate["enabled"] = enabled
     if runtime_type == "quadlet":
         from nas_service_runtime_podman import apply_podman
+
         return apply_podman(service_id, candidate)
     if runtime_type == "compose":
         from nas_service_runtime_compose import apply_compose
+
         return apply_compose(service_id, candidate)
     if runtime_type == "vm":
         from nas_service_runtime_libvirt import apply_libvirt
+
         return apply_libvirt(service_id, candidate)
     if runtime_type == "systemd":
         units = _systemd_units(service_id, candidate)
@@ -396,8 +442,8 @@ def start_service(service_id: str) -> dict[str, Any]:
     service = effective_registry().get("services", {}).get(service_id)
     if not isinstance(service, dict):
         raise ManagedResourceError(f"Unknown managed service {service_id!r}")
-    if service.get("ownership") == "system":
-        raise ManagedResourceError(f"Service {service_id!r} is still lifecycle-owned by the system compatibility layer")
+    if not _lifecycle_owned_by_v2(service):
+        raise ManagedResourceError(f"Service {service_id!r} is not lifecycle-owned by V2")
     if not service.get("enabled"):
         raise ManagedResourceError(f"Service {service_id!r} is disabled")
     lifecycle = service.get("lifecycle", {})
@@ -413,8 +459,8 @@ def stop_service(service_id: str) -> dict[str, Any]:
     service = effective_registry().get("services", {}).get(service_id)
     if not isinstance(service, dict):
         raise ManagedResourceError(f"Unknown managed service {service_id!r}")
-    if service.get("ownership") == "system":
-        raise ManagedResourceError(f"Service {service_id!r} is still lifecycle-owned by the system compatibility layer")
+    if not _lifecycle_owned_by_v2(service):
+        raise ManagedResourceError(f"Service {service_id!r} is not lifecycle-owned by V2")
     return _apply_runtime(service_id, service, enabled=False)
 
 
@@ -423,15 +469,36 @@ def reconcile_lifecycle(effective: dict[str, Any] | None = None) -> dict[str, An
         effective = effective_registry()
     actions: list[dict[str, Any]] = []
     for service_id, service in sorted((effective.get("services") or {}).items()):
-        if not isinstance(service, dict) or service.get("ownership") == "system":
+        if not isinstance(service, dict) or not _lifecycle_owned_by_v2(service):
             continue
         mode = (service.get("lifecycle") or {}).get("mode")
         if not service.get("enabled"):
-            actions.append({"service": service_id, "mode": mode, "enabled": False, "result": _apply_runtime(service_id, service, enabled=False)})
+            actions.append(
+                {
+                    "service": service_id,
+                    "mode": mode,
+                    "enabled": False,
+                    "result": _apply_runtime(service_id, service, enabled=False),
+                }
+            )
         elif mode == "persistent":
-            actions.append({"service": service_id, "mode": mode, "enabled": True, "result": _apply_runtime(service_id, service, enabled=True)})
+            actions.append(
+                {
+                    "service": service_id,
+                    "mode": mode,
+                    "enabled": True,
+                    "result": _apply_runtime(service_id, service, enabled=True),
+                }
+            )
         elif mode == "session":
-            actions.append({"service": service_id, "mode": mode, "enabled": True, "result": _apply_runtime(service_id, service, enabled=False)})
+            actions.append(
+                {
+                    "service": service_id,
+                    "mode": mode,
+                    "enabled": True,
+                    "result": _apply_runtime(service_id, service, enabled=False),
+                }
+            )
     return {"actions": actions}
 
 
@@ -441,7 +508,11 @@ def reap_lifecycle(*, now: int | None = None) -> dict[str, Any]:
     state = _read_lifecycle_state()
     stopped: list[str] = []
     for service_id, service in sorted((effective.get("services") or {}).items()):
-        if not isinstance(service, dict) or not service.get("enabled") or service.get("ownership") == "system":
+        if (
+            not isinstance(service, dict)
+            or not service.get("enabled")
+            or not _lifecycle_owned_by_v2(service)
+        ):
             continue
         lifecycle = service.get("lifecycle") or {}
         if lifecycle.get("mode") != "on-demand":
@@ -466,17 +537,18 @@ def _install_compatibility_layer() -> None:
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
+
     _install_compatibility_layer()
     parser = argparse.ArgumentParser(prog="nas-managed-service")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("reconcile", help="Rebuild projections and enforce runtime-owned application lifecycle")
+    sub.add_parser("reconcile", help="Rebuild projections and enforce V2-owned application lifecycle")
     sub.add_parser("validate", help="Validate V2 store and effective registry")
     show = sub.add_parser("show", help="Show effective registry")
     show.add_argument("--json", action="store_true")
     for command in ("start", "stop", "restart", "touch"):
         action = sub.add_parser(command)
         action.add_argument("service")
-    sub.add_parser("reap", help="Stop idle runtime-owned on-demand applications")
+    sub.add_parser("reap", help="Stop idle V2-owned on-demand applications")
     for command in ("plan", "create", "update", "delete", "adopt", "export", "import"):
         sub.add_parser(command)
     args = parser.parse_args(argv)
