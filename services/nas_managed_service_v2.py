@@ -2,9 +2,10 @@
 """Managed Services V2 compatibility, projection, and lifecycle layer.
 
 V2 owns cross-system application intent. Native runtimes still own execution,
-while this module translates V2 lifecycle/storage policy into those runtimes.
-There is deliberately no resident controller: reconcile and idle reaping are
-oneshot operations driven by systemd paths/timers or explicit commands.
+while this module translates V2 lifecycle/storage/network policy into those
+runtimes. There is deliberately no resident controller: reconcile and idle
+reaping are oneshot operations driven by systemd paths/timers or explicit
+commands.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import time
 from typing import Any
 
 import nas_managed_service as _legacy
+from nas_managed_network import merge_network_policy, normalize_network_policy, service_network
 from nas_managed_resources import (
     ManagedResourceError,
     application_principal,
@@ -48,18 +50,7 @@ def _runtime_mode(required_capabilities: list[str]) -> str:
 
 
 def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
-    """Return canonical runtime-lifetime policy while accepting old startPolicy input.
-
-    ``enabled`` controls whether the application is available at all. Lifecycle
-    controls what happens while it is enabled:
-
-    * persistent: reconcile keeps the runtime running;
-    * on-demand: authorized access starts it and a timer reaps it after idle time;
-    * session: an explicit session launcher owns a disposable runtime instance.
-
-    Runtime lifetime and storage lifetime are deliberately independent. Stopping
-    or destroying a runtime never implies deleting authoritative V2 storage.
-    """
+    """Return canonical runtime-lifetime policy while accepting old startPolicy input."""
 
     runtime = service.get("runtime") or {}
     start_policy = runtime.get("startPolicy")
@@ -129,6 +120,8 @@ def _resolved_mount(
         "stateClass": resource["stateClass"],
         "scope": resource["scope"],
     }
+    if normalized.get("target") is not None:
+        mount["target"] = normalized["target"]
     if resource.get("dataset"):
         mount["dataset"] = resource["dataset"]
     if resource.get("pathTemplate"):
@@ -141,14 +134,24 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(data)
     normalized["storageResources"] = resources
 
-    network_profiles = normalized.get("networkProfiles", {})
-    if network_profiles is not None and not isinstance(network_profiles, dict):
+    raw_network_profiles = normalized.get("networkProfiles", {})
+    if raw_network_profiles is None:
+        raw_network_profiles = {}
+    if not isinstance(raw_network_profiles, dict):
         raise ManagedResourceError("networkProfiles must be an object")
+    network_profiles: dict[str, dict[str, Any]] = {}
+    for profile_id, profile in raw_network_profiles.items():
+        try:
+            network_profiles[profile_id] = normalize_network_policy(profile)
+        except _legacy.ManagedServiceError as exc:
+            raise ManagedResourceError(f"Network profile {profile_id!r}: {exc}") from exc
+    normalized["networkProfiles"] = network_profiles
 
     services = normalized.get("services", {})
     if not isinstance(services, dict):
         raise ManagedResourceError("services must be an object")
 
+    claimed_subnets: dict[str, str] = {}
     for service_id, service in services.items():
         if not isinstance(service, dict):
             raise ManagedResourceError(f"Service {service_id!r} must be an object")
@@ -167,6 +170,21 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
         network_profile = service.get("networkProfile")
         if network_profile is not None and network_profile not in network_profiles:
             raise ManagedResourceError(f"Service {service_id}: unknown network profile {network_profile!r}")
+        inline_network = service.get("network")
+        if network_profile is not None or inline_network is not None:
+            try:
+                resolved_network = merge_network_policy(network_profiles.get(network_profile), inline_network)
+                identity = service_network(service_id)
+            except _legacy.ManagedServiceError as exc:
+                raise ManagedResourceError(f"Service {service_id}: {exc}") from exc
+            owner = claimed_subnets.get(identity["subnet"])
+            if owner is not None and owner != service_id:
+                raise ManagedResourceError(
+                    f"Services {owner!r} and {service_id!r} resolve to the same managed network subnet"
+                )
+            claimed_subnets[identity["subnet"]] = service_id
+            resolved_network["identity"] = identity
+            service["resolvedNetwork"] = resolved_network
 
         for endpoint_id, endpoint in (service.get("endpoints") or {}).items():
             auth = endpoint.get("auth") or {}
@@ -189,6 +207,7 @@ def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
         service.pop("principal", None)
         service.pop("lifecycle", None)
         service.pop("networkProfile", None)
+        service.pop("resolvedNetwork", None)
         resolved = service.pop("resolvedStorage", service.get("storage", []))
         legacy_mounts = []
         for mount in resolved:
@@ -258,6 +277,8 @@ def effective_registry(
         effective_service["resolvedStorage"] = service.get("resolvedStorage", [])
         if service.get("networkProfile") is not None:
             effective_service["networkProfile"] = service["networkProfile"]
+        if service.get("resolvedNetwork") is not None:
+            effective_service["resolvedNetwork"] = service["resolvedNetwork"]
     return effective
 
 
@@ -375,8 +396,6 @@ def reconcile_lifecycle(effective: dict[str, Any] | None = None) -> dict[str, An
                 }
             )
         elif mode == "session":
-            # Session runtimes must never survive a reconcile/reboot merely
-            # because the app is enabled. A dedicated launcher owns each session.
             actions.append(
                 {
                     "service": service_id,
