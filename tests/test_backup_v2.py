@@ -64,6 +64,12 @@ class BackupV2Tests(unittest.TestCase):
         )
         self.assertTrue(plan["groups"]["postgres"][0]["requiresNativeStage"])
 
+    def test_dynamic_files_emits_only_direct_filesystem_resources(self) -> None:
+        plan = backup.build_backup_plan(self.effective())
+        self.assertEqual(backup.dynamic_files(plan), ["/tank/apps/pi/users"])
+        self.assertNotIn("/tank/projects", backup.dynamic_files(plan))
+        self.assertNotIn("/var/lib/nas-control/apps/authentik", backup.dynamic_files(plan))
+
     def test_user_scope_preserves_path_template(self) -> None:
         item = backup.build_backup_plan(self.effective())["groups"]["filesystem"][0]
         self.assertEqual(item["pathTemplate"], "/tank/apps/pi/users/{user}")
