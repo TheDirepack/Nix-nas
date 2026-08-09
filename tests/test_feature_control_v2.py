@@ -23,6 +23,8 @@ class FeatureControlV2Tests(unittest.TestCase):
         self,
         capability: str | None = "application.demo.access",
         lifecycle: dict | None = None,
+        *,
+        enabled: bool = True,
     ) -> dict:
         auth = {"mode": "forward-auth"}
         if capability is not None:
@@ -31,7 +33,8 @@ class FeatureControlV2Tests(unittest.TestCase):
             "endpoints": {"demo:web": {"auth": auth}},
             "services": {
                 "demo": {
-                    "lifecycle": lifecycle or {"mode": "manual", "ephemeralRuntime": False},
+                    "enabled": enabled,
+                    "lifecycle": lifecycle or {"mode": "persistent"},
                 }
             },
         }
@@ -69,14 +72,16 @@ class FeatureControlV2Tests(unittest.TestCase):
         self.assertTrue(feature_v2.authorize_service_scope("service:demo:web", headers))
         mocked_legacy.assert_called_once()
 
-    def test_disabled_lifecycle_blocks_even_authorized_endpoint(self) -> None:
-        effective = self.effective(lifecycle={"mode": "disabled", "ephemeralRuntime": False})
+    def test_disabled_service_blocks_even_authorized_endpoint(self) -> None:
+        effective = self.effective(enabled=False)
+        self.assertFalse(feature_v2._authorized_use("demo", effective))
+
+    def test_session_lifecycle_is_never_auto_woken_by_static_endpoint(self) -> None:
+        effective = self.effective(lifecycle={"mode": "session"})
         self.assertFalse(feature_v2._authorized_use("demo", effective))
 
     def test_on_demand_first_access_starts_then_later_access_touches(self) -> None:
-        effective = self.effective(
-            lifecycle={"mode": "on-demand", "idleSeconds": 300, "ephemeralRuntime": False}
-        )
+        effective = self.effective(lifecycle={"mode": "on-demand", "idleSeconds": 300})
         fake = mock.Mock()
         fake._read_lifecycle_state.return_value = {"schemaVersion": 1, "services": {}}
         with patch.dict(sys.modules, {"nas_managed_service_v2": fake}):
@@ -92,6 +97,10 @@ class FeatureControlV2Tests(unittest.TestCase):
             self.assertTrue(feature_v2._authorized_use("demo", effective))
         fake.touch_service.assert_called_once_with("demo")
         fake.start_service.assert_not_called()
+
+    def test_unknown_lifecycle_fails_closed(self) -> None:
+        effective = self.effective(lifecycle={"mode": "mystery"})
+        self.assertFalse(feature_v2._authorized_use("demo", effective))
 
 
 if __name__ == "__main__":
