@@ -2,8 +2,8 @@
 """Thin Podman Compose adapter for managed services.
 
 The user-authored Compose file remains runtime authority. Managed Services V2
-adds NAS-owned storage policy through a generated secondary Compose document;
-it never rewrites the source Compose file.
+adds NAS-owned storage and device policy through a generated secondary Compose
+document; it never rewrites the source Compose file.
 """
 
 from __future__ import annotations
@@ -67,11 +67,48 @@ def _compose_mounts(service_id: str, service: dict[str, Any]) -> dict[str, list[
     return selected
 
 
+def _compose_devices(service_id: str, service: dict[str, Any]) -> dict[str, list[str]]:
+    selected: dict[str, list[str]] = {}
+    resolved = service.get("resolvedDevices") or []
+    if not isinstance(resolved, list):
+        raise ManagedServiceError(f"Compose service {service_id}: resolvedDevices must be an array")
+    for request in resolved:
+        if not isinstance(request, dict):
+            raise ManagedServiceError(f"Compose service {service_id}: resolved device entry must be an object")
+        devices = [*request.get("cdiDevices", []), *request.get("devicePaths", [])]
+        if not devices:
+            continue
+        target = request.get("target")
+        if not isinstance(target, str) or not target:
+            raise ManagedServiceError(
+                f"Compose service {service_id}: GPU request {request.get('request')!r} requires target=<compose-service>"
+            )
+        values = selected.setdefault(target, [])
+        for device in devices:
+            if not isinstance(device, str) or any(char in device for char in ("\x00", "\r", "\n")):
+                raise ManagedServiceError(f"Compose service {service_id}: invalid resolved GPU device")
+            # Compose supports both host-path and CDI device syntax.
+            value = device if not device.startswith("/") else f"{device}:{device}:rwm"
+            if value not in values:
+                values.append(value)
+    return selected
+
+
 def render_compose_override(service_id: str, service: dict[str, Any]) -> dict[str, Any] | None:
     mounts = _compose_mounts(service_id, service)
-    if not mounts:
+    devices = _compose_devices(service_id, service)
+    targets = sorted(set(mounts) | set(devices))
+    if not targets:
         return None
-    return {"services": {target: {"volumes": volumes} for target, volumes in sorted(mounts.items())}}
+    services: dict[str, Any] = {}
+    for target in targets:
+        policy: dict[str, Any] = {}
+        if mounts.get(target):
+            policy["volumes"] = mounts[target]
+        if devices.get(target):
+            policy["devices"] = devices[target]
+        services[target] = policy
+    return {"services": services}
 
 
 def _override_path(service_id: str) -> pathlib.Path:
@@ -121,13 +158,16 @@ def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         "project": service_id,
         "enabled": enabled,
         "resolvedStorage": service.get("resolvedStorage", []),
-        "actions": [{
-            "type": "podman-compose",
-            "operation": "up" if enabled else "down",
-            "project": service_id,
-            "source": str(source),
-            "override": override_path,
-        }],
+        "resolvedDevices": service.get("resolvedDevices", []),
+        "actions": [
+            {
+                "type": "podman-compose",
+                "operation": "up" if enabled else "down",
+                "project": service_id,
+                "source": str(source),
+                "override": override_path,
+            }
+        ],
     }
 
 
@@ -150,9 +190,6 @@ def apply_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = F
         command = _compose_command(plan)
         command.extend(["up", "-d"])
     else:
-        # A prior up may have used the generated override. Keep it in the down
-        # invocation when present, but teardown must still work after /run was
-        # cleared by a reboot or manual cleanup.
         command = _compose_command(plan, require_override_exists=True)
         command.extend(["down", "--remove-orphans"])
     subprocess.run(command, check=True)
