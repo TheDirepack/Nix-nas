@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Reconcile Managed Services V2 capability groups into Authentik.
+"""Reconcile Managed Services V2 service capabilities into Authentik.
 
 Authentik remains the authorization authority. This command only ensures that
-every V2 object has stable capability-group objects which administrators can
+V2 service capabilities have stable group objects which administrators can
 assign through Authentik's native UI. It never creates users, validates users,
 manages group membership, or stores a second authorization database.
 """
@@ -19,7 +19,7 @@ from typing import Any
 from nas_identity_sync import SyncError, authentik_list, authentik_request, authentik_token
 from nas_managed_resources import capability_group_name as legacy_group_name
 from nas_managed_resources import validate_capability_reference as validate_legacy_capability
-from nas_v2_authorization import capability_group_name, desired_capabilities as object_capabilities
+from nas_v2_authorization import capability_group_name, desired_capabilities as service_capabilities
 
 EFFECTIVE_PATH = pathlib.Path(
     os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
@@ -32,14 +32,9 @@ class AuthentikV2GroupError(RuntimeError):
 
 
 def desired_capabilities(effective: dict[str, Any]) -> set[str]:
-    """Return object-derived V2 capabilities plus explicit legacy route aliases.
+    """Return canonical service capabilities plus temporary legacy aliases."""
 
-    Object capabilities are the canonical model. Explicit application/storage
-    capabilities remain projected only so existing assignments keep working
-    during migration.
-    """
-
-    desired = set(object_capabilities(effective))
+    desired = set(service_capabilities(effective))
     services = effective.get("services", {})
     if not isinstance(services, dict):
         raise AuthentikV2GroupError("effective services must be an object")
@@ -51,21 +46,19 @@ def desired_capabilities(effective: dict[str, Any]) -> set[str]:
                 continue
             auth = endpoint.get("auth") or {}
             explicit = auth.get("capability") if isinstance(auth, dict) else None
-            if explicit is None:
+            if explicit is None or (isinstance(explicit, str) and explicit.startswith("v2.service.")):
                 continue
             try:
                 desired.add(validate_legacy_capability(explicit))
-            except Exception:
-                # Canonical v2.* capabilities are already derived above. An
-                # endpoint may explicitly name one during migration.
-                from nas_v2_authorization import validate_capability
-
-                desired.add(validate_capability(explicit))
+            except Exception as exc:
+                raise AuthentikV2GroupError(
+                    f"Service {service_id}: invalid legacy route capability {explicit!r}"
+                ) from exc
     return desired
 
 
 def _group_name(capability: str) -> str:
-    if capability.startswith("v2."):
+    if capability.startswith("v2.service."):
         return capability_group_name(capability)
     return legacy_group_name(capability)
 
