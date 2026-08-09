@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Reconcile Managed Services V2 capability groups into Authentik.
 
-Authentik remains the authorization authority: this command only ensures that
-V2-declared capabilities have stable group objects which administrators can
-assign through Authentik's native UI.  It does not create users, manage group
-membership, or store a second authorization database.
+Authentik remains the authorization authority. This command only ensures that
+every V2 object has stable capability-group objects which administrators can
+assign through Authentik's native UI. It never creates users, validates users,
+manages group membership, or stores a second authorization database.
 """
 
 from __future__ import annotations
@@ -17,7 +17,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from nas_identity_sync import SyncError, authentik_list, authentik_request, authentik_token
-from nas_managed_resources import capability_group_name, validate_capability_reference, validate_storage_resources
+from nas_managed_resources import capability_group_name as legacy_group_name
+from nas_managed_resources import validate_capability_reference as validate_legacy_capability
+from nas_v2_authorization import capability_group_name, desired_capabilities as object_capabilities
 
 EFFECTIVE_PATH = pathlib.Path(
     os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
@@ -30,12 +32,14 @@ class AuthentikV2GroupError(RuntimeError):
 
 
 def desired_capabilities(effective: dict[str, Any]) -> set[str]:
-    resources = validate_storage_resources(effective.get("storageResources", {}))
-    desired = {
-        f"storage.{resource_id}.{capability}"
-        for resource_id, resource in resources.items()
-        for capability in resource["capabilities"]
-    }
+    """Return object-derived V2 capabilities plus explicit legacy route aliases.
+
+    Object capabilities are the canonical model. Explicit application/storage
+    capabilities remain projected only so existing assignments keep working
+    during migration.
+    """
+
+    desired = set(object_capabilities(effective))
     services = effective.get("services", {})
     if not isinstance(services, dict):
         raise AuthentikV2GroupError("effective services must be an object")
@@ -46,11 +50,24 @@ def desired_capabilities(effective: dict[str, Any]) -> set[str]:
             if not isinstance(endpoint, dict):
                 continue
             auth = endpoint.get("auth") or {}
-            capability = auth.get("capability") if isinstance(auth, dict) else None
-            if capability is not None:
-                validate_capability_reference(capability)
-                desired.add(capability)
+            explicit = auth.get("capability") if isinstance(auth, dict) else None
+            if explicit is None:
+                continue
+            try:
+                desired.add(validate_legacy_capability(explicit))
+            except Exception:
+                # Canonical v2.* capabilities are already derived above. An
+                # endpoint may explicitly name one during migration.
+                from nas_v2_authorization import validate_capability
+
+                desired.add(validate_capability(explicit))
     return desired
+
+
+def _group_name(capability: str) -> str:
+    if capability.startswith("v2."):
+        return capability_group_name(capability)
+    return legacy_group_name(capability)
 
 
 def reconcile_groups(token: str, effective: dict[str, Any]) -> dict[str, Any]:
@@ -64,7 +81,7 @@ def reconcile_groups(token: str, effective: dict[str, Any]) -> dict[str, Any]:
     corrected: list[str] = []
 
     for capability in desired:
-        name = capability_group_name(capability)
+        name = _group_name(capability)
         attributes = {
             MANAGED_ATTRIBUTE: capability,
             "nixos_nas_managed": True,
@@ -98,7 +115,7 @@ def reconcile_groups(token: str, effective: dict[str, Any]) -> dict[str, Any]:
         "desiredCapabilities": desired,
         "createdGroups": created,
         "correctedGroups": corrected,
-        "managedGroups": [capability_group_name(capability) for capability in desired],
+        "managedGroups": [_group_name(capability) for capability in desired],
     }
 
 
