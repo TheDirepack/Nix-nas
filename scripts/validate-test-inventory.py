@@ -65,9 +65,8 @@ def load_inventory() -> dict[str, object]:
             or not isinstance(raw.get("pythonModules"), dict)
         ):
             fail(f"malformed {path.relative_to(ROOT)}")
-        # Later inventories intentionally override executable rows so a staged
-        # architecture migration can move an installed command to a new module
-        # without rewriting the large historical inventory in one giant diff.
+        # Later inventories may override executable rows so command ownership can
+        # move between modules while retaining one strict merged contract.
         executables.update(raw["executables"])
         for module, tests in raw["pythonModules"].items():
             if module in python_modules:
