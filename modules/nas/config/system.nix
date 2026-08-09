@@ -84,6 +84,7 @@ in
         then [ "0.0.0.0:${toString cockpitPort}" "[::]:${toString cockpitPort}" ]
         else [ "127.0.0.1:${toString cockpitPort}" "[::1]:${toString cockpitPort}" ]
       );
+      socketConfig.BindIPv6Only = "ipv6-only";
       unitConfig.ConditionPathExists = lib.mkOverride 90 [ ];
       requires = lib.optional (
         cfg.hostPolicy.directCockpitRecovery

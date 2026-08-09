@@ -61,6 +61,7 @@ class ContractTests(unittest.TestCase):
         secrets = text("modules/nas/internal/secret-tools.nix")
         self.assertNotIn('protectedServiceUnits = [\n    "cockpit.socket"', base)
         self.assertIn('wantedBy = lib.mkOverride 90 [ "sockets.target" ]', system)
+        self.assertIn('socketConfig.BindIPv6Only = "ipv6-only"', system)
         self.assertIn("lib.optional cfg.hostPolicy.directCockpitRecovery", firewall)
         self.assertIn("port = toString cockpitPort;", firewall)
         self.assertIn("directCockpitRecovery = true;", text("local.nix"))
