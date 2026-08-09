@@ -7,6 +7,7 @@ import argparse
 import json
 import pathlib
 
+import nas_v2_apply as apply_engine
 import nas_v2_lifecycle as lifecycle
 import nas_v2_runtime as runtime
 from nas_v2_schedules import reconcile_schedules
@@ -57,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command in {"plan", "apply"}:
             dry_run = args.command == "plan"
-            result = runtime.apply_document(
+            result = apply_engine.apply_document(
                 document,
                 effective_path=args.effective,
                 dry_run=dry_run,
