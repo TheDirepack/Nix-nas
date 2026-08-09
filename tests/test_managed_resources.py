@@ -8,11 +8,14 @@ from services.nas_managed_resources import (
     application_principal,
     backup_resource_ids,
     capability_group_name,
+    realize_storage_path,
+    realize_storage_resource,
     storage_capability,
     validate_application_principal,
     validate_capability_reference,
     validate_storage_attachment,
     validate_storage_resources,
+    validate_user_identifier,
 )
 
 
@@ -84,6 +87,42 @@ class ManagedResourceTests(unittest.TestCase):
                     }
                 }
             )
+
+    def test_user_template_must_be_exactly_one_identity_beneath_parent(self) -> None:
+        for template in (
+            "/tank/apps/broken/users/{user}/{user}",
+            "/tank/apps/other/{user}",
+            "/tank/apps/broken/users",
+        ):
+            with self.subTest(template=template), self.assertRaises(ManagedResourceError):
+                validate_storage_resources(
+                    {
+                        "broken": {
+                            "path": "/tank/apps/broken/users",
+                            "scope": "user",
+                            "pathTemplate": template,
+                            "stateClass": "authoritative",
+                            "capabilities": ["read", "write"],
+                            "backup": {"enabled": True},
+                        }
+                    }
+                )
+
+    def test_user_resource_realization_is_identity_bound_and_confined(self) -> None:
+        resource = self.resources["pi-home"]
+        self.assertEqual(realize_storage_path("pi-home", resource, user="Alice_1"), "/tank/apps/pi/users/Alice_1")
+        realized = realize_storage_resource("pi-home", resource, user="alice")
+        self.assertEqual(realized["path"], "/tank/apps/pi/users/alice")
+        self.assertEqual(realized["user"], "alice")
+        with self.assertRaisesRegex(ManagedResourceError, "identity is required"):
+            realize_storage_path("pi-home", resource)
+        for identity in ("../alice", "alice/bob", "", "x" * 65):
+            with self.subTest(identity=identity), self.assertRaises(ManagedResourceError):
+                realize_storage_path("pi-home", resource, user=identity)
+
+    def test_non_user_resource_realization_keeps_declared_path(self) -> None:
+        self.assertEqual(realize_storage_path("projects", self.resources["projects"]), "/tank/projects")
+        self.assertEqual(validate_user_identifier("User.Name-1"), "User.Name-1")
 
     def test_cache_and_ephemeral_state_cannot_be_marked_for_backup(self) -> None:
         for state_class in ("cache", "ephemeral"):
