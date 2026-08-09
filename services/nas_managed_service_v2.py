@@ -89,11 +89,9 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
                 resolved_storage.append(copy.deepcopy(attachment))
         service["resolvedStorage"] = resolved_storage
 
-        network = service.get("network") or {}
-        if isinstance(network, dict) and "profile" in network:
-            profile = network["profile"]
-            if profile not in network_profiles:
-                raise ManagedResourceError(f"Service {service_id}: unknown network profile {profile!r}")
+        network_profile = service.get("networkProfile")
+        if network_profile is not None and network_profile not in network_profiles:
+            raise ManagedResourceError(f"Service {service_id}: unknown network profile {network_profile!r}")
 
         for endpoint_id, endpoint in (service.get("endpoints") or {}).items():
             auth = endpoint.get("auth") or {}
@@ -121,6 +119,7 @@ def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
     validated.pop("networkProfiles", None)
     for service in validated.get("services", {}).values():
         service.pop("principal", None)
+        service.pop("networkProfile", None)
         resolved = service.pop("resolvedStorage", service.get("storage", []))
         legacy_mounts = []
         for mount in resolved:
@@ -135,9 +134,6 @@ def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
             else:
                 legacy_mounts.append(mount)
         service["storage"] = legacy_mounts
-        network = service.get("network")
-        if isinstance(network, dict):
-            network.pop("profile", None)
         for endpoint in (service.get("endpoints") or {}).values():
             auth = endpoint.get("auth")
             if isinstance(auth, dict):
@@ -194,6 +190,8 @@ def effective_registry(
         effective_service = effective["services"][service_id]
         effective_service["principal"] = service["principal"]
         effective_service["resolvedStorage"] = service.get("resolvedStorage", [])
+        if service.get("networkProfile") is not None:
+            effective_service["networkProfile"] = service["networkProfile"]
     return effective
 
 
