@@ -24,7 +24,7 @@ nas-migrate-state = "nas_migrate_state:main"
 nas-operation-run = "nas_operation_lock:main"
 nas-setup = "nas_setup:main"
 nas-state = "nas_state:main"
-nas-v2-runtime = "nas_v2_runtime:main"
+nas-v2-runtime = "nas_v2_cli:main"
 
 [tool.setuptools.dynamic]
 version = {file = ["VERSION"]}
@@ -65,7 +65,10 @@ py-modules = [
   "nas_setup_config",
   "nas_state",
   "nas_syncthing_devices",
-  "nas_v2_runtime"
+  "nas_v2_cli",
+  "nas_v2_lifecycle",
+  "nas_v2_runtime",
+  "nas_v2_schedules"
 ]
 
 [tool.ruff]
