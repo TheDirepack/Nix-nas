@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Realize GUI-provided V2 session inputs into safe runtime storage mounts."""
+"""Realize authorized V2 session inputs into safe runtime storage mounts.
+
+Authentication and subject validation belong to Caddy/Authentik. This module
+accepts the already-authenticated subject supplied by that boundary and only
+performs filesystem safety/containment checks needed to construct a mount.
+"""
 
 from __future__ import annotations
 
 import copy
 import pathlib
-import re
+import urllib.parse
 from typing import Any
-
-USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 class V2SessionInputError(RuntimeError):
@@ -27,22 +30,38 @@ def parse_input_values(values: list[str] | None) -> dict[str, str]:
     return result
 
 
-def _identity_root(resource: dict[str, Any], *, user: str | None, instance_id: str) -> pathlib.Path:
+def _path_key(value: str, *, field: str) -> str:
+    """Encode a trusted opaque identifier as one filesystem path segment.
+
+    This is path escaping, not identity validation. Whether the subject/session
+    is valid and authorized is decided by the authentication layer before V2 is
+    invoked.
+    """
+
+    if not isinstance(value, str) or not value:
+        raise V2SessionInputError(f"{field} is required")
+    if any(character in value for character in ("\x00", "\r", "\n")):
+        raise V2SessionInputError(f"{field} contains a filesystem-unsafe control character")
+    return urllib.parse.quote(value, safe="._-")
+
+
+def _authorized_root(resource: dict[str, Any], *, subject: str | None, instance_id: str) -> pathlib.Path:
     scope = resource.get("scope", "system")
     if scope == "system":
         raw = resource["path"]
     else:
         template = resource.get("pathTemplate")
         if not isinstance(template, str):
-            raise V2SessionInputError("Identity-scoped resource is missing pathTemplate")
+            raise V2SessionInputError("Scoped resource is missing pathTemplate")
         if scope == "user":
-            if user is None or USER_RE.fullmatch(user) is None:
-                raise V2SessionInputError("User-scoped session input requires a validated --user identity")
-            raw = template.replace("{user}", user)
+            if subject is None:
+                raise V2SessionInputError("Subject-scoped session input requires a trusted auth subject")
+            key = _path_key(subject, field="auth subject")
+            # {user} remains a compatibility alias while definitions migrate to
+            # the more accurate {subject} terminology.
+            raw = template.replace("{subject}", key).replace("{user}", key)
         elif scope == "instance":
-            if USER_RE.fullmatch(instance_id) is None:
-                raise V2SessionInputError("Invalid session instance id")
-            raw = template.replace("{instance}", instance_id)
+            raw = template.replace("{instance}", _path_key(instance_id, field="session id"))
         else:
             raise V2SessionInputError(f"Unsupported storage resource scope {scope!r}")
     path = pathlib.Path(raw)
@@ -78,7 +97,7 @@ def realize_session_service(
     document: dict[str, Any],
     *,
     values: dict[str, str] | None = None,
-    user: str | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     service = document.get("services", {}).get(service_id)
     if not isinstance(service, dict):
@@ -101,7 +120,7 @@ def realize_session_service(
         resource = resources.get(resource_id)
         if not isinstance(resource, dict):
             raise V2SessionInputError(f"Service {service_id} input {input_id}: unknown storage resource {resource_id!r}")
-        root = _identity_root(resource, user=user, instance_id=session_id)
+        root = _authorized_root(resource, subject=subject, instance_id=session_id)
         value = supplied.get(input_id, ".")
         selected = _selected_path(root, value, allow_subpath=bool(definition.get("allowSubpath", True)))
         mount = {
@@ -127,7 +146,7 @@ def decorate_document_for_session(
     document: dict[str, Any],
     *,
     values: dict[str, str] | None = None,
-    user: str | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     decorated = copy.deepcopy(document)
     decorated["services"][service_id] = realize_session_service(
@@ -135,6 +154,6 @@ def decorate_document_for_session(
         session_id,
         document,
         values=values,
-        user=user,
+        subject=subject,
     )
     return decorated
