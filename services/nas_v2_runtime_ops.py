@@ -181,6 +181,7 @@ def end_session(
     session_id: str,
     service: dict[str, Any],
     *,
+    last_session: bool,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     runtime_type = service["runtime"]["type"]
@@ -189,7 +190,9 @@ def end_session(
 
         return end_oci_session(service_id, session_id, dry_run=dry_run)
     if runtime_type in {"systemd", "python", "exec"}:
-        return stop(service_id, service, dry_run=dry_run)
+        if last_session:
+            return stop(service_id, service, dry_run=dry_run)
+        return {"service": service_id, "runtime": runtime_type, "operation": None, "sharedSessionRuntime": True}
     raise V2RuntimeOperationError(
         f"Service {service_id}: runtime {runtime_type!r} does not implement disposable session semantics"
     )
