@@ -15,6 +15,8 @@ import pathlib
 import tempfile
 from typing import Any
 
+from nas_managed_resources import capability_group_name, storage_capability
+
 DEFAULT_EFFECTIVE_PATH = pathlib.Path(
     os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
 )
@@ -41,8 +43,7 @@ class CopypartyProjectionError(RuntimeError):
 def capability_group(resource_id: str, capability: str) -> str:
     """Return the deterministic Authentik group backing a storage capability."""
 
-    safe_id = resource_id.replace("-", "_")
-    return f"nas_storage_{safe_id}_{capability}"
+    return capability_group_name(storage_capability(resource_id, capability))
 
 
 def _volume_url(resource_id: str) -> str:
