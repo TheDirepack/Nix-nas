@@ -592,7 +592,7 @@ def require_confirmed_plan(config: Mapping[str, Any], supplied: str | None) -> s
     expected = setup_plan_digest(config)
     if not supplied or not secrets.compare_digest(supplied, expected):
         raise SetupError(
-            "The confirmed first-start plan no longer matches the normalized configuration; refresh Cockpit and review it again"
+            "The confirmed first-start plan digest no longer matches the normalized configuration; refresh Cockpit and review it again"
         )
     return expected
 

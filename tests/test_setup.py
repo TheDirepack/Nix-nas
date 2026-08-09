@@ -995,6 +995,11 @@ class SetupConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(setup.SetupError, "did not create"):
                     setup.verify_or_create_database("password", create=True)
 
+    def test_stale_plan_error_identifies_the_digest_contract(self):
+        normalized = setup.normalize_config({"storage": {"createPool": False}, "features": {}})
+        with self.assertRaisesRegex(setup.SetupError, "plan digest"):
+            setup.require_confirmed_plan(normalized, "0" * 64)
+
     def test_first_start_status_revalidates_completion_and_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = pathlib.Path(tmp) / "first-run.json"
