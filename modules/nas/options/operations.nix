@@ -12,7 +12,17 @@
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Enable Restic recovery backups for the boot filesystem, appliance configuration, and mutable service state.";
+        description = "Enable Restic recovery backups for the boot filesystem, appliance configuration, mutable service state, and explicitly selected V2 storage resources.";
+      };
+      includeShares = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Include the managed NAS share tree in Restic backups. This is disabled
+          by default because share datasets may be very large. When enabled,
+          Managed Services V2 snapshots nas.zfsDataset and feeds only the
+          <nas.zfsRoot>/shares subtree from that read-only snapshot to Restic.
+        '';
       };
       localRepository = lib.mkOption {
         type = lib.types.str;
