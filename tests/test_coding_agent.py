@@ -46,34 +46,72 @@ class CodingAgentTests(unittest.TestCase):
                     with self.assertRaises((coding.CodingAgentError, FileNotFoundError)):
                         coding.configured_roots()
 
-    def test_transient_session_command_contains_sandbox_and_only_credential_path(self) -> None:
+    def test_session_command_uses_disposable_read_only_podman_container(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
-            session_exec = root / "session-exec"
-            session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
+            state = root / "state"
+            state.mkdir()
             credential = root / "credential"
             credential.write_text("local-client-secret", encoding="utf-8")
             with mock.patch.dict(
                 os.environ,
                 {
-                    "NAS_PI_SESSION_EXEC": str(session_exec),
+                    "NAS_PI_IMAGE": "nixos-nas-pi-agent:2.2.0-alpha.8",
                     "NAS_PI_CREDENTIAL": str(credential),
-                    "NAS_PI_STATE_DIR": "/var/lib/nas-code-agent",
+                    "NAS_PI_NETWORK": "ns:/run/netns/pi",
+                    "NAS_PI_CONTAINER_UID": "954",
+                    "NAS_PI_CONTAINER_GID": "954",
+                    "NAS_CODING_CPUS": "4",
+                    "NAS_CODING_MEMORY": "4g",
                 },
             ):
-                command = coding.session_command(root, ["--model", "coding/default"])
+                command = coding.session_command(root, state, ["--model", "coding/default"])
             rendered = "\n".join(command)
-            self.assertIn("--uid=nas-code-agent", command)
-            self.assertIn("--gid=nas-code-agent", command)
-            self.assertIn("ProtectSystem=strict", command)
-            self.assertIn("NoNewPrivileges=yes", command)
-            self.assertIn("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6", command)
-            self.assertIn("NetworkNamespacePath=/run/netns/pi", command)
-            self.assertNotIn("IPAddressDeny=any", command)
-            self.assertIn("InaccessiblePaths=/run/nas-secrets", command)
-            self.assertIn(f"ReadWritePaths={root}", command)
-            self.assertIn(f"LoadCredential=llama-swap-api-key:{credential}", command)
+            self.assertEqual(command[:2], ["podman", "run"])
+            for argument in (
+                "--rm",
+                "--replace",
+                "--read-only",
+                "--cap-drop=all",
+                "--security-opt=no-new-privileges",
+                "--user=954:954",
+                "--network=ns:/run/netns/pi",
+                "--pids-limit=512",
+                "--workdir=/workspace",
+            ):
+                self.assertIn(argument, command)
+            self.assertIn(f"{root}:/workspace:rw", command)
+            self.assertIn(f"{state}:/home/pi:rw", command)
+            self.assertIn(f"{credential}:/run/secrets/llama-swap-api-key:ro", command)
+            self.assertIn("nixos-nas-pi-agent:2.2.0-alpha.8", command)
             self.assertNotIn("local-client-secret", rendered)
+            self.assertNotIn("systemd-run", command)
+
+    def test_user_state_is_scoped_to_authenticated_username(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "NAS_PI_USER_STATE_ROOT": str(root),
+                        "NAS_PI_CONTAINER_UID": "954",
+                        "NAS_PI_CONTAINER_GID": "954",
+                    },
+                ),
+                mock.patch.object(os, "chown") as chown,
+            ):
+                state = coding.ensure_user_state("alice")
+            self.assertEqual(state, root.resolve() / "alice")
+            self.assertTrue(state.is_dir())
+            chown.assert_called_once_with(state, 954, 954)
+            escape = root / "mallory"
+            escape.symlink_to(root, target_is_directory=True)
+            with (
+                mock.patch.dict(os.environ, {"NAS_PI_USER_STATE_ROOT": str(root)}),
+                self.assertRaisesRegex(coding.CodingAgentError, "real directory"),
+            ):
+                coding.ensure_user_state("mallory")
 
     def test_nix_integration_keeps_llama_swap_authoritative_and_agent_unprivileged(self) -> None:
         module = (ROOT / "modules" / "ai" / "coding-agent.nix").read_text(encoding="utf-8")
@@ -90,8 +128,15 @@ class CodingAgentTests(unittest.TestCase):
             self.assertIn(flag, module)
         self.assertNotIn("--no-approve", module)
         self.assertIn("PI_OFFLINE=1", module)
-        self.assertIn("nas-code-agent", module)
-        self.assertIn("NetworkNamespacePath=/run/netns/pi", coding_agent_py)
+        self.assertIn("buildLayeredImage", module)
+        self.assertIn("podman load", module)
+        self.assertIn("NAS_PI_USER_STATE_ROOT", module)
+        self.assertIn("userStateRoot", module)
+        self.assertNotIn("environment.systemPackages = [ piPackage launcher ]", module)
+        self.assertIn("--read-only", coding_agent_py)
+        self.assertIn("--cap-drop=all", coding_agent_py)
+        self.assertIn("--network=", coding_agent_py)
+        self.assertNotIn("systemd-run", coding_agent_py)
         self.assertIn('parent = "aiRuntime"', features)
         self.assertIn('access = "coding"', features)
         self.assertIn('allowGroup = "nas_allow_coding"', capabilities)
@@ -115,15 +160,15 @@ class CodingAgentTests(unittest.TestCase):
                 self.skipTest("nix store not available on host (VM-only check)")
             self.assertEqual(result.returncode, 0, f"nix parse failed: {result.stderr}")
 
-    def test_main_wakes_feature_then_runs_transient_session(self) -> None:
+    def test_main_wakes_feature_then_runs_disposable_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             repo = root / "repo"
             repo.mkdir()
+            state = root / "alice-state"
+            state.mkdir()
             credential = root / "credential"
             credential.write_text("token", encoding="utf-8")
-            session_exec = root / "session"
-            session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
             completed = mock.Mock(returncode=0)
             identity = json.dumps({"username": "alice", "groups": ["nas_allow_coding"]})
             with (
@@ -133,18 +178,21 @@ class CodingAgentTests(unittest.TestCase):
                     {
                         "NAS_CODING_WORKSPACE_ROOTS_JSON": json.dumps([str(root)]),
                         "NAS_PI_CREDENTIAL": str(credential),
-                        "NAS_PI_SESSION_EXEC": str(session_exec),
+                        "NAS_PI_IMAGE": "nixos-nas-pi-agent:2.2.0-alpha.8",
+                        "NAS_PI_NETWORK": "ns:/run/netns/pi",
                         "NAS_FEATURE_CONTROL": "/test/nas-feature-control",
                         "NAS_CODING_HEARTBEAT_SECONDS": "3600",
                         "NAS_AUTHENTICATED_IDENTITY_JSON": identity,
                     },
                 ),
+                mock.patch.object(coding, "ensure_user_state", return_value=state) as ensure_state,
                 mock.patch.object(coding, "run_checked") as wake,
                 mock.patch.object(coding.subprocess, "run", return_value=completed) as run,
             ):
                 self.assertEqual(coding.main([str(repo), "--", "--model", "coding/default"]), 0)
             wake.assert_called_once_with(["/test/nas-feature-control", "wake", "aiCoding"])
-            self.assertTrue(any(call.args and call.args[0][0] == "systemd-run" for call in run.call_args_list))
+            ensure_state.assert_called_once_with("alice")
+            self.assertTrue(any(call.args and call.args[0][0:2] == ["podman", "run"] for call in run.call_args_list))
 
     def test_llama_swap_default_uses_configurable_idle_ttl(self):
         internal = (ROOT / "modules" / "ai" / "internal.nix").read_text(encoding="utf-8")
@@ -169,39 +217,37 @@ class CodingAgentTests(unittest.TestCase):
                 coding.run_checked(["false"])
         run.assert_called_once_with(["false"], check=False)
 
-    def test_session_command_requires_absolute_executable(self) -> None:
+    def test_session_command_requires_image_and_valid_network(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
-            with mock.patch.dict(os.environ, {"NAS_PI_SESSION_EXEC": "relative-exec"}, clear=True):
-                with self.assertRaisesRegex(coding.CodingAgentError, "not configured"):
-                    coding.session_command(root, [])
-            with mock.patch.dict(os.environ, {"NAS_PI_SESSION_EXEC": ""}, clear=True):
-                with self.assertRaisesRegex(coding.CodingAgentError, "not configured"):
-                    coding.session_command(root, [])
+            state = root / "state"
+            state.mkdir()
+            with mock.patch.dict(os.environ, {"NAS_PI_IMAGE": ""}, clear=True):
+                with self.assertRaisesRegex(coding.CodingAgentError, "image is not configured"):
+                    coding.session_command(root, state, [])
+            with mock.patch.dict(
+                os.environ,
+                {"NAS_PI_IMAGE": "image:tag", "NAS_PI_NETWORK": "bad network"},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(coding.CodingAgentError, "network is invalid"):
+                    coding.session_command(root, state, [])
 
     def test_session_command_clamps_max_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
-            session_exec = root / "session"
-            session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
-            with mock.patch.dict(
-                os.environ,
-                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "not-a-number"},
-            ):
-                command = coding.session_command(root, [])
-            self.assertIn("RuntimeMaxSec=14400", command)
-            with mock.patch.dict(
-                os.environ,
-                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "10"},
-            ):
-                command = coding.session_command(root, [])
-            self.assertIn("RuntimeMaxSec=14400", command)
-            with mock.patch.dict(
-                os.environ,
-                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "7200"},
-            ):
-                command = coding.session_command(root, [])
-            self.assertIn("RuntimeMaxSec=7200", command)
+            state = root / "state"
+            state.mkdir()
+            base_env = {"NAS_PI_IMAGE": "image:tag", "NAS_PI_NETWORK": "ns:/run/netns/pi"}
+            with mock.patch.dict(os.environ, {**base_env, "NAS_CODING_MAX_RUNTIME_SEC": "not-a-number"}):
+                command = coding.session_command(root, state, [])
+            self.assertIn("--timeout=14400", command)
+            with mock.patch.dict(os.environ, {**base_env, "NAS_CODING_MAX_RUNTIME_SEC": "10"}):
+                command = coding.session_command(root, state, [])
+            self.assertIn("--timeout=14400", command)
+            with mock.patch.dict(os.environ, {**base_env, "NAS_CODING_MAX_RUNTIME_SEC": "7200"}):
+                command = coding.session_command(root, state, [])
+            self.assertIn("--timeout=7200", command)
 
     def test_heartbeat_wakes_feature_until_stopped(self) -> None:
         stop = threading.Event()
@@ -221,18 +267,24 @@ class CodingAgentTests(unittest.TestCase):
     def test_identity_json_coding_capability_allowed(self) -> None:
         identity = json.dumps({"username": "alice", "groups": ["nas_allow_coding"]})
         with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": identity}, clear=True):
-            coding._check_coding_access()
+            self.assertEqual(coding._check_coding_access(), "alice")
         admin_identity = json.dumps({"username": "bob", "groups": ["nas_admin"]})
         with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": admin_identity}, clear=True):
-            coding._check_coding_access()
+            self.assertEqual(coding._check_coding_access(), "bob")
         admin_flag = json.dumps({"username": "carol", "groups": [], "admin": True})
         with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": admin_flag}, clear=True):
-            coding._check_coding_access()
+            self.assertEqual(coding._check_coding_access(), "carol")
 
     def test_identity_json_no_capability_denied(self) -> None:
         identity = json.dumps({"username": "eve", "groups": ["nas_users"]})
         with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": identity}, clear=True):
             with self.assertRaisesRegex(coding.CodingAgentError, "coding capability required"):
+                coding._check_coding_access()
+
+    def test_invalid_identity_username_denied_before_storage_selection(self) -> None:
+        identity = json.dumps({"username": "../escape", "groups": ["nas_allow_coding"]})
+        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": identity}, clear=True):
+            with self.assertRaisesRegex(coding.CodingAgentError, "invalid username"):
                 coding._check_coding_access()
 
     def test_sudo_user_without_identity_no_insecure_flag_denied(self) -> None:
@@ -256,7 +308,7 @@ class CodingAgentTests(unittest.TestCase):
                 with mock.patch.object(
                     coding.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="")
                 ):
-                    coding._check_coding_access()
+                    self.assertEqual(coding._check_coding_access(), "max")
 
     def test_root_no_sudo_user_no_identity_denied(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -265,16 +317,11 @@ class CodingAgentTests(unittest.TestCase):
                     coding._check_coding_access()
 
     def test_malformed_identity_json_denied(self) -> None:
-        for bad in ("not-json", '{"groups": "not-a-list"}', '{"groups": [123]}', ""):
-            if bad == "":
-                continue
+        for bad in ("not-json", '{"groups": "not-a-list"}', '{"groups": [123]}'):
             with self.subTest(bad=bad):
                 with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": bad}, clear=True):
-                    with self.assertRaisesRegex(coding.CodingAgentError, "malformed identity JSON|missing"):
+                    with self.assertRaisesRegex(coding.CodingAgentError, "malformed identity JSON"):
                         coding._check_coding_access()
-        with mock.patch.dict(os.environ, {"NAS_AUTHENTICATED_IDENTITY_JSON": "not-json{"}, clear=True):
-            with self.assertRaisesRegex(coding.CodingAgentError, "malformed identity JSON"):
-                coding._check_coding_access()
 
     def test_check_coding_access_grants_admin_and_denies_others(self) -> None:
         class FakeGroup:
@@ -290,7 +337,7 @@ class CodingAgentTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SUDO_USER": "max", "NAS_CODING_INSECURE_UID_AUTH": "1"}, clear=True):
             with mock.patch.dict(sys.modules, modules):
                 grp.getgrall.return_value = [FakeGroup("nas_admin", ["max"])]
-                coding._check_coding_access()
+                self.assertEqual(coding._check_coding_access(), "max")
                 grp.getgrall.return_value = [FakeGroup("wheel", ["someone-else"])]
                 with mock.patch.object(
                     coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="wheel\n")
@@ -301,7 +348,7 @@ class CodingAgentTests(unittest.TestCase):
                 with mock.patch.object(
                     coding.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="nas_admin\n")
                 ):
-                    coding._check_coding_access()
+                    self.assertEqual(coding._check_coding_access(), "max")
                 grp.getgrall.return_value = []
                 with mock.patch.object(
                     coding.subprocess,
