@@ -13,6 +13,7 @@ import nas_v2_apply as apply_engine
 import nas_v2_lifecycle as lifecycle
 import nas_v2_runtime as runtime
 from nas_v2_schedules import reconcile_schedules
+from nas_v2_session_inputs import decorate_document_for_session, parse_input_values
 
 
 def _load(args: argparse.Namespace) -> dict:
@@ -54,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("target", nargs="?")
     parser.add_argument("--session-id")
+    parser.add_argument("--input", action="append", default=[], dest="session_inputs")
+    parser.add_argument("--user", dest="session_user")
     parser.add_argument("--spec", type=pathlib.Path, default=runtime.DEFAULT_SPEC)
     parser.add_argument("--schema", type=pathlib.Path, default=runtime.DEFAULT_SCHEMA)
     parser.add_argument("--effective", type=pathlib.Path, default=runtime.DEFAULT_EFFECTIVE)
@@ -115,7 +118,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "session-begin":
             if not args.session_id:
                 parser.error("session-begin requires --session-id")
-            _print(lifecycle.session_begin(args.target, args.session_id, document))
+            session_document = decorate_document_for_session(
+                args.target,
+                args.session_id,
+                document,
+                values=parse_input_values(args.session_inputs),
+                user=args.session_user,
+            )
+            _print(lifecycle.session_begin(args.target, args.session_id, session_document))
         else:  # pragma: no cover - argparse guards this branch
             parser.error(f"unsupported command {args.command}")
     except Exception as exc:
