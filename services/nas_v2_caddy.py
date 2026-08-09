@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Direct Caddy projection for the canonical Managed Services V2 route schema."""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+from typing import Any
+
+DEFAULT_OUTPUT = pathlib.Path("/run/nas-control/caddy-managed.conf")
+GATE_SOCKET = os.environ.get("NAS_ON_DEMAND_GATE_SOCKET", "/run/nas-control/on-demand-gate.sock")
+PATH_SNIPPET = "nas_managed_paths"
+HOST_RE = re.compile(r"^(?:[A-Za-z0-9-]{1,63}\.)*[A-Za-z0-9-]{1,63}$")
+
+
+class V2CaddyError(RuntimeError):
+    pass
+
+
+def _route_key(service_id: str, route_id: str) -> str:
+    return f"{service_id}:{route_id}"
+
+
+def _render_gate(lines: list[str], service_id: str, route_id: str, indent: str) -> None:
+    lines.extend(
+        [
+            f"{indent}forward_auth unix/{GATE_SOCKET} {{",
+            f"{indent}  uri /authorize?scope=service:{_route_key(service_id, route_id)}",
+            f"{indent}  header_up Remote-User {{http.request.header.Remote-User}}",
+            f"{indent}  header_up Remote-Groups {{http.request.header.Remote-Groups}}",
+            f"{indent}  header_up Remote-Name {{http.request.header.Remote-Name}}",
+            f"{indent}  header_up Remote-Email {{http.request.header.Remote-Email}}",
+            f"{indent}  header_up Remote-UID {{http.request.header.Remote-UID}}",
+            f"{indent}}}",
+        ]
+    )
+
+
+def _render_auth(lines: list[str], service_id: str, route_id: str, route: dict[str, Any], indent: str) -> None:
+    auth = route["auth"]
+    mode = auth["mode"]
+    if mode == "identity":
+        for header in (
+            "Remote-User",
+            "Remote-Groups",
+            "Remote-Name",
+            "Remote-Email",
+            "Remote-UID",
+            "X-Authentik-Username",
+            "X-Authentik-Groups",
+            "X-Authentik-Name",
+            "X-Authentik-Email",
+            "X-Authentik-Uid",
+        ):
+            lines.append(f"{indent}request_header -{header}")
+        lines.extend(
+            [
+                f"{indent}forward_auth 127.0.0.1:9000 {{",
+                f"{indent}  uri /outpost.goauthentik.io/auth/caddy",
+                f"{indent}  copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid",
+                f"{indent}}}",
+                f"{indent}@missingV2Identity not header X-Authentik-Username *",
+                f"{indent}respond @missingV2Identity 403",
+                f"{indent}request_header Remote-User {{http.request.header.X-Authentik-Username}}",
+                f"{indent}request_header Remote-Groups {{http.request.header.X-Authentik-Groups}}",
+                f"{indent}request_header Remote-Name {{http.request.header.X-Authentik-Name}}",
+                f"{indent}request_header Remote-Email {{http.request.header.X-Authentik-Email}}",
+                f"{indent}request_header Remote-UID {{http.request.header.X-Authentik-Uid}}",
+            ]
+        )
+    if mode not in {"public", "identity", "secret", "upstream"}:
+        raise V2CaddyError(f"Service {service_id} route {route_id}: unsupported auth mode {mode!r}")
+    _render_gate(lines, service_id, route_id, indent)
+
+
+def _render_proxy(lines: list[str], route: dict[str, Any], indent: str) -> None:
+    proxy = route.get("proxy", {})
+    strip = proxy.get("stripPrefix")
+    if isinstance(strip, str):
+        lines.append(f"{indent}uri strip_prefix {strip}")
+        lines.append(f"{indent}request_header X-Forwarded-Prefix {strip}")
+    for header in proxy.get("removeRequestHeaders", []):
+        lines.append(f"{indent}request_header -{header}")
+    for header, value in sorted(proxy.get("requestHeaders", {}).items()):
+        lines.append(f"{indent}request_header {header} {value}")
+
+    target = route["target"]
+    typ = target["type"]
+    if typ == "unix-http":
+        lines.append(f"{indent}reverse_proxy unix/{target['path']}")
+    else:
+        host = target.get("host", "127.0.0.1")
+        port = int(target["port"])
+        if any(char in str(host) for char in ("\r", "\n", "{", "}")):
+            raise V2CaddyError("Route target host contains unsafe characters")
+        upstream = f"{host}:{port}"
+        if typ == "https":
+            lines.extend(
+                [
+                    f"{indent}reverse_proxy {upstream} {{",
+                    f"{indent}  transport http {{",
+                    f"{indent}    tls",
+                    f"{indent}    tls_insecure_skip_verify",
+                    f"{indent}  }}",
+                    f"{indent}}}",
+                ]
+            )
+        elif typ == "http":
+            lines.append(f"{indent}reverse_proxy {upstream}")
+        else:
+            raise V2CaddyError(f"Unsupported Caddy route target {typ!r}")
+
+
+def _render_handler(
+    lines: list[str], service_id: str, route_id: str, route: dict[str, Any], indent: str
+) -> None:
+    _render_auth(lines, service_id, route_id, route, indent)
+    _render_proxy(lines, route, indent)
+
+
+def generate_caddyfile(effective: dict[str, Any]) -> str:
+    path_routes: list[tuple[int, str, str, dict[str, Any], str]] = []
+    host_routes: list[tuple[int, str, str, dict[str, Any], str, str]] = []
+    seen_paths: set[str] = set()
+    seen_hosts: set[tuple[str, str]] = set()
+
+    services = effective.get("services", {})
+    if not isinstance(services, dict):
+        raise V2CaddyError("effective services must be an object")
+    for service_id, service in services.items():
+        if not isinstance(service, dict) or not service.get("enabled"):
+            continue
+        routes = service.get("routes", {})
+        if not isinstance(routes, dict):
+            raise V2CaddyError(f"Service {service_id}: routes must be an object")
+        for route_id, route in routes.items():
+            exposure = route["exposure"]
+            priority = int(route.get("priority", 0))
+            if exposure["type"] == "path":
+                for path in exposure["paths"]:
+                    if path in seen_paths:
+                        raise V2CaddyError(f"Duplicate managed path exposure {path!r}")
+                    seen_paths.add(path)
+                    path_routes.append((priority, service_id, route_id, route, path))
+            elif exposure["type"] == "hostname":
+                hostname = exposure["hostname"]
+                path = exposure.get("path", "/")
+                if not isinstance(hostname, str) or HOST_RE.fullmatch(hostname) is None:
+                    raise V2CaddyError(f"Invalid managed hostname {hostname!r}")
+                key = (hostname.lower(), path)
+                if key in seen_hosts:
+                    raise V2CaddyError(f"Duplicate managed hostname exposure {hostname!r}{path}")
+                seen_hosts.add(key)
+                host_routes.append((priority, service_id, route_id, route, hostname, path))
+            else:
+                raise V2CaddyError(f"Service {service_id} route {route_id}: invalid exposure")
+
+    path_routes.sort(key=lambda item: (-item[0], item[4], item[1], item[2]))
+    host_routes.sort(key=lambda item: (-item[0], item[4], item[5], item[1], item[2]))
+    lines = ["# Generated by nas-v2-runtime; do not edit.", "", f"({PATH_SNIPPET}) {{"]
+    for _, service_id, route_id, route, path in path_routes:
+        matcher = f"v2_{service_id}_{route_id}_{abs(hash(path)) & 0xffffffff:x}"
+        lines.append(f"  @{matcher} path {path} {path}*")
+        lines.append(f"  handle @{matcher} {{")
+        _render_handler(lines, service_id, route_id, route, "    ")
+        lines.append("  }")
+    lines.extend(["}", ""])
+
+    for _, service_id, route_id, route, hostname, path in host_routes:
+        lines.append(f"https://{hostname} {{")
+        lines.append("  tls internal")
+        if path != "/":
+            lines.append(f"  handle_path {path}* {{")
+            _render_handler(lines, service_id, route_id, route, "    ")
+            lines.append("  }")
+        else:
+            _render_handler(lines, service_id, route_id, route, "  ")
+        lines.extend(["}", ""])
+    return "\n".join(lines)
+
+
+def write_caddyfile(
+    effective: dict[str, Any],
+    path: pathlib.Path = DEFAULT_OUTPUT,
+    *,
+    validate: bool = True,
+    reload: bool = True,
+) -> str:
+    text = generate_caddyfile(effective)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = pathlib.Path(name)
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        caddy = shutil.which("caddy")
+        if validate and caddy:
+            result = subprocess.run(
+                [caddy, "adapt", "--adapter", "caddyfile", "--config", str(temporary)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                raise V2CaddyError(f"Caddy validation failed: {result.stderr.strip()}")
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+        if reload and shutil.which("systemctl"):
+            result = subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                if previous is not None:
+                    path.write_text(previous, encoding="utf-8")
+                    subprocess.run(["systemctl", "reload", "caddy"], capture_output=True, timeout=10)
+                raise V2CaddyError(f"Caddy reload failed: {result.stderr.strip()}")
+    finally:
+        temporary.unlink(missing_ok=True)
+    return text
