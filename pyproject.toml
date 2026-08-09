@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 nas-ai-config = "nas_ai_config:main"
 nas-alert-router = "nas_alert_router:main"
 nas-authentik-v2-groups = "nas_authentik_v2_groups:main"
+nas-backup-v2 = "nas_backup_v2:main"
 nas-cockpit-api = "nas_cockpit_api:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-copyparty-projection = "nas_copyparty_projection:main"
@@ -33,6 +34,7 @@ py-modules = [
   "nas_ai_config",
   "nas_alert_router",
   "nas_authentik_v2_groups",
+  "nas_backup_v2",
   "nas_common",
   "nas_cockpit_api",
   "nas_coding_agent",
@@ -44,6 +46,7 @@ py-modules = [
   "nas_identity_model",
   "nas_identity_sync",
   "nas_logging",
+  "nas_managed_network",
   "nas_managed_resources",
   "nas_managed_service",
   "nas_managed_service_v2",
@@ -63,11 +66,6 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 
-# These harnesses intentionally add the repository service/test directories to
-# sys.path before importing NAS-owned modules. Keep E402 scoped to only those
-# bootstrap files so ordinary modules still enforce top-level import ordering.
-# The property tier imports unittest classes from its non-discovered slow module
-# solely so unittest can discover them; F401 is therefore intentional there.
 [tool.ruff.lint.per-file-ignores]
 "scripts/fuzz.py" = ["E402"]
 "tests/slow_managed_service_stateful.py" = ["E402"]
