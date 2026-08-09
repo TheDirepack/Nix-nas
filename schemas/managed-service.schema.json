@@ -92,6 +92,28 @@
         }
       ]
     },
+    "gpuSelector": {
+      "type": "string",
+      "pattern": "^(optional|required):(auto|all|(nvidia|amd|intel):all|pci:[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]|cdi:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.:@-]+)$"
+    },
+    "gpuRequest": {
+      "oneOf": [
+        {"$ref": "#/$defs/gpuSelector"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selector"],
+          "properties": {
+            "selector": {"$ref": "#/$defs/gpuSelector"},
+            "target": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "description": "Runtime target when the runtime contains multiple workloads, such as a Compose service name."
+            }
+          }
+        }
+      ]
+    },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
@@ -164,7 +186,7 @@
             "maxItems": 32,
             "uniqueItems": true,
             "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
-            "description": "Managed services that must be available before this service starts. Dependencies may be V2-owned or system-owned core services."
+            "description": "Managed services that must be available before this service starts. Dependencies may use any V2 runtime or be system-owned core services."
           },
           "portal": {
             "type": "object",
@@ -182,7 +204,13 @@
             "properties": {
               "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 68719476736},
               "cpus": {"type": "number", "minimum": 0.1, "maximum": 64},
-              "gpus": {"type": "array", "items": {"type": "string"}}
+              "gpus": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {"$ref": "#/$defs/gpuRequest"},
+                "description": "Runtime-neutral GPU requests. optional selectors allow CPU fallback; required selectors fail closed when unavailable."
+              }
             }
           },
           "storage": {
@@ -249,7 +277,7 @@
                   "additionalProperties": false,
                   "required": ["mode"],
                   "properties": {
-                    "mode": {"enum": ["public", "forward-auth", "oidc"]},
+                    "mode": {"enum": ["public", "forward-auth", "oidc", "api-key"]},
                     "capability": {"type": "string", "pattern": "^(application|storage)\\.[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$"},
                     "allow": {"enum": ["any", "groups", "users", "all"]},
                     "groups": {"type": "array", "items": {"type": "string", "pattern": "^([A-Za-z0-9_-]+|[0-9a-fA-F-]{36}|\\d+)$"}},
