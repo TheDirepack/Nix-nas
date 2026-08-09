@@ -57,8 +57,8 @@ def _render_access(resource_id: str, capabilities: list[str]) -> list[str]:
             raise CopypartyProjectionError(
                 f"Storage resource {resource_id!r} has unsupported Copyparty capability {capability!r}"
             )
-        # nas_admin already receives A and does not need the generated admin
-        # capability group to retain appliance recovery access.
+        # nas_admin always retains appliance recovery access independently from
+        # generated storage capability assignments.
         lines.append(f"    {permission}: @{capability_group(resource_id, capability)}")
     return lines
 
@@ -109,7 +109,9 @@ def atomic_write_config(text: str, path: pathlib.Path = DEFAULT_CONFIG_PATH) -> 
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        tmp_path.chmod(0o640)
+        # The directory is service-private; the generated include itself is not
+        # secret and must remain readable after root atomically replaces it.
+        tmp_path.chmod(0o644)
         tmp_path.replace(path)
         dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
