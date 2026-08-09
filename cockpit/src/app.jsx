@@ -73,7 +73,7 @@ function StatusLabel({value, children}) {
 function Output({children, ariaLabel}) {
   if (!children) return null;
   return (
-    <CodeBlock className="nas-code-output">
+    <CodeBlock className="nas-code-output" tabIndex={0} role="region" aria-label={ariaLabel}>
       <CodeBlockCode aria-label={ariaLabel}>{children}</CodeBlockCode>
     </CodeBlock>
   );
@@ -577,7 +577,7 @@ function CapabilityTable({data}) {
           {value?.error || "No capability data was returned."}
         </Alert>
       ) : (
-        <div className="nas-table-wrap">
+        <div className="nas-table-wrap" tabIndex={0} role="region" aria-label="User access">
           <table
             className="pf-v6-c-table pf-m-grid-md nas-table"
             role="grid"
@@ -647,7 +647,7 @@ function MemoryTable({data}) {
       {!memory ? (
         <Alert variant="warning" title="Memory model unavailable" isInline />
       ) : (
-        <div className="nas-table-wrap">
+        <div className="nas-table-wrap" tabIndex={0} role="region" aria-label="Memory planner">
           <table
             className="pf-v6-c-table pf-m-grid-md nas-table"
             role="grid"
@@ -1058,7 +1058,12 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                 <Stack hasGutter>
                   {(config.localModels || []).length > 0 && (
                     <StackItem>
-                      <div className="nas-table-wrap">
+                      <div
+                        className="nas-table-wrap"
+                        tabIndex={0}
+                        role="region"
+                        aria-label="Local AI models"
+                      >
                         <table
                           className="pf-v6-c-table pf-m-grid-md nas-table"
                           aria-label="Local AI models"
@@ -1210,7 +1215,12 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                 <Stack hasGutter>
                   {(config.providers || []).length > 0 && (
                     <StackItem>
-                      <div className="nas-table-wrap">
+                      <div
+                        className="nas-table-wrap"
+                        tabIndex={0}
+                        role="region"
+                        aria-label="AI providers"
+                      >
                         <table
                           className="pf-v6-c-table pf-m-grid-md nas-table"
                           aria-label="AI providers"
@@ -1759,7 +1769,7 @@ function Services({data}) {
       <Title headingLevel="h2" className="nas-section-heading">
         System services
       </Title>
-      <div className="nas-table-wrap">
+      <div className="nas-table-wrap" tabIndex={0} role="region" aria-label="NAS services">
         <table
           className="pf-v6-c-table pf-m-grid-md nas-table"
           role="grid"
@@ -1806,7 +1816,7 @@ function Timers({data}) {
   );
 }
 
-function ActionModal({action, running, onClose, onConfirm}) {
+function ActionModal({action, running, error, onClose, onConfirm}) {
   return (
     <Modal
       isOpen={Boolean(action)}
@@ -1817,6 +1827,11 @@ function ActionModal({action, running, onClose, onConfirm}) {
       <ModalBody>
         Run <strong>{action?.label}</strong>? The NAS will execute the reviewed maintenance action
         and report the result here.
+        {error && (
+          <Alert variant="danger" title="Operation failed" isInline>
+            {error}
+          </Alert>
+        )}
       </ModalBody>
       <ModalFooter>
         <Button variant="primary" onClick={onConfirm} isLoading={running} isDisabled={running}>
@@ -1837,6 +1852,7 @@ export default function App() {
   const [busyFeature, setBusyFeature] = useState(null);
   const [action, setAction] = useState(null);
   const [actionRunning, setActionRunning] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   const refresh = useCallback(async ({quiet = false} = {}) => {
     if (!quiet) setLoading(true);
@@ -1897,10 +1913,12 @@ export default function App() {
       });
       return;
     }
+    setActionError("");
     setAction({id, label});
   };
   const runAction = async () => {
     if (!action) return;
+    setActionError("");
     setActionRunning(true);
     try {
       await api(["action", action.id]);
@@ -1912,7 +1930,7 @@ export default function App() {
       setAction(null);
       await refresh({quiet: true});
     } catch (error) {
-      setNotice({variant: "danger", title: "Operation failed", message: errorText(error)});
+      setActionError(errorText(error));
     } finally {
       setActionRunning(false);
     }
@@ -1923,7 +1941,7 @@ export default function App() {
       <PageSection>
         <Toolbar className="nas-page__header">
           <ToolbarContent>
-            <ToolbarItem variant="label">
+            <ToolbarItem>
               <Title headingLevel="h1">NAS Overview</Title>
               <p className="nas-page__subtitle">
                 Storage, access, service policy, maintenance, and recovery status in one place.
@@ -1980,7 +1998,11 @@ export default function App() {
       <ActionModal
         action={action}
         running={actionRunning}
-        onClose={() => setAction(null)}
+        error={actionError}
+        onClose={() => {
+          setAction(null);
+          setActionError("");
+        }}
         onConfirm={runAction}
       />
     </Page>
