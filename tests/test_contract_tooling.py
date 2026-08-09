@@ -297,6 +297,7 @@ class ContractTests(unittest.TestCase):
         package_step = workflow.split("      - name: Package and verify as an untrusted consumer", 1)[1]
         self.assertIn('mv cockpit/node_modules "$dependencies"', package_step)
         self.assertIn('mv "$dependencies" cockpit/node_modules', package_step)
+        self.assertIn('extract="$RUNNER_TEMP/extracted-source"', package_step)
         self.assertLess(
             package_step.index('mv cockpit/node_modules "$dependencies"'), package_step.index("package-release.sh")
         )

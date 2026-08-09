@@ -345,7 +345,7 @@ jobs:
           NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
           archive=$(find "$out" -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit)
           test -n "$archive"
-          extract="$GITHUB_WORKSPACE/extracted-source"
+          extract="$RUNNER_TEMP/extracted-source"
           mkdir -p "$extract"
           # Python's zipfile extractor intentionally ignores Unix executable bits;
           # Info-ZIP unzip preserves the modes encoded by package-release.sh.
