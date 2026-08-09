@@ -12,9 +12,9 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_managed_network as managed_network
-import nas_managed_service as legacy
-import nas_managed_service_v2 as v2
+import nas_managed_network as managed_network  # noqa: E402
+import nas_managed_service as legacy  # noqa: E402
+import nas_managed_service_v2 as v2  # noqa: E402
 
 
 def service(
