@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import pathlib
 import re
 import shlex
@@ -38,8 +39,15 @@ SELECTOR_STRATEGIES = ("warm", "pin", "spillover")
 MAX_LOCAL_ARGS = 64
 MAX_LOCAL_ARG_LENGTH = 512
 FORBIDDEN_LOCAL_FLAGS = {
-    "--host", "--port", "--model", "-m", "--model-url", "--api-key", "--alias",
-    "--ctx-size", "-c",
+    "--host",
+    "--port",
+    "--model",
+    "-m",
+    "--model-url",
+    "--api-key",
+    "--alias",
+    "--ctx-size",
+    "-c",
 }
 
 
@@ -176,8 +184,6 @@ def _require_mapping(value: object, label: str) -> dict[str, Any]:
     return dict(value)
 
 
-
-
 def validate_timeouts(value: object) -> dict[str, int]:
     if value in (None, {}):
         return {}
@@ -231,6 +237,7 @@ def validate_selector_settings(strategy: object, spillover: object) -> tuple[str
             raise AiConfigError("Spillover reservation count must be an integer between 1 and 128")
         settings["spillover"] = spillover
     return str(strategy), settings
+
 
 def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
     try:
@@ -381,7 +388,9 @@ def local_models_view(config: Mapping[str, Any]) -> list[dict[str, Any]]:
             row.update(
                 {
                     "path": str(metadata.get("modelPath", "")),
-                    "context": context_value if isinstance(context_value, int) and not isinstance(context_value, bool) else 32768,
+                    "context": context_value
+                    if isinstance(context_value, int) and not isinstance(context_value, bool)
+                    else 32768,
                     "ttl": ttl_value if isinstance(ttl_value, int) and not isinstance(ttl_value, bool) else -1,
                     "tools": capabilities.get("tools") is True,
                     "extraArgs": [item for item in extra_args_value if isinstance(item, str)]
@@ -640,7 +649,9 @@ def set_provider(
     model_list = validate_models(models)
     old_state, old_value = _probe_provider_credential(provider_id)
     if old_state == CREDENTIAL_UNKNOWN:
-        raise AiConfigError(f"Unable to determine prior credential state for provider {provider_id!r}; aborting to avoid credential loss")
+        raise AiConfigError(
+            f"Unable to determine prior credential state for provider {provider_id!r}; aborting to avoid credential loss"
+        )
     old_config_bytes = _read_config_bytes(path)
     did_write = False
     try:
@@ -689,7 +700,9 @@ def delete_provider(provider_id: str, *, path: pathlib.Path = CONFIG_PATH) -> di
     provider_id = validate_provider_id(provider_id)
     old_state, old_value = _probe_provider_credential(provider_id)
     if old_state == CREDENTIAL_UNKNOWN:
-        raise AiConfigError(f"Unable to determine prior credential state for provider {provider_id!r}; aborting to avoid credential loss")
+        raise AiConfigError(
+            f"Unable to determine prior credential state for provider {provider_id!r}; aborting to avoid credential loss"
+        )
     old_config_bytes = _read_config_bytes(path)
     did_write = False
     try:
@@ -756,7 +769,9 @@ def set_local_model(
         existing = _require_mapping(models.get(model_id), f"model {model_id}")
         existing_metadata = existing.get("metadata", {}) if isinstance(existing.get("metadata", {}), dict) else {}
         if existing and existing_metadata.get("nasManaged") is not True:
-            raise AiConfigError(f"Local model {model_id} is administrator-managed outside Cockpit and cannot be overwritten")
+            raise AiConfigError(
+                f"Local model {model_id} is administrator-managed outside Cockpit and cannot be overwritten"
+            )
         command_parts = [
             llama_server_path(),
             "--host",
@@ -769,10 +784,7 @@ def set_local_model(
             str(context),
             *args,
         ]
-        command = " ".join(
-            item if item == "${PORT}" else shlex.quote(item)
-            for item in command_parts
-        )
+        command = " ".join(item if item == "${PORT}" else shlex.quote(item) for item in command_parts)
         models[model_id] = {
             "cmd": command,
             "ttl": ttl,
@@ -813,7 +825,9 @@ def delete_local_model(model_id: str, *, path: pathlib.Path = CONFIG_PATH) -> di
         if not existing:
             raise AiConfigError(f"Local model {model_id} does not exist")
         if metadata.get("nasManaged") is not True:
-            raise AiConfigError(f"Local model {model_id} is administrator-managed outside Cockpit and cannot be deleted")
+            raise AiConfigError(
+                f"Local model {model_id} is administrator-managed outside Cockpit and cannot be deleted"
+            )
         models.pop(model_id, None)
         config["models"] = models
         selectors = _require_mapping(config.get("selectors"), "selectors")
@@ -1006,7 +1020,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(value, sort_keys=True))
         return 0
     except (AiConfigError, json.JSONDecodeError, OSError) as exc:
-        print(f"nas-ai-config: {exc}", file=os.sys.stderr)
+        print(f"nas-ai-config: {exc}", file=sys.stderr)
         return 1
 
 

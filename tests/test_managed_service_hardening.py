@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
 
+import nas_feature_control as gate
 import nas_managed_service as msvc
 import nas_service_caddy as caddy
-import nas_feature_control as gate
 
 
 class CaddySingleSourceTests(unittest.TestCase):
@@ -71,14 +74,26 @@ class CaddySingleSourceTests(unittest.TestCase):
 class ReserveCollideTests(unittest.TestCase):
     def test_reserved_path_rejected(self):
         with self.assertRaisesRegex(msvc.ManagedServiceError, "conflicts with reserved"):
-            msvc.validate_service("test", {
-                "label": "Test",
-                "enabled": True,
-                "runtime": {"type": "quadlet", "source": "/var/lib/nas-control/apps/test/app.container", "startPolicy": "boot"},
-                "endpoints": {
-                    "web": {"transport": "http", "targetPort": 80, "exposure": {"type": "path", "value": "/api"}, "auth": {"mode": "public"}}
-                }
-            })
+            msvc.validate_service(
+                "test",
+                {
+                    "label": "Test",
+                    "enabled": True,
+                    "runtime": {
+                        "type": "quadlet",
+                        "source": "/var/lib/nas-control/apps/test/app.container",
+                        "startPolicy": "boot",
+                    },
+                    "endpoints": {
+                        "web": {
+                            "transport": "http",
+                            "targetPort": 80,
+                            "exposure": {"type": "path", "value": "/api"},
+                            "auth": {"mode": "public"},
+                        }
+                    },
+                },
+            )
 
     def test_hostname_injection_rejected(self):
         with self.assertRaisesRegex(caddy.CaddyError, "contains invalid characters"):
@@ -86,36 +101,78 @@ class ReserveCollideTests(unittest.TestCase):
 
     def test_lan_host_collision_rejected(self):
         with self.assertRaisesRegex(msvc.ManagedServiceError, "collides with NAS host"):
-            msvc.validate_service("test", {
-                "label": "Test",
-                "enabled": True,
-                "runtime": {"type": "quadlet", "source": "/var/lib/nas-control/apps/test/app.container", "startPolicy": "boot"},
-                "endpoints": {
-                    "web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "nas.local"}, "auth": {"mode": "public"}}
-                }
-            })
+            msvc.validate_service(
+                "test",
+                {
+                    "label": "Test",
+                    "enabled": True,
+                    "runtime": {
+                        "type": "quadlet",
+                        "source": "/var/lib/nas-control/apps/test/app.container",
+                        "startPolicy": "boot",
+                    },
+                    "endpoints": {
+                        "web": {
+                            "transport": "http",
+                            "targetPort": 80,
+                            "exposure": {"type": "hostname", "value": "nas.local"},
+                            "auth": {"mode": "public"},
+                        }
+                    },
+                },
+            )
 
 
 class AuthentikStableIdTests(unittest.TestCase):
     def test_group_pk_accepted(self):
-        msvc.validate_service("test", {
-            "label": "Test",
-            "enabled": True,
-            "runtime": {"type": "quadlet", "source": "/var/lib/nas-control/apps/test/app.container", "startPolicy": "boot"},
-            "endpoints": {
-                "web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "app.example"}, "auth": {"mode": "forward-auth", "groups": ["123", "550e8400-e29b-41d4-a716-446655440000"]}}
-            }
-        })
+        msvc.validate_service(
+            "test",
+            {
+                "label": "Test",
+                "enabled": True,
+                "runtime": {
+                    "type": "quadlet",
+                    "source": "/var/lib/nas-control/apps/test/app.container",
+                    "startPolicy": "boot",
+                },
+                "endpoints": {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "hostname", "value": "app.example"},
+                        "auth": {
+                            "mode": "forward-auth",
+                            "groups": ["123", "550e8400-e29b-41d4-a716-446655440000"],
+                        },
+                    }
+                },
+            },
+        )
 
     def test_user_pk_accepted(self):
-        msvc.validate_service("test", {
-            "label": "Test",
-            "enabled": True,
-            "runtime": {"type": "quadlet", "source": "/var/lib/nas-control/apps/test/app.container", "startPolicy": "boot"},
-            "endpoints": {
-                "web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "app.example"}, "auth": {"mode": "forward-auth", "users": ["456", "550e8400-e29b-41d4-a716-446655440001"]}}
-            }
-        })
+        msvc.validate_service(
+            "test",
+            {
+                "label": "Test",
+                "enabled": True,
+                "runtime": {
+                    "type": "quadlet",
+                    "source": "/var/lib/nas-control/apps/test/app.container",
+                    "startPolicy": "boot",
+                },
+                "endpoints": {
+                    "web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "hostname", "value": "app.example"},
+                        "auth": {
+                            "mode": "forward-auth",
+                            "users": ["456", "550e8400-e29b-41d4-a716-446655440001"],
+                        },
+                    }
+                },
+            },
+        )
 
 
 class GateTests(unittest.TestCase):
@@ -128,15 +185,20 @@ class GateTests(unittest.TestCase):
     def test_allow_default_deny(self):
         headers = {"Remote-User": "alice", "Remote-Groups": "family"}
         scope = "service:test:web"
-        import tempfile, json, pathlib, os
         with tempfile.TemporaryDirectory() as tmp:
             effective_path = pathlib.Path(tmp) / "effective.json"
             effective = {
                 "schemaVersion": 2,
                 "generation": 1,
                 "endpoints": {
-                    "test:web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "test.local"}, "auth": {"mode": "forward-auth"}, "available": True}
-                }
+                    "test:web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "hostname", "value": "test.local"},
+                        "auth": {"mode": "forward-auth"},
+                        "available": True,
+                    }
+                },
             }
             effective_path.write_text(json.dumps(effective), encoding="utf-8")
             with mock.patch.dict(os.environ, {"NAS_EFFECTIVE_REGISTRY": str(effective_path)}):
@@ -146,15 +208,20 @@ class GateTests(unittest.TestCase):
     def test_remote_uid_used(self):
         headers = {"Remote-User": "alice", "Remote-Groups": "family", "Remote-UID": "123"}
         scope = "service:test:web"
-        import tempfile, json, pathlib, os
         with tempfile.TemporaryDirectory() as tmp:
             effective_path = pathlib.Path(tmp) / "effective.json"
             effective = {
                 "schemaVersion": 2,
                 "generation": 1,
                 "endpoints": {
-                    "test:web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "test.local"}, "auth": {"mode": "forward-auth", "allow": "users", "users": ["123"]}, "available": True}
-                }
+                    "test:web": {
+                        "transport": "http",
+                        "targetPort": 80,
+                        "exposure": {"type": "hostname", "value": "test.local"},
+                        "auth": {"mode": "forward-auth", "allow": "users", "users": ["123"]},
+                        "available": True,
+                    }
+                },
             }
             effective_path.write_text(json.dumps(effective), encoding="utf-8")
             with mock.patch.dict(os.environ, {"NAS_EFFECTIVE_REGISTRY": str(effective_path)}):

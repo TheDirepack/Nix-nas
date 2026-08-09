@@ -79,7 +79,7 @@ class ContractTests(unittest.TestCase):
         packaging = text("scripts/package-release.sh")
         self.assertIn("unsafe archive member", packaging)
         self.assertIn("archive file set does not exactly match staged release", packaging)
-        self.assertIn("archive manifest has extras or omissions", packaging)
+        self.assertIn("archive manifest mismatch", packaging)
         self.assertIn("sha256sum -c MANIFEST.sha256", packaging)
         self.assertIn("NAS_PREFLIGHT_VERIFY_MANIFEST=1", packaging)
         self.assertIn("release checkout is dirty or has untracked files", packaging)
@@ -123,7 +123,7 @@ class ContractTests(unittest.TestCase):
         script = text("scripts/live-validation.sh")
         prefix = script.split('case "${1:-}" in', 1)[0]
         value = 'Unicode ✓ Ü quote" slash\\ colon:#='
-        command = prefix + "\nprintf '%s' \"$(curl_config_escape \"$1\")\"\n"
+        command = prefix + '\nprintf \'%s\' "$(curl_config_escape "$1")"\n'
         result = subprocess.run(
             ["bash", "-c", command, "bash", value],
             cwd=ROOT,
@@ -135,7 +135,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Unicode ✓ Ü", result.stdout)
         self.assertIn('\\"', result.stdout)
-        self.assertIn('\\\\', result.stdout)
+        self.assertIn("\\\\", result.stdout)
 
     def test_complete_release_provenance_hashes_the_actual_staged_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -163,19 +163,32 @@ class ContractTests(unittest.TestCase):
                 [
                     "python3",
                     "scripts/lib/release_provenance.py",
-                    "--out", str(out),
-                    "--version", "2.2.0-alpha.5",
-                    "--artifact-name", "Nix OS NAS 2.2.5 release",
-                    "--archive-root", "nixos-nas-test",
-                    "--validation", "complete",
-                    "--archive-hash", "a" * 64,
-                    "--manifest-hash", "b" * 64,
-                    "--flake-hash", "c" * 64,
-                    "--commit", "d" * 40,
-                    "--selection-policy", "git-tracked-clean",
-                    "--status", str(status),
-                    "--stage-root", str(stage),
-                    "--git-tree", "e" * 40,
+                    "--out",
+                    str(out),
+                    "--version",
+                    "2.2.0-alpha.5",
+                    "--artifact-name",
+                    "Nix OS NAS 2.2.5 release",
+                    "--archive-root",
+                    "nixos-nas-test",
+                    "--validation",
+                    "complete",
+                    "--archive-hash",
+                    "a" * 64,
+                    "--manifest-hash",
+                    "b" * 64,
+                    "--flake-hash",
+                    "c" * 64,
+                    "--commit",
+                    "d" * 40,
+                    "--selection-policy",
+                    "git-tracked-clean",
+                    "--status",
+                    str(status),
+                    "--stage-root",
+                    str(stage),
+                    "--git-tree",
+                    "e" * 40,
                 ],
                 cwd=ROOT,
                 capture_output=True,
@@ -195,11 +208,20 @@ class ContractTests(unittest.TestCase):
                 hashlib.sha256(fixtures["cockpit/dist/build-meta.json"]).hexdigest(),
             )
             evidence = provenance["evidence"]
-            self.assertEqual(evidence["qemuCommitSha256"], hashlib.sha256(fixtures["release-evidence/qemu/commit.txt"]).hexdigest())
-            self.assertEqual(evidence["qemuChecksSha256"], hashlib.sha256(fixtures["release-evidence/qemu/checks.txt"]).hexdigest())
-            self.assertEqual(evidence["installerCommitSha256"], hashlib.sha256(fixtures["release-evidence/installer/commit.txt"]).hexdigest())
-            self.assertEqual(evidence["installerChecksSha256"], hashlib.sha256(fixtures["release-evidence/installer/checks.txt"]).hexdigest())
-
+            self.assertEqual(
+                evidence["qemuCommitSha256"], hashlib.sha256(fixtures["release-evidence/qemu/commit.txt"]).hexdigest()
+            )
+            self.assertEqual(
+                evidence["qemuChecksSha256"], hashlib.sha256(fixtures["release-evidence/qemu/checks.txt"]).hexdigest()
+            )
+            self.assertEqual(
+                evidence["installerCommitSha256"],
+                hashlib.sha256(fixtures["release-evidence/installer/commit.txt"]).hexdigest(),
+            )
+            self.assertEqual(
+                evidence["installerChecksSha256"],
+                hashlib.sha256(fixtures["release-evidence/installer/checks.txt"]).hexdigest(),
+            )
 
     def test_live_validation_curl_helpers_round_trip_special_credentials(self):
         received: list[str | None] = []
@@ -248,7 +270,7 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(received.pop(0), f"Bearer {token}")
 
-                unicode_value = 'snowman-☃-check-✓'
+                unicode_value = "snowman-☃-check-✓"
                 command = prefix + '\ncurl_config_escape "$1"\n'
                 result = subprocess.run(
                     ["bash", "-c", command, "bash", unicode_value],
@@ -272,6 +294,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("archive mode mismatch", packaging)
         self.assertIn("archived_mode", packaging)
         self.assertIn("staged_mode", packaging)
+
+    def test_pipeline_summary_checks_out_its_behavioral_policy(self):
+        workflow = text(".github/workflows/ci.yml")
+        summary = workflow.split("  summary:\n", 1)[1]
+        self.assertIn("actions/checkout@", summary)
+        self.assertIn("python3 scripts/ci-summary.py", summary)
 
     def test_release_packaging_rejects_ignored_secrets_links_and_fifos(self):
         scenarios = (
@@ -311,6 +339,64 @@ class ContractTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stdout + result.stderr)
+
+    def test_release_packaging_records_linked_worktree_git_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            linked = Path(temporary) / "linked"
+            shutil.copytree(
+                ROOT,
+                repository,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    ".pytest_cache",
+                    ".ruff_cache",
+                    "__pycache__",
+                    ".coverage",
+                    ".coverage.*",
+                    "coverage.json",
+                    "node_modules",
+                ),
+            )
+            subprocess.run(["git", "init", "-b", "main"], cwd=repository, check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=repository, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-m",
+                    "fixture",
+                ],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "worktree", "add", "-b", "linked", str(linked)],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            output = Path(temporary) / "output"
+            result = subprocess.run(
+                ["bash", "scripts/package-release.sh", "--source-only", str(output)],
+                cwd=linked,
+                env={**os.environ, "NAS_PREFLIGHT_SKIP_TESTS": "1", "NAS_PREFLIGHT_SKIP_NIX": "1"},
+                text=True,
+                capture_output=True,
+                timeout=90,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            provenance_files = list(output.glob("*.release/*.provenance.json"))
+            self.assertEqual(len(provenance_files), 1)
+            provenance = json.loads(provenance_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(provenance["fileSelectionPolicy"], "git-tracked-clean")
+            self.assertNotEqual(provenance["gitCommit"], "unavailable")
 
     def test_cockpit_pure_modules_and_react_composition_have_direct_tests(self):
         modules = {path.stem for path in (ROOT / "cockpit" / "src").glob("*.js")}
@@ -389,6 +475,8 @@ class ContractTests(unittest.TestCase):
         workflow = text(".github/workflows/ci.yml")
         matrix = text("scripts/nix-config-matrix.sh")
         negative = text("scripts/nix-negative-tests.sh")
+        host_platform = text("modules/nas/config/host-platform.nix")
+        consumer = text("tests/nixos/module-consumer.nix")
         for name in [
             "nas-module-consumer",
             "nas-profile-core-storage",
@@ -401,14 +489,29 @@ class ContractTests(unittest.TestCase):
             self.assertIn(name, flake)
             self.assertIn(name, matrix)
         self.assertIn("nix-config-matrix.sh", workflow)
+        self.assertIn("nix flake metadata --json", matrix)
+        self.assertIn("nixosConfigurations.nas", matrix)
+        self.assertIn("root file system", matrix)
         self.assertIn("nix-negative-tests.sh", matrix)
         self.assertIn("trusted-loopback.nix", negative)
         self.assertIn("trusted-duplicate.nix", negative)
         self.assertIn("zfs-dataset-root.nix", negative)
+        self.assertIn('"other/nas"', text("tests/nixos/invalid/zfs-dataset-root.nix"))
         self.assertIn("tftp-privileged-port.nix", negative)
-        self.assertIn("replication-leading-dash.nix", negative)
+        self.assertIn("replication-same-dataset.nix", negative)
+        self.assertIn('"tank/nas"', text("tests/nixos/invalid/replication-same-dataset.nix"))
         self.assertIn("firewall-without-networking.nix", negative)
         self.assertIn("failed for the wrong reason", negative)
+        self.assertIn('NAS_NEGATIVE_ROOT="$ROOT" NAS_NEGATIVE_FIXTURE="$fixture"', negative)
+        negative_eval = text("tests/nixos/negative-eval.nix")
+        self.assertIn('builtins.getEnv "NAS_NEGATIVE_ROOT"', negative_eval)
+        self.assertIn('builtins.getEnv "NAS_NEGATIVE_FIXTURE"', negative_eval)
+        self.assertIn('name == "open-webui"', host_platform)
+        self.assertNotIn("allowUnfree = true", host_platform)
+        self.assertIn("!cfg.testing.readOnlyPackageSet", host_platform)
+        self.assertIn("nas.testing.readOnlyPackageSet = true", text("tests/nixos/integration.nix"))
+        self.assertIn("nas.testing.readOnlyPackageSet = true", text("tests/nixos/encrypted.nix"))
+        self.assertIn("TestFixtureOnlyKeyMaterial", consumer)
 
     def test_qemu_harness_covers_native_and_installed_paths(self):
         flake = text("flake.nix")
@@ -417,6 +520,8 @@ class ContractTests(unittest.TestCase):
         workflow = text(".github/workflows/ci.yml")
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/integration.nix"))
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/encrypted.nix"))
+        self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/integration.nix"))
+        self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/encrypted.nix"))
         self.assertIn("nas-vm-encrypted", flake)
         self.assertIn("nas-vm-encrypted-guest-test /dev/vdb", text("tests/nixos/encrypted.nix"))
         self.assertIn("nixosConfigurations.nas-qemu", flake)
@@ -460,6 +565,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication = lib.mkForce false", vm_common)
         self.assertIn('(pkgs.writeText "vm-admin-password-hash" "!")', vm_common)
         self.assertNotIn("authorizedKeys.keys", vm_common)
+        self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))
         self.assertIn("nas-secrets activate-stdin", guest)
         self.assertIn("nas-setup first-run", guest)

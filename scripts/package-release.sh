@@ -107,7 +107,37 @@ for path in root.rglob("*"):
     if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
         raise SystemExit(f"release input contains a non-regular object: {relative}")
 
-if (root / ".git").exists():
+git_marker = root / ".git"
+git_metadata_matches_root = git_marker.is_dir()
+if git_marker.is_file():
+    marker = git_marker.read_text(encoding="utf-8").strip()
+    if marker.startswith("gitdir: "):
+        git_dir = pathlib.Path(marker.removeprefix("gitdir: "))
+        if not git_dir.is_absolute():
+            git_dir = root / git_dir
+        try:
+            back_pointer = pathlib.Path((git_dir / "gitdir").read_text(encoding="utf-8").strip())
+            if not back_pointer.is_absolute():
+                back_pointer = git_dir / back_pointer
+            git_metadata_matches_root = back_pointer.resolve() == git_marker.resolve()
+        except OSError:
+            pass
+
+git_checkout = False
+if git_metadata_matches_root:
+    try:
+        git_root = pathlib.Path(
+            subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        ).resolve()
+        git_checkout = git_root == root
+    except (OSError, subprocess.CalledProcessError):
+        pass
+
+if git_checkout:
     status = subprocess.run(
         ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
         check=True,
@@ -285,6 +315,11 @@ try:
 finally:
     os.close(fd)
 PY
+selection_policy="$(tr -d '\r\n' < "$stage_root/.release-input-policy")"
+case "$selection_policy" in
+  git-tracked-clean|committed-manifest-allowlist) ;;
+  *) echo "Invalid release input selection policy" >&2; exit 1 ;;
+esac
 rm -f "$stage_root/.release-input-policy"
 
 (
@@ -326,8 +361,7 @@ cp "$stage_root/MANIFEST.sha256" "$work/$artifact_name.MANIFEST.sha256"
 manifest_hash="$(sha256sum "$stage_root/MANIFEST.sha256" | awk '{print $1}')"
 flake_hash="$(sha256sum "$stage_root/flake.lock" | awk '{print $1}')"
 commit=unavailable
-selection_policy=committed-manifest-allowlist
-if [[ -d .git ]]; then
+if [[ "$selection_policy" == git-tracked-clean ]]; then
   commit="$(git rev-parse HEAD)"
   NAS_RELEASE_GIT_TREE="$(git rev-parse 'HEAD^{tree}')"
   export NAS_RELEASE_GIT_TREE
@@ -389,7 +423,9 @@ with zipfile.ZipFile(archive_path) as archive:
         manifest_rows[name.removeprefix("./")] = digest
     expected_manifest = expected - {"MANIFEST.sha256"}
     if set(manifest_rows) != expected_manifest:
-        raise SystemExit("archive manifest has extras or omissions")
+        extras = sorted(set(manifest_rows) - expected_manifest)
+        missing = sorted(expected_manifest - set(manifest_rows))
+        raise SystemExit(f"archive manifest mismatch: extras={extras[:20]}, missing={missing[:20]}")
     for name, digest in manifest_rows.items():
         actual = hashlib.sha256(archive.read(str(prefix / name))).hexdigest()
         if actual != digest:

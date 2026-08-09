@@ -18,17 +18,19 @@ else:
     import nas_alert_router as alert_router
     import nas_cockpit_api as cockpit_api
     import nas_common as common
-    import nas_logging as nas_logging
     import nas_feature_model as feature_model
+    import nas_logging as nas_logging
     import nas_managed_service as msvc
     import nas_setup_config as setup_config
     import nas_state as nas_state
     import nas_syncthing_devices as syncthing_devices
+    from tests.slow_managed_service_stateful import ProjectionDifferentialTests, StatefulTests
 
 
 if HAS_HYPOTHESIS:
+    SAFE_MANAGED_HOSTNAME = st.from_regex(r"[a-z0-9][a-z0-9-]{0,9}\.example\.test", fullmatch=True)
 
-    class PropertyInvariantTests(unittest.TestCase):
+    class PropertyInvariantTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(st.text(max_size=9000))
         def test_group_parser_is_total_and_bounded(self, value: str) -> None:
@@ -113,7 +115,8 @@ if HAS_HYPOTHESIS:
             self.assertIsInstance(accepted, bool)
             if not accepted:
                 return
-            self.assertIsInstance(value, str)
+            if not isinstance(value, str):
+                self.fail("accepted loopback URL is not a string")
             import urllib.parse
 
             parsed = urllib.parse.urlsplit(value)
@@ -153,20 +156,37 @@ if HAS_HYPOTHESIS:
             )
             self.assertIn(alert.severity, {"critical", "warning", "info"})
 
-        @settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+        @settings(
+            max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
+        )
         @given(
             service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
-            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            label=st.text(
+                min_size=1,
+                max_size=32,
+                alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\"),
+            ),
             port=st.integers(min_value=1, max_value=65535),
-            hostname=st.from_regex(r"[a-z0-9-]{1,10}\.local", fullmatch=True),
+            hostname=SAFE_MANAGED_HOSTNAME,
         )
-        def test_managed_service_valid_doc_is_accepted(self, service_id: str, label: str, port: int, hostname: str) -> None:
+        def test_managed_service_valid_doc_is_accepted(
+            self, service_id: str, label: str, port: int, hostname: str
+        ) -> None:
             doc = {
                 "label": label,
                 "enabled": True,
-                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
+                "runtime": {
+                    "type": "compose",
+                    "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml",
+                    "startPolicy": "boot",
+                },
                 "endpoints": {
-                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
+                    "web": {
+                        "transport": "http",
+                        "targetPort": port,
+                        "exposure": {"type": "hostname", "value": hostname},
+                        "auth": {"mode": "public"},
+                    }
                 },
             }
             result = msvc.validate_service(service_id, doc)
@@ -175,18 +195,34 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(
             service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
-            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            label=st.text(
+                min_size=1,
+                max_size=32,
+                alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\"),
+            ),
             port=st.integers(min_value=1, max_value=65535),
-            hostname=st.from_regex(r"[a-z0-9-]{1,10}\.local", fullmatch=True),
+            hostname=SAFE_MANAGED_HOSTNAME,
         )
-        def test_managed_service_serialize_deserialize_preserves(self, service_id: str, label: str, port: int, hostname: str) -> None:
+        def test_managed_service_serialize_deserialize_preserves(
+            self, service_id: str, label: str, port: int, hostname: str
+        ) -> None:
             import json
+
             doc = {
                 "label": label,
                 "enabled": False,
-                "runtime": {"type": "quadlet", "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml", "startPolicy": "boot"},
+                "runtime": {
+                    "type": "quadlet",
+                    "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml",
+                    "startPolicy": "boot",
+                },
                 "endpoints": {
-                    "api": {"transport": "http", "targetPort": port, "exposure": {"type": "dns", "value": hostname}, "auth": {"mode": "public"}}
+                    "api": {
+                        "transport": "http",
+                        "targetPort": port,
+                        "exposure": {"type": "dns", "value": hostname},
+                        "auth": {"mode": "public"},
+                    }
                 },
             }
             msvc.validate_service(service_id, doc)
@@ -199,18 +235,33 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=150, deadline=None)
         @given(
             service_id=st.from_regex(r"[a-z][a-z0-9-]{0,12}", fullmatch=True),
-            label=st.text(min_size=1, max_size=32, alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\")),
+            label=st.text(
+                min_size=1,
+                max_size=32,
+                alphabet=st.characters(min_codepoint=33, max_codepoint=126, blacklist_characters="\x00\r\n/\\"),
+            ),
             port=st.integers(min_value=1, max_value=65535),
-            hostname=st.from_regex(r"[a-z0-9-]{1,10}\.local", fullmatch=True),
+            hostname=SAFE_MANAGED_HOSTNAME,
             mutate=st.sampled_from(["port_zero", "port_overflow", "bad_hostname", "bad_source"]),
         )
-        def test_managed_service_mutated_field_is_rejected(self, service_id: str, label: str, port: int, hostname: str, mutate: str) -> None:
+        def test_managed_service_mutated_field_is_rejected(
+            self, service_id: str, label: str, port: int, hostname: str, mutate: str
+        ) -> None:
             doc = {
                 "label": label,
                 "enabled": True,
-                "runtime": {"type": "compose", "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml", "startPolicy": "boot"},
+                "runtime": {
+                    "type": "compose",
+                    "source": f"/var/lib/nas-control/apps/{service_id}/compose.yaml",
+                    "startPolicy": "boot",
+                },
                 "endpoints": {
-                    "web": {"transport": "http", "targetPort": port, "exposure": {"type": "hostname", "value": hostname}, "auth": {"mode": "public"}}
+                    "web": {
+                        "transport": "http",
+                        "targetPort": port,
+                        "exposure": {"type": "hostname", "value": hostname},
+                        "auth": {"mode": "public"},
+                    }
                 },
             }
             msvc.validate_service(service_id, doc)
@@ -234,7 +285,7 @@ if HAS_HYPOTHESIS:
 else:
 
     @unittest.skip("Hypothesis is not installed; CI runs the property-test tier with it")
-    class PropertyInvariantTests(unittest.TestCase):
+    class PropertyInvariantTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
         def test_hypothesis_tier_placeholder(self) -> None:
             pass
 

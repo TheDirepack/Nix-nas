@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -142,7 +143,7 @@ class AiSecretTransactionTests(unittest.TestCase):
         active = self.active()
         before = {"peers": {"cloud": {"apiKey": "${env.LLAMA_SWAP_PEER_CLOUD_API_KEY}"}}}
         writes: list[str | None] = []
-        restored: list[tuple[pathlib.Path, api.PrivateFileSnapshot, str]] = []
+        restored: list[tuple[pathlib.Path, Any, str]] = []
 
         def restore(path, snapshot, label):
             restored.append((path, snapshot, label))

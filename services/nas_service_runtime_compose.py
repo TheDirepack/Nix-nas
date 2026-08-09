@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Thin Podman Compose adapter for managed services."""
+
 from __future__ import annotations
 
 import pathlib
@@ -8,6 +9,8 @@ from typing import Any
 
 from nas_managed_service import ManagedServiceError
 
+APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
+
 
 def _compose_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
     runtime = service.get("runtime", {})
@@ -15,17 +18,19 @@ def _compose_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
         raise ManagedServiceError(f"Service {service_id} is not a Compose service")
 
     source = runtime.get("source", "")
-    root = pathlib.PurePosixPath(f"/var/lib/nas-control/apps/{service_id}")
-    path = pathlib.PurePosixPath(source)
+    if not isinstance(source, str) or not pathlib.PurePosixPath(source).is_absolute():
+        raise ManagedServiceError(f"Compose source for {service_id} must be under {APP_ROOT / service_id}/")
+    app_root = APP_ROOT.resolve()
+    root = (app_root / service_id).resolve()
+    path = pathlib.Path(source).resolve()
     try:
+        root.relative_to(app_root)
         path.relative_to(root)
     except ValueError as exc:
-        raise ManagedServiceError(
-            f"Compose source for {service_id} must be under {root}/"
-        ) from exc
+        raise ManagedServiceError(f"Compose source for {service_id} must be under {root}/") from exc
     if path.suffix not in {".yaml", ".yml"}:
         raise ManagedServiceError(f"Compose source for {service_id} must be a YAML file")
-    return pathlib.Path(str(path))
+    return path
 
 
 def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
@@ -55,9 +60,7 @@ def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def apply_compose(
-    service_id: str, service: dict[str, Any], *, dry_run: bool = False
-) -> dict[str, Any]:
+def apply_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
     plan = plan_compose(service_id, service)
     if dry_run or not plan["actions"]:
         return plan
@@ -78,10 +81,22 @@ def apply_compose(
     return plan
 
 
-def remove_compose(service_id: str, *, dry_run: bool = False) -> None:
+def remove_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> None:
     if dry_run:
         return
+    plan = plan_compose(service_id, service)
+    if not plan["actions"]:
+        return
     subprocess.run(
-        ["podman", "compose", "-p", service_id, "down", "--remove-orphans"],
+        [
+            "podman",
+            "compose",
+            "-p",
+            plan["project"],
+            "-f",
+            plan["source"],
+            "down",
+            "--remove-orphans",
+        ],
         check=True,
     )

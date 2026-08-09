@@ -19,7 +19,11 @@
     }:
     let
       system = "x86_64-linux";
-      mkPkgs = systemName: import nixpkgs { system = systemName; };
+      mkPkgs = systemName: import nixpkgs {
+        system = systemName;
+        overlays = [ copyparty.overlays.default ];
+        config.allowUnfreePredicate = package: nixpkgs.lib.getName package == "open-webui";
+      };
       commonModules = [
         self.nixosModules.default
         ./local.nix
@@ -105,7 +109,7 @@
             pkgs.shellcheck
           ];
           shellHook = ''
-            echo "NixOS NAS security, property, and fuzz test tools are available."
+            echo "NixOS NAS security, property, and fuzz test tools are available." >&2
           '';
         };
 
@@ -122,8 +126,8 @@
             qemu
           ];
           shellHook = ''
-            echo "NixOS NAS QEMU tools are available."
-            echo "Run: ./scripts/qemu-test.sh all"
+            echo "NixOS NAS QEMU tools are available." >&2
+            echo "Run: ./scripts/qemu-test.sh all" >&2
           '';
         };
     };

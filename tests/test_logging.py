@@ -82,24 +82,27 @@ class StructuredLoggingTests(unittest.TestCase):
                 self.assertEqual(sanitized[key], "[redacted]")
         self.assertNotIn(secret, json.dumps(sanitized))
 
-    @unittest.skip("TODO: follow-up — vault redaction depth")
-    def test_nested_secret_keys_are_redacted_at_every_supported_depth(self) -> None:
+    def test_nested_secrets_redact_until_depth_limit_and_never_escape_after_it(self) -> None:
         sentinel = "SECRET-NEVER-LOG"
         value = {
             "level1": {
+                "clientSecret": sentinel,
                 "level2": {
-                    "clientSecret": sentinel,
+                    "apiKey": sentinel,
                     "safe": [
-                        {"apiKey": sentinel},
-                        {"message": "visible"},
+                        {"password": sentinel},
+                        {"message": "too-deep-to-retain"},
                     ],
-                }
+                },
             }
         }
         sanitized = nas_logging.sanitize(value)
         encoded = json.dumps(sanitized)
+        self.assertEqual(sanitized["level1"]["clientSecret"], "[redacted]")
+        self.assertEqual(sanitized["level1"]["level2"]["apiKey"], "[redacted]")
         self.assertNotIn(sentinel, encoded)
-        self.assertIn("visible", encoded)
+        self.assertNotIn("too-deep-to-retain", encoded)
+        self.assertIn("[depth-limit]", encoded)
 
     def test_non_finite_numbers_never_emit_nonstandard_json(self) -> None:
         stream = io.StringIO()

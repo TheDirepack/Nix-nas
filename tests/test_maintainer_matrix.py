@@ -155,3 +155,15 @@ pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8'
         )
         self.assertEqual(rejected.returncode, 2)
         self.assertIn("must be one line", rejected.stderr)
+
+    def test_zap_automation_requires_explicit_active_scan_confirmation(self) -> None:
+        result = self.run_clean(
+            "env",
+            "NAS_ZAP_IMAGE=example.invalid/zap@sha256:" + "a" * 64,
+            "bash",
+            "scripts/zap-automation-scan.sh",
+            "unauthenticated",
+            "https://127.0.0.1/",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("NAS_ZAP_CONFIRM_ACTIVE=1", result.stderr)

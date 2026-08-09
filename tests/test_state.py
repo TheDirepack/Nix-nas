@@ -25,6 +25,25 @@ SPEC.loader.exec_module(state)
 
 
 class StateBundleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = pathlib.Path(self.temporary.name)
+        path_patch = mock.patch.multiple(
+            state,
+            DEFAULT_ROLLBACK_ROOT=root / "rollbacks",
+            DEFAULT_RUNTIME_ROOT=root / "runtime",
+            RESTORE_JOURNAL=root / "restore-operation.json",
+        )
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
+        environment_patch = mock.patch.dict(
+            os.environ,
+            {"NAS_STATE_RUNTIME_ROOT": str(root / "runtime")},
+        )
+        environment_patch.start()
+        self.addCleanup(environment_patch.stop)
+
     def registry(self, public: pathlib.Path, sensitive: pathlib.Path, missing: pathlib.Path) -> str:
         return json.dumps(
             [
@@ -101,10 +120,6 @@ class StateBundleTests(unittest.TestCase):
         validate.assert_called_once_with("a" * 32, ("appliance",))
         acquire.assert_not_called()
 
-    @unittest.skipIf(
-        not pathlib.Path("/run/nas-operations").exists(),
-        "requires VM with /run/nas-operations tmpfs (host hermetic fallback cannot fully emulate nested operation lock)",
-    )
     def test_real_nested_operation_runner_accepts_state_validator_success_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             operation_root = pathlib.Path(temporary) / "operations"
@@ -144,7 +159,9 @@ class StateBundleTests(unittest.TestCase):
         with (
             mock.patch.object(state, "parser") as parser,
             mock.patch.object(
-                state, "validate_coordination_token", side_effect=state.OperationBusyError("coordination proof is invalid")
+                state,
+                "validate_coordination_token",
+                side_effect=state.OperationBusyError("coordination proof is invalid"),
             ),
             mock.patch.object(state, "export_bundle") as export,
             mock.patch.dict(os.environ, {state.COORDINATION_TOKEN_ENV: "0" * 32}, clear=True),
@@ -441,10 +458,6 @@ class StateBundleTests(unittest.TestCase):
             self.assertEqual((destination / "public.txt").stat().st_mode & 0o777, 0o640)
             self.assertEqual(destination.stat().st_mode & 0o777, 0o750)
 
-    @unittest.skipIf(
-        os.geteuid() != 0,
-        "requires root-owned chown semantics (VM with nas-state user)",
-    )
     def test_restore_to_absent_authority_uses_registry_owned_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -465,6 +478,7 @@ class StateBundleTests(unittest.TestCase):
             with (
                 mock.patch.object(state.pwd, "getpwnam", return_value=fake_user),
                 mock.patch.object(state.grp, "getgrnam", return_value=fake_group),
+                mock.patch.object(state.os, "geteuid", return_value=0),
                 mock.patch.object(state.os, "chown") as chown,
             ):
                 state.restore_path(source, destination, authority)
@@ -530,7 +544,9 @@ class StateBundleTests(unittest.TestCase):
         ):
             state.reapply_runtime_consumers(snapshot)
 
-        self.assertLess(calls.index(("start", "NetworkManager.service")), calls.index(("reload", "NetworkManager.service")))
+        self.assertLess(
+            calls.index(("start", "NetworkManager.service")), calls.index(("reload", "NetworkManager.service"))
+        )
         self.assertLess(calls.index(("start", "firewalld.service")), calls.index(("reload", "firewalld.service")))
         self.assertEqual(process_calls, [("nmcli", "connection", "reload")])
 

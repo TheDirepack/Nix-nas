@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
 
-import nas_managed_service as msvc
-import nas_service_runtime_podman as podman
+import nas_managed_service as msvc  # noqa: E402
+import nas_service_runtime_podman as podman  # noqa: E402
 
 
 class PodmanQuadletAdapterTests(unittest.TestCase):
-    def service(self, *, enabled: bool = True, source: str | None = None) -> dict:
+    def service(self, *, enabled: bool = True, source: object | None = None) -> dict:
         return {
             "label": "Example",
             "enabled": enabled,
             "runtime": {
                 "type": "quadlet",
-                "source": source
-                or "/var/lib/nas-control/apps/example/app.container",
+                "source": source or "/var/lib/nas-control/apps/example/app.container",
                 "startPolicy": "boot",
             },
         }
@@ -47,6 +47,29 @@ class PodmanQuadletAdapterTests(unittest.TestCase):
                 self.service(source="/var/lib/nas-control/apps/other/app.container"),
             )
 
+    def test_source_rejects_traversal_and_non_string_values(self):
+        for source in (
+            "/var/lib/nas-control/apps/example/../other/app.container",
+            42,
+        ):
+            with self.subTest(source=source), self.assertRaisesRegex(msvc.ManagedServiceError, "must be under"):
+                podman.plan_podman("example", self.service(source=source))
+
+    def test_source_rejects_symlink_escape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app_root = pathlib.Path(temporary) / "apps"
+            service_root = app_root / "example"
+            service_root.mkdir(parents=True)
+            outside = pathlib.Path(temporary) / "outside.container"
+            outside.write_text("[Container]\nImage=example.invalid/test\n", encoding="utf-8")
+            source = service_root / "app.container"
+            source.symlink_to(outside)
+            with (
+                mock.patch.object(podman, "APP_ROOT", app_root),
+                self.assertRaisesRegex(msvc.ManagedServiceError, "must be under"),
+            ):
+                podman.plan_podman("example", self.service(source=str(source)))
+
     def test_source_must_be_native_container_quadlet(self):
         with self.assertRaisesRegex(msvc.ManagedServiceError, "native .container"):
             podman.plan_podman(
@@ -66,8 +89,13 @@ class PodmanQuadletAdapterTests(unittest.TestCase):
 
     @mock.patch.object(podman.subprocess, "run")
     def test_apply_uses_native_quadlet_install_and_restarts_enabled_unit(self, run):
+        run.side_effect = [
+            mock.Mock(),
+            mock.Mock(stdout='[{"Name":"app.container","UnitName":"app.service","App":"example"}]'),
+            mock.Mock(),
+        ]
         podman.apply_podman("example", self.service())
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 3)
         run.assert_any_call(
             [
                 "podman",
@@ -79,10 +107,45 @@ class PodmanQuadletAdapterTests(unittest.TestCase):
             ],
             check=True,
         )
+        run.assert_any_call(
+            [
+                "podman",
+                "quadlet",
+                "list",
+                "--filter",
+                "name=app.container",
+                "--format",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         run.assert_any_call(["systemctl", "restart", "app.service"], check=True)
 
     @mock.patch.object(podman.subprocess, "run")
+    def test_apply_uses_native_unit_name_reported_by_quadlet(self, run):
+        run.side_effect = [
+            mock.Mock(),
+            mock.Mock(
+                stdout=(
+                    '[{"Name":"app.container","UnitName":"other.service","App":"other"},'
+                    '{"Name":"app.container","UnitName":"custom-example.service","App":"example"}]'
+                )
+            ),
+            mock.Mock(),
+        ]
+        plan = podman.apply_podman("example", self.service())
+        self.assertEqual(plan["unit"], "custom-example.service")
+        run.assert_any_call(["systemctl", "restart", "custom-example.service"], check=True)
+
+    @mock.patch.object(podman.subprocess, "run")
     def test_apply_stops_disabled_unit(self, run):
+        run.side_effect = [
+            mock.Mock(),
+            mock.Mock(stdout='[{"Name":"app.container","UnitName":"app.service","App":"example"}]'),
+            mock.Mock(),
+        ]
         podman.apply_podman("example", self.service(enabled=False))
         run.assert_any_call(["systemctl", "stop", "app.service"], check=True)
 

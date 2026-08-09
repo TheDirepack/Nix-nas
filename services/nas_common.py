@@ -246,15 +246,16 @@ def run_command(
     writer: threading.Thread | None = None
     if input_text is not None and proc.stdin is not None:
         payload = input_text.encode("utf-8")
+        stdin = proc.stdin
 
         def write_input() -> None:
             try:
-                proc.stdin.write(payload)
-                proc.stdin.flush()
+                stdin.write(payload)
+                stdin.flush()
             except BrokenPipeError:
                 pass
             finally:
-                proc.stdin.close()
+                stdin.close()
 
         writer = threading.Thread(target=write_input, daemon=True)
         writer.start()

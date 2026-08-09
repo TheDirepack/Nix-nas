@@ -10,48 +10,87 @@ function overview() {
     protectedReady: true,
     zfsReplicationInstalled: true,
     authentikTokenWarning: "",
-    setup: {firstStart: {status: "complete", message: "complete"}, setupState: {status: "complete"}},
-    identity: {ok: true, users: [{uid: "alice"}], groups: [], administrators: ["operator"], shareAuthority: "CopyParty"},
+    setup: {
+      firstStart: {status: "complete", message: "complete"},
+      setupState: {status: "complete"},
+    },
+    identity: {
+      ok: true,
+      users: [{uid: "alice"}],
+      groups: [],
+      administrators: ["operator"],
+      shareAuthority: "CopyParty",
+    },
     capabilities: {
       ok: true,
-      users: [{
-        id: "alice",
-        displayName: xss,
-        administrator: false,
-        capabilities: {
-          files: {allowed: true, source: xss},
-          webdav: {allowed: false, source: "default"},
-          ai: {allowed: false, source: "default"},
-          vault: {allowed: true, source: "group"},
+      users: [
+        {
+          id: "alice",
+          displayName: xss,
+          administrator: false,
+          capabilities: {
+            files: {allowed: true, source: xss},
+            webdav: {allowed: false, source: "default"},
+            ai: {allowed: false, source: "default"},
+            vault: {allowed: true, source: "group"},
+          },
         },
-      }],
+      ],
     },
     featureControl: {
-      features: [{
-        id: "aiWorkspace",
-        label: xss,
-        description: xss,
-        available: true,
-        runtimeAvailable: true,
-        effective: true,
-        requestedMode: "on-demand",
-        effectiveMode: "on-demand",
-        allowedModes: ["off", "on-demand", "always"],
-        running: false,
-        idleRemainingSeconds: null,
-        units: [],
-      }],
+      features: [
+        {
+          id: "aiWorkspace",
+          label: xss,
+          description: xss,
+          available: true,
+          runtimeAvailable: true,
+          effective: true,
+          requestedMode: "on-demand",
+          effectiveMode: "on-demand",
+          allowedModes: ["off", "on-demand", "always"],
+          running: false,
+          idleRemainingSeconds: null,
+          units: [],
+        },
+      ],
       memory: {
         residentEstimateMiB: {min: 100, max: 200, typical: 150},
         activeEstimateMiB: {min: 100, max: 200, typical: 150},
         configuredMaximumMiB: {min: 200, max: 300, typical: 250},
         onDemandSavingsMiB: {typical: 100},
         system: {availableBytes: 1024 * 1024 * 1024},
-        components: [{id: "core", label: xss, configured: true, resident: true, mode: "core", estimateMiB: {min: 1, max: 2, typical: 1}, currentBytes: 1024, notes: xss}],
+        components: [
+          {
+            id: "core",
+            label: xss,
+            configured: true,
+            resident: true,
+            mode: "core",
+            estimateMiB: {min: 1, max: 2, typical: 1},
+            currentBytes: 1024,
+            notes: xss,
+          },
+        ],
       },
     },
-    update: {revision: "deadbeef", branch: "main", upstream: "origin/main", ahead: 0, behind: 0, dirty: false},
-    services: [{unit: "cockpit.socket", active: "active", enabled: "enabled", sub: "listening", load: "loaded"}],
+    update: {
+      revision: "deadbeef",
+      branch: "main",
+      upstream: "origin/main",
+      ahead: 0,
+      behind: 0,
+      dirty: false,
+    },
+    services: [
+      {
+        unit: "cockpit.socket",
+        active: "active",
+        enabled: "enabled",
+        sub: "listening",
+        load: "loaded",
+      },
+    ],
     zpool: {ok: true, text: xss},
     zfs: {ok: true, text: `tank/nas 1G 2G ${xss}`},
     failedUnits: [xss, longToken],
@@ -71,39 +110,56 @@ function overview() {
 
 async function installCockpitMock(page, behavior = {}) {
   const data = overview();
-  await page.addInitScript(({payload, configuredBehavior}) => {
-    globalThis.__nas_xss = 0;
-    globalThis.__nas_spawn_calls = [];
-    const response = structuredClone(payload);
-    const rejected = (message) => {
-      const promise = Promise.reject(new Error(message));
-      promise.input = () => {};
-      promise.stream = () => promise;
-      return promise;
-    };
-    globalThis.cockpit = {
-      spawn(args) {
-        globalThis.__nas_spawn_calls.push([...args]);
-        if (args[0] === "nas-cockpit-api" && args[1] === "overview" && configuredBehavior.overviewError) {
-          return rejected(configuredBehavior.overviewError);
-        }
-        if (args[0] === "nas-cockpit-api" && args[1] === "feature" && configuredBehavior.featureError) {
-          return rejected(configuredBehavior.featureError);
-        }
-        if (args[0] === "nas-cockpit-api" && args[1] === "action" && configuredBehavior.actionError) {
-          return rejected(configuredBehavior.actionError);
-        }
-        let value = {ok: true};
-        if (args[0] === "nas-cockpit-api" && args[1] === "overview") value = response;
-        if (args[0] === "nas-cockpit-api" && args[1] === "feature") value = {ok: true, feature: args[2], mode: args[3]};
-        if (args[0] === "nas-cockpit-api" && args[1] === "action") value = {ok: true, action: args[2], output: "ok"};
-        const promise = Promise.resolve(JSON.stringify(value));
+  await page.addInitScript(
+    ({payload, configuredBehavior}) => {
+      globalThis.__nas_xss = 0;
+      globalThis.__nas_spawn_calls = [];
+      const response = structuredClone(payload);
+      const rejected = (message) => {
+        const promise = Promise.reject(new Error(message));
         promise.input = () => {};
         promise.stream = () => promise;
         return promise;
-      },
-    };
-  }, {payload: data, configuredBehavior: behavior});
+      };
+      globalThis.cockpit = {
+        spawn(args) {
+          globalThis.__nas_spawn_calls.push([...args]);
+          if (
+            args[0] === "nas-cockpit-api" &&
+            args[1] === "overview" &&
+            configuredBehavior.overviewError
+          ) {
+            return rejected(configuredBehavior.overviewError);
+          }
+          if (
+            args[0] === "nas-cockpit-api" &&
+            args[1] === "feature" &&
+            configuredBehavior.featureError
+          ) {
+            return rejected(configuredBehavior.featureError);
+          }
+          if (
+            args[0] === "nas-cockpit-api" &&
+            args[1] === "action" &&
+            configuredBehavior.actionError
+          ) {
+            return rejected(configuredBehavior.actionError);
+          }
+          let value = {ok: true};
+          if (args[0] === "nas-cockpit-api" && args[1] === "overview") value = response;
+          if (args[0] === "nas-cockpit-api" && args[1] === "feature")
+            value = {ok: true, feature: args[2], mode: args[3]};
+          if (args[0] === "nas-cockpit-api" && args[1] === "action")
+            value = {ok: true, action: args[2], output: "ok"};
+          const promise = Promise.resolve(JSON.stringify(value));
+          promise.input = () => {};
+          promise.stream = () => promise;
+          return promise;
+        },
+      };
+    },
+    {payload: data, configuredBehavior: behavior},
+  );
 }
 
 async function openApp(page, behavior = {}) {
@@ -115,11 +171,15 @@ async function openApp(page, behavior = {}) {
 
 test("renders hostile backend text as text, never executable markup", async ({page}) => {
   const pageErrors = [];
-  page.on("pageerror", error => pageErrors.push(String(error)));
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
   await openApp(page);
   await expect(page.getByText(xss, {exact: true}).first()).toBeVisible();
   expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
-  expect(await page.locator("script").evaluateAll(nodes => nodes.some(node => node.textContent?.includes("__nas_xss")))).toBe(false);
+  expect(
+    await page
+      .locator("script")
+      .evaluateAll((nodes) => nodes.some((node) => node.textContent?.includes("__nas_xss"))),
+  ).toBe(false);
   expect(await page.locator("img").count()).toBe(0);
   await expect(page.getByRole("link", {name: "My account settings"})).toHaveCount(0);
   await expect(page.getByRole("link", {name: "Host files"})).toHaveCount(0);
@@ -149,12 +209,15 @@ test("has no serious or critical automated accessibility violations", async ({pa
   const result = await new AxeBuilder({page})
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
-  const blocking = result.violations.filter(item => ["serious", "critical"].includes(item.impact));
+  const blocking = result.violations.filter((item) =>
+    ["serious", "critical"].includes(item.impact),
+  );
   expect(blocking).toEqual([]);
 });
 
-
-test("handles narrow, wide, and enlarged-text layouts without document overflow", async ({page}) => {
+test("handles narrow, wide, and enlarged-text layouts without document overflow", async ({
+  page,
+}) => {
   await openApp(page);
   for (const viewport of [
     {width: 320, height: 568},
@@ -165,7 +228,9 @@ test("handles narrow, wide, and enlarged-text layouts without document overflow"
   ]) {
     await page.setViewportSize(viewport);
     for (const fontScale of [1, 2]) {
-      await page.evaluate((scale) => { document.documentElement.style.fontSize = `${scale * 100}%`; }, fontScale);
+      await page.evaluate((scale) => {
+        document.documentElement.style.fontSize = `${scale * 100}%`;
+      }, fontScale);
       const metrics = await page.evaluate(() => ({
         viewport: document.documentElement.clientWidth,
         pageWidth: document.documentElement.scrollWidth,
@@ -177,10 +242,14 @@ test("handles narrow, wide, and enlarged-text layouts without document overflow"
   }
 });
 
-test("all visible interactive controls stay inside the viewport and keyboard reachable", async ({page}) => {
+test("all visible interactive controls stay inside the viewport and keyboard reachable", async ({
+  page,
+}) => {
   await page.setViewportSize({width: 360, height: 740});
   await openApp(page);
-  const controls = page.locator('button, a[href], select, input, textarea, [tabindex]:not([tabindex="-1"])');
+  const controls = page.locator(
+    'button, a[href], select, input, textarea, [tabindex]:not([tabindex="-1"])',
+  );
   const count = await controls.count();
   expect(count).toBeGreaterThan(4);
   for (let index = 0; index < Math.min(count, 40); index += 1) {
@@ -197,14 +266,19 @@ test("all visible interactive controls stay inside the viewport and keyboard rea
   expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
 });
 
-
-test("has unique DOM ids and keeps the confirmation dialog usable at extreme zoom", async ({page}) => {
+test("has unique DOM ids and keeps the confirmation dialog usable at extreme zoom", async ({
+  page,
+}) => {
   await page.setViewportSize({width: 320, height: 568});
   await openApp(page);
-  const ids = await page.locator("[id]").evaluateAll(nodes => nodes.map(node => node.id).filter(Boolean));
+  const ids = await page
+    .locator("[id]")
+    .evaluateAll((nodes) => nodes.map((node) => node.id).filter(Boolean));
   expect(new Set(ids).size).toBe(ids.length);
 
-  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "200%";
+  });
   await page.getByRole("button", {name: "Run system health checks"}).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -229,7 +303,7 @@ test("hostile status corpus never creates executable elements", async ({page}) =
     "\r\nX-Injected: yes",
     "\u202e" + "W".repeat(1024),
   ];
-  await page.evaluate(values => {
+  await page.evaluate((values) => {
     const root = document.createElement("div");
     root.id = "nas-hostile-corpus";
     for (const value of values) {
@@ -239,14 +313,17 @@ test("hostile status corpus never creates executable elements", async ({page}) =
     }
     document.body.append(root);
   }, hostile);
-  expect(await page.locator("#nas-hostile-corpus script, #nas-hostile-corpus svg, #nas-hostile-corpus img").count()).toBe(0);
+  expect(
+    await page
+      .locator("#nas-hostile-corpus script, #nas-hostile-corpus svg, #nas-hostile-corpus img")
+      .count(),
+  ).toBe(0);
   expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
 });
 
-
 test("backend refresh failure becomes a bounded operator-visible error", async ({page}) => {
   const pageErrors = [];
-  page.on("pageerror", error => pageErrors.push(String(error)));
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
   await installCockpitMock(page, {overviewError: "simulated backend outage"});
   await page.goto("/index.html");
   await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
@@ -256,9 +333,11 @@ test("backend refresh failure becomes a bounded operator-visible error", async (
   expect(pageErrors).toEqual([]);
 });
 
-test("privileged action failure stays recoverable and never becomes an uncaught page error", async ({page}) => {
+test("privileged action failure stays recoverable and never becomes an uncaught page error", async ({
+  page,
+}) => {
   const pageErrors = [];
-  page.on("pageerror", error => pageErrors.push(String(error)));
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
   await openApp(page, {actionError: "simulated operation rejection"});
   await page.getByRole("button", {name: "Run system health checks"}).click();
   await page.getByRole("button", {name: "Run action"}).click();
@@ -277,6 +356,8 @@ test("confirmation dialog supports keyboard cancellation", async ({page}) => {
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  const actionCalls = await page.evaluate(() => globalThis.__nas_spawn_calls.filter(args => args[1] === "action").length);
+  const actionCalls = await page.evaluate(
+    () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length,
+  );
   expect(actionCalls).toBe(0);
 });

@@ -20,10 +20,10 @@ let
   featureStatePath = "/var/lib/nas-control/settings.json";
   featureRuntimePath = "/run/nas-control/on-demand.json";
   onDemandGateSocket = "/run/nas-on-demand/gate.sock";
-  authentikPort = serviceRegistry.identity.port;
-  cockpitPort = serviceRegistry.cockpit.port;
-  syncthingGuiPort = serviceRegistry.syncthing.port;
-  vaultwardenPort = serviceRegistry.vaultwarden.port;
+  authentikPort = serviceRegistry.identity.endpoints.main.targetPort;
+  cockpitPort = serviceRegistry.cockpit.endpoints.main.targetPort;
+  syncthingGuiPort = serviceRegistry.syncthing.endpoints.main.targetPort;
+  vaultwardenPort = serviceRegistry.vaultwarden.endpoints.main.targetPort;
   vaultwardenSecretDir = "${secretRoot}/vaultwarden";
   zfsSecretDir = "${secretRoot}/zfs";
   aiSecretDir = "${secretRoot}/ai";
@@ -53,7 +53,7 @@ let
   hostSystem = pkgs.stdenv.hostPlatform.system;
   isX86_64 = hostSystem == "x86_64-linux";
   supportedHostSystems = [ "x86_64-linux" ];
-  failureAlert = lib.optional cfg.alerting.enable "nas-health-alert@%n";
+  failureAlert = lib.optional cfg.alerting.enable "nas-health-alert@%n.service";
   bootLoaderConfigured = config.boot.loader.systemd-boot.enable || config.boot.loader.grub.enable;
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";

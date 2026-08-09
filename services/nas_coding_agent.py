@@ -124,7 +124,9 @@ def parser() -> argparse.ArgumentParser:
         description="Run a Pi coding-agent session inside an approved NAS workspace.",
     )
     result.add_argument("workspace", help="Repository/workspace path under an approved root")
-    result.add_argument("pi_args", nargs=argparse.REMAINDER, help="Arguments passed to Pi after an optional -- separator")
+    result.add_argument(
+        "pi_args", nargs=argparse.REMAINDER, help="Arguments passed to Pi after an optional -- separator"
+    )
     return result
 
 
@@ -135,7 +137,9 @@ def _check_coding_access() -> None:
             data = json.loads(identity_json)
         except json.JSONDecodeError as exc:
             print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
-            raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]") from exc
+            raise CodingAgentError(
+                "Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]"
+            ) from exc
         if not isinstance(data, dict):
             print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
             raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
@@ -186,7 +190,7 @@ def _check_coding_access() -> None:
                 pw = pwd.getpwnam(sudo_user)
                 user_groups.add(pw.pw_name)
                 for g in grp.getgrall():
-                    if sudo_user in g.gr_members:
+                    if sudo_user in g.gr_mem:
                         user_groups.add(g.gr_name)
                 result = subprocess.run(["id", "-nG", sudo_user], capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
@@ -232,7 +236,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         workspace = validate_workspace(args.workspace, roots)
         credential = pathlib.Path(os.environ.get("NAS_PI_CREDENTIAL", "/run/nas-secrets/ai/coding-agent-api-key"))
         if not credential.is_file():
-            raise CodingAgentError("Coding-agent llama-swap client credential is unavailable; activate NAS secrets first")
+            raise CodingAgentError(
+                "Coding-agent llama-swap client credential is unavailable; activate NAS secrets first"
+            )
         feature_control = os.environ.get("NAS_FEATURE_CONTROL", "nas-feature-control")
         run_checked([feature_control, "wake", "aiCoding"])
         interval = max(30, int(os.environ.get("NAS_CODING_HEARTBEAT_SECONDS", "120")))

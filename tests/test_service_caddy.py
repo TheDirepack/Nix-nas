@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import pathlib
 import sys
 import tempfile
@@ -91,8 +90,17 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_https_and_missing_transport_endpoints_are_handled(self):
         effective = {
             "endpoints": {
-                "a": {"transport": "https", "targetPort": 443, "exposure": {"type": "dns", "value": "a.example"}, "auth": {"mode": "public"}},
-                "b": {"targetPort": 9092, "exposure": {"type": "hostname", "value": "b.example"}, "auth": {"mode": "public"}},
+                "a": {
+                    "transport": "https",
+                    "targetPort": 443,
+                    "exposure": {"type": "dns", "value": "a.example"},
+                    "auth": {"mode": "public"},
+                },
+                "b": {
+                    "targetPort": 9092,
+                    "exposure": {"type": "hostname", "value": "b.example"},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         fragment = caddy.generate_caddy_fragment(effective)
@@ -101,19 +109,42 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_non_http_transports_are_skipped(self):
         effective = {
             "endpoints": {
-                "tcp": {"transport": "tcp", "targetPort": 3306, "exposure": {"type": "hostname", "value": "db.local"}, "auth": {"mode": "public"}},
-                "udp": {"transport": "udp", "targetPort": 53, "exposure": {"type": "hostname", "value": "dns.local"}, "auth": {"mode": "public"}},
+                "tcp": {
+                    "transport": "tcp",
+                    "targetPort": 3306,
+                    "exposure": {"type": "hostname", "value": "db.local"},
+                    "auth": {"mode": "public"},
+                },
+                "udp": {
+                    "transport": "udp",
+                    "targetPort": 53,
+                    "exposure": {"type": "hostname", "value": "dns.local"},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         self.assertEqual(caddy.generate_caddy_fragment(effective), {"routes": []})
 
     def test_none_exposure_is_rejected(self):
-        effective = {"endpoints": {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "none"}, "auth": {"mode": "public"}}}}
+        effective = {
+            "endpoints": {
+                "web": {"transport": "http", "targetPort": 80, "exposure": {"type": "none"}, "auth": {"mode": "public"}}
+            }
+        }
         with self.assertRaisesRegex(caddy.CaddyError, "none|mandatory"):
             caddy.generate_caddy_fragment(effective)
 
     def test_invalid_exposure_is_rejected(self):
-        effective = {"endpoints": {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "bad host"}, "auth": {"mode": "public"}}}}
+        effective = {
+            "endpoints": {
+                "web": {
+                    "transport": "http",
+                    "targetPort": 80,
+                    "exposure": {"type": "hostname", "value": "bad host"},
+                    "auth": {"mode": "public"},
+                }
+            }
+        }
         with self.assertRaisesRegex(caddy.CaddyError, "Invalid hostname"):
             caddy.generate_caddy_fragment(effective)
 
@@ -123,12 +154,25 @@ class GenerateFragmentTests(unittest.TestCase):
             caddy.generate_caddy_fragment(effective)
 
     def test_missing_auth_is_rejected(self):
-        effective = {"endpoints": {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "app.local"}}}}
+        effective = {
+            "endpoints": {
+                "web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "app.local"}}
+            }
+        }
         with self.assertRaisesRegex(caddy.CaddyError, "auth is mandatory|unknown auth"):
             caddy.generate_caddy_fragment(effective)
 
     def test_unknown_auth_mode_is_rejected(self):
-        effective = {"endpoints": {"web": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "app.local"}, "auth": {"mode": "foward-auth"}}}}
+        effective = {
+            "endpoints": {
+                "web": {
+                    "transport": "http",
+                    "targetPort": 80,
+                    "exposure": {"type": "hostname", "value": "app.local"},
+                    "auth": {"mode": "foward-auth"},
+                }
+            }
+        }
         with self.assertRaisesRegex(caddy.CaddyError, "unknown auth"):
             caddy.generate_caddy_fragment(effective)
 
@@ -157,13 +201,12 @@ class GenerateFragmentTests(unittest.TestCase):
                 }
             }
         }
-        # Behavioral: fragment dict is the contract, caddyfile string is rendering
         fragment = caddy.generate_caddy_fragment(effective)
         self.assertEqual(fragment["routes"][0]["path"], "/photos")
         self.assertEqual(fragment["routes"][0]["targetPort"], 8080)
         self.assertTrue(fragment["routes"][0]["path_prefix"])
         caddyfile = caddy.generate_caddyfile(effective)
-        self.assertIn("/photos", caddyfile)  # smoke: rendering contains path
+        self.assertIn("/photos", caddyfile)
         self.assertIn("reverse_proxy 127.0.0.1:8080", caddyfile)
 
     def test_port_exposure_generates_caddyfile(self):
@@ -215,8 +258,18 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_routes_are_sorted_by_id(self):
         effective = {
             "endpoints": {
-                "zebra": {"transport": "http", "targetPort": 1, "exposure": {"type": "hostname", "value": "z.local"}, "auth": {"mode": "public"}},
-                "apple": {"transport": "http", "targetPort": 2, "exposure": {"type": "hostname", "value": "a.local"}, "auth": {"mode": "public"}},
+                "zebra": {
+                    "transport": "http",
+                    "targetPort": 1,
+                    "exposure": {"type": "hostname", "value": "z.local"},
+                    "auth": {"mode": "public"},
+                },
+                "apple": {
+                    "transport": "http",
+                    "targetPort": 2,
+                    "exposure": {"type": "hostname", "value": "a.local"},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         fragment = caddy.generate_caddy_fragment(effective)
@@ -225,7 +278,12 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_colon_in_key_becomes_dash_in_route_id(self):
         effective = {
             "endpoints": {
-                "photo:web:2": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": "x.local"}, "auth": {"mode": "public"}}
+                "photo:web:2": {
+                    "transport": "http",
+                    "targetPort": 80,
+                    "exposure": {"type": "hostname", "value": "x.local"},
+                    "auth": {"mode": "public"},
+                }
             }
         }
         fragment = caddy.generate_caddy_fragment(effective)
@@ -234,8 +292,18 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_duplicate_host_exposure_raises_conflict(self):
         effective = {
             "endpoints": {
-                "a": {"transport": "http", "targetPort": 1, "exposure": {"type": "hostname", "value": "same.local"}, "auth": {"mode": "public"}},
-                "b": {"transport": "http", "targetPort": 2, "exposure": {"type": "hostname", "value": "same.local"}, "auth": {"mode": "public"}},
+                "a": {
+                    "transport": "http",
+                    "targetPort": 1,
+                    "exposure": {"type": "hostname", "value": "same.local"},
+                    "auth": {"mode": "public"},
+                },
+                "b": {
+                    "transport": "http",
+                    "targetPort": 2,
+                    "exposure": {"type": "hostname", "value": "same.local"},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         with self.assertRaisesRegex(caddy.CaddyError, "Duplicate exposure"):
@@ -244,8 +312,18 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_duplicate_path_exposure_raises_conflict(self):
         effective = {
             "endpoints": {
-                "a": {"transport": "http", "targetPort": 1, "exposure": {"type": "path", "value": "/shared"}, "auth": {"mode": "public"}},
-                "b": {"transport": "http", "targetPort": 2, "exposure": {"type": "path", "value": "/shared"}, "auth": {"mode": "public"}},
+                "a": {
+                    "transport": "http",
+                    "targetPort": 1,
+                    "exposure": {"type": "path", "value": "/shared"},
+                    "auth": {"mode": "public"},
+                },
+                "b": {
+                    "transport": "http",
+                    "targetPort": 2,
+                    "exposure": {"type": "path", "value": "/shared"},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         with self.assertRaisesRegex(caddy.CaddyError, "Duplicate exposure"):
@@ -254,8 +332,18 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_distinct_exposures_do_not_conflict(self):
         effective = {
             "endpoints": {
-                "a": {"transport": "http", "targetPort": 1, "exposure": {"type": "hostname", "value": "a.local"}, "auth": {"mode": "public"}},
-                "b": {"transport": "http", "targetPort": 2, "exposure": {"type": "hostname", "value": "b.local"}, "auth": {"mode": "public"}},
+                "a": {
+                    "transport": "http",
+                    "targetPort": 1,
+                    "exposure": {"type": "hostname", "value": "a.local"},
+                    "auth": {"mode": "public"},
+                },
+                "b": {
+                    "transport": "http",
+                    "targetPort": 2,
+                    "exposure": {"type": "hostname", "value": "b.local"},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         fragment = caddy.generate_caddy_fragment(effective)
@@ -264,7 +352,12 @@ class GenerateFragmentTests(unittest.TestCase):
     def test_catch_all_without_matcher_is_rejected(self):
         effective = {
             "endpoints": {
-                "bad": {"transport": "http", "targetPort": 80, "exposure": {"type": "hostname", "value": ""}, "auth": {"mode": "public"}},
+                "bad": {
+                    "transport": "http",
+                    "targetPort": 80,
+                    "exposure": {"type": "hostname", "value": ""},
+                    "auth": {"mode": "public"},
+                },
             }
         }
         with self.assertRaisesRegex(caddy.CaddyError, "Invalid hostname|exposure value"):
@@ -297,11 +390,10 @@ class WriteFragmentTests(unittest.TestCase):
             with mock.patch.object(msvc, "effective_registry", return_value=effective):
                 with mock.patch.dict("os.environ", {"NAS_SKIP_CADDY_VALIDATE": "1", "NAS_SKIP_CADDY_RELOAD": "1"}):
                     fragment = caddy.write_caddy_fragment(target)
-            # Behavioral: fragment dict is the source of truth
             self.assertEqual(fragment["routes"][0]["host"], "app.local")
             self.assertEqual(fragment["routes"][0]["targetPort"], 8080)
             content = target.read_text(encoding="utf-8")
-            self.assertIn("app.local", content)  # smoke: file rendering
+            self.assertIn("app.local", content)
             self.assertIn("8080", content)
 
     def test_default_path_uses_run_control_location(self):

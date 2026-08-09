@@ -48,10 +48,15 @@ export const OPERATIONS = [
 ];
 
 export function featureMap(data = {}) {
-  const features = Array.isArray(data?.featureControl?.features) ? data.featureControl.features : [];
+  const features = Array.isArray(data?.featureControl?.features)
+    ? data.featureControl.features
+    : [];
   return Object.fromEntries(
     features
-      .filter((feature) => feature && typeof feature === "object" && typeof feature.id === "string" && feature.id)
+      .filter(
+        (feature) =>
+          feature && typeof feature === "object" && typeof feature.id === "string" && feature.id,
+      )
       .map((feature) => [feature.id, feature]),
   );
 }
@@ -59,16 +64,21 @@ export function featureMap(data = {}) {
 export function inactiveServiceCount(services = []) {
   const rows = Array.isArray(services) ? services : [];
   return rows.filter(
-    (item) => item && typeof item === "object" && item.active !== "active" && !String(item.unit || "").endsWith(".timer"),
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      item.active !== "active" &&
+      !String(item.unit || "").endsWith(".timer"),
   ).length;
 }
 
 export function revisionModel(update = {}) {
   update = update && typeof update === "object" && !Array.isArray(update) ? update : {};
   if (update.ok === false) return {kind: "error", error: update.error || "Unknown error"};
-  const divergence = Number.isInteger(update.ahead) && Number.isInteger(update.behind)
-    ? `${update.ahead} ahead / ${update.behind} approved update${update.behind === 1 ? "" : "s"} available`
-    : "Upstream status unavailable until a tracking branch is configured";
+  const divergence =
+    Number.isInteger(update.ahead) && Number.isInteger(update.behind)
+      ? `${update.ahead} ahead / ${update.behind} approved update${update.behind === 1 ? "" : "s"} available`
+      : "Upstream status unavailable until a tracking branch is configured";
   const checkout = update.dirty === true ? "dirty" : update.dirty === false ? "clean" : "unknown";
   return {
     kind: "status",
@@ -82,10 +92,13 @@ export function revisionModel(update = {}) {
 
 export function safeInternalPath(value) {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return null;
-  if ([...value].some(character => {
-    const code = character.charCodeAt(0);
-    return code < 32 || code === 127;
-  })) return null;
+  if (
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    })
+  )
+    return null;
   return value;
 }
 
@@ -113,7 +126,8 @@ export function enabledLinkKeys(data = {}) {
     metrics: Boolean(features.grafana?.effective),
     notifications: Boolean(features.notifications?.effective),
   };
-  const links = data?.links && typeof data.links === "object" && !Array.isArray(data.links) ? data.links : {};
+  const links =
+    data?.links && typeof data.links === "object" && !Array.isArray(data.links) ? data.links : {};
   return Object.keys(links).filter((key) => Boolean(enabled[key]));
 }
 
@@ -127,7 +141,8 @@ export function setupModel(data = {}) {
       pending: true,
       ready: false,
       status: "unknown",
-      message: "First-start state is unavailable. Recheck the configuration or inspect the setup service.",
+      message:
+        "First-start state is unavailable. Recheck the configuration or inspect the setup service.",
       configPath: "",
       planDigest: "",
       storage: {},
@@ -137,7 +152,8 @@ export function setupModel(data = {}) {
       journal: null,
     };
   }
-  const firstStart = setup.firstStart && typeof setup.firstStart === "object" ? setup.firstStart : {};
+  const firstStart =
+    setup.firstStart && typeof setup.firstStart === "object" ? setup.firstStart : {};
   const stateStatus = setup.setupState?.status;
   const status = firstStart.status || stateStatus || "unknown";
   const complete = status === "complete" || status === "complete-unverified";
@@ -154,7 +170,8 @@ export function setupModel(data = {}) {
     accountCount: Number(firstStart.accountCount || 0),
     featureCount: Number(firstStart.featureCount || 0),
     destructiveRequired: firstStart.requiresDestructiveConfirmation === true,
-    journal: setup.setupJournal && typeof setup.setupJournal === "object" ? setup.setupJournal : null,
+    journal:
+      setup.setupJournal && typeof setup.setupJournal === "object" ? setup.setupJournal : null,
     authorityHealth: firstStart.authorityHealth || null,
   };
 }
@@ -175,7 +192,9 @@ export function featureRuntimeText(feature = {}) {
     details.push(`Runtime unavailable: ${feature.availabilityReason || "probe failed"}`);
   }
   if (feature.effectiveMode === "on-demand" && feature.running) {
-    details.push(`Idle stop in ${feature.idleRemainingSeconds == null ? "—" : `${Math.ceil(feature.idleRemainingSeconds / 60)} min`}`);
+    details.push(
+      `Idle stop in ${feature.idleRemainingSeconds == null ? "—" : `${Math.ceil(feature.idleRemainingSeconds / 60)} min`}`,
+    );
   } else if (feature.effectiveMode === "on-demand") {
     details.push("Starts on first authorized access");
   }
@@ -183,12 +202,14 @@ export function featureRuntimeText(feature = {}) {
     details.push(`Last cold start ${(feature.lastStartDurationMs / 1000).toFixed(1)}s`);
   }
   if (feature.startupEstimateSeconds) {
-    details.push(`Expected warm ${feature.startupEstimateSeconds.warm}s; first ${feature.startupEstimateSeconds.first}s`);
+    details.push(
+      `Expected warm ${feature.startupEstimateSeconds.warm}s; first ${feature.startupEstimateSeconds.first}s`,
+    );
   }
-  if (Array.isArray(feature.heldBy) && feature.heldBy.length) details.push(`Kept resident by ${feature.heldBy.join(", ")}`);
+  if (Array.isArray(feature.heldBy) && feature.heldBy.length)
+    details.push(`Kept resident by ${feature.heldBy.join(", ")}`);
   return details.join(" · ");
 }
-
 
 export function operationConflicts(data = {}, actionId) {
   const value = data?.operationState?.conflictsByAction?.[actionId];
@@ -196,13 +217,19 @@ export function operationConflicts(data = {}, actionId) {
 }
 
 export function operationBusy(data = {}, actionId) {
-  const busy = new Set(Array.isArray(data?.operationState?.busyClasses) ? data.operationState.busyClasses : []);
+  const busy = new Set(
+    Array.isArray(data?.operationState?.busyClasses) ? data.operationState.busyClasses : [],
+  );
   return operationConflicts(data, actionId).some((item) => busy.has(item));
 }
 
 export function featureOperationsBusy(data = {}) {
-  const busy = new Set(Array.isArray(data?.operationState?.busyClasses) ? data.operationState.busyClasses : []);
-  const conflicts = Array.isArray(data?.operationState?.featureConflicts) ? data.operationState.featureConflicts : ["runtime"];
+  const busy = new Set(
+    Array.isArray(data?.operationState?.busyClasses) ? data.operationState.busyClasses : [],
+  );
+  const conflicts = Array.isArray(data?.operationState?.featureConflicts)
+    ? data.operationState.featureConflicts
+    : ["runtime"];
   return conflicts.some((item) => busy.has(item));
 }
 

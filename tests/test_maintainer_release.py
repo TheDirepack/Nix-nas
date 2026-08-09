@@ -113,3 +113,4 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
         self.assertNotIn("Preflight partial: 0", result.stdout)
         self.assertIn("repository structure", result.stdout)
         self.assertIn("static security boundaries", result.stdout)
+        self.assertFalse((self.clean_root / ".ruff_cache").exists())

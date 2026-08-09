@@ -25,20 +25,19 @@ class CockpitApiTests(unittest.TestCase):
     def test_every_allowlisted_action_runs_only_its_declared_commands(self):
         for name, spec in api.ACTIONS.items():
             calls: list[tuple[str, ...]] = []
-            patches = {
-                "BACKUP_INSTALLED": True,
-                "ZFS_REPLICATION_INSTALLED": True,
-                "SYNCTHING_INSTALLED": True,
-            }
             with (
                 self.subTest(action=name),
-                mock.patch.multiple(api, **patches),
+                mock.patch.object(api, "BACKUP_INSTALLED", True),
+                mock.patch.object(api, "ZFS_REPLICATION_INSTALLED", True),
+                mock.patch.object(api, "SYNCTHING_INSTALLED", True),
                 mock.patch.object(
                     api,
                     "run",
                     side_effect=lambda command, **_kwargs: calls.append(tuple(command)) or self.completed(),
                 ),
-                mock.patch.object(api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()),
+                mock.patch.object(
+                    api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()
+                ),
             ):
                 result = api.safe_action(name)
                 self.assertTrue(result["ok"])
@@ -63,7 +62,14 @@ class CockpitApiTests(unittest.TestCase):
             self.assertNotIn("storage", api.operation_state()["busyClasses"])
 
     def test_worker_owned_actions_do_not_hold_conflicting_api_lock(self):
-        for action in ("identity-sync", "update-preview", "update-sync", "update-apply", "protected-restart", "syncthing-reconcile"):
+        for action in (
+            "identity-sync",
+            "update-preview",
+            "update-sync",
+            "update-apply",
+            "protected-restart",
+            "syncthing-reconcile",
+        ):
             with (
                 self.subTest(action=action),
                 mock.patch.object(api, "SYNCTHING_INSTALLED", True),
@@ -83,11 +89,7 @@ class CockpitApiTests(unittest.TestCase):
             "syncthing-reconcile": "nas-syncthing-sync.service",
         }
         self.assertEqual(
-            {
-                name: spec.commands[0][2]
-                for name, spec in api.ACTIONS.items()
-                if spec.worker_owns_operation
-            },
+            {name: spec.commands[0][2] for name, spec in api.ACTIONS.items() if spec.worker_owns_operation},
             expected,
         )
         systemd = (ROOT / "modules" / "nas" / "config" / "systemd-services.nix").read_text(encoding="utf-8")
@@ -95,7 +97,7 @@ class CockpitApiTests(unittest.TestCase):
         self.assertIn("nas-protected-restart =", systemd)
         self.assertIn("--action protected-restart --class identity --class runtime", systemd)
         self.assertIn("operation_class=update", updater)
-        self.assertIn('if $apply || $sync; then', updater)
+        self.assertIn("if $apply || $sync; then", updater)
         self.assertIn('exec "$operation_runner" --action nas-update --class "$operation_class"', updater)
 
     def test_feature_mutation_delegates_operation_lock_to_worker(self):
@@ -123,7 +125,9 @@ class CockpitApiTests(unittest.TestCase):
         with (
             mock.patch.object(api, "diagnostic") as diagnostic,
             mock.patch.object(api, "run", return_value=self.completed(returncode=1, stderr="denied")),
-            mock.patch.object(api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()),
+            mock.patch.object(
+                api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()
+            ),
         ):
             with self.assertRaisesRegex(api.ApiError, r"Operation failed \(reference [0-9a-f]{12}\)") as raised:
                 api.safe_action("scrub")
@@ -133,7 +137,9 @@ class CockpitApiTests(unittest.TestCase):
     def test_action_timeout_uses_declared_limit(self):
         with (
             mock.patch.object(api, "run", return_value=self.completed()) as run,
-            mock.patch.object(api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()),
+            mock.patch.object(
+                api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()
+            ),
         ):
             api.safe_action("scrub")
         run.assert_called_once_with(
@@ -217,7 +223,6 @@ class CockpitApiTests(unittest.TestCase):
             states = api.service_states(["one.service", "two.service"])
         self.assertEqual([state["active"] for state in states], ["active", "inactive"])
 
-
     def test_ai_provider_update_keeps_secrets_on_stdin_and_uses_parent_coordination(self):
         active = mock.Mock(coordination_token="coord-token")
         request = {
@@ -230,8 +235,15 @@ class CockpitApiTests(unittest.TestCase):
             "filters": {"stripParams": "top_k", "setParams": {}},
         }
         with (
-            mock.patch.object(api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)) as lock,
+            mock.patch.object(
+                api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)
+            ) as lock,
             mock.patch.object(api, "run", return_value=self.completed()) as run,
+            mock.patch.object(
+                api.ai_config,
+                "load_config",
+                return_value={"models": {}, "peers": {}, "selectors": {}},
+            ),
             mock.patch.object(api.ai_config, "set_provider", return_value={"ok": True}) as configure,
         ):
             result = api.set_ai_provider(request)
@@ -239,7 +251,9 @@ class CockpitApiTests(unittest.TestCase):
         lock.assert_called_once_with("ai-provider-set", ("secrets", "runtime"))
         # Find the credential staging call among possibly multiple run invocations (fetch old key, stage, restart)
         secret_calls = [
-            call for call in run.call_args_list if call.args and call.args[0][:2] == ["nas-secrets", "set-ai-provider-key-stdin"]
+            call
+            for call in run.call_args_list
+            if call.args and call.args[0][:2] == ["nas-secrets", "set-ai-provider-key-stdin"]
         ]
         self.assertTrue(secret_calls, "expected nas-secrets staging call")
         secret_call = secret_calls[0]
@@ -252,15 +266,28 @@ class CockpitApiTests(unittest.TestCase):
         self.assertEqual(secret_call.kwargs["env"]["NAS_SKIP_LLAMA_SWAP_RESTART"], "1")
         configure.assert_called_once()
         # Ensure a single restart occurs after both credential and config are committed (deferred, not intermediate)
-        restart_calls = [c for c in run.call_args_list if c.args and c.args[0] == ["systemctl", "restart", "nas-llama-swap.service"]]
+        restart_calls = [
+            c for c in run.call_args_list if c.args and c.args[0] == ["systemctl", "restart", "nas-llama-swap.service"]
+        ]
         self.assertTrue(restart_calls)
 
     def test_ai_provider_without_new_key_does_not_prompt_or_spawn_secret_writer(self):
-        request = {"id": "cloud", "url": "https://cloud.example", "models": ["coder"], "apiKey": "", "keepassPassword": ""}
+        request = {
+            "id": "cloud",
+            "url": "https://cloud.example",
+            "models": ["coder"],
+            "apiKey": "",
+            "keepassPassword": "",
+        }
         active = mock.Mock(coordination_token="coord-token")
         with (
             mock.patch.object(api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)),
             mock.patch.object(api, "run", return_value=self.completed()) as run,
+            mock.patch.object(
+                api.ai_config,
+                "load_config",
+                return_value={"models": {}, "peers": {}, "selectors": {}},
+            ),
             mock.patch.object(api.ai_config, "set_provider", return_value={"ok": True}) as configure,
         ):
             self.assertTrue(api.set_ai_provider(request)["ok"])
@@ -315,7 +342,7 @@ class CockpitApiTests(unittest.TestCase):
     def test_ai_json_request_is_bounded_and_object_only(self):
         with mock.patch.object(api.sys, "stdin", mock.Mock(buffer=io.BytesIO(b'{"id":"x"}'))):
             self.assertEqual(api.read_json_request(), {"id": "x"})
-        with mock.patch.object(api.sys, "stdin", mock.Mock(buffer=io.BytesIO(b'[]'))):
+        with mock.patch.object(api.sys, "stdin", mock.Mock(buffer=io.BytesIO(b"[]"))):
             with self.assertRaisesRegex(api.ApiError, "JSON object"):
                 api.read_json_request()
 
@@ -637,7 +664,9 @@ class CockpitApiTests(unittest.TestCase):
 
     def test_restart_llama_swap_raises_when_restart_fails(self):
         active = mock.Mock(coordination_token="coord")
-        with mock.patch.object(api, "run", side_effect=[self.completed(returncode=0), self.completed(returncode=1, stderr="boom")]):
+        with mock.patch.object(
+            api, "run", side_effect=[self.completed(returncode=0), self.completed(returncode=1, stderr="boom")]
+        ):
             with self.assertRaisesRegex(api.ApiError, "Operation failed"):
                 api._restart_llama_swap(active)
 
@@ -692,16 +721,24 @@ class CockpitApiTests(unittest.TestCase):
             with (
                 mock.patch.object(api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)),
                 mock.patch.object(api.ai_config, "CONFIG_PATH", config),
+                mock.patch.object(
+                    api.ai_config,
+                    "load_config",
+                    return_value={"models": {}, "peers": {}, "selectors": {}},
+                ),
                 mock.patch.object(api, "_read_secret_env", return_value=b"old-env"),
                 mock.patch.object(api, "run", return_value=self.completed()) as run,
-                mock.patch.object(api.ai_config, "set_provider", side_effect=ValueError("config rejected")) as configure,
+                mock.patch.object(
+                    api.ai_config, "set_provider", side_effect=ValueError("config rejected")
+                ) as configure,
                 mock.patch.object(api, "_restore_private_file") as restore_file,
             ):
                 with self.assertRaises(ValueError):
                     api.set_ai_provider(request)
             configure.assert_called_once()
             rollback_calls = [
-                call for call in run.call_args_list
+                call
+                for call in run.call_args_list
                 if call.args and call.args[0][:2] == ["nas-secrets", "set-ai-provider-key-stdin"]
             ]
             self.assertTrue(rollback_calls, "expected rollback of staged credential")
@@ -752,7 +789,9 @@ class CockpitApiTests(unittest.TestCase):
     def test_overview_aggregates_probes_and_links(self):
         healthy = api.CommandResult(returncode=0, stdout="all pools healthy", stderr="")
         with (
-            mock.patch.object(api, "feature_status", return_value={"features": [{"units": [{"unit": "nas-custom.service"}]}]}),
+            mock.patch.object(
+                api, "feature_status", return_value={"features": [{"units": [{"unit": "nas-custom.service"}]}]}
+            ),
             mock.patch.object(api, "setup_status", return_value={"status": "ready"}),
             mock.patch.object(api, "identity_status", return_value={"users": []}),
             mock.patch.object(api, "capability_status", return_value={"capabilities": []}),
@@ -801,7 +840,9 @@ class CockpitApiTests(unittest.TestCase):
     def test_safe_action_captures_command_stdout(self):
         with (
             mock.patch.object(api, "run", return_value=self.completed(stdout="status-line")),
-            mock.patch.object(api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()),
+            mock.patch.object(
+                api, "operation_guard", side_effect=lambda *_args: __import__("contextlib").nullcontext()
+            ),
         ):
             result = api.safe_action("scrub")
         self.assertEqual(result["output"], "status-line")

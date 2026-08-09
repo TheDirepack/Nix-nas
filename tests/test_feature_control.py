@@ -85,8 +85,12 @@ class FeatureControlTests(unittest.TestCase):
         catalog["features"]["parent"]["legacyTrueMode"] = "on-demand"
         with tempfile.TemporaryDirectory() as tmp:
             state_path = pathlib.Path(tmp) / "settings.json"
+            last_good_path = pathlib.Path(tmp) / "settings.last-good.json"
             state_path.write_text(json.dumps({"schemaVersion": 1, "features": {"parent": True}, "updatedAt": 1}))
-            with mock.patch.object(features, "STATE_PATH", state_path):
+            with (
+                mock.patch.object(features, "STATE_PATH", state_path),
+                mock.patch.object(features, "LAST_GOOD_PATH", last_good_path),
+            ):
                 state = features.load_state(catalog)
             self.assertEqual(state["features"]["parent"], "on-demand")
             self.assertEqual(state["features"]["child"], "on-demand")
@@ -370,7 +374,11 @@ class FeatureControlTests(unittest.TestCase):
         catalog = self.catalog()
         with tempfile.TemporaryDirectory() as tmp:
             state_path = pathlib.Path(tmp) / "missing.json"
-            with mock.patch.object(features, "STATE_PATH", state_path):
+            last_good_path = pathlib.Path(tmp) / "settings.last-good.json"
+            with (
+                mock.patch.object(features, "STATE_PATH", state_path),
+                mock.patch.object(features, "LAST_GOOD_PATH", last_good_path),
+            ):
                 state = features.load_state(catalog)
             self.assertTrue(state_path.exists())
             self.assertEqual(state["schemaVersion"], 2)

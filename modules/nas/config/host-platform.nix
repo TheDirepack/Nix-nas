@@ -13,18 +13,21 @@ let
   ;
 in
 {
-  config = {
-    nixpkgs.config.allowUnfreePredicate = lib.mkForce (package:
-      let name = lib.getName package;
-      in hasNvidiaGpu && lib.any (prefix: lib.hasPrefix prefix name) [
-        "nvidia"
-        "cuda"
-        "cudnn"
-        "libcu"
-        "nccl"
-      ]);
-    nixpkgs.config.cudaSupport = lib.mkForce (llamaBackend == "cuda");
-    nixpkgs.config.rocmSupport = lib.mkForce (llamaBackend == "rocm");
+  config = lib.mkMerge [
+    (lib.mkIf (!cfg.testing.readOnlyPackageSet) {
+      nixpkgs.config.allowUnfreePredicate = lib.mkForce (package:
+        let name = lib.getName package;
+        in name == "open-webui" || (hasNvidiaGpu && lib.any (prefix: lib.hasPrefix prefix name) [
+            "nvidia"
+            "cuda"
+            "cudnn"
+            "libcu"
+            "nccl"
+          ]));
+      nixpkgs.config.cudaSupport = lib.mkForce (llamaBackend == "cuda");
+      nixpkgs.config.rocmSupport = lib.mkForce (llamaBackend == "rocm");
+    })
+    {
     networking.hostName = lib.mkDefault "nas";
     time.timeZone = lib.mkDefault "UTC";
 
@@ -130,5 +133,6 @@ in
         X-GNOME-Autostart-enabled=true
       '';
     };
-  };
+    }
+  ];
 }

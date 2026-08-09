@@ -41,8 +41,8 @@ let
       "sshd.service"
       "postgresql.service"
     ]
-    ++ lib.concatMap (entry: entry.units)
-      (lib.filter (entry: entry.available) (lib.attrValues nasInternal.serviceRegistry))
+    ++ lib.concatMap (entry: entry.runtime.units)
+      (lib.filter (entry: entry.enabled) (lib.attrValues nasInternal.serviceRegistry))
   );
   smartctlReadOnly = pkgs.writeShellScript "nas-smartctl-readonly" ''
     set -euo pipefail
@@ -286,7 +286,7 @@ in
             };
             zfs = { };
             smart = {
-              path_smartctl = smartctlReadOnly;
+              path_smartctl = "${smartctlReadOnly}";
               use_sudo = true;
               nocheck = "standby";
               attributes = false;
@@ -309,7 +309,7 @@ in
           users = [ "telegraf" ];
           commands = [
             {
-              command = smartctlReadOnly;
+              command = "${smartctlReadOnly}";
               options = [ "NOPASSWD" "NOSETENV" ];
             }
           ];

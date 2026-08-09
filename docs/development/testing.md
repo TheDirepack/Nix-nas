@@ -16,6 +16,8 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 
 `fast` runs source, security, and fuzz tiers. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
 
+The CI pipeline summary applies event- and dispatch-tier requirements. A job required for that run must succeed; a skipped required job fails pipeline qualification rather than being accepted as an intentional skip.
+
 ## 1. Fast source validation
 
 ```bash
@@ -23,6 +25,8 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 ```
 
 Preflight checks repository structure and data, version and policy contracts, documentation links, the custom-executable inventory, static security boundaries, Python syntax and behavior, shell syntax, JavaScript/JSX source contracts, the Cockpit bundle when available, the Authentik fixture, and deterministic fuzz smoke tests. Nix, Ruff, Pyright, ShellCheck, and complete Cockpit bundle checks run when their tools or artifacts are available.
+
+The offline Authentik fixture uses a private temporary identity lock unless the caller supplies an explicit lock path, keeping source validation isolated from host runtime state.
 
 Useful focused commands:
 
@@ -60,6 +64,10 @@ CI also runs Hypothesis properties from the pinned Nix test shell:
 ```bash
 nix develop .#test -c python -m unittest tests.test_property_invariants -v
 ```
+
+CI does not cache qualification pass markers: fast, property, browser, build, VM, and installer gates execute for every run that requires them. Dependency downloads, immutable installer media, and incremental Nix build outputs may still be cached because they accelerate execution without replacing test evidence.
+
+After the fast gates pass, one `build` job uses one runner to materialize and verify Cockpit (compiling it on a cache miss), round-trip the source archive, and build the NixOS closures in sequence. Browser qualification and KVM/QEMU integration remain downstream jobs. This runner consolidation does not remove or pass-cache any qualification tier.
 
 Unexpected deterministic fuzz crashes are retained under `.fuzz-crashes/` with the target, seed, and case. A confirmed crash should become a normal regression test before the implementation is fixed.
 
@@ -105,7 +113,7 @@ Automated accessibility and layout checks cannot detect every visual or usabilit
 
 ## 6. Packaged-source consumer test
 
-CI builds the guarded source archive, validates it as an untrusted consumer, rejects duplicate, traversing, or non-regular ZIP members, then extracts with a Unix-mode-preserving tool. Release assembly separately verifies that each archived file mode matches the staged file, which prevents executable maintenance scripts from silently becoming non-executable in distribution. The consumer then verifies every manifest digest, reruns manifest-aware preflight from the extracted tree, and runs `nix flake check --no-build --show-trace` from that packaged copy. This catches errors that only appear after file selection, permission encoding, extraction, or archive assembly rather than testing the checkout alone.
+CI builds the guarded source archive, validates it as an untrusted consumer, rejects duplicate, traversing, or non-regular ZIP members, then extracts with a Unix-mode-preserving tool. Release assembly separately verifies that each archived file mode matches the staged file, which prevents executable maintenance scripts from silently becoming non-executable in distribution. The consumer then verifies every manifest digest, reruns manifest-aware preflight from the extracted tree, and runs the valid/invalid Nix configuration matrix from that packaged copy. The matrix evaluates every bootable reference configuration while proving the operator hardware placeholder remains non-bootable for the expected missing-root and boot-loader assertions. This catches errors that only appear after file selection, permission encoding, extraction, or archive assembly rather than testing the checkout alone.
 
 ## 7. NixOS, QEMU, and installation matrix
 
@@ -116,7 +124,7 @@ Before building closures, CI evaluates the appliance plus each reusable profile 
 nix develop .#qemu-test -c ./scripts/qemu-test.sh all
 ```
 
-The negative fixtures currently cover loopback/duplicate trusted interfaces, invalid ZFS dataset roots, privileged TFTP ports, unsafe replication destinations, and firewall/networking contradictions. A fixture that evaluates successfully—or fails for some unrelated reason—is a test failure.
+The negative fixtures currently cover loopback/duplicate trusted interfaces, invalid ZFS dataset roots, privileged TFTP ports, same-dataset replication destinations, and firewall/networking contradictions. A fixture that evaluates successfully—or fails for some unrelated reason—is a test failure.
 
 The heavyweight matrix deliberately uses different system lifecycle paths:
 

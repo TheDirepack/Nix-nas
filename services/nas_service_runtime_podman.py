@@ -4,13 +4,19 @@
 Nix-nas owns NAS-specific policy and metadata. Podman owns Quadlet parsing,
 installation, replacement, systemd reloads, and removal.
 """
+
 from __future__ import annotations
 
+import json
 import pathlib
+import re
 import subprocess
 from typing import Any
 
 from nas_managed_service import ManagedServiceError
+
+APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
+UNIT_RE = re.compile(r"^[A-Za-z0-9_.@:-]+\.service$")
 
 
 def _quadlet_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
@@ -19,20 +25,20 @@ def _quadlet_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
         raise ManagedServiceError(f"Service {service_id} is not a Quadlet service")
 
     source = runtime.get("source", "")
-    root = pathlib.PurePosixPath(f"/var/lib/nas-control/apps/{service_id}")
-    path = pathlib.PurePosixPath(source)
+    if not isinstance(source, str) or not pathlib.PurePosixPath(source).is_absolute():
+        raise ManagedServiceError(f"Podman source for {service_id} must be under {APP_ROOT / service_id}/")
+    app_root = APP_ROOT.resolve()
+    root = (app_root / service_id).resolve()
+    path = pathlib.Path(source).resolve()
     try:
+        root.relative_to(app_root)
         path.relative_to(root)
     except ValueError as exc:
-        raise ManagedServiceError(
-            f"Podman source for {service_id} must be under {root}/"
-        ) from exc
+        raise ManagedServiceError(f"Podman source for {service_id} must be under {root}/") from exc
 
     if path.suffix != ".container":
-        raise ManagedServiceError(
-            f"Podman source for {service_id} must be a native .container Quadlet file"
-        )
-    return pathlib.Path(str(path))
+        raise ManagedServiceError(f"Podman source for {service_id} must be a native .container Quadlet file")
+    return path
 
 
 def plan_podman(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
@@ -68,9 +74,7 @@ def plan_podman(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def apply_podman(
-    service_id: str, service: dict[str, Any], *, dry_run: bool = False
-) -> dict[str, Any]:
+def apply_podman(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
     plan = plan_podman(service_id, service)
     if dry_run or not plan["actions"]:
         return plan
@@ -86,6 +90,36 @@ def apply_podman(
         ],
         check=True,
     )
+    listed = subprocess.run(
+        [
+            "podman",
+            "quadlet",
+            "list",
+            "--filter",
+            f"name={pathlib.Path(plan['source']).name}",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        rows = json.loads(listed.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ManagedServiceError(f"Podman returned invalid Quadlet metadata for {service_id}") from exc
+    source_name = pathlib.Path(plan["source"]).name
+    units: list[str] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict) or row.get("Name") != source_name or row.get("App") != service_id:
+                continue
+            unit = row.get("UnitName")
+            if isinstance(unit, str):
+                units.append(unit)
+    if len(units) != 1 or not UNIT_RE.fullmatch(units[0]):
+        raise ManagedServiceError(f"Podman did not report one valid unit for {service_id}")
+    plan["unit"] = units[0]
     operation = "restart" if plan["enabled"] else "stop"
     subprocess.run(["systemctl", operation, plan["unit"]], check=True)
     return plan

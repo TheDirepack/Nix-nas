@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
 
-import nas_managed_service as msvc
-import nas_service_runtime_compose as compose
+import nas_managed_service as msvc  # noqa: E402
+import nas_service_runtime_compose as compose  # noqa: E402
 
 
 class PodmanComposeAdapterTests(unittest.TestCase):
-    def service(self, *, enabled: bool = True, source: str | None = None) -> dict:
+    def service(self, *, enabled: bool = True, source: object | None = None) -> dict:
         return {
             "label": "Example",
             "enabled": enabled,
             "runtime": {
                 "type": "compose",
-                "source": source
-                or "/var/lib/nas-control/apps/example/compose.yaml",
+                "source": source or "/var/lib/nas-control/apps/example/compose.yaml",
                 "startPolicy": "boot",
             },
         }
@@ -46,6 +46,29 @@ class PodmanComposeAdapterTests(unittest.TestCase):
                 "example",
                 self.service(source="/var/lib/nas-control/apps/other/compose.yaml"),
             )
+
+    def test_source_rejects_traversal_and_non_string_values(self):
+        for source in (
+            "/var/lib/nas-control/apps/example/../other/compose.yaml",
+            42,
+        ):
+            with self.subTest(source=source), self.assertRaisesRegex(msvc.ManagedServiceError, "must be under"):
+                compose.plan_compose("example", self.service(source=source))
+
+    def test_source_rejects_symlink_escape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app_root = pathlib.Path(temporary) / "apps"
+            service_root = app_root / "example"
+            service_root.mkdir(parents=True)
+            outside = pathlib.Path(temporary) / "outside.yaml"
+            outside.write_text("services: {}\n", encoding="utf-8")
+            source = service_root / "compose.yaml"
+            source.symlink_to(outside)
+            with (
+                mock.patch.object(compose, "APP_ROOT", app_root),
+                self.assertRaisesRegex(msvc.ManagedServiceError, "must be under"),
+            ):
+                compose.plan_compose("example", self.service(source=str(source)))
 
     def test_source_must_be_yaml(self):
         with self.assertRaisesRegex(msvc.ManagedServiceError, "must be a YAML file"):
@@ -102,9 +125,18 @@ class PodmanComposeAdapterTests(unittest.TestCase):
 
     @mock.patch.object(compose.subprocess, "run")
     def test_remove_uses_same_project_name(self, run):
-        compose.remove_compose("example")
+        compose.remove_compose("example", self.service())
         run.assert_called_once_with(
-            ["podman", "compose", "-p", "example", "down", "--remove-orphans"],
+            [
+                "podman",
+                "compose",
+                "-p",
+                "example",
+                "-f",
+                "/var/lib/nas-control/apps/example/compose.yaml",
+                "down",
+                "--remove-orphans",
+            ],
             check=True,
         )
 

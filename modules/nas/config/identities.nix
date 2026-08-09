@@ -2,7 +2,11 @@
 
 let
   inherit (nasInternal) cfg featureCatalog;
-  featureUnits = lib.unique (lib.concatMap (entry: entry.startUnits ++ entry.stopUnits) (lib.attrValues featureCatalog));
+  featureUnits = lib.unique (
+    lib.concatMap
+      (entry: entry.startUnits ++ (entry.stopUnits or [ ]))
+      (lib.attrValues featureCatalog.features)
+  );
   featureUnitsJson = builtins.toJSON featureUnits;
 in
 {

@@ -734,7 +734,9 @@ class SetupConfigTests(unittest.TestCase):
                 if cmd[:3] == ["install", "-d", "-m"]:
                     pathlib.Path(cmd[4]).mkdir(parents=True, exist_ok=True)
                 elif cmd[0] == "install" and "-m" in cmd:
-                    src = pathlib.Path(cmd[cmd.index(str(status_path.parent)) + 1] if str(status_path.parent) in cmd else cmd[-2])
+                    src = pathlib.Path(
+                        cmd[cmd.index(str(status_path.parent)) + 1] if str(status_path.parent) in cmd else cmd[-2]
+                    )
                     # Fallback: find the temp file and status_path
                     for arg in cmd:
                         if arg.startswith("/tmp/") and pathlib.Path(arg).is_file():
@@ -829,7 +831,9 @@ class SetupConfigTests(unittest.TestCase):
         )
 
     def test_command_runner_bounds_environment_and_reports_failures(self):
-        completed = mock.Mock(returncode=0, stdout="abcdefgh\n[output truncated]", stderr="stderr-v\n[output truncated]")
+        completed = mock.Mock(
+            returncode=0, stdout="abcdefgh\n[output truncated]", stderr="stderr-v\n[output truncated]"
+        )
         with (
             mock.patch.object(setup, "COMMAND_MAX_OUTPUT_BYTES", 8),
             mock.patch.object(setup, "run_command", return_value=completed) as runner,
@@ -990,6 +994,11 @@ class SetupConfigTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(setup.SetupError, "did not create"):
                     setup.verify_or_create_database("password", create=True)
+
+    def test_stale_plan_error_identifies_the_digest_contract(self):
+        normalized = setup.normalize_config({"storage": {"createPool": False}, "features": {}})
+        with self.assertRaisesRegex(setup.SetupError, "plan digest"):
+            setup.require_confirmed_plan(normalized, "0" * 64)
 
     def test_first_start_status_revalidates_completion_and_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
