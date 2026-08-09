@@ -64,7 +64,6 @@ def _resource_plan(resource_id: str, resource: dict[str, Any], snapshot: str) ->
             raise BackupPlanError(f"Resource {resource_id!r}: zfs-snapshot consistency requires a valid dataset")
         result["dataset"] = dataset
         result["snapshot"] = f"{dataset}@{snapshot}"
-        result["snapshotPath"] = str(pathlib.PurePosixPath(resource["path"]) / ".zfs" / "snapshot" / snapshot)
     elif consistency == "filesystem":
         pass
     elif consistency in {"postgres", "native"}:
@@ -129,6 +128,36 @@ def _atomic_write_json(path: pathlib.Path, value: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _dataset_mountpoint(dataset: str) -> pathlib.Path:
+    result = subprocess.run(
+        ["zfs", "get", "-H", "-o", "value", "mountpoint", dataset],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    raw = result.stdout.strip()
+    if not raw.startswith("/") or raw in {"none", "legacy"}:
+        raise BackupPlanError(f"ZFS dataset {dataset!r} has no usable filesystem mountpoint")
+    mountpoint = pathlib.Path(raw)
+    if ".." in pathlib.PurePosixPath(raw).parts:
+        raise BackupPlanError(f"ZFS dataset {dataset!r} returned an unsafe mountpoint")
+    return mountpoint
+
+
+def _snapshot_resource_path(item: dict[str, Any], snapshot_name_value: str) -> pathlib.Path:
+    dataset = item["dataset"]
+    mountpoint = _dataset_mountpoint(dataset)
+    resource_path = pathlib.Path(item["path"])
+    try:
+        relative = resource_path.relative_to(mountpoint)
+    except ValueError as exc:
+        raise BackupPlanError(
+            f"Resource {item['resource']!r} path {resource_path} is not beneath dataset {dataset!r} mountpoint {mountpoint}"
+        ) from exc
+    snapshot_root = mountpoint / ".zfs" / "snapshot" / snapshot_name_value
+    return snapshot_root if str(relative) == "." else snapshot_root / relative
+
+
 def _destroy_snapshot(snapshot: str) -> None:
     if SNAPSHOT_RE.fullmatch(snapshot) is None:
         raise BackupPlanError(f"Refusing to destroy snapshot outside V2 backup namespace: {snapshot!r}")
@@ -160,23 +189,36 @@ def prepare_files(
     state_path: pathlib.Path = DEFAULT_STATE,
 ) -> list[str]:
     plan = build_backup_plan(effective, timestamp=timestamp)
-    # Refuse to overlap snapshot runs. A stale state file means the prior backup
-    # needs explicit cleanup rather than creating more temporary snapshots.
     if state_path.exists():
         raise BackupPlanError(f"Previous V2 backup snapshot state still exists: {state_path}")
+
     created: list[str] = []
+    snapshot_by_dataset: dict[str, str] = {}
     try:
+        # Multiple resources may be subdirectories of one dataset. Create one
+        # atomic snapshot per dataset and reuse its read-only view for each
+        # selected resource rather than attempting duplicate same-name snapshots.
         for item in plan["groups"]["zfs-snapshot"]:
+            dataset = item["dataset"]
             snapshot = item["snapshot"]
             if SNAPSHOT_RE.fullmatch(snapshot) is None:
                 raise BackupPlanError(f"Generated snapshot name is invalid: {snapshot!r}")
-            subprocess.run(["zfs", "snapshot", snapshot], check=True)
-            created.append(snapshot)
-            snapshot_path = pathlib.Path(item["snapshotPath"])
+            prior = snapshot_by_dataset.get(dataset)
+            if prior is None:
+                subprocess.run(["zfs", "snapshot", snapshot], check=True)
+                snapshot_by_dataset[dataset] = snapshot
+                created.append(snapshot)
+            elif prior != snapshot:
+                raise BackupPlanError(f"Dataset {dataset!r} resolved to inconsistent snapshot names")
+
+        for item in plan["groups"]["zfs-snapshot"]:
+            snapshot_path = _snapshot_resource_path(item, plan["snapshotName"])
+            item["snapshotPath"] = str(snapshot_path)
             if not snapshot_path.is_dir():
                 raise BackupPlanError(
-                    f"ZFS snapshot {snapshot!r} was created but its filesystem view is unavailable at {snapshot_path}"
+                    f"ZFS snapshot {item['snapshot']!r} was created but resource {item['resource']!r} view is unavailable at {snapshot_path}"
                 )
+
         if created:
             _atomic_write_json(state_path, {"schemaVersion": 1, "snapshots": created})
         return dynamic_files(plan, include_snapshots=True)
