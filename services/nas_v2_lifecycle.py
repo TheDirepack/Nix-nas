@@ -308,8 +308,13 @@ def session_end(session_id: str, document: dict[str, Any]) -> dict[str, Any]:
     service = document["services"].get(service_id)
     if not isinstance(service, dict):
         raise V2LifecycleError(f"Session {session_id!r} references unknown service {service_id!r}")
-    remaining = service_id in _active_session_services(state)
-    runtime = None if remaining else runtime_ops.end_session(service_id, session_id, service)
+    last_session = service_id not in _active_session_services(state)
+    runtime = runtime_ops.end_session(
+        service_id,
+        session_id,
+        service,
+        last_session=last_session,
+    )
     _write_state(state)
     return {"session": session_id, "service": service_id, "ended": True, "runtime": runtime}
 
@@ -359,8 +364,13 @@ def reap(document: dict[str, Any], *, now: float | None = None) -> dict[str, Any
             continue
         state["sessions"].pop(session_id, None)
         expired_sessions.append(session_id)
-        if service_id not in _active_session_services(state):
-            runtime_ops.end_session(service_id, session_id, service)
+        last_session = service_id not in _active_session_services(state)
+        runtime_ops.end_session(
+            service_id,
+            session_id,
+            service,
+            last_session=last_session,
+        )
 
     protected = _protected_dependencies(document, state)
     for service_id, lease in list(state["services"].items()):
