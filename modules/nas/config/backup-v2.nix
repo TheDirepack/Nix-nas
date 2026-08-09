@@ -1,4 +1,4 @@
-{ config, lib, nasInternal, ... }:
+{ config, lib, pkgs, nasInternal, ... }:
 
 let
   cfg = config.nas;
@@ -11,7 +11,7 @@ in
     # hook, which feeds Restic --files-from. Snapshot/native resources are not
     # emitted until nas-backup-v2 has created a consistent source for them.
     services.restic.backups.nas-boot-system.dynamicFilesFrom = ''
-      #!${config.system.build.toplevel}/sw/bin/sh
+      #!${pkgs.runtimeShell}
       set -eu
       exec ${nasInternal.nasPythonApplication}/bin/nas-backup-v2 files --effective ${effectivePath}
     '';
