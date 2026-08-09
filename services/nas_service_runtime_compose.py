@@ -71,12 +71,7 @@ def render_compose_override(service_id: str, service: dict[str, Any]) -> dict[st
     mounts = _compose_mounts(service_id, service)
     if not mounts:
         return None
-    return {
-        "services": {
-            target: {"volumes": volumes}
-            for target, volumes in sorted(mounts.items())
-        }
-    }
+    return {"services": {target: {"volumes": volumes} for target, volumes in sorted(mounts.items())}}
 
 
 def _override_path(service_id: str) -> pathlib.Path:
@@ -108,10 +103,7 @@ def _write_override(service_id: str, service: dict[str, Any]) -> pathlib.Path | 
 def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime = service.get("runtime", {})
     if runtime.get("type") != "compose":
-        return {
-            "actions": [],
-            "warnings": [f"Service {service_id} is not a Compose service"],
-        }
+        return {"actions": [], "warnings": [f"Service {service_id} is not a Compose service"]}
     if service.get("enabled") and (service.get("lifecycle") or {}).get("mode") == "session":
         raise ManagedServiceError(
             f"Compose service {service_id}: session lifecycle requires a disposable Compose runtime implementation"
@@ -129,22 +121,21 @@ def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         "project": service_id,
         "enabled": enabled,
         "resolvedStorage": service.get("resolvedStorage", []),
-        "actions": [
-            {
-                "type": "podman-compose",
-                "operation": "up" if enabled else "down",
-                "project": service_id,
-                "source": str(source),
-                "override": override_path,
-            }
-        ],
+        "actions": [{
+            "type": "podman-compose",
+            "operation": "up" if enabled else "down",
+            "project": service_id,
+            "source": str(source),
+            "override": override_path,
+        }],
     }
 
 
-def _compose_command(plan: dict[str, Any]) -> list[str]:
+def _compose_command(plan: dict[str, Any], *, require_override_exists: bool = True) -> list[str]:
     command = ["podman", "compose", "-p", plan["project"], "-f", plan["source"]]
-    if plan.get("override"):
-        command.extend(["-f", plan["override"]])
+    override = plan.get("override")
+    if override and (not require_override_exists or pathlib.Path(override).is_file()):
+        command.extend(["-f", override])
     return command
 
 
@@ -153,14 +144,20 @@ def apply_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = F
     if dry_run or not plan["actions"]:
         return plan
 
-    override_path = _write_override(service_id, service)
-    plan["override"] = str(override_path) if override_path is not None else None
-    command = _compose_command(plan)
     if plan["enabled"]:
+        override_path = _write_override(service_id, service)
+        plan["override"] = str(override_path) if override_path is not None else None
+        command = _compose_command(plan)
         command.extend(["up", "-d"])
     else:
+        # A prior up may have used the generated override. Keep it in the down
+        # invocation when present, but teardown must still work after /run was
+        # cleared by a reboot or manual cleanup.
+        command = _compose_command(plan, require_override_exists=True)
         command.extend(["down", "--remove-orphans"])
     subprocess.run(command, check=True)
+    if not plan["enabled"]:
+        _override_path(service_id).unlink(missing_ok=True)
     return plan
 
 
@@ -170,7 +167,7 @@ def remove_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = 
     plan = plan_compose(service_id, {**service, "enabled": False})
     if not plan["actions"]:
         return
-    command = _compose_command(plan)
+    command = _compose_command(plan, require_override_exists=True)
     command.extend(["down", "--remove-orphans"])
     subprocess.run(command, check=True)
     _override_path(service_id).unlink(missing_ok=True)
