@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Dependency-aware lifecycle layer for Managed Services V2.
 
-This module deliberately delegates native runtime execution to
-``nas_managed_service_v2``. It only owns graph validation and lifecycle ordering:
-required services start before dependents, on-demand dependency chains are
-touched together, and idle dependencies are not reaped while an active
-dependent still needs them.
+This module delegates native runtime execution to ``nas_managed_service_v2``.
+It owns only generic graph/lifecycle semantics: required services start before
+dependents, readiness is satisfied before graph traversal continues, on-demand
+dependency chains are touched together, and idle dependencies are retained
+while an active dependent still needs them.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
 import nas_managed_service_v2 as _v2
+from nas_managed_readiness import normalize_readiness, wait_ready
 from nas_managed_resources import ManagedResourceError
 
 _BASE_EFFECTIVE_REGISTRY = _v2.effective_registry
@@ -35,6 +35,7 @@ def _validate_dependency_graph(services: dict[str, Any]) -> None:
     for service_id, service in services.items():
         if not isinstance(service, dict):
             raise ManagedResourceError(f"Service {service_id!r} must be an object")
+        normalize_readiness(service_id, service.get("readiness"))
         for dependency in _dependencies(service_id, service):
             if dependency not in services:
                 raise ManagedResourceError(f"Service {service_id}: unknown dependency {dependency!r}")
@@ -136,6 +137,12 @@ def touch_service(service_id: str, *, now: int | None = None) -> dict[str, Any]:
     return touched.get(service_id, {})
 
 
+def _start_one(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
+    result = _v2._apply_runtime(service_id, service, enabled=True)
+    readiness = wait_ready(service_id, service)
+    return {"runtime": result, "readiness": readiness}
+
+
 def start_service(service_id: str) -> dict[str, Any]:
     effective = effective_registry()
     services = effective["services"]
@@ -150,12 +157,11 @@ def start_service(service_id: str) -> dict[str, Any]:
     for current in ordered:
         current_service = services[current]
         _require_startable(current, current_service, dependency=current != service_id)
-        result = _v2._apply_runtime(current, current_service, enabled=True)
         actions.append(
             {
                 "service": current,
                 "ownership": current_service.get("ownership", "runtime"),
-                "result": result,
+                "result": _start_one(current, current_service),
             }
         )
     touched = _touch_chain(ordered, services)
@@ -202,10 +208,8 @@ def _dependent_active(
     if mode == "persistent":
         return True
     if mode == "session":
-        # Session launchers are responsible for explicit dependency lifetime.
-        # Without a session lease in the generic lifecycle state, fail safe and
-        # do not reap a dependency merely because the generic timer fired.
-        return True
+        record = state.get("services", {}).get(dependent_id) or {}
+        return isinstance(record.get("activeSessions"), int) and record["activeSessions"] > 0
     if mode != "on-demand":
         return False
     last_access = (state.get("services", {}).get(dependent_id) or {}).get("lastAccess")
@@ -252,6 +256,8 @@ def reconcile_lifecycle(effective: dict[str, Any] | None = None) -> dict[str, An
             )
             continue
         if mode == "session":
+            # Session launchers own creation/destruction. Reconcile only ensures
+            # an orphaned generic runtime is not made boot-persistent.
             actions.append(
                 {
                     "service": service_id,
@@ -268,14 +274,13 @@ def reconcile_lifecycle(effective: dict[str, Any] | None = None) -> dict[str, An
                 continue
             current_service = services[current]
             _require_startable(current, current_service, dependency=current != service_id)
-            result = _v2._apply_runtime(current, current_service, enabled=True)
             actions.append(
                 {
                     "service": current,
                     "requestedBy": service_id,
                     "mode": (current_service.get("lifecycle") or {}).get("mode"),
                     "enabled": True,
-                    "result": result,
+                    "result": _start_one(current, current_service),
                 }
             )
             started.add(current)
