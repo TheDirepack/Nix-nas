@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -18,16 +19,21 @@ class Headers(dict):
 
 
 class FeatureControlV2Tests(unittest.TestCase):
-    def effective(self, capability: str | None = "application.demo.access") -> dict:
+    def effective(
+        self,
+        capability: str | None = "application.demo.access",
+        lifecycle: dict | None = None,
+    ) -> dict:
         auth = {"mode": "forward-auth"}
         if capability is not None:
             auth["capability"] = capability
         return {
-            "endpoints": {
-                "demo:web": {
-                    "auth": auth,
+            "endpoints": {"demo:web": {"auth": auth}},
+            "services": {
+                "demo": {
+                    "lifecycle": lifecycle or {"mode": "manual", "ephemeralRuntime": False},
                 }
-            }
+            },
         }
 
     @patch.object(feature_v2, "_load_effective")
@@ -62,6 +68,30 @@ class FeatureControlV2Tests(unittest.TestCase):
         headers = Headers({"Remote-User": "alice", "Remote-Groups": "legacy-group"})
         self.assertTrue(feature_v2.authorize_service_scope("service:demo:web", headers))
         mocked_legacy.assert_called_once()
+
+    def test_disabled_lifecycle_blocks_even_authorized_endpoint(self) -> None:
+        effective = self.effective(lifecycle={"mode": "disabled", "ephemeralRuntime": False})
+        self.assertFalse(feature_v2._authorized_use("demo", effective))
+
+    def test_on_demand_first_access_starts_then_later_access_touches(self) -> None:
+        effective = self.effective(
+            lifecycle={"mode": "on-demand", "idleSeconds": 300, "ephemeralRuntime": False}
+        )
+        fake = mock.Mock()
+        fake._read_lifecycle_state.return_value = {"schemaVersion": 1, "services": {}}
+        with patch.dict(sys.modules, {"nas_managed_service_v2": fake}):
+            self.assertTrue(feature_v2._authorized_use("demo", effective))
+        fake.start_service.assert_called_once_with("demo")
+
+        fake.reset_mock()
+        fake._read_lifecycle_state.return_value = {
+            "schemaVersion": 1,
+            "services": {"demo": {"lastAccess": 1}},
+        }
+        with patch.dict(sys.modules, {"nas_managed_service_v2": fake}):
+            self.assertTrue(feature_v2._authorized_use("demo", effective))
+        fake.touch_service.assert_called_once_with("demo")
+        fake.start_service.assert_not_called()
 
 
 if __name__ == "__main__":
