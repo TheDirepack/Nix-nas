@@ -47,9 +47,7 @@ def validate_application_principal(value: Any, *, service_id: str | None = None)
     if match is None:
         raise ManagedResourceError(f"Invalid application principal {value!r}")
     if service_id is not None and match.group(1) != service_id:
-        raise ManagedResourceError(
-            f"Application principal {value!r} does not match service {service_id!r}"
-        )
+        raise ManagedResourceError(f"Application principal {value!r} does not match service {service_id!r}")
     return value
 
 
@@ -112,9 +110,7 @@ def validate_storage_resource(resource_id: str, data: Any) -> dict[str, Any]:
             raise ManagedResourceError(f"Storage resource {resource_id!r}: user scope requires pathTemplate")
         _validate_host_path(path_template, field=f"storageResources.{resource_id}.pathTemplate")
         if "{user}" not in path_template:
-            raise ManagedResourceError(
-                f"Storage resource {resource_id!r}: user pathTemplate must contain '{{user}}'"
-            )
+            raise ManagedResourceError(f"Storage resource {resource_id!r}: user pathTemplate must contain '{{user}}'")
     elif path_template is not None:
         _validate_host_path(path_template, field=f"storageResources.{resource_id}.pathTemplate")
 
@@ -131,26 +127,25 @@ def validate_storage_resource(resource_id: str, data: Any) -> dict[str, Any]:
         raise ManagedResourceError(f"Storage resource {resource_id!r}: duplicate capability")
     unknown = set(capabilities) - STORAGE_CAPABILITIES
     if unknown:
-        raise ManagedResourceError(
-            f"Storage resource {resource_id!r}: unsupported capabilities {sorted(unknown)}"
-        )
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: unsupported capabilities {sorted(unknown)}")
 
     backup = data.get("backup")
     if not isinstance(backup, dict) or not isinstance(backup.get("enabled"), bool):
         raise ManagedResourceError(f"Storage resource {resource_id!r}: backup.enabled must be boolean")
     consistency = backup.get("consistency", "filesystem")
     if consistency not in BACKUP_CONSISTENCY:
-        raise ManagedResourceError(
-            f"Storage resource {resource_id!r}: invalid backup consistency {consistency!r}"
-        )
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: invalid backup consistency {consistency!r}")
     if state_class in {"cache", "ephemeral"} and backup.get("enabled"):
-        raise ManagedResourceError(
-            f"Storage resource {resource_id!r}: {state_class} state must not be selected for backup"
-        )
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: {state_class} state must not be selected for backup")
     if consistency == "none" and backup.get("enabled"):
-        raise ManagedResourceError(
-            f"Storage resource {resource_id!r}: backup cannot be enabled with consistency='none'"
-        )
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: backup cannot be enabled with consistency='none'")
+
+    file_browser = data.get("fileBrowser", {"visible": True})
+    if not isinstance(file_browser, dict) or set(file_browser) - {"visible"}:
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: fileBrowser must contain only visible")
+    visible = file_browser.get("visible", True)
+    if not isinstance(visible, bool):
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: fileBrowser.visible must be boolean")
 
     quota = data.get("quotaBytes")
     if quota is not None and (isinstance(quota, bool) or not isinstance(quota, int) or quota < 0):
@@ -162,6 +157,7 @@ def validate_storage_resource(resource_id: str, data: Any) -> dict[str, Any]:
     normalized["stateClass"] = state_class
     normalized["capabilities"] = list(capabilities)
     normalized["backup"] = {**backup, "consistency": consistency}
+    normalized["fileBrowser"] = {"visible": visible}
     return normalized
 
 
@@ -178,18 +174,13 @@ def validate_storage_attachment(
     attachment: Any,
     resources: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Validate and normalize one resource-reference attachment."""
-
     validate_resource_id(service_id)
     if not isinstance(attachment, dict):
         raise ManagedResourceError(f"Service {service_id}: storage attachment must be an object")
     resource_id = validate_resource_id(attachment.get("resource"))
     if resource_id not in resources:
         raise ManagedResourceError(f"Service {service_id}: unknown storage resource {resource_id!r}")
-    guest_path = _validate_mount_path(
-        attachment.get("guestPath"),
-        field=f"Service {service_id}: guestPath",
-    )
+    guest_path = _validate_mount_path(attachment.get("guestPath"), field=f"Service {service_id}: guestPath")
     required = attachment.get("requiredCapabilities", ["read"])
     if not isinstance(required, list) or not required:
         raise ManagedResourceError(f"Service {service_id}: requiredCapabilities must be a non-empty array")
@@ -200,11 +191,7 @@ def validate_storage_attachment(
         raise ManagedResourceError(
             f"Service {service_id}: resource {resource_id!r} does not expose capabilities {sorted(unsupported)}"
         )
-    normalized = {
-        "resource": resource_id,
-        "guestPath": guest_path,
-        "requiredCapabilities": list(required),
-    }
+    normalized = {"resource": resource_id, "guestPath": guest_path, "requiredCapabilities": list(required)}
     target = attachment.get("target")
     if target is not None:
         if not isinstance(target, str) or RUNTIME_TARGET_RE.fullmatch(target) is None:
@@ -214,8 +201,4 @@ def validate_storage_attachment(
 
 
 def backup_resource_ids(resources: dict[str, dict[str, Any]]) -> list[str]:
-    selected = []
-    for resource_id, resource in resources.items():
-        if resource["backup"]["enabled"]:
-            selected.append(resource_id)
-    return sorted(selected)
+    return sorted(resource_id for resource_id, resource in resources.items() if resource["backup"]["enabled"])
