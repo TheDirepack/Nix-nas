@@ -6,6 +6,7 @@ let
   effectivePath = "/run/nas-control/effective-endpoints.json";
   fragmentPath = "/run/nas-control/caddy-managed.conf";
   secretReady = "${nasInternal.secretRoot}/ready";
+  runtimeBin = "${nasInternal.nasPythonApplication}/bin/nas-v2-runtime";
 in
 {
   config = {
@@ -35,8 +36,12 @@ in
       unitConfig.ConditionPathExists = secretReady;
       serviceConfig = {
         Type = "oneshot";
+        Environment = [
+          "NAS_V2_FIREWALL_ZONE=${config.nas.networking.firewall.zone}"
+          "NAS_V2_RUNTIME_BIN=${runtimeBin}"
+        ];
         ExecStart = ''
-          ${nasInternal.nasPythonApplication}/bin/nas-v2-runtime apply \
+          ${runtimeBin} apply \
             --spec ${storePath} \
             --schema ${schemaPath} \
             --effective ${effectivePath}
@@ -62,7 +67,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = ''
-          ${nasInternal.nasPythonApplication}/bin/nas-v2-runtime reap \
+          ${runtimeBin} reap \
             --spec ${storePath} \
             --schema ${schemaPath}
         '';
