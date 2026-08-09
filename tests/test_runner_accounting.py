@@ -6,7 +6,21 @@ import pathlib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CONTRACTS = ROOT / "tests" / "custom-script-contracts.json"
+CONTRACTS = (
+    ROOT / "tests" / "custom-script-contracts.json",
+    ROOT / "tests" / "custom-script-contracts-v2.json",
+)
+
+
+def _python_modules() -> dict[str, list[str]]:
+    modules: dict[str, list[str]] = {}
+    for path in CONTRACTS:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for module, tests in raw.get("pythonModules", {}).items():
+            if module in modules:
+                raise AssertionError(f"duplicate module contract: {module}")
+            modules[module] = tests
+    return modules
 
 
 def _module_name_from_service_path(path: str) -> str:
@@ -30,8 +44,7 @@ def _imports_in_file(test_path: pathlib.Path) -> set[str]:
 
 class RunnerAccountingTests(unittest.TestCase):
     def test_every_service_module_has_importing_test(self):
-        raw = json.loads(CONTRACTS.read_text(encoding="utf-8"))
-        python_modules: dict[str, list[str]] = raw.get("pythonModules", {})
+        python_modules = _python_modules()
         service_modules = {p.relative_to(ROOT).as_posix() for p in (ROOT / "services").glob("*.py")}
         for mod_path in sorted(service_modules):
             with self.subTest(module=mod_path):
@@ -52,8 +65,7 @@ class RunnerAccountingTests(unittest.TestCase):
                 )
 
     def test_python_modules_mapping_has_real_import(self):
-        raw = json.loads(CONTRACTS.read_text(encoding="utf-8"))
-        for module, tests in raw.get("pythonModules", {}).items():
+        for module, tests in _python_modules().items():
             with self.subTest(module=module):
                 module_name = _module_name_from_service_path(module)
                 has_import = False
