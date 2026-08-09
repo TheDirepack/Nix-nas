@@ -26,7 +26,7 @@ in
     ];
 
     systemd.services.nas-managed-services-reconcile = {
-      description = "Rebuild effective service, portal, and storage projections";
+      description = "Rebuild V2 projections and enforce persistent/disabled application lifecycle";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" "copyparty.service" ];
       serviceConfig = {
@@ -42,6 +42,27 @@ in
       wantedBy = [ "multi-user.target" ];
       pathConfig = {
         PathChanged = storePath;
+      };
+    };
+
+    systemd.services.nas-managed-services-reap = {
+      description = "Stop idle Managed Services V2 on-demand applications";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${nasInternal.nasPythonApplication}/bin/nas-managed-service reap";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+      };
+    };
+
+    systemd.timers.nas-managed-services-reap = {
+      description = "Periodically reap idle Managed Services V2 applications";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "2m";
+        OnUnitActiveSec = "1m";
+        AccuracySec = "15s";
+        Persistent = false;
       };
     };
 
