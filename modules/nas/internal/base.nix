@@ -53,7 +53,7 @@ let
   hostSystem = pkgs.stdenv.hostPlatform.system;
   isX86_64 = hostSystem == "x86_64-linux";
   supportedHostSystems = [ "x86_64-linux" ];
-  failureAlert = lib.optional cfg.alerting.enable "nas-health-alert@%n";
+  failureAlert = lib.optional cfg.alerting.enable "nas-health-alert@%n.service";
   bootLoaderConfigured = config.boot.loader.systemd-boot.enable || config.boot.loader.grub.enable;
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";

@@ -191,8 +191,10 @@ class ContractTests(unittest.TestCase):
         catalog = text("modules/nas/internal/feature-catalog.nix")
         ai_options = text("modules/ai/options.nix")
         systemd = text("modules/nas/config/systemd-services.nix")
+        base = text("modules/nas/internal/base.nix")
         account = text("modules/nas/internal/account-tools.nix")
         identity_model = text("services/nas_identity_model.py")
+        self.assertIn('"nas-health-alert@%n.service"', base)
 
         self.assertIn('victoriaAllowed = "96MiB";', observability)
         self.assertIn('victoriaHigh = "128M";', observability)
