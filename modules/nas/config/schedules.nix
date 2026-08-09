@@ -78,9 +78,9 @@ in
     };
 
     systemd.targets.nas-protected-services = {
-      description = "NAS core services enabled after KeePassXC secret activation";
+      description = "NAS core control plane enabled after KeePassXC secret activation";
       requires = protectedServiceUnits;
-      wants = [ "nas-feature-apply.service" "network-online.target" ];
+      wants = [ "network-online.target" ];
       after = [ "network-online.target" ] ++ protectedServiceUnits;
     };
   };
