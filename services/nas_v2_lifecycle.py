@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generic workload/dependency lifecycle executor for Managed Services V2.
 
-The executor consumes only normalized V2 data.  It contains no application
-names.  Cross-runtime dependencies, jobs, sessions, readiness and on-demand
-leases are therefore schema behavior instead of per-application wake code.
+The executor consumes only normalized V2 data. It contains no application
+names. Cross-runtime dependencies, jobs, sessions, readiness and on-demand
+leases are schema behavior instead of per-application wake code.
 """
 
 from __future__ import annotations
@@ -68,12 +68,6 @@ def _systemd_unit(service_id: str, service: dict[str, Any]) -> str:
     raise V2LifecycleError(f"Service {service_id}: runtime {runtime['type']!r} has no systemd unit identity")
 
 
-def _prepare_python(service_id: str, service: dict[str, Any]) -> None:
-    from nas_service_runtime_python import apply_python
-
-    apply_python(service_id, service, dry_run=False)
-
-
 def _start_runtime(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime_type = service["runtime"]["type"]
     if runtime_type == "systemd":
@@ -81,7 +75,9 @@ def _start_runtime(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         subprocess.run(["systemctl", "start", unit], check=True)
         return {"runtime": runtime_type, "operation": "start", "unit": unit}
     if runtime_type == "python":
-        _prepare_python(service_id, service)
+        from nas_service_runtime_python import apply_python
+
+        apply_python(service_id, service, dry_run=False)
         unit = _systemd_unit(service_id, service)
         subprocess.run(["systemctl", "start", unit], check=True)
         return {"runtime": runtime_type, "operation": "start", "unit": unit}
@@ -202,6 +198,21 @@ def _mark_used(service_id: str, service: dict[str, Any], state: dict[str, Any], 
         state["services"][service_id] = {"lastUse": float(time.time() if now is None else now)}
 
 
+def _python_job_command(service_id: str, service: dict[str, Any]) -> list[str]:
+    from nas_service_runtime_python import _safe_app_path, ensure_venv, venv_path
+
+    ensure_venv(service_id, service)
+    runtime = service["runtime"]
+    entrypoint = runtime["entrypoint"]
+    python = str(venv_path(service_id) / "bin/python")
+    if "module" in entrypoint:
+        command = [python, "-m", entrypoint["module"]]
+    else:
+        script = _safe_app_path(service_id, entrypoint["script"], field="runtime.entrypoint.script")
+        command = [python, str(script)]
+    return [*command, *runtime.get("args", [])]
+
+
 def _run_job_runtime(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime_type = service["runtime"]["type"]
     if runtime_type == "systemd":
@@ -211,62 +222,88 @@ def _run_job_runtime(service_id: str, service: dict[str, Any]) -> dict[str, Any]
             raise V2LifecycleError(f"Service {service_id}: job unit {unit} failed")
         return {"runtime": runtime_type, "operation": "run-job", "unit": unit}
     if runtime_type == "python":
-        from nas_service_runtime_python import ensure_venv, runtime_command
-
-        ensure_venv(service_id, service)
-        result = subprocess.run(runtime_command(service_id, service), check=False)
+        result = subprocess.run(_python_job_command(service_id, service), check=False)
         if result.returncode != 0:
             raise V2LifecycleError(f"Service {service_id}: Python job failed with exit code {result.returncode}")
         return {"runtime": runtime_type, "operation": "run-job", "exitCode": result.returncode}
     raise V2LifecycleError(f"Service {service_id}: runtime {runtime_type!r} does not support generic job execution yet")
 
 
-def run_job(service_id: str, document: dict[str, Any]) -> dict[str, Any]:
-    services = document["services"]
-    service = services.get(service_id)
-    if not isinstance(service, dict):
-        raise V2LifecycleError(f"Unknown V2 service {service_id!r}")
-    if service["workload"]["kind"] != "job":
-        raise V2LifecycleError(f"Service {service_id!r} is not a job")
+def _activate_dependency(
+    parent_id: str,
+    dependency: dict[str, Any],
+    document: dict[str, Any],
+    state: dict[str, Any],
+    results: dict[str, Any],
+    active: set[str],
+) -> None:
+    target_id = dependency["service"]
+    target = document["services"][target_id]
+    condition = dependency.get("condition", "ready")
+    if condition == "completed":
+        if target["workload"]["kind"] != "job":
+            raise V2LifecycleError(f"Service {parent_id}: completed dependency {target_id!r} is not a job")
+        results[target_id] = run_job(target_id, document)
+        return
+    if target["workload"]["kind"] == "session":
+        raise V2LifecycleError(f"Service {parent_id}: cannot automatically instantiate session dependency {target_id!r}")
+    _activate_service(target_id, document, state, results, active)
+    if condition == "ready":
+        wait_ready(target_id, target)
+
+
+def _activate_service(
+    service_id: str,
+    document: dict[str, Any],
+    state: dict[str, Any],
+    results: dict[str, Any],
+    active: set[str],
+) -> None:
+    if service_id in active:
+        return
+    service = document["services"][service_id]
+    if not service.get("enabled"):
+        raise V2LifecycleError(f"Service {service_id!r} is disabled")
     for dependency in service.get("dependencies", []):
-        target = dependency["service"]
-        condition = dependency.get("condition", "ready")
-        if condition == "completed":
-            run_job(target, document)
-        else:
-            start_service(target, document)
-            if condition == "ready":
-                wait_ready(target, services[target])
-    return _run_job_runtime(service_id, service)
+        _activate_dependency(service_id, dependency, document, state, results, active)
+    kind = service["workload"]["kind"]
+    if kind == "job":
+        results[service_id] = _run_job_runtime(service_id, service)
+    elif kind == "session":
+        raise V2LifecycleError(f"Service {service_id!r} is a session workload; use session-begin")
+    else:
+        results[service_id] = _start_runtime(service_id, service)
+        _mark_used(service_id, service, state)
+    active.add(service_id)
 
 
-def start_service(service_id: str, document: dict[str, Any]) -> dict[str, Any]:
-    services = document["services"]
-    service = services.get(service_id)
+def run_job(service_id: str, document: dict[str, Any]) -> dict[str, Any]:
+    service = document["services"].get(service_id)
     if not isinstance(service, dict):
         raise V2LifecycleError(f"Unknown V2 service {service_id!r}")
     if not service.get("enabled"):
         raise V2LifecycleError(f"Service {service_id!r} is disabled")
+    if service["workload"]["kind"] != "job":
+        raise V2LifecycleError(f"Service {service_id!r} is not a job")
+    state = _read_state()
+    results: dict[str, Any] = {}
+    active: set[str] = set()
+    for dependency in service.get("dependencies", []):
+        _activate_dependency(service_id, dependency, document, state, results, active)
+    result = _run_job_runtime(service_id, service)
+    _write_state(state)
+    return {"service": service_id, "dependencies": results, "runtime": result}
+
+
+def start_service(service_id: str, document: dict[str, Any]) -> dict[str, Any]:
+    service = document["services"].get(service_id)
+    if not isinstance(service, dict):
+        raise V2LifecycleError(f"Unknown V2 service {service_id!r}")
     if service["workload"]["kind"] == "job":
         return run_job(service_id, document)
-    if service["workload"]["kind"] == "session":
-        raise V2LifecycleError(f"Service {service_id!r} is a session workload; use session-begin")
-
-    results: dict[str, Any] = {}
     state = _read_state()
-    for current in dependency_order(service_id, document):
-        current_service = services[current]
-        if current_service["workload"]["kind"] == "job":
-            results[current] = run_job(current, document)
-            continue
-        if current_service["workload"]["kind"] == "session":
-            raise V2LifecycleError(f"Service {service_id!r} cannot automatically instantiate session dependency {current!r}")
-        results[current] = _start_runtime(current, current_service)
-        _mark_used(current, current_service, state)
-        if current != service_id:
-            dependency = next(item for item in services[service_id].get("dependencies", []) if item["service"] == current) if any(item["service"] == current for item in services[service_id].get("dependencies", [])) else None
-            if dependency is not None and dependency.get("condition", "ready") == "ready":
-                wait_ready(current, current_service)
+    results: dict[str, Any] = {}
+    _activate_service(service_id, document, state, results, set())
     _write_state(state)
     return {"service": service_id, "started": results}
 
@@ -304,22 +341,18 @@ def session_begin(service_id: str, session_id: str, document: dict[str, Any]) ->
     state = _read_state()
     if session_id in state["sessions"]:
         raise V2LifecycleError(f"Session {session_id!r} already exists")
+    dependencies: dict[str, Any] = {}
+    active: set[str] = set()
     for dependency in service.get("dependencies", []):
-        target = dependency["service"]
-        condition = dependency.get("condition", "ready")
-        if condition == "completed":
-            run_job(target, document)
-        else:
-            start_service(target, document)
-            if condition == "ready":
-                wait_ready(target, document["services"][target])
+        _activate_dependency(service_id, dependency, document, state, dependencies, active)
     runtime_result = _start_runtime(service_id, service)
     now = time.time()
     state["sessions"][session_id] = {"service": service_id, "lastUse": now}
     for dependency in service.get("dependencies", []):
-        _mark_used(dependency["service"], document["services"][dependency["service"]], state, now)
+        target_id = dependency["service"]
+        _mark_used(target_id, document["services"][target_id], state, now)
     _write_state(state)
-    return {"service": service_id, "session": session_id, "runtime": runtime_result}
+    return {"service": service_id, "session": session_id, "dependencies": dependencies, "runtime": runtime_result}
 
 
 def session_touch(session_id: str, document: dict[str, Any]) -> dict[str, Any]:
@@ -332,7 +365,8 @@ def session_touch(session_id: str, document: dict[str, Any]) -> dict[str, Any]:
     session["lastUse"] = now
     service = document["services"][service_id]
     for dependency in service.get("dependencies", []):
-        _mark_used(dependency["service"], document["services"][dependency["service"]], state, now)
+        target_id = dependency["service"]
+        _mark_used(target_id, document["services"][target_id], state, now)
     _write_state(state)
     return {"session": session_id, "service": service_id, "lastUse": now}
 
