@@ -90,6 +90,42 @@ class ManagedServiceV2Tests(unittest.TestCase):
         normalized = v2.normalize_document(document(required=["read", "write"]))
         self.assertEqual(normalized["services"]["demo"]["resolvedStorage"][0]["mode"], "rw")
 
+    def test_legacy_start_policy_migrates_to_lifecycle(self) -> None:
+        data = document()
+        normalized = v2.normalize_document(data)
+        self.assertEqual(
+            normalized["services"]["demo"]["lifecycle"],
+            {"mode": "manual", "ephemeralRuntime": False},
+        )
+        data["services"]["demo"]["runtime"]["startPolicy"] = "boot"
+        normalized = v2.normalize_document(data)
+        self.assertEqual(normalized["services"]["demo"]["lifecycle"]["mode"], "persistent")
+
+    def test_on_demand_lifecycle_requires_idle_timeout(self) -> None:
+        data = document()
+        data["services"]["demo"]["runtime"]["startPolicy"] = "on-demand"
+        data["services"]["demo"]["lifecycle"] = {"mode": "on-demand", "idleSeconds": 900}
+        normalized = v2.normalize_document(data)
+        self.assertEqual(
+            normalized["services"]["demo"]["lifecycle"],
+            {"mode": "on-demand", "idleSeconds": 900, "ephemeralRuntime": False},
+        )
+        del data["services"]["demo"]["lifecycle"]["idleSeconds"]
+        with self.assertRaisesRegex(Exception, "requires idleSeconds"):
+            v2.normalize_document(data)
+
+    def test_lifecycle_conflicts_fail_closed(self) -> None:
+        data = document()
+        data["services"]["demo"]["lifecycle"] = {"mode": "disabled"}
+        data["services"]["demo"]["runtime"]["startPolicy"] = "disabled"
+        with self.assertRaisesRegex(Exception, "enabled=true conflicts"):
+            v2.normalize_document(data)
+
+        data = document()
+        data["services"]["demo"]["lifecycle"] = {"mode": "persistent"}
+        with self.assertRaisesRegex(Exception, "startPolicy=.*conflicts"):
+            v2.normalize_document(data)
+
     def test_capability_must_belong_to_service(self) -> None:
         with self.assertRaisesRegex(Exception, "must start with"):
             v2.normalize_document(document(capability="application.other.access"))
@@ -105,6 +141,7 @@ class ManagedServiceV2Tests(unittest.TestCase):
         compat = v2._legacy_validation_copy(normalized)
         svc = compat["services"]["demo"]
         self.assertNotIn("principal", svc)
+        self.assertNotIn("lifecycle", svc)
         self.assertNotIn("networkProfile", svc)
         self.assertNotIn("resolvedStorage", svc)
         self.assertEqual(
@@ -121,7 +158,7 @@ class ManagedServiceV2Tests(unittest.TestCase):
         self.assertNotIn("capability", svc["endpoints"]["web"]["auth"])
         legacy.validate_service("demo", svc)
 
-    def test_effective_registry_exposes_resource_and_backup_projection(self) -> None:
+    def test_effective_registry_exposes_resource_backup_and_lifecycle_projection(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             store = root / "services.json"
@@ -132,6 +169,7 @@ class ManagedServiceV2Tests(unittest.TestCase):
             effective = v2.effective_registry(builtin, store)
             self.assertEqual(effective["backupResources"], ["projects"])
             self.assertEqual(effective["services"]["demo"]["principal"], "application:demo")
+            self.assertEqual(effective["services"]["demo"]["lifecycle"]["mode"], "manual")
             self.assertEqual(effective["services"]["demo"]["networkProfile"], "restricted-internet")
             self.assertEqual(effective["services"]["demo"]["resolvedStorage"][0]["mode"], "rw")
             self.assertIn("projects", effective["storageResources"])
