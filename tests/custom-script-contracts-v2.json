@@ -10,6 +10,15 @@
         "tests/test_managed_service_v2.py"
       ]
     },
+    "nas-feature-control": {
+      "fuzzStrategy": "feature-id",
+      "source": "services/nas_feature_control_v2.py",
+      "systemTest": "tests/vm/guest-test.sh",
+      "tests": [
+        "tests/test_feature_control.py",
+        "tests/test_feature_control_v2.py"
+      ]
+    },
     "nas-copyparty-projection": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_copyparty_projection.py",
@@ -33,6 +42,9 @@
     ],
     "services/nas_managed_service_v2.py": [
       "tests/test_managed_service_v2.py"
+    ],
+    "services/nas_feature_control_v2.py": [
+      "tests/test_feature_control_v2.py"
     ],
     "services/nas_copyparty_projection.py": [
       "tests/test_copyparty_projection.py"
