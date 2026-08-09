@@ -15,6 +15,7 @@ from typing import Any
 
 ALLOWED_HOST_ROOTS = ("/tank", "/srv", "/var/lib/nas-control/apps")
 RESOURCE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
+RUNTIME_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 APPLICATION_PRINCIPAL_RE = re.compile(r"^application:([a-z][a-z0-9-]{0,47})$")
 CAPABILITY_RE = re.compile(r"^(application|storage)\.([a-z][a-z0-9-]{0,47})\.([a-z][a-z0-9-]{0,47})$")
 STATE_CLASSES = frozenset({"authoritative", "derived", "cache", "ephemeral"})
@@ -59,12 +60,6 @@ def validate_capability_reference(value: Any) -> str:
 
 
 def capability_group_name(capability: str) -> str:
-    """Map a V2 capability to its stable Authentik group name.
-
-    The same function is consumed by Authentik reconciliation, CopyParty ACL
-    projection, and the endpoint authorization gate so naming cannot drift.
-    """
-
     validate_capability_reference(capability)
     return "nas_" + capability.replace(".", "_").replace("-", "_")
 
@@ -183,11 +178,7 @@ def validate_storage_attachment(
     attachment: Any,
     resources: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Validate and normalize one resource-reference attachment.
-
-    Legacy inline hostPath mounts are intentionally not handled here. They stay
-    in the old validator only as migration input until built-ins are converted.
-    """
+    """Validate and normalize one resource-reference attachment."""
 
     validate_resource_id(service_id)
     if not isinstance(attachment, dict):
@@ -209,16 +200,20 @@ def validate_storage_attachment(
         raise ManagedResourceError(
             f"Service {service_id}: resource {resource_id!r} does not expose capabilities {sorted(unsupported)}"
         )
-    return {
+    normalized = {
         "resource": resource_id,
         "guestPath": guest_path,
         "requiredCapabilities": list(required),
     }
+    target = attachment.get("target")
+    if target is not None:
+        if not isinstance(target, str) or RUNTIME_TARGET_RE.fullmatch(target) is None:
+            raise ManagedResourceError(f"Service {service_id}: invalid storage runtime target {target!r}")
+        normalized["target"] = target
+    return normalized
 
 
 def backup_resource_ids(resources: dict[str, dict[str, Any]]) -> list[str]:
-    """Return deterministic authoritative/derived resources selected for backup."""
-
     selected = []
     for resource_id, resource in resources.items():
         if resource["backup"]["enabled"]:
