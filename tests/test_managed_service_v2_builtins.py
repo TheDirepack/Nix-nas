@@ -47,7 +47,12 @@ def builtin_document() -> dict:
                         "transport": "http",
                         "targetPort": 8384,
                         "exposure": {"type": "path", "value": "/syncthing/", "prefix": True},
-                        "auth": {"mode": "forward-auth", "allow": "groups", "groups": ["nas_admin"]},
+                        "auth": {
+                            "mode": "forward-auth",
+                            "capability": "application.syncthing.access",
+                            "allow": "groups",
+                            "groups": ["nas_admin"],
+                        },
                         "portal": {"visible": True, "category": "Files", "icon": "syncthing"},
                     }
                 },
@@ -84,6 +89,8 @@ class ManagedServiceV2BuiltinTests(unittest.TestCase):
         self.assertEqual(service["runtime"]["type"], "systemd")
         self.assertEqual(endpoint["serviceId"], "syncthing")
         self.assertEqual(endpoint["exposure"]["prefix"], True)
+        self.assertEqual(endpoint["auth"]["capability"], "application.syncthing.access")
+        self.assertEqual(endpoint["auth"]["groups"], ["nas_admin"])
         self.assertEqual(effective["backupResources"], ["shares"])
         self.assertIn("shares", effective["storageResources"])
 
