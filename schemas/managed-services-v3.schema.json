@@ -1,0 +1,528 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixos-nas.local/schemas/managed-services-v3.schema.json",
+  "title": "NixOS NAS Managed Services V2 Application Specification",
+  "description": "Canonical declarative application, resource, dependency, lifecycle, ingress, and runtime specification. Application additions must be expressible as data conforming to this schema without application-specific controller code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "services"],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,47}$"
+    },
+    "storageResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "stateClass", "capabilities", "backup"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/(tank|srv|var/lib/nas-control/apps)(/.*)?$",
+          "title": "Host path"
+        },
+        "dataset": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)+$",
+          "title": "Backing ZFS dataset"
+        },
+        "scope": {
+          "enum": ["system", "user", "instance"],
+          "default": "system"
+        },
+        "pathTemplate": {
+          "type": "string",
+          "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+\\{user\\}.+|^/(tank|srv|var/lib/nas-control/apps)/.*\\{user\\}$",
+          "description": "Required for user-scoped resources. {user} is resolved only from an authenticated identity."
+        },
+        "stateClass": {
+          "enum": ["authoritative", "derived", "cache", "ephemeral"]
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["read", "write", "move", "delete", "admin"]}
+        },
+        "backup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "consistency": {
+              "enum": ["filesystem", "zfs-snapshot", "postgres", "native", "none"],
+              "default": "filesystem"
+            }
+          }
+        },
+        "fileBrowser": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visible": {"type": "boolean", "default": true}
+          }
+        },
+        "quotaBytes": {"type": "integer", "minimum": 0},
+        "description": {"type": "string", "maxLength": 256}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"scope": {"const": "user"}}, "required": ["scope"]},
+          "then": {"required": ["pathTemplate"]}
+        }
+      ]
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outboundDefault": {"enum": ["allow", "deny"], "default": "allow"},
+        "lanAccess": {"type": "boolean", "default": false},
+        "allowedHostPorts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+        },
+        "allowedEgress": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cidr"],
+            "properties": {
+              "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]+$"},
+              "ports": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+              }
+            }
+          }
+        }
+      }
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/run/nas-secrets/[A-Za-z0-9._/-]+$",
+          "description": "Runtime-only secret path. Secret values are never stored in the V2 document."
+        },
+        "required": {"type": "boolean", "default": true}
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["persistent", "on-demand", "session"]},
+        "idleSeconds": {"type": "integer", "minimum": 30, "maximum": 604800}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "on-demand"}}, "required": ["mode"]},
+          "then": {"required": ["idleSeconds"]}
+        },
+        {
+          "if": {"properties": {"mode": {"enum": ["persistent", "session"]}}, "required": ["mode"]},
+          "then": {"not": {"required": ["idleSeconds"]}}
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service"],
+      "properties": {
+        "service": {"$ref": "#/$defs/id"},
+        "condition": {
+          "enum": ["started", "ready"],
+          "default": "ready",
+          "description": "ready waits for the dependency readiness probes; started waits only for native runtime activation."
+        }
+      }
+    },
+    "probe": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "unit"],
+          "properties": {
+            "type": {"const": "systemd"},
+            "unit": {"type": "string", "pattern": "^[A-Za-z0-9_.@:-]+\\.(service|socket|target|timer|path)$"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "port"],
+          "properties": {
+            "type": {"const": "tcp"},
+            "host": {"type": "string", "default": "127.0.0.1", "maxLength": 253},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": {
+            "type": {"const": "http"},
+            "url": {"type": "string", "pattern": "^https?://"},
+            "acceptStatusMin": {"type": "integer", "minimum": 100, "maximum": 599, "default": 200},
+            "acceptStatusMax": {"type": "integer", "minimum": 100, "maximum": 599, "default": 399}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": {"const": "path"},
+            "path": {"type": "string", "pattern": "^/"}
+          }
+        }
+      ]
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probes"],
+      "properties": {
+        "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 60},
+        "intervalMilliseconds": {"type": "integer", "minimum": 100, "maximum": 10000, "default": 500},
+        "probes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/probe"}
+        }
+      }
+    },
+    "accelerator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"const": "gpu"},
+        "vendor": {"enum": ["any", "nvidia", "amd", "intel"], "default": "any"},
+        "quantity": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1, "maximum": 16},
+            {"const": "all"}
+          ],
+          "default": 1
+        },
+        "device": {
+          "type": "string",
+          "pattern": "^(pci:[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]|cdi:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.:@-]+)$",
+          "description": "Optional explicit PCI or CDI device selector."
+        },
+        "required": {"type": "boolean", "default": false},
+        "mode": {
+          "enum": ["shared", "passthrough"],
+          "default": "shared",
+          "description": "VM GPU assignment requires passthrough and an explicit pci: selector."
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "description": "Runtime-local target, required when a multi-service Compose project needs the accelerator on one inner service."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"required": ["device"]},
+          "then": {
+            "not": {"required": ["quantity"]}
+          }
+        }
+      ]
+    },
+    "storageAttachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource", "mountPath"],
+      "properties": {
+        "resource": {"$ref": "#/$defs/id"},
+        "mountPath": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Container/exec mount path or intended in-guest mount path."
+        },
+        "access": {"enum": ["read", "write"], "default": "read"},
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "description": "Runtime-local target: Compose inner service name or libvirt virtiofs mount tag."
+        }
+      }
+    },
+    "credentialAttachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential", "mountPath"],
+      "properties": {
+        "credential": {"$ref": "#/$defs/id"},
+        "mountPath": {"type": "string", "pattern": "^/"},
+        "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}
+      }
+    },
+    "systemdRuntime": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "units"],
+          "properties": {
+            "type": {"const": "systemd"},
+            "units": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z0-9_.@:-]+\\.(service|socket|target|timer|path)$"}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "exec"],
+          "properties": {
+            "type": {"const": "systemd"},
+            "exec": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["command"],
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {"type": "string", "minLength": 1}
+                },
+                "user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,31}$"},
+                "group": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,31}$"},
+                "workingDirectory": {"type": "string", "pattern": "^/"},
+                "environment": {
+                  "type": "object",
+                  "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                  "additionalProperties": {"type": "string"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "runtime": {
+      "oneOf": [
+        {"$ref": "#/$defs/systemdRuntime"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "source"],
+          "properties": {
+            "type": {"const": "quadlet"},
+            "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+\\.container$"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "source"],
+          "properties": {
+            "type": {"const": "compose"},
+            "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+\\.(ya?ml|json)$"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "source"],
+          "properties": {
+            "type": {"const": "vm"},
+            "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+\\.xml$"}
+          }
+        }
+      ]
+    },
+    "endpointTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "port"],
+          "properties": {
+            "type": {"const": "tcp"},
+            "host": {"type": "string", "default": "127.0.0.1", "maxLength": 253},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": {"const": "unix"},
+            "path": {"type": "string", "pattern": "^/run/"}
+          }
+        }
+      ]
+    },
+    "endpointAuth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {"type": {"const": "public"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "capability"],
+          "properties": {
+            "type": {"const": "identity"},
+            "capability": {"type": "string", "pattern": "^application\\.[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "credential", "accept"],
+          "properties": {
+            "type": {"const": "secret"},
+            "credential": {"$ref": "#/$defs/id"},
+            "accept": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"enum": ["bearer", "x-api-key"]}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {"type": {"const": "upstream"}}
+        }
+      ]
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "target", "exposure", "auth"],
+      "properties": {
+        "protocol": {"enum": ["http", "https", "tcp", "udp"]},
+        "target": {"$ref": "#/$defs/endpointTarget"},
+        "exposure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {"enum": ["none", "path", "hostname", "port"]},
+            "value": {"type": "string", "minLength": 1, "maxLength": 253},
+            "prefix": {"type": "boolean", "default": false}
+          }
+        },
+        "auth": {"$ref": "#/$defs/endpointAuth"},
+        "portal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visible": {"type": "boolean", "default": false},
+            "label": {"type": "string", "maxLength": 64},
+            "category": {"enum": ["Files", "Media", "AI", "Home", "Tools", "Monitoring", "Administration", "Other"]},
+            "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "enabled", "managed", "runtime", "lifecycle"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 64},
+        "description": {"type": "string", "maxLength": 256},
+        "enabled": {"type": "boolean"},
+        "managed": {
+          "type": "boolean",
+          "default": true,
+          "description": "false means the service is a core substrate visible to dependency resolution but V2 never stops or reconfigures its lifecycle."
+        },
+        "principal": {"type": "string", "pattern": "^application:[a-z][a-z0-9-]{0,47}$"},
+        "runtime": {"$ref": "#/$defs/runtime"},
+        "lifecycle": {"$ref": "#/$defs/lifecycle"},
+        "dependencies": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/dependency"}
+        },
+        "readiness": {"$ref": "#/$defs/readiness"},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpuCores": {"type": "number", "minimum": 0.1, "maximum": 64},
+            "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 68719476736},
+            "pids": {"type": "integer", "minimum": 16, "maximum": 65536},
+            "accelerators": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {"$ref": "#/$defs/accelerator"}
+            }
+          }
+        },
+        "storage": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/storageAttachment"}
+        },
+        "credentials": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/credentialAttachment"}
+        },
+        "networkProfile": {"$ref": "#/$defs/id"},
+        "network": {"$ref": "#/$defs/networkPolicy"},
+        "endpoints": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/id"},
+          "additionalProperties": {"$ref": "#/$defs/endpoint"}
+        }
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": {"const": 3},
+    "generation": {"type": "integer", "minimum": 1, "default": 1},
+    "storageResources": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/storageResource"}
+    },
+    "networkProfiles": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/networkPolicy"}
+    },
+    "credentials": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/credential"}
+    },
+    "services": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/service"}
+    }
+  }
+}
