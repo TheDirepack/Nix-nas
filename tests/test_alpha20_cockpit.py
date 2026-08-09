@@ -159,6 +159,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Query the current npm vulnerability database", workflow)
         self.assertNotIn("~/.cache/nixos-nas-qemu\n", workflow)
         self.assertIn("~/.cache/nixos-nas-qemu/*.iso", workflow)
+        self.assertIn("prepare-coverage-baseline.py .", workflow)
+        self.assertIn("hashFiles('scripts/prepare-coverage-baseline.py')", workflow)
         for phrase in (
             "Dependency caches",
             "Cockpit distribution cache",

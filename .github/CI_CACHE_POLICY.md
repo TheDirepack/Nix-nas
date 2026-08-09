@@ -21,7 +21,9 @@ Playwright operating-system packages installed by `playwright install-deps` are 
 
 ## Main coverage baseline data
 
-Pull-request coverage comparison caches `main-coverage.json` by the exact main-branch revision, runner operating system, and `CI_CACHE_SCHEMA`. The cache avoids recomputing coverage for an unchanged main revision. It does not replace current-branch tests, current coverage generation, or the per-file drift check.
+Pull-request coverage comparison checks out the exact main-branch revision. Before measuring an uncached baseline, `scripts/prepare-coverage-baseline.py` targets exactly four known stale assertions or values in test-only fixtures. It alters no production source and ignores no test failures. The full fast baseline test run must pass before CI compares coverage.
+
+CI caches `main-coverage.json` by that exact main revision, the baseline-preparation helper hash, runner operating system, and `CI_CACHE_SCHEMA`. The cache remains measurement data only. It does not replace current-branch tests, current coverage generation, or the per-file drift check.
 
 ## Immutable installer media
 

@@ -148,6 +148,12 @@ class ContractTests(unittest.TestCase):
         )
         self.assertIn(mount_guard, text("modules/nas/config/systemd-services.nix"))
 
+    def test_observability_consumes_the_v2_service_registry_shape(self):
+        observability = text("modules/nas/config/observability.nix")
+        self.assertIn("entry.runtime.units", observability)
+        self.assertIn("entry.enabled", observability)
+        self.assertNotIn("entry.available", observability)
+
     def test_shared_operation_coordinator_covers_update_secrets_and_setup_children(self):
         system = text("modules/nas/config/system.nix")
         identities = text("modules/nas/config/identities.nix")

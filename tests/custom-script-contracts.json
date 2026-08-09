@@ -326,6 +326,14 @@
         "tests/test_maintainer_scripts.py"
       ]
     },
+    "scripts/prepare-coverage-baseline.py": {
+      "source": "scripts/prepare-coverage-baseline.py",
+      "sourceFuzzStrategy": "hostile-argv",
+      "systemTest": "tests/test_prepare_coverage_baseline.py",
+      "tests": [
+        "tests/test_prepare_coverage_baseline.py"
+      ]
+    },
     "scripts/qemu-test.sh": {
       "source": "scripts/qemu-test.sh",
       "sourceFuzzStrategy": "unknown-option",
