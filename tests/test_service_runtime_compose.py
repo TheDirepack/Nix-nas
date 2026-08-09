@@ -14,10 +14,17 @@ import nas_service_runtime_compose as compose  # noqa: E402
 
 
 class PodmanComposeAdapterTests(unittest.TestCase):
-    def service(self, *, enabled: bool = True, source: object | None = None) -> dict:
+    def service(
+        self,
+        *,
+        enabled: bool = True,
+        source: object | None = None,
+        lifecycle: str = "persistent",
+    ) -> dict:
         return {
             "label": "Example",
             "enabled": enabled,
+            "lifecycle": {"mode": lifecycle},
             "runtime": {
                 "type": "compose",
                 "source": source or "/var/lib/nas-control/apps/example/compose.yaml",
@@ -81,7 +88,16 @@ class PodmanComposeAdapterTests(unittest.TestCase):
         plan = compose.plan_compose("example", self.service())
         self.assertEqual(plan["runtime"], "podman-compose")
         self.assertEqual(plan["project"], "example")
+        self.assertEqual(plan["lifecycle"], "persistent")
         self.assertEqual(plan["actions"][0]["operation"], "up")
+
+    def test_enabled_session_lifecycle_is_rejected(self):
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "session lifecycle is not supported for Compose"):
+            compose.plan_compose("example", self.service(lifecycle="session"))
+
+    def test_disabled_session_can_be_torn_down_for_cleanup(self):
+        plan = compose.plan_compose("example", self.service(enabled=False, lifecycle="session"))
+        self.assertEqual(plan["actions"][0]["operation"], "down")
 
     @mock.patch.object(compose.subprocess, "run")
     def test_apply_enabled_delegates_to_podman_compose(self, run):
@@ -124,8 +140,8 @@ class PodmanComposeAdapterTests(unittest.TestCase):
         run.assert_not_called()
 
     @mock.patch.object(compose.subprocess, "run")
-    def test_remove_uses_same_project_name(self, run):
-        compose.remove_compose("example", self.service())
+    def test_remove_uses_same_project_name_and_allows_session_cleanup(self, run):
+        compose.remove_compose("example", self.service(lifecycle="session"))
         run.assert_called_once_with(
             [
                 "podman",
