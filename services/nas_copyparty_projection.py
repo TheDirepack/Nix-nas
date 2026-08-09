@@ -9,7 +9,9 @@ capability-group names.
 User-scoped resources are deliberately not projected as their parent path. They
 require an identity-bound realization of ``pathTemplate``; until that projection
 is explicitly qualified against the pinned Copyparty version, omission is safer
-than exposing every user's state beneath one shared volume.
+than exposing every user's state beneath one shared volume. Resources can also
+be marked fileBrowser.visible=false when they exist for workloads/backup but
+should not create a human-facing Copyparty volume.
 """
 
 from __future__ import annotations
@@ -44,8 +46,6 @@ class CopypartyProjectionError(RuntimeError):
 
 
 def capability_group(resource_id: str, capability: str) -> str:
-    """Return the deterministic Authentik group backing a storage capability."""
-
     return capability_group_name(storage_capability(resource_id, capability))
 
 
@@ -87,10 +87,21 @@ def render_config(effective: dict[str, Any]) -> str:
         path = resource.get("path")
         capabilities = resource.get("capabilities")
         scope = resource.get("scope", "system")
+        file_browser = resource.get("fileBrowser", {"visible": True})
         if not isinstance(path, str) or not path.startswith("/"):
             raise CopypartyProjectionError(f"Storage resource {resource_id!r} has invalid path")
         if not isinstance(capabilities, list) or not capabilities:
             raise CopypartyProjectionError(f"Storage resource {resource_id!r} has no capabilities")
+        if not isinstance(file_browser, dict) or not isinstance(file_browser.get("visible", True), bool):
+            raise CopypartyProjectionError(f"Storage resource {resource_id!r} has invalid fileBrowser policy")
+        if not file_browser.get("visible", True):
+            lines.extend(
+                [
+                    "",
+                    f"# resource {resource_id!r} intentionally omitted: fileBrowser.visible=false",
+                ]
+            )
+            continue
         if scope == "user":
             path_template = resource.get("pathTemplate")
             if not isinstance(path_template, str) or "{user}" not in path_template:
