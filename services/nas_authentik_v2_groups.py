@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import re
+import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
@@ -91,9 +92,10 @@ def reconcile_groups(token: str, effective: dict[str, Any]) -> dict[str, Any]:
             primary_key = current.get("pk")
             if primary_key is None:
                 raise AuthentikV2GroupError(f"Authentik group {name!r} has no primary key")
+            encoded_pk = urllib.parse.quote(str(primary_key), safe="")
             authentik_request(
                 token,
-                f"core/groups/{primary_key}/",
+                f"core/groups/{encoded_pk}/",
                 method="PATCH",
                 body={"is_superuser": False, "attributes": {**current_attributes, **attributes}},
             )
