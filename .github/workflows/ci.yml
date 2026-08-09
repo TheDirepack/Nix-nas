@@ -65,6 +65,17 @@ jobs:
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
+      - name: Source-only repository preflight
+        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
+      - name: Restore exact Node 24 source dependencies
+        id: source-node-deps
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/node_modules
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install source dependencies on cache miss
+        if: steps.source-node-deps.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Source syntax and renderer contracts
         run: |
           while IFS= read -r -d '' script; do bash -n "$script"; done < <(find scripts tests/vm -type f -name '*.sh' -print0)
@@ -72,7 +83,6 @@ jobs:
           node cockpit/build.js --check-source
           node scripts/validate-cockpit-jsx.cjs
           node --test tests/js/*.test.mjs
-          NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: success()
         with:
@@ -350,7 +360,7 @@ jobs:
           cd "$root"
           sha256sum -c MANIFEST.sha256
           NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
-          nix flake check --no-build --show-trace
+          ./scripts/nix-config-matrix.sh
           ./scripts/evaluate-reference-configurations.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

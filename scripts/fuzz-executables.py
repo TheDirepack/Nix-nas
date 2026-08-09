@@ -19,7 +19,8 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "tests/custom-script-contracts.json"
-MARKER = pathlib.Path("/tmp/nas-source-fuzz-pwned")
+# The fixed sentinel must match literal attack payloads so marker creation is detectable.
+MARKER = pathlib.Path("/tmp/nas-source-fuzz-pwned")  # nosec B108
 PAYLOADS = (
     "../../../../etc/shadow",
     ";touch /tmp/nas-source-fuzz-pwned",
