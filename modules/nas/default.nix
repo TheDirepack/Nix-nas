@@ -19,6 +19,7 @@
     ./config/reverse-proxy.nix
     ./config/observability.nix
     ./config/storage-monitoring.nix
+    ./config/backup-v2.nix
     ./config/systemd-services.nix
     ./config/schedules.nix
     ./config/system.nix
