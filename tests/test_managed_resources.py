@@ -105,12 +105,14 @@ class ManagedResourceTests(unittest.TestCase):
             {
                 "resource": "projects",
                 "guestPath": "/workspace",
+                "target": "web",
                 "requiredCapabilities": ["read", "write"],
             },
             self.resources,
         )
         self.assertEqual(attachment["resource"], "projects")
         self.assertEqual(attachment["requiredCapabilities"], ["read", "write"])
+        self.assertEqual(attachment["target"], "web")
         with self.assertRaises(ManagedResourceError):
             validate_storage_attachment(
                 "pi",
@@ -127,6 +129,15 @@ class ManagedResourceTests(unittest.TestCase):
                 },
                 self.resources,
             )
+
+    def test_runtime_target_is_strict_metadata(self) -> None:
+        for bad in ("", "web/service", "../../escape", "web:bad", "x" * 65):
+            with self.subTest(target=bad), self.assertRaises(ManagedResourceError):
+                validate_storage_attachment(
+                    "pi",
+                    {"resource": "projects", "guestPath": "/workspace", "target": bad},
+                    self.resources,
+                )
 
     def test_backup_inventory_is_derived_from_resource_policy(self) -> None:
         self.assertEqual(backup_resource_ids(self.resources), ["pi-home", "projects"])
