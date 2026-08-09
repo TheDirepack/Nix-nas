@@ -2,9 +2,9 @@
 """Thin libvirt/QEMU/KVM runtime adapter for managed services.
 
 The user-authored libvirt XML remains the VM definition authority. Managed
-Services V2 adds NAS-owned storage policy through a generated runtime XML
-projection under /run; the native source is never rewritten. Persistent storage
-is never implicitly deleted with the domain.
+Services V2 adds NAS-owned storage and explicit PCI-device policy through a
+generated runtime XML projection under /run; the native source is never
+rewritten. Persistent storage is never implicitly deleted with the domain.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 PROJECTION_ROOT = pathlib.Path("/run/nas-control/libvirt")
 MAX_DOMAIN_XML_BYTES = 4 * 1024 * 1024
 VIRTIOFS_TAG_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+PCI_RE = re.compile(r"^([0-9a-fA-F]{4}):([0-9a-fA-F]{2}):([0-9a-fA-F]{2})\.([0-7])$")
 
 
 def _domain_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
@@ -89,6 +90,30 @@ def _virtiofs_specs(service_id: str, service: dict[str, Any]) -> list[dict[str, 
     return specs
 
 
+def _gpu_hostdev_specs(service_id: str, service: dict[str, Any]) -> list[str]:
+    resolved = service.get("resolvedDevices") or []
+    if not isinstance(resolved, list):
+        raise ManagedServiceError(f"VM service {service_id}: resolvedDevices must be an array")
+    addresses: list[str] = []
+    for request in resolved:
+        if not isinstance(request, dict):
+            raise ManagedServiceError(f"VM service {service_id}: resolved device entry must be an object")
+        request_name = request.get("request")
+        request_addresses = request.get("pciAddresses") or []
+        if not request_addresses:
+            continue
+        if not isinstance(request_name, str) or ":pci:" not in request_name:
+            raise ManagedServiceError(
+                f"VM service {service_id}: GPU passthrough requires explicit resources.gpus selector required:pci:<address> or optional:pci:<address>"
+            )
+        for address in request_addresses:
+            if not isinstance(address, str) or PCI_RE.fullmatch(address) is None:
+                raise ManagedServiceError(f"VM service {service_id}: invalid resolved PCI GPU address {address!r}")
+            if address not in addresses:
+                addresses.append(address)
+    return addresses
+
+
 def _read_domain_xml(service_id: str, source: pathlib.Path) -> ET.Element:
     try:
         payload = source.read_bytes()
@@ -119,9 +144,27 @@ def _ensure_shared_memory(service_id: str, domain: ET.Element) -> None:
         raise ManagedServiceError(f"VM service {service_id}: virtiofs requires memoryBacking access mode='shared'")
 
 
+def _pci_address_element(parent: ET.Element, address: str) -> None:
+    match = PCI_RE.fullmatch(address)
+    if match is None:  # pragma: no cover - validated before use
+        raise ManagedServiceError(f"Invalid PCI address {address!r}")
+    domain, bus, slot, function = match.groups()
+    ET.SubElement(
+        parent,
+        "address",
+        {
+            "domain": f"0x{domain}",
+            "bus": f"0x{bus}",
+            "slot": f"0x{slot}",
+            "function": f"0x{function}",
+        },
+    )
+
+
 def render_domain_projection(service_id: str, service: dict[str, Any]) -> bytes | None:
     specs = _virtiofs_specs(service_id, service)
-    if not specs:
+    gpu_addresses = _gpu_hostdev_specs(service_id, service)
+    if not specs and not gpu_addresses:
         return None
     source = _domain_source(service_id, service)
     domain = _read_domain_xml(service_id, source)
@@ -130,13 +173,32 @@ def render_domain_projection(service_id: str, service: dict[str, Any]) -> bytes 
     devices = domain.find("devices")
     if devices is None:
         devices = ET.SubElement(domain, "devices")
+
     existing_targets = {
         target.get("dir")
         for filesystem in devices.findall("filesystem")
         for target in filesystem.findall("target")
         if target.get("dir")
     }
-    _ensure_shared_memory(service_id, domain)
+    existing_hostdevs: set[str] = set()
+    for hostdev in devices.findall("hostdev"):
+        source_node = hostdev.find("source")
+        address_node = source_node.find("address") if source_node is not None else None
+        if address_node is None:
+            continue
+        try:
+            value = (
+                f"{int(address_node.get('domain', '0'), 0):04x}:"
+                f"{int(address_node.get('bus', '0'), 0):02x}:"
+                f"{int(address_node.get('slot', '0'), 0):02x}."
+                f"{int(address_node.get('function', '0'), 0):x}"
+            )
+        except ValueError:
+            continue
+        existing_hostdevs.add(value)
+
+    if specs:
+        _ensure_shared_memory(service_id, domain)
     for spec in specs:
         if spec["target"] in existing_targets:
             raise ManagedServiceError(
@@ -148,6 +210,14 @@ def render_domain_projection(service_id: str, service: dict[str, Any]) -> bytes 
         ET.SubElement(filesystem, "target", {"dir": spec["target"]})
         if spec["mode"] == "ro":
             ET.SubElement(filesystem, "readonly")
+
+    for address in gpu_addresses:
+        if address in existing_hostdevs:
+            raise ManagedServiceError(f"VM service {service_id}: native XML already defines PCI hostdev {address}")
+        hostdev = ET.SubElement(devices, "hostdev", {"mode": "subsystem", "type": "pci", "managed": "yes"})
+        source_node = ET.SubElement(hostdev, "source")
+        _pci_address_element(source_node, address)
+
     ET.indent(domain, space="  ")
     return ET.tostring(domain, encoding="utf-8", xml_declaration=True) + b"\n"
 
@@ -184,7 +254,8 @@ def plan_libvirt(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     _validate_lifecycle(service_id, service)
     native_source = _domain_source(service_id, service)
     mounts = _virtiofs_specs(service_id, service)
-    source = _projection_path(service_id) if mounts else native_source
+    gpu_addresses = _gpu_hostdev_specs(service_id, service)
+    source = _projection_path(service_id) if mounts or gpu_addresses else native_source
     enabled = bool(service.get("enabled"))
     return {
         "service": service_id,
@@ -195,7 +266,9 @@ def plan_libvirt(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         "enabled": enabled,
         "lifecycle": (service.get("lifecycle") or {}).get("mode"),
         "resolvedStorage": service.get("resolvedStorage", []),
+        "resolvedDevices": service.get("resolvedDevices", []),
         "virtiofs": mounts,
+        "pciHostDevices": gpu_addresses,
         "actions": [
             {"type": "virsh-define", "domain": service_id, "source": str(source)},
             {"type": "virsh-domain", "domain": service_id, "operation": "start" if enabled else "destroy"},
