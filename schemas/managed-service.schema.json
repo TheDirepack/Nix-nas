@@ -60,6 +60,26 @@
           }
         }
       }
+    },
+    "lifecyclePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["persistent", "on-demand", "manual", "disabled"]},
+        "idleSeconds": {"type": "integer", "minimum": 30, "maximum": 604800},
+        "ephemeralRuntime": {"type": "boolean", "default": false}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "on-demand"}}, "required": ["mode"]},
+          "then": {"required": ["idleSeconds"]}
+        },
+        {
+          "if": {"properties": {"mode": {"enum": ["persistent", "manual", "disabled"]}}, "required": ["mode"]},
+          "then": {"not": {"required": ["idleSeconds"]}}
+        }
+      ]
     }
   },
   "properties": {
@@ -88,6 +108,7 @@
           "enabled": {"type": "boolean"},
           "generation": {"type": "integer", "minimum": 1},
           "principal": {"type": "string", "pattern": "^application:[a-z][a-z0-9-]{0,47}$"},
+          "lifecycle": {"$ref": "#/$defs/lifecyclePolicy"},
           "portal": {
             "type": "object",
             "additionalProperties": false,
