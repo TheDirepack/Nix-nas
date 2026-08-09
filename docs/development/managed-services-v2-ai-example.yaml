@@ -151,7 +151,7 @@ services:
     credentials:
       - credential: ai-runtime-env
         use: environment-file
-    endpoints:
+    routes:
       admin:
         target:
           type: http
@@ -219,7 +219,7 @@ services:
     credentials:
       - credential: open-webui-env
         use: environment-file
-    endpoints:
+    routes:
       main:
         target:
           type: http
