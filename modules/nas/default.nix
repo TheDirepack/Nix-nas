@@ -23,6 +23,7 @@
     ./config/schedules.nix
     ./config/system.nix
     ./config/managed-services.nix
+    ./config/storage-authz.nix
   ];
 
   _module.args.nasInternal = import ./internal { inherit config lib pkgs; };
