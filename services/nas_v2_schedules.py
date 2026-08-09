@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import tempfile
 from typing import Any
@@ -46,7 +47,18 @@ def runner_name(service_id: str, index: int) -> str:
     return f"nas-v2-job-{service_id}-{index}.service"
 
 
-def render_runner(service_id: str, index: int, *, spec_path: str, schema_path: str) -> str:
+def render_runner(
+    service_id: str,
+    index: int,
+    *,
+    runtime_path: str,
+    spec_path: str,
+    schema_path: str,
+) -> str:
+    command = " ".join(
+        shlex.quote(item)
+        for item in [runtime_path, "run-job", service_id, "--spec", spec_path, "--schema", schema_path]
+    )
     return "\n".join(
         [
             MARKER,
@@ -56,7 +68,7 @@ def render_runner(service_id: str, index: int, *, spec_path: str, schema_path: s
             "",
             "[Service]",
             "Type=oneshot",
-            f"ExecStart=/run/current-system/sw/bin/nas-v2-runtime run-job {service_id} --spec {spec_path} --schema {schema_path}",
+            f"ExecStart={command}",
             "NoNewPrivileges=yes",
             "PrivateTmp=yes",
             "",
@@ -90,10 +102,13 @@ def render_timer(service_id: str, index: int, schedule: dict[str, Any]) -> str:
 def reconcile_schedules(
     document: dict[str, Any],
     *,
+    runtime_path: str,
     spec_path: str,
     schema_path: str,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    if not pathlib.PurePosixPath(runtime_path).is_absolute():
+        raise V2ScheduleError("V2 runtime path for generated timers must be absolute")
     desired: dict[str, str] = {}
     enabled_timers: list[str] = []
     for service_id, service in document["services"].items():
@@ -103,15 +118,17 @@ def reconcile_schedules(
         for index, schedule in enumerate(workload.get("schedules", []), start=1):
             runner = runner_name(service_id, index)
             timer = timer_name(service_id, index)
-            desired[runner] = render_runner(service_id, index, spec_path=spec_path, schema_path=schema_path)
+            desired[runner] = render_runner(
+                service_id,
+                index,
+                runtime_path=runtime_path,
+                spec_path=spec_path,
+                schema_path=schema_path,
+            )
             desired[timer] = render_timer(service_id, index, schedule)
             enabled_timers.append(timer)
 
-    existing = {
-        path.name: path
-        for path in UNIT_ROOT.glob("nas-v2-job-*.service")
-        if path.is_file()
-    }
+    existing = {path.name: path for path in UNIT_ROOT.glob("nas-v2-job-*.service") if path.is_file()}
     existing.update({path.name: path for path in UNIT_ROOT.glob("nas-v2-job-*.timer") if path.is_file()})
     stale = sorted(set(existing) - set(desired))
     plan = {"units": sorted(desired), "timers": sorted(enabled_timers), "remove": stale}
