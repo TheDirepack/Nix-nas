@@ -327,9 +327,7 @@ test("backend refresh failure becomes a bounded operator-visible error", async (
   await installCockpitMock(page, {overviewError: "simulated backend outage"});
   await page.goto("/index.html");
   await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
-  await expect(
-    page.getByRole("heading", {name: /Unable to refresh NAS state/}),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", {name: /Unable to refresh NAS state/})).toBeVisible();
   await expect(page.getByText("simulated backend outage", {exact: true})).toBeVisible();
   await expect(page.getByLabel("Loading NAS state")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
