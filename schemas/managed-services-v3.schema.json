@@ -10,6 +10,23 @@
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
     "unit": {"type": "string", "pattern": "^[A-Za-z0-9_.@:-]+\\.(service|socket|target|timer|path)$"},
     "absolutePath": {"type": "string", "pattern": "^/"},
+    "pythonHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pythonModule"],
+      "properties": {
+        "pythonModule": {
+          "type": "string",
+          "pattern": "^nas_v2_handler_[a-z0-9_]+$",
+          "description": "Python handler loaded by the generic V2 wrapper. Use nas_v2_handler_generic unless this service needs an isolated application-specific extension."
+        },
+        "options": {
+          "type": "object",
+          "default": {},
+          "description": "Handler-owned JSON-compatible options. The generic handler ignores this object."
+        }
+      }
+    },
     "storageResource": {
       "type": "object",
       "additionalProperties": false,
@@ -38,95 +55,42 @@
         "allowedEgress": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["cidr"], "properties": {"cidr": {"type": "string", "minLength": 3, "maxLength": 64}, "ports": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 65535}}}}}
       }
     },
-    "credential": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["path"],
-      "properties": {
-        "path": {"type": "string", "pattern": "^/run/nas-secrets/[A-Za-z0-9._/-]+$", "description": "Runtime secret path. Secret values never appear in the V2 desired-state document."},
-        "required": {"type": "boolean", "default": true},
-        "description": {"type": "string", "maxLength": 256}
-      }
-    },
-    "schedule": {"type": "object", "additionalProperties": false, "required": ["calendar"], "properties": {"calendar": {"type": "string", "minLength": 1, "maxLength": 128, "description": "systemd OnCalendar expression"}, "randomizedDelaySeconds": {"type": "integer", "minimum": 0, "maximum": 604800, "default": 0}, "persistent": {"type": "boolean", "default": true}}},
-    "daemonWorkload": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "activation"],
-      "properties": {"kind": {"const": "daemon"}, "activation": {"enum": ["persistent", "on-demand"]}, "idleSeconds": {"type": "integer", "minimum": 30, "maximum": 604800}},
-      "allOf": [{"if": {"properties": {"activation": {"const": "on-demand"}}, "required": ["activation"]}, "then": {"required": ["idleSeconds"]}, "else": {"not": {"required": ["idleSeconds"]}}}]
-    },
+    "credential": {"type": "object", "additionalProperties": false, "required": ["path"], "properties": {"path": {"type": "string", "pattern": "^/run/nas-secrets/[A-Za-z0-9._/-]+$"}, "required": {"type": "boolean", "default": true}, "description": {"type": "string", "maxLength": 256}}},
+    "schedule": {"type": "object", "additionalProperties": false, "required": ["calendar"], "properties": {"calendar": {"type": "string", "minLength": 1, "maxLength": 128}, "randomizedDelaySeconds": {"type": "integer", "minimum": 0, "maximum": 604800, "default": 0}, "persistent": {"type": "boolean", "default": true}}},
+    "daemonWorkload": {"type": "object", "additionalProperties": false, "required": ["kind", "activation"], "properties": {"kind": {"const": "daemon"}, "activation": {"enum": ["persistent", "on-demand"]}, "idleSeconds": {"type": "integer", "minimum": 30, "maximum": 604800}}, "allOf": [{"if": {"properties": {"activation": {"const": "on-demand"}}, "required": ["activation"]}, "then": {"required": ["idleSeconds"]}, "else": {"not": {"required": ["idleSeconds"]}}}]},
     "jobWorkload": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "job"}, "schedules": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/schedule"}}}},
     "sessionWorkload": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "session"}, "leaseIdleSeconds": {"type": "integer", "minimum": 30, "maximum": 86400, "default": 900}}},
     "workload": {"oneOf": [{"$ref": "#/$defs/daemonWorkload"}, {"$ref": "#/$defs/jobWorkload"}, {"$ref": "#/$defs/sessionWorkload"}]},
     "dependency": {"type": "object", "additionalProperties": false, "required": ["service"], "properties": {"service": {"$ref": "#/$defs/id"}, "condition": {"enum": ["started", "ready", "completed"], "default": "ready"}}},
-    "probe": {
-      "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["type", "unit"], "properties": {"type": {"const": "systemd"}, "unit": {"$ref": "#/$defs/unit"}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "port"], "properties": {"type": {"const": "tcp"}, "host": {"type": "string", "default": "127.0.0.1", "maxLength": 253}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "url"], "properties": {"type": {"const": "http"}, "url": {"type": "string", "pattern": "^https?://"}, "acceptStatusMin": {"type": "integer", "minimum": 100, "maximum": 599, "default": 200}, "acceptStatusMax": {"type": "integer", "minimum": 100, "maximum": 599, "default": 399}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "path"}, "path": {"$ref": "#/$defs/absolutePath"}}}
-      ]
-    },
+    "probe": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["type", "unit"], "properties": {"type": {"const": "systemd"}, "unit": {"$ref": "#/$defs/unit"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "port"], "properties": {"type": {"const": "tcp"}, "host": {"type": "string", "default": "127.0.0.1"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}}, {"type": "object", "additionalProperties": false, "required": ["type", "url"], "properties": {"type": {"const": "http"}, "url": {"type": "string", "pattern": "^https?://"}, "acceptStatusMin": {"type": "integer", "minimum": 100, "maximum": 599, "default": 200}, "acceptStatusMax": {"type": "integer", "minimum": 100, "maximum": 599, "default": 399}}}, {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "path"}, "path": {"$ref": "#/$defs/absolutePath"}}}]},
     "readiness": {"type": "object", "additionalProperties": false, "required": ["probes"], "properties": {"timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 60}, "intervalMilliseconds": {"type": "integer", "minimum": 100, "maximum": 10000, "default": 500}, "probes": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/probe"}}}},
-    "accelerator": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind"],
-      "properties": {"kind": {"const": "gpu"}, "vendor": {"enum": ["any", "nvidia", "amd", "intel"], "default": "any"}, "quantity": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 16}, {"const": "all"}], "default": 1}, "device": {"type": "string", "pattern": "^(pci:[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]|cdi:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.:@-]+)$"}, "required": {"type": "boolean", "default": false}, "mode": {"enum": ["shared", "passthrough"], "default": "shared"}, "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}},
-      "allOf": [{"if": {"required": ["device"]}, "then": {"not": {"anyOf": [{"required": ["vendor"]}, {"required": ["quantity"]}]}}}]
-    },
+    "accelerator": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "gpu"}, "vendor": {"enum": ["any", "nvidia", "amd", "intel"], "default": "any"}, "quantity": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 16}, {"const": "all"}], "default": 1}, "device": {"type": "string"}, "required": {"type": "boolean", "default": false}, "mode": {"enum": ["shared", "passthrough"], "default": "shared"}, "target": {"type": "string"}}},
     "resources": {"type": "object", "additionalProperties": false, "properties": {"memoryBytes": {"type": "integer", "minimum": 16777216}, "cpus": {"type": "number", "minimum": 0.1, "maximum": 256}, "pids": {"type": "integer", "minimum": 16, "maximum": 1048576}, "accelerators": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/accelerator"}}}},
     "tmpfs": {"type": "object", "additionalProperties": false, "required": ["path"], "properties": {"path": {"$ref": "#/$defs/absolutePath"}, "sizeBytes": {"type": "integer", "minimum": 1048576}, "noexec": {"type": "boolean", "default": true}, "nodev": {"type": "boolean", "default": true}, "nosuid": {"type": "boolean", "default": true}}},
-    "sandbox": {"type": "object", "additionalProperties": false, "properties": {"profile": {"enum": ["strict", "standard", "none"], "default": "strict"}, "readOnlyRoot": {"type": "boolean", "default": true}, "writablePaths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/absolutePath"}}, "tmpfs": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/tmpfs"}}, "addLinuxCapabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^CAP_[A-Z0-9_]+$"}}, "dropAllLinuxCapabilities": {"type": "boolean", "default": true}}},
-    "storageAttachment": {"type": "object", "additionalProperties": false, "required": ["resource", "mountPath"], "properties": {"resource": {"$ref": "#/$defs/id"}, "mountPath": {"$ref": "#/$defs/absolutePath"}, "access": {"enum": ["read", "write"], "default": "read"}, "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}}},
-    "credentialAttachment": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["credential", "use"],
-      "properties": {"credential": {"$ref": "#/$defs/id"}, "use": {"enum": ["file", "environment-file"]}, "mountPath": {"$ref": "#/$defs/absolutePath"}, "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}},
-      "allOf": [{"if": {"properties": {"use": {"const": "file"}}, "required": ["use"]}, "then": {"required": ["mountPath"]}}]
-    },
-    "identity": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "dynamic"}}}, {"type": "object", "additionalProperties": false, "required": ["mode", "user"], "properties": {"mode": {"const": "existing"}, "user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,31}$"}, "group": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,31}$"}}}]},
-    "execSpec": {"type": "object", "additionalProperties": false, "required": ["command"], "properties": {"command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "identity": {"$ref": "#/$defs/identity"}, "workingDirectory": {"$ref": "#/$defs/absolutePath"}, "environment": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "additionalProperties": {"type": "string"}}, "restart": {"enum": ["no", "on-failure", "always"], "default": "on-failure"}, "restartSeconds": {"type": "integer", "minimum": 0, "maximum": 3600, "default": 3}, "stopSignal": {"type": "string", "pattern": "^SIG[A-Z0-9]+$"}, "timeoutStopSeconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 30}}},
-    "runtime": {
-      "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["type", "units"], "properties": {"type": {"const": "systemd"}, "units": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/unit"}}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "exec"], "properties": {"type": {"const": "exec"}, "exec": {"$ref": "#/$defs/execSpec"}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "source"], "properties": {"type": {"const": "quadlet"}, "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+\\.container$"}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "source"], "properties": {"type": {"const": "compose"}, "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+\\.(ya?ml|json)$"}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "source"], "properties": {"type": {"const": "vm"}, "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+\\.xml$"}}},
-        {"type": "object", "additionalProperties": false, "required": ["type", "image"], "properties": {"type": {"const": "oci"}, "image": {"type": "string", "minLength": 1, "maxLength": 512}, "command": {"type": "array", "items": {"type": "string"}}, "user": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]+$"}, "pull": {"enum": ["never", "missing", "always"], "default": "missing"}}}
-      ]
-    },
-    "sessionPathInput": {"type": "object", "additionalProperties": false, "required": ["type", "resource", "mountPath"], "properties": {"type": {"const": "path"}, "label": {"type": "string", "minLength": 1, "maxLength": 64}, "resource": {"$ref": "#/$defs/id"}, "allowSubpath": {"type": "boolean", "default": true}, "mountPath": {"$ref": "#/$defs/absolutePath"}, "access": {"enum": ["read", "write"], "default": "read"}, "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}}},
-    "routeHeaderValue": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["source", "value"], "properties": {"source": {"const": "static"}, "value": {"type": "string"}}}, {"type": "object", "additionalProperties": false, "required": ["source", "field"], "properties": {"source": {"const": "identity"}, "field": {"enum": ["username", "groups", "name", "email", "role"]}}}, {"type": "object", "additionalProperties": false, "required": ["source", "header"], "properties": {"source": {"const": "request-header"}, "header": {"type": "string", "pattern": "^[A-Za-z0-9-]+$"}}}]},
-    "routeMatch": {"type": "object", "additionalProperties": false, "properties": {"paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^/"}}, "methods": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z]+$"}}, "headers": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z0-9-]+$"}, "additionalProperties": {"type": "string", "description": "Regular expression matched against the request header value"}}}},
-    "routeTarget": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["type", "port"], "properties": {"type": {"enum": ["http", "https"]}, "host": {"type": "string", "default": "127.0.0.1", "maxLength": 253}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}}, {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "unix-http"}, "path": {"$ref": "#/$defs/absolutePath"}}}]},
-    "routeExposure": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "path"}, "path": {"type": "string", "pattern": "^/"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "hostname"], "properties": {"type": {"const": "hostname"}, "hostname": {"type": "string", "minLength": 1, "maxLength": 253}, "path": {"type": "string", "pattern": "^/", "default": "/"}}}]},
-    "auth": {
-      "oneOf": [
-        {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "public"}}},
-        {"type": "object", "additionalProperties": false, "required": ["mode", "capability"], "properties": {"mode": {"const": "identity"}, "capability": {"type": "string", "pattern": "^application\\.[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$"}}},
-        {"type": "object", "additionalProperties": false, "required": ["mode", "credential", "sources"], "properties": {"mode": {"const": "secret"}, "credential": {"$ref": "#/$defs/id"}, "sources": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"oneOf": [{"const": "bearer"}, {"type": "string", "pattern": "^header:[A-Za-z0-9-]+$"}]}}}},
-        {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "upstream"}}}
-      ]
-    },
-    "proxy": {"type": "object", "additionalProperties": false, "properties": {"stripPrefix": {"type": "string", "pattern": "^/"}, "requestHeaders": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z0-9-]+$"}, "additionalProperties": {"$ref": "#/$defs/routeHeaderValue"}}, "removeRequestHeaders": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9-]+$"}}, "responseHeaders": {"type": "object", "propertyNames": {"pattern": "^[A-Za-z0-9-]+$"}, "additionalProperties": {"type": "string"}}, "removeResponseHeaders": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9-]+$"}}, "keepaliveSeconds": {"type": "integer", "minimum": 0, "maximum": 3600}}},
-    "mdns": {"type": "object", "additionalProperties": false, "required": ["serviceType", "port"], "properties": {"serviceType": {"type": "string", "pattern": "^_[A-Za-z0-9-]+\\._(tcp|udp)$"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}, "txt": {"type": "object", "additionalProperties": {"type": "string"}}}},
-    "route": {"type": "object", "additionalProperties": false, "required": ["target", "exposure", "auth"], "properties": {"target": {"$ref": "#/$defs/routeTarget"}, "exposure": {"$ref": "#/$defs/routeExposure"}, "auth": {"$ref": "#/$defs/auth"}, "match": {"$ref": "#/$defs/routeMatch"}, "proxy": {"$ref": "#/$defs/proxy"}, "priority": {"type": "integer", "minimum": -1000, "maximum": 1000, "default": 0}, "portal": {"type": "object", "additionalProperties": false, "properties": {"visible": {"type": "boolean", "default": false}, "label": {"type": "string", "minLength": 1, "maxLength": 64}, "category": {"enum": ["Files", "Media", "AI", "Home", "Tools", "Monitoring", "Administration", "Other"]}, "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}}}, "discovery": {"type": "object", "additionalProperties": false, "properties": {"mdns": {"$ref": "#/$defs/mdns"}}}}},
+    "sandbox": {"type": "object", "additionalProperties": false, "properties": {"profile": {"enum": ["strict", "standard", "none"], "default": "strict"}, "readOnlyRoot": {"type": "boolean", "default": true}, "writablePaths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/absolutePath"}}, "tmpfs": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/tmpfs"}}, "addLinuxCapabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "dropAllLinuxCapabilities": {"type": "boolean", "default": true}}},
+    "storageAttachment": {"type": "object", "additionalProperties": false, "required": ["resource", "mountPath"], "properties": {"resource": {"$ref": "#/$defs/id"}, "mountPath": {"$ref": "#/$defs/absolutePath"}, "access": {"enum": ["read", "write"], "default": "read"}, "target": {"type": "string"}}},
+    "credentialAttachment": {"type": "object", "additionalProperties": false, "required": ["credential", "use"], "properties": {"credential": {"$ref": "#/$defs/id"}, "use": {"enum": ["file", "environment-file"]}, "mountPath": {"$ref": "#/$defs/absolutePath"}, "target": {"type": "string"}}},
+    "identity": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "dynamic"}}}, {"type": "object", "additionalProperties": false, "required": ["mode", "user"], "properties": {"mode": {"const": "existing"}, "user": {"type": "string"}, "group": {"type": "string"}}}]},
+    "execSpec": {"type": "object", "additionalProperties": false, "required": ["command"], "properties": {"command": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "identity": {"$ref": "#/$defs/identity"}, "workingDirectory": {"$ref": "#/$defs/absolutePath"}, "environment": {"type": "object", "additionalProperties": {"type": "string"}}, "restart": {"enum": ["no", "on-failure", "always"], "default": "on-failure"}, "restartSeconds": {"type": "integer", "minimum": 0, "maximum": 3600, "default": 3}, "timeoutStopSeconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 30}}},
+    "runtime": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["type", "units"], "properties": {"type": {"const": "systemd"}, "units": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/unit"}}}}, {"type": "object", "additionalProperties": false, "required": ["type", "exec"], "properties": {"type": {"const": "exec"}, "exec": {"$ref": "#/$defs/execSpec"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "source"], "properties": {"type": {"const": "quadlet"}, "source": {"type": "string"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "source"], "properties": {"type": {"const": "compose"}, "source": {"type": "string"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "source"], "properties": {"type": {"const": "vm"}, "source": {"type": "string"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "image"], "properties": {"type": {"const": "oci"}, "image": {"type": "string"}, "command": {"type": "array", "items": {"type": "string"}}, "user": {"type": "string"}, "pull": {"enum": ["never", "missing", "always"], "default": "missing"}}}]},
+    "sessionPathInput": {"type": "object", "additionalProperties": false, "required": ["type", "resource", "mountPath"], "properties": {"type": {"const": "path"}, "label": {"type": "string"}, "resource": {"$ref": "#/$defs/id"}, "allowSubpath": {"type": "boolean", "default": true}, "mountPath": {"$ref": "#/$defs/absolutePath"}, "access": {"enum": ["read", "write"], "default": "read"}, "target": {"type": "string"}}},
+    "routeTarget": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["type", "port"], "properties": {"type": {"enum": ["http", "https"]}, "host": {"type": "string", "default": "127.0.0.1"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}}, {"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "unix-http"}, "path": {"$ref": "#/$defs/absolutePath"}}}]},
+    "routeExposure": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": {"type": {"const": "path"}, "path": {"type": "string", "pattern": "^/"}}}, {"type": "object", "additionalProperties": false, "required": ["type", "hostname"], "properties": {"type": {"const": "hostname"}, "hostname": {"type": "string"}, "path": {"type": "string", "pattern": "^/", "default": "/"}}}]},
+    "auth": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "public"}}}, {"type": "object", "additionalProperties": false, "required": ["mode", "capability"], "properties": {"mode": {"const": "identity"}, "capability": {"type": "string"}}}, {"type": "object", "additionalProperties": false, "required": ["mode", "credential", "sources"], "properties": {"mode": {"const": "secret"}, "credential": {"$ref": "#/$defs/id"}, "sources": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}}}, {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "upstream"}}}]},
+    "route": {"type": "object", "additionalProperties": true, "required": ["target", "exposure", "auth"], "properties": {"target": {"$ref": "#/$defs/routeTarget"}, "exposure": {"$ref": "#/$defs/routeExposure"}, "auth": {"$ref": "#/$defs/auth"}, "priority": {"type": "integer", "default": 0}, "portal": {"type": "object", "additionalProperties": true}}},
     "listenerPort": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["port"], "properties": {"port": {"type": "integer", "minimum": 1, "maximum": 65535}}}, {"type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": {"start": {"type": "integer", "minimum": 1, "maximum": 65535}, "end": {"type": "integer", "minimum": 1, "maximum": 65535}}}]},
-    "listener": {"type": "object", "additionalProperties": false, "required": ["protocol", "exposure"], "properties": {"protocol": {"enum": ["tcp", "udp"]}, "exposure": {"$ref": "#/$defs/listenerPort"}, "firewall": {"type": "boolean", "default": true}, "discovery": {"type": "object", "additionalProperties": false, "properties": {"mdns": {"$ref": "#/$defs/mdns"}}}}},
+    "listener": {"type": "object", "additionalProperties": true, "required": ["protocol", "exposure"], "properties": {"protocol": {"enum": ["tcp", "udp"]}, "exposure": {"$ref": "#/$defs/listenerPort"}, "firewall": {"type": "boolean", "default": true}}},
     "service": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "enabled", "managed", "workload", "runtime"],
+      "required": ["name", "enabled", "managed", "handler", "workload", "runtime"],
       "properties": {
         "name": {"type": "string", "minLength": 1, "maxLength": 64},
         "description": {"type": "string", "maxLength": 512},
         "enabled": {"type": "boolean"},
-        "managed": {"type": "boolean", "default": true, "description": "When false V2 may ensure/readiness-check the dependency but never owns shutdown/reaping."},
-        "principal": {"type": "string", "pattern": "^application:[a-z][a-z0-9-]{0,47}$"},
+        "managed": {"type": "boolean", "default": true},
+        "handler": {"$ref": "#/$defs/pythonHandler"},
+        "principal": {"type": "string"},
         "workload": {"$ref": "#/$defs/workload"},
         "runtime": {"$ref": "#/$defs/runtime"},
         "dependencies": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/dependency"}},
@@ -147,9 +111,9 @@
   "properties": {
     "schemaVersion": {"const": 3},
     "generation": {"type": "integer", "minimum": 1, "default": 1},
-    "storageResources": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/storageResource"}, "default": {}},
-    "networkProfiles": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/networkPolicy"}, "default": {}},
-    "credentials": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/credential"}, "default": {}},
-    "services": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"}, "additionalProperties": {"$ref": "#/$defs/service"}}
+    "storageResources": {"type": "object", "additionalProperties": {"$ref": "#/$defs/storageResource"}, "default": {}},
+    "networkProfiles": {"type": "object", "additionalProperties": {"$ref": "#/$defs/networkPolicy"}, "default": {}},
+    "credentials": {"type": "object", "additionalProperties": {"$ref": "#/$defs/credential"}, "default": {}},
+    "services": {"type": "object", "additionalProperties": {"$ref": "#/$defs/service"}}
   }
 }
