@@ -1,4 +1,4 @@
-{ config, lib, pkgs, nasInternal, nasReadOnlyPkgs ? false, ... }:
+{ config, lib, pkgs, nasInternal, ... }:
 
 let
   inherit (nasInternal)
@@ -14,7 +14,7 @@ let
 in
 {
   config = lib.mkMerge [
-    (lib.mkIf (!nasReadOnlyPkgs) {
+    (lib.mkIf (!cfg.testing.readOnlyPackageSet) {
       nixpkgs.config.allowUnfreePredicate = lib.mkForce (package:
         let name = lib.getName package;
         in name == "open-webui" || (hasNvidiaGpu && lib.any (prefix: lib.hasPrefix prefix name) [

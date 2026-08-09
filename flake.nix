@@ -41,13 +41,13 @@
       nixosModules = rec {
         core = import ./modules/nas;
         ai = import ./modules/ai;
-        default = { lib, nasReadOnlyPkgs ? false, ... }: {
+        default = { ... }: {
           imports = [
             copyparty.nixosModules.default
             ai
             core
           ];
-          nixpkgs.overlays = lib.mkIf (!nasReadOnlyPkgs) [ copyparty.overlays.default ];
+          nixpkgs.overlays = [ copyparty.overlays.default ];
         };
         profiles = {
           core-storage = import ./modules/profiles/core-storage.nix;

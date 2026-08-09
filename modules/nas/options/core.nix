@@ -119,6 +119,13 @@
       visible = false;
       description = "CI-only switch proving installation-ready assertions with synthetic hardware.";
     };
+    testing.readOnlyPackageSet = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      internal = true;
+      visible = false;
+      description = "CI-only switch for test frameworks that provide an immutable package set.";
+    };
 
     desktop.enable = lib.mkOption {
       type = lib.types.bool;

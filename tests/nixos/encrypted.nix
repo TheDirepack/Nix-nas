@@ -5,13 +5,16 @@ pkgs.testers.runNixOSTest {
 
   nodes.machine = { lib, ... }: {
     imports = [
-      self.nixosModules.default
+      copyparty.nixosModules.default
+      self.nixosModules.ai
+      self.nixosModules.core
       ../../local.nix
       ./vm-common.nix
     ];
 
     nas.zfsEncryption.enable = lib.mkForce true;
     nas.trustedInterfaces = lib.mkForce [ "eth1" ];
+    nas.testing.readOnlyPackageSet = true;
     users.users.admin.openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci"
     ];

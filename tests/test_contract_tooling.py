@@ -508,9 +508,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn('builtins.getEnv "NAS_NEGATIVE_FIXTURE"', negative_eval)
         self.assertIn('name == "open-webui"', host_platform)
         self.assertNotIn("allowUnfree = true", host_platform)
-        self.assertIn("nasReadOnlyPkgs ? false", host_platform)
-        self.assertIn("nasReadOnlyPkgs ? false", flake)
-        self.assertIn("_module.args.nasReadOnlyPkgs = true", text("tests/nixos/vm-common.nix"))
+        self.assertIn("!cfg.testing.readOnlyPackageSet", host_platform)
+        self.assertIn("nas.testing.readOnlyPackageSet = true", text("tests/nixos/integration.nix"))
+        self.assertIn("nas.testing.readOnlyPackageSet = true", text("tests/nixos/encrypted.nix"))
         self.assertIn("TestFixtureOnlyKeyMaterial", consumer)
 
     def test_qemu_harness_covers_native_and_installed_paths(self):
