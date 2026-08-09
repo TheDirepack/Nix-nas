@@ -31,14 +31,12 @@ from nas_managed_resources import (
 _ORIGINAL_LOAD_STORE = _legacy.load_store
 _ORIGINAL_EFFECTIVE_REGISTRY = _legacy.effective_registry
 
-LIFECYCLE_MODES = frozenset({"persistent", "on-demand", "manual", "disabled"})
+LIFECYCLE_MODES = frozenset({"persistent", "on-demand", "session"})
 _START_POLICY_TO_LIFECYCLE = {
     "boot": "persistent",
     "on-demand": "on-demand",
-    "manual": "manual",
-    "disabled": "disabled",
+    "manual": "session",
 }
-_LIFECYCLE_TO_START_POLICY = {value: key for key, value in _START_POLICY_TO_LIFECYCLE.items()}
 DEFAULT_IDLE_SECONDS = 600
 LIFECYCLE_STATE_PATH = pathlib.Path(
     os.environ.get("NAS_MANAGED_LIFECYCLE_STATE", "/run/nas-control/lifecycle.json")
@@ -50,10 +48,17 @@ def _runtime_mode(required_capabilities: list[str]) -> str:
 
 
 def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
-    """Return canonical process-lifetime policy while accepting old startPolicy input.
+    """Return canonical runtime-lifetime policy while accepting old startPolicy input.
+
+    ``enabled`` controls whether the application is available at all. Lifecycle
+    controls what happens while it is enabled:
+
+    * persistent: reconcile keeps the runtime running;
+    * on-demand: authorized access starts it and a timer reaps it after idle time;
+    * session: an explicit session launcher owns a disposable runtime instance.
 
     Runtime lifetime and storage lifetime are deliberately independent. Stopping
-    or reaping an application never implies deleting its authoritative storage.
+    or destroying a runtime never implies deleting authoritative V2 storage.
     """
 
     runtime = service.get("runtime") or {}
@@ -62,12 +67,17 @@ def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, 
     enabled = service.get("enabled")
 
     if lifecycle is None:
-        mode = _START_POLICY_TO_LIFECYCLE.get(start_policy)
-        if enabled is False:
-            mode = "disabled"
+        if start_policy == "disabled":
+            if enabled is not False:
+                raise ManagedResourceError(
+                    f"Service {service_id}: runtime.startPolicy='disabled' requires enabled=false"
+                )
+            mode = "persistent"
+        else:
+            mode = _START_POLICY_TO_LIFECYCLE.get(start_policy)
         if mode is None:
             raise ManagedResourceError(f"Service {service_id}: cannot derive lifecycle from runtime.startPolicy")
-        normalized = {"mode": mode, "ephemeralRuntime": False}
+        normalized = {"mode": mode}
         if mode == "on-demand":
             normalized["idleSeconds"] = DEFAULT_IDLE_SECONDS
         return normalized
@@ -78,11 +88,7 @@ def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, 
     if mode not in LIFECYCLE_MODES:
         raise ManagedResourceError(f"Service {service_id}: invalid lifecycle mode {mode!r}")
 
-    ephemeral_runtime = lifecycle.get("ephemeralRuntime", False)
-    if not isinstance(ephemeral_runtime, bool):
-        raise ManagedResourceError(f"Service {service_id}: lifecycle.ephemeralRuntime must be boolean")
-
-    normalized: dict[str, Any] = {"mode": mode, "ephemeralRuntime": ephemeral_runtime}
+    normalized: dict[str, Any] = {"mode": mode}
     idle_seconds = lifecycle.get("idleSeconds")
     if mode == "on-demand":
         if isinstance(idle_seconds, bool) or not isinstance(idle_seconds, int) or not 30 <= idle_seconds <= 604800:
@@ -93,20 +99,17 @@ def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, 
     elif idle_seconds is not None:
         raise ManagedResourceError(f"Service {service_id}: idleSeconds is only valid for on-demand lifecycle")
 
-    if enabled is False and mode != "disabled":
-        raise ManagedResourceError(
-            f"Service {service_id}: enabled=false conflicts with lifecycle.mode={mode!r}"
-        )
-    if enabled is True and mode == "disabled":
-        raise ManagedResourceError(
-            f"Service {service_id}: enabled=true conflicts with lifecycle.mode='disabled'"
-        )
-
-    expected_start_policy = _LIFECYCLE_TO_START_POLICY[mode]
-    if start_policy is not None and start_policy != expected_start_policy:
-        raise ManagedResourceError(
-            f"Service {service_id}: runtime.startPolicy={start_policy!r} conflicts with lifecycle.mode={mode!r}"
-        )
+    if start_policy == "disabled":
+        if enabled is not False:
+            raise ManagedResourceError(
+                f"Service {service_id}: runtime.startPolicy='disabled' requires enabled=false"
+            )
+    elif start_policy is not None:
+        migrated = _START_POLICY_TO_LIFECYCLE.get(start_policy)
+        if migrated != mode:
+            raise ManagedResourceError(
+                f"Service {service_id}: runtime.startPolicy={start_policy!r} conflicts with lifecycle.mode={mode!r}"
+            )
     return normalized
 
 
@@ -289,6 +292,8 @@ def touch_service(service_id: str, *, now: int | None = None) -> dict[str, Any]:
     service = effective.get("services", {}).get(service_id)
     if not isinstance(service, dict):
         raise ManagedResourceError(f"Unknown managed service {service_id!r}")
+    if not service.get("enabled"):
+        raise ManagedResourceError(f"Service {service_id!r} is disabled")
     if service.get("lifecycle", {}).get("mode") != "on-demand":
         raise ManagedResourceError(f"Service {service_id!r} is not on-demand")
     state = _read_lifecycle_state()
@@ -323,9 +328,13 @@ def start_service(service_id: str) -> dict[str, Any]:
     service = effective_registry().get("services", {}).get(service_id)
     if not isinstance(service, dict):
         raise ManagedResourceError(f"Unknown managed service {service_id!r}")
-    lifecycle = service.get("lifecycle", {})
-    if lifecycle.get("mode") == "disabled":
+    if not service.get("enabled"):
         raise ManagedResourceError(f"Service {service_id!r} is disabled")
+    lifecycle = service.get("lifecycle", {})
+    if lifecycle.get("mode") == "session":
+        raise ManagedResourceError(
+            f"Service {service_id!r} is session-scoped and must be started by its session launcher"
+        )
     result = _apply_runtime(service_id, service, enabled=True)
     if lifecycle.get("mode") == "on-demand":
         touch_service(service_id)
@@ -347,10 +356,35 @@ def reconcile_lifecycle(effective: dict[str, Any] | None = None) -> dict[str, An
         if not isinstance(service, dict):
             continue
         mode = (service.get("lifecycle") or {}).get("mode")
-        if mode == "persistent":
-            actions.append({"service": service_id, "mode": mode, "result": _apply_runtime(service_id, service, enabled=True)})
-        elif mode == "disabled":
-            actions.append({"service": service_id, "mode": mode, "result": _apply_runtime(service_id, service, enabled=False)})
+        if not service.get("enabled"):
+            actions.append(
+                {
+                    "service": service_id,
+                    "mode": mode,
+                    "enabled": False,
+                    "result": _apply_runtime(service_id, service, enabled=False),
+                }
+            )
+        elif mode == "persistent":
+            actions.append(
+                {
+                    "service": service_id,
+                    "mode": mode,
+                    "enabled": True,
+                    "result": _apply_runtime(service_id, service, enabled=True),
+                }
+            )
+        elif mode == "session":
+            # Session runtimes must never survive a reconcile/reboot merely
+            # because the app is enabled. A dedicated launcher owns each session.
+            actions.append(
+                {
+                    "service": service_id,
+                    "mode": mode,
+                    "enabled": True,
+                    "result": _apply_runtime(service_id, service, enabled=False),
+                }
+            )
     return {"actions": actions}
 
 
@@ -360,7 +394,7 @@ def reap_lifecycle(*, now: int | None = None) -> dict[str, Any]:
     state = _read_lifecycle_state()
     stopped: list[str] = []
     for service_id, service in sorted((effective.get("services") or {}).items()):
-        if not isinstance(service, dict):
+        if not isinstance(service, dict) or not service.get("enabled"):
             continue
         lifecycle = service.get("lifecycle") or {}
         if lifecycle.get("mode") != "on-demand":
@@ -391,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     _install_compatibility_layer()
     parser = argparse.ArgumentParser(prog="nas-managed-service")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("reconcile", help="Rebuild projections and enforce persistent/disabled lifecycle")
+    sub.add_parser("reconcile", help="Rebuild projections and enforce application lifecycle")
     sub.add_parser("validate", help="Validate V2 store and effective registry")
     show = sub.add_parser("show", help="Show effective registry")
     show.add_argument("--json", action="store_true")
