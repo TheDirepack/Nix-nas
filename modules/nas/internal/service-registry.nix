@@ -21,7 +21,7 @@ let
     dependsOn ? [ ],
   }:
     let
-      authMode = if access == "public" then "public" else "forward-auth";
+      authMode = if access == "public" then "public" else if access == "api-key" then "api-key" else "forward-auth";
       authAllow = if access == "admin" then "groups" else if access == "ai" then "groups" else if access == "vault" then "groups" else "any";
       authGroups = if access == "admin" then [ "nas_admin" ] else if access == "ai" then [ "nas_allow_ai" "nas_admin" ] else if access == "vault" then [ "nas_allow_vault" "nas_admin" ] else [ ];
       authCapability = if access == "admin" || access == "ai" || access == "vault" then "application.${serviceId}.access" else null;
@@ -42,7 +42,7 @@ let
             mode = authMode;
           }
           // (if authCapability != null then { capability = authCapability; } else { })
-          // (if authGroups != [ ] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then { } else { allow = "any"; });
+          // (if authGroups != [ ] then { allow = authAllow; groups = authGroups; } else if authMode == "public" || authMode == "api-key" then { } else { allow = "any"; });
           portal = {
             visible = linkKey != null;
             category = portalCategory;
@@ -62,7 +62,7 @@ let
     } // (if description != null then { inherit description; } else { });
 
   aiRuntimeBase = mkService {
-    serviceId = "aiRuntime";
+    serviceId = "ai-runtime";
     label = "llama-swap runtime";
     enabled = cfg.ai.enable;
     units = [ "nas-llama-swap.service" ];
@@ -76,8 +76,6 @@ let
   };
 
   registry = {
-    # Recovery/control-plane substrates are visible to the dependency graph but
-    # V2 never owns their shutdown lifecycle.
     identity = mkService {
       serviceId = "identity";
       label = "Authentik identity";
@@ -123,7 +121,7 @@ let
       expose = false;
     };
 
-    aiRuntime = aiRuntimeBase // {
+    "ai-runtime" = aiRuntimeBase // {
       endpoints = aiRuntimeBase.endpoints // {
         api = {
           transport = "http";
@@ -133,12 +131,7 @@ let
             value = "/ai/v1/";
             prefix = true;
           };
-          auth = {
-            mode = "forward-auth";
-            capability = "application.aiRuntime.access";
-            allow = "groups";
-            groups = [ "nas_allow_ai" "nas_admin" ];
-          };
+          auth = { mode = "api-key"; };
           portal = {
             visible = false;
             category = "AI";
@@ -147,8 +140,8 @@ let
         };
       };
     };
-    aiWorkspace = mkService {
-      serviceId = "aiWorkspace";
+    "ai-workspace" = mkService {
+      serviceId = "ai-workspace";
       label = "Open WebUI";
       enabled = cfg.ai.enable;
       units = [ "open-webui.service" ];
@@ -159,10 +152,10 @@ let
       category = "AI";
       lifecycleMode = "on-demand";
       idleSeconds = 600;
-      dependsOn = [ "aiRuntime" ];
+      dependsOn = [ "ai-runtime" ];
     };
-    aiDownloader = mkService {
-      serviceId = "aiDownloader";
+    "ai-downloader" = mkService {
+      serviceId = "ai-downloader";
       label = "Hugging Face model downloader";
       enabled = cfg.ai.enable && cfg.ai.modelDownloader.enable;
       units = [ "podman-hfdownloader.service" ];
@@ -187,8 +180,8 @@ let
       lifecycleMode = "persistent";
       dependsOn = [ "identity" ];
     };
-    vaultwardenCa = mkService {
-      serviceId = "vaultwardenCa";
+    "vaultwarden-ca" = mkService {
+      serviceId = "vaultwarden-ca";
       label = "Vaultwarden CA preparation";
       enabled = cfg.vaultwarden.enable;
       units = [ "nas-caddy-ca-export.service" ];
@@ -207,7 +200,7 @@ let
       linkKey = "vaultwarden";
       category = "Home";
       lifecycleMode = "persistent";
-      dependsOn = [ "identity" "vaultwardenCa" ];
+      dependsOn = [ "identity" "vaultwarden-ca" ];
     };
     victoriametrics = mkService {
       serviceId = "victoriametrics";
@@ -364,7 +357,7 @@ in
   serviceRegistry = registry;
   serviceRegistryV2 = {
     schemaVersion = 2;
-    generation = 3;
+    generation = 4;
     inherit storageResources;
     services = registry;
   };
