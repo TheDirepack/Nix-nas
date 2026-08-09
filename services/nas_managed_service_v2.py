@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Managed Services V2 compatibility and projection layer.
+"""Managed Services V2 compatibility, projection, and lifecycle layer.
 
-This module is intentionally thin. It preserves the proven file-backed
-reconciler from ``nas_managed_service`` while making the new resource-authority
-model executable. Persisted V2 documents keep named resource references; only
-a validation copy is converted to the legacy hostPath mount shape. Effective
-state exposes authoritative V2 policy plus resolved runtime projections so
-adapters can migrate independently.
+V2 owns cross-system application intent. Native runtimes still own execution,
+while this module translates V2 lifecycle/storage policy into those runtimes.
+There is deliberately no resident controller: reconcile and idle reaping are
+oneshot operations driven by systemd paths/timers or explicit commands.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import os
 import pathlib
+import tempfile
+import time
 from typing import Any
 
 import nas_managed_service as _legacy
@@ -39,6 +40,9 @@ _START_POLICY_TO_LIFECYCLE = {
 }
 _LIFECYCLE_TO_START_POLICY = {value: key for key, value in _START_POLICY_TO_LIFECYCLE.items()}
 DEFAULT_IDLE_SECONDS = 600
+LIFECYCLE_STATE_PATH = pathlib.Path(
+    os.environ.get("NAS_MANAGED_LIFECYCLE_STATE", "/run/nas-control/lifecycle.json")
+)
 
 
 def _runtime_mode(required_capabilities: list[str]) -> str:
@@ -130,8 +134,6 @@ def _resolved_mount(
 
 
 def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
-    """Validate V2 cross-system policy and return a normalized copy."""
-
     resources = validate_storage_resources(data.get("storageResources"))
     normalized = copy.deepcopy(data)
     normalized["storageResources"] = resources
@@ -156,8 +158,6 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
             if isinstance(attachment, dict) and "resource" in attachment:
                 resolved_storage.append(_resolved_mount(service_id, attachment, resources))
             else:
-                # Legacy inline mounts remain migration input. Preserve them in
-                # effective state until the owning service is converted.
                 resolved_storage.append(copy.deepcopy(attachment))
         service["resolvedStorage"] = resolved_storage
 
@@ -175,17 +175,10 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
                     raise ManagedResourceError(
                         f"Service {service_id}: endpoint {endpoint_id!r} capability must start with {expected_prefix!r}"
                     )
-
     return normalized
 
 
 def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
-    """Build a copy consumable by the pre-resource V2 validator.
-
-    This is migration glue only; it is never persisted and never becomes the
-    authorization source of truth.
-    """
-
     validated = copy.deepcopy(data)
     validated.pop("storageResources", None)
     validated.pop("networkProfiles", None)
@@ -215,8 +208,6 @@ def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_store(path: pathlib.Path = _legacy.STORE_PATH) -> dict[str, Any]:
-    """Load, schema-validate, normalize, then exercise legacy hardening checks."""
-
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -250,8 +241,6 @@ def effective_registry(
     builtin_path: pathlib.Path = _legacy.BUILTIN_REGISTRY,
     store_path: pathlib.Path = _legacy.STORE_PATH,
 ) -> dict[str, Any]:
-    """Return effective state including resource, lifecycle and runtime projections."""
-
     effective = _ORIGINAL_EFFECTIVE_REGISTRY(builtin_path, store_path)
     store = load_store(store_path)
     effective["storageResources"] = store.get("storageResources", {})
@@ -269,14 +258,187 @@ def effective_registry(
     return effective
 
 
+def _read_lifecycle_state(path: pathlib.Path = LIFECYCLE_STATE_PATH) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"schemaVersion": 1, "services": {}}
+    if value.get("schemaVersion") != 1 or not isinstance(value.get("services"), dict):
+        return {"schemaVersion": 1, "services": {}}
+    return value
+
+
+def _write_lifecycle_state(value: dict[str, Any], path: pathlib.Path = LIFECYCLE_STATE_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = pathlib.Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def touch_service(service_id: str, *, now: int | None = None) -> dict[str, Any]:
+    effective = effective_registry()
+    service = effective.get("services", {}).get(service_id)
+    if not isinstance(service, dict):
+        raise ManagedResourceError(f"Unknown managed service {service_id!r}")
+    if service.get("lifecycle", {}).get("mode") != "on-demand":
+        raise ManagedResourceError(f"Service {service_id!r} is not on-demand")
+    state = _read_lifecycle_state()
+    record = state["services"].setdefault(service_id, {})
+    record["lastAccess"] = int(time.time()) if now is None else int(now)
+    _write_lifecycle_state(state)
+    return record
+
+
+def _apply_runtime(service_id: str, service: dict[str, Any], *, enabled: bool) -> dict[str, Any]:
+    runtime_type = (service.get("runtime") or {}).get("type")
+    candidate = copy.deepcopy(service)
+    candidate["enabled"] = enabled
+    if runtime_type == "quadlet":
+        from nas_service_runtime_podman import apply_podman
+
+        return apply_podman(service_id, candidate)
+    if runtime_type == "compose":
+        from nas_service_runtime_compose import apply_compose
+
+        return apply_compose(service_id, candidate)
+    if runtime_type == "vm":
+        from nas_service_runtime_libvirt import apply_libvirt
+
+        return apply_libvirt(service_id, candidate)
+    raise ManagedResourceError(
+        f"Service {service_id}: runtime type {runtime_type!r} has no native lifecycle adapter yet"
+    )
+
+
+def start_service(service_id: str) -> dict[str, Any]:
+    service = effective_registry().get("services", {}).get(service_id)
+    if not isinstance(service, dict):
+        raise ManagedResourceError(f"Unknown managed service {service_id!r}")
+    lifecycle = service.get("lifecycle", {})
+    if lifecycle.get("mode") == "disabled":
+        raise ManagedResourceError(f"Service {service_id!r} is disabled")
+    result = _apply_runtime(service_id, service, enabled=True)
+    if lifecycle.get("mode") == "on-demand":
+        touch_service(service_id)
+    return result
+
+
+def stop_service(service_id: str) -> dict[str, Any]:
+    service = effective_registry().get("services", {}).get(service_id)
+    if not isinstance(service, dict):
+        raise ManagedResourceError(f"Unknown managed service {service_id!r}")
+    return _apply_runtime(service_id, service, enabled=False)
+
+
+def reconcile_lifecycle(effective: dict[str, Any] | None = None) -> dict[str, Any]:
+    if effective is None:
+        effective = effective_registry()
+    actions: list[dict[str, Any]] = []
+    for service_id, service in sorted((effective.get("services") or {}).items()):
+        if not isinstance(service, dict):
+            continue
+        mode = (service.get("lifecycle") or {}).get("mode")
+        if mode == "persistent":
+            actions.append({"service": service_id, "mode": mode, "result": _apply_runtime(service_id, service, enabled=True)})
+        elif mode == "disabled":
+            actions.append({"service": service_id, "mode": mode, "result": _apply_runtime(service_id, service, enabled=False)})
+    return {"actions": actions}
+
+
+def reap_lifecycle(*, now: int | None = None) -> dict[str, Any]:
+    current = int(time.time()) if now is None else int(now)
+    effective = effective_registry()
+    state = _read_lifecycle_state()
+    stopped: list[str] = []
+    for service_id, service in sorted((effective.get("services") or {}).items()):
+        if not isinstance(service, dict):
+            continue
+        lifecycle = service.get("lifecycle") or {}
+        if lifecycle.get("mode") != "on-demand":
+            continue
+        record = state.get("services", {}).get(service_id, {})
+        last_access = record.get("lastAccess")
+        if not isinstance(last_access, int):
+            continue
+        if current - last_access < int(lifecycle["idleSeconds"]):
+            continue
+        _apply_runtime(service_id, service, enabled=False)
+        stopped.append(service_id)
+        state["services"].pop(service_id, None)
+    if stopped:
+        _write_lifecycle_state(state)
+    return {"stopped": stopped}
+
+
 def _install_compatibility_layer() -> None:
     _legacy.load_store = load_store
     _legacy.effective_registry = effective_registry
 
 
 def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
     _install_compatibility_layer()
-    return _legacy.main(argv)
+    parser = argparse.ArgumentParser(prog="nas-managed-service")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("reconcile", help="Rebuild projections and enforce persistent/disabled lifecycle")
+    sub.add_parser("validate", help="Validate V2 store and effective registry")
+    show = sub.add_parser("show", help="Show effective registry")
+    show.add_argument("--json", action="store_true")
+    for command in ("start", "stop", "restart", "touch"):
+        action = sub.add_parser(command)
+        action.add_argument("service")
+    sub.add_parser("reap", help="Stop idle on-demand applications")
+    for command in ("plan", "create", "update", "delete", "adopt", "export", "import"):
+        sub.add_parser(command)
+    args = parser.parse_args(argv)
+
+    try:
+        if args.command == "reconcile":
+            effective = _legacy.write_effective()
+            portal = _legacy.write_portal()
+            lifecycle = reconcile_lifecycle(effective)
+            print(json.dumps({"effective": effective, "portal": portal, "lifecycle": lifecycle}, indent=2))
+            return 0
+        if args.command == "validate":
+            load_store()
+            effective_registry()
+            print("store and effective registry are valid")
+            return 0
+        if args.command == "show":
+            print(json.dumps(effective_registry(), indent=2, sort_keys=not args.json))
+            return 0
+        if args.command == "start":
+            print(json.dumps(start_service(args.service), indent=2, default=str))
+            return 0
+        if args.command == "stop":
+            print(json.dumps(stop_service(args.service), indent=2, default=str))
+            return 0
+        if args.command == "restart":
+            stop_service(args.service)
+            print(json.dumps(start_service(args.service), indent=2, default=str))
+            return 0
+        if args.command == "touch":
+            print(json.dumps(touch_service(args.service), indent=2))
+            return 0
+        if args.command == "reap":
+            print(json.dumps(reap_lifecycle(), indent=2))
+            return 0
+        print(f"nas-managed-service: {args.command} is not yet implemented", file=sys.stderr)
+        return 2
+    except (ManagedResourceError, _legacy.ManagedServiceError, OSError) as exc:
+        print(f"nas-managed-service: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
