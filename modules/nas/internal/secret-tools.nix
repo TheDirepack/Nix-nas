@@ -22,11 +22,11 @@ let
       pkgs.keepassxc
       pkgs.openssl
       pythonYaml
-      pkgs.sudo
       pkgs.systemd
       pkgs.util-linux
     ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       set -euo pipefail
       umask 0077
 

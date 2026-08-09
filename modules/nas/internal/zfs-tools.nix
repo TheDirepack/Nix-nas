@@ -196,8 +196,9 @@ let
 
   nasZfsLock = pkgs.writeShellApplication {
     name = "nas-zfs-lock";
-    runtimeInputs = [ pkgs.coreutils pkgs.sudo pkgs.systemd pkgs.zfs ];
+    runtimeInputs = [ pkgs.coreutils pkgs.systemd pkgs.zfs ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       set -euo pipefail
       dataset=${lib.escapeShellArg cfg.zfsDataset}
       encryption_enabled=${if cfg.zfsEncryption.enable then "1" else "0"}
@@ -219,8 +220,9 @@ let
 
   nasZfsCreateEncryptedDataset = pkgs.writeShellApplication {
     name = "nas-zfs-create-encrypted-dataset";
-    runtimeInputs = [ pkgs.coreutils nasSecrets pkgs.sudo pkgs.zfs ];
+    runtimeInputs = [ pkgs.coreutils nasSecrets pkgs.zfs ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       set -euo pipefail
       dataset=${lib.escapeShellArg cfg.zfsDataset}
       pool=${lib.escapeShellArg cfg.zfsPool}
@@ -336,8 +338,9 @@ let
 
   nasZfsExportRecoveryKey = pkgs.writeShellApplication {
     name = "nas-zfs-export-recovery-key";
-    runtimeInputs = [ pkgs.coreutils nasSecrets pkgs.sudo ];
+    runtimeInputs = [ pkgs.coreutils nasSecrets ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       set -euo pipefail
       [[ $# -eq 1 ]] || { echo "Usage: nas-zfs-export-recovery-key /absolute/output-file" >&2; exit 2; }
       output="$1"

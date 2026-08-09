@@ -472,6 +472,19 @@ class ContractTests(unittest.TestCase):
         self.assertIn("[First start](admin/first-run.md)", summary)
         self.assertTrue((ROOT / "setup" / "first-run.example.json").exists())
 
+    def test_unprivileged_tools_resolve_the_nixos_sudo_wrapper(self):
+        wrapper_path = "export PATH=/run/wrappers/bin:$PATH"
+        expected_wrappers = {
+            "modules/nas/internal/account-tools.nix": 1,
+            "modules/nas/internal/maintenance-tools.nix": 1,
+            "modules/nas/internal/secret-tools.nix": 1,
+            "modules/nas/internal/zfs-tools.nix": 3,
+        }
+        for filename, count in expected_wrappers.items():
+            source = text(filename)
+            self.assertNotIn("pkgs.sudo", source, msg=filename)
+            self.assertEqual(source.count(wrapper_path), count, msg=filename)
+
     def test_browser_authorization_matrix_is_exercised_in_qemu(self):
         browser = text("tests/browser/authz.py")
         vm = text("tests/nixos/vm-common.nix")

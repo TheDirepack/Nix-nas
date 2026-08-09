@@ -94,7 +94,6 @@ let
       pkgs.coreutils
       pkgs.keepassxc
       pkgs.python3
-      pkgs.sudo
       pkgs.systemd
       pkgs.util-linux
       pkgs.zfs
@@ -106,6 +105,7 @@ let
       nasZfsMountCheck
     ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
