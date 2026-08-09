@@ -44,11 +44,7 @@ def _load_effective() -> dict[str, Any]:
 
 
 def _authorized_use(service_id: str, effective: dict[str, Any]) -> bool:
-    """Apply lifecycle policy after authorization succeeds.
-
-    Failure to apply lifecycle policy fails the request closed instead of
-    forwarding traffic to a runtime that V2 says should have been managed.
-    """
+    """Apply lifecycle policy after authorization succeeds."""
 
     service = effective.get("services", {}).get(service_id)
     if not isinstance(service, dict) or not service.get("enabled"):
@@ -73,6 +69,12 @@ def _authorized_use(service_id: str, effective: dict[str, Any]) -> bool:
     except Exception as exc:
         print(f"nas-on-demand: managed service {service_id} wake failed: {exc}", file=os.sys.stderr)
         return False
+
+
+def _has_legacy_assignments(auth: dict[str, Any]) -> bool:
+    groups = auth.get("groups")
+    users = auth.get("users")
+    return (isinstance(groups, list) and bool(groups)) or (isinstance(users, list) and bool(users))
 
 
 def authorize_service_scope(scope: str, headers: Any) -> bool:
@@ -112,8 +114,9 @@ def authorize_service_scope(scope: str, headers: Any) -> bool:
                 if not validated.startswith(expected_prefix):
                     return False
                 authorized = capability_group_name(validated) in groups
+                if not authorized and _has_legacy_assignments(auth):
+                    authorized = _ORIGINAL_AUTHORIZE_SERVICE_SCOPE(scope, headers)
             else:
-                # Migration fallback only. New V2 endpoint writes use capability.
                 authorized = _ORIGINAL_AUTHORIZE_SERVICE_SCOPE(scope, headers)
 
     return authorized and _authorized_use(service_id, effective)
