@@ -22,10 +22,11 @@ _devices._install()
 import nas_managed_service_dependencies as _dependencies  # noqa: E402
 
 _dependencies._install()
+_DEPENDENCY_EFFECTIVE_REGISTRY = _dependencies.effective_registry
 
 
 def effective_registry(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    effective = _dependencies.effective_registry(*args, **kwargs)
+    effective = _DEPENDENCY_EFFECTIVE_REGISTRY(*args, **kwargs)
     services = effective.get("services") or {}
     if not isinstance(services, dict):
         raise ManagedResourceError("Effective managed service registry services must be an object")
