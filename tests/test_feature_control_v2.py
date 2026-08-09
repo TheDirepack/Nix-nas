@@ -11,7 +11,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_feature_control_v2 as feature_v2
+import nas_feature_control_v2 as feature_v2  # noqa: E402
 
 
 class Headers(dict):
