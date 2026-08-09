@@ -69,7 +69,6 @@ in
       openFirewall = false;
       showBanner = false;
       plugins = [
-        pkgs.cockpit-files
         pkgs.cockpit-podman
         cockpitZfsPlugin
         cockpitNasPlugin

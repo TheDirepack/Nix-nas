@@ -5,9 +5,168 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "services"],
+  "$defs": {
+    "storageResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "stateClass", "capabilities", "backup"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)(/.*)?$"},
+        "dataset": {"type": "string", "pattern": "^tank/.+"},
+        "scope": {"enum": ["system", "user", "instance"], "default": "system"},
+        "pathTemplate": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"},
+        "stateClass": {"enum": ["authoritative", "derived", "cache", "ephemeral"]},
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["read", "write", "move", "delete", "admin"]}
+        },
+        "backup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "consistency": {"enum": ["filesystem", "zfs-snapshot", "postgres", "native", "none"], "default": "filesystem"}
+          }
+        },
+        "fileBrowser": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "visible": {"type": "boolean", "default": true}
+          }
+        },
+        "quotaBytes": {"type": "integer", "minimum": 0},
+        "description": {"type": "string", "maxLength": 256}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"scope": {"const": "user"}}, "required": ["scope"]},
+          "then": {"required": ["pathTemplate"]}
+        }
+      ]
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outboundDefault": {"enum": ["allow", "deny"]},
+        "lanAccess": {"type": "boolean"},
+        "allowedHostPorts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+        },
+        "allowedEgress": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cidr"],
+            "properties": {
+              "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]+$"},
+              "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}}
+            }
+          }
+        }
+      }
+    },
+    "lifecyclePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["persistent", "on-demand", "session"]},
+        "idleSeconds": {"type": "integer", "minimum": 30, "maximum": 604800}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "on-demand"}}, "required": ["mode"]},
+          "then": {"required": ["idleSeconds"]}
+        },
+        {
+          "if": {"properties": {"mode": {"enum": ["persistent", "session"]}}, "required": ["mode"]},
+          "then": {"not": {"required": ["idleSeconds"]}}
+        }
+      ]
+    },
+    "gpuSelector": {
+      "type": "string",
+      "pattern": "^(optional|required):(auto|all|(nvidia|amd|intel):all|pci:[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\\.[0-7]|cdi:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.:@-]+)$"
+    },
+    "gpuRequest": {
+      "oneOf": [
+        {"$ref": "#/$defs/gpuSelector"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selector"],
+          "properties": {
+            "selector": {"$ref": "#/$defs/gpuSelector"},
+            "target": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "description": "Runtime target when the runtime contains multiple workloads, such as a Compose service name."
+            }
+          }
+        }
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "source"],
+      "properties": {
+        "type": {"enum": ["quadlet", "compose", "vm", "systemd", "external", "native"]},
+        "project": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
+        "source": {"type": "string", "minLength": 1},
+        "units": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9_.@:-]+\\.(service|socket|target|timer|path)$"}
+        },
+        "startPolicy": {
+          "enum": ["boot", "manual", "on-demand", "disabled"],
+          "description": "Deprecated migration input; canonical V2 uses service.lifecycle plus service.enabled."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "systemd"}}, "required": ["type"]},
+          "then": {
+            "required": ["units"],
+            "properties": {
+              "source": {"type": "string", "pattern": "^systemd/[A-Za-z0-9_.@:-]+\\.(service|socket|target|timer|path)$"}
+            }
+          },
+          "else": {
+            "if": {"properties": {"type": {"enum": ["quadlet", "compose", "vm"]}}, "required": ["type"]},
+            "then": {
+              "properties": {
+                "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+$"}
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
   "properties": {
     "schemaVersion": {"const": 2},
     "generation": {"type": "integer", "minimum": 1},
+    "storageResources": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,47}$"},
+      "additionalProperties": {"$ref": "#/$defs/storageResource"}
+    },
+    "networkProfiles": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]{0,47}$"},
+      "additionalProperties": {"$ref": "#/$defs/networkPolicy"}
+    },
     "services": {
       "type": "object",
       "additionalProperties": {
@@ -17,9 +176,18 @@
         "properties": {
           "label": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]*$"},
           "description": {"type": "string", "maxLength": 256},
-          "ownership": {"enum": ["system", "runtime"], "default": "runtime"},
+          "ownership": {"enum": ["system", "v2", "runtime"], "default": "runtime"},
           "enabled": {"type": "boolean"},
           "generation": {"type": "integer", "minimum": 1},
+          "principal": {"type": "string", "pattern": "^application:[a-z][a-z0-9-]{0,47}$"},
+          "lifecycle": {"$ref": "#/$defs/lifecyclePolicy"},
+          "dependsOn": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
+            "description": "Managed services that must be available before this service starts. Dependencies may use any V2 runtime or be system-owned core services."
+          },
           "portal": {
             "type": "object",
             "additionalProperties": false,
@@ -29,39 +197,59 @@
               "icon": {"type": "string", "pattern": "^[a-z0-9-]+$"}
             }
           },
-          "runtime": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["type", "source", "startPolicy"],
-            "properties": {
-              "type": {"enum": ["quadlet", "compose", "vm", "external", "native"]},
-              "project": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
-              "source": {"type": "string", "pattern": "^/var/lib/nas-control/apps/[a-z0-9-]+/.+$"},
-              "startPolicy": {"enum": ["boot", "manual", "on-demand", "disabled"]}
-            }
-          },
+          "runtime": {"$ref": "#/$defs/runtime"},
           "resources": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
               "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 68719476736},
               "cpus": {"type": "number", "minimum": 0.1, "maximum": 64},
-              "gpus": {"type": "array", "items": {"type": "string"}}
+              "gpus": {
+                "type": "array",
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {"$ref": "#/$defs/gpuRequest"},
+                "description": "Runtime-neutral GPU requests. optional selectors allow CPU fallback; required selectors fail closed when unavailable."
+              }
             }
           },
           "storage": {
             "type": "array",
             "maxItems": 16,
             "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["hostPath", "guestPath", "mode"],
-              "properties": {
-                "hostPath": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"},
-                "guestPath": {"type": "string", "pattern": "^/.+"},
-                "mode": {"enum": ["ro", "rw"]},
-                "dataset": {"type": "string", "pattern": "^tank/.+"}
-              }
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["hostPath", "guestPath", "mode"],
+                  "properties": {
+                    "hostPath": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"},
+                    "guestPath": {"type": "string", "pattern": "^/.+"},
+                    "mode": {"enum": ["ro", "rw"]},
+                    "dataset": {"type": "string", "pattern": "^tank/.+"},
+                    "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["resource", "guestPath"],
+                  "properties": {
+                    "resource": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
+                    "guestPath": {"type": "string", "pattern": "^/.+"},
+                    "target": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+                      "description": "Runtime-specific destination identity: Compose service name or libvirt filesystem target."
+                    },
+                    "requiredCapabilities": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {"enum": ["read", "write", "move", "delete", "admin"]}
+                    }
+                  }
+                }
+              ]
             }
           },
           "endpoints": {
@@ -80,7 +268,8 @@
                   "required": ["type"],
                   "properties": {
                     "type": {"enum": ["none", "path", "hostname", "dns", "port"]},
-                    "value": {"type": "string", "minLength": 1, "maxLength": 253}
+                    "value": {"type": "string", "minLength": 1, "maxLength": 253},
+                    "prefix": {"type": "boolean"}
                   }
                 },
                 "auth": {
@@ -88,7 +277,8 @@
                   "additionalProperties": false,
                   "required": ["mode"],
                   "properties": {
-                    "mode": {"enum": ["public", "forward-auth", "oidc"]},
+                    "mode": {"enum": ["public", "forward-auth", "oidc", "api-key"]},
+                    "capability": {"type": "string", "pattern": "^(application|storage)\\.[a-z][a-z0-9-]{0,47}\\.[a-z][a-z0-9-]{0,47}$"},
                     "allow": {"enum": ["any", "groups", "users", "all"]},
                     "groups": {"type": "array", "items": {"type": "string", "pattern": "^([A-Za-z0-9_-]+|[0-9a-fA-F-]{36}|\\d+)$"}},
                     "users": {"type": "array", "items": {"type": "string", "pattern": "^([A-Za-z0-9._-]+|[0-9a-fA-F-]{36}|\\d+)$"}}
@@ -106,26 +296,8 @@
               }
             }
           },
-          "network": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "outboundDefault": {"enum": ["allow", "deny"]},
-              "lanAccess": {"type": "boolean"},
-              "allowedEgress": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["cidr"],
-                  "properties": {
-                    "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]+$"},
-                    "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}}
-                  }
-                }
-              }
-            }
-          }
+          "networkProfile": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
+          "network": {"$ref": "#/$defs/networkPolicy"}
         }
       }
     }

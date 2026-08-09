@@ -1,0 +1,1 @@
+This stacked branch targets PR #25's head branch until that PR merges. Keep PR #28 based on fix/ci-runtime-and-code-fixes-20260808 and rebase onto new PR #25 heads as needed; do not retarget to main early.

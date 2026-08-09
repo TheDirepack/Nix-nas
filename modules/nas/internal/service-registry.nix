@@ -2,24 +2,35 @@
 
 let
   cfg = config.nas;
-  mkService = { label, description ? null, enabled, units, port, publicPath, access, linkKey, category ? "Other", icon ? null }:
+  mkService = {
+    serviceId,
+    label,
+    description ? null,
+    enabled,
+    units,
+    port ? null,
+    publicPath ? null,
+    access ? "admin",
+    linkKey ? null,
+    category ? "Other",
+    icon ? null,
+    lifecycleMode ? "persistent",
+    idleSeconds ? null,
+    ownership ? "v2",
+    expose ? true,
+    dependsOn ? [ ],
+    resources ? { },
+  }:
     let
-      authMode = if access == "public" then "public" else "forward-auth";
+      authMode = if access == "public" then "public" else if access == "api-key" then "api-key" else "forward-auth";
       authAllow = if access == "admin" then "groups" else if access == "ai" then "groups" else if access == "vault" then "groups" else "any";
-      authGroups = if access == "admin" then ["nas_admin"] else if access == "ai" then ["nas_allow_ai" "nas_admin"] else if access == "vault" then ["nas_allow_vault" "nas_admin"] else if access == "api-key" then [] else [];
+      authGroups = if access == "admin" then [ "nas_admin" ] else if access == "ai" then [ "nas_allow_ai" "nas_admin" ] else if access == "vault" then [ "nas_allow_vault" "nas_admin" ] else [ ];
+      authCapability = if access == "admin" || access == "ai" || access == "vault" then "application.${serviceId}.access" else null;
       portalCategory = if linkKey == "identity" then "Administration" else if linkKey == "console" then "Administration" else if linkKey == "aiWorkspace" then "AI" else if linkKey == "syncthing" then "Files" else category;
       portalIcon = if icon != null then icon else if linkKey != null then linkKey else "box";
-    in {
-      label = label;
-      enabled = enabled;
-      ownership = "system";
-      runtime = {
-        type = "systemd";
-        source = "systemd/${builtins.head units}";
-        startPolicy = "boot";
-        units = units;
-      };
-      endpoints = {
+      lifecycle = { mode = lifecycleMode; } // (if lifecycleMode == "on-demand" then { inherit idleSeconds; } else { });
+      startPolicy = if !enabled then "disabled" else if lifecycleMode == "persistent" then "boot" else if lifecycleMode == "on-demand" then "on-demand" else "manual";
+      endpoint = {
         main = {
           transport = "http";
           targetPort = port;
@@ -30,7 +41,9 @@ let
           };
           auth = {
             mode = authMode;
-          } // (if authGroups != [] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then {} else { allow = "any"; });
+          }
+          // (if authCapability != null then { capability = authCapability; } else { })
+          // (if authGroups != [ ] then { allow = authAllow; groups = authGroups; } else if authMode == "public" || authMode == "api-key" then { } else { allow = "any"; });
           portal = {
             visible = linkKey != null;
             category = portalCategory;
@@ -38,9 +51,51 @@ let
           };
         };
       };
-    } // (if description != null then { description = description; } else {});
+    in
+    {
+      inherit label enabled ownership lifecycle dependsOn resources;
+      runtime = {
+        type = "systemd";
+        source = "systemd/${builtins.head units}";
+        inherit startPolicy units;
+      };
+      endpoints = if expose then endpoint else { };
+    } // (if description != null then { inherit description; } else { });
+
+  aiRuntimeBase = mkService {
+    serviceId = "ai-runtime";
+    label = "llama-swap runtime";
+    enabled = cfg.ai.enable;
+    units = [ "nas-llama-swap.service" ];
+    port = cfg.ai.llamaSwap.port;
+    publicPath = "/ai/runtime/";
+    access = "admin";
+    linkKey = "aiRuntime";
+    category = "AI";
+    lifecycleMode = "on-demand";
+    idleSeconds = 600;
+    dependsOn = [ "ai-config" ];
+    # llama-swap/llama.cpp can run on CPU, so GPU availability accelerates the
+    # service but does not make the application unavailable on a GPU-less host.
+    # The generic V2 device resolver decides which concrete GPU nodes/CDI
+    # resources to grant; this definition is not vendor- or runtime-specific.
+    resources.gpus = [ "optional:auto" ];
+  };
+
   registry = {
+    # V2 bootstrap/control-plane substrates are referenceable dependencies, but
+    # V2 never owns their shutdown lifecycle.
+    "storage-core" = mkService {
+      serviceId = "storage-core";
+      label = "NAS mounted storage";
+      enabled = true;
+      units = [ "nas-zfs-mount-guard.service" ];
+      lifecycleMode = "persistent";
+      ownership = "system";
+      expose = false;
+    };
     identity = mkService {
+      serviceId = "identity";
       label = "Authentik identity";
       enabled = true;
       units = [ "authentik.service" "authentik-worker.service" ];
@@ -49,8 +104,11 @@ let
       access = "public";
       linkKey = "identity";
       category = "Administration";
+      lifecycleMode = "persistent";
+      ownership = "system";
     };
     cockpit = mkService {
+      serviceId = "cockpit";
       label = "Cockpit management";
       enabled = true;
       units = [ "cockpit.socket" ];
@@ -59,28 +117,71 @@ let
       access = "admin";
       linkKey = "console";
       category = "Administration";
+      lifecycleMode = "persistent";
+      ownership = "system";
     };
-    aiApi = mkService {
-      label = "llama-swap API";
+    caddy = mkService {
+      serviceId = "caddy";
+      label = "Caddy ingress";
+      enabled = true;
+      units = [ "caddy.service" ];
+      lifecycleMode = "persistent";
+      ownership = "system";
+      expose = false;
+    };
+
+    # Application workloads and their prerequisites are ordinary V2 graph
+    # nodes. Their relationships are data, so any future runtime can depend on
+    # any other runtime without service-specific wake code.
+    copyparty = mkService {
+      serviceId = "copyparty";
+      label = "CopyParty files";
+      enabled = true;
+      units = [ "copyparty.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "storage-core" ];
+    };
+
+    "ai-storage" = mkService {
+      serviceId = "ai-storage";
+      label = "AI storage preparation";
       enabled = cfg.ai.enable;
-      units = [ "nas-llama-swap.service" ];
-      port = cfg.ai.llamaSwap.port;
-      publicPath = "/ai/v1/";
-      access = "api-key";
-      linkKey = null;
-      category = "AI";
+      units = [ "nas-ai-storage.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "storage-core" ];
     };
-    aiRuntime = mkService {
-      label = "llama-swap runtime UI";
+    "ai-config" = mkService {
+      serviceId = "ai-config";
+      label = "AI runtime configuration";
       enabled = cfg.ai.enable;
-      units = [ "nas-llama-swap.service" ];
-      port = cfg.ai.llamaSwap.port;
-      publicPath = "/ai/runtime/";
-      access = "admin";
-      linkKey = "aiRuntime";
-      category = "AI";
+      units = [ "nas-ai-config-init.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "ai-storage" ];
     };
-    aiWorkspace = mkService {
+    "ai-runtime" = aiRuntimeBase // {
+      endpoints = aiRuntimeBase.endpoints // {
+        api = {
+          transport = "http";
+          targetPort = cfg.ai.llamaSwap.port;
+          exposure = {
+            type = "path";
+            value = "/ai/v1/";
+            prefix = true;
+          };
+          auth = { mode = "api-key"; };
+          portal = {
+            visible = false;
+            category = "AI";
+            icon = "api";
+          };
+        };
+      };
+    };
+    "ai-workspace" = mkService {
+      serviceId = "ai-workspace";
       label = "Open WebUI";
       enabled = cfg.ai.enable;
       units = [ "open-webui.service" ];
@@ -89,8 +190,12 @@ let
       access = "ai";
       linkKey = "aiWorkspace";
       category = "AI";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
+      dependsOn = [ "ai-runtime" ];
     };
-    aiDownloader = mkService {
+    "ai-downloader" = mkService {
+      serviceId = "ai-downloader";
       label = "Hugging Face model downloader";
       enabled = cfg.ai.enable && cfg.ai.modelDownloader.enable;
       units = [ "podman-hfdownloader.service" ];
@@ -99,18 +204,44 @@ let
       access = "admin";
       linkKey = "aiModels";
       category = "AI";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
+      dependsOn = [ "ai-storage" ];
     };
+    "ai-coding" = mkService {
+      serviceId = "ai-coding";
+      label = "Pi coding sessions";
+      enabled = cfg.ai.enable && cfg.ai.codingAgent.enable;
+      units = [ "nas-ai-coding-prepare.service" "nas-ai-coding-sessions.target" ];
+      lifecycleMode = "session";
+      expose = false;
+      dependsOn = [ "ai-runtime" ];
+    };
+
     syncthing = mkService {
-      label = "Syncthing administration";
+      serviceId = "syncthing";
+      label = "Syncthing";
       enabled = cfg.syncthing.enable;
-      units = [ "syncthing.service" ];
+      units = [ "syncthing.service" "nas-syncthing-sync.timer" ];
       port = 8384;
       publicPath = "/syncthing/";
       access = "admin";
       linkKey = "syncthing";
       category = "Files";
+      lifecycleMode = "persistent";
+      dependsOn = [ "identity" "storage-core" ];
+    };
+    "vaultwarden-ca" = mkService {
+      serviceId = "vaultwarden-ca";
+      label = "Vaultwarden CA preparation";
+      enabled = cfg.vaultwarden.enable;
+      units = [ "nas-caddy-ca-export.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "caddy" ];
     };
     vaultwarden = mkService {
+      serviceId = "vaultwarden";
       label = "Vaultwarden";
       enabled = cfg.vaultwarden.enable;
       units = [ "vaultwarden.service" ];
@@ -119,8 +250,11 @@ let
       access = "vault";
       linkKey = "vaultwarden";
       category = "Home";
+      lifecycleMode = "persistent";
+      dependsOn = [ "identity" "vaultwarden-ca" ];
     };
     victoriametrics = mkService {
+      serviceId = "victoriametrics";
       label = "VictoriaMetrics";
       enabled = cfg.observability.enable;
       units = [ "victoriametrics.service" ];
@@ -129,8 +263,19 @@ let
       access = "admin";
       linkKey = "victoriaMetrics";
       category = "Monitoring";
+      lifecycleMode = "persistent";
+    };
+    telegraf = mkService {
+      serviceId = "telegraf";
+      label = "Telegraf metrics collector";
+      enabled = cfg.observability.enable;
+      units = [ "telegraf.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "victoriametrics" ];
     };
     grafana = mkService {
+      serviceId = "grafana";
       label = "Grafana";
       enabled = cfg.observability.enable && cfg.observability.grafana.enable;
       units = [ "grafana.service" ];
@@ -139,8 +284,12 @@ let
       access = "admin";
       linkKey = "metrics";
       category = "Monitoring";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
+      dependsOn = [ "victoriametrics" ];
     };
     alerts = mkService {
+      serviceId = "alerts";
       label = "Alert status";
       enabled = cfg.observability.enable && cfg.alerting.enable;
       units = [ "nas-alert-router.service" "vmalert-nas.service" ];
@@ -149,8 +298,11 @@ let
       access = "admin";
       linkKey = "alerts";
       category = "Monitoring";
+      lifecycleMode = "persistent";
+      dependsOn = [ "victoriametrics" ] ++ (if cfg.observability.ntfy.enable then [ "notifications" ] else [ ]);
     };
     notifications = mkService {
+      serviceId = "notifications";
       label = "ntfy notifications";
       enabled = cfg.observability.ntfy.enable;
       units = [ "ntfy-sh.service" ];
@@ -159,8 +311,10 @@ let
       access = "native";
       linkKey = "notifications";
       category = "Monitoring";
+      lifecycleMode = "persistent";
     };
     ups = mkService {
+      serviceId = "ups";
       label = "NUT web interface";
       enabled = cfg.power.ups.enable && cfg.power.ups.web.enable;
       units = [ "podman-nut-webgui.service" ];
@@ -169,14 +323,122 @@ let
       access = "admin";
       linkKey = "ups";
       category = "Monitoring";
+      lifecycleMode = "on-demand";
+      idleSeconds = 600;
     };
+
+    # Appliance jobs that are optional and do not bootstrap V2 are also V2
+    # services. The native systemd timer remains the scheduler/runtime.
+    "automatic-updates" = mkService {
+      serviceId = "automatic-updates";
+      label = "Scheduled update checks";
+      enabled = cfg.autoUpdate.enable && cfg.installationReady && cfg.scheduler.backend == "systemd";
+      units = [ "nas-auto-update.timer" ];
+      lifecycleMode = "persistent";
+      expose = false;
+    };
+    backups = mkService {
+      serviceId = "backups";
+      label = "Scheduled critical-state backups";
+      enabled = cfg.backup.enable && cfg.scheduler.backend == "systemd";
+      units = [ "restic-backups-nas-boot-system.timer" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "storage-core" ];
+    };
+  };
+
+  storageResources = {
+    nas-shares = {
+      path = "${cfg.zfsRoot}/shares";
+      dataset = cfg.zfsDataset;
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "read" "write" "move" "delete" "admin" ];
+      backup = {
+        enabled = cfg.backup.includeShares;
+        consistency = "zfs-snapshot";
+      };
+      fileBrowser.visible = false;
+      description = "Managed NAS share tree";
+    };
+    nas-control-state = {
+      path = "/var/lib/nas-control";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "Managed Services V2 definitions and appliance control state";
+    };
+    copyparty-config = {
+      path = "/var/lib/copyparty/user.d";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "CopyParty native administrator configuration";
+    };
+    authentik-files = {
+      path = "/var/lib/authentik";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "Authentik file-backed state; PostgreSQL remains native-dump managed";
+    };
+    setup-state = {
+      path = "/var/lib/nas-setup";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "First-start completion and recovery state";
+    };
+    identity-projection-state = {
+      path = "/var/lib/nas-identity-sync";
+      scope = "system";
+      stateClass = "derived";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = false;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "Reconstructable identity projection state derived from Authentik";
+    };
+  };
+
+  # Temporary read-only aliases for older Nix modules that still consume
+  # feature-catalog names. They are NOT emitted into V2 and cannot become
+  # duplicate lifecycle owners.
+  serviceRegistryCompat = registry // {
+    aiRuntime = registry."ai-runtime";
+    aiWorkspace = registry."ai-workspace";
+    aiDownloader = registry."ai-downloader";
   };
 in
 {
-  serviceRegistry = registry;
+  serviceRegistry = serviceRegistryCompat;
   serviceRegistryV2 = {
     schemaVersion = 2;
-    generation = 1;
+    generation = 5;
+    inherit storageResources;
     services = registry;
   };
 }

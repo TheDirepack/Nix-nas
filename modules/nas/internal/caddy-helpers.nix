@@ -24,9 +24,23 @@ let
     request_header Remote-Email {http.request.header.X-Authentik-Email}
     request_header Remote-UID {http.request.header.X-Authentik-Uid}
   '';
+  # Compatibility helper for feature-catalog routes not yet represented as V2
+  # applications. New application routes should use caddyManagedServiceAuth.
   caddyOnDemandAuth = feature: scope: ''
     forward_auth unix/${onDemandGateSocket} {
       uri /authorize?feature=${feature}&scope=${scope}
+      header_up Remote-User {http.request.header.Remote-User}
+      header_up Remote-Groups {http.request.header.Remote-Groups}
+      header_up Remote-Name {http.request.header.Remote-Name}
+      header_up Remote-Email {http.request.header.Remote-Email}
+      header_up Remote-UID {http.request.header.Remote-UID}
+      header_up Authorization {http.request.header.Authorization}
+      header_up X-API-Key {http.request.header.X-API-Key}
+    }
+  '';
+  caddyManagedServiceAuth = service: endpoint: ''
+    forward_auth unix/${onDemandGateSocket} {
+      uri /authorize?scope=service:${service}:${endpoint}
       header_up Remote-User {http.request.header.Remote-User}
       header_up Remote-Groups {http.request.header.Remote-Groups}
       header_up Remote-Name {http.request.header.Remote-Name}
@@ -71,6 +85,7 @@ in
   inherit
     caddyForwardAuth
     caddyOnDemandAuth
+    caddyManagedServiceAuth
     caddyCapabilityAuth
     caddyOnDemandTransport
     copypartySsoProxy

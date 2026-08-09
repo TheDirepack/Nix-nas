@@ -6,10 +6,13 @@ let
   code = cfg.codingAgent;
   piPackageAvailable = builtins.hasAttr "pi-coding-agent" pkgs;
   piPackage = if piPackageAvailable then pkgs."pi-coding-agent" else null;
-  stateDir = "/var/lib/nas-code-agent";
+  version = lib.removeSuffix "\n" (builtins.readFile ../../VERSION);
   piNetnsPath = "/run/netns/pi";
   piHostVethIp = "10.200.1.1";
   piNsVethIp = "10.200.1.2";
+  piImageName = "nixos-nas-pi-agent";
+  piImageRef = "${piImageName}:${version}";
+  userStateRoot = "${config.nas.zfsRoot}/apps/pi/users";
   providerName = "nas-llama-swap";
   roleModels = lib.unique (builtins.attrValues code.modelRoles);
   modelsFile = pkgs.writeText "nas-pi-models.json" (builtins.toJSON {
@@ -39,29 +42,54 @@ let
     cp ${settingsFile} "$out/settings.json"
   '';
   piExecutable = if piPackageAvailable then "${piPackage}/bin/pi" else "${pkgs.coreutils}/bin/false";
-  sessionExec = pkgs.writeShellScript "nas-pi-session" ''
+  sessionExec = pkgs.writeShellScriptBin "nas-pi-session" ''
     set -euo pipefail
-    : "''${CREDENTIALS_DIRECTORY:?systemd credential directory is unavailable}"
-    key_file="$CREDENTIALS_DIRECTORY/llama-swap-api-key"
+    key_file="''${NAS_PI_CREDENTIAL_FILE:-/run/secrets/llama-swap-api-key}"
     [[ -r "$key_file" ]] || { echo "Pi llama-swap credential is unavailable" >&2; exit 1; }
     LLAMA_SWAP_CODING_API_KEY="$(cat "$key_file")"
     export LLAMA_SWAP_CODING_API_KEY
+    export HOME=/home/pi
     export PI_CODING_AGENT_DIR=${lib.escapeShellArg (toString piConfigDir)}
-    export PI_CODING_AGENT_SESSION_DIR=${lib.escapeShellArg "${stateDir}/sessions"}
-    export PI_PACKAGE_DIR=${lib.escapeShellArg "${stateDir}/packages"}
+    export PI_CODING_AGENT_SESSION_DIR=/home/pi/sessions
+    export PI_PACKAGE_DIR=/home/pi/packages
     export PI_OFFLINE=1
     export PI_SKIP_VERSION_CHECK=1
     export PI_TELEMETRY=0
+    mkdir -p "$PI_CODING_AGENT_SESSION_DIR" "$PI_PACKAGE_DIR"
     exec ${piExecutable} --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files "$@"
   '';
+  piImage = if piPackageAvailable then pkgs.dockerTools.buildLayeredImage {
+    name = piImageName;
+    tag = version;
+    contents = [
+      piPackage
+      pkgs.coreutils
+      pkgs.git
+      pkgs.openssh
+      pkgs.cacert
+      sessionExec
+    ];
+    config = {
+      Entrypoint = [ "${sessionExec}/bin/nas-pi-session" ];
+      WorkingDir = "/workspace";
+      User = "${toString code.serviceUid}:${toString code.serviceUid}";
+      Env = [
+        "HOME=/home/pi"
+        "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+      ];
+    };
+  } else null;
   launcher = pkgs.writeShellApplication {
     name = "nas-code";
-    runtimeInputs = [ nasPythonApplication pkgs.systemd ];
+    runtimeInputs = [ nasPythonApplication pkgs.podman ];
     text = ''
       export NAS_CODING_WORKSPACE_ROOTS_JSON=${lib.escapeShellArg (builtins.toJSON code.workspaceRoots)}
-      export NAS_PI_SESSION_EXEC=${lib.escapeShellArg sessionExec}
+      export NAS_PI_IMAGE=${lib.escapeShellArg piImageRef}
+      export NAS_PI_NETWORK=${lib.escapeShellArg "ns:${piNetnsPath}"}
       export NAS_PI_CREDENTIAL=${lib.escapeShellArg "${aiSecretDir}/coding-agent-api-key"}
-      export NAS_PI_STATE_DIR=${lib.escapeShellArg stateDir}
+      export NAS_PI_USER_STATE_ROOT=${lib.escapeShellArg userStateRoot}
+      export NAS_PI_CONTAINER_UID=${toString code.serviceUid}
+      export NAS_PI_CONTAINER_GID=${toString code.serviceUid}
       export NAS_FEATURE_CONTROL=${lib.escapeShellArg "${nasPythonApplication}/bin/nas-feature-control"}
       export NAS_CODING_HEARTBEAT_SECONDS=${toString code.heartbeatSeconds}
       export NAS_CAPABILITY_REGISTRY_FILE=${lib.escapeShellArg "${nasInternal.capabilityRegistryFile}"}
@@ -88,17 +116,12 @@ in
         DNSStubListenerExtra=${piHostVethIp}
       '';
 
-      environment.systemPackages = [ piPackage launcher ];
-
-      systemd.slices.nas-ai-coding = {
-        description = "Pi coding-agent session slice";
-        wantedBy = lib.mkOverride 90 [ ];
-        partOf = [ "nas-protected-services.target" ];
-        unitConfig.Before = [ "nas-ai-coding-sessions.target" ];
-      };
+      # Pi itself is no longer installed as a host executable. The launcher and
+      # reproducible OCI image are the supported runtime surface.
+      environment.systemPackages = [ launcher ];
 
       systemd.targets.nas-ai-coding-sessions = {
-        description = "Active Pi coding-agent sessions";
+        description = "Active Pi coding-agent session prerequisites";
         wantedBy = lib.mkOverride 90 [ ];
         partOf = [ "nas-protected-services.target" ];
         requires = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
@@ -160,7 +183,7 @@ in
       };
 
       systemd.services.nas-ai-coding-prepare = {
-        description = "Prepare the transient Pi coding-agent runtime";
+        description = "Prepare the disposable Pi coding-agent container runtime";
         requires = [ "nas-ai-storage.service" ];
         after = [ "nas-ai-storage.service" ];
         before = [ "nas-ai-coding-sessions.target" ];
@@ -172,15 +195,14 @@ in
           RemainAfterExit = true;
           User = "root";
           Group = "root";
-          StateDirectory = "nas-code-agent";
-          StateDirectoryMode = "0750";
           UMask = "0007";
         };
         script = ''
           set -euo pipefail
-          install -d -m 0750 -o nas-code-agent -g nas-code-agent ${lib.escapeShellArg stateDir}
-          install -d -m 0700 -o nas-code-agent -g nas-code-agent \
-            ${lib.escapeShellArg "${stateDir}/sessions"} ${lib.escapeShellArg "${stateDir}/packages"}
+          install -d -m 0750 -o root -g nas-code-agent ${lib.escapeShellArg userStateRoot}
+          if ! ${pkgs.podman}/bin/podman image exists ${lib.escapeShellArg piImageRef}; then
+            ${pkgs.podman}/bin/podman load --input ${piImage}
+          fi
           ${lib.concatMapStringsSep "\n" (root: ''
             if [[ ! -e ${lib.escapeShellArg root} ]]; then
               install -d -m 2770 -o ${lib.escapeShellArg config.nas.adminUser} -g nas-code-agent ${lib.escapeShellArg root}
@@ -199,7 +221,6 @@ in
               echo "Fix with: chown :nas-code-agent ${root} && chmod 2770 ${root} or add ACL via setfacl -m g:nas-code-agent:rwx ${root}" >&2
               exit 1
             fi
-            # Group/ACL-based access is preferred over recursive ownership changes; do not blindly chown existing trees.
           '') code.workspaceRoots}
         '';
       };

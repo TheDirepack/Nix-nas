@@ -8,7 +8,10 @@ import pathlib
 import subprocess
 
 ROOT = pathlib.Path("/var/lib/nas-test/repo")
-INVENTORY = ROOT / "tests/custom-script-contracts.json"
+INVENTORIES = (
+    ROOT / "tests/custom-script-contracts.json",
+    ROOT / "tests/custom-script-contracts-v2.json",
+)
 MARKER = pathlib.Path("/tmp/nas-installed-fuzz-pwned")
 PAYLOADS = (
     "../etc/shadow",
@@ -27,7 +30,7 @@ PAYLOADS = (
     "A" * 2048,
 )
 
-# Strategies live in the reviewed executable inventory so adding a new installed
+# Strategies live in the reviewed executable inventories so adding a new installed
 # command without an adversarial classification fails preflight. Destructive storage
 # commands are fuzzed only inside the disposable ZFS lifecycle tests.
 
@@ -48,12 +51,13 @@ def run(command: list[str], *, allowed: set[int] | None = None) -> subprocess.Co
 
 
 def inventory_strategies() -> dict[str, str]:
-    raw = json.loads(INVENTORY.read_text(encoding="utf-8"))
     strategies: dict[str, str] = {}
-    for name, row in raw["executables"].items():
-        strategy = row.get("fuzzStrategy")
-        if isinstance(strategy, str) and strategy:
-            strategies[name] = strategy
+    for path in INVENTORIES:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for name, row in raw["executables"].items():
+            strategy = row.get("fuzzStrategy")
+            if isinstance(strategy, str) and strategy:
+                strategies[name] = strategy
     return strategies
 
 

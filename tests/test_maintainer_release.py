@@ -103,6 +103,7 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
             "NAS_PREFLIGHT_SKIP_TESTS=1",
             "NAS_PREFLIGHT_SKIP_FUZZ=1",
             "NAS_PREFLIGHT_SKIP_NIX=1",
+            "NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1",
             "bash",
             "scripts/preflight.sh",
             timeout=90,

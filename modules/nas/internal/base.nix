@@ -45,7 +45,7 @@ let
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
   upsMonitorSystem =
-    if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
+    if cfg.power.ups.monitorSystem != "" then "${cfg.power.ups.monitorSystem}"
     else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
   syncthingDataDir = "/var/lib/syncthing";
@@ -58,14 +58,19 @@ let
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";
 
+  # Caddy depends only on the ingress/authentication control plane. Application
+  # backends are V2-owned and may legitimately be stopped or on-demand.
   caddyBackendUnits = [
     "authentik.service"
     "authentik-worker.service"
-    "copyparty.service"
     "nas-on-demand-gate.service"
     "cockpit.socket"
   ];
 
+  # Minimum service set required to unlock, authorize, expose, and operate V2.
+  # Application workloads (CopyParty, Syncthing, Vaultwarden, AI, observability,
+  # notifications, UPS UI, etc.) are intentionally absent and lifecycle-owned
+  # by Managed Services V2.
   protectedServiceUnits = [
     "nas-zfs-mount-guard.service"
     "postgresql.service"
@@ -73,7 +78,6 @@ let
     "authentik-worker.service"
     "authentik.service"
     "nas-identity-sync.service"
-    "copyparty.service"
     "nas-on-demand-gate.service"
     "caddy.service"
   ] ++ lib.optional cfg.zfsEncryption.enable "nas-zfs-unlock.service";

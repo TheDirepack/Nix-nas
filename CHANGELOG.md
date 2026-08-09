@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.0-alpha.8 — 2026-08-09
+
+- Establish Managed Services V2 as the shared application/resource authority with stable application principals, named storage resources, explicit authorization capabilities, named network profiles, and authoritative/derived/cache/ephemeral state classification.
+- Separate application availability from runtime lifetime with first-class `persistent`, `on-demand`, and `session` lifecycle policy; keep idle reaping timer/oneshot driven rather than adding a resident controller.
+- Make CopyParty the sole general-purpose file browser, project V2 storage ACLs from Authentik capability groups, reserve filesystem-root recovery access for `nas_admin`, and fail closed for unresolved user-scoped storage.
+- Move Pi coding sessions to disposable hardened Podman containers with persistent per-user state, native V2 storage policy, and the existing restricted network boundary retained until the native Podman/firewalld replacement is qualified.
+- Preserve native runtime authority: Quadlet uses generated V2 drop-ins, Compose uses a generated secondary document, and libvirt consumes native XML without deleting persistent disks during application removal.
+- Add V2-derived Restic inputs and exact temporary ZFS snapshot views while retaining the native NixOS Restic/systemd scheduler and native PostgreSQL/SQLite consistency mechanisms; NAS share-data backup is explicit opt-in.
+- Retarget this development work to current `main` after the first CI/runtime-fix phase merged and use the working pre-build CI gates as the validation baseline.
+
 ## 2.2.0-alpha.7 — 2026-08-08
 
 - Fix Pi network namespace construction (remove `mount --bind /proc/self/ns/net` that overwrote `/run/netns/pi`), provide DNS inside the namespace via `/etc/netns/pi/resolv.conf` pointing at `10.200.1.1` and `systemd-resolved` `DNSStubListenerExtra`, and clean up teardown without `umount` of the ip-managed namespace.
@@ -42,7 +52,6 @@
 - This remains a source-only/unverified development artifact until exact Nix evaluation/build, native/encrypted VM tests, installer/reboot/rollback, browser authorization, and hardware recovery qualification run on this revision.
 
 ## 2.2.0-alpha.3 — 2026-08-07
-
 - Replaced the caller-controlled `NAS_OPERATION_COORDINATED=1` bypass with a verifiable live ancestor-operation token tied to PID/boot/start identity and the PID that actually owns every claimed Linux `flock`.
 - Added explicit state-authority restore policy metadata (owner, group, root mode, strategy) so restore to an empty host does not guess `root:root`.
 - Made state subprocess timeouts terminate the entire child process group before rollback/recovery continues.
@@ -177,7 +186,6 @@
 - Moved installation choices, option behavior, and ShellCheck suppression rationale into operator/development documentation.
 - Replaced contract tests that depended on comment wording with behavioral source-contract assertions.
 - Added comment-policy tests that reject long comment blocks, source-level backlog markers, review history, and Python section comments.
-
 ## 2.1.0-alpha.15 — 2026-08-06
 
 - Reorganized documentation into operator, development, and concise history/backlog surfaces.

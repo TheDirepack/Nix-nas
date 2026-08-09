@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixos-nas.local/schemas/storage-resource.schema.json",
+  "title": "NixOS NAS managed storage resource",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "stateClass", "capabilities", "backup"],
+  "properties": {
+    "path": {
+      "type": "string",
+      "pattern": "^/(tank|srv|var/lib/nas-control/apps)(/.*)?$"
+    },
+    "dataset": {
+      "type": "string",
+      "pattern": "^tank/.+"
+    },
+    "scope": {
+      "enum": ["system", "user", "instance"],
+      "default": "system"
+    },
+    "pathTemplate": {
+      "type": "string",
+      "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"
+    },
+    "stateClass": {
+      "enum": ["authoritative", "derived", "cache", "ephemeral"]
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["read", "write", "move", "delete", "admin"]
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "consistency": {
+          "enum": ["filesystem", "zfs-snapshot", "postgres", "native", "none"],
+          "default": "filesystem"
+        }
+      }
+    },
+    "quotaBytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 256
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"scope": {"const": "user"}},
+        "required": ["scope"]
+      },
+      "then": {
+        "required": ["pathTemplate"]
+      }
+    }
+  ]
+}

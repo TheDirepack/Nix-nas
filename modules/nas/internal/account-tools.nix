@@ -38,7 +38,11 @@ let
     pyproject = true;
     src = lib.cleanSource ../../..;
     build-system = [ pkgs.python3Packages.setuptools ];
-    dependencies = [ pkgs.python3Packages.pyyaml ];
+    dependencies = with pkgs.python3Packages; [
+      pyyaml
+      jsonschema
+      ruamel-yaml
+    ];
     pythonImportsCheck = [
       "nas_ai_config"
       "nas_alert_router"
@@ -47,14 +51,18 @@ let
       "nas_feature_control"
       "nas_identity_sync"
       "nas_logging"
+      "nas_managed_spec"
       "nas_migrate_state"
+      "nas_service_runtime_python"
       "nas_setup"
       "nas_state"
+      "nas_v2_runtime"
     ];
     doCheck = false;
   };
   nasAlertRouter = "${nasPythonApplication}/bin/nas-alert-router";
   nasIdentitySyncScript = "${nasPythonApplication}/bin/nas-identity-sync";
+  nasV2RuntimeScript = "${nasPythonApplication}/bin/nas-v2-runtime";
   nasIdentityPython = pkgs.python3;
   nasIdentitySync = pkgs.writeShellApplication {
     name = "nas-identity-sync";
@@ -203,7 +211,7 @@ let
     (mkDatabaseAuthority { name = "authentik-database"; source = "postgresql://authentik"; })
     (mkPathAuthority {
       name = "managed-services";
-      source = "/var/lib/nas-control/services.json";
+      source = "/var/lib/nas-control/services.yaml";
       owner = "nas-feature-gate";
       group = "nas-feature-control";
       rootMode = "0600";
@@ -328,9 +336,6 @@ let
     })
   ]
   ++ lib.optionals cfg.virtualization.enable [
-    # /var/lib/libvirt is heterogeneous; root ownership applies only to the
-    # authority root. Existing subpath owners are preserved and libvirt remains
-    # a priority for a dedicated native adapter/VM-backed restore test.
     (mkPathAuthority {
       name = "libvirt";
       source = "/var/lib/libvirt";
@@ -338,8 +343,6 @@ let
       rootMode = "0750";
     })
   ];
-  # Stop only authorities that require a quiet application writer. NetworkManager
-  # and firewalld remain live so a routine state export cannot sever management.
   stateQuiesceUnits = [
     "authentik.service"
     "authentik-worker.service"
@@ -357,8 +360,6 @@ let
   ++ lib.optional (cfg.ai.enable && cfg.ai.modelDownloader.enable) "podman-hfdownloader.service"
   ++ lib.optional cfg.virtualization.enable "libvirtd.service";
 
-  # Restore can temporarily stop network/firewall authorities. Keep this list
-  # generated from the active profile so disabled services are never touched.
   stateRestoreUnits = [
     "nas-protected-services.target"
     "nas-identity-sync.timer"
@@ -395,8 +396,6 @@ let
       export NAS_STATE_SCHEMA=${../../../schemas/state-bundle.schema.json}
       export NAS_STATE_SIGNING_KEY=/run/nas-secrets/state/bundle-signing-key
       export NAS_VERSION=${lib.escapeShellArg (lib.removeSuffix "\n" (builtins.readFile ../../../VERSION))}
-      # The realized flake source path is immutable/content-addressed and gives state bundles
-      # exact build provenance even when a Git worktree is not present at runtime.
       export NAS_SOURCE_REVISION=${lib.escapeShellArg (toString ../../..)}
       exec ${nasStateScript} "$@"
     '';
@@ -469,12 +468,11 @@ let
     '';
   };
 
-
 in
 {
   inherit
-    nasPythonApplication nasAlertRouter nasIdentitySyncScript nasIdentityPython nasIdentitySync nasFeatureControlScript nasFeatureControl
-    nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasMigrateStateScript nasMigrateState nasPortalStatic nasAuthentikBlueprints
-    nasCockpitApiScript nasCockpitApi
+    nasPythonApplication nasAlertRouter nasIdentitySyncScript nasIdentityPython nasIdentitySync nasV2RuntimeScript
+    nasFeatureControlScript nasFeatureControl nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor
+    nasMigrateStateScript nasMigrateState nasPortalStatic nasAuthentikBlueprints nasCockpitApiScript nasCockpitApi
   ;
 }
