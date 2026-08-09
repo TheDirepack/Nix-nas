@@ -17,7 +17,7 @@ The plan at `/home/max/Downloads/...` describes a 28-phase, zero-extra-daemon sy
 | Generic user portal                    | 🟢 Done       | `web/portal/index.html` now iterates `portal.json` (`include "/run/nas-control/portal.json" | mustFromJson`) and filters by `has $groups` / `allow` / `users` / `public` + `nas_admin` bypass. `portal_projection()` carries `portal` from service/endpoint and falls back to `publicPath` for built-ins. |
 | Dynamic app authorization              | 🟢 Done       | `nas_feature_control.py` now handles `scope=service:<id>:<endpoint>` dynamically: looks up `effective-endpoints.json`, evaluates `public`/`forward-auth`/`oidc` + `allow` (`any`/`groups`/`users`/`all`) + `groups`/`users` + admin bypass. `caddy-helpers.nix` now propagates `X-Authentik-Uid` → `Remote-UID` through `forward_auth` and the on-demand gate. |
 | Caddy managed routes                   | 🟢 Done — via unified registry | `nas_service_caddy.py` now generates a **Caddyfile** fragment (not JSON `forward_auth` handler) via `generate_caddyfile()` using `forward_auth unix/<gate> { uri /authorize?scope=... header_up Remote-* }` (mirroring `caddy-helpers.nix`), handles `path` as `path /x /x*` (prefix), validates via `caddy fmt --overwrite` (best-effort, `NAS_SKIP_CADDY_VALIDATE`), writes to `/run/nas-control/caddy-managed.conf` with `systemctl reload` best-effort. All 12 built-ins now expose via the same Caddy generation path as runtime services (their `endpoints.main` with `exposure.path` from `publicPath`). |
-| Podman single-container management     | 🟢 Adapter present | `services/nas_service_runtime_podman.py` now implements `plan`/`apply`/`remove` → `podman`/`Quadlet` (`/etc/containers/systemd/<id>.container`, `systemctl daemon-reload`). `pyproject.toml` now exposes the 5 runtime modules. |
+| Podman single-container management     | 🟢 Native Quadlet adapter | `services/nas_service_runtime_podman.py` no longer renders or installs home-grown Quadlet content. Runtime services supply a native `.container` file under `/var/lib/nas-control/apps/<id>/`; the adapter validates only the NAS ownership boundary, then delegates replace/install/systemd reload and recursive application removal to `podman quadlet`. Nix-nas retains enable/disable policy but does not duplicate Podman's Quadlet grammar. |
 | Podman Compose                         | 🟢 Adapter present | `services/nas_service_runtime_compose.py` now implements `plan`/`apply`/`remove` → `podman compose -p <id> -f <source> up -d` (explicit provider, project name = service id). |
 | VM management                          | 🟢 Adapter present | `services/nas_service_runtime_libvirt.py` now implements `plan`/`apply`/`remove` → `virsh define/start/destroy/undefine` with `nas:service` metadata (`<id>`+`<generation>`). |
 | firewalld policy generation            | 🟢 Adapter present | `services/nas_service_firewall.py` now implements `plan`/`apply`/`remove` → `firewall-cmd --permanent` + `ipaddress` CIDR validation, `StrictForwardPorts` ready. |
@@ -25,6 +25,12 @@ The plan at `/home/max/Downloads/...` describes a 28-phase, zero-extra-daemon sy
 | Cockpit Applications UI                | 🟢 Unified API | `services/nas_cockpit_api.py` now exposes `managed-services` / `managed-service-validate` and includes `managedServices` in `overview()` (`effective`+`portal`). The portal is now the only service list; built-ins and runtime services appear through the same `effective` API. |
 | Managed-service backup/restore         | 🟢 Done       | `services/nas_state.py:default_authorities()` and `modules/nas/internal/account-tools.nix:stateRegistry` now include `managed-services` (`/var/lib/nas-control/services.json`) and `managed-apps` (`/var/lib/nas-control/apps`, optional). `nas-state` now preserves the authoritative definitions. |
 | Zero-extra-daemon architecture         | 🟢 Done       | Maintained: only file-backed state + oneshots + existing Caddy/Authentik/firewalld/Podman/libvirt. No new daemon. |
+
+## Runtime ownership rule
+
+Managed services should use native upstream configuration formats wherever an upstream runtime already has a declarative contract. Nix-nas owns NAS-specific policy (allowed storage roots, exposure, Authentik access, portal metadata and feature lifecycle) and should not maintain a second implementation of Podman, libvirt, firewalld, Caddy or Authentik configuration semantics.
+
+For Podman single-container applications, the authoritative runtime definition is now the native Quadlet `.container` file. This deliberately removes the former Python translation of `image`, `storage`, CPU, memory and endpoint fields into a generated Quadlet. Those settings belong in the Quadlet; the managed-service document only carries the cross-system NAS metadata that other control planes need.
 
 ## Most important problem — fixed
 
@@ -57,4 +63,3 @@ Replaced non-standard JSON `forward_auth` handler with Caddyfile `forward_auth` 
 - UI still `2.2.0-alpha.7` source-only (not install-ready).
 
 Next milestone (per review): wire a synthetic runtime endpoint through the adapters and prove it appears for exactly the correct Authentik user in the portal and is denied for everyone else, with the existing `stateful`/`property` tests as the gate.
-

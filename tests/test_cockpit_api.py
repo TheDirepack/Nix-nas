@@ -239,6 +239,11 @@ class CockpitApiTests(unittest.TestCase):
                 api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)
             ) as lock,
             mock.patch.object(api, "run", return_value=self.completed()) as run,
+            mock.patch.object(
+                api.ai_config,
+                "load_config",
+                return_value={"models": {}, "peers": {}, "selectors": {}},
+            ),
             mock.patch.object(api.ai_config, "set_provider", return_value={"ok": True}) as configure,
         ):
             result = api.set_ai_provider(request)
@@ -278,6 +283,11 @@ class CockpitApiTests(unittest.TestCase):
         with (
             mock.patch.object(api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)),
             mock.patch.object(api, "run", return_value=self.completed()) as run,
+            mock.patch.object(
+                api.ai_config,
+                "load_config",
+                return_value={"models": {}, "peers": {}, "selectors": {}},
+            ),
             mock.patch.object(api.ai_config, "set_provider", return_value={"ok": True}) as configure,
         ):
             self.assertTrue(api.set_ai_provider(request)["ok"])
@@ -711,6 +721,11 @@ class CockpitApiTests(unittest.TestCase):
             with (
                 mock.patch.object(api, "acquire_operation", return_value=__import__("contextlib").nullcontext(active)),
                 mock.patch.object(api.ai_config, "CONFIG_PATH", config),
+                mock.patch.object(
+                    api.ai_config,
+                    "load_config",
+                    return_value={"models": {}, "peers": {}, "selectors": {}},
+                ),
                 mock.patch.object(api, "_read_secret_env", return_value=b"old-env"),
                 mock.patch.object(api, "run", return_value=self.completed()) as run,
                 mock.patch.object(

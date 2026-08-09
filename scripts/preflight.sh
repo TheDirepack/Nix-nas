@@ -5,6 +5,12 @@ repo_root="${NAS_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 status_file="${NAS_PREFLIGHT_STATUS_FILE:-}"
 require_complete="${NAS_PREFLIGHT_REQUIRE_COMPLETE:-0}"
 incomplete=()
+identity_fixture_lock="${NAS_IDENTITY_LOCK:-}"
+
+if [[ -z "$identity_fixture_lock" ]]; then
+  identity_fixture_lock="$(mktemp "${TMPDIR:-/tmp}/nas-identity-sync-preflight.XXXXXX")"
+  trap 'rm -f -- "$identity_fixture_lock"' EXIT
+fi
 
 [[ -d "$repo_root" ]] || { printf 'preflight: missing repository: %s\n' "$repo_root" >&2; exit 1; }
 cd -- "$repo_root"
@@ -104,7 +110,8 @@ else
   skip node "Node.js unavailable; CI runs JavaScript checks"
 fi
 
-step "Authentik fixture" env PYTHONDONTWRITEBYTECODE=1 python3 services/nas_identity_sync.py status-fixture tests/fixtures/authentik-identity.json
+step "Authentik fixture" env PYTHONDONTWRITEBYTECODE=1 NAS_IDENTITY_LOCK="$identity_fixture_lock" \
+  python3 services/nas_identity_sync.py status-fixture tests/fixtures/authentik-identity.json
 
 if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
   [[ -f MANIFEST.sha256 ]] || { printf 'preflight: MANIFEST.sha256 is required\n' >&2; exit 1; }
@@ -115,8 +122,8 @@ if [[ "${NAS_PREFLIGHT_SKIP_TOOLING:-0}" == "1" ]]; then
   skip tooling "Ruff, Pyright, and ShellCheck are owned by dedicated CI steps"
 else
   if command -v ruff >/dev/null 2>&1; then
-    step "Ruff" ruff check services tests scripts
-    step "Ruff format" ruff format --check services tests scripts
+    step "Ruff" ruff check --no-cache services tests scripts
+    step "Ruff format" ruff format --check --no-cache services tests scripts
   else
     skip ruff "Ruff unavailable; CI runs it"
   fi

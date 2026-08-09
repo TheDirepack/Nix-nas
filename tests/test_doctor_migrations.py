@@ -46,6 +46,8 @@ class MigrationTests(unittest.TestCase):
             self.write_json(state, {"schemaVersion": 1, "features": {"ai": True, "backup": False}})
             plan = nas_migrate_state.plan_feature_state(state, catalog)
             self.assertEqual("migration-required", plan.item.status)
+            self.assertIsNotNone(plan.value)
+            assert plan.value is not None
             self.assertEqual(2, plan.value["schemaVersion"])
             self.assertEqual({"ai": "on-demand", "backup": "off"}, plan.value["features"])
 

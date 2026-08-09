@@ -25,6 +25,25 @@ SPEC.loader.exec_module(state)
 
 
 class StateBundleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = pathlib.Path(self.temporary.name)
+        path_patch = mock.patch.multiple(
+            state,
+            DEFAULT_ROLLBACK_ROOT=root / "rollbacks",
+            DEFAULT_RUNTIME_ROOT=root / "runtime",
+            RESTORE_JOURNAL=root / "restore-operation.json",
+        )
+        path_patch.start()
+        self.addCleanup(path_patch.stop)
+        environment_patch = mock.patch.dict(
+            os.environ,
+            {"NAS_STATE_RUNTIME_ROOT": str(root / "runtime")},
+        )
+        environment_patch.start()
+        self.addCleanup(environment_patch.stop)
+
     def registry(self, public: pathlib.Path, sensitive: pathlib.Path, missing: pathlib.Path) -> str:
         return json.dumps(
             [

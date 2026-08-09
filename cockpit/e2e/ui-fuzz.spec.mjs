@@ -3,7 +3,7 @@ import {test, expect} from "@playwright/test";
 const seeds = [
   "<script>alert(1)</script>",
   '<img src=x onerror="alert(1)">',
-  '<svg/onload=alert(1)>',
+  "<svg/onload=alert(1)>",
   "javascript:alert(1)",
   "' OR 1=1 --",
   "\r\nX-Injected: yes",
@@ -31,23 +31,45 @@ test.describe.configure({mode: "parallel"});
 
 for (const {name, value} of cases) {
   test(`slow hostile-input fuzz ${name}`, async ({page}) => {
-    await page.addInitScript(payload => {
+    await page.addInitScript((payload) => {
       globalThis.__nas_xss = 0;
       const response = {
         host: payload,
         protectedReady: true,
-        setup: {firstStart: {status: "complete", message: payload}, setupState: {status: "complete"}},
-        identity: {ok: true, users: [{uid: payload}], groups: [], administrators: [], shareAuthority: payload},
+        setup: {
+          firstStart: {status: "complete", message: payload},
+          setupState: {status: "complete"},
+        },
+        identity: {
+          ok: true,
+          users: [{uid: payload}],
+          groups: [],
+          administrators: [],
+          shareAuthority: payload,
+        },
         capabilities: {ok: true, users: []},
         featureControl: {features: [], memory: {components: [], system: {availableBytes: 1}}},
-        update: {revision: payload, branch: payload, upstream: payload, ahead: 0, behind: 0, dirty: false},
+        update: {
+          revision: payload,
+          branch: payload,
+          upstream: payload,
+          ahead: 0,
+          behind: 0,
+          dirty: false,
+        },
         services: [{unit: payload, active: payload, enabled: payload, sub: payload, load: payload}],
         zpool: {ok: true, text: payload},
         zfs: {ok: true, text: payload},
         failedUnits: [payload],
         timers: [],
         operationState: {busyClasses: [], conflictsByAction: {}, featureConflicts: []},
-        links: {identity: "/identity/", documentation: "/docs/", shares: "/shares/", settings: payload, files: payload},
+        links: {
+          identity: "/identity/",
+          documentation: "/docs/",
+          shares: "/shares/",
+          settings: payload,
+          files: payload,
+        },
       };
       globalThis.cockpit = {
         spawn() {
@@ -61,6 +83,10 @@ for (const {name, value} of cases) {
     await page.goto("/index.html");
     await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
     expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
-    expect(await page.locator("script, iframe, svg, img").evaluateAll(nodes => nodes.some(node => node.outerHTML.includes("alert(1)")))).toBe(false);
+    expect(
+      await page
+        .locator("script, iframe, svg, img")
+        .evaluateAll((nodes) => nodes.some((node) => node.outerHTML.includes("alert(1)"))),
+    ).toBe(false);
   });
 }

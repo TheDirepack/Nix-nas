@@ -213,8 +213,17 @@ class ManagedServiceTests(unittest.TestCase):
 
     def test_adapter_planners_are_directly_covered(self):
         compose = service_template("compose")
-        self.assertEqual(nas_service_runtime_compose.plan_compose("x", compose)["runtime"], "compose")
-        self.assertEqual(nas_service_runtime_podman.plan_podman("x", compose)["runtime"], "podman")
+        self.assertEqual(
+            nas_service_runtime_compose.plan_compose("x", compose)["runtime"],
+            "podman-compose",
+        )
+
+        quadlet = service_template("quadlet")
+        quadlet["runtime"]["source"] = "/var/lib/nas-control/apps/x/app.container"
+        self.assertEqual(
+            nas_service_runtime_podman.plan_podman("x", quadlet)["runtime"],
+            "podman-quadlet",
+        )
 
         vm = service_template("vm")
         self.assertEqual(nas_service_runtime_libvirt.plan_libvirt("x", vm)["runtime"], "vm")

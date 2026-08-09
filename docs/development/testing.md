@@ -16,6 +16,8 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 
 `fast` runs source, security, and fuzz tiers. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
 
+The CI pipeline summary applies event- and dispatch-tier requirements. A job required for that run must succeed; a skipped required job fails pipeline qualification rather than being accepted as an intentional skip.
+
 ## 1. Fast source validation
 
 ```bash
@@ -23,6 +25,8 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 ```
 
 Preflight checks repository structure and data, version and policy contracts, documentation links, the custom-executable inventory, static security boundaries, Python syntax and behavior, shell syntax, JavaScript/JSX source contracts, the Cockpit bundle when available, the Authentik fixture, and deterministic fuzz smoke tests. Nix, Ruff, Pyright, ShellCheck, and complete Cockpit bundle checks run when their tools or artifacts are available.
+
+The offline Authentik fixture uses a private temporary identity lock unless the caller supplies an explicit lock path, keeping source validation isolated from host runtime state.
 
 Useful focused commands:
 
@@ -60,6 +64,8 @@ CI also runs Hypothesis properties from the pinned Nix test shell:
 ```bash
 nix develop .#test -c python -m unittest tests.test_property_invariants -v
 ```
+
+CI does not cache qualification pass markers: fast, property, browser, build, VM, and installer gates execute for every run that requires them. Dependency downloads, immutable installer media, and incremental Nix build outputs may still be cached because they accelerate execution without replacing test evidence.
 
 Unexpected deterministic fuzz crashes are retained under `.fuzz-crashes/` with the target, seed, and case. A confirmed crash should become a normal regression test before the implementation is fixed.
 

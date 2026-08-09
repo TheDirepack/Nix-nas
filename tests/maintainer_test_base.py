@@ -29,6 +29,7 @@ class MaintainerScriptMixin:
                 "__pycache__",
                 "*.pyc",
                 ".coverage",
+                ".coverage.*",
                 "coverage.json",
                 "node_modules",
                 "playwright-report",

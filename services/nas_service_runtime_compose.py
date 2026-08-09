@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Podman Compose runtime adapter for managed-services."""
+"""Thin Podman Compose adapter for managed services."""
 
 from __future__ import annotations
 
@@ -9,42 +9,94 @@ from typing import Any
 
 from nas_managed_service import ManagedServiceError
 
+APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
+
+
+def _compose_source(service_id: str, service: dict[str, Any]) -> pathlib.Path:
+    runtime = service.get("runtime", {})
+    if runtime.get("type") != "compose":
+        raise ManagedServiceError(f"Service {service_id} is not a Compose service")
+
+    source = runtime.get("source", "")
+    if not isinstance(source, str) or not pathlib.PurePosixPath(source).is_absolute():
+        raise ManagedServiceError(f"Compose source for {service_id} must be under {APP_ROOT / service_id}/")
+    app_root = APP_ROOT.resolve()
+    root = (app_root / service_id).resolve()
+    path = pathlib.Path(source).resolve()
+    try:
+        root.relative_to(app_root)
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ManagedServiceError(f"Compose source for {service_id} must be under {root}/") from exc
+    if path.suffix not in {".yaml", ".yml"}:
+        raise ManagedServiceError(f"Compose source for {service_id} must be a YAML file")
+    return path
+
 
 def plan_compose(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime = service.get("runtime", {})
     if runtime.get("type") != "compose":
-        return {"actions": [], "warnings": [f"Service {service_id} is not a Compose service"]}
-    source = runtime.get("source", "")
-    if not source.startswith(f"/var/lib/nas-control/apps/{service_id}/"):
-        raise ManagedServiceError(
-            f"Compose source for {service_id} must be under /var/lib/nas-control/apps/{service_id}/"
-        )
-    if not source.endswith((".yaml", ".yml", "compose.yaml")):
-        raise ManagedServiceError(f"Compose source for {service_id} must be a YAML file")
+        return {
+            "actions": [],
+            "warnings": [f"Service {service_id} is not a Compose service"],
+        }
+
+    source = _compose_source(service_id, service)
+    enabled = bool(service.get("enabled"))
     return {
         "service": service_id,
-        "runtime": "compose",
-        "actions": [{"type": "compose", "project": service_id, "source": source}],
+        "runtime": "podman-compose",
+        "source": str(source),
+        "project": service_id,
+        "enabled": enabled,
+        "actions": [
+            {
+                "type": "podman-compose",
+                "operation": "up" if enabled else "down",
+                "project": service_id,
+                "source": str(source),
+            }
+        ],
     }
 
 
 def apply_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
     plan = plan_compose(service_id, service)
-    if dry_run:
+    if dry_run or not plan["actions"]:
         return plan
-    for action in plan["actions"]:
-        compose_file = pathlib.Path(action["source"])
-        if not compose_file.exists():
-            raise ManagedServiceError(f"Compose file not found: {compose_file}")
-        subprocess.run(
-            ["podman", "compose", "-f", str(compose_file), "up", "-d"],
-            check=False,
-            env={"COMPOSE_PROJECT_NAME": service_id},
-        )
+
+    command = [
+        "podman",
+        "compose",
+        "-p",
+        plan["project"],
+        "-f",
+        plan["source"],
+    ]
+    if plan["enabled"]:
+        command.extend(["up", "-d"])
+    else:
+        command.extend(["down", "--remove-orphans"])
+    subprocess.run(command, check=True)
     return plan
 
 
-def remove_compose(service_id: str, *, dry_run: bool = False) -> None:
+def remove_compose(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> None:
     if dry_run:
         return
-    subprocess.run(["podman", "compose", "-p", service_id, "down", "--remove-orphans"], check=False)
+    plan = plan_compose(service_id, service)
+    if not plan["actions"]:
+        return
+    subprocess.run(
+        [
+            "podman",
+            "compose",
+            "-p",
+            plan["project"],
+            "-f",
+            plan["source"],
+            "down",
+            "--remove-orphans",
+        ],
+        check=True,
+    )

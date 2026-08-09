@@ -114,9 +114,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
 
     def test_release_ci_runs_official_installer_and_final_vm_security(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        final_vm = text("scripts/qemu-final-browser.sh")
         self.assertIn("qemu-test.sh installer", workflow)
         self.assertIn("qemu-final-browser.sh", workflow)
-        self.assertIn("zap-automation-scan.sh", workflow)
+        self.assertIn("zap-automation-scan.sh", final_vm)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("name: cockpit-bundle", workflow)
         self.assertGreaterEqual(workflow.count("npm --prefix cockpit ci --no-audit --no-fund"), 1)
@@ -152,19 +153,18 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae", workflow)
         self.assertIn("v5.0.5", workflow)
         for cache_id in ("fast-result", "caddy-result", "security-result", "source-archive-result", "system-build"):
-            self.assertIn(f"id: {cache_id}", workflow)
-        self.assertIn("if: steps.caddy-result.outputs.cache-hit != 'true'", workflow)
-        self.assertIn("if: steps.security-result.outputs.cache-hit != 'true'", workflow)
+            self.assertNotIn(f"id: {cache_id}", workflow)
+        self.assertNotIn(".ci-cache/", workflow)
         self.assertIn("Query the current npm vulnerability database", workflow)
         self.assertNotIn("~/.cache/nixos-nas-qemu\n", workflow)
         self.assertIn("~/.cache/nixos-nas-qemu/*.iso", workflow)
         for phrase in (
             "Dependency caches",
-            "Immutable build-output caches",
-            "Deterministic qualification-result caches",
-            "Runtime/browser/VM/fuzz result caches",
-            "Fresh checks that must not be pass-cached",
-            "Never cache mutable VM runtime state",
+            "Cockpit distribution cache",
+            "Main coverage baseline data",
+            "Immutable installer media",
+            "Nix outputs",
+            "Qualification results are never pass-cached",
         ):
             self.assertIn(phrase, policy)
 

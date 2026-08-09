@@ -22,6 +22,7 @@ Authenticated mode uses ZAP browser-based authentication and session auto-detect
 
 Required:
   NAS_ZAP_IMAGE              ZAP image pinned by immutable sha256 digest
+  NAS_ZAP_CONFIRM_ACTIVE=1   confirm authorization for the active scan
   NAS_ZAP_AUTH_USER          required in authenticated mode
   NAS_ZAP_AUTH_PASSWORD      required in authenticated mode
 
@@ -46,6 +47,7 @@ case "$MODE" in
   -h|--help|help) usage; exit 0 ;;
   *) usage >&2; die "unknown scan mode: $MODE" ;;
 esac
+[[ "${NAS_ZAP_CONFIRM_ACTIVE:-0}" == 1 ]] || die "active scanning requires NAS_ZAP_CONFIRM_ACTIVE=1"
 for cmd in python3 timeout; do need "$cmd"; done
 [[ -n "$TARGET" ]] || die "target URL is required"
 [[ "$TARGET" =~ ^https?:// ]] || die "target must use http:// or https://"

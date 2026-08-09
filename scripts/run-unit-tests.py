@@ -196,6 +196,7 @@ def main() -> int:
         "NAS_FEATURE_STATE_ROOT": str(_hermetic_tmp / "nas-control"),
         "NAS_OPERATION_ROOT": str(_hermetic_tmp / "nas-operations"),
         "NAS_OPERATION_GROUP": "users",  # host fallback when nas-operations group missing
+        "NAS_IDENTITY_LOCK": str(_hermetic_tmp / "nas-identity-sync.lock"),
         "NAS_COCKPIT_SUPERUSER_BYPASS": "1",  # allow --help without root in tests
     }
     for key, val in _hermetic_map.items():

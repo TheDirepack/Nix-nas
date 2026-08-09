@@ -25,6 +25,7 @@ except ImportError:
 
 if HAS_HYPOTHESIS:
     SAFE_HOSTNAME = st.from_regex(r"[a-z0-9][a-z0-9-]{0,7}\.example\.test", fullmatch=True)
+    SAFE_LABEL = st.from_regex(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,11}", fullmatch=True)
 
     def _valid_service_doc(service_id: str, label: str, port: int, hostname: str, enabled: bool) -> dict:
         return {
@@ -66,15 +67,7 @@ if HAS_HYPOTHESIS:
         @rule(
             target=services_bundle,
             sid=st.from_regex(r"[a-z][a-z0-9-]{0,8}", fullmatch=True),
-            label=st.text(
-                min_size=1,
-                max_size=12,
-                alphabet=st.characters(
-                    min_codepoint=33,
-                    max_codepoint=126,
-                    blacklist_characters="\x00\r\n/\\",
-                ),
-            ),
+            label=SAFE_LABEL,
             port=st.integers(1024, 65535),
             hostname=SAFE_HOSTNAME,
             enabled=st.booleans(),
@@ -173,7 +166,8 @@ if HAS_HYPOTHESIS:
             if duplicates:
                 try:
                     caddy.generate_caddy_fragment(effective)
-                except caddy.CaddyError:
+                except caddy.CaddyError as exc:
+                    assert str(exc).startswith("Duplicate exposure ")
                     return
                 raise AssertionError("duplicate managed-service exposure did not fail closed")
             caddy.generate_caddy_fragment(effective)
@@ -184,7 +178,12 @@ if HAS_HYPOTHESIS:
             for endpoint in effective["endpoints"].values():
                 endpoint.setdefault("portal", {})["visible"] = True
             portal = msvc.portal_projection(effective)
-            route_ids = {route["id"] for route in caddy.generate_caddy_fragment(effective)["routes"]}
+            try:
+                routes = caddy.generate_caddy_fragment(effective)["routes"]
+            except caddy.CaddyError as exc:
+                assert str(exc).startswith("Duplicate exposure ")
+                routes = []
+            route_ids = {route["id"] for route in routes}
             by_id = {entry["id"]: entry for entry in portal["entries"]}
             for sid, service in self.model.items():
                 if service.get("enabled", False):

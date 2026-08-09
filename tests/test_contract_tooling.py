@@ -79,7 +79,7 @@ class ContractTests(unittest.TestCase):
         packaging = text("scripts/package-release.sh")
         self.assertIn("unsafe archive member", packaging)
         self.assertIn("archive file set does not exactly match staged release", packaging)
-        self.assertIn("archive manifest has extras or omissions", packaging)
+        self.assertIn("archive manifest mismatch", packaging)
         self.assertIn("sha256sum -c MANIFEST.sha256", packaging)
         self.assertIn("NAS_PREFLIGHT_VERIFY_MANIFEST=1", packaging)
         self.assertIn("release checkout is dirty or has untracked files", packaging)
@@ -295,6 +295,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("archived_mode", packaging)
         self.assertIn("staged_mode", packaging)
 
+    def test_pipeline_summary_checks_out_its_behavioral_policy(self):
+        workflow = text(".github/workflows/ci.yml")
+        summary = workflow.split("  summary:\n", 1)[1]
+        self.assertIn("actions/checkout@", summary)
+        self.assertIn("python3 scripts/ci-summary.py", summary)
+
     def test_release_packaging_rejects_ignored_secrets_links_and_fifos(self):
         scenarios = (
             ("ignored secret", lambda root: root / "secrets" / "leak.txt"),
@@ -333,6 +339,64 @@ class ContractTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stdout + result.stderr)
+
+    def test_release_packaging_records_linked_worktree_git_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary) / "repository"
+            linked = Path(temporary) / "linked"
+            shutil.copytree(
+                ROOT,
+                repository,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    ".pytest_cache",
+                    ".ruff_cache",
+                    "__pycache__",
+                    ".coverage",
+                    ".coverage.*",
+                    "coverage.json",
+                    "node_modules",
+                ),
+            )
+            subprocess.run(["git", "init", "-b", "main"], cwd=repository, check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=repository, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-m",
+                    "fixture",
+                ],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "worktree", "add", "-b", "linked", str(linked)],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            output = Path(temporary) / "output"
+            result = subprocess.run(
+                ["bash", "scripts/package-release.sh", "--source-only", str(output)],
+                cwd=linked,
+                env={**os.environ, "NAS_PREFLIGHT_SKIP_TESTS": "1", "NAS_PREFLIGHT_SKIP_NIX": "1"},
+                text=True,
+                capture_output=True,
+                timeout=90,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            provenance_files = list(output.glob("*.release/*.provenance.json"))
+            self.assertEqual(len(provenance_files), 1)
+            provenance = json.loads(provenance_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(provenance["fileSelectionPolicy"], "git-tracked-clean")
+            self.assertNotEqual(provenance["gitCommit"], "unavailable")
 
     def test_cockpit_pure_modules_and_react_composition_have_direct_tests(self):
         modules = {path.stem for path in (ROOT / "cockpit" / "src").glob("*.js")}
