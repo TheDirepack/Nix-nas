@@ -6,20 +6,9 @@ This document records the review passes used to converge the declarative Managed
 
 Adding or changing an application must be a **data change**, not a controller-code change.
 
-A service definition must be sufficient for the generic V2 engine to understand:
+A service definition must be sufficient for the generic V2 engine to understand runtime selection, workload/lifecycle, dependencies/readiness, storage/backup classification, network policy, resources/devices, credentials, ingress/auth, scheduling, and portal/UI metadata.
 
-- runtime selection
-- enabled state and lifecycle
-- dependencies and readiness
-- storage and backup classification
-- network policy
-- CPU/memory/PID limits
-- GPU/accelerator and device access
-- credentials by reference (never secret values)
-- ingress endpoints and authorization
-- portal/GUI metadata
-
-Application-specific Python/Nix wake functions, resource handlers, or lifecycle branches are prohibited. Native runtime configuration remains native: Quadlet, Compose and libvirt definitions are referenced rather than reimplemented.
+Application-specific Python/Nix wake functions, resource handlers, or lifecycle branches are prohibited. Native application configuration remains native and may be referenced as an artifact rather than reimplemented by V2.
 
 ## Review pass 1 — remove duplicated authority
 
@@ -34,83 +23,180 @@ Problems found in the previous schema:
 
 Changes:
 
-- canonical lifecycle is only `persistent`, `on-demand`, or `session` plus `enabled`.
-- canonical authorization uses capabilities or generic credential references; users/groups are migration-only and not part of v3.
-- portal visibility is endpoint-specific; service metadata only describes the application.
-- systemd runtime supports either existing units or a generic executable definition.
+- remove canonical `startPolicy`;
+- canonical authorization uses capabilities or generic credential references;
+- portal visibility is endpoint-specific;
+- systemd runtime can reference existing units or a generic executable;
 - accelerator requests are structured objects.
 
 ## Review pass 2 — make the schema GUI-native
 
 Problems found:
 
-- mini-languages such as `optional:nvidia:all` force the GUI and users to parse strings.
-- app-specific auth modes such as an AI API key would leak application knowledge into the gate.
+- mini-languages such as `optional:nvidia:all` force the GUI to parse strings;
+- app-specific auth modes leak application knowledge into the gate;
 - dependency ordering alone is insufficient when a dependency becomes active before its API is usable.
 
 Changes:
 
-- accelerators use structured fields (`kind`, `vendor`, `quantity`, `device`, `required`, `mode`, `target`).
-- endpoint authorization is one of `public`, `identity`, `secret`, or `upstream`.
-- dependencies are objects with `service` and `condition = started|ready`.
-- readiness is generic and supports systemd, TCP, HTTP and path probes.
-- JSON Schema titles, descriptions, enums and defaults are intended to drive Cockpit forms directly.
+- accelerators use structured fields;
+- endpoint authorization is one of `public`, `identity`, `secret`, or `upstream`;
+- dependencies are structured objects;
+- readiness is generic and supports systemd, TCP, HTTP and path probes;
+- JSON Schema titles/descriptions/enums/defaults are intended to drive Cockpit forms directly.
 
 ## Review pass 3 — keep runtime-native semantics
 
 Problems found:
 
-- Compose applications can contain multiple inner services, so storage/GPU attachment is ambiguous without a target.
-- libvirt virtiofs uses a mount tag, not a guest path.
-- VM GPU passthrough is fundamentally different from shared host/container GPU access.
+- Compose applications can contain multiple inner services;
+- libvirt virtiofs uses a mount tag, not a guest path;
+- VM GPU passthrough is fundamentally different from shared host/container GPU access;
 - credentials copied into environment variables increase leakage and adapter complexity.
 
 Changes:
 
-- storage and accelerator attachments have optional runtime-local `target`; Compose requires it when the policy applies to one inner service.
-- VM storage keeps both `mountPath` (intended guest mount) and `target` (virtiofs tag).
-- VM accelerators require explicit PCI passthrough; `auto`/vendor sharing is for host/container runtimes.
-- credentials are file references under `/run/nas-secrets` and are mounted/loaded read-only. V2 does not expand secret values into environment variables.
-
-These choices follow native capabilities rather than emulating them. Current Compose supports host device and CDI entries, Podman Quadlet supports device/CDI projection, and libvirt requires explicit host-device/virtiofs semantics.
+- storage and accelerator attachments can carry a runtime-local target;
+- VM storage keeps an intended guest mount plus a virtiofs target tag;
+- VM accelerators require explicit PCI passthrough;
+- credentials are file references under `/run/nas-secrets`; secret values are never persisted in the spec.
 
 ## Review pass 4 — session leases and dependency correctness
 
 Problem found:
 
-An enabled session service does not imply that a session is active. Treating all enabled session services as active can keep their on-demand dependencies alive forever.
+An enabled session-capable service does not imply an active session. Treating it as active can keep on-demand dependencies alive forever.
 
 Change:
 
-V2 owns generic **session leases**:
+V2 owns generic session leases:
 
-- `session begin <service>` creates an instance lease and starts/touches dependencies.
-- `session touch <service> <instance>` refreshes the lease and dependency usage.
-- `session end <service> <instance>` removes the lease.
-- the reaper considers only live leases when deciding whether an on-demand dependency is still needed.
+- begin creates an instance lease and satisfies dependencies;
+- touch refreshes the lease and dependency use;
+- end removes it;
+- the reaper considers only live leases.
 
-The session executor/launcher may be Pi, a shell, a future coding agent, or another runtime; dependency code never branches on application identity.
+No session lease code knows the application name.
 
 ## Review pass 5 — minimize implementation code
 
-Problem found:
+Incremental development produced too many wrappers. The final boundary is:
 
-Incremental development produced layered wrappers around the legacy engine. The behavior is generic, but the composition itself is more complex than necessary.
+1. JSON Schema — structure and GUI contract.
+2. YAML loader + spec normalizer — strict YAML 1.2 parsing, deterministic defaults, semantic references.
+3. One generic engine — dependency graph, readiness, daemon/job/session activation, leases, reconciliation and reaping.
+4. Resource resolvers — storage/network/accelerator/credentials/host capabilities.
+5. Thin runtime adapters — systemd/executable, Quadlet, Compose, libvirt, and a minimal Podman session runtime if required.
+6. Generic projections — Caddy, CopyParty, Authentik and Restic consume the same effective spec.
 
-Final implementation boundary:
+There must be no application-specific condition in layers 2–6.
 
-1. **JSON Schema** — structural validation and GUI contract.
-2. **Spec normalizer** — defaults plus semantic cross-reference validation; no application names.
-3. **Generic engine** — dependency graph, readiness, lifecycle, session leases, authorization wake/touch integration.
-4. **Resource resolvers** — storage/network/accelerator/credential resolution from host state.
-5. **Thin runtime adapters** — systemd, Quadlet, Compose, libvirt. They project already-resolved generic policy into native configuration.
-6. **Projection adapters** — Caddy, CopyParty, Authentik, Restic consume the same normalized effective spec.
+## Review pass 6 — derive the contract from every existing workload
 
-There must be no application-specific conditional in layers 2–6.
+The full audit is in `managed-services-v2-workload-matrix.md`. It found that the previous lifecycle model was still daemon-centric.
+
+Existing one-shot work includes Authentik migration, AI storage/config preparation, Vaultwarden CA export, identity reconciliation, Syncthing reconciliation, backup, restore verification, Syncoid and automatic update. Those are jobs, not persistent services.
+
+Change: separate **workload kind** from daemon activation.
+
+- `daemon`: long-running; activation is `persistent` or `on-demand`.
+- `job`: finite; may be invoked manually, as a dependency, or by a schedule.
+- `session`: exists only for live session lease(s).
+
+Dependency conditions become:
+
+- `started` — runtime activation returned successfully;
+- `ready` — declared readiness probes succeeded;
+- `completed` — a job completed successfully.
+
+This allows a daemon to depend on a completed migration/preparation job without inventing hooks.
+
+## Review pass 7 — do not add hook or templating mini-languages
+
+A generic `preStart/postStart/preBackup/...` hook system looks flexible but duplicates the dependency graph and becomes hard to display or reason about in a GUI.
+
+Decision: **no lifecycle hooks**. Preparation/migration/verification is modeled as ordinary job services.
+
+Likewise V2 will not invent a template language for arbitrary application configuration. Native config is a referenced artifact owned by the application. V2 may later gain a small generic managed-file primitive if the workload matrix proves it necessary, but application-aware renderers are prohibited.
+
+## Review pass 8 — separate application intent from host/platform capabilities
+
+Some current workloads need host privileges or substrates that cannot safely be synthesized from app data:
+
+- ZFS mounted/unlocked state;
+- Podman/libvirt;
+- GPU kernel drivers/CDI inventory;
+- network-online;
+- the tightly restricted SMART helper used by Telegraf;
+- minimal Authentik/Caddy/control-plane services needed for V2 itself.
+
+Decision: NixOS publishes a **named host-capability inventory**. Services may reference capabilities. Adding an application that uses existing capabilities remains data-only. Adding a genuinely new privileged/kernel/platform capability is a platform change and must be designed generically.
+
+Core services may appear in the service graph as externally lifecycle-owned nodes so V2 can ensure/readiness-check dependencies without claiming their shutdown/reaping authority.
+
+## Review pass 9 — choose YAML for desired state, JSON Schema for contract
+
+The persisted human/admin desired-state format is YAML 1.2. The structural/UI contract remains JSON Schema 2020-12.
+
+Reasons:
+
+- comments and readable diffs matter for appliance administration;
+- deeply nested service definitions are more usable in YAML than JSON;
+- JSON is valid YAML 1.2 input, preserving import compatibility;
+- JSON Schema remains the mature machine validation and GUI-form contract.
+
+Pipeline:
+
+1. strict YAML 1.2 parse; duplicate keys are errors;
+2. JSON Schema validation;
+3. one deterministic defaulting/normalization pass;
+4. semantic validation of cross-references/cycles/runtime-specific constraints;
+5. host-resource/capability resolution;
+6. native runtime/projection application.
+
+The GUI and hand-written YAML therefore reach exactly the same normalized document.
+
+## Review pass 10 — remove Nix as a second application settings database
+
+Current built-ins interpolate Nix options for enable flags, ports, paths, retention, memory profiles and other application settings. Keeping that indefinitely would leave two writable configuration authorities.
+
+Target:
+
+- Nix defines platform defaults, packages, kernel/runtime substrate and host capabilities;
+- first-run/migration converts current Nix application settings into V2 desired state;
+- Cockpit edits V2 desired state through the schema;
+- application settings are no longer duplicated as mutable Nix options once migration is complete.
+
+No YAML interpolation language is introduced. The persisted document contains resolved values.
+
+## Review pass 11 — ingress must model the real current routes
+
+The existing Caddy configuration proves a simple `path -> port` endpoint is insufficient. The final generic endpoint model must represent without raw snippets:
+
+- path-prefix stripping;
+- static and trusted identity-derived request headers;
+- response header set/remove;
+- WebSockets;
+- Unix socket targets;
+- multiple routes to one runtime with different auth;
+- header/referrer/origin match constraints for applications that emit absolute asset/API routes;
+- public, identity-capability, secret/API credential and upstream-native authorization;
+- HTTP hostname/path and raw TCP/UDP port/range exposure;
+- optional mDNS discovery metadata.
+
+If any existing route still needs an application-specific Caddy branch after migration, the endpoint spec is incomplete.
+
+## Review pass 12 — session inputs must be generic enough to remove Pi-specific launch code
+
+Pi currently needs an authenticated identity, per-user state, and a caller-selected workspace constrained under approved roots. A generic session engine cannot remove the custom launcher unless it can safely represent this interaction.
+
+Decision: session workloads may declare **path inputs**. Each input references an authorized storage resource, optionally allows selection of a descendant subpath, declares read/write access, and binds the resolved path to a runtime mount destination. Resolution uses the authenticated identity and rejects symlink/path escape.
+
+This primitive is reusable for shells, coding agents, media-processing sessions and future tools. It is not called `workspace` in the engine.
 
 ## Final canonical concepts
 
-### Top-level document
+### Top-level desired-state document
 
 - `schemaVersion`
 - `generation`
@@ -119,56 +205,51 @@ There must be no application-specific conditional in layers 2–6.
 - `credentials`
 - `services`
 
+Host capabilities are supplied by a separate immutable platform inventory generated by NixOS; services reference them by ID.
+
 ### Service
 
-- `name`, `description`
-- `enabled`
-- lifecycle authority (`managed` in schema v3; V2-managed vs core substrate)
-- `runtime`
-- `lifecycle`
-- `dependencies`
-- `readiness`
-- `resources`
-- `storage`
-- `credentials`
-- `networkProfile` / `network`
-- `endpoints`
+- name/description
+- enabled
+- lifecycle ownership (`managed` boolean)
+- workload kind/activation
+- runtime
+- dependencies
+- readiness
+- required host capabilities
+- resource limits + accelerators
+- sandbox policy
+- storage attachments
+- credential attachments
+- network policy/profile
+- endpoints
+- session inputs when workload kind is `session`
 
 ### Runtime choices
 
 - existing systemd units
-- generic systemd executable
-- native Quadlet source
-- native Compose source
+- generic executable through systemd
+- native Quadlet
+- native Compose
 - native libvirt XML
+- minimal generic OCI session execution when dynamic per-session mounts/identity are required
 
-A new runtime *kind* may require one new generic adapter. A new application using an existing runtime never should.
-
-### Lifecycle
-
-- `persistent`: V2 keeps the runtime available while enabled.
-- `on-demand`: V2 starts it when an authorized consumer uses it and reaps it after idle time.
-- `session`: the runtime exists only for active session lease(s); persistent storage is independent of runtime lifetime.
-
-### Dependencies
-
-Dependencies may cross runtime boundaries. A systemd service can depend on Compose, a VM can depend on Quadlet, etc. V2 operates on service IDs and delegates execution to each service's runtime adapter.
-
-### Hardware
-
-Hardware intent is service data. A model runner can request an optional GPU; a future Starlight server can use the same request. The engine resolves hardware without knowing either application name.
+A new runtime *kind* may require one generic adapter. A new application using an existing runtime never should.
 
 ### Authority rule
 
-If adding an application requires editing Python controller code, the spec or a generic runtime/resource adapter is incomplete. The application must instead be expressible by changing only declarative V2 data and native runtime source where that runtime inherently has its own configuration format.
+If adding an application requires editing Python controller code, Caddy application branches, Cockpit application forms, or Nix lifecycle code, either the spec is incomplete or a genuinely new generic host/runtime capability has been discovered. The generic primitive must be designed first; application names do not belong in the engine.
 
 ## Remaining implementation migration
 
-- make schema v3 the canonical validation input and implement deterministic defaults
-- replace wrapper stack with one normalizer/engine
-- add generic readiness and session leases to that engine
-- make secret endpoint authorization generic
-- re-express every built-in application with the canonical v3 fields
-- remove old feature-mode lifecycle authority
-- remove v2 compatibility fields once the built-in migration and store migration are complete
-- generate Cockpit forms/status from the schema and effective document rather than maintaining separate feature settings
+- revise schema v3 around daemon/job/session workload kinds, host capabilities, complete endpoint transforms and session path inputs;
+- add strict YAML 1.2 + JSON Schema loader and deterministic normalizer;
+- collapse the wrapper stack into one generic engine;
+- implement readiness and session leases in that engine;
+- add generic systemd executable/job and generic scheduled-job projection;
+- make secret endpoint authorization generic;
+- re-express every built-in application with the canonical YAML fields;
+- migrate current Nix application settings into V2 desired state and deprecate duplicate options;
+- remove old feature-mode lifecycle authority;
+- remove compatibility fields and application-specific route/wake branches;
+- generate Cockpit forms/status from schema + effective document rather than maintaining separate feature settings.
