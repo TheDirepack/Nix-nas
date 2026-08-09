@@ -7,10 +7,6 @@ name = "nixos-nas-control"
 dynamic = ["version"]
 description = "NixOS NAS appliance control-plane commands"
 requires-python = ">=3.12"
-dependencies = [
-  "jsonschema>=4.23",
-  "ruamel.yaml>=0.18",
-]
 
 [project.scripts]
 nas-ai-config = "nas_ai_config:main"
