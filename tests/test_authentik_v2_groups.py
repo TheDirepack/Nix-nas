@@ -10,7 +10,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_authentik_v2_groups as authz
+import nas_authentik_v2_groups as authz  # noqa: E402
 
 
 class AuthentikV2GroupTests(unittest.TestCase):
