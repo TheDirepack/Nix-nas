@@ -205,12 +205,31 @@ let
       idleSeconds = 600;
     };
   };
+  storageResources = {
+    nas-shares = {
+      path = "${cfg.zfsRoot}/shares";
+      dataset = cfg.zfsDataset;
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "read" "write" "move" "delete" "admin" ];
+      backup = {
+        enabled = cfg.backup.includeShares;
+        consistency = "zfs-snapshot";
+      };
+      # CopyParty already exposes /shares through its native NAS volume model.
+      # This V2 resource exists for cross-runtime policy and backup authority;
+      # projecting it again would create a duplicate browser volume.
+      fileBrowser.visible = false;
+      description = "Managed NAS share tree";
+    };
+  };
 in
 {
   serviceRegistry = registry;
   serviceRegistryV2 = {
     schemaVersion = 2;
     generation = 1;
+    inherit storageResources;
     services = registry;
   };
 }
