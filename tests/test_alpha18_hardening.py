@@ -37,6 +37,8 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("users.users.nas-feature-gate", identities)
         self.assertIn('subject.user === "nas-feature-gate"', identities)
         self.assertIn('action.id === "org.freedesktop.systemd1.manage-units"', identities)
+        self.assertIn("lib.attrValues featureCatalog.features", identities)
+        self.assertIn("entry.stopUnits or [ ]", identities)
         self.assertIn('User = "nas-feature-gate";', units)
         self.assertNotIn('User = "root";', units.split("nas-on-demand-gate", 1)[1].split("};", 1)[0])
 
