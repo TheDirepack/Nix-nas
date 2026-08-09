@@ -9,7 +9,10 @@
     },
     "nas-feature-control": {
       "fuzzStrategy": "feature-id",
-      "source": "services/nas_feature_control_v2.py",
+      "sources": [
+        "modules/nas/internal/account-tools.nix",
+        "services/nas_feature_control_v2.py"
+      ],
       "systemTest": "tests/vm/guest-test.sh",
       "tests": ["tests/test_feature_control.py", "tests/test_feature_control_v2.py"]
     },
