@@ -353,7 +353,8 @@ PY_AI_PROVIDERS
         local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token
         ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
         local provider_id provider_env provider_key
-        local ntfy_password ntfy_hash ntfy_topic state_bundle_signing_key
+        ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
+        local state_bundle_signing_key
         sudo install -d -m 0711 -o root -g root /run/nas-secret-staging
         runtime_base="/run/nas-secret-staging/$(id -u)"
         sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$runtime_base"
