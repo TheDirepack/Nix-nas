@@ -3,8 +3,8 @@
 
 Nix-nas owns NAS-specific policy and metadata. Podman owns Quadlet parsing,
 application installation, drop-in merging, systemd reloads, and removal.
-V2 storage policy is projected as one generated native Quadlet drop-in rather
-than re-rendering the user-authored container definition.
+V2 storage/network policy is projected as generated native Quadlet fragments
+rather than re-rendering the user-authored container definition.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 from typing import Any
 
+from nas_managed_network import render_network_quadlet, service_network
 from nas_managed_service import ManagedServiceError
 
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
@@ -80,7 +81,34 @@ def _v2_mounts(service: dict[str, Any]) -> list[dict[str, Any]]:
     return selected
 
 
+def _v2_network(service_id: str, service: dict[str, Any]) -> dict[str, Any] | None:
+    resolved = service.get("resolvedNetwork")
+    if resolved is None:
+        return None
+    if not isinstance(resolved, dict):
+        raise ManagedServiceError("resolvedNetwork must be an object")
+    identity = resolved.get("identity")
+    expected = service_network(service_id)
+    if identity != expected:
+        raise ManagedServiceError(f"Service {service_id}: resolved network identity is invalid")
+    return resolved
+
+
+def render_policy_dropin(service_id: str, service: dict[str, Any]) -> str:
+    lines = [GENERATED_MARKER]
+    mounts = _v2_mounts(service)
+    network = _v2_network(service_id, service)
+    if mounts or network is not None:
+        lines.extend(["", "[Container]"])
+        for mount in mounts:
+            lines.append(f"Volume={mount['hostPath']}:{mount['guestPath']}:{mount['mode']}")
+        if network is not None:
+            lines.append(f"Network={network['identity']['quadlet']}")
+    return "\n".join(lines) + "\n"
+
+
 def render_storage_dropin(service: dict[str, Any]) -> str:
+    """Compatibility helper retained for tests/callers that only exercise storage."""
     lines = [GENERATED_MARKER]
     mounts = _v2_mounts(service)
     if mounts:
@@ -94,41 +122,16 @@ def _dropin_path(source: pathlib.Path) -> pathlib.Path:
     return source.parent / f"{source.name}.d" / GENERATED_DROPIN
 
 
-def _write_generated_dropin(source: pathlib.Path, service: dict[str, Any]) -> pathlib.Path | None:
-    path = _dropin_path(source)
-    mounts = _v2_mounts(service)
-    if not mounts:
-        try:
-            existing = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
-        if not existing.startswith(GENERATED_MARKER):
-            raise ManagedServiceError(f"Refusing to remove non-generated Quadlet drop-in {path}")
-        path.unlink()
-        try:
-            path.parent.rmdir()
-        except OSError:
-            pass
-        return None
-
-    if path.exists():
-        try:
-            existing = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ManagedServiceError(f"Unable to inspect generated Quadlet drop-in {path}: {exc}") from exc
-        if not existing.startswith(GENERATED_MARKER):
-            raise ManagedServiceError(f"Refusing to overwrite non-generated Quadlet drop-in {path}")
-
+def _atomic_write(path: pathlib.Path, text: str, *, mode: int = 0o640) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = render_storage_dropin(service)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     tmp_path = pathlib.Path(temporary)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(encoded)
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(tmp_path, 0o640)
+        os.chmod(tmp_path, mode)
         os.replace(tmp_path, path)
         dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -137,21 +140,50 @@ def _write_generated_dropin(source: pathlib.Path, service: dict[str, Any]) -> pa
             os.close(dir_fd)
     finally:
         tmp_path.unlink(missing_ok=True)
-    return path
+
+
+def _write_generated_policy(source: pathlib.Path, service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path | None, pathlib.Path | None]:
+    dropin = _dropin_path(source)
+    mounts = _v2_mounts(service)
+    network = _v2_network(service_id, service)
+    if not mounts and network is None:
+        try:
+            existing = dropin.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if not existing.startswith(GENERATED_MARKER):
+                raise ManagedServiceError(f"Refusing to remove non-generated Quadlet drop-in {dropin}")
+            dropin.unlink()
+            try:
+                dropin.parent.rmdir()
+            except OSError:
+                pass
+    else:
+        if dropin.exists() and not dropin.read_text(encoding="utf-8").startswith(GENERATED_MARKER):
+            raise ManagedServiceError(f"Refusing to overwrite non-generated Quadlet drop-in {dropin}")
+        _atomic_write(dropin, render_policy_dropin(service_id, service))
+
+    network_path: pathlib.Path | None = None
+    if network is not None:
+        root = _application_root(service_id, source)
+        network_path = root / network["identity"]["quadlet"]
+        if network_path.exists() and not network_path.read_text(encoding="utf-8").startswith(GENERATED_MARKER):
+            raise ManagedServiceError(f"Refusing to overwrite non-generated Quadlet network {network_path}")
+        _atomic_write(network_path, render_network_quadlet(service_id))
+    return (dropin if (mounts or network is not None) else None, network_path)
 
 
 def plan_podman(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
     runtime = service.get("runtime", {})
     if runtime.get("type") != "quadlet":
-        return {
-            "actions": [],
-            "warnings": [f"Service {service_id} is not a Quadlet service"],
-        }
+        return {"actions": [], "warnings": [f"Service {service_id} is not a Quadlet service"]}
 
     source = _quadlet_source(service_id, service)
     application_root = _application_root(service_id, source)
     unit = f"{source.stem}.service"
     v2_mounts = _v2_mounts(service)
+    v2_network = _v2_network(service_id, service)
     return {
         "service": service_id,
         "runtime": "podman-quadlet",
@@ -161,18 +193,10 @@ def plan_podman(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
         "unit": unit,
         "enabled": bool(service.get("enabled")),
         "resolvedStorage": v2_mounts,
+        "resolvedNetwork": v2_network,
         "actions": [
-            {
-                "type": "podman-quadlet-install",
-                "source": str(application_root),
-                "application": service_id,
-                "replace": True,
-            },
-            {
-                "type": "systemd-unit",
-                "unit": unit,
-                "operation": "restart" if service.get("enabled") else "stop",
-            },
+            {"type": "podman-quadlet-install", "source": str(application_root), "application": service_id, "replace": True},
+            {"type": "systemd-unit", "unit": unit, "operation": "restart" if service.get("enabled") else "stop"},
         ],
     }
 
@@ -183,28 +207,13 @@ def apply_podman(service_id: str, service: dict[str, Any], *, dry_run: bool = Fa
         return plan
 
     source = pathlib.Path(plan["source"])
-    _write_generated_dropin(source, service)
+    _write_generated_policy(source, service_id, service)
     subprocess.run(
-        [
-            "podman",
-            "quadlet",
-            "install",
-            "--replace",
-            f"--application={plan['application']}",
-            plan["applicationSource"],
-        ],
+        ["podman", "quadlet", "install", "--replace", f"--application={plan['application']}", plan["applicationSource"]],
         check=True,
     )
     listed = subprocess.run(
-        [
-            "podman",
-            "quadlet",
-            "list",
-            "--filter",
-            f"name={source.name}",
-            "--format",
-            "json",
-        ],
+        ["podman", "quadlet", "list", "--filter", f"name={source.name}", "--format", "json"],
         check=True,
         capture_output=True,
         text=True,
@@ -230,18 +239,34 @@ def apply_podman(service_id: str, service: dict[str, Any], *, dry_run: bool = Fa
     return plan
 
 
+def _remove_generated_sources(service_id: str) -> None:
+    root = (APP_ROOT / service_id)
+    if not root.exists():
+        return
+    network_path = root / service_network(service_id)["quadlet"]
+    if network_path.exists():
+        try:
+            if network_path.read_text(encoding="utf-8").startswith(GENERATED_MARKER):
+                network_path.unlink()
+        except OSError:
+            pass
+    for dropin in root.rglob(GENERATED_DROPIN):
+        try:
+            if dropin.read_text(encoding="utf-8").startswith(GENERATED_MARKER):
+                dropin.unlink()
+                try:
+                    dropin.parent.rmdir()
+                except OSError:
+                    pass
+        except OSError:
+            continue
+
+
 def remove_podman(service_id: str, *, dry_run: bool = False) -> None:
     if dry_run:
         return
     subprocess.run(
-        [
-            "podman",
-            "quadlet",
-            "rm",
-            "--force",
-            "--ignore",
-            "--recursive",
-            service_id,
-        ],
+        ["podman", "quadlet", "rm", "--force", "--ignore", "--recursive", service_id],
         check=True,
     )
+    _remove_generated_sources(service_id)
