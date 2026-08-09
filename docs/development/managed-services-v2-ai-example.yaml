@@ -1,0 +1,302 @@
+schemaVersion: 3
+generation: 1
+
+credentials:
+  ai-runtime-env:
+    path: /run/nas-secrets/ai/llama-swap.env
+  ai-gate-key:
+    path: /run/nas-secrets/ai/gate-api-key
+  open-webui-env:
+    path: /run/nas-secrets/ai/open-webui.env
+  coding-agent-key:
+    path: /run/nas-secrets/ai/coding-agent-api-key
+
+storageResources:
+  ai-root:
+    path: /tank/ai
+    stateClass: authoritative
+    capabilities: [read, write, admin]
+    backup:
+      enabled: true
+      consistency: zfs-snapshot
+    fileBrowser:
+      visible: false
+  llama-state:
+    path: /var/lib/nas-llama-swap
+    stateClass: authoritative
+    capabilities: [read, write, admin]
+    backup:
+      enabled: true
+      consistency: filesystem
+    fileBrowser:
+      visible: false
+  open-webui-state:
+    path: /var/lib/open-webui
+    stateClass: authoritative
+    capabilities: [read, write, admin]
+    backup:
+      enabled: true
+      consistency: filesystem
+    fileBrowser:
+      visible: false
+  pi-user-state:
+    path: /tank/apps/pi/users
+    scope: user
+    pathTemplate: /tank/apps/pi/users/{user}
+    stateClass: authoritative
+    capabilities: [read, write, admin]
+    backup:
+      enabled: true
+      consistency: zfs-snapshot
+    fileBrowser:
+      visible: false
+  projects:
+    path: /tank/projects
+    stateClass: authoritative
+    capabilities: [read, write, move, delete, admin]
+    backup:
+      enabled: true
+      consistency: zfs-snapshot
+
+networkProfiles:
+  coding-session:
+    mode: isolated
+    outboundDefault: allow
+    lanAccess: false
+    allowedHostPorts:
+      - 11434
+
+services:
+  zfs-storage:
+    name: NAS ZFS storage
+    description: Core storage substrate used by V2 applications.
+    enabled: true
+    managed: false
+    workload:
+      kind: daemon
+      activation: persistent
+    runtime:
+      type: systemd
+      units: [nas-zfs-mount-guard.service]
+    readiness:
+      probes:
+        - type: systemd
+          unit: nas-zfs-mount-guard.service
+
+  ai-storage:
+    name: AI storage preparation
+    enabled: true
+    managed: true
+    workload:
+      kind: job
+    runtime:
+      type: systemd
+      units: [nas-ai-storage.service]
+    dependencies:
+      - service: zfs-storage
+        condition: ready
+
+  ai-config:
+    name: AI configuration preparation
+    enabled: true
+    managed: true
+    workload:
+      kind: job
+    runtime:
+      type: systemd
+      units: [nas-ai-config-init.service]
+    dependencies:
+      - service: ai-storage
+        condition: completed
+    storage:
+      - resource: llama-state
+        mountPath: /var/lib/nas-llama-swap
+        access: write
+
+  ai-runtime:
+    name: llama-swap
+    description: Backend-neutral LLM router and llama.cpp runtime owner.
+    enabled: true
+    managed: true
+    workload:
+      kind: daemon
+      activation: on-demand
+      idleSeconds: 600
+    runtime:
+      type: systemd
+      units: [nas-llama-swap.service]
+    dependencies:
+      - service: ai-config
+        condition: completed
+    readiness:
+      timeoutSeconds: 60
+      probes:
+        - type: tcp
+          host: 127.0.0.1
+          port: 11434
+    resources:
+      accelerators:
+        - kind: gpu
+          vendor: any
+          quantity: 1
+          required: false
+          mode: shared
+    storage:
+      - resource: llama-state
+        mountPath: /var/lib/nas-llama-swap
+        access: write
+      - resource: ai-root
+        mountPath: /tank/ai
+        access: write
+    credentials:
+      - credential: ai-runtime-env
+        use: environment-file
+    endpoints:
+      admin:
+        target:
+          type: http
+          host: 127.0.0.1
+          port: 11434
+        exposure:
+          type: path
+          path: /ai/runtime/
+        auth:
+          mode: identity
+          capability: application.ai-runtime.access
+        proxy:
+          stripPrefix: /ai/runtime
+          requestHeaders:
+            X-Forwarded-Prefix:
+              source: static
+              value: /ai/runtime
+        portal:
+          visible: true
+          label: AI Runtime
+          category: AI
+          icon: cpu
+      api:
+        target:
+          type: http
+          host: 127.0.0.1
+          port: 11434
+        exposure:
+          type: path
+          path: /ai/v1/
+        auth:
+          mode: secret
+          credential: ai-gate-key
+          sources:
+            - bearer
+            - header:X-API-Key
+        proxy:
+          stripPrefix: /ai
+
+  ai-workspace:
+    name: Open WebUI
+    enabled: true
+    managed: true
+    workload:
+      kind: daemon
+      activation: on-demand
+      idleSeconds: 600
+    runtime:
+      type: systemd
+      units: [open-webui.service]
+    dependencies:
+      - service: ai-storage
+        condition: completed
+      - service: ai-runtime
+        condition: ready
+    readiness:
+      timeoutSeconds: 120
+      probes:
+        - type: http
+          url: http://127.0.0.1:8080/health
+    storage:
+      - resource: open-webui-state
+        mountPath: /var/lib/open-webui
+        access: write
+    credentials:
+      - credential: open-webui-env
+        use: environment-file
+    endpoints:
+      main:
+        target:
+          type: http
+          host: 127.0.0.1
+          port: 8080
+        exposure:
+          type: path
+          path: /ai/
+        auth:
+          mode: identity
+          capability: application.ai-workspace.access
+        proxy:
+          stripPrefix: /ai
+          requestHeaders:
+            Remote-User:
+              source: identity
+              field: username
+            Remote-Groups:
+              source: identity
+              field: groups
+            Remote-Name:
+              source: identity
+              field: name
+            Remote-Email:
+              source: identity
+              field: email
+            X-Forwarded-Prefix:
+              source: static
+              value: /ai
+        portal:
+          visible: true
+          label: AI Workspace
+          category: AI
+          icon: message-square
+
+  coding-agent:
+    name: Pi coding session
+    enabled: true
+    managed: true
+    workload:
+      kind: session
+      leaseIdleSeconds: 600
+    runtime:
+      type: oci
+      image: nixos-nas-pi-agent:2.2.0-alpha.8
+      pull: never
+    dependencies:
+      - service: ai-runtime
+        condition: ready
+    resources:
+      memoryBytes: 4294967296
+      cpus: 4
+      pids: 512
+    sandbox:
+      profile: strict
+      readOnlyRoot: true
+      dropAllLinuxCapabilities: true
+      tmpfs:
+        - path: /tmp
+          sizeBytes: 536870912
+          noexec: true
+          nodev: true
+          nosuid: true
+    storage:
+      - resource: pi-user-state
+        mountPath: /home/pi
+        access: write
+    credentials:
+      - credential: coding-agent-key
+        use: file
+        mountPath: /run/secrets/llama-swap-api-key
+    networkProfile: coding-session
+    sessionInputs:
+      source-tree:
+        type: path
+        label: Workspace
+        resource: projects
+        allowSubpath: true
+        mountPath: /workspace
+        access: write
