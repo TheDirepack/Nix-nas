@@ -30,9 +30,9 @@ let
           path = "${llamaCppPackage}/bin/llama-server";
           description = "The configured llama.cpp server executable is unavailable in this generation.";
         };
-        healthPort = serviceRegistry.aiRuntime.port;
-        activePorts = [ serviceRegistry.aiRuntime.port ];
-        startUnits = serviceRegistry.aiRuntime.units;
+        healthPort = serviceRegistry.aiRuntime.endpoints.main.targetPort;
+        activePorts = [ serviceRegistry.aiRuntime.endpoints.main.targetPort ];
+        startUnits = serviceRegistry.aiRuntime.runtime.units;
         stopUnits = [ "nas-llama-swap.service" ];
       };
       aiCoding = {
@@ -62,9 +62,9 @@ let
         idleSeconds = 600;
         startupTimeoutSeconds = 120;
         startupEstimateSeconds = { warm = "5-20"; first = "15-60"; };
-        healthUrl = "http://127.0.0.1:${toString serviceRegistry.aiWorkspace.port}/health";
-        activePorts = [ serviceRegistry.aiWorkspace.port ];
-        startUnits = serviceRegistry.aiWorkspace.units;
+        healthUrl = "http://127.0.0.1:${toString serviceRegistry.aiWorkspace.endpoints.main.targetPort}/health";
+        activePorts = [ serviceRegistry.aiWorkspace.endpoints.main.targetPort ];
+        startUnits = serviceRegistry.aiWorkspace.runtime.units;
       };
       aiDownloader = {
         label = "AI model downloader";
@@ -78,9 +78,9 @@ let
         idleSeconds = 600;
         startupTimeoutSeconds = 90;
         startupEstimateSeconds = { warm = "2-10"; first = "5-30"; };
-        healthPort = serviceRegistry.aiDownloader.port;
-        activePorts = [ serviceRegistry.aiDownloader.port ];
-        startUnits = serviceRegistry.aiDownloader.units;
+        healthPort = serviceRegistry.aiDownloader.endpoints.main.targetPort;
+        activePorts = [ serviceRegistry.aiDownloader.endpoints.main.targetPort ];
+        startUnits = serviceRegistry.aiDownloader.runtime.units;
       };
       syncthing = {
         label = "Syncthing";
@@ -187,9 +187,9 @@ let
         idleSeconds = 600;
         startupTimeoutSeconds = 60;
         startupEstimateSeconds = { warm = "1-5"; first = "3-15"; };
-        healthPort = serviceRegistry.ups.port;
-        activePorts = [ serviceRegistry.ups.port ];
-        startUnits = serviceRegistry.ups.units;
+        healthPort = serviceRegistry.ups.endpoints.main.targetPort;
+        activePorts = [ serviceRegistry.ups.endpoints.main.targetPort ];
+        startUnits = serviceRegistry.ups.runtime.units;
       };
       automaticUpdates = {
         label = "Scheduled update checks";

@@ -150,9 +150,13 @@ class ContractTests(unittest.TestCase):
 
     def test_observability_consumes_the_v2_service_registry_shape(self):
         observability = text("modules/nas/config/observability.nix")
+        feature_catalog = text("modules/nas/internal/feature-catalog.nix")
         self.assertIn("entry.runtime.units", observability)
         self.assertIn("entry.enabled", observability)
         self.assertNotIn("entry.available", observability)
+        self.assertNotRegex(feature_catalog, r"serviceRegistry\.[A-Za-z0-9_]+\.(?:port|units)\b")
+        self.assertIn(".endpoints.main.targetPort", feature_catalog)
+        self.assertIn(".runtime.units", feature_catalog)
 
     def test_shared_operation_coordinator_covers_update_secrets_and_setup_children(self):
         system = text("modules/nas/config/system.nix")
