@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared Managed Services V2 resource and authorization model helpers.
 
-This module deliberately contains no daemon or persistence layer.  It validates
+This module deliberately contains no daemon or persistence layer. It validates
 and normalizes the cross-system policy that V2 owns; Authentik remains the
 source of authorization assignments and runtime adapters remain responsible
 for enforcing the resulting mounts/network policy.
@@ -55,6 +55,17 @@ def validate_capability_reference(value: Any) -> str:
     if not isinstance(value, str) or CAPABILITY_RE.fullmatch(value) is None:
         raise ManagedResourceError(f"Invalid authorization capability {value!r}")
     return value
+
+
+def capability_group_name(capability: str) -> str:
+    """Map a V2 capability to its stable Authentik group name.
+
+    The same function is consumed by Authentik reconciliation, CopyParty ACL
+    projection, and the endpoint authorization gate so naming cannot drift.
+    """
+
+    validate_capability_reference(capability)
+    return "nas_" + capability.replace(".", "_").replace("-", "_")
 
 
 def storage_capability(resource_id: str, capability: str) -> str:
@@ -166,7 +177,7 @@ def validate_storage_attachment(
 ) -> dict[str, Any]:
     """Validate and normalize one resource-reference attachment.
 
-    Legacy inline hostPath mounts are intentionally not handled here.  They stay
+    Legacy inline hostPath mounts are intentionally not handled here. They stay
     in the old validator only as migration input until built-ins are converted.
     """
 
