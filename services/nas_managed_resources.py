@@ -16,6 +16,7 @@ from typing import Any
 ALLOWED_HOST_ROOTS = ("/tank", "/srv", "/var/lib/nas-control/apps")
 RESOURCE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 RUNTIME_TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+USER_IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
 APPLICATION_PRINCIPAL_RE = re.compile(r"^application:([a-z][a-z0-9-]{0,47})$")
 CAPABILITY_RE = re.compile(r"^(application|storage)\.([a-z][a-z0-9-]{0,47})\.([a-z][a-z0-9-]{0,47})$")
 STATE_CLASSES = frozenset({"authoritative", "derived", "cache", "ephemeral"})
@@ -32,6 +33,12 @@ class ManagedResourceError(RuntimeError):
 def validate_resource_id(value: Any) -> str:
     if not isinstance(value, str) or not RESOURCE_ID_RE.fullmatch(value):
         raise ManagedResourceError(f"Invalid resource ID {value!r}")
+    return value
+
+
+def validate_user_identifier(value: Any) -> str:
+    if not isinstance(value, str) or not USER_IDENTIFIER_RE.fullmatch(value):
+        raise ManagedResourceError(f"Invalid user identifier {value!r}")
     return value
 
 
@@ -94,6 +101,14 @@ def _validate_host_path(value: Any, *, field: str = "path") -> str:
     return value
 
 
+def _strict_child_path(parent: str, child: str) -> bool:
+    try:
+        relative = pathlib.PurePosixPath(child).relative_to(pathlib.PurePosixPath(parent))
+    except ValueError:
+        return False
+    return str(relative) not in {"", "."}
+
+
 def validate_storage_resource(resource_id: str, data: Any) -> dict[str, Any]:
     validate_resource_id(resource_id)
     if not isinstance(data, dict):
@@ -108,11 +123,21 @@ def validate_storage_resource(resource_id: str, data: Any) -> dict[str, Any]:
     if scope == "user":
         if path_template is None:
             raise ManagedResourceError(f"Storage resource {resource_id!r}: user scope requires pathTemplate")
-        _validate_host_path(path_template, field=f"storageResources.{resource_id}.pathTemplate")
-        if "{user}" not in path_template:
-            raise ManagedResourceError(f"Storage resource {resource_id!r}: user pathTemplate must contain '{{user}}'")
+        path_template = _validate_host_path(path_template, field=f"storageResources.{resource_id}.pathTemplate")
+        if path_template.count("{user}") != 1:
+            raise ManagedResourceError(
+                f"Storage resource {resource_id!r}: user pathTemplate must contain exactly one '{{user}}'"
+            )
+        sample_path = _validate_host_path(
+            path_template.replace("{user}", "nas-user"),
+            field=f"storageResources.{resource_id}.pathTemplate",
+        )
+        if not _strict_child_path(path, sample_path):
+            raise ManagedResourceError(
+                f"Storage resource {resource_id!r}: user pathTemplate must resolve beneath resource path"
+            )
     elif path_template is not None:
-        _validate_host_path(path_template, field=f"storageResources.{resource_id}.pathTemplate")
+        path_template = _validate_host_path(path_template, field=f"storageResources.{resource_id}.pathTemplate")
 
     state_class = data.get("stateClass")
     if state_class not in STATE_CLASSES:
@@ -158,7 +183,36 @@ def validate_storage_resource(resource_id: str, data: Any) -> dict[str, Any]:
     normalized["capabilities"] = list(capabilities)
     normalized["backup"] = {**backup, "consistency": consistency}
     normalized["fileBrowser"] = {"visible": visible}
+    if path_template is not None:
+        normalized["pathTemplate"] = path_template
     return normalized
+
+
+def realize_storage_path(resource_id: str, data: Any, *, user: str | None = None) -> str:
+    resource = validate_storage_resource(resource_id, data)
+    if resource["scope"] != "user":
+        if user is not None:
+            validate_user_identifier(user)
+        return resource["path"]
+    if user is None:
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: user identity is required")
+    identity = validate_user_identifier(user)
+    path = _validate_host_path(
+        resource["pathTemplate"].replace("{user}", identity),
+        field=f"storageResources.{resource_id}.realizedPath",
+    )
+    if not _strict_child_path(resource["path"], path):
+        raise ManagedResourceError(f"Storage resource {resource_id!r}: realized user path escaped resource path")
+    return path
+
+
+def realize_storage_resource(resource_id: str, data: Any, *, user: str | None = None) -> dict[str, Any]:
+    resource = validate_storage_resource(resource_id, data)
+    realized = dict(resource)
+    realized["path"] = realize_storage_path(resource_id, resource, user=user)
+    if resource["scope"] == "user":
+        realized["user"] = validate_user_identifier(user)
+    return realized
 
 
 def validate_storage_resources(resources: Any) -> dict[str, dict[str, Any]]:
