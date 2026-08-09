@@ -294,6 +294,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn("archive mode mismatch", packaging)
         self.assertIn("archived_mode", packaging)
         self.assertIn("staged_mode", packaging)
+        package_step = workflow.split("      - name: Package and verify as an untrusted consumer", 1)[1]
+        self.assertIn('mv cockpit/node_modules "$dependencies"', package_step)
+        self.assertIn('mv "$dependencies" cockpit/node_modules', package_step)
+        self.assertLess(
+            package_step.index('mv cockpit/node_modules "$dependencies"'), package_step.index("package-release.sh")
+        )
 
     def test_pipeline_summary_checks_out_its_behavioral_policy(self):
         workflow = text(".github/workflows/ci.yml")
@@ -310,7 +316,11 @@ class ContractTests(unittest.TestCase):
         for label, target_factory in scenarios:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "source"
-                shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage"))
+                shutil.copytree(
+                    ROOT,
+                    root,
+                    ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage", "state"),
+                )
                 shutil.rmtree(root / ".git", ignore_errors=True)
                 target = target_factory(root)
                 if label == "ignored secret":
@@ -356,6 +366,7 @@ class ContractTests(unittest.TestCase):
                     ".coverage.*",
                     "coverage.json",
                     "node_modules",
+                    "state",
                 ),
             )
             subprocess.run(["git", "init", "-b", "main"], cwd=repository, check=True, capture_output=True)

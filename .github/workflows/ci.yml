@@ -329,6 +329,17 @@ jobs:
         run: |
           set -euo pipefail
           node cockpit/build.js --check
+          dependencies="$RUNNER_TEMP/cockpit-node_modules"
+          restore_dependencies() {
+            if [[ -d "$dependencies" ]]; then
+              mv "$dependencies" cockpit/node_modules
+            fi
+          }
+          trap restore_dependencies EXIT
+          if [[ -d cockpit/node_modules ]]; then
+            rm -rf "$dependencies"
+            mv cockpit/node_modules "$dependencies"
+          fi
           out="$GITHUB_WORKSPACE/nas-source-release"
           mkdir -p "$out"
           NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
@@ -350,6 +361,8 @@ jobs:
           NAS_PREFLIGHT_VERIFY_MANIFEST=1 NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
           ./scripts/nix-config-matrix.sh
           ./scripts/evaluate-reference-configurations.sh
+          restore_dependencies
+          trap - EXIT
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: source-archive-evidence
