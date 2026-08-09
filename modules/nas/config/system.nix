@@ -123,7 +123,7 @@ in
       "d ${copypartyUserConfigDir} 0770 copyparty copyparty -"
       "C ${copypartyUserConfigDir}/00-local-overrides.conf 0660 copyparty copyparty - ${copypartyUserSeed}"
       "d /var/lib/nas-identity-sync 0700 root root -"
-      "d /var/lib/nas-setup 0750 root wheel -"
+      "d /var/lib/nas-setup 0770 root wheel -"
       "d /var/lib/nas-control 0770 nas-feature-gate nas-feature-control -"
       "d /run/nas-operations 2770 root nas-operations -"
       "d /run/nas-state 0700 root root -"

@@ -449,6 +449,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn('name = "nas-setup"', tools)
         self.assertIn("nasSetup", system)
         self.assertIn("(lib.lowPrio nasPythonApplication)", system)
+        self.assertIn("d /var/lib/nas-setup 0770 root wheel -", system)
+        self.assertRegex(
+            tools,
+            r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0770";',
+        )
         self.assertIn("def first_run", setup)
         self.assertIn("passwordFile", setup)
         self.assertIn("plaintext password", setup)

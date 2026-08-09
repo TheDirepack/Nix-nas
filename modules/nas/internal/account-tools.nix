@@ -160,7 +160,7 @@ let
       source = "/var/lib/nas-setup";
       optional = true;
       group = "wheel";
-      rootMode = "0750";
+      rootMode = "0770";
     })
     (mkPathAuthority {
       name = "copyparty";
