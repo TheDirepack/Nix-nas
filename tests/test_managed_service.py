@@ -24,7 +24,12 @@ import nas_service_runtime_podman  # noqa: E402
 
 
 def service_template(runtime_type: str = "compose") -> dict:
-    suffix = "compose.yaml" if runtime_type == "compose" else "definition"
+    if runtime_type == "compose":
+        suffix = "compose.yaml"
+    elif runtime_type == "vm":
+        suffix = "domain.xml"
+    else:
+        suffix = "definition"
     return {
         "label": "X",
         "enabled": True,
@@ -226,7 +231,7 @@ class ManagedServiceTests(unittest.TestCase):
         )
 
         vm = service_template("vm")
-        self.assertEqual(nas_service_runtime_libvirt.plan_libvirt("x", vm)["runtime"], "vm")
+        self.assertEqual(nas_service_runtime_libvirt.plan_libvirt("x", vm)["runtime"], "libvirt")
 
         secured = service_template()
         secured["endpoints"] = {
