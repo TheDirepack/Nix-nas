@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Direct Caddy projection for the canonical Managed Services V2 route schema."""
+"""Direct Caddy projection for the canonical Managed Services V2 route schema.
+
+V2 only generates configuration. Authentik owns capability assignments and
+Caddy is the request-time enforcement point. The optional Unix-socket wake
+bridge is called only after Caddy has authorized the request.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,10 @@ import shutil
 import subprocess
 import tempfile
 from typing import Any
+
+from nas_managed_resources import capability_group_name as legacy_group_name
+from nas_managed_resources import validate_capability_reference as validate_legacy_capability
+from nas_v2_authorization import capability_group_name, route_capability, validate_capability
 
 DEFAULT_OUTPUT = pathlib.Path("/run/nas-control/caddy-managed.conf")
 GATE_SOCKET = os.environ.get("NAS_ON_DEMAND_GATE_SOCKET", "/run/nas-control/on-demand-gate.sock")
@@ -33,25 +42,48 @@ def _matcher_id(service_id: str, route_id: str, path: str) -> str:
     return f"v2_{service_id}_{route_id}_{digest}".replace("-", "_")
 
 
+def _group_for_capability(service_id: str, route: dict[str, Any]) -> str:
+    auth = route.get("auth") or {}
+    explicit = auth.get("capability") if isinstance(auth, dict) else None
+    if explicit is None:
+        required = route_capability(service_id, route)
+        if required is None:
+            raise V2CaddyError(f"Service {service_id}: identity route has no capability")
+        return capability_group_name(required)
+    try:
+        return capability_group_name(validate_capability(explicit, service_id=service_id))
+    except Exception:
+        try:
+            legacy = validate_legacy_capability(explicit)
+        except Exception as exc:
+            raise V2CaddyError(f"Service {service_id}: invalid route capability {explicit!r}") from exc
+        if not legacy.startswith(f"application.{service_id}."):
+            raise V2CaddyError(f"Service {service_id}: route capability belongs to another service")
+        return legacy_group_name(legacy)
+
+
 def _render_gate(lines: list[str], service_id: str, route_id: str, indent: str) -> None:
     lines.extend(
         [
             f"{indent}forward_auth unix/{GATE_SOCKET} {{",
             f"{indent}  uri /authorize?scope=service:{_route_key(service_id, route_id)}",
-            f"{indent}  header_up Remote-User {{http.request.header.Remote-User}}",
-            f"{indent}  header_up Remote-Groups {{http.request.header.Remote-Groups}}",
-            f"{indent}  header_up Remote-Name {{http.request.header.Remote-Name}}",
-            f"{indent}  header_up Remote-Email {{http.request.header.Remote-Email}}",
-            f"{indent}  header_up Remote-UID {{http.request.header.Remote-UID}}",
             f"{indent}}}",
         ]
     )
 
 
-def _render_auth(lines: list[str], service_id: str, route_id: str, route: dict[str, Any], indent: str) -> None:
+def _render_auth(
+    lines: list[str],
+    service_id: str,
+    route_id: str,
+    route: dict[str, Any],
+    indent: str,
+    matcher_suffix: str,
+) -> None:
     auth = route["auth"]
     mode = auth["mode"]
     if mode == "identity":
+        required_group = _group_for_capability(service_id, route)
         for header in (
             "Remote-User",
             "Remote-Groups",
@@ -65,14 +97,15 @@ def _render_auth(lines: list[str], service_id: str, route_id: str, route: dict[s
             "X-Authentik-Uid",
         ):
             lines.append(f"{indent}request_header -{header}")
+        denied = f"v2_denied_{matcher_suffix}"
         lines.extend(
             [
                 f"{indent}forward_auth 127.0.0.1:9000 {{",
                 f"{indent}  uri /outpost.goauthentik.io/auth/caddy",
                 f"{indent}  copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid",
                 f"{indent}}}",
-                f"{indent}@missingV2Identity not header X-Authentik-Username *",
-                f"{indent}respond @missingV2Identity 403",
+                f"{indent}@{denied} not header X-Authentik-Groups *{required_group}*",
+                f"{indent}respond @{denied} 403",
                 f"{indent}request_header Remote-User {{http.request.header.X-Authentik-Username}}",
                 f"{indent}request_header Remote-Groups {{http.request.header.X-Authentik-Groups}}",
                 f"{indent}request_header Remote-Name {{http.request.header.X-Authentik-Name}}",
@@ -80,8 +113,15 @@ def _render_auth(lines: list[str], service_id: str, route_id: str, route: dict[s
                 f"{indent}request_header Remote-UID {{http.request.header.X-Authentik-Uid}}",
             ]
         )
-    if mode not in {"public", "identity", "secret", "upstream"}:
+    elif mode == "secret":
+        raise V2CaddyError(
+            f"Service {service_id} route {route_id}: V2 secret authorization was removed; use identity or upstream auth"
+        )
+    elif mode not in {"public", "upstream"}:
         raise V2CaddyError(f"Service {service_id} route {route_id}: unsupported auth mode {mode!r}")
+
+    # This is wake-only plumbing. Caddy has already completed any required
+    # authorization before the request is allowed to reach the Unix socket.
     _render_gate(lines, service_id, route_id, indent)
 
 
@@ -123,8 +163,15 @@ def _render_proxy(lines: list[str], route: dict[str, Any], indent: str) -> None:
             raise V2CaddyError(f"Unsupported Caddy route target {typ!r}")
 
 
-def _render_handler(lines: list[str], service_id: str, route_id: str, route: dict[str, Any], indent: str) -> None:
-    _render_auth(lines, service_id, route_id, route, indent)
+def _render_handler(
+    lines: list[str],
+    service_id: str,
+    route_id: str,
+    route: dict[str, Any],
+    indent: str,
+    matcher_suffix: str,
+) -> None:
+    _render_auth(lines, service_id, route_id, route, indent, matcher_suffix)
     _render_proxy(lines, route, indent)
 
 
@@ -172,19 +219,20 @@ def generate_caddyfile(effective: dict[str, Any]) -> str:
         matcher = _matcher_id(service_id, route_id, path)
         lines.append(f"  @{matcher} path {path} {path}*")
         lines.append(f"  handle @{matcher} {{")
-        _render_handler(lines, service_id, route_id, route, "    ")
+        _render_handler(lines, service_id, route_id, route, "    ", matcher)
         lines.append("  }")
     lines.extend(["}", ""])
 
     for _, service_id, route_id, route, hostname, path in host_routes:
+        matcher = _matcher_id(service_id, route_id, f"{hostname}{path}")
         lines.append(f"https://{hostname} {{")
         lines.append("  tls internal")
         if path != "/":
             lines.append(f"  handle_path {path}* {{")
-            _render_handler(lines, service_id, route_id, route, "    ")
+            _render_handler(lines, service_id, route_id, route, "    ", matcher)
             lines.append("  }")
         else:
-            _render_handler(lines, service_id, route_id, route, "  ")
+            _render_handler(lines, service_id, route_id, route, "  ", matcher)
         lines.extend(["}", ""])
     return "\n".join(lines)
 
