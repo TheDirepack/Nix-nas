@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch Pi coding-agent sessions inside the NAS systemd sandbox."""
+"""Launch authenticated Pi coding-agent sessions as disposable Podman containers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import secrets
+import stat
 import subprocess
 import sys
 import threading
@@ -16,6 +18,11 @@ from collections.abc import Sequence
 
 class CodingAgentError(RuntimeError):
     """Expected coding-agent launch failure."""
+
+
+USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./:_@-]{0,255}$")
+NETWORK_RE = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}|ns:/run/netns/[A-Za-z0-9_.-]+)$")
 
 
 def configured_roots() -> tuple[pathlib.Path, ...]:
@@ -49,15 +56,74 @@ def run_checked(command: Sequence[str]) -> None:
         raise CodingAgentError(f"Command failed with status {result.returncode}: {command[0]}")
 
 
-def session_command(workspace: pathlib.Path, pi_args: Sequence[str]) -> list[str]:
-    session_exec = os.environ.get("NAS_PI_SESSION_EXEC", "")
-    if not session_exec or not pathlib.Path(session_exec).is_absolute():
-        raise CodingAgentError("NAS Pi session executable is not configured")
-    credential = os.environ.get("NAS_PI_CREDENTIAL", "/run/nas-secrets/ai/coding-agent-api-key")
-    state_dir = os.environ.get("NAS_PI_STATE_DIR", "/var/lib/nas-code-agent")
-    unit = f"nas-ai-coding-session-{secrets.token_hex(8)}.service"
-    slice_name = os.environ.get("NAS_CODING_SLICE", "nas-ai-coding.slice")
-    target_name = os.environ.get("NAS_CODING_TARGET", "nas-ai-coding-sessions.target")
+def _validated_username(value: object) -> str:
+    username = value if isinstance(value, str) else str(value)
+    if not USERNAME_RE.fullmatch(username):
+        raise CodingAgentError("Authenticated identity has an invalid username")
+    return username
+
+
+def ensure_user_state(username: str) -> pathlib.Path:
+    """Create the authoritative per-user Pi state directory without symlink escapes."""
+
+    username = _validated_username(username)
+    root_raw = os.environ.get("NAS_PI_USER_STATE_ROOT", "/tank/apps/pi/users")
+    root = pathlib.Path(root_raw)
+    if not root.is_absolute():
+        raise CodingAgentError("NAS Pi user-state root must be absolute")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise CodingAgentError(f"NAS Pi user-state root is unavailable: {root_raw}") from exc
+    if not root.is_dir():
+        raise CodingAgentError(f"NAS Pi user-state root is not a directory: {root}")
+
+    user_state = root / username
+    try:
+        current = user_state.lstat()
+    except FileNotFoundError:
+        user_state.mkdir(mode=0o700)
+        current = user_state.lstat()
+    if stat.S_ISLNK(current.st_mode) or not stat.S_ISDIR(current.st_mode):
+        raise CodingAgentError(f"Pi user state must be a real directory: {user_state}")
+    resolved = user_state.resolve(strict=True)
+    if resolved.parent != root:
+        raise CodingAgentError(f"Pi user-state path escaped its managed root: {resolved}")
+
+    uid = int(os.environ.get("NAS_PI_CONTAINER_UID", "954"))
+    gid = int(os.environ.get("NAS_PI_CONTAINER_GID", str(uid)))
+    if uid <= 0 or gid <= 0:
+        raise CodingAgentError("Pi container UID/GID must be positive")
+    os.chown(resolved, uid, gid)
+    os.chmod(resolved, 0o700)
+    return resolved
+
+
+def _bind_arg(source: pathlib.Path, target: str, *, read_only: bool = False) -> str:
+    raw = str(source)
+    if any(char in raw for char in ("\n", "\r", ":")):
+        raise CodingAgentError(f"Podman bind source contains unsupported characters: {raw!r}")
+    suffix = ":ro" if read_only else ":rw"
+    return f"{raw}:{target}{suffix}"
+
+
+def session_command(workspace: pathlib.Path, user_state: pathlib.Path, pi_args: Sequence[str]) -> list[str]:
+    """Build one disposable, read-only-root Pi container invocation."""
+
+    image = os.environ.get("NAS_PI_IMAGE", "")
+    if not IMAGE_RE.fullmatch(image):
+        raise CodingAgentError("NAS Pi container image is not configured")
+    credential = pathlib.Path(
+        os.environ.get("NAS_PI_CREDENTIAL", "/run/nas-secrets/ai/coding-agent-api-key")
+    )
+    if not credential.is_absolute():
+        raise CodingAgentError("NAS Pi credential path must be absolute")
+    network = os.environ.get("NAS_PI_NETWORK", "ns:/run/netns/pi")
+    if not NETWORK_RE.fullmatch(network):
+        raise CodingAgentError("NAS Pi container network is invalid")
+
+    uid = int(os.environ.get("NAS_PI_CONTAINER_UID", "954"))
+    gid = int(os.environ.get("NAS_PI_CONTAINER_GID", str(uid)))
     max_runtime = os.environ.get("NAS_CODING_MAX_RUNTIME_SEC", "14400")
     try:
         max_runtime_int = int(max_runtime)
@@ -65,46 +131,50 @@ def session_command(workspace: pathlib.Path, pi_args: Sequence[str]) -> list[str
             max_runtime_int = 14400
     except ValueError:
         max_runtime_int = 14400
-    properties = (
-        "NoNewPrivileges=yes",
-        "PrivateTmp=yes",
-        "PrivateDevices=yes",
-        "ProtectSystem=strict",
-        "ProtectHome=yes",
-        "ProtectKernelTunables=yes",
-        "ProtectKernelModules=yes",
-        "ProtectKernelLogs=yes",
-        "ProtectControlGroups=yes",
-        "RestrictSUIDSGID=yes",
-        "LockPersonality=yes",
-        # Network allowed for Pi web/GitHub; host loopback blocked except via proxy (10.200.1.1)
-        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-        "NetworkNamespacePath=/run/netns/pi",
-        f"Slice={slice_name}",
-        f"PartOf={target_name}",
-        f"BindsTo={target_name}",
-        f"RuntimeMaxSec={max_runtime_int}",
-        "InaccessiblePaths=/run/nas-secrets",
-        "InaccessiblePaths=/var/lib/nas-llama-swap",
-        f"ReadWritePaths={workspace}",
-        f"ReadWritePaths={state_dir}",
-        f"LoadCredential=llama-swap-api-key:{credential}",
-    )
+
+    cpus_raw = os.environ.get("NAS_CODING_CPUS", "4")
+    try:
+        cpus = float(cpus_raw)
+    except ValueError as exc:
+        raise CodingAgentError("NAS coding CPU limit is invalid") from exc
+    if not 0.1 <= cpus <= 64:
+        raise CodingAgentError("NAS coding CPU limit must be between 0.1 and 64")
+    memory = os.environ.get("NAS_CODING_MEMORY", "4g")
+    if re.fullmatch(r"^[1-9][0-9]*[kKmMgG]?$", memory) is None:
+        raise CodingAgentError("NAS coding memory limit is invalid")
+
+    name = f"nas-pi-{secrets.token_hex(8)}"
     command = [
-        "systemd-run",
-        "--quiet",
-        "--wait",
-        "--collect",
-        "--pty",
-        "--service-type=exec",
-        f"--unit={unit}",
-        "--uid=nas-code-agent",
-        "--gid=nas-code-agent",
-        f"--working-directory={workspace}",
+        "podman",
+        "run",
+        "--rm",
+        "--replace",
+        "--interactive",
+        "--tty",
+        f"--name={name}",
+        "--pull=never",
+        "--read-only",
+        "--cap-drop=all",
+        "--security-opt=no-new-privileges",
+        f"--user={uid}:{gid}",
+        f"--network={network}",
+        f"--timeout={max_runtime_int}",
+        f"--cpus={cpus:g}",
+        f"--memory={memory}",
+        "--pids-limit=512",
+        "--tmpfs=/tmp:rw,nodev,nosuid,noexec,size=512m",
+        "--workdir=/workspace",
+        "--env=HOME=/home/pi",
+        "--env=NAS_PI_CREDENTIAL_FILE=/run/secrets/llama-swap-api-key",
+        "--volume",
+        _bind_arg(workspace, "/workspace"),
+        "--volume",
+        _bind_arg(user_state, "/home/pi"),
+        "--volume",
+        _bind_arg(credential, "/run/secrets/llama-swap-api-key", read_only=True),
+        image,
     ]
-    for prop in properties:
-        command.extend(("--property", prop))
-    command.extend((session_exec, *pi_args))
+    command.extend(pi_args)
     return command
 
 
@@ -121,7 +191,7 @@ def heartbeat(stop: threading.Event, feature_control: str, interval: int) -> Non
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="nas-code-agent",
-        description="Run a Pi coding-agent session inside an approved NAS workspace.",
+        description="Run a disposable Pi coding-agent container inside an approved NAS workspace.",
     )
     result.add_argument("workspace", help="Repository/workspace path under an approved root")
     result.add_argument(
@@ -130,7 +200,9 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def _check_coding_access() -> None:
+def _check_coding_access() -> str:
+    """Authorize the caller and return the stable username used for user-scoped storage."""
+
     identity_json = os.environ.get("NAS_AUTHENTICATED_IDENTITY_JSON", "")
     if identity_json.strip():
         try:
@@ -156,24 +228,23 @@ def _check_coding_access() -> None:
                 groups.add(_ADMIN_GROUP)
             except ImportError:
                 pass
-        username = data.get("username", "")
-        if not isinstance(username, str):
-            username = str(username)
+        username = _validated_username(data.get("username", ""))
         print("nas-code-agent: auth mode=identity-json", file=sys.stderr)
         try:
             from nas_common import ADMIN_GROUP, capability_allowed
 
             if capability_allowed(groups, "coding") or ADMIN_GROUP in groups or "nas_admin" in groups:
-                return
+                return username
         except ImportError:
             if "nas_allow_coding" in groups or "nas_admin" in groups:
-                return
+                return username
         raise CodingAgentError(
             f"User {username!r} denied: coding capability required (groups: {sorted(groups)}) [mode=identity-json]"
         )
     sudo_user = os.environ.get("SUDO_USER", "")
     insecure = os.environ.get("NAS_CODING_INSECURE_UID_AUTH", "") == "1"
     if sudo_user:
+        sudo_user = _validated_username(sudo_user)
         if not insecure:
             print("nas-code-agent: auth mode=uid-deny (insecure flag not set)", file=sys.stderr)
             raise CodingAgentError(
@@ -189,9 +260,9 @@ def _check_coding_access() -> None:
             try:
                 pw = pwd.getpwnam(sudo_user)
                 user_groups.add(pw.pw_name)
-                for g in grp.getgrall():
-                    if sudo_user in g.gr_mem:
-                        user_groups.add(g.gr_name)
+                for group in grp.getgrall():
+                    if sudo_user in group.gr_mem:
+                        user_groups.add(group.gr_name)
                 result = subprocess.run(["id", "-nG", sudo_user], capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
                     user_groups.update(result.stdout.strip().split())
@@ -202,13 +273,11 @@ def _check_coding_access() -> None:
         try:
             from nas_common import capability_allowed
 
-            if capability_allowed(user_groups, "coding"):
-                return
-            if "nas_admin" in user_groups:
-                return
+            if capability_allowed(user_groups, "coding") or "nas_admin" in user_groups:
+                return sudo_user
         except ImportError:
             if "nas_allow_coding" in user_groups or "nas_admin" in user_groups:
-                return
+                return sudo_user
         raise CodingAgentError(
             f"User {sudo_user!r} is not in nas_allow_coding or nas_admin; "
             f"request access via Authentik and Cockpit (groups: {sorted(user_groups)}) [mode=insecure-uid]"
@@ -228,10 +297,10 @@ def _check_coding_access() -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if os.geteuid() != 0:
-        print("nas-code-agent: run through sudo/root so systemd can create the sandboxed service", file=sys.stderr)
+        print("nas-code-agent: run through sudo/root so Podman can create the isolated session", file=sys.stderr)
         return 1
     try:
-        _check_coding_access()
+        username = _check_coding_access()
         roots = configured_roots()
         workspace = validate_workspace(args.workspace, roots)
         credential = pathlib.Path(os.environ.get("NAS_PI_CREDENTIAL", "/run/nas-secrets/ai/coding-agent-api-key"))
@@ -239,6 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise CodingAgentError(
                 "Coding-agent llama-swap client credential is unavailable; activate NAS secrets first"
             )
+        user_state = ensure_user_state(username)
         feature_control = os.environ.get("NAS_FEATURE_CONTROL", "nas-feature-control")
         run_checked([feature_control, "wake", "aiCoding"])
         interval = max(30, int(os.environ.get("NAS_CODING_HEARTBEAT_SECONDS", "120")))
@@ -249,7 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             pi_args = list(args.pi_args)
             if pi_args[:1] == ["--"]:
                 pi_args = pi_args[1:]
-            return subprocess.run(session_command(workspace, pi_args), check=False).returncode
+            return subprocess.run(session_command(workspace, user_state, pi_args), check=False).returncode
         finally:
             stop.set()
             worker.join(timeout=2)
