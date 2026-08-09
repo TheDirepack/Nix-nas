@@ -12,28 +12,21 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
 from nas_identity_sync import SyncError, authentik_list, authentik_request, authentik_token
-from nas_managed_resources import validate_capability_reference, validate_storage_resources
+from nas_managed_resources import capability_group_name, validate_capability_reference, validate_storage_resources
 
 EFFECTIVE_PATH = pathlib.Path(
     os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
 )
 MANAGED_ATTRIBUTE = "nixos_nas_v2_capability"
-GROUP_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 
 class AuthentikV2GroupError(RuntimeError):
     pass
-
-
-def capability_group_name(capability: str) -> str:
-    validate_capability_reference(capability)
-    return "nas_" + GROUP_NAME_RE.sub("_", capability.replace(".", "_"))
 
 
 def desired_capabilities(effective: dict[str, Any]) -> set[str]:
