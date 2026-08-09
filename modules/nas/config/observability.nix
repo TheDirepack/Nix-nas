@@ -286,7 +286,7 @@ in
             };
             zfs = { };
             smart = {
-              path_smartctl = smartctlReadOnly;
+              path_smartctl = "${smartctlReadOnly}";
               use_sudo = true;
               nocheck = "standby";
               attributes = false;
@@ -309,7 +309,7 @@ in
           users = [ "telegraf" ];
           commands = [
             {
-              command = smartctlReadOnly;
+              command = "${smartctlReadOnly}";
               options = [ "NOPASSWD" "NOSETENV" ];
             }
           ];

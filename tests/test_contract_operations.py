@@ -37,7 +37,8 @@ class ContractTests(unittest.TestCase):
         storage = text("modules/nas/config/storage-monitoring.nix")
         self.assertIn("services.ntfy-sh", observability)
         self.assertIn("services.telegraf", observability)
-        self.assertIn("path_smartctl", observability)
+        self.assertIn('path_smartctl = "${smartctlReadOnly}";', observability)
+        self.assertIn('command = "${smartctlReadOnly}";', observability)
         self.assertIn("use_sudo = true", observability)
         self.assertIn("services.smartd.enable = lib.mkDefault false", storage)
 
