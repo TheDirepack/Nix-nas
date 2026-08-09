@@ -7,6 +7,7 @@ from services.nas_managed_resources import (
     application_capability,
     application_principal,
     backup_resource_ids,
+    capability_group_name,
     storage_capability,
     validate_application_principal,
     validate_capability_reference,
@@ -52,6 +53,8 @@ class ManagedResourceTests(unittest.TestCase):
         self.assertEqual(application_capability("pi"), "application.pi.access")
         self.assertEqual(storage_capability("projects", "write"), "storage.projects.write")
         self.assertEqual(validate_capability_reference("storage.projects.read"), "storage.projects.read")
+        self.assertEqual(capability_group_name("storage.media-library.read"), "nas_storage_media_library_read")
+        self.assertEqual(capability_group_name("application.pi.access"), "nas_application_pi_access")
         with self.assertRaises(ManagedResourceError):
             validate_capability_reference("alice:projects:rw")
 
@@ -150,6 +153,26 @@ class ManagedResourceTests(unittest.TestCase):
                         "backup": {"enabled": True},
                     }
                 }
+            )
+
+    def test_mount_paths_reject_runtime_delimiters_and_control_characters(self) -> None:
+        for path in ("/tank/bad:path", "/tank/bad\npath", "/tank/bad\rpath"):
+            with self.subTest(path=path), self.assertRaises(ManagedResourceError):
+                validate_storage_resources(
+                    {
+                        "bad": {
+                            "path": path,
+                            "stateClass": "authoritative",
+                            "capabilities": ["read"],
+                            "backup": {"enabled": True},
+                        }
+                    }
+                )
+        with self.assertRaises(ManagedResourceError):
+            validate_storage_attachment(
+                "pi",
+                {"resource": "projects", "guestPath": "/bad:path"},
+                self.resources,
             )
 
 
