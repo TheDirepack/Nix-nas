@@ -13,9 +13,9 @@
     },
     "nas-v2-runtime": {
       "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_v2_runtime.py",
+      "source": "services/nas_v2_cli.py",
       "systemTest": "tests/vm/adversarial-installed.py",
-      "tests": ["tests/test_v2_runtime.py"]
+      "tests": ["tests/test_v2_runtime.py", "tests/test_v2_lifecycle.py"]
     },
     "nas-feature-control": {
       "fuzzStrategy": "feature-id",
@@ -56,7 +56,12 @@
     "services/nas_managed_service_engine.py": ["tests/test_v2_runtime.py"],
     "services/nas_managed_spec.py": ["tests/test_v2_runtime.py"],
     "services/nas_service_runtime_python.py": ["tests/test_v2_runtime.py"],
+    "services/nas_v2_apply.py": ["tests/test_v2_runtime.py"],
+    "services/nas_v2_caddy.py": ["tests/test_v2_lifecycle.py"],
+    "services/nas_v2_cli.py": ["tests/test_v2_runtime.py", "tests/test_v2_lifecycle.py"],
+    "services/nas_v2_lifecycle.py": ["tests/test_v2_lifecycle.py"],
     "services/nas_v2_runtime.py": ["tests/test_v2_runtime.py"],
+    "services/nas_v2_schedules.py": ["tests/test_v2_lifecycle.py"],
     "services/nas_feature_control_v2.py": ["tests/test_feature_control_v2.py"],
     "services/nas_copyparty_projection.py": ["tests/test_copyparty_projection.py"],
     "services/nas_authentik_v2_groups.py": ["tests/test_authentik_v2_groups.py"],
