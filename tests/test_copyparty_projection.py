@@ -21,10 +21,12 @@ class CopypartyProjectionTests(unittest.TestCase):
             "storageResources": {
                 "projects": {
                     "path": "/tank/projects",
+                    "scope": "system",
                     "capabilities": ["read", "write", "move", "delete"],
                 },
                 "media-library": {
                     "path": "/tank/media",
+                    "scope": "system",
                     "capabilities": ["read", "admin"],
                 },
             }
@@ -44,9 +46,32 @@ class CopypartyProjectionTests(unittest.TestCase):
         self.assertIn("r: @nas_storage_media_library_read", text)
         self.assertIn("A: @nas_storage_media_library_admin", text)
 
-    def test_every_resource_retains_admin_recovery_access(self) -> None:
+    def test_every_projected_resource_retains_admin_recovery_access(self) -> None:
         text = projection.render_config(self.effective())
         self.assertGreaterEqual(text.count("A: @nas_admin"), 3)
+
+    def test_user_scoped_resource_never_exposes_parent_directory(self) -> None:
+        effective = self.effective()
+        effective["storageResources"]["pi-home"] = {
+            "path": "/tank/apps/pi/users",
+            "scope": "user",
+            "pathTemplate": "/tank/apps/pi/users/{user}",
+            "capabilities": ["read", "write", "delete"],
+        }
+        text = projection.render_config(effective)
+        self.assertNotIn("[/pi-home]", text)
+        self.assertNotIn("\n/tank/apps/pi/users\n", text)
+        self.assertIn("user-scoped resource 'pi-home' intentionally omitted", text)
+
+    def test_user_scoped_resource_requires_identity_template(self) -> None:
+        effective = self.effective()
+        effective["storageResources"]["broken"] = {
+            "path": "/tank/users",
+            "scope": "user",
+            "capabilities": ["read"],
+        }
+        with self.assertRaisesRegex(projection.CopypartyProjectionError, "pathTemplate"):
+            projection.render_config(effective)
 
     def test_projection_rejects_unknown_permission(self) -> None:
         effective = self.effective()
