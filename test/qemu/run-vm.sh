@@ -16,6 +16,7 @@
 # and gives the harness full control of the console. The ISO itself is still
 # attached as a CD-ROM so stage-1 can mount it by volume label.
 set -euo pipefail
+# shellcheck source=test/qemu/lib/common.sh
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 MODE=""
@@ -45,7 +46,7 @@ done
 
 need_cmd "$QEMU_BIN" qemu-img 7z ssh-keygen
 ensure_dirs
-ensure_iso
+[[ $MODE == boot ]] || ensure_iso
 ensure_keys
 ensure_disk
 
@@ -126,15 +127,15 @@ ensure_iso_boot_files() {
 
 common_args=(
   -enable-kvm
-  -machine q35,accel=kvm
+  -machine "q35,accel=kvm"
   -m "$VM_MEM"
   -smp "$VM_CPUS"
   -cpu host
   -name nas-vm
   -no-reboot
   -pidfile "$VM_PIDFILE"
-  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22
-  -device virtio-net-pci,netdev=net0
+  -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+  -device "virtio-net-pci,netdev=net0"
   -device virtio-rng-pci
   -drive "file=$DISK,if=virtio,format=qcow2"
 )
