@@ -4,7 +4,8 @@
 The mature feature controller remains the HTTP gate. V2 capability-backed
 endpoints are authorized by Authentik groups, and successful access also drives
 the V2 application lifecycle: on-demand apps wake on first authorized use and
-refresh their idle timestamp thereafter. Manual apps are never auto-woken.
+refresh their idle timestamp thereafter. Session apps are never auto-woken by a
+static endpoint; their dedicated session launcher owns creation and teardown.
 """
 
 from __future__ import annotations
@@ -43,23 +44,23 @@ def _load_effective() -> dict[str, Any]:
 
 
 def _authorized_use(service_id: str, effective: dict[str, Any]) -> bool:
-    """Wake/touch an on-demand service after authorization succeeds.
+    """Apply lifecycle policy after authorization succeeds.
 
     Failure to apply lifecycle policy fails the request closed instead of
-    forwarding traffic to a service that V2 says should have been managed.
+    forwarding traffic to a runtime that V2 says should have been managed.
     """
 
     service = effective.get("services", {}).get(service_id)
-    if not isinstance(service, dict):
+    if not isinstance(service, dict) or not service.get("enabled"):
         return False
     lifecycle = service.get("lifecycle") or {}
     mode = lifecycle.get("mode")
-    if mode in {"persistent", "manual"}:
+    if mode == "persistent":
         return True
-    if mode == "disabled":
+    if mode == "session":
         return False
     if mode != "on-demand":
-        return True
+        return False
     try:
         import nas_managed_service_v2 as managed_v2
 
