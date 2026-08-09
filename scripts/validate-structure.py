@@ -133,7 +133,7 @@ REQUIRED_FILES = {
     "tests/nixos/invalid/trusted-duplicate.nix",
     "tests/nixos/invalid/zfs-dataset-root.nix",
     "tests/nixos/invalid/tftp-privileged-port.nix",
-    "tests/nixos/invalid/replication-leading-dash.nix",
+    "tests/nixos/invalid/replication-same-dataset.nix",
     "tests/nixos/invalid/firewall-without-networking.nix",
     "tests/nixos/encrypted.nix",
     "tests/vm/guest-test.sh",

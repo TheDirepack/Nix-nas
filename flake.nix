@@ -19,7 +19,11 @@
     }:
     let
       system = "x86_64-linux";
-      mkPkgs = systemName: import nixpkgs { system = systemName; };
+      mkPkgs = systemName: import nixpkgs {
+        system = systemName;
+        overlays = [ copyparty.overlays.default ];
+        config.allowUnfreePredicate = package: nixpkgs.lib.getName package == "open-webui";
+      };
       commonModules = [
         self.nixosModules.default
         ./local.nix
@@ -37,13 +41,13 @@
       nixosModules = rec {
         core = import ./modules/nas;
         ai = import ./modules/ai;
-        default = { ... }: {
+        default = { lib, nasReadOnlyPkgs ? false, ... }: {
           imports = [
             copyparty.nixosModules.default
             ai
             core
           ];
-          nixpkgs.overlays = [ copyparty.overlays.default ];
+          nixpkgs.overlays = lib.mkIf (!nasReadOnlyPkgs) [ copyparty.overlays.default ];
         };
         profiles = {
           core-storage = import ./modules/profiles/core-storage.nix;

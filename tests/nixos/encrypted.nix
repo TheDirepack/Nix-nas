@@ -12,6 +12,9 @@ pkgs.testers.runNixOSTest {
 
     nas.zfsEncryption.enable = lib.mkForce true;
     nas.trustedInterfaces = lib.mkForce [ "eth1" ];
+    users.users.admin.openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci"
+    ];
     boot.loader.systemd-boot.enable = lib.mkForce true;
     boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
 
@@ -26,7 +29,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     machine.wait_for_unit("multi-user.target")
-    machine.wait_for_unit("nas-vm-test-repository.service")
+    machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
     machine.succeed("timeout 1800 nas-vm-encrypted-guest-test /dev/vdb")
   '';
 }

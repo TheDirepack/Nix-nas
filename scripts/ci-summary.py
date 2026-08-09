@@ -14,7 +14,7 @@ FAST_JOBS = {
     "static",
     "dependency-audit",
 }
-HEAVY_JOBS = {"cockpit-build", "source-archive", "build", "browser", "integration"}
+HEAVY_JOBS = {"build", "browser", "integration"}
 SLOW_JOBS = {"fuzz", "browser-fuzz"}
 KNOWN_JOBS = frozenset(FAST_JOBS | HEAVY_JOBS | SLOW_JOBS | {"coverage-diff", "installer"})
 

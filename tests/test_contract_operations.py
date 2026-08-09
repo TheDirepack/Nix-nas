@@ -80,6 +80,7 @@ class ContractTests(unittest.TestCase):
         guest = text("tests/vm/guest-test.sh")
         self.assertIn("DefaultZone=drop", firewall)
         self.assertIn('DefaultZone = "drop";', firewall)
+        self.assertIn("${pkgs.findutils}/bin/find", firewall)
         self.assertNotIn("DefaultZone=public", firewall)
         self.assertIn('trustedInterfaces = pkgs.lib.mkForce [ "eth1" ]', integration)
         self.assertIn('trustedInterfaces = lib.mkForce [ "eth1" ]', encrypted)

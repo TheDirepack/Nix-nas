@@ -1,5 +1,5 @@
 { ... }:
 {
   nas.zfsReplication.enable = true;
-  nas.zfsReplication.target = "-unsafe";
+  nas.zfsReplication.target = "tank/nas";
 }

@@ -16,15 +16,6 @@ operational boundaries remain here.
 | Network/firewall state restore | Restoring NetworkManager/firewalld state can still sever remote administration after the mutation begins; there is no independent acknowledgement/deadman rollback yet. | Perform network-affecting restore with NanoKVM/out-of-band access until a timed remote-confirmation rollback contract is implemented and VM-tested. |
 | Direct storage lifecycle mutations | Setup/state/update/identity/feature/secret paths now share the operation coordinator, but systemd-owned ZFS lifecycle helpers still require runtime proof before being wrapped because naïve nesting can deadlock protected-target startup. | Treat overlapping manual storage lifecycle operations as unsupported until the native/QEMU service-ordering tests prove a coordinator-safe integration. |
 
-## UI build boundary
-
-The Cockpit package is a React 18 and PatternFly 6 application using the Starter
-Kit esbuild/Sass layout. This source-only archive does not include a compiled
-browser bundle or npm lockfile because the validation environment could not
-reach the npm registry. It must not be treated as an installable appliance
-release. A network-enabled builder must generate and retain the lockfile, build
-`cockpit/dist`, and complete release preflight.
-
 ## Required external evidence
 
 A source-only release is not hardware evidence. Nix evaluation, closure builds,

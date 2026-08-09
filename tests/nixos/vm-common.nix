@@ -76,6 +76,7 @@ let
   };
 in
 {
+  _module.args.nasReadOnlyPkgs = true;
   networking.hostName = lib.mkForce "nas-test";
   networking.hostId = lib.mkForce "c1a05eed";
   networking.useDHCP = lib.mkDefault true;

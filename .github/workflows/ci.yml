@@ -263,8 +263,8 @@ jobs:
 
   # The first expensive producer waits directly for every fast qualification.
   # coverage-diff is PR-only, so a skipped result is explicitly acceptable.
-  cockpit-build:
-    name: Build qualified Cockpit production bundle
+  build:
+    name: Build qualified Cockpit, source archive, and NixOS closures
     if: >-
       always() &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
@@ -277,7 +277,7 @@ jobs:
       (needs.coverage-diff.result == 'success' || needs.coverage-diff.result == 'skipped')
     needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 270
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -316,22 +316,6 @@ jobs:
           path: |
             cockpit/package-lock.json
             cockpit/dist
-
-  source-archive:
-    name: Package and round-trip qualified source
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [cockpit-build]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: cockpit-bundle
-          path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
@@ -372,28 +356,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: nas-source-release
-
-  build:
-    name: Build qualified NixOS closures
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [cockpit-build, source-archive]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: cockpit-bundle
-          path: cockpit
-      - run: git add -f cockpit/package-lock.json cockpit/dist
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
       - name: Build testable systems
         run: |
           nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
@@ -402,7 +364,7 @@ jobs:
   browser:
     name: Post-build deterministic Cockpit layout, XSS, and accessibility
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build, cockpit-build]
+    needs: [build]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -452,7 +414,7 @@ jobs:
   integration:
     name: Post-build full-stack QEMU integration
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build, browser, cockpit-build]
+    needs: [build, browser]
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -479,7 +441,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') ||
       (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
-    needs: [integration, cockpit-build]
+    needs: [integration, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 420
     env:
@@ -623,7 +585,7 @@ jobs:
       (github.event_name == 'pull_request' ||
        (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
        (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
-    needs: [integration, installer, cockpit-build]
+    needs: [integration, installer, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
@@ -677,7 +639,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, cockpit-build, source-archive, build, browser, integration, installer, fuzz, browser-fuzz]
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, browser, integration, installer, fuzz, browser-fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

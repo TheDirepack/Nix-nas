@@ -25,7 +25,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertFalse((ROOT / "ai-module.nix").exists())
         self.assertIn("core = import ./modules/nas;", flake)
         self.assertIn("ai = import ./modules/ai;", flake)
-        default_block = flake.split("default = { ... }:", 1)[1].split("profiles =", 1)[0]
+        default_block = flake.split("default = { lib, nasReadOnlyPkgs ? false, ... }:", 1)[1].split("profiles =", 1)[0]
         self.assertIn("copyparty.nixosModules.default", default_block)
         self.assertIn("ai", default_block)
         self.assertIn("core", default_block)
@@ -177,7 +177,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn(
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
         )
-        self.assertIn("needs: [build, browser, cockpit-build]", workflow)
+        self.assertIn("needs: [build, browser]", workflow)
         self.assertIn("needs: [integration, installer]", workflow)
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:

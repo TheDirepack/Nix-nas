@@ -1,2 +1,2 @@
 { ... }:
-{ nas.zfsDataset = "tank"; }
+{ nas.zfsDataset = "other/nas"; }

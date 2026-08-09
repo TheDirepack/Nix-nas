@@ -67,6 +67,8 @@ nix develop .#test -c python -m unittest tests.test_property_invariants -v
 
 CI does not cache qualification pass markers: fast, property, browser, build, VM, and installer gates execute for every run that requires them. Dependency downloads, immutable installer media, and incremental Nix build outputs may still be cached because they accelerate execution without replacing test evidence.
 
+After the fast gates pass, one `build` job uses one runner to materialize and verify Cockpit (compiling it on a cache miss), round-trip the source archive, and build the NixOS closures in sequence. Browser qualification and KVM/QEMU integration remain downstream jobs. This runner consolidation does not remove or pass-cache any qualification tier.
+
 Unexpected deterministic fuzz crashes are retained under `.fuzz-crashes/` with the target, seed, and case. A confirmed crash should become a normal regression test before the implementation is fixed.
 
 ## 3. Static security and injection checks
@@ -122,7 +124,7 @@ Before building closures, CI evaluates the appliance plus each reusable profile 
 nix develop .#qemu-test -c ./scripts/qemu-test.sh all
 ```
 
-The negative fixtures currently cover loopback/duplicate trusted interfaces, invalid ZFS dataset roots, privileged TFTP ports, unsafe replication destinations, and firewall/networking contradictions. A fixture that evaluates successfully—or fails for some unrelated reason—is a test failure.
+The negative fixtures currently cover loopback/duplicate trusted interfaces, invalid ZFS dataset roots, privileged TFTP ports, same-dataset replication destinations, and firewall/networking contradictions. A fixture that evaluates successfully—or fails for some unrelated reason—is a test failure.
 
 The heavyweight matrix deliberately uses different system lifecycle paths:
 

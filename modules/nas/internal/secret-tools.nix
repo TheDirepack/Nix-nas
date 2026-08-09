@@ -350,7 +350,8 @@ PY_AI_PROVIDERS
         local bootstrap_token_reused=false
         local authentik_secret authentik_token authentik_password
         local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash
-        local llama_swap_api_key coding_agent_api_key open_webui_secret open_webui_admin_password huggingface_token
+        local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token
+        ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
         local provider_id provider_env provider_key
         local ntfy_password ntfy_hash ntfy_topic state_bundle_signing_key
         sudo install -d -m 0711 -o root -g root /run/nas-secret-staging
@@ -370,6 +371,8 @@ PY_AI_PROVIDERS
         root_stage="$transaction_dir/new"
         previous="$transaction_dir/previous"
 
+        # Nix substitutes the immutable library store path.
+        # shellcheck disable=SC1091
         source ${../../../scripts/lib/nas-secret-transaction.sh}
         nas_secret_tx_init "$secret_root" "$root_stage" "$previous" nas-protected-services.target "$transaction_dir"
 
@@ -623,9 +626,9 @@ NTFY_ENV
         password_from_stdin=true
         prompt_unlock
         ensure_group
-        local token extra
+        local token
         IFS= read -r token || { echo "Unable to read the Authentik API token from standard input." >&2; exit 1; }
-        if IFS= read -r extra; then
+        if IFS= read -r _; then
           echo "Unexpected extra input while setting the Authentik API token." >&2
           exit 1
         fi
@@ -659,14 +662,14 @@ NTFY_ENV
       }
 
       command_set_ai_provider_key_stdin() {
-        local provider="''${2:-}" token extra
+        local provider="''${2:-}" token
         validate_ai_provider_id "$provider"
         acquire_lock
         password_from_stdin=true
         prompt_unlock
         ensure_group
         IFS= read -r token || { echo "Unable to read the AI provider API key from standard input." >&2; exit 1; }
-        if IFS= read -r extra; then
+        if IFS= read -r _; then
           echo "Unexpected extra input while setting the AI provider API key." >&2
           exit 1
         fi
@@ -678,12 +681,12 @@ NTFY_ENV
       }
 
       command_clear_ai_provider_key_stdin() {
-        local provider="''${2:-}" extra
+        local provider="''${2:-}"
         validate_ai_provider_id "$provider"
         acquire_lock
         password_from_stdin=true
         prompt_unlock
-        if IFS= read -r extra; then
+        if IFS= read -r _; then
           echo "Unexpected extra input while clearing the AI provider API key." >&2
           exit 1
         fi
@@ -703,12 +706,12 @@ NTFY_ENV
       }
 
       command_show_ai_provider_key_stdin() {
-        local provider="''${2:-}" extra
+        local provider="''${2:-}"
         validate_ai_provider_id "$provider"
         acquire_lock
         password_from_stdin=true
         prompt_unlock
-        if IFS= read -r extra; then
+        if IFS= read -r _; then
           echo "Unexpected extra input while showing the AI provider API key." >&2
           exit 1
         fi

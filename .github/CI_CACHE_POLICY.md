@@ -44,8 +44,8 @@ Nix derivation and virtual machine outputs use Nix content addressing and the in
 ## Pipeline ordering
 
 1. Pre-build source/static/security/Caddy/dependency/coverage qualification.
-2. Build Cockpit, source-release and NixOS artifacts.
-3. Test built artifacts with deterministic browsers and QEMU integration.
+2. On one runner, the `build` job sequentially materializes and verifies Cockpit (compiling it on a cache miss), round-trips the source archive, and builds the NixOS closures.
+3. Downstream browser and KVM/QEMU integration jobs test the built artifacts.
 4. Install/reboot the official ISO and run final-system deterministic browser/security checks.
 5. Only after deterministic qualification passes, run slow source/property/browser and live ZAP fuzzing.
 

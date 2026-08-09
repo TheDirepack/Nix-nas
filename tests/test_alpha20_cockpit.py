@@ -86,8 +86,9 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn('tags: ["v*"]', workflow)
         for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
             self.assertNotIn(retired_gate, workflow)
-        self.assertIn("Build qualified Cockpit production bundle", workflow)
-        self.assertIn("Build qualified NixOS closures", workflow)
+        self.assertIn("Build qualified Cockpit, source archive, and NixOS closures", workflow)
+        self.assertNotIn("  cockpit-build:\n", workflow)
+        self.assertNotIn("  source-archive:\n", workflow)
         self.assertIn("Post-build full-stack QEMU integration", workflow)
         self.assertIn("Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz", workflow)
         self.assertIn("Slow source/property/security fuzz shard (${{ matrix.shard }})", workflow)
@@ -95,20 +96,23 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn(
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
         )
-        self.assertIn("needs: [cockpit-build]", workflow)
-        self.assertIn("needs: [cockpit-build, source-archive]", workflow)
-        self.assertIn("needs: [build, browser, cockpit-build]", workflow)
-        self.assertIn("needs: [integration, cockpit-build]", workflow)
+        self.assertIn("needs: [build, browser]", workflow)
+        self.assertIn("needs: [integration, build]", workflow)
         self.assertIn("needs: [integration, installer]", workflow)
 
-        cockpit_build_pos = workflow.index("cockpit-build:")
-        source_archive_pos = workflow.index("source-archive:")
         build_pos = workflow.index("  build:\n")
+        build_block = workflow.split("  build:\n", 1)[1].split("  browser:\n", 1)[0]
         integration_pos = workflow.index("integration:")
         installer_pos = workflow.index("installer:")
         fuzz_pos = workflow.index("  fuzz:\n")
-        self.assertLess(cockpit_build_pos, source_archive_pos)
-        self.assertLess(source_archive_pos, build_pos)
+        self.assertLess(
+            build_block.index("Build production bundle"),
+            build_block.index("Package and verify as an untrusted consumer"),
+        )
+        self.assertLess(
+            build_block.index("Package and verify as an untrusted consumer"),
+            build_block.index("Build testable systems"),
+        )
         self.assertLess(build_pos, integration_pos)
         self.assertLess(integration_pos, installer_pos)
         self.assertLess(installer_pos, fuzz_pos)

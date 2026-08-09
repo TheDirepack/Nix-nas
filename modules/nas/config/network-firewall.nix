@@ -139,7 +139,7 @@ in
         ${pkgs.coreutils}/bin/install -d -m 0700 ${firewalldStateRoot} ${firewalldStateRoot}/zones
         ${pkgs.coreutils}/bin/install -m 0600 ${firewalldSeedConfig} ${firewalldStateRoot}/firewalld.conf
         ${pkgs.coreutils}/bin/install -m 0600 ${zoneXml} ${firewalldStateRoot}/zones/${zone}.xml
-        ${pkgs.coreutils}/bin/find ${firewalldStateRoot}/zones -maxdepth 1 -type f \
+        ${pkgs.findutils}/bin/find ${firewalldStateRoot}/zones -maxdepth 1 -type f \
           -name '${zone}.xml.old' -delete
       '';
     };

@@ -1,6 +1,6 @@
-{ root, fixture }:
-
 let
+  root = builtins.getEnv "NAS_NEGATIVE_ROOT";
+  fixture = builtins.getEnv "NAS_NEGATIVE_FIXTURE";
   flake = builtins.getFlake root;
   fixturePath = builtins.toPath "${root}/${fixture}";
   system = flake.inputs.nixpkgs.lib.nixosSystem {

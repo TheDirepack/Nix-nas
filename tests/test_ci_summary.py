@@ -28,6 +28,9 @@ class CiSummaryTests(unittest.TestCase):
         self.assertEqual(workflow_jobs, set(ci_summary.KNOWN_JOBS))
         self.assertNotIn(".ci-cache/", workflow)
 
+    def test_heavy_jobs_match_the_consolidated_build_graph(self) -> None:
+        self.assertEqual({"build", "browser", "integration"}, ci_summary.HEAVY_JOBS)
+
     def test_pull_request_requires_every_qualification_except_installer(self) -> None:
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
         needs = self.results(expected)
