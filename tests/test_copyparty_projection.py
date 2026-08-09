@@ -12,7 +12,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_copyparty_projection as projection
+import nas_copyparty_projection as projection  # noqa: E402
 
 
 class CopypartyProjectionTests(unittest.TestCase):
