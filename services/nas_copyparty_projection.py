@@ -2,9 +2,14 @@
 """Generate Copyparty volume policy from Managed Services V2 resources.
 
 V2 owns storage resources, Authentik owns group membership/authorization, and
-Copyparty consumes the projection.  This module never creates users or mutates
-Authentik.  It emits group-based ACLs that match deterministic Authentik
+Copyparty consumes the projection. This module never creates users or mutates
+Authentik. It emits group-based ACLs that match deterministic Authentik
 capability-group names.
+
+User-scoped resources are deliberately not projected as their parent path. They
+require an identity-bound realization of ``pathTemplate``; until that projection
+is explicitly qualified against the pinned Copyparty version, omission is safer
+than exposing every user's state beneath one shared volume.
 """
 
 from __future__ import annotations
@@ -25,8 +30,6 @@ DEFAULT_CONFIG_PATH = pathlib.Path(
 )
 ADMIN_GROUP = "nas_admin"
 
-# Copyparty permission letters are intentionally kept separate.  Authentik
-# assignments can combine fine-grained V2 capability groups as needed.
 COPYPARTY_PERMISSIONS = {
     "read": "r",
     "write": "w",
@@ -58,8 +61,6 @@ def _render_access(resource_id: str, capabilities: list[str]) -> list[str]:
             raise CopypartyProjectionError(
                 f"Storage resource {resource_id!r} has unsupported Copyparty capability {capability!r}"
             )
-        # nas_admin always retains appliance recovery access independently from
-        # generated storage capability assignments.
         lines.append(f"    {permission}: @{capability_group(resource_id, capability)}")
     return lines
 
@@ -85,10 +86,27 @@ def render_config(effective: dict[str, Any]) -> str:
             raise CopypartyProjectionError(f"Storage resource {resource_id!r} must be an object")
         path = resource.get("path")
         capabilities = resource.get("capabilities")
+        scope = resource.get("scope", "system")
         if not isinstance(path, str) or not path.startswith("/"):
             raise CopypartyProjectionError(f"Storage resource {resource_id!r} has invalid path")
         if not isinstance(capabilities, list) or not capabilities:
             raise CopypartyProjectionError(f"Storage resource {resource_id!r} has no capabilities")
+        if scope == "user":
+            path_template = resource.get("pathTemplate")
+            if not isinstance(path_template, str) or "{user}" not in path_template:
+                raise CopypartyProjectionError(
+                    f"User-scoped storage resource {resource_id!r} lacks a valid pathTemplate"
+                )
+            lines.extend(
+                [
+                    "",
+                    f"# user-scoped resource {resource_id!r} intentionally omitted from generic projection",
+                    "# it must be realized for one authenticated identity before mounting",
+                ]
+            )
+            continue
+        if scope not in {"system", "instance"}:
+            raise CopypartyProjectionError(f"Storage resource {resource_id!r} has invalid scope {scope!r}")
         lines.extend(
             [
                 "",
@@ -110,8 +128,6 @@ def atomic_write_config(text: str, path: pathlib.Path = DEFAULT_CONFIG_PATH) -> 
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        # The directory is service-private; the generated include itself is not
-        # secret and must remain readable after root atomically replaces it.
         tmp_path.chmod(0o644)
         tmp_path.replace(path)
         dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
