@@ -23,7 +23,6 @@ DEFAULT_SPEC_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SPEC", "/var/lib/na
 DEFAULT_SCHEMA_PATH = pathlib.Path(
     os.environ.get("NAS_MANAGED_SPEC_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json")
 )
-ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
 
 
 class ManagedSpecError(RuntimeError):
@@ -74,12 +73,10 @@ def parse_yaml(path: pathlib.Path) -> dict[str, Any]:
 
 def validate_schema(document: dict[str, Any], schema: dict[str, Any]) -> None:
     validator = Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(document), key=lambda error: list(error.absolute_path))
+    errors = sorted(validator.iter_errors(document), key=lambda error: [str(part) for part in error.absolute_path])
     if not errors:
         return
-    details = []
-    for error in errors[:12]:
-        details.append(f"{_json_path(error.absolute_path)}: {error.message}")
+    details = [f"{_json_path(error.absolute_path)}: {error.message}" for error in errors[:12]]
     if len(errors) > len(details):
         details.append(f"... and {len(errors) - len(details)} more validation error(s)")
     raise ManagedSpecError("V2 schema validation failed:\n" + "\n".join(details))
@@ -114,11 +111,15 @@ def _normalize_service(service_id: str, service: dict[str, Any]) -> None:
     service.setdefault("storage", [])
     service.setdefault("credentials", [])
     service.setdefault("sessionInputs", {})
-    service.setdefault("endpoints", {})
+    service.setdefault("routes", {})
+    service.setdefault("listeners", {})
 
     workload = service["workload"]
     if workload["kind"] == "job":
         workload.setdefault("schedules", [])
+        for schedule in workload["schedules"]:
+            schedule.setdefault("randomizedDelaySeconds", 0)
+            schedule.setdefault("persistent", True)
     elif workload["kind"] == "session":
         workload.setdefault("leaseIdleSeconds", 900)
 
@@ -168,16 +169,18 @@ def _normalize_service(service_id: str, service: dict[str, Any]) -> None:
     if "network" in service:
         _network_defaults(service["network"])
 
-    for endpoint in service["endpoints"].values():
-        endpoint.setdefault("priority", 0)
-        endpoint.setdefault("portal", {})
-        endpoint["portal"].setdefault("visible", False)
-        target = endpoint["target"]
-        if target["type"] in {"http", "https", "tcp", "udp"}:
+    for route in service["routes"].values():
+        route.setdefault("priority", 0)
+        route.setdefault("portal", {})
+        route["portal"].setdefault("visible", False)
+        target = route["target"]
+        if target["type"] in {"http", "https"}:
             target.setdefault("host", "127.0.0.1")
-        exposure = endpoint["exposure"]
-        if exposure["type"] == "port":
-            exposure.setdefault("protocol", "tcp")
+        exposure = route["exposure"]
+        if exposure["type"] == "hostname":
+            exposure.setdefault("path", "/")
+    for listener in service["listeners"].values():
+        listener.setdefault("firewall", True)
 
 
 def normalize(document: dict[str, Any]) -> dict[str, Any]:
@@ -297,21 +300,24 @@ def semantic_validate(document: dict[str, Any], *, platform_capabilities: set[st
             elif runtime_type in {"systemd", "exec"} and isinstance(device, str) and device.startswith("cdi:"):
                 raise ManagedSpecError(f"Service {service_id}: CDI selectors are container-only")
 
-        for endpoint_id, endpoint in service["endpoints"].items():
-            auth = endpoint["auth"]
+        for route_id, route in service["routes"].items():
+            auth = route["auth"]
             if auth["mode"] == "identity":
                 expected = f"application.{service_id}."
                 if not auth["capability"].startswith(expected):
                     raise ManagedSpecError(
-                        f"Service {service_id} endpoint {endpoint_id}: capability must start with {expected!r}"
+                        f"Service {service_id} route {route_id}: capability must start with {expected!r}"
                     )
             elif auth["mode"] == "secret" and auth["credential"] not in credentials:
                 raise ManagedSpecError(
-                    f"Service {service_id} endpoint {endpoint_id}: unknown credential {auth['credential']!r}"
+                    f"Service {service_id} route {route_id}: unknown credential {auth['credential']!r}"
                 )
-            exposure = endpoint["exposure"]
-            if exposure["type"] == "port-range" and exposure["end"] < exposure["start"]:
-                raise ManagedSpecError(f"Service {service_id} endpoint {endpoint_id}: port range end precedes start")
+        for listener_id, listener in service["listeners"].items():
+            exposure = listener["exposure"]
+            if "start" in exposure and exposure["end"] < exposure["start"]:
+                raise ManagedSpecError(
+                    f"Service {service_id} listener {listener_id}: port range end precedes start"
+                )
 
         seen_dependencies: set[str] = set()
         for dependency in service["dependencies"]:
@@ -352,8 +358,6 @@ def load_and_normalize(
     document = parse_yaml(spec_path)
     validate_schema(document, schema)
     normalized = normalize(document)
-    # Defaults are annotations in JSON Schema, so validate once more after the
-    # deterministic normalizer has materialized them.
     validate_schema(normalized, schema)
     semantic_validate(normalized, platform_capabilities=platform_capabilities)
     return normalized
