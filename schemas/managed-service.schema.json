@@ -47,6 +47,11 @@
       "properties": {
         "outboundDefault": {"enum": ["allow", "deny"]},
         "lanAccess": {"type": "boolean"},
+        "allowedHostPorts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+        },
         "allowedEgress": {
           "type": "array",
           "items": {
@@ -153,7 +158,8 @@
                     "hostPath": {"type": "string", "pattern": "^/(tank|srv|var/lib/nas-control/apps)/.+"},
                     "guestPath": {"type": "string", "pattern": "^/.+"},
                     "mode": {"enum": ["ro", "rw"]},
-                    "dataset": {"type": "string", "pattern": "^tank/.+"}
+                    "dataset": {"type": "string", "pattern": "^tank/.+"},
+                    "target": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"}
                   }
                 },
                 {
@@ -163,6 +169,11 @@
                   "properties": {
                     "resource": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$"},
                     "guestPath": {"type": "string", "pattern": "^/.+"},
+                    "target": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+                      "description": "Runtime-specific destination identity: Compose service name or libvirt filesystem target."
+                    },
                     "requiredCapabilities": {
                       "type": "array",
                       "uniqueItems": true,
