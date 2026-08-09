@@ -1,12 +1,12 @@
 { config, lib, pkgs, nasInternal, ... }:
 
 let
-  cfg = config.nas;
   storePath = "/var/lib/nas-control/services.json";
   effectivePath = "/run/nas-control/effective-endpoints.json";
   portalPath = "/run/nas-control/portal.json";
   fragmentPath = "/run/nas-control/caddy-managed.conf";
   copypartyV2Path = "/var/lib/copyparty/user.d/50-v2-storage.conf";
+  secretReady = "${nasInternal.secretRoot}/ready";
   reconcilePost = pkgs.writeShellScript "nas-managed-services-reconcile-post" ''
     set -eu
     ${nasInternal.nasPythonApplication}/bin/nas-copyparty-projection \
@@ -16,7 +16,7 @@ let
   '';
 in
 {
-  config = lib.mkIf true {
+  config = {
     systemd.tmpfiles.rules = [
       "d /var/lib/nas-control 0750 nas-feature-gate nas-feature-control -"
       "d /run/nas-control 0755 root root -"
@@ -27,8 +27,16 @@ in
 
     systemd.services.nas-managed-services-reconcile = {
       description = "Rebuild V2 projections and enforce application availability/lifecycle";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" "copyparty.service" ];
+      wantedBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
+      requires = [ "nas-zfs-mount-guard.service" "nas-identity-sync.service" "caddy.service" ];
+      after = [
+        "network-online.target"
+        "nas-zfs-mount-guard.service"
+        "nas-identity-sync.service"
+        "caddy.service"
+      ];
+      unitConfig.ConditionPathExists = secretReady;
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nasInternal.nasPythonApplication}/bin/nas-managed-service reconcile";
@@ -38,15 +46,17 @@ in
     };
 
     systemd.paths.nas-managed-services-reconcile = {
-      description = "Watch for managed service store changes";
-      wantedBy = [ "multi-user.target" ];
-      pathConfig = {
-        PathChanged = storePath;
-      };
+      description = "Watch for managed service store changes while the protected control plane is unlocked";
+      wantedBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
+      unitConfig.ConditionPathExists = secretReady;
+      pathConfig.PathChanged = storePath;
     };
 
     systemd.services.nas-managed-services-reap = {
       description = "Stop idle Managed Services V2 on-demand applications";
+      partOf = [ "nas-protected-services.target" ];
+      unitConfig.ConditionPathExists = secretReady;
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nasInternal.nasPythonApplication}/bin/nas-managed-service reap";
@@ -57,9 +67,11 @@ in
 
     systemd.timers.nas-managed-services-reap = {
       description = "Periodically reap idle Managed Services V2 on-demand applications";
-      wantedBy = [ "timers.target" ];
+      wantedBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
+      unitConfig.ConditionPathExists = secretReady;
       timerConfig = {
-        OnBootSec = "2m";
+        OnActiveSec = "2m";
         OnUnitActiveSec = "1m";
         AccuracySec = "15s";
         Persistent = false;
@@ -68,10 +80,6 @@ in
 
     environment.etc."nas-control/effective-endpoints.json".source = effectivePath;
 
-    # The generated file defines complete hostname/port site blocks plus the
-    # nas_managed_paths snippet. Import complete sites globally, then import the
-    # path-only snippet inside the appliance's existing nas.local site so we do
-    # not create an ambiguous duplicate nas.local site definition.
     services.caddy.extraConfig = lib.mkAfter ''
       import ${fragmentPath}
     '';
