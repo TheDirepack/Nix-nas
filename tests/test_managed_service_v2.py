@@ -5,6 +5,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -93,13 +94,28 @@ class ManagedServiceV2Tests(unittest.TestCase):
     def test_legacy_start_policy_migrates_to_lifecycle(self) -> None:
         data = document()
         normalized = v2.normalize_document(data)
-        self.assertEqual(
-            normalized["services"]["demo"]["lifecycle"],
-            {"mode": "manual", "ephemeralRuntime": False},
-        )
+        self.assertEqual(normalized["services"]["demo"]["lifecycle"], {"mode": "session"})
         data["services"]["demo"]["runtime"]["startPolicy"] = "boot"
         normalized = v2.normalize_document(data)
-        self.assertEqual(normalized["services"]["demo"]["lifecycle"]["mode"], "persistent")
+        self.assertEqual(normalized["services"]["demo"]["lifecycle"], {"mode": "persistent"})
+        data["services"]["demo"]["runtime"]["startPolicy"] = "on-demand"
+        normalized = v2.normalize_document(data)
+        self.assertEqual(
+            normalized["services"]["demo"]["lifecycle"],
+            {"mode": "on-demand", "idleSeconds": v2.DEFAULT_IDLE_SECONDS},
+        )
+
+    def test_disabled_is_availability_not_a_lifecycle_mode(self) -> None:
+        data = document()
+        data["services"]["demo"]["enabled"] = False
+        data["services"]["demo"]["runtime"]["startPolicy"] = "disabled"
+        normalized = v2.normalize_document(data)
+        self.assertFalse(normalized["services"]["demo"]["enabled"])
+        self.assertEqual(normalized["services"]["demo"]["lifecycle"], {"mode": "persistent"})
+
+        data["services"]["demo"]["enabled"] = True
+        with self.assertRaisesRegex(Exception, "requires enabled=false"):
+            v2.normalize_document(data)
 
     def test_on_demand_lifecycle_requires_idle_timeout(self) -> None:
         data = document()
@@ -108,19 +124,21 @@ class ManagedServiceV2Tests(unittest.TestCase):
         normalized = v2.normalize_document(data)
         self.assertEqual(
             normalized["services"]["demo"]["lifecycle"],
-            {"mode": "on-demand", "idleSeconds": 900, "ephemeralRuntime": False},
+            {"mode": "on-demand", "idleSeconds": 900},
         )
         del data["services"]["demo"]["lifecycle"]["idleSeconds"]
         with self.assertRaisesRegex(Exception, "requires idleSeconds"):
             v2.normalize_document(data)
 
-    def test_lifecycle_conflicts_fail_closed(self) -> None:
-        data = document()
-        data["services"]["demo"]["lifecycle"] = {"mode": "disabled"}
-        data["services"]["demo"]["runtime"]["startPolicy"] = "disabled"
-        with self.assertRaisesRegex(Exception, "enabled=true conflicts"):
-            v2.normalize_document(data)
+    def test_session_and_persistent_reject_idle_timeout(self) -> None:
+        for mode, start_policy in (("persistent", "boot"), ("session", "manual")):
+            data = document()
+            data["services"]["demo"]["runtime"]["startPolicy"] = start_policy
+            data["services"]["demo"]["lifecycle"] = {"mode": mode, "idleSeconds": 60}
+            with self.subTest(mode=mode), self.assertRaisesRegex(Exception, "only valid for on-demand"):
+                v2.normalize_document(data)
 
+    def test_lifecycle_conflicts_fail_closed(self) -> None:
         data = document()
         data["services"]["demo"]["lifecycle"] = {"mode": "persistent"}
         with self.assertRaisesRegex(Exception, "startPolicy=.*conflicts"):
@@ -169,10 +187,31 @@ class ManagedServiceV2Tests(unittest.TestCase):
             effective = v2.effective_registry(builtin, store)
             self.assertEqual(effective["backupResources"], ["projects"])
             self.assertEqual(effective["services"]["demo"]["principal"], "application:demo")
-            self.assertEqual(effective["services"]["demo"]["lifecycle"]["mode"], "manual")
+            self.assertEqual(effective["services"]["demo"]["lifecycle"]["mode"], "session")
             self.assertEqual(effective["services"]["demo"]["networkProfile"], "restricted-internet")
             self.assertEqual(effective["services"]["demo"]["resolvedStorage"][0]["mode"], "rw")
             self.assertIn("projects", effective["storageResources"])
+
+    def test_reconcile_enforces_persistent_and_stops_disabled_or_session(self) -> None:
+        effective = {
+            "services": {
+                "always": {"enabled": True, "lifecycle": {"mode": "persistent"}},
+                "sleepy": {"enabled": True, "lifecycle": {"mode": "on-demand", "idleSeconds": 300}},
+                "session": {"enabled": True, "lifecycle": {"mode": "session"}},
+                "off": {"enabled": False, "lifecycle": {"mode": "persistent"}},
+            }
+        }
+        with mock.patch.object(v2, "_apply_runtime", return_value={"ok": True}) as apply_runtime:
+            result = v2.reconcile_lifecycle(effective)
+        calls = {(call.args[0], call.kwargs["enabled"]) for call in apply_runtime.call_args_list}
+        self.assertEqual(calls, {("always", True), ("session", False), ("off", False)})
+        self.assertEqual(len(result["actions"]), 3)
+
+    def test_generic_start_rejects_session_runtime(self) -> None:
+        effective = {"services": {"demo": {"enabled": True, "lifecycle": {"mode": "session"}}}}
+        with mock.patch.object(v2, "effective_registry", return_value=effective):
+            with self.assertRaisesRegex(Exception, "session launcher"):
+                v2.start_service("demo")
 
 
 if __name__ == "__main__":
