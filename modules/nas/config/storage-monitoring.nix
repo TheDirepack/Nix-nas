@@ -106,11 +106,6 @@ in
           cfg.configurationDir
           cfg.secrets.keepassDatabase
           "/var/lib/caddy"
-          "/var/lib/authentik"
-          copypartyUserConfigDir
-          "/var/lib/nas-control"
-          "/var/lib/nas-identity-sync"
-          "/var/lib/nas-setup"
           backupStage
         ]
         ++ lib.optionals cfg.networking.enable [
