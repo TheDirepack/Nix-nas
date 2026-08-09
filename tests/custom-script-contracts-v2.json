@@ -3,7 +3,7 @@
   "executables": {
     "nas-managed-service": {
       "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_managed_service_dependencies.py",
+      "source": "services/nas_managed_service_engine.py",
       "systemTest": "tests/vm/guest-test.sh",
       "tests": [
         "tests/test_managed_service.py",
