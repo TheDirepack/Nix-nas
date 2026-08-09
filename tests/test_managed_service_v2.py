@@ -32,7 +32,7 @@ def service(*, required: list[str] | None = None, capability: str = "application
                 "requiredCapabilities": required or ["read"],
             }
         ],
-        "network": {"profile": "restricted-internet"},
+        "networkProfile": "restricted-internet",
         "endpoints": {
             "web": {
                 "transport": "http",
@@ -96,7 +96,7 @@ class ManagedServiceV2Tests(unittest.TestCase):
 
     def test_unknown_network_profile_fails_closed(self) -> None:
         data = document()
-        data["services"]["demo"]["network"]["profile"] = "missing"
+        data["services"]["demo"]["networkProfile"] = "missing"
         with self.assertRaisesRegex(Exception, "unknown network profile"):
             v2.normalize_document(data)
 
@@ -105,6 +105,7 @@ class ManagedServiceV2Tests(unittest.TestCase):
         compat = v2._legacy_validation_copy(normalized)
         svc = compat["services"]["demo"]
         self.assertNotIn("principal", svc)
+        self.assertNotIn("networkProfile", svc)
         self.assertNotIn("resolvedStorage", svc)
         self.assertEqual(
             svc["storage"],
@@ -117,7 +118,6 @@ class ManagedServiceV2Tests(unittest.TestCase):
                 }
             ],
         )
-        self.assertNotIn("profile", svc["network"])
         self.assertNotIn("capability", svc["endpoints"]["web"]["auth"])
         legacy.validate_service("demo", svc)
 
@@ -132,6 +132,7 @@ class ManagedServiceV2Tests(unittest.TestCase):
             effective = v2.effective_registry(builtin, store)
             self.assertEqual(effective["backupResources"], ["projects"])
             self.assertEqual(effective["services"]["demo"]["principal"], "application:demo")
+            self.assertEqual(effective["services"]["demo"]["networkProfile"], "restricted-internet")
             self.assertEqual(effective["services"]["demo"]["resolvedStorage"][0]["mode"], "rw")
             self.assertIn("projects", effective["storageResources"])
 
