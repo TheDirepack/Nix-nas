@@ -2,7 +2,8 @@
 """Managed Services V2 authorization and wake layer for feature control.
 
 The mature feature controller remains the HTTP gate. V2 capability-backed
-endpoints are authorized by Authentik groups, and successful access drives the
+endpoints are authorized by Authentik groups, API-key endpoints retain their
+native bearer/X-API-Key contract, and successful access drives the
 dependency-aware V2 application lifecycle. On-demand dependencies start before
 the requested service and their idle leases are refreshed together. Session
 apps are never auto-woken by a static endpoint.
@@ -93,9 +94,12 @@ def authorize_service_scope(scope: str, headers: Any) -> bool:
     if not isinstance(auth, dict):
         return False
 
+    mode = auth.get("mode", endpoint.get("access", "admin"))
     authorized = False
-    if auth.get("mode", endpoint.get("access", "admin")) == "public":
+    if mode == "public":
         authorized = True
+    elif mode == "api-key":
+        authorized = _legacy.ai_api_authorized(headers)
     else:
         groups = _legacy.split_groups(headers.get("Remote-Groups", ""))
         username = headers.get("Remote-User", "").strip()
