@@ -45,6 +45,8 @@ jobs:
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
+      - name: Source-only repository preflight
+        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
       - name: Fast Python unit tests and branch coverage floor
         run: |
           ./scripts/validate-python-syntax.py
@@ -65,8 +67,6 @@ jobs:
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_matrix.py'
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_contract_tooling.py'
-      - name: Source-only repository preflight
-        run: NAS_PREFLIGHT_SKIP_TESTS=1 NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 NAS_PREFLIGHT_SKIP_TOOLING=1 NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
       - name: Restore exact Node 24 source dependencies
         id: source-node-deps
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

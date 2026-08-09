@@ -82,6 +82,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
 
     def test_ci_uses_direct_dependencies_static_build_runtime_final_then_fuzz(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        self.assertLess(workflow.index("Source-only repository preflight"), workflow.index("--coverage coverage.json"))
         self.assertIn('tags: ["v*"]', workflow)
         for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
             self.assertNotIn(retired_gate, workflow)

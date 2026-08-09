@@ -5,6 +5,7 @@
   networking.interfaces.eth0.useDHCP = true;
   boot.loader.systemd-boot.enable = lib.mkForce true;
   boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
+  users.users.admin.openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci" ];
 
   nas = {
     installationReady = lib.mkForce true;

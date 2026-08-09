@@ -475,6 +475,7 @@ class ContractTests(unittest.TestCase):
         workflow = text(".github/workflows/ci.yml")
         matrix = text("scripts/nix-config-matrix.sh")
         negative = text("scripts/nix-negative-tests.sh")
+        host_platform = text("modules/nas/config/host-platform.nix")
         for name in [
             "nas-module-consumer",
             "nas-profile-core-storage",
@@ -498,6 +499,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("replication-leading-dash.nix", negative)
         self.assertIn("firewall-without-networking.nix", negative)
         self.assertIn("failed for the wrong reason", negative)
+        self.assertIn('name == "open-webui"', host_platform)
+        self.assertNotIn("allowUnfree = true", host_platform)
 
     def test_qemu_harness_covers_native_and_installed_paths(self):
         flake = text("flake.nix")
