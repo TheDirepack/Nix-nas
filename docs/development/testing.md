@@ -14,7 +14,7 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 ./scripts/test-matrix.py all --require-all --report test-evidence/full.json
 ```
 
-`fast` runs source, security, and fuzz tiers. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
+The local matrix `fast` command includes its fuzz tier. GitHub's fast workflow dispatch is narrower and runs no fuzz workloads. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
 
 The CI pipeline summary applies event- and dispatch-tier requirements. A job required for that run must succeed; a skipped required job fails pipeline qualification rather than being accepted as an intentional skip.
 
@@ -24,7 +24,7 @@ The CI pipeline summary applies event- and dispatch-tier requirements. A job req
 ./scripts/preflight.sh
 ```
 
-Preflight checks repository structure and data, version and policy contracts, documentation links, the custom-executable inventory, static security boundaries, Python syntax and behavior, shell syntax, JavaScript/JSX source contracts, the Cockpit bundle when available, the Authentik fixture, and deterministic fuzz smoke tests. Nix, Ruff, Pyright, ShellCheck, and complete Cockpit bundle checks run when their tools or artifacts are available.
+Preflight checks repository structure and data, version and policy contracts, documentation links, the custom-executable inventory, static security boundaries, Python syntax and behavior, shell syntax, JavaScript/JSX source contracts, the Cockpit bundle when available, and the Authentik fixture. Its deterministic fuzz smoke tests are opt-in through `NAS_PREFLIGHT_INCLUDE_FUZZ=1`; CI runs fuzzing only in the final parallel stage. Nix, Ruff, Pyright, ShellCheck, and complete Cockpit bundle checks run when their tools or artifacts are available.
 
 The offline Authentik fixture uses a private temporary identity lock unless the caller supplies an explicit lock path, keeping source validation isolated from host runtime state.
 
@@ -58,6 +58,8 @@ The source-executable fuzzer runs every maintained executable script with strate
 ```
 
 The installed VM has a separate command fuzzer in `tests/vm/adversarial-installed.py`. It discovers the installed command strategies from the same inventory and exercises every NAS-owned appliance command in the disposable VM. Destructive ZFS commands use disposable test storage rather than the host or production data.
+
+CI exposes parser fuzzing, boundary unittest mutations, executable fuzzing, Hypothesis properties, randomized secret fuzzing, hostile-input browser fuzzing, installed-command fuzzing, and active ZAP scanning as final parallel workloads. Source and browser shards wait for deterministic integration; release and installer runs also wait for deterministic official-ISO qualification. Installed-command and ZAP jobs each provision a fresh isolated appliance instead of persisting or sharing VM disks or credentials.
 
 CI also runs Hypothesis properties from the pinned Nix test shell:
 
@@ -141,13 +143,15 @@ Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testi
 
 ## 8. Dynamic web security
 
-The Playwright suite is the deterministic application-level layer. The official-ISO QEMU harness can additionally run OWASP ZAP against loopback-only forwarded Caddy and Cockpit ports while the disposable appliance is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI uses full active scanning when that reviewed repository variable is configured and retains HTML, JSON, and Markdown reports.
+The Playwright suite is the deterministic application-level layer. The final ZAP workload provisions an independent official-ISO VM, runs the existing public/Cockpit scans, and then runs unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI fails closed when the reviewed repository variable is absent and retains HTML, JSON, and Markdown reports.
 
 For a local run:
 
 ```bash
+nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
 NAS_ZAP_IMAGE='registry.example/zaproxy@sha256:<digest>' \
-  nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
+  NAS_ZAP_CONFIRM_ACTIVE=1 NAS_FINAL_VM_WORKLOAD=zap-fuzz \
+  nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
 ```
 
 `zap-scan.sh baseline` is passive apart from normal crawling; `zap-scan.sh full` actively attacks the target and requires `NAS_ZAP_CONFIRM_ACTIVE=1`. The wrapper accepts loopback, link-local, RFC1918, and `.local` targets by default; scanning a public target requires the separate `NAS_ZAP_ALLOW_PUBLIC_TARGET=1` override. ZAP warnings are failures by default, and an outer process timeout bounds the entire container even if the scanner itself stalls. The disposable QEMU harness supplies the active-scan confirmation when it owns the target. ZAP is supplementary because the most important NAS boundaries include authenticated Cockpit operations, Caddy/Authentik authorization, Unix-socket control planes, local privileged commands, storage operations, and recovery workflows that a generic web scanner cannot fully model.

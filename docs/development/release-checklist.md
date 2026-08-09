@@ -35,7 +35,7 @@ Record Nix version, runner architecture, result paths, and check names with the 
 
 ## 4. Run installation tests
 
-Run the official-ISO installation harness through fresh install, repeated declarative installation, first boot, installed command fuzzing/security/browser checks, dry-activate/test/switch, rejected bad candidate, explicit rollback, return to the reviewed generation, and a second reboot. Confirm the installed generation uses the same reviewed source and Cockpit artifact and that unrelated persistence survives every stage.
+Run the deterministic official-ISO installation harness through fresh install, repeated declarative installation, first boot, security/browser checks, dry-activate/test/switch, rejected bad candidate, explicit rollback, return to the reviewed generation, and a second reboot. Then require the independently provisioned installed-command and active-ZAP fuzz workloads. Confirm each installed generation uses the same reviewed source and Cockpit artifact and that unrelated persistence survives every deterministic stage.
 
 ## 5. Exercise recovery and destructive boundaries
 

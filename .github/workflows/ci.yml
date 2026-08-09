@@ -450,15 +450,13 @@ jobs:
         run: nix build .#checks.x86_64-linux.nas-vm .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
 
   installer:
-    name: Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz
+    name: Official-ISO install, reboot, and final-VM deterministic checks
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') ||
       (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     needs: [integration, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 420
-    env:
-      NAS_ZAP_OUT_DIR: zap-report
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -514,24 +512,8 @@ jobs:
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
       - name: Install from the official NixOS ISO and reboot-test the appliance
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
-      - name: Final VM deterministic layout/accessibility/security checks then state-aware fuzz
-        env:
-          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
-          NAS_ZAP_CONFIRM_ACTIVE: "1"
-          NAS_FINAL_VM_FUZZ: "1"
-          NAS_ZAP_AUTOMATION_MINUTES: "90"
-          NAS_ZAP_BROWSER_WORKERS: "2"
-        run: |
-          test -n "$NAS_ZAP_IMAGE"
-          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs -c bash ./scripts/qemu-final-browser.sh
-      - name: Retain smart web-security reports
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: zap-security-reports
-          if-no-files-found: ignore
-          retention-days: 30
-          path: zap-report
+      - name: Final VM deterministic layout/accessibility/security checks
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs -c bash ./scripts/qemu-final-browser.sh
       - name: Retain final-VM browser evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -544,11 +526,11 @@ jobs:
             cockpit/test-results
             ~/.cache/nixos-nas-qemu/state/browser-console.log
 
-  # Slow fuzzing starts only after QEMU integration. On release/installer runs it
+  # Final fuzzing starts only after QEMU integration. On release/installer runs it
   # also waits for the official installer; on PRs installer is skipped and the
   # explicit result check below permits the slow shards to proceed.
-  fuzz:
-    name: Slow source/property/security fuzz shard (${{ matrix.shard }})
+  source-fuzz:
+    name: Final source fuzz shard (${{ matrix.shard }})
     if: >-
       always() && needs.integration.result == 'success' &&
       (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
@@ -560,19 +542,26 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 5
       matrix:
-        shard: [parser-boundaries, executables, properties, security]
+        shard: [parser, boundary-mutations, executables, properties, security]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Parser and boundary fuzzing
-        if: matrix.shard == 'parser-boundaries'
+      - name: Source parser fuzzing
+        if: matrix.shard == 'parser'
         run: |
-          ./scripts/fuzz.py --cases 50000 --seed 0x4e41533232
-          python3 -m unittest tests.test_fuzz_boundaries -v
+          mkdir -p .fuzz-evidence
+          ./scripts/fuzz.py --cases 50000 --seed 0x4e41533232 2>&1 | tee .fuzz-evidence/parser.log
+      - name: Boundary unittest mutations
+        if: matrix.shard == 'boundary-mutations'
+        run: |
+          mkdir -p .fuzz-evidence
+          ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_fuzz_boundaries.py' 2>&1 | tee .fuzz-evidence/boundary-mutations.log
       - name: Executable fuzzing
         if: matrix.shard == 'executables'
-        run: ./scripts/fuzz-executables.py --cases 50 --seed 0x534352495054
+        run: |
+          mkdir -p .fuzz-evidence
+          ./scripts/fuzz-executables.py --cases 50 --seed 0x534352495054 2>&1 | tee .fuzz-evidence/executables.log
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         if: matrix.shard == 'properties' || matrix.shard == 'security'
         with:
@@ -585,13 +574,27 @@ jobs:
           use-flakehub: false
       - name: Hypothesis property tests
         if: matrix.shard == 'properties'
-        run: nix develop .#test -c python -m unittest tests.test_property_invariants -v
+        run: |
+          mkdir -p .fuzz-evidence
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_property_invariants.py' 2>&1 | tee .fuzz-evidence/properties.log
       - name: Randomized secret-security fuzz tests
         if: matrix.shard == 'security'
-        run: nix develop .#test -c python -m unittest tests.test_secret_security_fuzz -v
+        run: |
+          mkdir -p .fuzz-evidence
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_secret_security_fuzz.py' 2>&1 | tee .fuzz-evidence/security.log
+      - name: Retain source fuzz crash evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-fuzz-${{ matrix.shard }}-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            .fuzz-evidence/${{ matrix.shard }}.log
+            .fuzz-crashes
 
   browser-fuzz:
-    name: Slow browser deterministic replay plus hostile-input fuzz
+    name: Final hostile-input browser fuzz
     if: >-
       always() && needs.integration.result == 'success' &&
       (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
@@ -630,29 +633,134 @@ jobs:
         run: npm --prefix cockpit exec -- playwright install chromium firefox webkit
       - name: Install Playwright system dependencies
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
-      - name: Replay all deterministic XSS overlap formatting layout and accessibility checks
-        env:
-          NAS_BROWSER_SUITE: deterministic
-        run: npm --prefix cockpit run test:browser
-      - name: Run slow hostile-input browser fuzz after deterministic replay
+      - name: Run final hostile-input browser fuzz
         env:
           NAS_BROWSER_SUITE: fuzz
-        run: npm --prefix cockpit run test:browser
+        run: |
+          mkdir -p .fuzz-evidence
+          npm --prefix cockpit run test:browser 2>&1 | tee .fuzz-evidence/browser.log
       - name: Retain slow-browser evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: browser-fuzz-evidence
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 30
           path: |
+            .fuzz-evidence/browser.log
             cockpit/playwright-report
             cockpit/test-results
+
+  installed-command-fuzz:
+    name: Final installed-command adversarial fuzz
+    needs: [installer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Compute weekly installer epoch
+        id: installed-fuzz-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore immutable installer media
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cache/nixos-nas-qemu/*.iso
+            ~/.cache/nixos-nas-qemu/*.sha256.remote
+            ~/.cache/nixos-nas-qemu/iso-boot
+          key: ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-${{ steps.installed-fuzz-epoch.outputs.week }}-${{ hashFiles('scripts/qemu-test.sh') }}
+          restore-keys: |
+            ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_kvm: true
+      - name: Enable incremental Nix build and VM cache
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Provision isolated installed appliance
+        run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
+      - name: Fuzz installed command surfaces
+        env:
+          NAS_FINAL_VM_WORKLOAD: installed-command-fuzz
+          NAS_INSTALLED_FUZZ_OUT: installed-command-fuzz.json
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
+      - name: Retain installed-command fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installed-command-fuzz-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: installed-command-fuzz.json
+
+  zap-fuzz:
+    name: Final installed-VM active ZAP fuzz
+    needs: [installer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cockpit-bundle
+          path: cockpit
+      - run: git add -f cockpit/package-lock.json cockpit/dist
+      - name: Compute weekly installer epoch
+        id: zap-fuzz-epoch
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore immutable installer media
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cache/nixos-nas-qemu/*.iso
+            ~/.cache/nixos-nas-qemu/*.sha256.remote
+            ~/.cache/nixos-nas-qemu/iso-boot
+          key: ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-${{ steps.zap-fuzz-epoch.outputs.week }}-${{ hashFiles('scripts/qemu-test.sh') }}
+          restore-keys: |
+            ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          enable_kvm: true
+      - name: Enable incremental Nix build and VM cache
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Provision isolated installed appliance
+        run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
+      - name: Run state-aware active ZAP scans
+        env:
+          NAS_FINAL_VM_WORKLOAD: zap-fuzz
+          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
+          NAS_ZAP_CONFIRM_ACTIVE: "1"
+          NAS_ZAP_OUT_DIR: zap-report
+          NAS_ZAP_AUTOMATION_MINUTES: "90"
+          NAS_ZAP_BROWSER_WORKERS: "2"
+        run: |
+          test -n "$NAS_ZAP_IMAGE"
+          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
+      - name: Retain active ZAP evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-fuzz-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: zap-report
 
   summary:
     name: Pipeline summary
     if: always()
-    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, browser, integration, installer, fuzz, browser-fuzz]
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, browser, integration, installer, source-fuzz, browser-fuzz, installed-command-fuzz, zap-fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

@@ -143,7 +143,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
 
     def test_keepass_passwords_and_secret_values_are_not_passed_in_argv(self) -> None:
         source = SECRET_TOOLS.read_text(encoding="utf-8")
-        self.assertIn("--pw-stdin", source)
+        self.assertNotIn("--pw-stdin", source)
         self.assertNotRegex(source, r"keepassxc-cli[^\n]*(?:--password|-p)\s+\"?\$keepass_password")
         self.assertNotRegex(source, r"curl[^\n]*(?:--user|-u)\s+\"?admin:\$password")
         self.assertNotIn("set -x", source)

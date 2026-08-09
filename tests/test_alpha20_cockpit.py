@@ -90,9 +90,9 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("  cockpit-build:\n", workflow)
         self.assertNotIn("  source-archive:\n", workflow)
         self.assertIn("Post-build full-stack QEMU integration", workflow)
-        self.assertIn("Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz", workflow)
-        self.assertIn("Slow source/property/security fuzz shard (${{ matrix.shard }})", workflow)
-        self.assertIn("Slow browser deterministic replay plus hostile-input fuzz", workflow)
+        self.assertIn("Official-ISO install, reboot, and final-VM deterministic checks", workflow)
+        self.assertIn("Final source fuzz shard (${{ matrix.shard }})", workflow)
+        self.assertIn("Final hostile-input browser fuzz", workflow)
         self.assertIn(
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
         )
@@ -104,7 +104,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         build_block = workflow.split("  build:\n", 1)[1].split("  browser:\n", 1)[0]
         integration_pos = workflow.index("integration:")
         installer_pos = workflow.index("installer:")
-        fuzz_pos = workflow.index("  fuzz:\n")
+        fuzz_pos = workflow.index("  source-fuzz:\n")
         self.assertLess(
             build_block.index("Build production bundle"),
             build_block.index("Package and verify as an untrusted consumer"),
@@ -128,8 +128,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertGreaterEqual(workflow.count("npm --prefix cockpit ci --no-audit --no-fund"), 1)
         self.assertNotIn("npm --prefix cockpit install", workflow)
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
-        self.assertIn("Final VM deterministic layout/accessibility/security checks then state-aware fuzz", workflow)
-        self.assertIn("Retain smart web-security reports", workflow)
+        self.assertIn("Final VM deterministic layout/accessibility/security checks", workflow)
+        self.assertIn("Retain active ZAP evidence", workflow)
         self.assertIn("checks.x86_64-linux.nas-vm", workflow)
 
     def test_fast_ci_excludes_all_fuzz_and_slow_ci_parallelizes_it(self) -> None:
@@ -141,15 +141,31 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertGreaterEqual(workflow.count("--exclude test_secret_security_fuzz.py"), 3)
         self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
-        self.assertIn("shard: [parser-boundaries, executables, properties, security]", workflow)
-        self.assertIn("max-parallel: 4", workflow)
-        self.assertIn("tests.test_secret_security_fuzz", workflow)
+        self.assertIn("shard: [parser, boundary-mutations, executables, properties, security]", workflow)
+        self.assertIn("max-parallel: 5", workflow)
+        self.assertIn("fail-fast: false", workflow)
+        self.assertIn("test_secret_security_fuzz.py", workflow)
         self.assertIn("timeout-minutes: 240", workflow)
         self.assertIn("test-tier == 'full'", workflow)
         self.assertIn("test-tier == 'installer'", workflow)
-        fuzz_block = workflow.split("  fuzz:\n", 1)[1].split("  browser-fuzz:\n", 1)[0]
+        fuzz_block = workflow.split("  source-fuzz:\n", 1)[1].split("  browser-fuzz:\n", 1)[0]
         self.assertIn("needs: [integration, installer]", fuzz_block)
         self.assertIn("github.event_name == 'pull_request'", fuzz_block)
+        self.assertIn("source-fuzz-${{ matrix.shard }}-evidence", fuzz_block)
+
+        deterministic_installer = workflow.split("  installer:\n", 1)[1].split("  source-fuzz:\n", 1)[0]
+        self.assertNotIn("adversarial-installed.py", deterministic_installer)
+        self.assertNotIn("NAS_ZAP_IMAGE", deterministic_installer)
+        self.assertNotIn("NAS_FINAL_VM_FUZZ", deterministic_installer)
+
+        installed = workflow.split("  installed-command-fuzz:\n", 1)[1].split("  zap-fuzz:\n", 1)[0]
+        zap = workflow.split("  zap-fuzz:\n", 1)[1].split("  summary:\n", 1)[0]
+        self.assertIn("needs: [installer]", installed)
+        self.assertIn("needs: [installer]", zap)
+        self.assertIn("qemu-test.sh installer", installed)
+        self.assertIn("qemu-test.sh installer", zap)
+        self.assertIn("NAS_FINAL_VM_WORKLOAD: installed-command-fuzz", installed)
+        self.assertIn("NAS_FINAL_VM_WORKLOAD: zap-fuzz", zap)
 
     def test_cache_policy_distinguishes_dependencies_outputs_results_and_fresh_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -175,15 +191,14 @@ class Alpha20CockpitContracts(unittest.TestCase):
         ):
             self.assertIn(phrase, policy)
 
-    def test_slow_browser_replays_deterministic_suite_before_fuzzing(self) -> None:
+    def test_slow_browser_runs_only_hostile_input_fuzz(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         block = workflow.split("  browser-fuzz:\n", 1)[1].split("  summary:\n", 1)[0]
         deterministic = "Replay all deterministic XSS overlap formatting layout and accessibility checks"
-        fuzz = "Run slow hostile-input browser fuzz after deterministic replay"
-        self.assertIn(deterministic, block)
+        fuzz = "Run final hostile-input browser fuzz"
+        self.assertNotIn(deterministic, block)
         self.assertIn(fuzz, block)
-        self.assertLess(block.index(deterministic), block.index(fuzz))
-        self.assertIn("NAS_BROWSER_SUITE: deterministic", block)
+        self.assertNotIn("NAS_BROWSER_SUITE: deterministic", block)
         self.assertIn("NAS_BROWSER_SUITE: fuzz", block)
 
     def test_browser_security_has_deterministic_corpus_fuzz_and_final_vm_modes(self) -> None:

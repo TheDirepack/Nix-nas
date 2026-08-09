@@ -15,14 +15,14 @@ systemctl is-active --quiet nas-protected-services.target || fail "protected tar
 kp_show() {
   local key=$1
   printf '%s\n' "$KEEPASS_PASSWORD" |
-    runuser -u admin -- keepassxc-cli show --quiet --pw-stdin --show-protected -a Password \
+    runuser -u admin -- keepassxc-cli show --quiet --show-protected -a Password \
       "$DATABASE" "$GROUP/$key"
 }
 
 kp_set() {
   local key=$1 value=$2
   printf '%s\n%s\n' "$KEEPASS_PASSWORD" "$value" |
-    runuser -u admin -- keepassxc-cli edit --quiet --pw-stdin -p "$DATABASE" "$GROUP/$key" >/dev/null
+    runuser -u admin -- keepassxc-cli edit --quiet -p "$DATABASE" "$GROUP/$key" >/dev/null
 }
 
 runtime_digest() {

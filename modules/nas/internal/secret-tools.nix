@@ -77,7 +77,8 @@ let
           echo "The KeePass database password cannot be empty." >&2
           exit 1
         }
-        local args=(db-info --quiet --pw-stdin)
+        # keepassxc >= 2.7 reads a piped database password from stdin without an explicit flag.
+        local args=(db-info --quiet)
         [[ -n "$key_file" ]] && args+=(--key-file "$key_file")
         args+=("$database")
         if ! printf '%s\n' "$keepass_password" | keepassxc-cli "''${args[@]}" >/dev/null 2>&1; then
@@ -87,7 +88,7 @@ let
       }
 
       kp_args() {
-        KP_ARGS=(--quiet --pw-stdin)
+        KP_ARGS=(--quiet)
         [[ -n "$key_file" ]] && KP_ARGS+=(--key-file "$key_file")
       }
 

@@ -15,8 +15,9 @@ FAST_JOBS = {
     "dependency-audit",
 }
 HEAVY_JOBS = {"build", "browser", "integration"}
-SLOW_JOBS = {"fuzz", "browser-fuzz"}
-KNOWN_JOBS = frozenset(FAST_JOBS | HEAVY_JOBS | SLOW_JOBS | {"coverage-diff", "installer"})
+SLOW_JOBS = {"source-fuzz", "browser-fuzz"}
+INSTALLED_FUZZ_JOBS = {"installed-command-fuzz", "zap-fuzz"}
+KNOWN_JOBS = frozenset(FAST_JOBS | HEAVY_JOBS | SLOW_JOBS | INSTALLED_FUZZ_JOBS | {"coverage-diff", "installer"})
 
 
 def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> set[str]:
@@ -29,6 +30,7 @@ def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> s
         event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
     ):
         expected.add("installer")
+        expected.update(INSTALLED_FUZZ_JOBS)
     if (
         event_name == "pull_request"
         or (event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))

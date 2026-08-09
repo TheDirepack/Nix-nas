@@ -593,10 +593,7 @@ nas-state diff /tmp/nas-qemu-state.tar.gz --json | jq -e '.schemaVersion >= 1 an
 grep -q 'Restore requires --apply' /tmp/nas-state-dry-restore.log
 rm -f /tmp/nas-qemu-state.tar.gz
 NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
-python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-fuzz.json
-expected_installed_commands="$(jq '[.executables[] | select(.fuzzStrategy != null)] | length' /var/lib/nas-test/repo/tests/custom-script-contracts.json)"
-jq -e --argjson expected "$expected_installed_commands" '.ok == true and .commands == $expected' /tmp/nas-installed-command-fuzz.json >/dev/null
-pass "all custom command surfaces, installed adversarial command fuzzing, and in-VM repository preflight succeeded"
+pass "all custom command surfaces and in-VM repository preflight succeeded"
 
 log "Open WebUI and llama-swap start/stop/on-demand lifecycle"
 nas-feature-control set aiRuntime always | jq -e '.ok == true' >/dev/null
