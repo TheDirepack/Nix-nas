@@ -100,6 +100,8 @@
               bandit
               coverage
               hypothesis
+              jsonschema
+              ruamel-yaml
             ]))
             pkgs.semgrep
             pkgs.shellcheck
