@@ -14,11 +14,18 @@ import nas_service_runtime_libvirt as libvirt  # noqa: E402
 
 
 class LibvirtAdapterTests(unittest.TestCase):
-    def service(self, *, enabled: bool = True, source: str = "/var/lib/nas-control/apps/demo/domain.xml") -> dict:
+    def service(
+        self,
+        *,
+        enabled: bool = True,
+        source: str = "/var/lib/nas-control/apps/demo/domain.xml",
+        lifecycle: str = "persistent",
+    ) -> dict:
         return {
             "label": "Demo VM",
             "enabled": enabled,
-            "runtime": {"type": "vm", "source": source, "startPolicy": "manual"},
+            "lifecycle": {"mode": lifecycle},
+            "runtime": {"type": "vm", "source": source, "startPolicy": "boot"},
             "resolvedStorage": [
                 {
                     "resource": "vm-data",
@@ -33,8 +40,17 @@ class LibvirtAdapterTests(unittest.TestCase):
         plan = libvirt.plan_libvirt("demo", self.service())
         self.assertEqual(plan["runtime"], "libvirt")
         self.assertEqual(plan["source"], "/var/lib/nas-control/apps/demo/domain.xml")
+        self.assertEqual(plan["lifecycle"], "persistent")
         self.assertEqual(plan["actions"][0]["type"], "virsh-define")
         self.assertEqual(plan["resolvedStorage"][0]["resource"], "vm-data")
+
+    def test_enabled_session_lifecycle_is_rejected(self) -> None:
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "session lifecycle is not supported for libvirt"):
+            libvirt.plan_libvirt("demo", self.service(lifecycle="session"))
+
+    def test_disabled_session_can_be_destroyed_for_cleanup(self) -> None:
+        plan = libvirt.plan_libvirt("demo", self.service(enabled=False, lifecycle="session"))
+        self.assertEqual(plan["actions"][1]["operation"], "destroy")
 
     def test_source_must_be_native_xml_under_service_root(self) -> None:
         for source in (
