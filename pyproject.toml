@@ -16,7 +16,7 @@ nas-cockpit-api = "nas_cockpit_api:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-copyparty-projection = "nas_copyparty_projection:main"
 nas-doctor = "nas_doctor:main"
-nas-feature-control = "nas_feature_control:main"
+nas-feature-control = "nas_feature_control_v2:main"
 nas-identity-sync = "nas_identity_sync:main"
 nas-managed-service = "nas_managed_service_v2:main"
 nas-migrate-state = "nas_migrate_state:main"
@@ -39,6 +39,7 @@ py-modules = [
   "nas_copyparty_projection",
   "nas_doctor",
   "nas_feature_control",
+  "nas_feature_control_v2",
   "nas_feature_model",
   "nas_identity_model",
   "nas_identity_sync",
