@@ -26,7 +26,7 @@ in
     ];
 
     systemd.services.nas-managed-services-reconcile = {
-      description = "Rebuild V2 projections and enforce persistent/disabled application lifecycle";
+      description = "Rebuild V2 projections and enforce application availability/lifecycle";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" "copyparty.service" ];
       serviceConfig = {
@@ -56,7 +56,7 @@ in
     };
 
     systemd.timers.nas-managed-services-reap = {
-      description = "Periodically reap idle Managed Services V2 applications";
+      description = "Periodically reap idle Managed Services V2 on-demand applications";
       wantedBy = [ "timers.target" ];
       timerConfig = {
         OnBootSec = "2m";
