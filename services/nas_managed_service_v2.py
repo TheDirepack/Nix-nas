@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Managed Services V2 compatibility and projection layer.
 
-This module is intentionally thin.  It preserves the proven file-backed
+This module is intentionally thin. It preserves the proven file-backed
 reconciler from ``nas_managed_service`` while making the new resource-authority
-model executable.  Persisted V2 documents keep named resource references; only
-a validation copy is converted to the legacy hostPath mount shape.  Effective
-state exposes both the authoritative resource reference and a resolved runtime
-mount projection so adapters can migrate independently.
+model executable. Persisted V2 documents keep named resource references; only
+a validation copy is converted to the legacy hostPath mount shape. Effective
+state exposes authoritative V2 policy plus resolved runtime projections so
+adapters can migrate independently.
 """
 
 from __future__ import annotations
@@ -30,9 +30,80 @@ from nas_managed_resources import (
 _ORIGINAL_LOAD_STORE = _legacy.load_store
 _ORIGINAL_EFFECTIVE_REGISTRY = _legacy.effective_registry
 
+LIFECYCLE_MODES = frozenset({"persistent", "on-demand", "manual", "disabled"})
+_START_POLICY_TO_LIFECYCLE = {
+    "boot": "persistent",
+    "on-demand": "on-demand",
+    "manual": "manual",
+    "disabled": "disabled",
+}
+_LIFECYCLE_TO_START_POLICY = {value: key for key, value in _START_POLICY_TO_LIFECYCLE.items()}
+DEFAULT_IDLE_SECONDS = 600
+
 
 def _runtime_mode(required_capabilities: list[str]) -> str:
     return "rw" if set(required_capabilities) & {"write", "move", "delete", "admin"} else "ro"
+
+
+def _normalize_lifecycle(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
+    """Return canonical process-lifetime policy while accepting old startPolicy input.
+
+    Runtime lifetime and storage lifetime are deliberately independent. Stopping
+    or reaping an application never implies deleting its authoritative storage.
+    """
+
+    runtime = service.get("runtime") or {}
+    start_policy = runtime.get("startPolicy")
+    lifecycle = service.get("lifecycle")
+    enabled = service.get("enabled")
+
+    if lifecycle is None:
+        mode = _START_POLICY_TO_LIFECYCLE.get(start_policy)
+        if enabled is False:
+            mode = "disabled"
+        if mode is None:
+            raise ManagedResourceError(f"Service {service_id}: cannot derive lifecycle from runtime.startPolicy")
+        normalized = {"mode": mode, "ephemeralRuntime": False}
+        if mode == "on-demand":
+            normalized["idleSeconds"] = DEFAULT_IDLE_SECONDS
+        return normalized
+
+    if not isinstance(lifecycle, dict):
+        raise ManagedResourceError(f"Service {service_id}: lifecycle must be an object")
+    mode = lifecycle.get("mode")
+    if mode not in LIFECYCLE_MODES:
+        raise ManagedResourceError(f"Service {service_id}: invalid lifecycle mode {mode!r}")
+
+    ephemeral_runtime = lifecycle.get("ephemeralRuntime", False)
+    if not isinstance(ephemeral_runtime, bool):
+        raise ManagedResourceError(f"Service {service_id}: lifecycle.ephemeralRuntime must be boolean")
+
+    normalized: dict[str, Any] = {"mode": mode, "ephemeralRuntime": ephemeral_runtime}
+    idle_seconds = lifecycle.get("idleSeconds")
+    if mode == "on-demand":
+        if isinstance(idle_seconds, bool) or not isinstance(idle_seconds, int) or not 30 <= idle_seconds <= 604800:
+            raise ManagedResourceError(
+                f"Service {service_id}: on-demand lifecycle requires idleSeconds between 30 and 604800"
+            )
+        normalized["idleSeconds"] = idle_seconds
+    elif idle_seconds is not None:
+        raise ManagedResourceError(f"Service {service_id}: idleSeconds is only valid for on-demand lifecycle")
+
+    if enabled is False and mode != "disabled":
+        raise ManagedResourceError(
+            f"Service {service_id}: enabled=false conflicts with lifecycle.mode={mode!r}"
+        )
+    if enabled is True and mode == "disabled":
+        raise ManagedResourceError(
+            f"Service {service_id}: enabled=true conflicts with lifecycle.mode='disabled'"
+        )
+
+    expected_start_policy = _LIFECYCLE_TO_START_POLICY[mode]
+    if start_policy is not None and start_policy != expected_start_policy:
+        raise ManagedResourceError(
+            f"Service {service_id}: runtime.startPolicy={start_policy!r} conflicts with lifecycle.mode={mode!r}"
+        )
+    return normalized
 
 
 def _resolved_mount(
@@ -78,13 +149,14 @@ def normalize_document(data: dict[str, Any]) -> dict[str, Any]:
             raise ManagedResourceError(f"Service {service_id!r} must be an object")
         principal = service.get("principal", application_principal(service_id))
         service["principal"] = validate_application_principal(principal, service_id=service_id)
+        service["lifecycle"] = _normalize_lifecycle(service_id, service)
 
         resolved_storage: list[dict[str, Any]] = []
         for attachment in service.get("storage", []):
             if isinstance(attachment, dict) and "resource" in attachment:
                 resolved_storage.append(_resolved_mount(service_id, attachment, resources))
             else:
-                # Legacy inline mounts remain migration input.  Preserve them in
+                # Legacy inline mounts remain migration input. Preserve them in
                 # effective state until the owning service is converted.
                 resolved_storage.append(copy.deepcopy(attachment))
         service["resolvedStorage"] = resolved_storage
@@ -119,6 +191,7 @@ def _legacy_validation_copy(data: dict[str, Any]) -> dict[str, Any]:
     validated.pop("networkProfiles", None)
     for service in validated.get("services", {}).values():
         service.pop("principal", None)
+        service.pop("lifecycle", None)
         service.pop("networkProfile", None)
         resolved = service.pop("resolvedStorage", service.get("storage", []))
         legacy_mounts = []
@@ -177,7 +250,7 @@ def effective_registry(
     builtin_path: pathlib.Path = _legacy.BUILTIN_REGISTRY,
     store_path: pathlib.Path = _legacy.STORE_PATH,
 ) -> dict[str, Any]:
-    """Return effective state including resource and runtime projections."""
+    """Return effective state including resource, lifecycle and runtime projections."""
 
     effective = _ORIGINAL_EFFECTIVE_REGISTRY(builtin_path, store_path)
     store = load_store(store_path)
@@ -189,6 +262,7 @@ def effective_registry(
             continue
         effective_service = effective["services"][service_id]
         effective_service["principal"] = service["principal"]
+        effective_service["lifecycle"] = service["lifecycle"]
         effective_service["resolvedStorage"] = service.get("resolvedStorage", [])
         if service.get("networkProfile") is not None:
             effective_service["networkProfile"] = service["networkProfile"]
