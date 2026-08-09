@@ -19,9 +19,7 @@ from typing import Any
 
 from nas_managed_resources import ManagedResourceError, validate_storage_resources
 
-DEFAULT_EFFECTIVE = pathlib.Path(
-    os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json")
-)
+DEFAULT_EFFECTIVE = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
 SNAPSHOT_PREFIX = "nixos-nas-v2-backup"
 DATASET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
 
@@ -45,7 +43,6 @@ def _resource_plan(resource_id: str, resource: dict[str, Any], snapshot: str) ->
         raise BackupPlanError(f"Resource {resource_id!r} is not enabled for backup")
     if resource["stateClass"] in {"cache", "ephemeral"}:
         raise BackupPlanError(f"Resource {resource_id!r} has non-authoritative state class {resource['stateClass']!r}")
-
     result: dict[str, Any] = {
         "resource": resource_id,
         "path": resource["path"],
@@ -55,22 +52,16 @@ def _resource_plan(resource_id: str, resource: dict[str, Any], snapshot: str) ->
     }
     if resource.get("pathTemplate"):
         result["pathTemplate"] = resource["pathTemplate"]
-
     if consistency == "zfs-snapshot":
         dataset = resource.get("dataset")
         if not isinstance(dataset, str) or DATASET_RE.fullmatch(dataset) is None:
             raise BackupPlanError(f"Resource {resource_id!r}: zfs-snapshot consistency requires a valid dataset")
         result["dataset"] = dataset
         result["snapshot"] = f"{dataset}@{snapshot}"
-        # ZFS snapshots are normally visible beneath the dataset mount at
-        # .zfs/snapshot/<name>. The executor verifies snapdir/access before
-        # handing this path to Restic; the planner never assumes it exists.
         result["snapshotRelative"] = f".zfs/snapshot/{snapshot}"
     elif consistency == "filesystem":
         pass
     elif consistency in {"postgres", "native"}:
-        # These require a named native dump/hook rather than backing a live
-        # application data directory. The executor/staging layer owns the hook.
         result["requiresNativeStage"] = True
     else:
         raise BackupPlanError(f"Resource {resource_id!r}: unsupported backup consistency {consistency!r}")
@@ -89,14 +80,8 @@ def build_backup_plan(effective: dict[str, Any], *, timestamp: dt.datetime | Non
         raise BackupPlanError("effective backupResources must be an array of resource IDs")
     if len(selected) != len(set(selected)):
         raise BackupPlanError("effective backupResources contains duplicates")
-
     snap = snapshot_name(timestamp)
-    grouped: dict[str, list[dict[str, Any]]] = {
-        "zfs-snapshot": [],
-        "filesystem": [],
-        "postgres": [],
-        "native": [],
-    }
+    grouped: dict[str, list[dict[str, Any]]] = {"zfs-snapshot": [], "filesystem": [], "postgres": [], "native": []}
     resources_out: list[dict[str, Any]] = []
     for resource_id in sorted(selected):
         resource = resources.get(resource_id)
@@ -105,13 +90,22 @@ def build_backup_plan(effective: dict[str, Any], *, timestamp: dt.datetime | Non
         item = _resource_plan(resource_id, resource, snap)
         grouped[item["consistency"]].append(item)
         resources_out.append(item)
+    return {"schemaVersion": 1, "snapshotName": snap, "resources": resources_out, "groups": grouped}
 
-    return {
-        "schemaVersion": 1,
-        "snapshotName": snap,
-        "resources": resources_out,
-        "groups": grouped,
-    }
+
+def dynamic_files(plan: dict[str, Any]) -> list[str]:
+    """Return direct Restic inputs safe to emit via NixOS dynamicFilesFrom.
+
+    Filesystem-consistent resources can be backed up directly. Snapshot/native
+    resources are omitted here because prepare must first create their immutable
+    snapshot view or consistent dump in staging.
+    """
+    files: list[str] = []
+    for item in plan.get("groups", {}).get("filesystem", []):
+        path = item.get("path")
+        if isinstance(path, str) and path.startswith("/"):
+            files.append(path)
+    return sorted(set(files))
 
 
 def load_effective(path: pathlib.Path = DEFAULT_EFFECTIVE) -> dict[str, Any]:
@@ -128,7 +122,7 @@ def load_effective(path: pathlib.Path = DEFAULT_EFFECTIVE) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nas-backup-v2")
-    parser.add_argument("command", choices=["plan"])
+    parser.add_argument("command", choices=["plan", "files"])
     parser.add_argument("--effective", type=pathlib.Path, default=DEFAULT_EFFECTIVE)
     args = parser.parse_args(argv)
     try:
@@ -136,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     except BackupPlanError as exc:
         print(f"nas-backup-v2: {exc}", file=sys.stderr)
         return 1
+    if args.command == "files":
+        for path in dynamic_files(plan):
+            print(path)
+        return 0
     print(json.dumps(plan, indent=2, sort_keys=True))
     return 0
 
