@@ -21,6 +21,7 @@ STATE_CLASSES = frozenset({"authoritative", "derived", "cache", "ephemeral"})
 STORAGE_CAPABILITIES = frozenset({"read", "write", "move", "delete", "admin"})
 BACKUP_CONSISTENCY = frozenset({"filesystem", "zfs-snapshot", "postgres", "native", "none"})
 RESOURCE_SCOPES = frozenset({"system", "user", "instance"})
+UNSAFE_MOUNT_PATH_CHARS = frozenset({"\x00", "\r", "\n", ":"})
 
 
 class ManagedResourceError(RuntimeError):
@@ -82,12 +83,19 @@ def application_capability(service_id: str, capability: str = "access") -> str:
     return f"application.{service_id}.{capability}"
 
 
-def _validate_host_path(value: Any, *, field: str = "path") -> str:
+def _validate_mount_path(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.startswith("/"):
         raise ManagedResourceError(f"{field} must be an absolute path")
+    if any(char in value for char in UNSAFE_MOUNT_PATH_CHARS):
+        raise ManagedResourceError(f"{field} contains an unsafe mount delimiter or control character")
     pure = pathlib.PurePosixPath(value)
     if ".." in pure.parts:
         raise ManagedResourceError(f"{field} must not contain '..'")
+    return value
+
+
+def _validate_host_path(value: Any, *, field: str = "path") -> str:
+    value = _validate_mount_path(value, field=field)
     if not any(value == root or value.startswith(root + "/") for root in ALLOWED_HOST_ROOTS):
         raise ManagedResourceError(f"{field} {value!r} is outside the managed storage roots")
     return value
@@ -187,9 +195,10 @@ def validate_storage_attachment(
     resource_id = validate_resource_id(attachment.get("resource"))
     if resource_id not in resources:
         raise ManagedResourceError(f"Service {service_id}: unknown storage resource {resource_id!r}")
-    guest_path = attachment.get("guestPath")
-    if not isinstance(guest_path, str) or not guest_path.startswith("/") or ".." in pathlib.PurePosixPath(guest_path).parts:
-        raise ManagedResourceError(f"Service {service_id}: guestPath must be an absolute non-traversing path")
+    guest_path = _validate_mount_path(
+        attachment.get("guestPath"),
+        field=f"Service {service_id}: guestPath",
+    )
     required = attachment.get("requiredCapabilities", ["read"])
     if not isinstance(required, list) or not required:
         raise ManagedResourceError(f"Service {service_id}: requiredCapabilities must be a non-empty array")
