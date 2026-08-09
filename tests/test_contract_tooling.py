@@ -552,6 +552,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication = lib.mkForce false", vm_common)
         self.assertIn('(pkgs.writeText "vm-admin-password-hash" "!")', vm_common)
         self.assertNotIn("authorizedKeys.keys", vm_common)
+        self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))
         self.assertIn("nas-secrets activate-stdin", guest)
         self.assertIn("nas-setup first-run", guest)
