@@ -1,0 +1,1 @@
+Next checkpoint: convert Pi into a normal V2 on-demand Podman application with persistent per-user state, then replace custom backup/state machinery with native ZFS/Restic/database flows.
