@@ -18,6 +18,7 @@ let
     idleSeconds ? null,
     ownership ? "v2",
     expose ? true,
+    dependsOn ? [ ],
   }:
     let
       authMode = if access == "public" then "public" else "forward-auth";
@@ -51,7 +52,7 @@ let
       };
     in
     {
-      inherit label enabled ownership lifecycle;
+      inherit label enabled ownership lifecycle dependsOn;
       runtime = {
         type = "systemd";
         source = "systemd/${builtins.head units}";
@@ -75,8 +76,8 @@ let
   };
 
   registry = {
-    # Control-plane/recovery services stay system-owned so V2 cannot lock an
-    # administrator out of the mechanism required to repair V2 itself.
+    # Recovery/control-plane substrates are visible to the dependency graph but
+    # V2 never owns their shutdown lifecycle.
     identity = mkService {
       serviceId = "identity";
       label = "Authentik identity";
@@ -103,9 +104,16 @@ let
       lifecycleMode = "persistent";
       ownership = "system";
     };
+    caddy = mkService {
+      serviceId = "caddy";
+      label = "Caddy ingress";
+      enabled = true;
+      units = [ "caddy.service" ];
+      lifecycleMode = "persistent";
+      ownership = "system";
+      expose = false;
+    };
 
-    # CopyParty is the file application, not V2 infrastructure. Its Caddy
-    # routes remain appliance-owned while its lifetime is V2-owned.
     copyparty = mkService {
       serviceId = "copyparty";
       label = "CopyParty files";
@@ -115,8 +123,6 @@ let
       expose = false;
     };
 
-    # One application owns llama-swap's unit. API and runtime UI are endpoints
-    # of that application so two logical services can never race the same unit.
     aiRuntime = aiRuntimeBase // {
       endpoints = aiRuntimeBase.endpoints // {
         api = {
@@ -153,6 +159,7 @@ let
       category = "AI";
       lifecycleMode = "on-demand";
       idleSeconds = 600;
+      dependsOn = [ "aiRuntime" ];
     };
     aiDownloader = mkService {
       serviceId = "aiDownloader";
@@ -178,6 +185,16 @@ let
       linkKey = "syncthing";
       category = "Files";
       lifecycleMode = "persistent";
+      dependsOn = [ "identity" ];
+    };
+    vaultwardenCa = mkService {
+      serviceId = "vaultwardenCa";
+      label = "Vaultwarden CA preparation";
+      enabled = cfg.vaultwarden.enable;
+      units = [ "nas-caddy-ca-export.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
+      dependsOn = [ "caddy" ];
     };
     vaultwarden = mkService {
       serviceId = "vaultwarden";
@@ -190,6 +207,7 @@ let
       linkKey = "vaultwarden";
       category = "Home";
       lifecycleMode = "persistent";
+      dependsOn = [ "identity" "vaultwardenCa" ];
     };
     victoriametrics = mkService {
       serviceId = "victoriametrics";
@@ -210,6 +228,7 @@ let
       units = [ "telegraf.service" ];
       lifecycleMode = "persistent";
       expose = false;
+      dependsOn = [ "victoriametrics" ];
     };
     grafana = mkService {
       serviceId = "grafana";
@@ -223,6 +242,7 @@ let
       category = "Monitoring";
       lifecycleMode = "on-demand";
       idleSeconds = 600;
+      dependsOn = [ "victoriametrics" ];
     };
     alerts = mkService {
       serviceId = "alerts";
@@ -235,6 +255,7 @@ let
       linkKey = "alerts";
       category = "Monitoring";
       lifecycleMode = "persistent";
+      dependsOn = [ "victoriametrics" ];
     };
     notifications = mkService {
       serviceId = "notifications";
@@ -343,7 +364,7 @@ in
   serviceRegistry = registry;
   serviceRegistryV2 = {
     schemaVersion = 2;
-    generation = 2;
+    generation = 3;
     inherit storageResources;
     services = registry;
   };
