@@ -8,35 +8,27 @@ let
     description ? null,
     enabled,
     units,
-    port,
-    publicPath,
-    access,
-    linkKey,
+    port ? null,
+    publicPath ? null,
+    access ? "admin",
+    linkKey ? null,
     category ? "Other",
     icon ? null,
     lifecycleMode ? "persistent",
     idleSeconds ? null,
+    ownership ? "v2",
+    expose ? true,
   }:
     let
       authMode = if access == "public" then "public" else "forward-auth";
       authAllow = if access == "admin" then "groups" else if access == "ai" then "groups" else if access == "vault" then "groups" else "any";
-      authGroups = if access == "admin" then ["nas_admin"] else if access == "ai" then ["nas_allow_ai" "nas_admin"] else if access == "vault" then ["nas_allow_vault" "nas_admin"] else [];
+      authGroups = if access == "admin" then [ "nas_admin" ] else if access == "ai" then [ "nas_allow_ai" "nas_admin" ] else if access == "vault" then [ "nas_allow_vault" "nas_admin" ] else [ ];
       authCapability = if access == "admin" || access == "ai" || access == "vault" then "application.${serviceId}.access" else null;
       portalCategory = if linkKey == "identity" then "Administration" else if linkKey == "console" then "Administration" else if linkKey == "aiWorkspace" then "AI" else if linkKey == "syncthing" then "Files" else category;
       portalIcon = if icon != null then icon else if linkKey != null then linkKey else "box";
-      lifecycle = { mode = lifecycleMode; } // (if lifecycleMode == "on-demand" then { idleSeconds = idleSeconds; } else { });
+      lifecycle = { mode = lifecycleMode; } // (if lifecycleMode == "on-demand" then { inherit idleSeconds; } else { });
       startPolicy = if !enabled then "disabled" else if lifecycleMode == "persistent" then "boot" else if lifecycleMode == "on-demand" then "on-demand" else "manual";
-    in {
-      label = label;
-      enabled = enabled;
-      ownership = "system";
-      inherit lifecycle;
-      runtime = {
-        type = "systemd";
-        source = "systemd/${builtins.head units}";
-        inherit startPolicy units;
-      };
-      endpoints = {
+      endpoint = {
         main = {
           transport = "http";
           targetPort = port;
@@ -48,8 +40,8 @@ let
           auth = {
             mode = authMode;
           }
-          // (if authCapability != null then { capability = authCapability; } else {})
-          // (if authGroups != [] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then {} else { allow = "any"; });
+          // (if authCapability != null then { capability = authCapability; } else { })
+          // (if authGroups != [ ] then { allow = authAllow; groups = authGroups; } else if authMode == "public" then { } else { allow = "any"; });
           portal = {
             visible = linkKey != null;
             category = portalCategory;
@@ -57,8 +49,34 @@ let
           };
         };
       };
-    } // (if description != null then { description = description; } else {});
+    in
+    {
+      inherit label enabled ownership lifecycle;
+      runtime = {
+        type = "systemd";
+        source = "systemd/${builtins.head units}";
+        inherit startPolicy units;
+      };
+      endpoints = if expose then endpoint else { };
+    } // (if description != null then { inherit description; } else { });
+
+  aiRuntimeBase = mkService {
+    serviceId = "aiRuntime";
+    label = "llama-swap runtime";
+    enabled = cfg.ai.enable;
+    units = [ "nas-llama-swap.service" ];
+    port = cfg.ai.llamaSwap.port;
+    publicPath = "/ai/runtime/";
+    access = "admin";
+    linkKey = "aiRuntime";
+    category = "AI";
+    lifecycleMode = "on-demand";
+    idleSeconds = 600;
+  };
+
   registry = {
+    # Control-plane/recovery services stay system-owned so V2 cannot lock an
+    # administrator out of the mechanism required to repair V2 itself.
     identity = mkService {
       serviceId = "identity";
       label = "Authentik identity";
@@ -70,6 +88,7 @@ let
       linkKey = "identity";
       category = "Administration";
       lifecycleMode = "persistent";
+      ownership = "system";
     };
     cockpit = mkService {
       serviceId = "cockpit";
@@ -82,32 +101,45 @@ let
       linkKey = "console";
       category = "Administration";
       lifecycleMode = "persistent";
+      ownership = "system";
     };
-    aiApi = mkService {
-      serviceId = "aiApi";
-      label = "llama-swap API";
-      enabled = cfg.ai.enable;
-      units = [ "nas-llama-swap.service" ];
-      port = cfg.ai.llamaSwap.port;
-      publicPath = "/ai/v1/";
-      access = "api-key";
-      linkKey = null;
-      category = "AI";
-      lifecycleMode = "on-demand";
-      idleSeconds = 600;
+
+    # CopyParty is the file application, not V2 infrastructure. Its Caddy
+    # routes remain appliance-owned while its lifetime is V2-owned.
+    copyparty = mkService {
+      serviceId = "copyparty";
+      label = "CopyParty files";
+      enabled = true;
+      units = [ "copyparty.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
     };
-    aiRuntime = mkService {
-      serviceId = "aiRuntime";
-      label = "llama-swap runtime UI";
-      enabled = cfg.ai.enable;
-      units = [ "nas-llama-swap.service" ];
-      port = cfg.ai.llamaSwap.port;
-      publicPath = "/ai/runtime/";
-      access = "admin";
-      linkKey = "aiRuntime";
-      category = "AI";
-      lifecycleMode = "on-demand";
-      idleSeconds = 600;
+
+    # One application owns llama-swap's unit. API and runtime UI are endpoints
+    # of that application so two logical services can never race the same unit.
+    aiRuntime = aiRuntimeBase // {
+      endpoints = aiRuntimeBase.endpoints // {
+        api = {
+          transport = "http";
+          targetPort = cfg.ai.llamaSwap.port;
+          exposure = {
+            type = "path";
+            value = "/ai/v1/";
+            prefix = true;
+          };
+          auth = {
+            mode = "forward-auth";
+            capability = "application.aiRuntime.access";
+            allow = "groups";
+            groups = [ "nas_allow_ai" "nas_admin" ];
+          };
+          portal = {
+            visible = false;
+            category = "AI";
+            icon = "api";
+          };
+        };
+      };
     };
     aiWorkspace = mkService {
       serviceId = "aiWorkspace";
@@ -137,9 +169,9 @@ let
     };
     syncthing = mkService {
       serviceId = "syncthing";
-      label = "Syncthing administration";
+      label = "Syncthing";
       enabled = cfg.syncthing.enable;
-      units = [ "syncthing.service" ];
+      units = [ "syncthing.service" "nas-syncthing-sync.timer" ];
       port = 8384;
       publicPath = "/syncthing/";
       access = "admin";
@@ -170,6 +202,14 @@ let
       linkKey = "victoriaMetrics";
       category = "Monitoring";
       lifecycleMode = "persistent";
+    };
+    telegraf = mkService {
+      serviceId = "telegraf";
+      label = "Telegraf metrics collector";
+      enabled = cfg.observability.enable;
+      units = [ "telegraf.service" ];
+      lifecycleMode = "persistent";
+      expose = false;
     };
     grafana = mkService {
       serviceId = "grafana";
@@ -222,6 +262,7 @@ let
       idleSeconds = 600;
     };
   };
+
   storageResources = {
     nas-shares = {
       path = "${cfg.zfsRoot}/shares";
@@ -302,7 +343,7 @@ in
   serviceRegistry = registry;
   serviceRegistryV2 = {
     schemaVersion = 2;
-    generation = 1;
+    generation = 2;
     inherit storageResources;
     services = registry;
   };
