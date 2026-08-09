@@ -216,11 +216,68 @@ let
         enabled = cfg.backup.includeShares;
         consistency = "zfs-snapshot";
       };
-      # CopyParty already exposes /shares through its native NAS volume model.
-      # This V2 resource exists for cross-runtime policy and backup authority;
-      # projecting it again would create a duplicate browser volume.
       fileBrowser.visible = false;
       description = "Managed NAS share tree";
+    };
+    nas-control-state = {
+      path = "/var/lib/nas-control";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "Managed Services V2 definitions and appliance control state";
+    };
+    copyparty-config = {
+      path = "/var/lib/copyparty/user.d";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "CopyParty native administrator configuration";
+    };
+    authentik-files = {
+      path = "/var/lib/authentik";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "Authentik file-backed state; PostgreSQL remains native-dump managed";
+    };
+    setup-state = {
+      path = "/var/lib/nas-setup";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = cfg.backup.enable;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "First-start completion and recovery state";
+    };
+    identity-projection-state = {
+      path = "/var/lib/nas-identity-sync";
+      scope = "system";
+      stateClass = "derived";
+      capabilities = [ "admin" ];
+      backup = {
+        enabled = false;
+        consistency = "filesystem";
+      };
+      fileBrowser.visible = false;
+      description = "Reconstructable identity projection state derived from Authentik";
     };
   };
 in
