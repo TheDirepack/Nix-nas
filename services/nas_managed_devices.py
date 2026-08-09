@@ -6,22 +6,13 @@ module resolves that intent into runtime-neutral CDI names, device nodes, and
 PCI addresses. Runtime adapters consume the same resolved structure; there are
 no application-name checks here.
 
-Supported selectors:
-
-- ``optional:auto`` / ``required:auto``: first available GPU
-- ``optional:all`` / ``required:all``: every available GPU
-- ``optional:nvidia:all`` / ``required:nvidia:all``
-- ``optional:amd:all`` / ``required:amd:all``
-- ``optional:intel:all`` / ``required:intel:all``
-- ``optional:pci:0000:01:00.0`` / ``required:pci:...``
-- ``optional:cdi:nvidia.com/gpu=all`` / ``required:cdi:...``
-
-The requirement prefix is explicit so CPU-capable workloads can request a GPU
-when present without making the whole service unavailable on GPU-less hosts.
+GPU requests may be a selector string or ``{"selector": ..., "target": ...}``.
+The optional target disambiguates multi-workload runtimes such as Compose.
 """
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 from typing import Any
@@ -36,21 +27,38 @@ GPU_VENDORS = {
 GPU_SELECTOR_RE = re.compile(
     r"^(optional|required):(auto|all|(?:nvidia|amd|intel):all|pci:[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]|cdi:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.:@-]+)$"
 )
+TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 PCI_RE = re.compile(r"^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$")
 
 
-def normalize_gpu_requests(value: Any) -> list[str]:
+def normalize_gpu_requests(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise ManagedResourceError("resources.gpus must be an array of V2 GPU selector strings")
-    if len(value) != len(set(value)):
-        raise ManagedResourceError("resources.gpus contains duplicate selectors")
-    normalized: list[str] = []
-    for selector in value:
-        if GPU_SELECTOR_RE.fullmatch(selector) is None:
+    if not isinstance(value, list):
+        raise ManagedResourceError("resources.gpus must be an array of V2 GPU requests")
+    normalized: list[dict[str, Any]] = []
+    fingerprints: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            selector = item
+            target = None
+        elif isinstance(item, dict) and set(item) <= {"selector", "target"}:
+            selector = item.get("selector")
+            target = item.get("target")
+        else:
+            raise ManagedResourceError("resources.gpus entries must be selector strings or {selector,target} objects")
+        if not isinstance(selector, str) or GPU_SELECTOR_RE.fullmatch(selector) is None:
             raise ManagedResourceError(f"Invalid V2 GPU selector {selector!r}")
-        normalized.append(selector)
+        if target is not None and (not isinstance(target, str) or TARGET_RE.fullmatch(target) is None):
+            raise ManagedResourceError(f"Invalid V2 GPU runtime target {target!r}")
+        request = {"selector": selector}
+        if target is not None:
+            request["target"] = target
+        fingerprint = json.dumps(request, sort_keys=True, separators=(",", ":"))
+        if fingerprint in fingerprints:
+            raise ManagedResourceError("resources.gpus contains duplicate requests")
+        fingerprints.add(fingerprint)
+        normalized.append(request)
     return normalized
 
 
@@ -65,8 +73,12 @@ def _pci_from_device_link(link: pathlib.Path) -> str | None:
     return None
 
 
-def discover_gpus(*, sys_class_drm: pathlib.Path = pathlib.Path("/sys/class/drm"), dev_root: pathlib.Path = pathlib.Path("/dev")) -> list[dict[str, Any]]:
-    """Return stable GPU inventory from DRM/sysfs without vendor-specific daemons."""
+def discover_gpus(
+    *,
+    sys_class_drm: pathlib.Path = pathlib.Path("/sys/class/drm"),
+    dev_root: pathlib.Path = pathlib.Path("/dev"),
+) -> list[dict[str, Any]]:
+    """Return stable GPU inventory from DRM/sysfs without app-specific probes."""
 
     by_pci: dict[str, dict[str, Any]] = {}
     if sys_class_drm.is_dir():
@@ -91,8 +103,6 @@ def discover_gpus(*, sys_class_drm: pathlib.Path = pathlib.Path("/sys/class/drm"
             if node.exists():
                 record["devicePaths"].append(str(node))
 
-    # NVIDIA exposes additional character devices that CUDA/NVML need. Attach
-    # them to NVIDIA records generically; CDI remains preferred for containers.
     nvidia_nodes = sorted(
         str(path)
         for pattern in ("nvidiactl", "nvidia-uvm", "nvidia-uvm-tools", "nvidia[0-9]*")
@@ -103,17 +113,18 @@ def discover_gpus(*, sys_class_drm: pathlib.Path = pathlib.Path("/sys/class/drm"
     if nvidia_records:
         for record in nvidia_records:
             record["devicePaths"] = sorted(set(record["devicePaths"] + nvidia_nodes))
-        # ``all`` is a valid CDI selector and intentionally represents the
-        # aggregate request rather than guessing an index-to-PCI mapping.
-        for record in nvidia_records:
+            # CDI is the preferred Podman representation for NVIDIA. The
+            # aggregate name intentionally avoids inventing PCI-to-index maps.
             record["cdiDevices"] = ["nvidia.com/gpu=all"]
 
     return [by_pci[key] for key in sorted(by_pci)]
 
 
-def _merge_devices(records: list[dict[str, Any]], *, request: str, required: bool) -> dict[str, Any]:
+def _merge_devices(
+    records: list[dict[str, Any]], *, request: str, required: bool, target: str | None
+) -> dict[str, Any]:
     vendors = sorted({str(record["vendor"]) for record in records})
-    return {
+    result = {
         "request": request,
         "required": required,
         "vendors": vendors,
@@ -121,16 +132,23 @@ def _merge_devices(records: list[dict[str, Any]], *, request: str, required: boo
         "cdiDevices": sorted({name for record in records for name in record.get("cdiDevices", [])}),
         "pciAddresses": sorted({str(record["pciAddress"]) for record in records}),
     }
+    if target is not None:
+        result["target"] = target
+    return result
 
 
-def resolve_gpu_requests(requests: Any, *, inventory: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    selectors = normalize_gpu_requests(requests)
-    if not selectors:
+def resolve_gpu_requests(
+    requests: Any, *, inventory: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    normalized = normalize_gpu_requests(requests)
+    if not normalized:
         return []
     available = discover_gpus() if inventory is None else inventory
     resolved: list[dict[str, Any]] = []
 
-    for selector in selectors:
+    for request in normalized:
+        selector = request["selector"]
+        target = request.get("target")
         requirement, expression = selector.split(":", 1)
         required = requirement == "required"
         selected: list[dict[str, Any]] = []
@@ -154,26 +172,20 @@ def resolve_gpu_requests(requests: Any, *, inventory: list[dict[str, Any]] | Non
         if not selected and not explicit_cdi:
             if required:
                 raise ManagedResourceError(f"Required GPU selector {selector!r} matched no host GPU")
-            resolved.append(
-                {
-                    "request": selector,
-                    "required": False,
-                    "vendors": [],
-                    "devicePaths": [],
-                    "cdiDevices": [],
-                    "pciAddresses": [],
-                }
-            )
+            empty = _merge_devices([], request=selector, required=False, target=target)
+            resolved.append(empty)
             continue
 
-        record = _merge_devices(selected, request=selector, required=required)
+        record = _merge_devices(selected, request=selector, required=required, target=target)
         if explicit_cdi:
             record["cdiDevices"] = explicit_cdi
         resolved.append(record)
     return resolved
 
 
-def resolve_service_devices(service: dict[str, Any], *, inventory: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def resolve_service_devices(
+    service: dict[str, Any], *, inventory: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     resources = service.get("resources") or {}
     if not isinstance(resources, dict):
         raise ManagedResourceError("service resources must be an object")
