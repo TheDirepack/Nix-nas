@@ -352,9 +352,18 @@ let
       description = "Reconstructable identity projection state derived from Authentik";
     };
   };
+
+  # Temporary read-only aliases for older Nix modules that still use the
+  # feature-catalog names. These aliases are intentionally NOT emitted into the
+  # V2 services document, so they cannot become duplicate lifecycle owners.
+  serviceRegistryCompat = registry // {
+    aiRuntime = registry."ai-runtime";
+    aiWorkspace = registry."ai-workspace";
+    aiDownloader = registry."ai-downloader";
+  };
 in
 {
-  serviceRegistry = registry;
+  serviceRegistry = serviceRegistryCompat;
   serviceRegistryV2 = {
     schemaVersion = 2;
     generation = 4;
