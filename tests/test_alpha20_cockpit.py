@@ -144,9 +144,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("max-parallel: 6", workflow)
         self.assertIn("fail-fast: false", workflow)
-        self.assertIn(
-            "shard: [boundaries, properties, stateful, security, javascript, executable-contracts]", workflow
-        )
+        self.assertIn("shard: [boundaries, properties, stateful, security, javascript, executable-contracts]", workflow)
         self.assertIn("timeout-minutes: 240", workflow)
         self.assertIn("test-tier == 'full'", workflow)
         self.assertIn("test-tier == 'installer'", workflow)
@@ -202,7 +200,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         config = text("cockpit/e2e/playwright.config.mjs")
         harness = text("scripts/qemu-final-browser.sh")
         installed = workflow.split("  installed-command-fuzz:\n", 1)[1].split("  zap-fuzz:\n", 1)[0]
-        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split("case \"$WORKLOAD\"", 1)[0]
+        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split('case "$WORKLOAD"', 1)[0]
         self.assertIn("NAS_HTTP_ADVERSARIAL_OUT: http-adversarial.json", installed)
         self.assertIn("run_http_adversarial_contracts", harness)
         self.assertIn("curl --insecure --silent --show-error", http_block)
