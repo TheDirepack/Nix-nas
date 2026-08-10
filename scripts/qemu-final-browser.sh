@@ -97,6 +97,81 @@ for _ in $(seq 1 90); do
 done
 curl --fail --insecure --silent --show-error "https://127.0.0.1:$COCKPIT_PORT/" >/dev/null || die "Cockpit did not become reachable"
 
+run_http_adversarial_contracts() {
+  local evidence=${1:?evidence path is required}
+  local body code label url path
+  local requests=0 blocked=0
+  body="$(mktemp "${TMPDIR:-/tmp}/nas-http-adversarial.XXXXXX")"
+  trap 'rm -f -- "$body"' RETURN
+
+  probe_not_5xx() {
+    label=$1
+    url=$2
+    shift 2
+    code="$(curl --insecure --silent --show-error --output "$body" --write-out '%{http_code}' \
+      --connect-timeout 5 --max-time 20 "$@" "$url" || true)"
+    [[ "$code" =~ ^[0-9]{3}$ ]] || die "$label did not return an HTTP status"
+    [[ "$code" != 5* ]] || {
+      cat "$body" >&2 || true
+      die "$label returned server error HTTP $code"
+    }
+    requests=$((requests + 1))
+  }
+
+  probe_blocked() {
+    path=$1
+    code="$(curl --insecure --silent --show-error --output "$body" --write-out '%{http_code}' \
+      --connect-timeout 5 --max-time 20 \
+      --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" \
+      -H 'Remote-User: akadmin' \
+      -H 'Remote-Groups: nas_admin,nas_allow_files,nas_allow_ai' \
+      -H 'X-authentik-username: akadmin' \
+      -H 'X-authentik-groups: nas_admin' \
+      "https://nas-test.local:$HTTPS_PORT$path" || true)"
+    case "$code" in
+      301|302|303|307|308|401|403|404) ;;
+      *)
+        cat "$body" >&2 || true
+        die "spoofed identity headers reached protected path $path (HTTP ${code:-none})"
+        ;;
+    esac
+    requests=$((requests + 1))
+    blocked=$((blocked + 1))
+  }
+
+  log "Running curl-based HTTP adversarial contracts"
+  probe_not_5xx "Cockpit hostile query" \
+    "https://127.0.0.1:$COCKPIT_PORT/?q=%3Cscript%3EglobalThis.__nas_xss%3D1%3C%2Fscript%3E"
+  probe_not_5xx "Cockpit encoded traversal" \
+    "https://127.0.0.1:$COCKPIT_PORT/%2e%2e/%2e%2e/etc/passwd" --path-as-is
+  probe_not_5xx "Caddy hostile query" \
+    "https://nas-test.local:$HTTPS_PORT/?q=%3Csvg%2Fonload%3Dalert%281%29%3E" \
+    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1"
+  probe_not_5xx "Caddy encoded traversal" \
+    "https://nas-test.local:$HTTPS_PORT/%2e%2e/%2e%2e/etc/shadow" \
+    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" --path-as-is
+
+  for path in /shares/ /shares/admin/ /console/ /ai/ /syncthing/ /vault/admin /metrics/ /alerts/; do
+    probe_blocked "$path"
+  done
+
+  install -d -m 0755 "$(dirname "$evidence")"
+  python3 - "$evidence" "$requests" "$blocked" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "ok": True,
+    "engine": "curl",
+    "requests": int(sys.argv[2]),
+    "spoofedIdentityPathsBlocked": int(sys.argv[3]),
+}
+path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
 case "$WORKLOAD" in
   deterministic-browser)
     log "Running deterministic authenticated and unauthenticated browser checks against the final VM"
@@ -109,6 +184,7 @@ case "$WORKLOAD" in
     ;;
   installed-command-fuzz)
     fuzz_out="${NAS_INSTALLED_FUZZ_OUT:-$ROOT/installed-command-fuzz.json}"
+    http_out="${NAS_HTTP_ADVERSARIAL_OUT:-$ROOT/http-adversarial.json}"
     install -d -m 0755 "$(dirname "$fuzz_out")"
     log "Running installed-command adversarial fuzzing in the disposable VM"
     ssh "${ssh_args[@]}" admin@127.0.0.1 \
@@ -124,6 +200,7 @@ expected = sum(item.get("fuzzStrategy") is not None for item in contracts["execu
 if result.get("ok") is not True or result.get("commands") != expected or expected == 0:
     raise SystemExit("installed-command fuzz evidence is empty or incomplete")
 PY
+    run_http_adversarial_contracts "$http_out"
     ;;
   zap-fuzz)
     [[ -n "${NAS_ZAP_IMAGE:-}" ]] || die "NAS_ZAP_IMAGE is required for zap-fuzz"
