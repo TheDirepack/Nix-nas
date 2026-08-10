@@ -2,12 +2,12 @@ import {defineConfig, devices} from "@playwright/test";
 
 const suite = process.env.NAS_BROWSER_SUITE || "deterministic";
 const isFinalVm = suite === "vm";
-const testMatch =
-  suite === "fuzz"
-    ? "ui-fuzz.spec.mjs"
-    : isFinalVm
-      ? "final-vm.spec.mjs"
-      : ["ui-security.spec.mjs", "common-xss.spec.mjs"];
+// Browser security is a deterministic behavioral/regression layer. Do not grow
+// a second hand-written mutation fuzzer here; generated browser properties need
+// a lockfile-pinned property engine with shrinking.
+const testMatch = isFinalVm
+  ? "final-vm.spec.mjs"
+  : ["ui-security.spec.mjs", "common-xss.spec.mjs"];
 
 export default defineConfig({
   testDir: ".",
