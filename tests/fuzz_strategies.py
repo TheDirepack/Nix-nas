@@ -11,71 +11,98 @@ from typing import Any
 
 from hypothesis import strategies as st
 
-MAX_TEXT = 8192
 
-CONTROL_CHARS = "\x00\r\n\t\x1b\x7f"
-PATH_SEPARATORS = "/\\"
-SHELL_METACHARS = ";|&$`<>(){}[]'\""
-
-
-def bounded_text(*, max_size: int = MAX_TEXT) -> st.SearchStrategy[str]:
-    return st.text(max_size=max_size)
-
-
-def identifier_candidates(*, max_size: int = 512) -> st.SearchStrategy[str]:
-    """Generate ordinary and grammar-hostile identifier candidates."""
-
-    normal = st.text(
+def _identifier_fragment(*, max_size: int) -> st.SearchStrategy[str]:
+    return st.text(
         alphabet=st.characters(
             blacklist_categories=("Cs",),
-            blacklist_characters="\x00\r\n",
+            blacklist_characters="/\\\x00\r\n\t ;|&$`",
         ),
         max_size=max_size,
     )
-    hostile = st.sampled_from(
-        [
-            "..",
-            "../x",
-            "..\\x",
-            "/absolute",
-            "a/b",
-            "a\\b",
-            "--option",
-            "-x",
-            "a b",
-            "a\tb",
-            "a\nb",
-            "a\x00b",
-            "a;b",
-            "a|b",
-            "a&b",
-            "a$b",
-            "a`b",
-            "\u202eadmin",
-        ]
+
+
+def identifier_candidates(*, max_size: int = 512) -> st.SearchStrategy[str]:
+    """Generate ordinary identifiers plus structural grammar violations."""
+
+    normal = st.text(
+        alphabet=st.characters(blacklist_categories=("Cs",)),
+        max_size=max_size,
     )
-    return st.one_of(normal, hostile)
+    fragment = _identifier_fragment(max_size=max(1, min(max_size // 2, 128)))
+    path_like = st.builds(
+        lambda left, separator, right: f"{left}{separator}{right}",
+        fragment,
+        st.sampled_from(["/", "\\"]),
+        fragment,
+    )
+    option_like = st.builds(
+        lambda prefix, body: prefix + body,
+        st.sampled_from(["-", "--"]),
+        fragment.filter(bool),
+    )
+    whitespace = st.builds(
+        lambda left, separator, right: f"{left}{separator}{right}",
+        fragment,
+        st.sampled_from([" ", "\t", "\r", "\n"]),
+        fragment,
+    )
+    shell_meta = st.builds(
+        lambda left, metachar, right: f"{left}{metachar}{right}",
+        fragment,
+        st.sampled_from(list(";|&$`")),
+        fragment,
+    )
+    traversal = st.builds(
+        lambda separator, tail: f"..{separator}{tail}",
+        st.sampled_from(["/", "\\"]),
+        fragment,
+    )
+    control = st.builds(
+        lambda left, character, right: f"{left}{character}{right}",
+        fragment,
+        st.sampled_from(["\x00", "\x1b", "\x7f", "\u202e", "\u2066", "\u2069"]),
+        fragment,
+    )
+    return st.one_of(normal, path_like, option_like, whitespace, shell_meta, traversal, control)
 
 
 def path_candidates(*, max_components: int = 12) -> st.SearchStrategy[str]:
-    component = st.one_of(
-        st.text(
-            alphabet=st.characters(
-                blacklist_categories=("Cs",),
-                blacklist_characters="/\\\x00\r\n",
-            ),
-            min_size=1,
-            max_size=64,
+    ordinary_component = st.text(
+        alphabet=st.characters(
+            blacklist_categories=("Cs",),
+            blacklist_characters="/\\\x00\r\n",
         ),
-        st.sampled_from([".", "..", "~", "-", "--", "%2e%2e", "\u202e"]),
+        min_size=1,
+        max_size=64,
     )
+    special_component = st.one_of(
+        st.just("."),
+        st.just(".."),
+        st.just("~"),
+        st.builds(lambda prefix: prefix + ".", st.sampled_from(["-", ".", "%2e"])),
+        st.builds(lambda marker, tail: marker + tail, st.sampled_from(["\u202e", "\u2066"]), ordinary_component),
+    )
+    component = st.one_of(ordinary_component, special_component)
 
     @st.composite
     def build(draw) -> str:
         parts = draw(st.lists(component, min_size=0, max_size=max_components))
         separator = draw(st.sampled_from(["/", "\\"]))
-        prefix = draw(st.sampled_from(["", separator, f".{separator}", f"..{separator}"]))
-        suffix = draw(st.sampled_from(["", separator, f"{separator}..", f"{separator}."]))
+        prefix_kind = draw(st.sampled_from(["relative", "absolute", "dot", "parent"]))
+        suffix_kind = draw(st.sampled_from(["none", "separator", "parent", "dot"]))
+        prefix = {
+            "relative": "",
+            "absolute": separator,
+            "dot": f".{separator}",
+            "parent": f"..{separator}",
+        }[prefix_kind]
+        suffix = {
+            "none": "",
+            "separator": separator,
+            "parent": f"{separator}..",
+            "dot": f"{separator}.",
+        }[suffix_kind]
         return prefix + separator.join(parts) + suffix
 
     return build()
@@ -100,6 +127,8 @@ def json_values(*, max_leaves: int = 80) -> st.SearchStrategy[Any]:
 
 
 def secret_key_names() -> st.SearchStrategy[str]:
+    """Generate the naming conventions that should always trigger redaction."""
+
     base = st.sampled_from(
         [
             "password",
