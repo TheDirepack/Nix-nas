@@ -37,6 +37,7 @@ CHECKS = (
             "tests.test_secret_transaction",
             "tests.test_secret_transaction_followup",
             "tests.test_secret_security",
+            "tests.test_secret_security_fuzz",
             "tests.test_keepass_fail_closed",
             "tests.test_secret_journal_security",
             "tests.test_ai_secret_transaction",
