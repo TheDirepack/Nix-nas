@@ -10,11 +10,11 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 ./scripts/test-matrix.py list
 ./scripts/test-matrix.py fast --report test-evidence/fast.json
 ./scripts/test-matrix.py security --report test-evidence/security.json
-./scripts/test-matrix.py fuzz --cases 10000 --seed 0x4e41533232 --report test-evidence/fuzz.json
+./scripts/test-matrix.py fuzz --report test-evidence/fuzz.json
 ./scripts/test-matrix.py all --require-all --report test-evidence/full.json
 ```
 
-The local matrix `fast` command includes its fuzz tier. GitHub's fast workflow dispatch is narrower and runs no fuzz workloads. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
+The local matrix `fast` command includes its smart-fuzz tier. GitHub's fast workflow dispatch is narrower and may omit heavyweight generated testing. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
 
 The CI pipeline summary applies event- and dispatch-tier requirements. A job required for that run must succeed; a skipped required job fails pipeline qualification rather than being accepted as an intentional skip.
 
@@ -24,7 +24,7 @@ The CI pipeline summary applies event- and dispatch-tier requirements. A job req
 ./scripts/preflight.sh
 ```
 
-Preflight checks repository structure and data, version and policy contracts, documentation links, the custom-executable inventory, static security boundaries, Python syntax and behavior, shell syntax, JavaScript/JSX source contracts, the Cockpit bundle when available, and the Authentik fixture. Its deterministic fuzz smoke tests are opt-in through `NAS_PREFLIGHT_INCLUDE_FUZZ=1`; CI runs fuzzing only in the final parallel stage. Nix, Ruff, Pyright, ShellCheck, and complete Cockpit bundle checks run when their tools or artifacts are available.
+Preflight checks repository structure and data, version and policy contracts, documentation links, the custom-executable inventory, static security boundaries, Python syntax and behavior, shell syntax, JavaScript/JSX source contracts, the Cockpit bundle when available, and the Authentik fixture. Generated fuzz/property work is opt-in through `NAS_PREFLIGHT_INCLUDE_FUZZ=1`; when enabled, preflight delegates to the same `scripts/run-fuzz.py` orchestrator used elsewhere rather than maintaining its own seed, case count, or mutation loop. Nix, Ruff, Pyright, ShellCheck, and complete Cockpit bundle checks run when their tools or artifacts are available.
 
 The offline Authentik fixture uses a private temporary identity lock unless the caller supplies an explicit lock path, keeping source validation isolated from host runtime state.
 
@@ -35,43 +35,48 @@ Useful focused commands:
 python3 -m unittest tests.test_adversarial_security -v
 ./scripts/run-security-tests.py
 ./scripts/security-static-scan.py
-./scripts/fuzz.py --cases 5000
-./scripts/fuzz-executables.py --cases 5
+./scripts/run-fuzz.py
+./scripts/run-fuzz.py --suite boundaries --suite properties --jobs 2
+nix develop .#test -c python3 -m unittest tests.slow_managed_service_stateful -v
 node --test tests/js/*.test.mjs
 node cockpit/build.js --check-source
 ```
 
-`tests/custom-script-contracts.json` is the executable coverage authority. Every NAS-owned installed command and every executable repository-maintenance script must declare focused tests plus an adversarial strategy. Installed commands must also declare an installed-system test. `scripts/validate-test-inventory.py` discovers the executable surfaces and fails closed when a command is added, removed, or assigned an unsupported fuzz strategy without updating the test architecture.
+`tests/custom-script-contracts.json` is the executable coverage authority. Every NAS-owned installed command and every executable repository-maintenance script must declare focused tests plus an adversarial/whole-process strategy. Installed commands must also declare an installed-system test. `scripts/validate-test-inventory.py` discovers the executable surfaces and fails closed when a command is added, removed, or assigned an unsupported strategy without updating the test architecture.
 
-## 2. Boundary, property, and executable fuzzing
+## 2. Smart fuzzing and generated properties
 
-The deterministic boundary fuzzer requires only Python and uses a replayable seed. It exercises parsing and validation boundaries for identity groups, secrets, usernames, alerts, feature catalogs, setup documents, feature identifiers, state members, identity models, structured logs, doctor input, migration schemas, identity-error sanitization, operation classes, operation journals, authorization, endpoint labeling, and loopback-only health/probe URLs.
+The project does not maintain a project-local RNG mutator. **Hypothesis** is the canonical engine for Python structured input and stateful testing: it owns generation, edge-case search, shrinking, reproduction, and rule-based operation sequences. Project code defines strategies and invariants rather than manually generating thousands of arbitrary strings.
 
-```bash
-./scripts/fuzz.py --cases 50000 --seed 0x4e41533232
-```
+`scripts/run-fuzz.py` is an orchestrator, not a fuzzer. Its independent source classes run in parallel by default:
 
-The source-executable fuzzer runs every maintained executable script with strategy-appropriate hostile arguments. `scripts/run-matrix-fuzz.py` combines the boundary, unittest mutation, and executable fuzz layers under one seed/case contract for the matrix harness. Payloads include traversal strings, command-substitution markers, SQL-shaped input, HTML/JavaScript payloads, control characters, option confusion, and oversized values. It never invokes a shell with attacker-controlled text and checks for signal deaths, Python tracebacks, and marker-file creation.
+- `boundaries` — parser, identifier, path, normalization, and decoder properties from `tests/test_fuzz_boundaries.py`.
+- `properties` — cross-object, round-trip, metamorphic, and validation properties from `tests/test_property_invariants.py`.
+- `stateful` — `RuleBasedStateMachine` lifecycle sequences and differential projection checks from `tests/slow_managed_service_stateful.py`.
+- `security` — generated secret/logging/transaction properties from `tests/test_secret_security_fuzz.py`.
+- `executable-contracts` — one-pass whole-process checks for behavior that cannot be modeled efficiently in-process, such as argument-injection sentinels, unknown-option handling, signal death, tracebacks, syntax/source checks, and preflight behavior.
 
-```bash
-./scripts/fuzz-executables.py --cases 20 --seed 0x534352495054
-```
-
-The installed VM has a separate command fuzzer in `tests/vm/adversarial-installed.py`. It discovers the installed command strategies from the same inventory and exercises every NAS-owned appliance command in the disposable VM. Destructive ZFS commands use disposable test storage rather than the host or production data.
-
-CI exposes parser fuzzing, boundary unittest mutations, executable fuzzing, Hypothesis properties, randomized secret fuzzing, hostile-input browser fuzzing, installed-command fuzzing, and active ZAP scanning as final parallel workloads. Source and browser shards wait for deterministic integration; release and installer runs also wait for deterministic official-ISO qualification. Installed-command and ZAP jobs each provision a fresh isolated appliance instead of persisting or sharing VM disks or credentials.
-
-CI also runs Hypothesis properties from the pinned Nix test shell:
+Reusable generators live in `tests/fuzz_strategies.py`. They must not grow a second `random.Random` engine, static payload-blasting loop, global case counter, or home-grown corpus manager.
 
 ```bash
-nix develop .#test -c python -m unittest tests.test_property_invariants -v
+./scripts/run-fuzz.py
+./scripts/run-fuzz.py --suite boundaries
+./scripts/run-fuzz.py --suite stateful --suite security --jobs 2
 ```
 
-CI does not cache qualification pass markers: fast, property, browser, build, VM, and installer gates execute for every run that requires them. Dependency downloads, immutable installer media, and incremental Nix build outputs may still be cached because they accelerate execution without replacing test evidence.
+`scripts/fuzz.py` remains only as a stable compatibility entry point for the Hypothesis boundary suite. `scripts/fuzz-executables.py` is retained as a compatibility filename for the executable contract layer; despite the old name it does not perform mutation fuzzing or repeat generic payload lists.
+
+The installed disposable VM uses the same principle in `tests/vm/adversarial-installed.py`. Hypothesis generates strategy-specific **guaranteed-invalid** argv values for each declared command grammar and shrinks failures. Because each example starts a real appliance command, the example budget is intentionally small; repeatedly launching a command with hundreds of generic SQL/XSS/path strings would consume VM time without useful search guidance. Explicit shell-injection and other historically important values remain as regression examples.
+
+Known attack strings belong in deterministic regression tests or Hypothesis `@example` cases when they represent a concrete bug. A generated failure should be minimized by the property engine and, after the implementation is fixed, preserved as a deterministic regression if the example carries lasting security value.
+
+For a genuinely byte-oriented, fast in-process parser where code-coverage feedback can guide mutations, prefer a maintained coverage-guided engine such as Atheris/libFuzzer rather than adding another local RNG loop. Do not wrap subprocess, systemd, QEMU, or browser workflows in byte mutation merely to increase a case counter. If the project later exposes a machine-readable OpenAPI or GraphQL surface, use a schema-aware engine such as Schemathesis rather than generic HTTP request spraying.
+
+CI still has upstream VM/QEMU qualification work to stabilize. The smart-fuzz architecture is intentionally independent of that current blocker: once those downstream jobs become reachable, they should consume these same organized suites rather than reviving the old random mutation paths.
+
+CI does not cache qualification pass markers. Dependency downloads, immutable installer media, and incremental Nix build outputs may be cached because they accelerate execution without replacing test evidence.
 
 After the fast gates pass, one `build` job uses one runner to materialize and verify Cockpit (compiling it on a cache miss), round-trip the source archive, and build the NixOS closures in sequence. Browser qualification and KVM/QEMU integration remain downstream jobs. This runner consolidation does not remove or pass-cache any qualification tier.
-
-Unexpected deterministic fuzz crashes are retained under `.fuzz-crashes/` with the target, seed, and case. A confirmed crash should become a normal regression test before the implementation is fixed.
 
 ## 3. Static security and injection checks
 
@@ -85,7 +90,7 @@ nix develop .#test -c bandit -q -r services scripts -ll -ii
 npm --prefix cockpit audit --audit-level=high
 ```
 
-Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, and XSS-shaped values through setup, identity, feature-control, alert, state, and Cockpit API boundaries. Static scanners are not treated as proof that an interface is safe; the behavioral tests are the primary contract for input handling.
+Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, and XSS-shaped regression values through setup, identity, feature-control, alert, state, and Cockpit API boundaries. Static scanners are not treated as proof that an interface is safe; behavioral and generated properties are the primary contracts for input handling.
 
 ## 4. Coverage regression gates
 
@@ -106,6 +111,8 @@ npm --prefix cockpit run build
 npm --prefix cockpit exec -- playwright install chromium firefox webkit
 npm --prefix cockpit run test:browser
 ```
+
+Playwright is used for browser behavior, rendering, interaction, and deterministic security regressions. Fixed XSS/HTML/URL strings are regression examples, not a pretend fuzzer; do not multiply a small seed list into dozens of mechanically transformed cases. If browser-side generated property testing is added, use a maintained JavaScript property engine with shrinking (for example fast-check) and keep it lockfile-pinned rather than adding another handwritten mutator.
 
 The browser suite verifies that hostile backend strings remain inert, no executable markup appears, controls work with keyboard focus, serious/critical automated accessibility findings are absent, and the page avoids document-level horizontal overflow across small phones through large desktop viewports. It also repeats layout checks at 200% font scaling and with oversized hostile status text.
 
