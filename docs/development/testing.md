@@ -37,6 +37,7 @@ python3 -m unittest tests.test_adversarial_security -v
 ./scripts/security-static-scan.py
 ./scripts/run-fuzz.py
 ./scripts/run-fuzz.py --suite boundaries --suite properties --jobs 2
+./scripts/run-fuzz.py --suite javascript --jobs 1
 nix develop .#test -c python3 -m unittest tests.slow_managed_service_stateful -v
 node --test tests/js/*.test.mjs
 node cockpit/build.js --check-source
@@ -48,20 +49,22 @@ node cockpit/build.js --check-source
 
 The project does not maintain a project-local RNG mutator. **Hypothesis** is the canonical engine for Python structured input and stateful testing: it owns generation, edge-case search, shrinking, reproduction, and rule-based operation sequences. Project code defines strategies and invariants rather than manually generating thousands of arbitrary strings.
 
-`scripts/run-fuzz.py` is an orchestrator, not a fuzzer. Its independent source classes run in parallel by default:
+`scripts/run-fuzz.py` is an orchestrator, not a fuzzer. Its independent source classes can run in parallel:
 
 - `boundaries` — parser, identifier, path, normalization, and decoder properties from `tests/test_fuzz_boundaries.py`.
 - `properties` — cross-object, round-trip, metamorphic, and validation properties from `tests/test_property_invariants.py`.
 - `stateful` — `RuleBasedStateMachine` lifecycle sequences and differential projection checks from `tests/slow_managed_service_stateful.py`.
 - `security` — generated secret/logging/transaction properties from `tests/test_secret_security_fuzz.py`.
+- `javascript` — shrinking frontend value-space properties from the isolated `tests/js-fuzz/` fast-check workspace.
 - `executable-contracts` — one-pass whole-process checks for behavior that cannot be modeled efficiently in-process, such as argument-injection sentinels, unknown-option handling, signal death, tracebacks, syntax/source checks, and preflight behavior.
 
-Reusable generators live in `tests/fuzz_strategies.py`. They must not grow a second `random.Random` engine, static payload-blasting loop, global case counter, or home-grown corpus manager.
+Reusable Python generators live in `tests/fuzz_strategies.py`. They must not grow a second `random.Random` engine, static payload-blasting loop, global case counter, or home-grown corpus manager.
 
 ```bash
 ./scripts/run-fuzz.py
 ./scripts/run-fuzz.py --suite boundaries
 ./scripts/run-fuzz.py --suite stateful --suite security --jobs 2
+./scripts/run-fuzz.py --suite javascript --suite executable-contracts --jobs 2
 ```
 
 `scripts/fuzz.py` remains only as a stable compatibility entry point for the Hypothesis boundary suite. `scripts/fuzz-executables.py` is retained as a compatibility filename for the executable contract layer; despite the old name it does not perform mutation fuzzing or repeat generic payload lists.
@@ -72,7 +75,7 @@ Known attack strings belong in deterministic regression tests or Hypothesis `@ex
 
 For a genuinely byte-oriented, fast in-process parser where code-coverage feedback can guide mutations, prefer a maintained coverage-guided engine such as Atheris/libFuzzer rather than adding another local RNG loop. Do not wrap subprocess, systemd, QEMU, or browser workflows in byte mutation merely to increase a case counter. If the project later exposes a machine-readable OpenAPI or GraphQL surface, use a schema-aware engine such as Schemathesis rather than generic HTTP request spraying.
 
-CI still has upstream VM/QEMU qualification work to stabilize. The smart-fuzz architecture is intentionally independent of that current blocker: once those downstream jobs become reachable, they should consume these same organized suites rather than reviving the old random mutation paths.
+CI currently sequences the generated source-property shards after deterministic QEMU integration. That is an orchestration choice, not a limitation of Hypothesis or fast-check. The important boundary is tool selection: use the cheapest layer that proves the invariant while preserving higher-fidelity VM or browser checks where those semantics matter.
 
 CI does not cache qualification pass markers. Dependency downloads, immutable installer media, and incremental Nix build outputs may be cached because they accelerate execution without replacing test evidence.
 
@@ -112,11 +115,13 @@ npm --prefix cockpit exec -- playwright install chromium firefox webkit
 npm --prefix cockpit run test:browser
 ```
 
-Playwright is used for browser behavior, rendering, interaction, and deterministic security regressions. Fixed XSS/HTML/URL strings are regression examples, not a pretend fuzzer; do not multiply a small seed list into dozens of mechanically transformed cases. If browser-side generated property testing is added, use a maintained JavaScript property engine with shrinking (for example fast-check) and keep it lockfile-pinned rather than adding another handwritten mutator.
+Playwright is used whenever the invariant depends on actual browser semantics: DOM execution/XSS behavior, rendering, interaction, focus, layout, accessibility, or real login flows. Fixed XSS/HTML/URL strings are regression examples, not a pretend fuzzer; do not multiply a small seed list into dozens of mechanically transformed browser cases when the same input-space property can be checked more cheaply with fast-check. Generated browser tests are still appropriate when the property itself requires a browser engine.
+
+HTTP request/response properties that do **not** depend on DOM or browser behavior should use curl or another protocol-aware client instead. In the installed disposable VM, `scripts/qemu-final-browser.sh` uses curl for hostile query strings, encoded traversal, response-status checks, and spoofed identity-header authorization probes against the real Cockpit/Caddy stack. This avoids paying browser startup and rendering cost for tests that only need HTTP semantics.
 
 The browser suite verifies that hostile backend strings remain inert, no executable markup appears, controls work with keyboard focus, serious/critical automated accessibility findings are absent, and the page avoids document-level horizontal overflow across small phones through large desktop viewports. It also repeats layout checks at 200% font scaling and with oversized hostile status text.
 
-The installed-system Selenium suite separately uses the running Cockpit, Caddy, and Authentik stack. It checks real login and authorization identities, capability grants and denials, XSS-shaped identity data, browser console errors, duplicate DOM IDs, interactive-control geometry, and multiple viewport widths. This gives the project both a deterministic mocked-backend browser layer and a real-appliance browser layer.
+The installed-system browser suite separately uses the running Cockpit, Caddy, and Authentik stack. It checks real login and authorization identities, capability grants and denials, XSS-shaped identity data, browser console errors, duplicate DOM IDs, interactive-control geometry, and multiple viewport widths. This gives the project both a deterministic mocked-backend browser layer and a real-appliance browser layer.
 
 Automated accessibility and layout checks cannot detect every visual or usability defect; manual review remains part of release qualification.
 
@@ -146,11 +151,13 @@ The reinstall, failed-candidate, candidate-switch, rollback, and final reconfigu
 
 The guest suite deliberately checks states that must never occur: protected services running while secrets are locked, unauthenticated or spoofed identities receiving protected access, destructive setup without exact confirmation, hostile identifiers reaching shell execution, SQL-shaped usernames passing account validation, traversal-shaped device paths, malformed alert requests producing tracebacks, unsafe state/archive members, stale operation residue, and recovery/rollback inconsistencies.
 
+The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
+
 Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testing.md).
 
 ## 8. Dynamic web security
 
-The Playwright suite is the deterministic application-level layer. The final ZAP workload provisions an independent official-ISO VM, runs the existing public/Cockpit scans, and then runs unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI fails closed when the reviewed repository variable is absent and retains HTML, JSON, and Markdown reports.
+The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI fails closed when the reviewed repository variable is absent and retains HTML, JSON, and Markdown reports.
 
 For a local run:
 
