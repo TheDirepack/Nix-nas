@@ -92,7 +92,7 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
 
     def test_vm_http_adversarial_contracts_use_curl(self) -> None:
         harness = (ROOT / "scripts/qemu-final-browser.sh").read_text(encoding="utf-8")
-        block = harness.split("run_http_adversarial_contracts()", 1)[1].split("case \"$WORKLOAD\"", 1)[0]
+        block = harness.split("run_http_adversarial_contracts()", 1)[1].split('case "$WORKLOAD"', 1)[0]
         self.assertIn("curl --insecure --silent --show-error", block)
         self.assertIn("spoofed identity headers reached protected path", block)
         for browser in ("playwright", "chromium", "firefox", "webkit", "selenium"):
