@@ -115,6 +115,7 @@ class VmBundleScriptTests(unittest.TestCase):
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         block = flake.split("\n      packages.x86_64-linux =", 1)[1]
         block = block.split("\n      devShells.x86_64-linux.test =", 1)[0]
+        block = block.split("\n        in {", 1)[1]
         declared = set(re.findall(r"^\s{10}([a-zA-Z0-9][a-zA-Z0-9-]*)\s*=", block, flags=re.MULTILINE))
         self.assertEqual(declared, set(EXPECTED_BUNDLES))
 
