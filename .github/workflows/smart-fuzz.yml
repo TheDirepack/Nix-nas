@@ -1,0 +1,73 @@
+name: Smart fuzz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smart-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-properties:
+    name: Hypothesis ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [boundaries, properties, stateful, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Run structured property suite
+        run: nix develop .#test -c python3 scripts/run-fuzz.py --suite "${{ matrix.suite }}" --jobs 1
+
+  javascript-properties:
+    name: fast-check frontend properties
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/js-fuzz/package-lock.json
+      - name: Install isolated fuzz dependencies
+        run: npm --prefix tests/js-fuzz ci --no-audit --no-fund
+      - name: Run shrinking frontend properties
+        run: npm --prefix tests/js-fuzz test
+
+  executable-contracts:
+    name: Whole-process adversarial contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Run one-pass executable contracts
+        run: python3 scripts/run-fuzz.py --suite executable-contracts --jobs 1
+
+  http-adversarial:
+    name: curl static HTTP adversarial checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run curl-only HTTP checks
+        run: bash tests/http-static-adversarial.sh
