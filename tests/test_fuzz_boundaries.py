@@ -17,7 +17,7 @@ if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
 try:
-    from hypothesis import HealthCheck, given, settings, strategies as st
+    from hypothesis import HealthCheck, event, given, settings, strategies as st, target
 except ImportError:
     HAS_HYPOTHESIS = False
 else:
@@ -39,6 +39,8 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(st.text(max_size=9000))
         def test_group_header_parser_is_total_bounded_and_control_safe(self, raw: str) -> None:
+            target(len(raw), label="group-header-length")
+            event("group-header:control" if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw) else "group-header:text")
             with contextlib.redirect_stderr(io.StringIO()):
                 groups = common.split_groups(raw)
             self.assertLessEqual(len(groups), common.MAX_GROUPS)
@@ -51,21 +53,27 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=400, deadline=None)
         @given(identifier_candidates(max_size=300))
         def test_usernames_never_escape_the_declared_identifier_grammar(self, raw: str) -> None:
+            target(len(raw), label="username-length")
             try:
                 accepted = syncthing.validate_username(raw)
             except syncthing.DeviceError:
+                event("username:rejected")
                 return
+            event("username:accepted")
             self.assertEqual(accepted, raw)
             self.assertRegex(accepted, syncthing.USERNAME_RE)
 
         @settings(max_examples=400, deadline=None)
         @given(identifier_candidates(max_size=512))
         def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, raw: str) -> None:
+            target(len(raw), label="feature-id-length")
             try:
                 accepted = api.validate_argument(raw, api.FEATURE_RE, "feature identifier")
             except api.ApiError:
+                event("feature-id:rejected")
                 self.assertTrue(len(raw) > api.MAX_ARGUMENT_LENGTH or api.FEATURE_RE.fullmatch(raw) is None)
                 return
+            event("feature-id:accepted")
             self.assertEqual(accepted, raw)
             self.assertLessEqual(len(accepted), api.MAX_ARGUMENT_LENGTH)
             self.assertIsNotNone(api.FEATURE_RE.fullmatch(accepted))
@@ -73,10 +81,13 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=400, deadline=None)
         @given(st.text(max_size=4200))
         def test_secret_line_normalization_never_returns_multiline_or_nul_data(self, raw: str) -> None:
+            target(len(raw), label="secret-line-length")
             try:
                 accepted = setup_config.normalize_secret_line(raw, "fuzz secret")
             except setup_config.SetupError:
+                event("secret-line:rejected")
                 return
+            event("secret-line:accepted")
             self.assertTrue(accepted)
             self.assertNotIn("\x00", accepted)
             self.assertNotIn("\r", accepted)
@@ -86,10 +97,13 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=500, deadline=None)
         @given(st.one_of(path_candidates(), st.text(max_size=2048)))
         def test_archive_member_parser_never_returns_absolute_or_parent_paths(self, raw: str) -> None:
+            target(len(raw.encode("utf-8", errors="ignore")), label="archive-member-input-bytes")
             try:
                 accepted = state.safe_member_name(raw)
             except state.StateError:
+                event("archive-member:rejected")
                 return
+            event("archive-member:accepted")
             self.assertFalse(accepted.is_absolute())
             self.assertNotIn("..", accepted.parts)
             self.assertNotIn("", accepted.parts)
@@ -111,10 +125,13 @@ if HAS_HYPOTHESIS:
             )
         )
         def test_syncthing_device_decoder_has_only_expected_failure_modes(self, raw: str) -> None:
+            target(len(raw), label="syncthing-device-input-length")
             try:
                 device = syncthing.normalize_device(raw)
             except syncthing.DeviceError:
+                event("syncthing-device:rejected")
                 return
+            event("syncthing-device:accepted")
             self.assertRegex(device["deviceID"], syncthing.DEVICE_ID_RE)
             self.assertLessEqual(len(device["name"]), syncthing.MAX_DEVICE_NAME)
             self.assertLessEqual(len(device["addresses"]), syncthing.MAX_ADDRESSES)
@@ -129,6 +146,7 @@ if HAS_HYPOTHESIS:
         def test_alert_normalization_is_bounded_and_control_safe(
             self, alertname: str, severity: str, summary: str, description: str
         ) -> None:
+            target(max(map(len, (alertname, severity, summary, description))), label="alert-field-length")
             raw = {
                 "labels": {"alertname": alertname, "severity": severity},
                 "annotations": {"summary": summary, "description": description},
@@ -137,7 +155,9 @@ if HAS_HYPOTHESIS:
             try:
                 alert = alerts.normalize_alert(raw)
             except alerts.AlertRouterError:
+                event("alert:rejected")
                 return
+            event("alert:accepted")
             self.assertLessEqual(len(alert.title), 256)
             self.assertLessEqual(len(alert.message), 4096)
             self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in alert.title))
@@ -156,26 +176,31 @@ if HAS_HYPOTHESIS:
             try:
                 normalized = setup_config.normalize_config(raw)
             except (setup_config.SetupError, TypeError, ValueError):
+                event("setup-accounts:rejected")
                 return
+            event("setup-accounts:accepted")
+            target(len(normalized["accounts"]), label="normalized-account-count")
             for account in normalized["accounts"]:
                 self.assertRegex(account["username"], syncthing.USERNAME_RE)
 
         @settings(max_examples=400, deadline=None)
         @given(identifier_candidates(max_size=256))
         def test_identity_model_rejects_or_preserves_usernames(self, username: str) -> None:
+            target(len(username), label="identity-username-length")
             raw = {"groups": [], "users": [{"pk": "1", "username": username, "is_active": True}]}
             try:
                 model = identity.build_model(raw)
             except identity.SyncError:
+                event("identity-username:rejected")
                 return
+            event("identity-username:accepted")
             self.assertTrue(all(re.fullmatch(syncthing.USERNAME_RE, user.uid) for user in model.users))
             self.assertTrue(all(user.uid == username for user in model.users))
 else:
 
-    @unittest.skip("Hypothesis is not installed; CI runs this suite in the Nix test environment")
     class StructuredBoundaryFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
-        def test_hypothesis_tier_placeholder(self) -> None:
-            pass
+        def test_hypothesis_is_required(self) -> None:
+            self.fail("Hypothesis is required for the structured boundary fuzz suite")
 
 
 if __name__ == "__main__":
