@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the organized smart-fuzz suites, in parallel by default.
 
-Structured Python inputs are generated and shrunk by Hypothesis.  This runner is
-only orchestration; it deliberately contains no home-grown mutation logic.
+Structured Python inputs are generated and shrunk by Hypothesis. This runner is
+only orchestration; it deliberately contains no project-local mutation engine.
 """
 
 from __future__ import annotations
@@ -24,35 +24,27 @@ class Suite:
     command: tuple[str, ...]
 
 
+def hypothesis_suite(name: str, pattern: str) -> Suite:
+    return Suite(
+        name,
+        (
+            "nix",
+            "develop",
+            ".#test",
+            "-c",
+            "./scripts/run-unit-tests.py",
+            "--jobs",
+            "1",
+            "--pattern",
+            pattern,
+        ),
+    )
+
+
 SUITES = {
-    "properties": Suite(
-        "properties",
-        (
-            "nix",
-            "develop",
-            ".#test",
-            "-c",
-            "./scripts/run-unit-tests.py",
-            "--jobs",
-            "1",
-            "--pattern",
-            "test_property_invariants.py",
-        ),
-    ),
-    "security": Suite(
-        "security",
-        (
-            "nix",
-            "develop",
-            ".#test",
-            "-c",
-            "./scripts/run-unit-tests.py",
-            "--jobs",
-            "1",
-            "--pattern",
-            "test_secret_security_fuzz.py",
-        ),
-    ),
+    "boundaries": hypothesis_suite("boundaries", "test_fuzz_boundaries.py"),
+    "properties": hypothesis_suite("properties", "test_property_invariants.py"),
+    "security": hypothesis_suite("security", "test_secret_security_fuzz.py"),
     "executables": Suite(
         "executables",
         (sys.executable, "scripts/fuzz-executables.py"),
