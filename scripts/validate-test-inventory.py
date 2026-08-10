@@ -16,6 +16,7 @@ INVENTORY = ROOT / "tests" / "custom-script-contracts.json"
 # installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/evaluate-reference-configurations.sh",
+    "scripts/http-adversarial-smoke.sh",
     "scripts/qemu-final-browser.sh",
     "scripts/vm-bundles.sh",
     "scripts/vm-pytest.sh",
