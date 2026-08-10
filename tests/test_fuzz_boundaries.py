@@ -30,7 +30,7 @@ else:
     import nas_setup_config as setup_config
     import nas_state as state
     import nas_syncthing_devices as syncthing
-    from fuzz_harness import identifier_candidates, json_values, path_candidates
+    from fuzz_strategies import identifier_candidates, json_values, path_candidates
 
 
 if HAS_HYPOTHESIS:
