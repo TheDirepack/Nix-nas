@@ -1,108 +1,138 @@
-"""Deterministic mutation helpers used by the fast and extended fuzz suites.
+"""Shared Hypothesis strategies for structured NAS fuzz/property tests.
 
-This deliberately has no third-party dependency so every developer and source-only
-release can run a useful fuzz pass. CI increases the case count with NAS_FUZZ_CASES.
+This module intentionally contains no RNG or mutation engine. Hypothesis owns
+input generation, targeting, shrinking, and reproduction; tests only describe
+valid or adversarial input shapes and assert invariants.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import random
-import string
-from collections.abc import Iterable, Iterator
 from typing import Any
 
-DEFAULT_CASES = max(32, min(int(os.environ.get("NAS_FUZZ_CASES", "256")), 10000))
-DEFAULT_SEED = int(os.environ.get("NAS_FUZZ_SEED", "22001"))
-MAX_MUTATION_BYTES = 8192
+from hypothesis import strategies as st
 
-INTERESTING_TEXT = (
-    "",
-    "0",
-    "null",
-    "true",
-    "false",
-    "../",
-    "..\\",
-    "/",
-    "\\",
-    "'\"`$;&|<>(){}[]",
-    "\x00",
-    "\r\n",
-    "\u202e",
-    "\ud7ff",
-    "é",
-    "🧪",
-    "A" * 4096,
-)
+MAX_TEXT = 8192
+
+CONTROL_CHARS = "\x00\r\n\t\x1b\x7f"
+PATH_SEPARATORS = "/\\"
+SHELL_METACHARS = ";|&$`<>(){}[]'\""
 
 
-def _bounded(value: str) -> str:
-    encoded = value.encode("utf-8", errors="ignore")[:MAX_MUTATION_BYTES]
-    return encoded.decode("utf-8", errors="ignore")
+def bounded_text(*, max_size: int = MAX_TEXT) -> st.SearchStrategy[str]:
+    return st.text(max_size=max_size)
 
 
-def mutate_text(corpus: Iterable[str], *, seed: int = DEFAULT_SEED, cases: int = DEFAULT_CASES) -> Iterator[str]:
-    """Yield reproducible string mutations with size and runtime bounds."""
+def identifier_candidates(*, max_size: int = 512) -> st.SearchStrategy[str]:
+    """Generate ordinary and grammar-hostile identifier candidates."""
 
-    rng = random.Random(seed)
-    base = [str(value) for value in corpus] + list(INTERESTING_TEXT)
-    seen: set[str] = set()
-    alphabet = string.ascii_letters + string.digits + "_-. /:;|&$'\"<>[]{}()\\\r\n\t"
-
-    def emit(value: str) -> Iterator[str]:
-        value = _bounded(value)
-        if value not in seen:
-            seen.add(value)
-            yield value
-
-    for value in base:
-        yield from emit(value)
-    for _ in range(cases):
-        value = rng.choice(base)
-        operation = rng.randrange(8)
-        if operation == 0:
-            position = rng.randrange(len(value) + 1)
-            value = value[:position] + rng.choice(INTERESTING_TEXT) + value[position:]
-        elif operation == 1 and value:
-            start = rng.randrange(len(value))
-            end = rng.randrange(start, len(value) + 1)
-            value = value[:start] + value[end:]
-        elif operation == 2:
-            value = value * rng.randint(2, 16)
-        elif operation == 3:
-            value = value[::-1]
-        elif operation == 4:
-            value = value + "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 64)))
-        elif operation == 5:
-            value = rng.choice(INTERESTING_TEXT) + value + rng.choice(INTERESTING_TEXT)
-        elif operation == 6:
-            value = value.swapcase()
-        else:
-            value = "".join(chr(rng.randrange(0, 256)) for _ in range(rng.randint(0, 64)))
-        yield from emit(value)
+    normal = st.text(
+        alphabet=st.characters(
+            blacklist_categories=("Cs",),
+            blacklist_characters="\x00\r\n",
+        ),
+        max_size=max_size,
+    )
+    hostile = st.sampled_from(
+        [
+            "..",
+            "../x",
+            "..\\x",
+            "/absolute",
+            "a/b",
+            "a\\b",
+            "--option",
+            "-x",
+            "a b",
+            "a\tb",
+            "a\nb",
+            "a\x00b",
+            "a;b",
+            "a|b",
+            "a&b",
+            "a$b",
+            "a`b",
+            "\u202eadmin",
+        ]
+    )
+    return st.one_of(normal, hostile)
 
 
-def json_values(*, seed: int = DEFAULT_SEED, cases: int = DEFAULT_CASES) -> Iterator[Any]:
-    """Yield bounded recursively generated JSON-compatible values."""
+def path_candidates(*, max_components: int = 12) -> st.SearchStrategy[str]:
+    component = st.one_of(
+        st.text(
+            alphabet=st.characters(
+                blacklist_categories=("Cs",),
+                blacklist_characters="/\\\x00\r\n",
+            ),
+            min_size=1,
+            max_size=64,
+        ),
+        st.sampled_from([".", "..", "~", "-", "--", "%2e%2e", "\u202e"]),
+    )
 
-    rng = random.Random(seed)
+    @st.composite
+    def build(draw: st.DrawFn) -> str:
+        parts = draw(st.lists(component, min_size=0, max_size=max_components))
+        separator = draw(st.sampled_from(["/", "\\"]))
+        prefix = draw(st.sampled_from(["", separator, f".{separator}", f"..{separator}"]))
+        suffix = draw(st.sampled_from(["", separator, f"{separator}..", f"{separator}." ]))
+        return prefix + separator.join(parts) + suffix
 
-    def value(depth: int = 0) -> Any:
-        scalar: list[Any] = [None, True, False, 0, -1, 1, 2**31 - 1, "", "x", "../", "\x00", "<script>"]
-        if depth >= 3 or rng.random() < 0.55:
-            return rng.choice(scalar)
-        if rng.random() < 0.5:
-            return [value(depth + 1) for _ in range(rng.randrange(0, 6))]
-        return {f"k{rng.randrange(0, 20)}": value(depth + 1) for _ in range(rng.randrange(0, 6))}
-
-    for item in [None, [], {}, "", 0, True]:
-        yield item
-    for _ in range(cases):
-        yield value()
+    return build()
 
 
-def json_texts(*, seed: int = DEFAULT_SEED, cases: int = DEFAULT_CASES) -> Iterator[str]:
-    for value in json_values(seed=seed, cases=cases):
-        yield json.dumps(value, ensure_ascii=False)
+def json_values(*, max_leaves: int = 80) -> st.SearchStrategy[Any]:
+    scalar = st.one_of(
+        st.none(),
+        st.booleans(),
+        st.integers(),
+        st.floats(allow_nan=False, allow_infinity=False),
+        st.text(max_size=1024),
+    )
+    return st.recursive(
+        scalar,
+        lambda children: st.one_of(
+            st.lists(children, max_size=24),
+            st.dictionaries(st.text(max_size=128), children, max_size=24),
+        ),
+        max_leaves=max_leaves,
+    )
+
+
+def secret_key_names() -> st.SearchStrategy[str]:
+    base = st.sampled_from(
+        [
+            "password",
+            "passwd",
+            "token",
+            "secret",
+            "api_key",
+            "access_key",
+            "private_key",
+            "client_secret",
+            "access_token",
+            "refresh_token",
+            "session_token",
+            "cookie",
+            "authorization",
+        ]
+    )
+
+    @st.composite
+    def render(draw: st.DrawFn) -> str:
+        value = draw(base)
+        style = draw(st.sampled_from(["snake", "dash", "dot", "camel", "provider"]))
+        if style == "dash":
+            value = value.replace("_", "-")
+        elif style == "dot":
+            value = value.replace("_", ".")
+        elif style == "camel":
+            head, *tail = value.split("_")
+            value = head + "".join(part[:1].upper() + part[1:] for part in tail)
+        elif style == "provider":
+            value = f"provider_{value}"
+        if draw(st.booleans()) and value:
+            value = value[:1].upper() + value[1:]
+        return value
+
+    return render()
