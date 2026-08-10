@@ -18,13 +18,13 @@ The privileged control plane uses the Python standard library, immutable datacla
 
 Structured Python fuzz/property testing uses **Hypothesis** from the pinned Nix test shell. Hypothesis is test-only and must not enter appliance runtime closures. Project-local RNG mutation engines are forbidden: tests define strategies and invariants while Hypothesis owns generation, shrinking, replay, and state-machine sequences.
 
-JavaScript property testing uses **fast-check 4.9.0** in the isolated `tests/js-fuzz/` npm workspace. Its lockfile is intentionally separate from `cockpit/package-lock.json`, so adding or updating a fuzzing tool cannot change the production Cockpit dependency graph or source hash. Generated JavaScript fuzzing belongs in this fast-check workspace, not in Playwright loops that launch a browser for every generated input.
+JavaScript property testing uses **fast-check 4.9.0** in the isolated `tests/js-fuzz/` npm workspace. Its lockfile is intentionally separate from `cockpit/package-lock.json`, so adding or updating a fuzzing tool cannot change the production Cockpit dependency graph or source hash. Use fast-check directly for frontend value-space properties that do not require a browser; it may also drive browser-backed cases when the invariant genuinely depends on browser semantics.
 
 Byte-level coverage-guided fuzzing may use Atheris/libFuzzer only for a target that actually consumes opaque or binary input. Do not add it merely to fuzz structured JSON, identifiers, paths, or configuration objects that property strategies can model more efficiently.
 
 ## Browser and HTTP test tools
 
-Playwright remains a deterministic browser-behavior tool for checks that require a browser engine: DOM execution/XSS regressions, layout, interaction, and accessibility. It is not the generic fuzz engine. Request/response-level behavior should use curl or a protocol-aware scanner without launching a browser. Installed web active scanning remains ZAP's responsibility.
+Playwright is the browser-behavior layer for checks that require a browser engine: DOM execution/XSS regressions, layout, interaction, accessibility, and real login flows. Browser engines are allowed for generated tests when those semantics matter. Request/response-level behavior that only needs HTTP status, headers, paths, redirects, or authorization responses should use curl or a protocol-aware scanner instead, because launching and rendering a browser adds cost without increasing fidelity for those invariants. Installed web active scanning remains ZAP's responsibility.
 
 ## Cockpit frontend
 
