@@ -152,7 +152,7 @@
             test-tools = [
               keepassxc
               nodejs
-              (python3.withPackages (pythonPackages: [ pythonPackages.selenium ]))
+              (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
             ];
           };
         in {
