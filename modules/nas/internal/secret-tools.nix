@@ -88,7 +88,9 @@ let
 
       kp_args() {
         KP_ARGS=(--quiet --pw-stdin)
-        [[ -n "$key_file" ]] && KP_ARGS+=(--key-file "$key_file")
+        if [[ -n "$key_file" ]]; then
+          KP_ARGS+=(--key-file "$key_file")
+        fi
       }
 
       entry_path() {
