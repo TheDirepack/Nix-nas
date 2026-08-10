@@ -87,7 +87,6 @@ REQUIRED_FILES = {
     "tests/browser/authz.py",
     "cockpit/e2e/playwright.config.mjs",
     "cockpit/e2e/ui-security.spec.mjs",
-    "cockpit/e2e/http-adversarial.spec.mjs",
     "tests/adversarial_payloads.py",
     "tests/custom-script-contracts.json",
     "tests/fuzz_strategies.py",
