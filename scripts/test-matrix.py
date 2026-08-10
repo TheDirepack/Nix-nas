@@ -47,7 +47,7 @@ def stage_catalog() -> dict[str, Stage]:
             "fuzz",
             (sys.executable, "scripts/run-fuzz.py"),
             900,
-            requires=("python3", "nix"),
+            requires=("python3", "nix", "npm"),
         ),
         "nix-config": Stage(
             "nix-config",
