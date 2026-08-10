@@ -44,8 +44,10 @@ if HAS_HYPOTHESIS:
             self.assertNotIn(sentinel, json.dumps(sanitized))
 
         @settings(max_examples=400, deadline=None)
-        @given(st.text(min_size=1, max_size=2048))
-        def test_nested_hostile_secret_values_never_escape_structured_log_redaction(self, value: str) -> None:
+        @given(st.text(max_size=1024))
+        def test_nested_hostile_secret_values_never_escape_structured_log_redaction(self, suffix: str) -> None:
+            sentinel = "SENTINEL-SECRET-DO-NOT-LOG:"
+            value = sentinel + suffix
             payload = {
                 "request": {
                     "clientSecret": value,
@@ -60,7 +62,7 @@ if HAS_HYPOTHESIS:
             self.assertEqual(len(raw.splitlines()), 1)
             decoded = json.loads(raw)
             encoded = json.dumps(decoded)
-            self.assertNotIn(value, encoded)
+            self.assertNotIn(sentinel, encoded)
             self.assertEqual(decoded["payload"]["request"]["clientSecret"], "[redacted]")
             self.assertEqual(decoded["payload"]["request"]["provider"]["apiKey"], "[redacted]")
 
