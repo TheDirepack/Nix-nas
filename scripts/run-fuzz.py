@@ -32,7 +32,7 @@ def hypothesis_suite(name: str, module_or_pattern: str, *, module: bool = False)
             "develop",
             ".#test",
             "-c",
-            sys.executable,
+            "python3",
             "-m",
             "unittest",
             module_or_pattern,
@@ -58,8 +58,8 @@ SUITES = {
     "properties": hypothesis_suite("properties", "test_property_invariants.py"),
     "stateful": hypothesis_suite("stateful", "tests.slow_managed_service_stateful", module=True),
     "security": hypothesis_suite("security", "test_secret_security_fuzz.py"),
-    "executables": Suite(
-        "executables",
+    "executable-contracts": Suite(
+        "executable-contracts",
         (sys.executable, "scripts/fuzz-executables.py"),
     ),
 }
