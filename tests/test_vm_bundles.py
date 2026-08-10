@@ -37,7 +37,7 @@ case "$1" in
         name=${ref##*.x86_64-linux.}
         ;;
     esac
-    printf '/nix/store/aaaaaaaaaa-%s\\n' "$name"
+    printf '/nix/store/aaaaaaaaaa-%s' "$name"
     ;;
   path-info)
     shift 2
