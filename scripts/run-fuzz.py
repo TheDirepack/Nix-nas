@@ -84,22 +84,28 @@ def run_suite(suite: Suite) -> tuple[str, int, str]:
     return suite.name, completed.returncode, prefix + completed.stdout
 
 
-def enter_test_environment(selected_names: list[str], argv: list[str]) -> int | None:
-    """Re-exec once through the pinned test shell only for Hypothesis suites."""
+def resolve_suites(selected_names: list[str], jobs: int) -> list[Suite]:
+    """Resolve one Nix worker group for Hypothesis when needed."""
 
-    if not HYPOTHESIS_SUITES.intersection(selected_names):
-        return None
+    selected_hypothesis = [name for name in selected_names if name in HYPOTHESIS_SUITES]
+    direct_names = [name for name in selected_names if name not in HYPOTHESIS_SUITES]
+    resolved = [SUITES[name] for name in direct_names]
+    if not selected_hypothesis:
+        return resolved
     if importlib.util.find_spec("hypothesis") is not None:
-        return None
+        resolved.extend(SUITES[name] for name in selected_hypothesis)
+        return resolved
+
     nix = shutil.which("nix")
     if nix is None:
-        print(
-            "Hypothesis suites need the pinned Nix test environment; Nix is unavailable.",
-            file=sys.stderr,
-        )
-        return 2
-    command = [nix, "develop", ".#test", "-c", "python3", "scripts/run-fuzz.py", *argv]
-    return subprocess.call(command, cwd=ROOT, env=os.environ.copy())
+        missing = ", ".join(selected_hypothesis)
+        raise RuntimeError(f"Hypothesis suites require Nix or an installed Hypothesis package: {missing}")
+    command = [nix, "develop", ".#test", "-c", "python3", "scripts/run-fuzz.py"]
+    for name in selected_hypothesis:
+        command.extend(["--suite", name])
+    command.extend(["--jobs", str(min(jobs, len(selected_hypothesis)))])
+    resolved.append(Suite("hypothesis", tuple(command)))
+    return resolved
 
 
 def main() -> int:
@@ -110,21 +116,18 @@ def main() -> int:
         choices=sorted(SUITES),
         help="suite to run; repeat to select several (default: all)",
     )
-    parser.add_argument("--jobs", type=int, default=len(SUITES), help="maximum parallel suites")
+    parser.add_argument("--jobs", type=int, default=len(SUITES), help="maximum parallel workers")
     args = parser.parse_args()
     if not 1 <= args.jobs <= len(SUITES):
         parser.error(f"--jobs must be from 1 through {len(SUITES)}")
 
     selected_names = list(dict.fromkeys(args.suite or SUITES.keys()))
-    forwarded: list[str] = []
-    for suite in args.suite or []:
-        forwarded.extend(["--suite", suite])
-    forwarded.extend(["--jobs", str(args.jobs)])
-    reexec_status = enter_test_environment(selected_names, forwarded)
-    if reexec_status is not None:
-        return reexec_status
+    try:
+        selected = resolve_suites(selected_names, args.jobs)
+    except RuntimeError as exc:
+        print(f"smart fuzz setup failed: {exc}", file=sys.stderr)
+        return 2
 
-    selected = [SUITES[name] for name in selected_names]
     failures = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.jobs, len(selected))) as executor:
         futures = [executor.submit(run_suite, suite) for suite in selected]
@@ -140,9 +143,9 @@ def main() -> int:
                 print(f"smart fuzz ok: {name}")
 
     if failures:
-        print(f"smart fuzz failed: {failures}/{len(selected)} suite(s)", file=sys.stderr)
+        print(f"smart fuzz failed: {failures}/{len(selected)} worker(s)", file=sys.stderr)
         return 1
-    print(f"smart fuzz complete: {len(selected)} suite(s)")
+    print(f"smart fuzz complete: {len(selected_names)} suite(s) across {len(selected)} worker(s)")
     return 0
 
 
