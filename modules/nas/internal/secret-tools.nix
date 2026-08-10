@@ -40,7 +40,10 @@ let
       cleanup_password() {
         unset keepass_password
       }
-      trap cleanup_password EXIT HUP INT TERM
+      trap cleanup_password EXIT
+      trap 'cleanup_password; exit 129' HUP
+      trap 'cleanup_password; exit 130' INT
+      trap 'cleanup_password; exit 143' TERM
 
       acquire_lock() {
         exec 8>/run/lock/nas-secrets.lock
