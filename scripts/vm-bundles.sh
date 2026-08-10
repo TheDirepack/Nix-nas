@@ -11,11 +11,17 @@ set -Eeuo pipefail
 # the integration job re-imports them before the VM tests build only the small
 # system-configuration delta.
 #
-# Each bundle is keyed by the content-address hash of its flake package output,
-# so an unchanged application reuses its previous bundle without a rebuild or
-# re-upload. Bundles overlap by design; every imported path is content
-# addressed, so duplicate imports are no-ops. `core` is always exported and
-# imported first, and every sub-bundle carries only what it adds on top of core.
+# Each bundle is keyed by the content-address hash of every root it contains,
+# so an unchanged bundle reuses its previous archive without a rebuild or
+# re-upload. Most bundles have one packages.<system> root. `test-tools` also
+# carries the exact unencrypted and encrypted NixOS test-driver roots: their
+# generated driver configurations reference each VM's system.build.vm start
+# script, so their recursive closures contain the already-assembled VM systems
+# needed by the downstream checks.
+#
+# Bundles overlap by design; every imported path is content addressed, so
+# duplicate imports are no-ops. `core` is always exported and imported first,
+# and every sub-bundle carries only what it adds on top of core.
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -37,7 +43,8 @@ usage() {
 usage: $PROG <list|keys|save|import> [dir]
 
 Build, cache, and restore per-application Nix store bundles for the QEMU
-integration VMs. Bundle names mirror the packages.x86_64-linux flake output.
+integration VMs. Bundle names mirror the packages.x86_64-linux flake output;
+the test-tools bundle additionally includes both NixOS VM test drivers.
 
   list                 print each bundle name, one per line (core first)
   keys [dir]           print key_<name>=<hash> lines (for GITHUB_OUTPUT) and,
@@ -53,20 +60,42 @@ list_bundles() {
   printf '%s\n' "${BUNDLES[@]}"
 }
 
-bundle_out_path() {
-  "$NIX" eval --raw ".#packages.$SYSTEM.$1.outPath"
+bundle_refs() {
+  local name=$1
+  printf '.#packages.%s.%s\n' "$SYSTEM" "$name"
+  if [[ $name == test-tools ]]; then
+    printf '.#checks.%s.nas-vm.driver\n' "$SYSTEM"
+    printf '.#checks.%s.nas-vm-encrypted.driver\n' "$SYSTEM"
+  fi
+}
+
+bundle_out_paths() {
+  local ref
+  while IFS= read -r ref; do
+    "$NIX" eval --raw "${ref}.outPath"
+    printf '\n'
+  done < <(bundle_refs "$1")
 }
 
 bundle_hash() {
   local out
-  out=$(bundle_out_path "$1")
-  basename "$out" | cut -d- -f1
+  local -a hashes=()
+  while IFS= read -r out; do
+    hashes+=("$(basename "$out" | cut -d- -f1)")
+  done < <(bundle_out_paths "$1")
+  (IFS=-; printf '%s\n' "${hashes[*]}")
 }
 
 closure() {
-  local out
-  out=$(bundle_out_path "$1")
-  "$NIX" path-info -r "$out" | sort -u
+  local -a outs=()
+  mapfile -t outs < <(bundle_out_paths "$1")
+  "$NIX" path-info -r "${outs[@]}" | sort -u
+}
+
+build_bundle() {
+  local -a refs=()
+  mapfile -t refs < <(bundle_refs "$1")
+  "$NIX" build --no-link "${refs[@]}"
 }
 
 keys() {
@@ -86,13 +115,13 @@ save() {
   core_file="$dir/.core.paths"
 
   # Core first: every sub-bundle is the closure "on top of" core.
-  "$NIX" build --no-link ".#packages.$SYSTEM.core"
+  build_bundle core
   closure core > "$core_file"
   xargs "$NIX_STORE" --export < "$core_file" | gzip > "$dir/core.nar.gz"
 
   while IFS= read -r name; do
     [[ $name == core ]] && continue
-    "$NIX" build --no-link ".#packages.$SYSTEM.$name"
+    build_bundle "$name"
     comm -23 <(closure "$name") "$core_file" \
       | xargs --no-run-if-empty "$NIX_STORE" --export | gzip > "$dir/$name.nar.gz"
   done < <(list_bundles)
