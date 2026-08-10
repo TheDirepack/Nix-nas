@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Run the organized smart-fuzz suites, in parallel by default.
+"""Run organized smart-fuzz and adversarial suites in parallel.
 
-Structured Python inputs are generated and shrunk by Hypothesis. This runner is
-only orchestration; it deliberately contains no project-local mutation engine.
+Hypothesis owns structured generation, targeting, shrinking, and reproduction.
+This runner only orchestrates independent target classes; it contains no local
+mutation engine or fixed hostile-payload corpus.
 """
 
 from __future__ import annotations
@@ -24,10 +25,21 @@ class Suite:
     command: tuple[str, ...]
 
 
-def hypothesis_suite(name: str, pattern: str) -> Suite:
-    return Suite(
-        name,
-        (
+def hypothesis_suite(name: str, module_or_pattern: str, *, module: bool = False) -> Suite:
+    if module:
+        command = (
+            "nix",
+            "develop",
+            ".#test",
+            "-c",
+            sys.executable,
+            "-m",
+            "unittest",
+            module_or_pattern,
+            "-v",
+        )
+    else:
+        command = (
             "nix",
             "develop",
             ".#test",
@@ -36,14 +48,15 @@ def hypothesis_suite(name: str, pattern: str) -> Suite:
             "--jobs",
             "1",
             "--pattern",
-            pattern,
-        ),
-    )
+            module_or_pattern,
+        )
+    return Suite(name, command)
 
 
 SUITES = {
     "boundaries": hypothesis_suite("boundaries", "test_fuzz_boundaries.py"),
     "properties": hypothesis_suite("properties", "test_property_invariants.py"),
+    "stateful": hypothesis_suite("stateful", "tests.slow_managed_service_stateful", module=True),
     "security": hypothesis_suite("security", "test_secret_security_fuzz.py"),
     "executables": Suite(
         "executables",
