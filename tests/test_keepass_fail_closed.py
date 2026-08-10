@@ -62,9 +62,7 @@ esac
                 "key_file=''\n"
                 "database=/tmp/test.kdbx\n"
                 "secret_group=NAS\n"
-                "keepass_password=test-password\n"
-                + helpers
-                + command
+                "keepass_password=test-password\n" + helpers + command
             )
             result = subprocess.run(
                 ["bash", "-c", script],
