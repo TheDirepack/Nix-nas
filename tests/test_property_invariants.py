@@ -21,7 +21,6 @@ else:
     import nas_logging
     import nas_managed_service as msvc
     import nas_syncthing_devices as syncthing_devices
-    from tests.slow_managed_service_stateful import ProjectionDifferentialTests, StatefulTests
 
 
 if HAS_HYPOTHESIS:
@@ -61,6 +60,8 @@ if HAS_HYPOTHESIS:
         }
 
     class PropertyInvariantTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
+        """Structured cross-object properties; parser boundaries and state machines run separately."""
+
         @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(
             st.recursive(
@@ -96,8 +97,17 @@ if HAS_HYPOTHESIS:
                 self.assertGreater(parsed.port, 0)
                 self.assertLess(parsed.port, 65536)
 
-        @settings(max_examples=180, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
-        @given(service_id=SERVICE_ID, label=SAFE_LABEL, port=st.integers(min_value=1, max_value=65535), hostname=SAFE_MANAGED_HOSTNAME)
+        @settings(
+            max_examples=180,
+            deadline=None,
+            suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+        )
+        @given(
+            service_id=SERVICE_ID,
+            label=SAFE_LABEL,
+            port=st.integers(min_value=1, max_value=65535),
+            hostname=SAFE_MANAGED_HOSTNAME,
+        )
         def test_managed_service_valid_doc_is_accepted(
             self, service_id: str, label: str, port: int, hostname: str
         ) -> None:
