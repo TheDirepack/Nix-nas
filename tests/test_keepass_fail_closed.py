@@ -27,6 +27,13 @@ def rendered_shell_helpers(*names: str) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def rendered_signal_setup() -> str:
+    source = SECRET_TOOLS.read_text(encoding="utf-8")
+    start = source.index("      cleanup_password() {")
+    end = source.index("\n\n      acquire_lock() {", start)
+    return textwrap.dedent(source[start:end]).replace("''${", "${") + "\n"
+
+
 class KeePassFailClosedTests(unittest.TestCase):
     def run_scenario(
         self,
@@ -197,6 +204,33 @@ class KeePassFailClosedTests(unittest.TestCase):
             timeout=10,
         )
         self.assertNotEqual(result.returncode, 0)
+
+    def test_secret_signal_handlers_terminate_instead_of_resuming(self) -> None:
+        setup = rendered_signal_setup()
+        source = SECRET_TOOLS.read_text(encoding="utf-8")
+        for signal_name, expected_status in (("HUP", 129), ("INT", 130), ("TERM", 143)):
+            with self.subTest(signal=signal_name):
+                self.assertIn(
+                    f"trap 'cleanup_password; exit {expected_status}' {signal_name}",
+                    source,
+                )
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        "set -Eeuo pipefail\n"
+                        "keepass_password=top-secret\n"
+                        + setup
+                        + f"kill -s {signal_name} $$\nprintf 'survived\\n'\n",
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
+                self.assertNotIn("survived", result.stdout)
 
 
 if __name__ == "__main__":
