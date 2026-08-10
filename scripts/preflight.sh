@@ -51,8 +51,9 @@ step "Python syntax" ./scripts/validate-python-syntax.py
 
 # Generated fuzz/property work is deliberately opt-in during preflight. The
 # canonical runner owns parallelization and Hypothesis owns input generation;
-# preflight must not maintain a second seed/case-count mutation path.
-if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" ]]; then
+# preflight must not maintain a second seed/case-count mutation path. Contract
+# checks of preflight itself set NAS_PREFLIGHT_SKIP_FUZZ to prevent recursion.
+if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" && "${NAS_PREFLIGHT_SKIP_FUZZ:-0}" != "1" ]]; then
   step "smart fuzz and executable contracts" ./scripts/run-fuzz.py
 fi
 
