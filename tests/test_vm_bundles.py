@@ -29,16 +29,25 @@ set -eu
 printf '%s\\n' "$*" >> "$NAS_TEST_NIX_LOG"
 case "$1" in
   eval)
-    name=${3##*.x86_64-linux.}
-    name=${name%.outPath}
+    ref=${3%.outPath}
+    case "$ref" in
+      .#checks.x86_64-linux.nas-vm.driver) name=nas-vm-driver ;;
+      .#checks.x86_64-linux.nas-vm-encrypted.driver) name=nas-vm-encrypted-driver ;;
+      *)
+        name=${ref##*.x86_64-linux.}
+        ;;
+    esac
     printf '/nix/store/aaaaaaaaaa-%s\\n' "$name"
     ;;
   path-info)
-    printf '%s\\n' "$3"
-    case "$3" in
-      */core) ;;
-      *) printf '%s\\n' /nix/store/aaaaaaaaaa-core ;;
-    esac
+    shift 2
+    for path in "$@"; do
+      printf '%s\\n' "$path"
+      case "$path" in
+        */core) ;;
+        *) printf '%s\\n' /nix/store/aaaaaaaaaa-core ;;
+      esac
+    done
     ;;
 esac
 """
@@ -127,9 +136,25 @@ class VmBundleScriptTests(unittest.TestCase):
         lines = result.stdout.splitlines()
         self.assertEqual(len(lines), len(EXPECTED_BUNDLES))
         for name in EXPECTED_BUNDLES:
-            expected = f"key_{name.replace('-', '_')}=aaaaaaaaaa"
+            expected_hash = "aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa" if name == "test-tools" else "aaaaaaaaaa"
+            expected = f"key_{name.replace('-', '_')}={expected_hash}"
             self.assertIn(expected, lines)
-            self.assertEqual((out_dir / f"{name}.key").read_text(encoding="utf-8").strip(), "aaaaaaaaaa")
+            self.assertEqual((out_dir / f"{name}.key").read_text(encoding="utf-8").strip(), expected_hash)
+
+    def test_test_tools_key_tracks_both_exact_nixos_test_drivers(self) -> None:
+        env, nix_log, _ = self._fake_environment()
+        result = self._run("keys", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        calls = nix_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn(
+            "eval --raw .#checks.x86_64-linux.nas-vm.driver.outPath",
+            calls,
+        )
+        self.assertIn(
+            "eval --raw .#checks.x86_64-linux.nas-vm-encrypted.driver.outPath",
+            calls,
+        )
+        self.assertIn("key_test_tools=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
 
     def test_save_exports_core_first_then_each_application_delta(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
@@ -148,7 +173,22 @@ class VmBundleScriptTests(unittest.TestCase):
 
         nix_calls = nix_log.read_text(encoding="utf-8").splitlines()
         for name in EXPECTED_BUNDLES:
+            if name == "test-tools":
+                continue
             self.assertIn(f"build --no-link .#packages.x86_64-linux.{name}", nix_calls)
+
+        test_tools_build = (
+            "build --no-link .#packages.x86_64-linux.test-tools "
+            ".#checks.x86_64-linux.nas-vm.driver "
+            ".#checks.x86_64-linux.nas-vm-encrypted.driver"
+        )
+        self.assertIn(test_tools_build, nix_calls)
+        self.assertIn(
+            "path-info -r /nix/store/aaaaaaaaaa-test-tools "
+            "/nix/store/aaaaaaaaaa-nas-vm-driver "
+            "/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver",
+            nix_calls,
+        )
 
         first_build = nix_calls.index("build --no-link .#packages.x86_64-linux.core")
         self.assertLess(
@@ -157,6 +197,11 @@ class VmBundleScriptTests(unittest.TestCase):
         )
         store_calls = nix_store_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len([c for c in store_calls if c.startswith("--export")]), len(EXPECTED_BUNDLES))
+        driver_export = next(c for c in store_calls if c.startswith("--export") and "nas-vm-driver" in c)
+        self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-driver", driver_export)
+        self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver", driver_export)
+        self.assertIn("/nix/store/aaaaaaaaaa-test-tools", driver_export)
+        self.assertNotIn("/nix/store/aaaaaaaaaa-core", driver_export)
 
     def test_import_restores_core_first(self) -> None:
         env, _, nix_store_log = self._fake_environment()
