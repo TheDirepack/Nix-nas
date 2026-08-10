@@ -71,11 +71,11 @@ def path_candidates(*, max_components: int = 12) -> st.SearchStrategy[str]:
     )
 
     @st.composite
-    def build(draw: st.DrawFn) -> str:
+    def build(draw) -> str:
         parts = draw(st.lists(component, min_size=0, max_size=max_components))
         separator = draw(st.sampled_from(["/", "\\"]))
         prefix = draw(st.sampled_from(["", separator, f".{separator}", f"..{separator}"]))
-        suffix = draw(st.sampled_from(["", separator, f"{separator}..", f"{separator}." ]))
+        suffix = draw(st.sampled_from(["", separator, f"{separator}..", f"{separator}."]))
         return prefix + separator.join(parts) + suffix
 
     return build()
@@ -119,7 +119,7 @@ def secret_key_names() -> st.SearchStrategy[str]:
     )
 
     @st.composite
-    def render(draw: st.DrawFn) -> str:
+    def render(draw) -> str:
         value = draw(base)
         style = draw(st.sampled_from(["snake", "dash", "dot", "camel", "provider"]))
         if style == "dash":
