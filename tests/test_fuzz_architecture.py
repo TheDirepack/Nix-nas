@@ -66,6 +66,7 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         self.assertFalse((ROOT / "cockpit/e2e/ui-fuzz.spec.mjs").exists())
         config = (ROOT / "cockpit/e2e/playwright.config.mjs").read_text(encoding="utf-8")
         self.assertNotIn("ui-fuzz.spec.mjs", config)
+        self.assertNotIn('suite === "fuzz"', config)
 
     def test_orchestrator_exposes_independent_parallel_target_classes(self) -> None:
         completed = subprocess.run(
@@ -89,25 +90,23 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
             with self.subTest(suite=suite):
                 self.assertIn(suite, help_text)
 
-    def test_smart_fuzz_workflow_is_independent_of_vm_qualification(self) -> None:
-        workflow = (ROOT / ".github/workflows/smart-fuzz.yml").read_text(encoding="utf-8")
-        self.assertIn("suite: [boundaries, properties, stateful, security]", workflow)
-        self.assertIn("fast-check frontend properties", workflow)
-        self.assertIn("Whole-process adversarial contracts", workflow)
-        self.assertIn("curl static HTTP adversarial checks", workflow)
-        self.assertNotIn("needs: [integration", workflow)
-        self.assertNotIn("qemu-test.sh", workflow)
-        self.assertNotIn("playwright install", workflow)
-        self.assertNotIn("chromium", workflow.lower())
-        self.assertIn("scripts/http-adversarial-smoke.sh", workflow)
-
-    def test_curl_http_harness_does_not_use_a_browser_runtime(self) -> None:
-        source = (ROOT / "scripts/http-adversarial-smoke.sh").read_text(encoding="utf-8")
-        self.assertIn("curl --silent", source)
-        self.assertIn("python3 -m http.server", source)
+    def test_vm_http_adversarial_contracts_use_curl(self) -> None:
+        harness = (ROOT / "scripts/qemu-final-browser.sh").read_text(encoding="utf-8")
+        block = harness.split("run_http_adversarial_contracts()", 1)[1].split("case \"$WORKLOAD\"", 1)[0]
+        self.assertIn("curl --insecure --silent --show-error", block)
+        self.assertIn("spoofed identity headers reached protected path", block)
         for browser in ("playwright", "chromium", "firefox", "webkit", "selenium"):
             with self.subTest(browser=browser):
-                self.assertNotIn(browser, source.lower())
+                self.assertNotIn(browser, block.lower())
+
+    def test_browser_runtime_remains_for_browser_specific_checks(self) -> None:
+        harness = (ROOT / "scripts/qemu-final-browser.sh").read_text(encoding="utf-8")
+        config = (ROOT / "cockpit/e2e/playwright.config.mjs").read_text(encoding="utf-8")
+        self.assertIn("deterministic-browser", harness)
+        self.assertIn("playwright test", harness)
+        self.assertIn('name: "chromium-final-vm"', config)
+        self.assertIn('name: "firefox-final-vm"', config)
+        self.assertIn('name: "webkit-final-vm"', config)
 
 
 if __name__ == "__main__":
