@@ -37,6 +37,8 @@ class MaintainerMatrixTests(MaintainerScriptMixin, unittest.TestCase):
             )
             required = module.run_stage(probe, require_complete_source=True)
             self.assertEqual(required["status"], "passed")
+            fuzz_stage = module.stage_catalog()["fuzz"]
+            self.assertEqual(fuzz_stage.requires, ("python3", "nix", "npm"))
             matrix_source = matrix_path.read_text(encoding="utf-8")
             self.assertIn("start_new_session=True", matrix_source)
             self.assertIn("os.killpg", matrix_source)
@@ -51,7 +53,7 @@ class MaintainerMatrixTests(MaintainerScriptMixin, unittest.TestCase):
         orchestrator = self.run_clean(sys.executable, "scripts/run-fuzz.py", "--help")
         self.assertEqual(orchestrator.returncode, 0, orchestrator.stdout + orchestrator.stderr)
         help_text = orchestrator.stdout + orchestrator.stderr
-        for suite in ("boundaries", "properties", "stateful", "security", "executable-contracts"):
+        for suite in ("boundaries", "properties", "stateful", "security", "javascript", "executable-contracts"):
             self.assertIn(suite, help_text)
         self.assertNotIn("--cases", help_text)
         self.assertNotIn("--seed", help_text)
@@ -173,3 +175,7 @@ pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8'
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("NAS_ZAP_CONFIRM_ACTIVE=1", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
