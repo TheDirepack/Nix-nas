@@ -89,6 +89,26 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
             with self.subTest(suite=suite):
                 self.assertIn(suite, help_text)
 
+    def test_smart_fuzz_workflow_is_independent_of_vm_qualification(self) -> None:
+        workflow = (ROOT / ".github/workflows/smart-fuzz.yml").read_text(encoding="utf-8")
+        self.assertIn("suite: [boundaries, properties, stateful, security]", workflow)
+        self.assertIn("fast-check frontend properties", workflow)
+        self.assertIn("Whole-process adversarial contracts", workflow)
+        self.assertIn("curl static HTTP adversarial checks", workflow)
+        self.assertNotIn("needs: [integration", workflow)
+        self.assertNotIn("qemu-test.sh", workflow)
+        self.assertNotIn("playwright install", workflow)
+        self.assertNotIn("chromium", workflow.lower())
+        self.assertIn("scripts/http-adversarial-smoke.sh", workflow)
+
+    def test_curl_http_harness_does_not_use_a_browser_runtime(self) -> None:
+        source = (ROOT / "scripts/http-adversarial-smoke.sh").read_text(encoding="utf-8")
+        self.assertIn("curl --silent", source)
+        self.assertIn("python3 -m http.server", source)
+        for browser in ("playwright", "chromium", "firefox", "webkit", "selenium"):
+            with self.subTest(browser=browser):
+                self.assertNotIn(browser, source.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
