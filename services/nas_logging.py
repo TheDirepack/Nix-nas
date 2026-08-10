@@ -39,16 +39,12 @@ _SENSITIVE_KEYS = frozenset(
         "session_token",
     }
 )
-_SENSITIVE_SUFFIXES = (
-    "_password",
-    "_passwd",
-    "_token",
-    "_secret",
-    "_api_key",
-    "_access_key",
-    "_private_key",
-    "_cookie",
-)
+# Compound structured-field names are common (providerAuthorization,
+# upstream_token, peer.credentials). Every complete sensitive token is treated
+# as sensitive at a normalized component boundary rather than maintaining a
+# second, inevitably incomplete suffix allowlist. Names such as
+# authorizationMethod remain visible because they do not end at that boundary.
+_SENSITIVE_SUFFIXES = tuple(f"_{key}" for key in sorted(_SENSITIVE_KEYS))
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
