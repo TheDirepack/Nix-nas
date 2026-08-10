@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+import ast
+import pathlib
+import subprocess
+import sys
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+SMART_FUZZ_FILES = (
+    "scripts/fuzz.py",
+    "scripts/fuzz-executables.py",
+    "scripts/run-fuzz.py",
+    "tests/fuzz_strategies.py",
+    "tests/test_fuzz_boundaries.py",
+    "tests/test_property_invariants.py",
+    "tests/test_secret_security_fuzz.py",
+    "tests/slow_managed_service_stateful.py",
+)
+
+
+def imported_roots(path: pathlib.Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    result: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            result.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            result.add(node.module.split(".", 1)[0])
+    return result
+
+
+class SmartFuzzArchitectureTests(unittest.TestCase):
+    def test_project_local_fuzz_layer_does_not_use_rng_mutation_engines(self) -> None:
+        for relative in SMART_FUZZ_FILES:
+            with self.subTest(path=relative):
+                imports = imported_roots(ROOT / relative)
+                self.assertNotIn("random", imports)
+
+    def test_shared_strategy_module_uses_hypothesis_not_case_loops(self) -> None:
+        source = (ROOT / "tests/fuzz_strategies.py").read_text(encoding="utf-8")
+        self.assertIn("from hypothesis import strategies as st", source)
+        self.assertNotIn("random.Random", source)
+        self.assertNotIn("NAS_FUZZ_CASES", source)
+        self.assertNotIn("for _ in range(", source)
+
+    def test_executable_layer_is_a_contract_check_not_payload_fuzzer(self) -> None:
+        source = (ROOT / "scripts/fuzz-executables.py").read_text(encoding="utf-8")
+        self.assertIn("not a mutation fuzzer", source)
+        self.assertNotIn("PAYLOADS =", source)
+        self.assertNotIn("rng.choice", source)
+        self.assertNotIn("random.Random", source)
+
+    def test_orchestrator_exposes_independent_parallel_target_classes(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "scripts/run-fuzz.py", "--help"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        help_text = completed.stdout + completed.stderr
+        for suite in ("boundaries", "properties", "stateful", "security", "executable-contracts"):
+            with self.subTest(suite=suite):
+                self.assertIn(suite, help_text)
+
+
+if __name__ == "__main__":
+    unittest.main()
