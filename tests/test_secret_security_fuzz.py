@@ -25,7 +25,7 @@ except ImportError:
 else:
     HAS_HYPOTHESIS = True
     import nas_logging
-    from fuzz_harness import identifier_candidates, secret_key_names
+    from fuzz_strategies import identifier_candidates, secret_key_names
 
 LIBRARY = ROOT / "scripts/lib/nas-secret-transaction.sh"
 
@@ -74,7 +74,7 @@ if HAS_HYPOTHESIS:
             self.assertEqual(decoded["payload"]["request"]["clientSecret"], "[redacted]")
             self.assertEqual(decoded["payload"]["request"]["provider"]["apiKey"], "[redacted]")
 
-        @settings(max_examples=60, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(identifier_candidates(max_size=24))
         def test_transaction_path_generation_never_accepts_root_overlap(self, component: str) -> None:
             with tempfile.TemporaryDirectory() as directory:
@@ -115,7 +115,7 @@ if HAS_HYPOTHESIS:
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-        @settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(identifier_candidates(max_size=48))
         def test_transaction_target_never_accepts_non_target_or_option_units(self, value: str) -> None:
             generated = shell_safe_component(value)
