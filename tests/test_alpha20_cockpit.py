@@ -132,7 +132,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Retain active ZAP evidence", workflow)
         self.assertIn("checks.x86_64-linux.nas-vm", workflow)
 
-    def test_fast_ci_excludes_all_fuzz_and_slow_ci_parallelizes_it(self) -> None:
+    def test_fast_ci_excludes_generated_fuzz_and_slow_ci_parallelizes_it(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         preflight = text("scripts/preflight.sh")
         security_runner = text("scripts/run-security-tests.py")
@@ -141,7 +141,6 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertGreaterEqual(workflow.count("--exclude test_secret_security_fuzz.py"), 3)
         self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
-        self.assertIn("shard: [parser, boundary-mutations, executables, properties, security]", workflow)
         self.assertIn("max-parallel: 5", workflow)
         self.assertIn("fail-fast: false", workflow)
         self.assertIn("test_secret_security_fuzz.py", workflow)
@@ -191,24 +190,24 @@ class Alpha20CockpitContracts(unittest.TestCase):
         ):
             self.assertIn(phrase, policy)
 
-    def test_slow_browser_runs_only_hostile_input_fuzz(self) -> None:
+    def test_legacy_browser_fuzz_selector_reuses_deterministic_security_suite(self) -> None:
         workflow = text(".github/workflows/ci.yml")
-        block = workflow.split("  browser-fuzz:\n", 1)[1].split("  summary:\n", 1)[0]
-        deterministic = "Replay all deterministic XSS overlap formatting layout and accessibility checks"
-        fuzz = "Run final hostile-input browser fuzz"
-        self.assertNotIn(deterministic, block)
-        self.assertIn(fuzz, block)
-        self.assertNotIn("NAS_BROWSER_SUITE: deterministic", block)
+        config = text("cockpit/e2e/playwright.config.mjs")
+        block = workflow.split("  browser-fuzz:\n", 1)[1].split("  installed-command-fuzz:\n", 1)[0]
         self.assertIn("NAS_BROWSER_SUITE: fuzz", block)
+        self.assertNotIn('suite === "fuzz"', config)
+        self.assertFalse((ROOT / "cockpit/e2e/ui-fuzz.spec.mjs").exists())
+        self.assertIn('"ui-security.spec.mjs"', config)
+        self.assertIn('"common-xss.spec.mjs"', config)
 
-    def test_browser_security_has_deterministic_corpus_fuzz_and_final_vm_modes(self) -> None:
+    def test_browser_security_has_deterministic_and_final_vm_modes(self) -> None:
         config = text("cockpit/e2e/playwright.config.mjs")
         deterministic = text("cockpit/e2e/common-xss.spec.mjs")
-        fuzz = text("cockpit/e2e/ui-fuzz.spec.mjs")
+        security = text("cockpit/e2e/ui-security.spec.mjs")
         vm = text("cockpit/e2e/final-vm.spec.mjs")
         harness = text("scripts/qemu-final-browser.sh")
         zap = text("scripts/zap-automation-scan.sh")
-        self.assertIn('suite === "fuzz"', config)
+        self.assertNotIn('suite === "fuzz"', config)
         self.assertIn('suite === "vm"', config)
         self.assertIn("fullyParallel: true", config)
         self.assertIn("workers: process.env.CI ? 4", config)
@@ -216,7 +215,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn('name: "chromium-mobile-final-vm"', config)
         for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
             self.assertIn(probe, deterministic)
-        self.assertIn("Array.from({length: 96}", fuzz)
+        self.assertIn("hostile status corpus never creates executable elements", security)
+        self.assertFalse((ROOT / "cockpit/e2e/ui-fuzz.spec.mjs").exists())
         self.assertIn("anonymous clients see only the Cockpit login boundary", vm)
         self.assertIn("anonymous login boundary remains accessible and responsive", vm)
         self.assertIn("invalid credentials cannot expose the NAS component", vm)
