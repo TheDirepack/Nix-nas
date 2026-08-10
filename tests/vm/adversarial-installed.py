@@ -29,42 +29,46 @@ IDENTIFIER_SAFE = st.text(
 IDENTIFIER_FORBIDDEN = st.sampled_from(["/", "\\", " ", "\t", "\r", "\n", ";", "|", "&", "$", "`"])
 
 
-@st.composite
-def invalid_identifier(draw) -> str:
+def invalid_identifier() -> st.SearchStrategy[str]:
     """Generate a value guaranteed outside the NAS identifier grammar."""
 
-    if draw(st.booleans()):
-        return ""
-    return draw(IDENTIFIER_SAFE) + draw(IDENTIFIER_FORBIDDEN) + draw(IDENTIFIER_SAFE)
-
-
-@st.composite
-def traversal_path(draw) -> str:
-    """Generate a relative path that is guaranteed to contain parent traversal."""
-
-    depth = draw(st.integers(min_value=1, max_value=8))
-    leaf = draw(
-        st.text(
-            alphabet=st.characters(
-                blacklist_categories=("Cs",),
-                blacklist_characters="/\x00\r\n",
-            ),
-            min_size=1,
-            max_size=48,
-        )
+    malformed = st.builds(
+        lambda left, forbidden, right: left + forbidden + right,
+        IDENTIFIER_SAFE,
+        IDENTIFIER_FORBIDDEN,
+        IDENTIFIER_SAFE,
     )
-    return "../" * depth + leaf
+    return st.one_of(st.just(""), malformed)
 
 
-@st.composite
-def invalid_alert_header(draw) -> str:
-    """Generate either header injection or a value beyond the accepted bound."""
+def traversal_path() -> st.SearchStrategy[str]:
+    """Generate a relative path guaranteed to contain parent traversal."""
 
-    if draw(st.booleans()):
-        prefix = draw(st.text(alphabet=ARGV_CHAR, max_size=32))
-        suffix = draw(st.text(alphabet=ARGV_CHAR, max_size=32))
-        return prefix + "\r\nX-NAS-Fuzz: injected" + suffix
-    return draw(st.text(alphabet=ARGV_CHAR, min_size=201, max_size=512))
+    leaf = st.text(
+        alphabet=st.characters(
+            blacklist_categories=("Cs",),
+            blacklist_characters="/\x00\r\n",
+        ),
+        min_size=1,
+        max_size=48,
+    )
+    return st.builds(
+        lambda depth, value: "../" * depth + value,
+        st.integers(min_value=1, max_value=8),
+        leaf,
+    )
+
+
+def invalid_alert_header() -> st.SearchStrategy[str]:
+    """Generate header injection or a value beyond the accepted bound."""
+
+    injected = st.builds(
+        lambda prefix, suffix: prefix + "\r\nX-NAS-Fuzz: injected" + suffix,
+        st.text(alphabet=ARGV_CHAR, max_size=32),
+        st.text(alphabet=ARGV_CHAR, max_size=32),
+    )
+    oversized = st.text(alphabet=ARGV_CHAR, min_size=201, max_size=512)
+    return st.one_of(injected, oversized)
 
 
 def run(command: list[str], *, allowed: set[int] | None = None) -> subprocess.CompletedProcess[str]:
