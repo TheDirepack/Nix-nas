@@ -84,6 +84,17 @@ in
   users.users.admin.extraGroups = lib.mkAfter [ "wheel" ];
   security.sudo.wheelNeedsPassword = lib.mkForce false;
 
+  # Source/unit/tooling/Nix qualification is already owned by dedicated CI jobs
+  # before this VM runs. Keep nas-preflight exercised as an installed command,
+  # but do not recursively rerun those expensive suites inside QEMU (first-run
+  # invokes preflight and guest-test.sh invokes it once more as a command smoke).
+  environment.variables = {
+    NAS_PREFLIGHT_SKIP_TESTS = "1";
+    NAS_PREFLIGHT_SKIP_TOOLING = "1";
+    NAS_PREFLIGHT_SKIP_NIX = "1";
+    NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE = "1";
+  };
+
   services.openssh.settings = {
     PasswordAuthentication = lib.mkForce false;
     KbdInteractiveAuthentication = lib.mkForce false;
