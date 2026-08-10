@@ -190,27 +190,31 @@ class Alpha20CockpitContracts(unittest.TestCase):
         ):
             self.assertIn(phrase, policy)
 
-    def test_legacy_browser_fuzz_selector_reuses_deterministic_security_suite(self) -> None:
+    def test_legacy_browser_fuzz_selector_is_curl_only(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         config = text("cockpit/e2e/playwright.config.mjs")
+        http_test = text("cockpit/e2e/http-adversarial.spec.mjs")
         block = workflow.split("  browser-fuzz:\n", 1)[1].split("  installed-command-fuzz:\n", 1)[0]
         self.assertIn("NAS_BROWSER_SUITE: fuzz", block)
-        self.assertNotIn('suite === "fuzz"', config)
+        self.assertIn('suite === "fuzz"', config)
+        self.assertIn('"http-adversarial.spec.mjs"', config)
+        self.assertIn('name: "curl-http"', config)
+        self.assertIn('spawnSync(\n    "curl"', http_test)
         self.assertFalse((ROOT / "cockpit/e2e/ui-fuzz.spec.mjs").exists())
-        self.assertIn('"ui-security.spec.mjs"', config)
-        self.assertIn('"common-xss.spec.mjs"', config)
 
-    def test_browser_security_has_deterministic_and_final_vm_modes(self) -> None:
+    def test_browser_security_has_deterministic_final_vm_and_curl_http_modes(self) -> None:
         config = text("cockpit/e2e/playwright.config.mjs")
         deterministic = text("cockpit/e2e/common-xss.spec.mjs")
         security = text("cockpit/e2e/ui-security.spec.mjs")
         vm = text("cockpit/e2e/final-vm.spec.mjs")
         harness = text("scripts/qemu-final-browser.sh")
         zap = text("scripts/zap-automation-scan.sh")
-        self.assertNotIn('suite === "fuzz"', config)
+        self.assertIn('suite === "fuzz"', config)
         self.assertIn('suite === "vm"', config)
+        self.assertIn('"http-adversarial.spec.mjs"', config)
+        self.assertIn('name: "curl-http"', config)
         self.assertIn("fullyParallel: true", config)
-        self.assertIn("workers: process.env.CI ? 4", config)
+        self.assertIn("process.env.CI ? 4", config)
         self.assertIn('name: "webkit-final-vm"', config)
         self.assertIn('name: "chromium-mobile-final-vm"', config)
         for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
