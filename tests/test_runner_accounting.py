@@ -113,7 +113,9 @@ class RunnerAccountingTests(unittest.TestCase):
         property_text = property_tier.read_text(encoding="utf-8")
         self.assertNotIn("slow_managed_service_stateful", property_text)
         orchestrator_text = orchestrator.read_text(encoding="utf-8")
-        self.assertIn('"stateful": unittest_suite("stateful", "tests.slow_managed_service_stateful")', orchestrator_text)
+        self.assertIn(
+            '"stateful": unittest_suite("stateful", "tests.slow_managed_service_stateful")', orchestrator_text
+        )
 
 
 if __name__ == "__main__":
