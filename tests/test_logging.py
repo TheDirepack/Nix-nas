@@ -85,6 +85,16 @@ class StructuredLoggingTests(unittest.TestCase):
                 self.assertEqual(sanitized[key], "[redacted]")
         self.assertNotIn(secret, json.dumps(sanitized))
 
+    def test_long_sensitive_mapping_key_is_classified_before_display_truncation(self) -> None:
+        sentinel = "LONG-KEY-SECRET-SENTINEL"
+        raw_key = "x" * (nas_logging.MAX_TEXT_LENGTH + 256) + "_password"
+        sanitized = nas_logging.sanitize({raw_key: sentinel})
+        self.assertEqual(len(sanitized), 1)
+        display_key = next(iter(sanitized))
+        self.assertTrue(display_key.endswith("[truncated]"))
+        self.assertEqual(sanitized[display_key], "[redacted]")
+        self.assertNotIn(sentinel, json.dumps(sanitized))
+
     def test_nested_secrets_redact_until_depth_limit_and_never_escape_after_it(self) -> None:
         sentinel = "SECRET-NEVER-LOG"
         value = {
