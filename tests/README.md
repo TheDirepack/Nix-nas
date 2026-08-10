@@ -63,9 +63,9 @@ The source classes are intentionally separate so expensive state-machine or
 subprocess security checks do not serialize cheap parser properties. They share
 one orchestration convention and can run concurrently.
 
-`tests/fuzz_harness.py` contains reusable Hypothesis strategies only. It must not
-contain a second RNG, payload mutation loop, case counter, or home-grown corpus
-engine.
+`tests/fuzz_strategies.py` contains reusable Hypothesis strategies only. It must
+not contain a second RNG, payload mutation loop, case counter, or home-grown
+corpus engine.
 
 `scripts/fuzz-executables.py` is retained as a compatibility filename, but it is
 not a mutation fuzzer. It performs one-pass whole-process adversarial contracts
