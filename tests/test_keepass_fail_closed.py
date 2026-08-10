@@ -219,9 +219,7 @@ class KeePassFailClosedTests(unittest.TestCase):
                         "bash",
                         "-c",
                         "set -Eeuo pipefail\n"
-                        "keepass_password=top-secret\n"
-                        + setup
-                        + f"kill -s {signal_name} $$\nprintf 'survived\\n'\n",
+                        "keepass_password=top-secret\n" + setup + f"kill -s {signal_name} $$\nprintf 'survived\\n'\n",
                     ],
                     cwd=ROOT,
                     text=True,
