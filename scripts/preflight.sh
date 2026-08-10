@@ -83,7 +83,7 @@ if command -v node >/dev/null 2>&1; then
   done < <(find cockpit/src -type f -name '*.js' -print0 | sort -z)
   while IFS= read -r -d '' script; do
     node --check "$script"
-  done < <(find cockpit/e2e -type f -name '*.mjs' -print0 2>/dev/null | sort -z)
+  done < <(find cockpit/e2e tests/js-fuzz -type f -name '*.mjs' -print0 2>/dev/null | sort -z)
   node cockpit/build.js --check-source
   cockpit_bundle_available=false
   if [[ "${NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE:-0}" == "1" ]]; then
