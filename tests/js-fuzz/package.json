@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "test": "node --test frontend-properties.test.mjs"
+  },
   "devDependencies": {
     "fast-check": "4.9.0"
   }
