@@ -44,29 +44,28 @@ class KeePassFailClosedTests(unittest.TestCase):
             cli = bin_dir / "keepassxc-cli"
             cli.write_text(
                 textwrap.dedent(
-                    f"""\
-                    #!/usr/bin/env bash
-                    printf '%s\\n' "$*" >> "$KEEPASS_TEST_LOG"
-                    case "$1" in
-                      ls)
-                        printf '%b' {ls_output!r}
-                        exit {ls_status}
-                        ;;
-                      mkdir)
-                        exit {mkdir_status}
-                        ;;
-                      add|edit|rm)
-                        cat >/dev/null
-                        exit 0
-                        ;;
-                      show)
-                        printf 'retrieved-secret'
-                        exit 0
-                        ;;
-                      *)
-                        exit 99
-                        ;;
-                    esac
+                    """\
+                    #!/usr/bin/env python3
+                    import os
+                    import sys
+
+                    command = sys.argv[1] if len(sys.argv) > 1 else ""
+                    with open(os.environ["KEEPASS_TEST_LOG"], "a", encoding="utf-8") as handle:
+                        handle.write(" ".join(sys.argv[1:]) + "\\n")
+
+                    if command == "ls":
+                        sys.stdout.write(os.environ.get("KEEPASS_TEST_LS_OUTPUT", ""))
+                        raise SystemExit(int(os.environ.get("KEEPASS_TEST_LS_STATUS", "0")))
+                    if command == "mkdir":
+                        raise SystemExit(int(os.environ.get("KEEPASS_TEST_MKDIR_STATUS", "0")))
+                    if command in {"add", "edit", "rm"}:
+                        sys.stdin.read()
+                        raise SystemExit(0)
+                    if command == "show":
+                        sys.stdin.read()
+                        sys.stdout.write("retrieved-secret")
+                        raise SystemExit(0)
+                    raise SystemExit(99)
                     """
                 ),
                 encoding="utf-8",
@@ -86,7 +85,6 @@ class KeePassFailClosedTests(unittest.TestCase):
                 f"""\
                 set -Eeuo pipefail
                 export PATH={bin_dir}:$PATH
-                export KEEPASS_TEST_LOG={log}
                 database=/tmp/test.kdbx
                 key_file=""
                 secret_group=NAS
@@ -95,10 +93,19 @@ class KeePassFailClosedTests(unittest.TestCase):
                 {body}
                 """
             )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "KEEPASS_TEST_LOG": str(log),
+                    "KEEPASS_TEST_LS_OUTPUT": ls_output,
+                    "KEEPASS_TEST_LS_STATUS": str(ls_status),
+                    "KEEPASS_TEST_MKDIR_STATUS": str(mkdir_status),
+                }
+            )
             result = subprocess.run(
                 ["bash", "-c", script],
                 cwd=work,
-                env=os.environ.copy(),
+                env=env,
                 text=True,
                 capture_output=True,
                 check=False,
@@ -111,7 +118,7 @@ class KeePassFailClosedTests(unittest.TestCase):
             "has_secret alpha; ! has_secret alp; ! has_secret gamma",
             ls_output="alpha\nbeta\n",
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr + log)
         self.assertIn("ls --quiet --pw-stdin --flatten /tmp/test.kdbx NAS", log)
         self.assertNotIn("show ", log)
 
@@ -131,14 +138,14 @@ class KeePassFailClosedTests(unittest.TestCase):
             'store_value alpha "new-secret"',
             ls_output="beta\n",
         )
-        self.assertEqual(missing.returncode, 0, missing.stderr)
+        self.assertEqual(missing.returncode, 0, missing.stdout + missing.stderr + missing_log)
         self.assertIn("\nadd ", "\n" + missing_log)
 
         existing, existing_log = self.run_scenario(
             'store_value alpha "new-secret"',
             ls_output="alpha\n",
         )
-        self.assertEqual(existing.returncode, 0, existing.stderr)
+        self.assertEqual(existing.returncode, 0, existing.stdout + existing.stderr + existing_log)
         self.assertIn("\nedit ", "\n" + existing_log)
 
     def test_group_creation_failure_is_not_silently_ignored(self) -> None:
@@ -156,7 +163,7 @@ class KeePassFailClosedTests(unittest.TestCase):
             'value="$(get_secret_optional alpha)"; [[ -z "$value" ]]',
             ls_output="beta\n",
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr + log)
         self.assertNotIn("\nshow ", "\n" + log)
 
     def test_machine_keys_are_validated_before_runtime_staging(self) -> None:
@@ -176,7 +183,13 @@ class KeePassFailClosedTests(unittest.TestCase):
         helpers = rendered_shell_helpers("require_huggingface_token")
         too_large = "hf_" + "A" * 4094
         result = subprocess.run(
-            ["bash", "-c", "set -Eeuo pipefail\n" + helpers + 'require_huggingface_token "$1"', "bash", too_large],
+            [
+                "bash",
+                "-c",
+                "set -Eeuo pipefail\n" + helpers + 'require_huggingface_token "$1"',
+                "bash",
+                too_large,
+            ],
             cwd=ROOT,
             text=True,
             capture_output=True,
