@@ -30,6 +30,14 @@ else:
 LIBRARY = ROOT / "scripts/lib/nas-secret-transaction.sh"
 
 
+def shell_safe_component(value: str) -> str:
+    """Keep generated path structure hostile without making execve itself invalid."""
+
+    value = value.replace("/", "_").replace("\\", "_")
+    value = "".join("_" if ord(character) < 32 or ord(character) == 127 else character for character in value)
+    return value or "empty"
+
+
 if HAS_HYPOTHESIS:
 
     class SecretSecurityFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
@@ -75,7 +83,7 @@ if HAS_HYPOTHESIS:
                 valid_stage = base / "tx" / "new"
                 valid_previous = base / "tx" / "previous"
                 valid_directory = base / "tx"
-                unsafe_component = component.replace("/", "_").replace("\\", "_") or "empty"
+                generated_component = shell_safe_component(component)
                 cases: list[tuple[str, str, str, str]] = [
                     ("relative", str(valid_stage), str(valid_previous), str(valid_directory)),
                     ("/", str(valid_stage), str(valid_previous), str(valid_directory)),
@@ -83,7 +91,7 @@ if HAS_HYPOTHESIS:
                     (str(valid_root), str(valid_stage), str(valid_stage / "previous"), ""),
                     (str(valid_root), str(valid_stage), str(valid_previous), str(valid_root / "tx")),
                     (str(valid_root), str(base / "outside" / "new"), str(valid_previous), str(valid_directory)),
-                    (str(valid_root), str(valid_root / unsafe_component), str(valid_previous), ""),
+                    (str(valid_root), str(valid_root / generated_component), str(valid_previous), ""),
                 ]
                 lines = [
                     "set -Eeuo pipefail",
@@ -110,6 +118,7 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(identifier_candidates(max_size=48))
         def test_transaction_target_never_accepts_non_target_or_option_units(self, value: str) -> None:
+            generated = shell_safe_component(value)
             bad = [
                 "--root=/tmp.target",
                 "-x.target",
@@ -119,7 +128,7 @@ if HAS_HYPOTHESIS:
                 "bad.target\nnext.target",
                 "bad.target\rnext.target",
                 "../bad.target",
-                value + ".service",
+                generated + ".service",
             ]
             with tempfile.TemporaryDirectory() as directory:
                 base = pathlib.Path(directory)
