@@ -96,6 +96,72 @@
           };
         };
 
+      # Per-application Nix store bundles for the QEMU integration VMs. The full
+      # VM system closure is thousands of store paths; fetching them one at a
+      # time through the Magic Nix Cache trips GitHub's per-path cache rate
+      # limit. Each root here is exported as one archived NAR stream by
+      # scripts/vm-bundles.sh, cached as a single GitHub Actions entry, and
+      # re-imported before the VM tests build the small configuration delta.
+      # Bundles overlap by design; imported paths are content-addressed, so a
+      # duplicate import is a no-op. vm-bundles.sh list must stay in sync here.
+      packages.x86_64-linux =
+        let pkgs = mkPkgs "x86_64-linux";
+        in {
+          core = pkgs.buildEnv {
+            name = "nas-vm-bundle-core";
+            paths = with pkgs; [
+              bash
+              cacert
+              coreutils
+              curl
+              diffutils
+              findutils
+              gawk
+              git
+              gnugrep
+              gnused
+              iproute2
+              jq
+              linuxPackages.kernel
+              openssh
+              procps
+              systemd
+              util-linux
+              zfs
+            ];
+          };
+          copyparty = pkgs.copyparty;
+          caddy = pkgs.caddy;
+          identity = pkgs.buildEnv {
+            name = "nas-vm-bundle-identity";
+            paths = with pkgs; [ authentik postgresql vaultwarden syncthing ];
+          };
+          observability = pkgs.buildEnv {
+            name = "nas-vm-bundle-observability";
+            paths = with pkgs; [ grafana ntfy-sh ];
+          };
+          storage = pkgs.buildEnv {
+            name = "nas-vm-bundle-storage";
+            paths = with pkgs; [ sanoid restic cockpit-files cockpit-podman cockpit-zfs ];
+          };
+          ai = pkgs.buildEnv {
+            name = "nas-vm-bundle-ai";
+            paths = with pkgs; [ open-webui llama-swap llama-cpp ];
+          };
+          test-browser = pkgs.buildEnv {
+            name = "nas-vm-bundle-test-browser";
+            paths = with pkgs; [ chromium chromedriver ];
+          };
+          test-tools = pkgs.buildEnv {
+            name = "nas-vm-bundle-test-tools";
+            paths = with pkgs; [
+              keepassxc
+              nodejs
+              (python3.withPackages (pythonPackages: [ pythonPackages.selenium ]))
+            ];
+          };
+        };
+
       devShells.x86_64-linux.test =
         let pkgs = mkPkgs "x86_64-linux";
         in pkgs.mkShell {

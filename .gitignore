@@ -17,6 +17,9 @@ node_modules/
 secrets/
 setup/first-run.json
 
+# Agent runtime memory
+.opencode/
+
 # VM/test artifacts
 *.iso
 *.qcow2

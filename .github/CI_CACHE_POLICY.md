@@ -41,6 +41,12 @@ Never cache mutable VM runtime state, including disks, overlays, PID files, logs
 
 Nix derivation and virtual machine outputs use Nix content addressing and the incremental Magic Nix Cache. Jobs still request and verify their required derivations. Cached store paths reduce rebuild work; they do not represent qualification passes.
 
+## Nix store bundles
+
+The full QEMU VM system closure contains thousands of store paths; fetching them individually through the Magic Nix Cache trips GitHub's per-path cache rate limit and can force a from-source build of the entire system. The `build` job therefore exports the base NixOS core plus each top-level application as one archived NAR stream per bundle (`scripts/vm-bundles.sh save`), and each bundle is cached as a single GitHub Actions entry keyed by its application name, flake output hash, and `CI_CACHE_SCHEMA`.
+
+The `integration` job restores the same bundles and re-imports them (`scripts/vm-bundles.sh import`) before running the VM tests, so only the small system-configuration delta is fetched or built. An unchanged application keeps its exact cache key and reuses the previous bundle; only changed applications produce new entries. Bundles are immutable store closures only. They never stand in for a qualification pass, and the integration job always builds and runs both VM checks.
+
 ## Pipeline ordering
 
 1. Pre-build source/static/security/Caddy/dependency/coverage qualification.

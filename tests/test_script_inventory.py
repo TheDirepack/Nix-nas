@@ -30,6 +30,7 @@ class ScriptInventoryTests(unittest.TestCase):
             ["bash", "scripts/package-release.sh", "--help"],
             ["bash", "scripts/qemu-test.sh", "--help"],
             ["bash", "scripts/update-nas.sh", "--help"],
+            ["bash", "scripts/vm-bundles.sh", "--help"],
         ]
         for command in commands:
             with self.subTest(command=command):
