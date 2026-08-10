@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0-alpha.8 — 2026-08-10
+
+- Make KeePassXC secret existence checks fail closed: exact `ls --flatten` membership distinguishes an absent entry from a database/listing failure, and secret-group creation errors are no longer silently ignored.
+- Bound Authentik and Hugging Face credential setters at 4096 characters and revalidate generated Grafana, NUT Web GUI, and ZFS machine keys as exact 64-hex secrets before runtime staging.
+- Add adversarial secret-transaction coverage for missing/symlinked ready markers, accidental success without commit, irreversible commit-cleanup failure, and post-move ready-marker substitution.
+- Add fake-KeePass behavioral tests proving lookup failures cannot fall through into add/edit mutations and wire the new security regressions into the dedicated security runner.
+- Synchronize release metadata to `2.2.0-alpha.8`; this remains a source-only development artifact until the exact Nix, QEMU, installer, and browser qualification gates complete.
+
 ## 2.2.0-alpha.7 — 2026-08-08
 
 - Fix Pi network namespace construction (remove `mount --bind /proc/self/ns/net` that overwrote `/run/netns/pi`), provide DNS inside the namespace via `/etc/netns/pi/resolv.conf` pointing at `10.200.1.1` and `systemd-resolved` `DNSStubListenerExtra`, and clean up teardown without `umount` of the ip-managed namespace.
@@ -39,7 +47,7 @@
 - Added exact state source provenance and removed duplicate state-diff filesystem hashing.
 - Began the Alpha.4 memory pass with a VictoriaMetrics cache budget/cgroup pressure target, 60-second baseline telemetry, ntfy SQLite history, balanced Syncthing Go/resource tuning, shorter on-demand idle windows, and a shorter llama-swap model TTL.
 - Added a named ZFS-backed libvirt `nas-zfs` storage pool at the configured VM path; Cockpit/default-pool selection still requires installed-system qualification.
-- This remains a source-only/unverified development artifact until exact Nix evaluation/build, native/encrypted VM tests, installer/reboot/rollback, browser authorization, and hardware recovery qualification run on this revision.
+- This remains source-only/unverified development artifact until exact Nix evaluation/build, native/encrypted VM tests, installer/reboot/rollback, browser authorization, and hardware recovery qualification run on this revision.
 
 ## 2.2.0-alpha.3 — 2026-08-07
 
