@@ -35,6 +35,7 @@ CHECKS = (
             "tests.test_security_surface",
             "tests.test_adversarial_security",
             "tests.test_secret_transaction",
+            "tests.test_secret_transaction_followup",
             "tests.test_secret_security",
             "tests.test_secret_journal_security",
             "tests.test_ai_secret_transaction",
