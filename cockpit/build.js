@@ -153,8 +153,9 @@ function check() {
     if (!existsSync(path) || statSync(path).size === 0) throw new Error(`cockpit/dist/${name} is missing or empty; run npm ci && npm run build`);
   }
   const metadata = JSON.parse(readFileSync(join(output, "build-meta.json"), "utf8"));
-  if (metadata.schemaVersion !== 2 || metadata.sourceSha256 !== sourceHash()) {
-    throw new Error("cockpit/dist is stale or has unsupported build metadata; rebuild the React/PatternFly bundle");
+  const expectedSourceSha256 = sourceHash();
+  if (metadata.schemaVersion !== 2 || metadata.sourceSha256 !== expectedSourceSha256) {
+    throw new Error(`cockpit/dist is stale or has unsupported build metadata; expected source ${expectedSourceSha256}, committed ${metadata.sourceSha256 ?? "missing"}; rebuild the React/PatternFly bundle`);
   }
   const current = outputRecords();
   if (JSON.stringify(current) !== JSON.stringify(metadata.outputFiles)) {
