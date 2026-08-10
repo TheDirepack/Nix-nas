@@ -108,7 +108,7 @@ class KeePassFailClosedTests(unittest.TestCase):
 
     def test_exact_flattened_listing_membership_is_used(self) -> None:
         result, log = self.run_scenario(
-            'has_secret alpha; ! has_secret alp; ! has_secret gamma',
+            "has_secret alpha; ! has_secret alp; ! has_secret gamma",
             ls_output="alpha\nbeta\n",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
