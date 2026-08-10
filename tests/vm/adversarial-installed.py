@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 
@@ -24,6 +25,12 @@ PAYLOADS = (
     "<svg/onload=globalThis.pwned=1>",
     "http://169.254.169.254/latest/meta-data/",
     "\u202eadmin",
+    "A" * 2048,
+)
+SMOKE_PAYLOADS = (
+    "$(touch /tmp/nas-installed-fuzz-pwned)",
+    "../../../../root/.ssh/authorized_keys",
+    "bad\r\nInjected: yes",
     "A" * 2048,
 )
 
@@ -64,25 +71,28 @@ def main() -> int:
     if not commands:
         raise SystemExit("installed fuzz inventory contains no strategies")
 
+    smoke = os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1"
+    payloads = SMOKE_PAYLOADS if smoke else PAYLOADS
+
     for name in sorted(commands):
         if not pathlib.Path(f"/run/current-system/sw/bin/{name}").exists() and not shutil_which(name):
             raise RuntimeError(f"installed custom command is missing: {name}")
 
     for name, strategy in sorted(strategies.items()):
         if strategy == "unknown-argv":
-            for payload in PAYLOADS:
+            for payload in payloads:
                 run([name, "--fuzz-" + payload])
         elif strategy == "unknown-verb":
-            for payload in PAYLOADS:
+            for payload in payloads:
                 run([name, "fuzz-" + payload])
         elif strategy == "feature-id":
-            for payload in PAYLOADS:
+            for payload in payloads:
                 run([name, "set", payload, "always"])
         elif strategy == "username":
-            for payload in PAYLOADS:
+            for payload in payloads:
                 run([name, "account", "apply", "--username", payload, "--disabled"])
         elif strategy == "output-path":
-            for payload in PAYLOADS:
+            for payload in payloads:
                 # Relative hostile paths must be rejected before any secret is read or file is written.
                 run([name, payload])
         elif strategy == "alert-header":
@@ -96,7 +106,12 @@ def main() -> int:
         else:
             raise RuntimeError(f"unknown fuzz strategy for {name}: {strategy}")
 
-    print(json.dumps({"ok": True, "commands": len(commands), "strategies": strategies}, sort_keys=True))
+    print(
+        json.dumps(
+            {"ok": True, "commands": len(commands), "smoke": smoke, "strategies": strategies},
+            sort_keys=True,
+        )
+    )
     return 0
 
 

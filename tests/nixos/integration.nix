@@ -35,5 +35,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
     machine.succeed("timeout 1800 nas-vm-guest-test /dev/vdb")
     machine.succeed("timeout 900 nas-vm-secret-adversarial")
+    machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout 300 python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
+    machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")
   '';
 }

@@ -36,6 +36,7 @@ CHECKS = (
             "tests.test_adversarial_security",
             "tests.test_secret_transaction",
             "tests.test_secret_security",
+            "tests.test_keepass_fail_closed",
             "tests.test_secret_journal_security",
             "tests.test_ai_secret_transaction",
             "tests.test_secret_subprocess_redaction",

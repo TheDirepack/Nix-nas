@@ -89,7 +89,9 @@ let
 
       kp_args() {
         KP_ARGS=(--quiet)
-        [[ -n "$key_file" ]] && KP_ARGS+=(--key-file "$key_file")
+        if [[ -n "$key_file" ]]; then
+          KP_ARGS+=(--key-file "$key_file")
+        fi
       }
 
       entry_path() {
@@ -98,14 +100,23 @@ let
 
       ensure_group() {
         kp_args
-        printf '%s\n' "$keepass_password" | keepassxc-cli mkdir "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1 || true
+        if printf '%s\n' "$keepass_password" | keepassxc-cli ls "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1; then
+          return 0
+        fi
+        if ! printf '%s\n' "$keepass_password" | keepassxc-cli mkdir "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1; then
+          echo "Unable to ensure KeePassXC group: $secret_group" >&2
+          exit 1
+        fi
       }
 
       has_secret() {
-        local path
-        path="$(entry_path "$1")"
+        local key="$1" listing
         kp_args
-        printf '%s\n' "$keepass_password" | keepassxc-cli show "''${KP_ARGS[@]}" -a Password "$database" "$path" >/dev/null 2>&1
+        if ! listing="$(printf '%s\n' "$keepass_password" | keepassxc-cli ls "''${KP_ARGS[@]}" --flatten "$database" "$secret_group" 2>/dev/null)"; then
+          echo "Unable to inspect the KeePassXC secret group." >&2
+          exit 1
+        fi
+        grep -Fxq -- "$key" <<<"$listing"
       }
 
       store_value() {
