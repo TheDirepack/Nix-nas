@@ -12,12 +12,13 @@ from typing import Any
 from hypothesis import strategies as st
 
 
-def _identifier_fragment(*, max_size: int) -> st.SearchStrategy[str]:
+def _identifier_fragment(*, min_size: int = 0, max_size: int) -> st.SearchStrategy[str]:
     return st.text(
         alphabet=st.characters(
             blacklist_categories=("Cs",),
             blacklist_characters="/\\\x00\r\n\t ;|&$`",
         ),
+        min_size=min_size,
         max_size=max_size,
     )
 
@@ -29,7 +30,9 @@ def identifier_candidates(*, max_size: int = 512) -> st.SearchStrategy[str]:
         alphabet=st.characters(blacklist_categories=("Cs",)),
         max_size=max_size,
     )
-    fragment = _identifier_fragment(max_size=max(1, min(max_size // 2, 128)))
+    fragment_size = max(1, min(max_size // 2, 128))
+    fragment = _identifier_fragment(max_size=fragment_size)
+    nonempty_fragment = _identifier_fragment(min_size=1, max_size=fragment_size)
     path_like = st.builds(
         lambda left, separator, right: f"{left}{separator}{right}",
         fragment,
@@ -39,7 +42,7 @@ def identifier_candidates(*, max_size: int = 512) -> st.SearchStrategy[str]:
     option_like = st.builds(
         lambda prefix, body: prefix + body,
         st.sampled_from(["-", "--"]),
-        fragment.filter(bool),
+        nonempty_fragment,
     )
     whitespace = st.builds(
         lambda left, separator, right: f"{left}{separator}{right}",
