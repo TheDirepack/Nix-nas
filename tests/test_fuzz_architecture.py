@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import subprocess
 import sys
@@ -52,6 +53,20 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         self.assertNotIn("rng.choice", source)
         self.assertNotIn("random.Random", source)
 
+    def test_javascript_properties_use_isolated_pinned_fast_check(self) -> None:
+        package = json.loads((ROOT / "tests/js-fuzz/package.json").read_text(encoding="utf-8"))
+        lock = json.loads((ROOT / "tests/js-fuzz/package-lock.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["devDependencies"], {"fast-check": "4.9.0"})
+        self.assertEqual(lock["packages"]["node_modules/fast-check"]["version"], "4.9.0")
+        source = (ROOT / "tests/js-fuzz/frontend-properties.test.mjs").read_text(encoding="utf-8")
+        self.assertIn('from "fast-check"', source)
+        self.assertNotIn("Math.random", source)
+
+    def test_generated_browser_mutation_suite_is_removed(self) -> None:
+        self.assertFalse((ROOT / "cockpit/e2e/ui-fuzz.spec.mjs").exists())
+        config = (ROOT / "cockpit/e2e/playwright.config.mjs").read_text(encoding="utf-8")
+        self.assertNotIn("ui-fuzz.spec.mjs", config)
+
     def test_orchestrator_exposes_independent_parallel_target_classes(self) -> None:
         completed = subprocess.run(
             [sys.executable, "scripts/run-fuzz.py", "--help"],
@@ -63,7 +78,14 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         help_text = completed.stdout + completed.stderr
-        for suite in ("boundaries", "properties", "stateful", "security", "executable-contracts"):
+        for suite in (
+            "boundaries",
+            "properties",
+            "stateful",
+            "security",
+            "javascript",
+            "executable-contracts",
+        ):
             with self.subTest(suite=suite):
                 self.assertIn(suite, help_text)
 
