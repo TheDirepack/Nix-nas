@@ -332,6 +332,20 @@ class OperationLockTests(unittest.TestCase):
             mode = (pathlib.Path(temporary) / "storage.lock").stat().st_mode & 0o777
             self.assertEqual(mode, 0o660)
 
+    def test_named_lock_enforces_group_write_despite_restrictive_umask(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.object(operation_lock, "OPERATION_ROOT", pathlib.Path(temporary)),
+        ):
+            previous = __import__("os").umask(0o022)
+            try:
+                handle = operation_lock._open_lock("runtime")
+                handle.close()
+            finally:
+                __import__("os").umask(previous)
+            mode = (pathlib.Path(temporary) / "runtime.lock").stat().st_mode & 0o777
+            self.assertEqual(mode, 0o660)
+
 
 if __name__ == "__main__":
     unittest.main()
