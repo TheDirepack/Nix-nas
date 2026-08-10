@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run organized smart-fuzz and adversarial suites in parallel.
 
-Hypothesis owns structured generation, targeting, shrinking, and reproduction.
-This runner enters the pinned Nix test environment once, then fans independent
-target classes out in parallel. It contains no project-local mutation engine.
+Hypothesis owns structured Python generation, targeting, shrinking, and replay;
+fast-check does the same for JavaScript properties. This runner only orchestrates
+independent target classes and contains no project-local mutation engine.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ import sys
 from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+JS_FUZZ_ROOT = ROOT / "tests/js-fuzz"
+HYPOTHESIS_SUITES = {"boundaries", "properties", "stateful", "security"}
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ SUITES = {
     "properties": unittest_suite("properties", "tests.test_property_invariants"),
     "stateful": unittest_suite("stateful", "tests.slow_managed_service_stateful"),
     "security": unittest_suite("security", "tests.test_secret_security_fuzz"),
+    "javascript": Suite("javascript", ("npm", "--prefix", "tests/js-fuzz", "test")),
     "executable-contracts": Suite(
         "executable-contracts",
         (sys.executable, "scripts/fuzz-executables.py"),
@@ -43,9 +46,32 @@ SUITES = {
 }
 
 
+def prepare_javascript_suite() -> tuple[int, str]:
+    npm = shutil.which("npm")
+    if npm is None:
+        return 2, "npm is required for the fast-check JavaScript property suite\n"
+    installed = JS_FUZZ_ROOT / "node_modules/fast-check/package.json"
+    if installed.is_file():
+        return 0, ""
+    completed = subprocess.run(
+        [npm, "--prefix", "tests/js-fuzz", "ci", "--no-audit", "--no-fund"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return completed.returncode, completed.stdout
+
+
 def run_suite(suite: Suite) -> tuple[str, int, str]:
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    prefix = ""
+    if suite.name == "javascript":
+        prepare_status, prefix = prepare_javascript_suite()
+        if prepare_status:
+            return suite.name, prepare_status, prefix
     completed = subprocess.run(
         suite.command,
         cwd=ROOT,
@@ -55,18 +81,20 @@ def run_suite(suite: Suite) -> tuple[str, int, str]:
         stderr=subprocess.STDOUT,
         check=False,
     )
-    return suite.name, completed.returncode, completed.stdout
+    return suite.name, completed.returncode, prefix + completed.stdout
 
 
-def enter_test_environment(argv: list[str]) -> int | None:
-    """Re-exec once through the pinned test shell when Hypothesis is unavailable."""
+def enter_test_environment(selected_names: list[str], argv: list[str]) -> int | None:
+    """Re-exec once through the pinned test shell only for Hypothesis suites."""
 
+    if not HYPOTHESIS_SUITES.intersection(selected_names):
+        return None
     if importlib.util.find_spec("hypothesis") is not None:
         return None
     nix = shutil.which("nix")
     if nix is None:
         print(
-            "Hypothesis is required for smart fuzzing and Nix is unavailable; run inside `nix develop .#test`.",
+            "Hypothesis suites need the pinned Nix test environment; Nix is unavailable.",
             file=sys.stderr,
         )
         return 2
@@ -87,15 +115,15 @@ def main() -> int:
     if not 1 <= args.jobs <= len(SUITES):
         parser.error(f"--jobs must be from 1 through {len(SUITES)}")
 
+    selected_names = list(dict.fromkeys(args.suite or SUITES.keys()))
     forwarded: list[str] = []
     for suite in args.suite or []:
         forwarded.extend(["--suite", suite])
     forwarded.extend(["--jobs", str(args.jobs)])
-    reexec_status = enter_test_environment(forwarded)
+    reexec_status = enter_test_environment(selected_names, forwarded)
     if reexec_status is not None:
         return reexec_status
 
-    selected_names = list(dict.fromkeys(args.suite or SUITES.keys()))
     selected = [SUITES[name] for name in selected_names]
     failures = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.jobs, len(selected))) as executor:
