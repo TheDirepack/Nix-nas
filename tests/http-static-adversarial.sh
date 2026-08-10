@@ -16,7 +16,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python3 -m http.server "$port" --bind 127.0.0.1 --directory "$repo_root/../cockpit/dist" >"$server_log" 2>&1 &
+python3 -m http.server "$port" --bind 127.0.0.1 --directory "$repo_root/cockpit/dist" >"$server_log" 2>&1 &
 server_pid=$!
 
 for _ in {1..50}; do
