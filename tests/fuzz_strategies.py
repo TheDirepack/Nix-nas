@@ -70,6 +70,22 @@ def identifier_candidates(*, max_size: int = 512) -> st.SearchStrategy[str]:
     return st.one_of(normal, path_like, option_like, whitespace, shell_meta, traversal, control)
 
 
+def _render_path(parts: list[str], separator: str, prefix_kind: str, suffix_kind: str) -> str:
+    prefix = {
+        "relative": "",
+        "absolute": separator,
+        "dot": f".{separator}",
+        "parent": f"..{separator}",
+    }[prefix_kind]
+    suffix = {
+        "none": "",
+        "separator": separator,
+        "parent": f"{separator}..",
+        "dot": f"{separator}.",
+    }[suffix_kind]
+    return prefix + separator.join(parts) + suffix
+
+
 def path_candidates(*, max_components: int = 12) -> st.SearchStrategy[str]:
     ordinary_component = st.text(
         alphabet=st.characters(
@@ -87,28 +103,13 @@ def path_candidates(*, max_components: int = 12) -> st.SearchStrategy[str]:
         st.builds(lambda marker, tail: marker + tail, st.sampled_from(["\u202e", "\u2066"]), ordinary_component),
     )
     component = st.one_of(ordinary_component, special_component)
-
-    @st.composite
-    def build(draw) -> str:
-        parts = draw(st.lists(component, min_size=0, max_size=max_components))
-        separator = draw(st.sampled_from(["/", "\\"]))
-        prefix_kind = draw(st.sampled_from(["relative", "absolute", "dot", "parent"]))
-        suffix_kind = draw(st.sampled_from(["none", "separator", "parent", "dot"]))
-        prefix = {
-            "relative": "",
-            "absolute": separator,
-            "dot": f".{separator}",
-            "parent": f"..{separator}",
-        }[prefix_kind]
-        suffix = {
-            "none": "",
-            "separator": separator,
-            "parent": f"{separator}..",
-            "dot": f"{separator}.",
-        }[suffix_kind]
-        return prefix + separator.join(parts) + suffix
-
-    return build()
+    return st.builds(
+        _render_path,
+        st.lists(component, min_size=0, max_size=max_components),
+        st.sampled_from(["/", "\\"]),
+        st.sampled_from(["relative", "absolute", "dot", "parent"]),
+        st.sampled_from(["none", "separator", "parent", "dot"]),
+    )
 
 
 def json_values(*, max_leaves: int = 80) -> st.SearchStrategy[Any]:
@@ -127,6 +128,21 @@ def json_values(*, max_leaves: int = 80) -> st.SearchStrategy[Any]:
         ),
         max_leaves=max_leaves,
     )
+
+
+def _render_secret_key(value: str, style: str, capitalize: bool) -> str:
+    if style == "dash":
+        value = value.replace("_", "-")
+    elif style == "dot":
+        value = value.replace("_", ".")
+    elif style == "camel":
+        head, *tail = value.split("_")
+        value = head + "".join(part[:1].upper() + part[1:] for part in tail)
+    elif style == "provider":
+        value = f"provider_{value}"
+    if capitalize and value:
+        value = value[:1].upper() + value[1:]
+    return value
 
 
 def secret_key_names() -> st.SearchStrategy[str]:
@@ -149,22 +165,9 @@ def secret_key_names() -> st.SearchStrategy[str]:
             "authorization",
         ]
     )
-
-    @st.composite
-    def render(draw) -> str:
-        value = draw(base)
-        style = draw(st.sampled_from(["snake", "dash", "dot", "camel", "provider"]))
-        if style == "dash":
-            value = value.replace("_", "-")
-        elif style == "dot":
-            value = value.replace("_", ".")
-        elif style == "camel":
-            head, *tail = value.split("_")
-            value = head + "".join(part[:1].upper() + part[1:] for part in tail)
-        elif style == "provider":
-            value = f"provider_{value}"
-        if draw(st.booleans()) and value:
-            value = value[:1].upper() + value[1:]
-        return value
-
-    return render()
+    return st.builds(
+        _render_secret_key,
+        base,
+        st.sampled_from(["snake", "dash", "dot", "camel", "provider"]),
+        st.booleans(),
+    )
