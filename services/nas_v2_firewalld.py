@@ -5,9 +5,9 @@ Managed isolated Podman services receive a stable interface-bound zone plus
 outbound policies. V2 routes receive a HOST -> service-zone TCP allowance so
 Caddy can reach loopback-published backends. Explicit listeners with
 ``firewall: true`` receive a trusted-LAN ingress policy. Host-network listeners
-use trusted-LAN -> HOST instead. Numeric policy port lists without an explicit
-protocol are intentionally treated as transport-neutral and emitted for both
-TCP and UDP.
+use trusted-LAN -> HOST instead, including platform services whose lifecycle is
+not V2-managed. Numeric policy port lists without an explicit protocol are
+intentionally treated as transport-neutral and emitted for both TCP and UDP.
 
 The compiler only materializes configuration files. A separate finite reconciler
 owns replacement/removal/reload of those files in firewalld's system config.
@@ -234,7 +234,7 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
 
     for service_id in sorted(services):
         service = services[service_id]
-        if not isinstance(service, dict) or not service.get("managed", True) or not service.get("enabled", True):
+        if not isinstance(service, dict) or not service.get("enabled", True):
             continue
         policy = network_policy(effective, service)
         mode = policy.get("mode", "host")
@@ -244,6 +244,10 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
 
         generated: dict[str, bytes] = {}
         if mode == "isolated":
+            if not service.get("managed", True):
+                raise FirewalldProjectionError(
+                    f"unmanaged isolated service {service_id!r} has no V2-owned bridge to receive firewalld policy"
+                )
             if runtime_type not in {"oci", "quadlet", "compose"}:
                 raise FirewalldProjectionError(
                     f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented yet"
