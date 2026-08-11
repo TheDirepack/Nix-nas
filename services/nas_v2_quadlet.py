@@ -101,9 +101,18 @@ def _publish_lines(effective: dict[str, Any], service_id: str, service: dict[str
                 continue
             protocol = listener["protocol"]
             exposure = listener["exposure"]
+            target_port = listener.get("targetPort")
             if "port" in exposure:
-                value = f"{exposure['port']}:{exposure['port']}/{protocol}"
+                if target_port is None:
+                    target_port = exposure["port"]
+                if not isinstance(target_port, int) or isinstance(target_port, bool) or not 1 <= target_port <= 65535:
+                    raise QuadletProjectionError(f"listener {listener_id!r} targetPort is invalid")
+                value = f"{exposure['port']}:{target_port}/{protocol}"
             else:
+                if target_port is not None:
+                    raise QuadletProjectionError(
+                        f"listener {listener_id!r} targetPort is valid only with a single exposed port"
+                    )
                 value = f"{exposure['start']}-{exposure['end']}:{exposure['start']}-{exposure['end']}/{protocol}"
             lines.append(f"PublishPort={_quote(value, field=f'listener {listener_id!r} publication')}")
 
