@@ -148,11 +148,11 @@ CURL_CONFIG
       pkgs.nixos-rebuild-ng
       pkgs.nut
       pkgs.skopeo
-      pkgs.sudo
       pkgs.systemd
       pkgs.zfs
     ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       export NAS_CONFIG_DIR=${lib.escapeShellArg cfg.configurationDir}
       export NAS_AUTHENTIK_PORT=${toString authentikPort}
       export NAS_AUTHENTIK_PATH=${lib.escapeShellArg cfg.identity.authentikPath}

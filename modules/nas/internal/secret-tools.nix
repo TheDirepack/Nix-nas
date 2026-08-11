@@ -22,11 +22,11 @@ let
       pkgs.keepassxc
       pkgs.openssl
       pythonYaml
-      pkgs.sudo
       pkgs.systemd
       pkgs.util-linux
     ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       set -euo pipefail
       umask 0077
 
@@ -77,7 +77,8 @@ let
           echo "The KeePass database password cannot be empty." >&2
           exit 1
         }
-        local args=(db-info --quiet --pw-stdin)
+        # keepassxc >= 2.7 reads a piped database password from stdin without an explicit flag.
+        local args=(db-info --quiet)
         [[ -n "$key_file" ]] && args+=(--key-file "$key_file")
         args+=("$database")
         if ! printf '%s\n' "$keepass_password" | keepassxc-cli "''${args[@]}" >/dev/null 2>&1; then
@@ -87,8 +88,10 @@ let
       }
 
       kp_args() {
-        KP_ARGS=(--quiet --pw-stdin)
-        [[ -n "$key_file" ]] && KP_ARGS+=(--key-file "$key_file")
+        KP_ARGS=(--quiet)
+        if [[ -n "$key_file" ]]; then
+          KP_ARGS+=(--key-file "$key_file")
+        fi
       }
 
       entry_path() {
@@ -97,14 +100,23 @@ let
 
       ensure_group() {
         kp_args
-        printf '%s\n' "$keepass_password" | keepassxc-cli mkdir "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1 || true
+        if printf '%s\n' "$keepass_password" | keepassxc-cli ls "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1; then
+          return 0
+        fi
+        if ! printf '%s\n' "$keepass_password" | keepassxc-cli mkdir "''${KP_ARGS[@]}" "$database" "$secret_group" >/dev/null 2>&1; then
+          echo "Unable to ensure KeePassXC group: $secret_group" >&2
+          exit 1
+        fi
       }
 
       has_secret() {
-        local path
-        path="$(entry_path "$1")"
+        local key="$1" listing
         kp_args
-        printf '%s\n' "$keepass_password" | keepassxc-cli show "''${KP_ARGS[@]}" -a Password "$database" "$path" >/dev/null 2>&1
+        if ! listing="$(printf '%s\n' "$keepass_password" | keepassxc-cli ls "''${KP_ARGS[@]}" --flatten "$database" "$secret_group" 2>/dev/null)"; then
+          echo "Unable to inspect the KeePassXC secret group." >&2
+          exit 1
+        fi
+        grep -Fxq -- "$key" <<<"$listing"
       }
 
       store_value() {
@@ -353,7 +365,8 @@ PY_AI_PROVIDERS
         local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token
         ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
         local provider_id provider_env provider_key
-        local ntfy_password ntfy_hash ntfy_topic state_bundle_signing_key
+        ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
+        local state_bundle_signing_key
         sudo install -d -m 0711 -o root -g root /run/nas-secret-staging
         runtime_base="/run/nas-secret-staging/$(id -u)"
         sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$runtime_base"

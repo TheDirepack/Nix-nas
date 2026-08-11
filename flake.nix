@@ -96,6 +96,98 @@
           };
         };
 
+      # Per-application Nix store bundles for the QEMU integration VMs. The full
+      # VM system closure is thousands of store paths; fetching them one at a
+      # time through the Magic Nix Cache trips GitHub's per-path cache rate
+      # limit. Each root here is exported as one archived NAR stream by
+      # scripts/vm-bundles.sh, cached as a single GitHub Actions entry, and
+      # re-imported before the VM tests build the small configuration delta.
+      # Bundles overlap by design; imported paths are content-addressed, so a
+      # duplicate import is a no-op. vm-bundles.sh list must stay in sync here.
+      packages.x86_64-linux =
+        let
+          pkgs = mkPkgs "x86_64-linux";
+          # The vaultwarden systemd unit runs the package with dbBackend="sqlite"
+          # (see modules/nas/config/application-services.nix), so the bundled
+          # derivation must be the same override the module produces.
+          vaultwardenBundle = pkgs.vaultwarden.override { dbBackend = "sqlite"; };
+          # The cockpit-zfs plugin is built with Node 22 as a workaround for
+          # NixOS/nixpkgs#530137 (see modules/nas/internal/zfs-tools.nix).
+          cockpitZfsBuildPackages = pkgs.buildPackages // {
+            yarn-berry = pkgs.buildPackages.yarn-berry.override {
+              nodejs = pkgs.buildPackages.nodejs_22;
+            };
+          };
+          cockpitZfsBundle = pkgs.cockpit-zfs.override {
+            nodejs = pkgs.nodejs_22;
+            yarn-berry = pkgs.yarn-berry.override { nodejs = pkgs.nodejs_22; };
+            buildPackages = cockpitZfsBuildPackages;
+          };
+          bundlePaths = with pkgs; {
+            core = [
+              bash
+              cacert
+              coreutils
+              curl
+              diffutils
+              findutils
+              gawk
+              git
+              gnugrep
+              gnused
+              iproute2
+              jq
+              linuxPackages.kernel
+              openssh
+              procps
+              systemd
+              util-linux
+              zfs
+            ];
+            identity = [ authentik postgresql vaultwardenBundle syncthing ];
+            observability = [ grafana ntfy-sh ];
+            storage = [ sanoid restic cockpit-files cockpit-podman cockpitZfsBundle ];
+            ai = [ open-webui llama-swap llama-cpp ];
+            test-browser = [ chromium chromedriver ];
+            test-tools = [
+              keepassxc
+              nodejs
+              (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
+            ];
+          };
+        in {
+          core = pkgs.buildEnv {
+            name = "nas-vm-bundle-core";
+            paths = bundlePaths.core;
+          };
+          copyparty = pkgs.copyparty;
+          caddy = pkgs.caddy;
+          identity = pkgs.buildEnv {
+            name = "nas-vm-bundle-identity";
+            paths = bundlePaths.identity;
+          };
+          observability = pkgs.buildEnv {
+            name = "nas-vm-bundle-observability";
+            paths = bundlePaths.observability;
+          };
+          storage = pkgs.buildEnv {
+            name = "nas-vm-bundle-storage";
+            paths = bundlePaths.storage;
+          };
+          ai = pkgs.buildEnv {
+            name = "nas-vm-bundle-ai";
+            paths = bundlePaths.ai;
+          };
+          test-browser = pkgs.buildEnv {
+            name = "nas-vm-bundle-test-browser";
+            paths = bundlePaths.test-browser;
+          };
+          test-tools = pkgs.buildEnv {
+            name = "nas-vm-bundle-test-tools";
+            paths = bundlePaths.test-tools;
+          };
+        };
+
       devShells.x86_64-linux.test =
         let pkgs = mkPkgs "x86_64-linux";
         in pkgs.mkShell {

@@ -92,10 +92,11 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
         self.assertIn("tests.test_service_caddy_validate", caddy_block)
 
-    def test_managed_service_has_fast_contract_and_slow_state_machine(self):
+    def test_managed_service_has_fast_contract_and_isolated_slow_state_machine(self):
         fast = ROOT / "tests" / "test_managed_service_stateful.py"
         slow = ROOT / "tests" / "slow_managed_service_stateful.py"
         property_tier = ROOT / "tests" / "test_property_invariants.py"
+        orchestrator = ROOT / "scripts" / "run-fuzz.py"
         self.assertTrue(fast.is_file(), msg="fast managed-service projection contract must exist")
         self.assertTrue(slow.is_file(), msg="slow managed-service state machine must exist")
 
@@ -110,7 +111,11 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn("ProjectionDifferentialTests", slow_text)
 
         property_text = property_tier.read_text(encoding="utf-8")
-        self.assertIn("slow_managed_service_stateful", property_text)
+        self.assertNotIn("slow_managed_service_stateful", property_text)
+        orchestrator_text = orchestrator.read_text(encoding="utf-8")
+        self.assertIn(
+            '"stateful": unittest_suite("stateful", "tests.slow_managed_service_stateful")', orchestrator_text
+        )
 
 
 if __name__ == "__main__":

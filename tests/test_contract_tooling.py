@@ -294,6 +294,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("archive mode mismatch", packaging)
         self.assertIn("archived_mode", packaging)
         self.assertIn("staged_mode", packaging)
+        package_step = workflow.split("      - name: Package and verify as an untrusted consumer", 1)[1]
+        self.assertIn('mv cockpit/node_modules "$dependencies"', package_step)
+        self.assertIn('mv "$dependencies" cockpit/node_modules', package_step)
+        self.assertIn('extract="$RUNNER_TEMP/extracted-source"', package_step)
+        self.assertLess(
+            package_step.index('mv cockpit/node_modules "$dependencies"'), package_step.index("package-release.sh")
+        )
 
     def test_pipeline_summary_checks_out_its_behavioral_policy(self):
         workflow = text(".github/workflows/ci.yml")
@@ -310,7 +317,11 @@ class ContractTests(unittest.TestCase):
         for label, target_factory in scenarios:
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "source"
-                shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage"))
+                shutil.copytree(
+                    ROOT,
+                    root,
+                    ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage", "state"),
+                )
                 shutil.rmtree(root / ".git", ignore_errors=True)
                 target = target_factory(root)
                 if label == "ignored secret":
@@ -356,6 +367,7 @@ class ContractTests(unittest.TestCase):
                     ".coverage.*",
                     "coverage.json",
                     "node_modules",
+                    "state",
                 ),
             )
             subprocess.run(["git", "init", "-b", "main"], cwd=repository, check=True, capture_output=True)
@@ -436,6 +448,12 @@ class ContractTests(unittest.TestCase):
         summary = text("docs/src/SUMMARY.md")
         self.assertIn('name = "nas-setup"', tools)
         self.assertIn("nasSetup", system)
+        self.assertIn("(lib.lowPrio nasPythonApplication)", system)
+        self.assertIn("d /var/lib/nas-setup 0770 root wheel -", system)
+        self.assertRegex(
+            tools,
+            r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0770";',
+        )
         self.assertIn("def first_run", setup)
         self.assertIn("passwordFile", setup)
         self.assertIn("plaintext password", setup)
@@ -458,6 +476,19 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-setup first-run", encrypted_guest)
         self.assertIn("[First start](admin/first-run.md)", summary)
         self.assertTrue((ROOT / "setup" / "first-run.example.json").exists())
+
+    def test_unprivileged_tools_resolve_the_nixos_sudo_wrapper(self):
+        wrapper_path = "export PATH=/run/wrappers/bin:$PATH"
+        expected_wrappers = {
+            "modules/nas/internal/account-tools.nix": 1,
+            "modules/nas/internal/maintenance-tools.nix": 1,
+            "modules/nas/internal/secret-tools.nix": 1,
+            "modules/nas/internal/zfs-tools.nix": 3,
+        }
+        for filename, count in expected_wrappers.items():
+            source = text(filename)
+            self.assertNotIn("pkgs.sudo", source, msg=filename)
+            self.assertEqual(source.count(wrapper_path), count, msg=filename)
 
     def test_browser_authorization_matrix_is_exercised_in_qemu(self):
         browser = text("tests/browser/authz.py")
@@ -517,6 +548,7 @@ class ContractTests(unittest.TestCase):
         flake = text("flake.nix")
         host = text("scripts/qemu-test.sh")
         guest = text("tests/vm/guest-test.sh")
+        run_vm = text("test/qemu/run-vm.sh")
         workflow = text(".github/workflows/ci.yml")
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/integration.nix"))
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/encrypted.nix"))
@@ -527,6 +559,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nixosConfigurations.nas-qemu", flake)
         self.assertIn("checks.x86_64-linux", flake)
         self.assertIn("latest-nixos-minimal-x86_64-linux.iso", host)
+        self.assertIn("[[ $MODE == boot ]] || ensure_iso", run_vm)
         self.assertIn("sha256sum --check --status", host)
         self.assertIn("nixos-install", text("tests/vm/install-system.sh"))
         self.assertIn("nas-vm-guest-test /dev/vdb", host)
@@ -542,12 +575,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-generation-test", reconfigure)
         self.assertIn("post-switch-console.log", host)
         self.assertIn("post-switch VM did not become reachable", host)
-        self.assertIn("run_dynamic_web_scan", host)
-        self.assertIn("NAS_ZAP_IMAGE", host)
+        self.assertNotIn("run_dynamic_web_scan", host)
+        self.assertNotIn("NAS_ZAP_IMAGE", host)
         self.assertIn("hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443", host)
         self.assertIn("hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092", host)
-        self.assertIn("zap-security-reports", workflow)
+        self.assertIn("zap-fuzz-evidence", workflow)
         self.assertIn('NAS_ZAP_CONFIRM_ACTIVE: "1"', workflow)
+        self.assertNotIn("adversarial-installed.py", guest)
         installer = text("tests/vm/install-system.sh")
         self.assertGreaterEqual(installer.count("nixos-install"), 2)
         self.assertIn("reinstall-sentinel", installer)

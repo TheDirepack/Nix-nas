@@ -2,12 +2,11 @@ import {defineConfig, devices} from "@playwright/test";
 
 const suite = process.env.NAS_BROWSER_SUITE || "deterministic";
 const isFinalVm = suite === "vm";
-const testMatch =
-  suite === "fuzz"
-    ? "ui-fuzz.spec.mjs"
-    : isFinalVm
-      ? "final-vm.spec.mjs"
-      : ["ui-security.spec.mjs", "common-xss.spec.mjs"];
+
+// Playwright remains appropriate for DOM/XSS execution, layout, interaction,
+// accessibility, and final-VM browser behavior. Protocol-level HTTP probes use
+// curl in the VM harness instead of paying browser startup cost per request.
+const testMatch = isFinalVm ? "final-vm.spec.mjs" : ["ui-security.spec.mjs", "common-xss.spec.mjs"];
 
 export default defineConfig({
   testDir: ".",

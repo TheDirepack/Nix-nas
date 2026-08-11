@@ -35,6 +35,14 @@ def rendered_shell_helpers(*names: str) -> str:
 
 
 class SecretVaultRenderingTests(unittest.TestCase):
+    def test_optional_ntfy_locals_are_declared_only_when_rendered(self) -> None:
+        source = SECRET_TOOLS.read_text(encoding="utf-8")
+        self.assertNotIn("local ntfy_password ntfy_hash ntfy_topic state_bundle_signing_key", source)
+        self.assertIn(
+            "${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}",
+            source,
+        )
+
     def run_helper(self, function: str, *arguments: str) -> subprocess.CompletedProcess[str]:
         helpers = rendered_shell_helpers(
             "require_secret_atom",
@@ -135,7 +143,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
 
     def test_keepass_passwords_and_secret_values_are_not_passed_in_argv(self) -> None:
         source = SECRET_TOOLS.read_text(encoding="utf-8")
-        self.assertIn("--pw-stdin", source)
+        self.assertNotIn("--pw-stdin", source)
         self.assertNotRegex(source, r"keepassxc-cli[^\n]*(?:--password|-p)\s+\"?\$keepass_password")
         self.assertNotRegex(source, r"curl[^\n]*(?:--user|-u)\s+\"?admin:\$password")
         self.assertNotIn("set -x", source)

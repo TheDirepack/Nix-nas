@@ -28,7 +28,7 @@ class Stage:
     env: tuple[tuple[str, str], ...] = ()
 
 
-def stage_catalog(cases: int, seed: int) -> dict[str, Stage]:
+def stage_catalog() -> dict[str, Stage]:
     return {
         "source": Stage(
             "source",
@@ -45,9 +45,9 @@ def stage_catalog(cases: int, seed: int) -> dict[str, Stage]:
         ),
         "fuzz": Stage(
             "fuzz",
-            (sys.executable, "scripts/run-matrix-fuzz.py", "--cases", str(cases), "--seed", str(seed)),
+            (sys.executable, "scripts/run-fuzz.py"),
             900,
-            requires=("python3", "node"),
+            requires=("python3", "nix", "npm"),
         ),
         "nix-config": Stage(
             "nix-config",
@@ -178,18 +178,14 @@ def main() -> int:
         default="fast",
         choices=("fast", "source", "security", "fuzz", "nix-config", "browser", "native", "installer", "all", "list"),
     )
-    parser.add_argument("--cases", type=int, default=2000, help="deterministic cases per fuzz target")
-    parser.add_argument("--seed", type=lambda value: int(value, 0), default=0x4E41533232)
     parser.add_argument("--timeout", type=int, help="override the timeout for each selected stage")
     parser.add_argument("--report", type=pathlib.Path, help="write JSON stage evidence to this path")
     parser.add_argument("--require-all", action="store_true", help="treat an unavailable selected stage as failure")
     args = parser.parse_args()
-    if not 1 <= args.cases <= 100_000:
-        parser.error("--cases must be from 1 through 100000")
     if args.timeout is not None and not 1 <= args.timeout <= 86400:
         parser.error("--timeout must be from 1 through 86400 seconds")
 
-    catalog = stage_catalog(args.cases, args.seed)
+    catalog = stage_catalog()
     if args.mode == "list":
         for name, stage in catalog.items():
             availability = missing_reason(stage) or "available"
@@ -218,10 +214,8 @@ def main() -> int:
             break
 
     payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "mode": args.mode,
-        "seed": args.seed,
-        "cases": args.cases,
         "results": results,
         "ok": all(row["status"] in {"passed", "skipped"} for row in results)
         and not (args.require_all and any(row["status"] == "skipped" for row in results)),

@@ -37,22 +37,30 @@ class MaintainerMatrixTests(MaintainerScriptMixin, unittest.TestCase):
             )
             required = module.run_stage(probe, require_complete_source=True)
             self.assertEqual(required["status"], "passed")
+            fuzz_stage = module.stage_catalog()["fuzz"]
+            self.assertEqual(fuzz_stage.requires, ("python3", "nix", "npm"))
             matrix_source = matrix_path.read_text(encoding="utf-8")
             self.assertIn("start_new_session=True", matrix_source)
             self.assertIn("os.killpg", matrix_source)
         finally:
             sys.modules.pop(spec.name, None)
 
-    def test_deterministic_fuzz_entrypoints_execute(self) -> None:
-        direct = self.run_clean(sys.executable, "scripts/fuzz.py", "--cases", "5", "--seed", "22001")
+    def test_smart_fuzz_entrypoints_expose_organized_suites(self) -> None:
+        direct = self.run_clean(sys.executable, "scripts/fuzz.py", "--help")
         self.assertEqual(direct.returncode, 0, direct.stdout + direct.stderr)
-        self.assertIn("fuzz complete", direct.stdout)
-        wrapper = self.run_clean(sys.executable, "scripts/run-fuzz.py", "--cases", "5", "--seed", "22001")
-        self.assertEqual(wrapper.returncode, 0, wrapper.stdout + wrapper.stderr)
-        self.assertIn("NAS fuzz seed=22001 cases=5", wrapper.stdout)
-        executables = self.run_clean(sys.executable, "scripts/fuzz-executables.py", "--cases", "1", "--seed", "22001")
-        self.assertEqual(executables.returncode, 0, executables.stdout + executables.stderr)
-        self.assertIn('"ok": true', executables.stdout)
+        self.assertIn("Hypothesis", direct.stdout + direct.stderr)
+
+        orchestrator = self.run_clean(sys.executable, "scripts/run-fuzz.py", "--help")
+        self.assertEqual(orchestrator.returncode, 0, orchestrator.stdout + orchestrator.stderr)
+        help_text = orchestrator.stdout + orchestrator.stderr
+        for suite in ("boundaries", "properties", "stateful", "security", "javascript", "executable-contracts"):
+            self.assertIn(suite, help_text)
+        self.assertNotIn("--cases", help_text)
+        self.assertNotIn("--seed", help_text)
+
+        contracts = self.run_clean(sys.executable, "scripts/fuzz-executables.py", "--help")
+        self.assertEqual(contracts.returncode, 0, contracts.stdout + contracts.stderr)
+        self.assertIn("not a mutation fuzzer", contracts.stdout + contracts.stderr)
 
     def test_zap_wrapper_requires_digest_and_constructs_bounded_scan(self) -> None:
         missing = self.run_clean("bash", "scripts/zap-scan.sh", "baseline", "https://nas-test.local:8443/")
@@ -167,3 +175,7 @@ pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8'
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("NAS_ZAP_CONFIRM_ACTIVE=1", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

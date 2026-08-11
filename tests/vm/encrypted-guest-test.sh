@@ -66,13 +66,21 @@ EOFSETUP
 chown admin:users /var/lib/nas-test/setup/encrypted-first-run.json
 chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
 run_as_admin "nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'"
+nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
+[[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
 plan_json="$(run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/encrypted-first-run.json")"
 plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
 stale_digest="$(printf '0%.0s' {1..64})"
 if run_as_admin "nas-setup first-run --config /var/lib/nas-test/setup/encrypted-first-run.json --confirm-plan-digest '$stale_digest'" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
   fail "first-run accepted a stale plan digest"
 fi
-grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err || fail "stale plan digest failure was not diagnostic"
+if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
+  printf '%s\n' '--- stale plan stdout ---' >&2
+  cat /tmp/nas-stale-plan.out >&2
+  printf '%s\n' '--- stale plan stderr ---' >&2
+  cat /tmp/nas-stale-plan.err >&2
+  fail "stale plan digest failure was not diagnostic"
+fi
 pass "first-run rejects a stale plan digest before mutation"
 run_as_admin "printf '%s\n' '$KEEPASS_PASSWORD' | timeout 1200 nas-setup first-run \
   --config /var/lib/nas-test/setup/encrypted-first-run.json \

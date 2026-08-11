@@ -90,9 +90,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("  cockpit-build:\n", workflow)
         self.assertNotIn("  source-archive:\n", workflow)
         self.assertIn("Post-build full-stack QEMU integration", workflow)
-        self.assertIn("Official-ISO install, reboot, final-VM deterministic checks, then smart fuzz", workflow)
-        self.assertIn("Slow source/property/security fuzz shard (${{ matrix.shard }})", workflow)
-        self.assertIn("Slow browser deterministic replay plus hostile-input fuzz", workflow)
+        self.assertIn("Official-ISO install, reboot, and final-VM deterministic checks", workflow)
+        self.assertIn("Final smart fuzz shard (${{ matrix.shard }})", workflow)
+        self.assertNotIn("Final hostile-input browser fuzz", workflow)
+        self.assertIn("Final installed-command and HTTP adversarial checks", workflow)
         self.assertIn(
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
         )
@@ -104,7 +105,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         build_block = workflow.split("  build:\n", 1)[1].split("  browser:\n", 1)[0]
         integration_pos = workflow.index("integration:")
         installer_pos = workflow.index("installer:")
-        fuzz_pos = workflow.index("  fuzz:\n")
+        fuzz_pos = workflow.index("  source-fuzz:\n")
         self.assertLess(
             build_block.index("Build production bundle"),
             build_block.index("Package and verify as an untrusted consumer"),
@@ -128,11 +129,11 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertGreaterEqual(workflow.count("npm --prefix cockpit ci --no-audit --no-fund"), 1)
         self.assertNotIn("npm --prefix cockpit install", workflow)
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
-        self.assertIn("Final VM deterministic layout/accessibility/security checks then state-aware fuzz", workflow)
-        self.assertIn("Retain smart web-security reports", workflow)
+        self.assertIn("Final VM deterministic layout/accessibility/security checks", workflow)
+        self.assertIn("Retain active ZAP evidence", workflow)
         self.assertIn("checks.x86_64-linux.nas-vm", workflow)
 
-    def test_fast_ci_excludes_all_fuzz_and_slow_ci_parallelizes_it(self) -> None:
+    def test_fast_ci_excludes_generated_fuzz_and_slow_ci_parallelizes_it(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         preflight = text("scripts/preflight.sh")
         security_runner = text("scripts/run-security-tests.py")
@@ -141,15 +142,34 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertGreaterEqual(workflow.count("--exclude test_secret_security_fuzz.py"), 3)
         self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
-        self.assertIn("shard: [parser-boundaries, executables, properties, security]", workflow)
-        self.assertIn("max-parallel: 4", workflow)
-        self.assertIn("tests.test_secret_security_fuzz", workflow)
+        self.assertIn("max-parallel: 6", workflow)
+        self.assertIn("fail-fast: false", workflow)
+        self.assertIn("shard: [boundaries, properties, stateful, security, javascript, executable-contracts]", workflow)
         self.assertIn("timeout-minutes: 240", workflow)
         self.assertIn("test-tier == 'full'", workflow)
         self.assertIn("test-tier == 'installer'", workflow)
-        fuzz_block = workflow.split("  fuzz:\n", 1)[1].split("  browser-fuzz:\n", 1)[0]
+        fuzz_block = workflow.split("  source-fuzz:\n", 1)[1].split("  installed-command-fuzz:\n", 1)[0]
         self.assertIn("needs: [integration, installer]", fuzz_block)
         self.assertIn("github.event_name == 'pull_request'", fuzz_block)
+        self.assertIn("source-fuzz-${{ matrix.shard }}-evidence", fuzz_block)
+        self.assertIn('./scripts/run-fuzz.py --suite "${{ matrix.shard }}" --jobs 1', fuzz_block)
+        self.assertNotIn("browser-fuzz:", workflow)
+
+        deterministic_installer = workflow.split("  installer:\n", 1)[1].split("  source-fuzz:\n", 1)[0]
+        self.assertNotIn("adversarial-installed.py", deterministic_installer)
+        self.assertNotIn("NAS_ZAP_IMAGE", deterministic_installer)
+        self.assertNotIn("NAS_FINAL_VM_FUZZ", deterministic_installer)
+
+        installed = workflow.split("  installed-command-fuzz:\n", 1)[1].split("  zap-fuzz:\n", 1)[0]
+        zap = workflow.split("  zap-fuzz:\n", 1)[1].split("  summary:\n", 1)[0]
+        self.assertIn("needs: [installer]", installed)
+        self.assertIn("needs: [installer]", zap)
+        self.assertIn("qemu-test.sh installer", installed)
+        self.assertIn("qemu-test.sh installer", zap)
+        self.assertIn("NAS_FINAL_VM_WORKLOAD: installed-command-fuzz", installed)
+        self.assertIn("NAS_HTTP_ADVERSARIAL_OUT: http-adversarial.json", installed)
+        self.assertIn("http-adversarial.json", installed)
+        self.assertIn("NAS_FINAL_VM_WORKLOAD: zap-fuzz", zap)
 
     def test_cache_policy_distinguishes_dependencies_outputs_results_and_fresh_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -175,33 +195,39 @@ class Alpha20CockpitContracts(unittest.TestCase):
         ):
             self.assertIn(phrase, policy)
 
-    def test_slow_browser_replays_deterministic_suite_before_fuzzing(self) -> None:
+    def test_http_adversarial_checks_use_curl_inside_installed_vm_workload(self) -> None:
         workflow = text(".github/workflows/ci.yml")
-        block = workflow.split("  browser-fuzz:\n", 1)[1].split("  summary:\n", 1)[0]
-        deterministic = "Replay all deterministic XSS overlap formatting layout and accessibility checks"
-        fuzz = "Run slow hostile-input browser fuzz after deterministic replay"
-        self.assertIn(deterministic, block)
-        self.assertIn(fuzz, block)
-        self.assertLess(block.index(deterministic), block.index(fuzz))
-        self.assertIn("NAS_BROWSER_SUITE: deterministic", block)
-        self.assertIn("NAS_BROWSER_SUITE: fuzz", block)
+        config = text("cockpit/e2e/playwright.config.mjs")
+        harness = text("scripts/qemu-final-browser.sh")
+        installed = workflow.split("  installed-command-fuzz:\n", 1)[1].split("  zap-fuzz:\n", 1)[0]
+        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split('case "$WORKLOAD"', 1)[0]
+        self.assertIn("NAS_HTTP_ADVERSARIAL_OUT: http-adversarial.json", installed)
+        self.assertIn("run_http_adversarial_contracts", harness)
+        self.assertIn("curl --insecure --silent --show-error", http_block)
+        self.assertIn("spoofed identity headers reached protected path", http_block)
+        self.assertNotIn("NAS_BROWSER_SUITE: fuzz", workflow)
+        self.assertNotIn('suite === "fuzz"', config)
+        self.assertFalse((ROOT / "cockpit/e2e/ui-fuzz.spec.mjs").exists())
+        self.assertFalse((ROOT / "cockpit/e2e/http-adversarial.spec.mjs").exists())
 
-    def test_browser_security_has_deterministic_corpus_fuzz_and_final_vm_modes(self) -> None:
+    def test_browser_security_keeps_browser_engines_for_browser_semantics(self) -> None:
         config = text("cockpit/e2e/playwright.config.mjs")
         deterministic = text("cockpit/e2e/common-xss.spec.mjs")
-        fuzz = text("cockpit/e2e/ui-fuzz.spec.mjs")
+        security = text("cockpit/e2e/ui-security.spec.mjs")
         vm = text("cockpit/e2e/final-vm.spec.mjs")
         harness = text("scripts/qemu-final-browser.sh")
         zap = text("scripts/zap-automation-scan.sh")
-        self.assertIn('suite === "fuzz"', config)
         self.assertIn('suite === "vm"', config)
+        self.assertNotIn('suite === "fuzz"', config)
         self.assertIn("fullyParallel: true", config)
-        self.assertIn("workers: process.env.CI ? 4", config)
+        self.assertIn("process.env.CI ? 4", config)
+        self.assertIn('name: "chromium-final-vm"', config)
+        self.assertIn('name: "firefox-final-vm"', config)
         self.assertIn('name: "webkit-final-vm"', config)
         self.assertIn('name: "chromium-mobile-final-vm"', config)
         for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
             self.assertIn(probe, deterministic)
-        self.assertIn("Array.from({length: 96}", fuzz)
+        self.assertIn("hostile status corpus never creates executable elements", security)
         self.assertIn("anonymous clients see only the Cockpit login boundary", vm)
         self.assertIn("anonymous login boundary remains accessible and responsive", vm)
         self.assertIn("invalid credentials cannot expose the NAS component", vm)
@@ -210,6 +236,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("#login-user-input", vm)
         self.assertIn("NAS_VM_TEST_PASSWORD", vm)
         self.assertIn("browser-os-overlay.qcow2", harness)
+        self.assertIn("deterministic-browser", harness)
+        self.assertIn("playwright test", harness)
         self.assertIn("chpasswd", harness)
         self.assertIn("zap-automation-scan.sh", harness)
         self.assertIn('"type": "spiderClient"', zap)

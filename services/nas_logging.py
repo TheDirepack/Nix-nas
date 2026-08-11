@@ -39,16 +39,12 @@ _SENSITIVE_KEYS = frozenset(
         "session_token",
     }
 )
-_SENSITIVE_SUFFIXES = (
-    "_password",
-    "_passwd",
-    "_token",
-    "_secret",
-    "_api_key",
-    "_access_key",
-    "_private_key",
-    "_cookie",
-)
+# Compound structured-field names are common (providerAuthorization,
+# upstream_token, peer.credentials). Every complete sensitive token is treated
+# as sensitive at a normalized component boundary rather than maintaining a
+# second, inevitably incomplete suffix allowlist. Names such as
+# authorizationMethod remain visible because they do not end at that boundary.
+_SENSITIVE_SUFFIXES = tuple(f"_{key}" for key in sorted(_SENSITIVE_KEYS))
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -96,8 +92,11 @@ def sanitize(value: Any, *, key: str = "", depth: int = 0) -> Any:
             if index >= MAX_COLLECTION_ITEMS:
                 output["_truncated"] = True
                 break
-            normalized_key = _bounded_text(item_key)
-            output[normalized_key] = sanitize(item_value, key=normalized_key, depth=depth + 1)
+            raw_key = str(item_key)
+            display_key = _bounded_text(raw_key)
+            # Classify the original key. Bounding is only a display/output
+            # concern; truncating first could remove a trailing sensitive token.
+            output[display_key] = sanitize(item_value, key=raw_key, depth=depth + 1)
         return output
     if isinstance(value, (list, tuple, set, frozenset)):
         items = list(value)

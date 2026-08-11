@@ -63,6 +63,8 @@ class CiSummaryTests(unittest.TestCase):
         self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.SLOW_JOBS <= full)
         self.assertNotIn("installer", full)
         self.assertIn("installer", installer)
+        self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & full)
+        self.assertTrue(ci_summary.INSTALLED_FUZZ_JOBS <= installer)
 
     def test_any_reported_failure_is_rejected_even_when_job_is_optional(self) -> None:
         expected = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/topic", "", "fast")

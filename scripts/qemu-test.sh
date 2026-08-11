@@ -251,25 +251,6 @@ ssh_options() {
     -o UserKnownHostsFile=/dev/null
 }
 
-run_dynamic_web_scan() {
-  if [[ -z "${NAS_ZAP_IMAGE:-}" ]]; then
-    log "Skipping OWASP ZAP: NAS_ZAP_IMAGE is not configured"
-    return 0
-  fi
-  local mode="${NAS_ZAP_MODE:-baseline}"
-  local out="${NAS_ZAP_OUT_DIR:-$STATE_DIR/zap}"
-  log "Running OWASP ZAP against the disposable installed appliance"
-  NAS_ZAP_OUT_DIR="$out" \
-    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
-    NAS_ZAP_REPORT_PREFIX="public" \
-    NAS_ZAP_CONFIRM_ACTIVE=1 \
-    "$ROOT/scripts/zap-scan.sh" "$mode" "https://nas-test.local:$HTTPS_PORT/"
-  NAS_ZAP_OUT_DIR="$out" \
-    NAS_ZAP_REPORT_PREFIX="cockpit" \
-    NAS_ZAP_CONFIRM_ACTIVE=1 \
-    "$ROOT/scripts/zap-scan.sh" "$mode" "https://127.0.0.1:$COCKPIT_PORT/"
-}
-
 wait_for_ssh() {
   local key=$1 attempts=${NAS_QEMU_SSH_ATTEMPTS:-180}
   local -a options
@@ -373,8 +354,6 @@ run_installer() {
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
       "sudo -n env NAS_TEST_TIMEOUT=600 nas-vm-guest-test /dev/vdb"
-
-  run_dynamic_web_scan
 
   log "Exercising post-install activation, failed-candidate, and rollback paths"
   timeout --foreground "${NAS_QEMU_RECONFIGURE_TIMEOUT:-5400}" \

@@ -197,6 +197,11 @@ def _open_named_lock(path: pathlib.Path) -> Any:
             raise RuntimeError(f"NAS operation lock is not a regular file: {path}")
         if stat.S_IMODE(metadata.st_mode) & 0o007:
             raise RuntimeError(f"NAS operation lock grants access to other users: {path}")
+        # os.open() applies the process umask, which can strip the group-write
+        # bit and lock out other nas-operations members who must open the file
+        # with O_RDWR. The creator enforces the intended 0o660 contract.
+        if os.geteuid() == 0 or metadata.st_uid == os.geteuid():
+            os.fchmod(descriptor, 0o660)
         return os.fdopen(descriptor, "a+", encoding="utf-8")
     except Exception:
         os.close(descriptor)

@@ -2,160 +2,205 @@ from __future__ import annotations
 
 import contextlib
 import io
-import importlib
+import json
 import pathlib
 import re
 import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "services"))
-sys.path.insert(0, str(ROOT / "tests"))
+SERVICES = ROOT / "services"
+TESTS = ROOT / "tests"
+if str(SERVICES) not in sys.path:
+    sys.path.insert(0, str(SERVICES))
+if str(TESTS) not in sys.path:
+    sys.path.insert(0, str(TESTS))
 
-from adversarial_payloads import (
-    ALL_TEXT_PAYLOADS,
-    CONTROL_PAYLOADS,
-    PATH_PAYLOADS,
-    SHELL_PAYLOADS,
-    SQL_PAYLOADS,
-    XSS_PAYLOADS,
-)
-from fuzz_harness import DEFAULT_CASES, json_texts, json_values, mutate_text
+try:
+    from hypothesis import HealthCheck, event, given, settings, strategies as st, target
+except ImportError:
+    HAS_HYPOTHESIS = False
+else:
+    HAS_HYPOTHESIS = True
 
-common = importlib.import_module("nas_common")
-setup_config = importlib.import_module("nas_setup_config")
-syncthing = importlib.import_module("nas_syncthing_devices")
-state = importlib.import_module("nas_state")
-api = importlib.import_module("nas_cockpit_api")
-alerts = importlib.import_module("nas_alert_router")
-identity = importlib.import_module("nas_identity_model")
+    import nas_alert_router as alerts
+    import nas_cockpit_api as api
+    import nas_common as common
+    import nas_identity_model as identity
+    import nas_setup_config as setup_config
+    import nas_state as state
+    import nas_syncthing_devices as syncthing
+    from fuzz_strategies import identifier_candidates, json_values, path_candidates
 
 
-class DeterministicBoundaryFuzzTests(unittest.TestCase):
-    def test_group_header_parser_is_bounded_and_control_character_fail_closed(self):
-        for raw in mutate_text(["nas_users", "nas_admin,nas_allow_files", *CONTROL_PAYLOADS], seed=22011):
-            with self.subTest(raw=raw[:80]):
-                with contextlib.redirect_stderr(io.StringIO()):
-                    groups = common.split_groups(raw)
-                self.assertLessEqual(len(groups), common.MAX_GROUPS)
-                for name in groups:
-                    self.assertLessEqual(len(name), common.MAX_GROUP_NAME_LENGTH)
-                    self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in name))
-                if any(ord(character) < 32 or ord(character) == 127 for character in raw):
-                    self.assertEqual(groups, set())
+if HAS_HYPOTHESIS:
 
-    def test_usernames_never_escape_the_declared_identifier_grammar(self):
-        corpus = ["alice", "operator", *ALL_TEXT_PAYLOADS]
-        for raw in mutate_text(corpus, seed=22012):
-            with self.subTest(raw=raw[:80]):
-                try:
-                    accepted = syncthing.validate_username(raw)
-                except syncthing.DeviceError:
-                    continue
-                self.assertEqual(accepted, raw)
-                self.assertRegex(accepted, syncthing.USERNAME_RE)
+    class StructuredBoundaryFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
+        @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(st.text(max_size=9000))
+        def test_group_header_parser_is_total_bounded_and_control_safe(self, raw: str) -> None:
+            target(len(raw), label="group-header-length")
+            event("group-header:control" if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw) else "group-header:text")
+            with contextlib.redirect_stderr(io.StringIO()):
+                groups = common.split_groups(raw)
+            self.assertLessEqual(len(groups), common.MAX_GROUPS)
+            for name in groups:
+                self.assertLessEqual(len(name), common.MAX_GROUP_NAME_LENGTH)
+                self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in name))
+            if any(ord(character) < 32 or ord(character) == 127 for character in raw):
+                self.assertEqual(groups, set())
 
-    def test_cockpit_feature_argument_never_accepts_shell_or_path_injection(self):
-        for raw in mutate_text(["ai", "syncthing", *SHELL_PAYLOADS, *PATH_PAYLOADS], seed=22013):
-            with self.subTest(raw=raw[:80]):
-                try:
-                    accepted = api.validate_argument(raw, api.FEATURE_RE, "feature identifier")
-                except api.ApiError:
-                    continue
-                self.assertLessEqual(len(accepted), api.MAX_ARGUMENT_LENGTH)
-                self.assertIsNotNone(api.FEATURE_RE.fullmatch(accepted))
-                self.assertNotRegex(accepted, r"[\\/;|&$`\s]")
+        @settings(max_examples=400, deadline=None)
+        @given(identifier_candidates(max_size=300))
+        def test_usernames_never_escape_the_declared_identifier_grammar(self, raw: str) -> None:
+            target(len(raw), label="username-length")
+            try:
+                accepted = syncthing.validate_username(raw)
+            except syncthing.DeviceError:
+                event("username:rejected")
+                return
+            event("username:accepted")
+            self.assertEqual(accepted, raw)
+            self.assertRegex(accepted, syncthing.USERNAME_RE)
 
-    def test_secret_line_normalization_never_returns_multiline_or_nul_data(self):
-        for raw in mutate_text(["secret", *ALL_TEXT_PAYLOADS], seed=22014):
-            with self.subTest(raw=raw[:80]):
-                try:
-                    accepted = setup_config.normalize_secret_line(raw, "fuzz secret")
-                except setup_config.SetupError:
-                    continue
-                self.assertTrue(accepted)
-                self.assertNotIn("\x00", accepted)
-                self.assertNotIn("\r", accepted)
-                self.assertNotIn("\n", accepted)
-                self.assertLessEqual(len(raw), 4098)
+        @settings(max_examples=400, deadline=None)
+        @given(identifier_candidates(max_size=512))
+        def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, raw: str) -> None:
+            target(len(raw), label="feature-id-length")
+            try:
+                accepted = api.validate_argument(raw, api.FEATURE_RE, "feature identifier")
+            except api.ApiError:
+                event("feature-id:rejected")
+                self.assertTrue(len(raw) > api.MAX_ARGUMENT_LENGTH or api.FEATURE_RE.fullmatch(raw) is None)
+                return
+            event("feature-id:accepted")
+            self.assertEqual(accepted, raw)
+            self.assertLessEqual(len(accepted), api.MAX_ARGUMENT_LENGTH)
+            self.assertIsNotNone(api.FEATURE_RE.fullmatch(accepted))
 
-    def test_archive_member_parser_never_returns_absolute_or_parent_paths(self):
-        for raw in mutate_text(["state/file.json", *PATH_PAYLOADS], seed=22015):
-            with self.subTest(raw=raw[:80]):
-                try:
-                    accepted = state.safe_member_name(raw)
-                except state.StateError:
-                    continue
-                self.assertFalse(accepted.is_absolute())
-                self.assertNotIn("..", accepted.parts)
-                self.assertNotIn("", accepted.parts)
-                self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in accepted.as_posix()))
-                self.assertLessEqual(len(accepted.as_posix().encode("utf-8")), state.MAX_ARCHIVE_MEMBER_NAME_BYTES)
+        @settings(max_examples=400, deadline=None)
+        @given(st.text(max_size=4200))
+        def test_secret_line_normalization_never_returns_multiline_or_nul_data(self, raw: str) -> None:
+            target(len(raw), label="secret-line-length")
+            try:
+                accepted = setup_config.normalize_secret_line(raw, "fuzz secret")
+            except setup_config.SetupError:
+                event("secret-line:rejected")
+                return
+            event("secret-line:accepted")
+            self.assertTrue(accepted)
+            self.assertNotIn("\x00", accepted)
+            self.assertNotIn("\r", accepted)
+            self.assertNotIn("\n", accepted)
+            self.assertLessEqual(len(accepted), 4096)
 
-    def test_syncthing_device_decoder_has_only_expected_failure_modes(self):
-        for raw in mutate_text(
-            [
-                '{"deviceID":"AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA-AAAAAAA"}',
-                *ALL_TEXT_PAYLOADS,
-            ],
-            seed=22016,
-        ):
-            with self.subTest(raw=raw[:80]):
-                try:
-                    device = syncthing.normalize_device(raw)
-                except syncthing.DeviceError:
-                    continue
-                self.assertRegex(device["deviceID"], syncthing.DEVICE_ID_RE)
-                self.assertLessEqual(len(device["name"]), syncthing.MAX_DEVICE_NAME)
-                self.assertLessEqual(len(device["addresses"]), syncthing.MAX_ADDRESSES)
+        @settings(max_examples=500, deadline=None)
+        @given(st.one_of(path_candidates(), st.text(max_size=2048)))
+        def test_archive_member_parser_never_returns_absolute_or_parent_paths(self, raw: str) -> None:
+            target(len(raw.encode("utf-8", errors="ignore")), label="archive-member-input-bytes")
+            try:
+                accepted = state.safe_member_name(raw)
+            except state.StateError:
+                event("archive-member:rejected")
+                return
+            event("archive-member:accepted")
+            self.assertFalse(accepted.is_absolute())
+            self.assertNotIn("..", accepted.parts)
+            self.assertNotIn("", accepted.parts)
+            self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in accepted.as_posix()))
+            self.assertLessEqual(len(accepted.as_posix().encode("utf-8")), state.MAX_ARCHIVE_MEMBER_NAME_BYTES)
+            self.assertTrue(
+                all(len(part.encode("utf-8")) <= state.MAX_ARCHIVE_COMPONENT_BYTES for part in accepted.parts)
+            )
 
-    def test_alert_normalization_never_reflects_unbounded_attacker_text(self):
-        for text in mutate_text(["alert", *SQL_PAYLOADS, *XSS_PAYLOADS], seed=22017):
+        @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(
+            st.one_of(
+                st.text(max_size=4096),
+                st.dictionaries(
+                    st.sampled_from(["deviceID", "name", "addresses", "compression", "introducer"]),
+                    json_values(max_leaves=20),
+                    max_size=5,
+                ).map(lambda value: json.dumps(value, ensure_ascii=False)),
+            )
+        )
+        def test_syncthing_device_decoder_has_only_expected_failure_modes(self, raw: str) -> None:
+            target(len(raw), label="syncthing-device-input-length")
+            try:
+                device = syncthing.normalize_device(raw)
+            except syncthing.DeviceError:
+                event("syncthing-device:rejected")
+                return
+            event("syncthing-device:accepted")
+            self.assertRegex(device["deviceID"], syncthing.DEVICE_ID_RE)
+            self.assertLessEqual(len(device["name"]), syncthing.MAX_DEVICE_NAME)
+            self.assertLessEqual(len(device["addresses"]), syncthing.MAX_ADDRESSES)
+
+        @settings(max_examples=350, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(
+            alertname=st.text(max_size=2000),
+            severity=st.text(max_size=2000),
+            summary=st.text(max_size=4000),
+            description=st.text(max_size=8000),
+        )
+        def test_alert_normalization_is_bounded_and_control_safe(
+            self, alertname: str, severity: str, summary: str, description: str
+        ) -> None:
+            target(max(map(len, (alertname, severity, summary, description))), label="alert-field-length")
             raw = {
-                "labels": {"alertname": text, "severity": text},
-                "annotations": {"summary": text, "description": text},
+                "labels": {"alertname": alertname, "severity": severity},
+                "annotations": {"summary": summary, "description": description},
                 "startsAt": "2026-08-06T12:00:00Z",
             }
-            with self.subTest(text=text[:80]):
-                try:
-                    alert = alerts.normalize_alert(raw)
-                except alerts.AlertRouterError:
-                    continue
-                self.assertLessEqual(len(alert.title), 256)
-                self.assertLessEqual(len(alert.message), 4096)
-                self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in alert.title))
-                self.assertTrue(all(len(key) <= 128 and len(value) <= 512 for key, value in alert.labels.items()))
-                self.assertTrue(
-                    all(
-                        not any(ord(character) < 32 or ord(character) == 127 for character in value)
-                        for value in alert.labels.values()
-                    )
+            try:
+                alert = alerts.normalize_alert(raw)
+            except alerts.AlertRouterError:
+                event("alert:rejected")
+                return
+            event("alert:accepted")
+            self.assertLessEqual(len(alert.title), 256)
+            self.assertLessEqual(len(alert.message), 4096)
+            self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in alert.title))
+            self.assertTrue(all(len(key) <= 128 and len(value) <= 512 for key, value in alert.labels.items()))
+            self.assertTrue(
+                all(
+                    not any(ord(character) < 32 or ord(character) == 127 for character in value)
+                    for value in alert.labels.values()
                 )
+            )
 
-    def test_setup_config_fuzz_never_returns_unsafe_account_identifiers(self):
-        for value in json_values(seed=22018):
-            raw = {"schemaVersion": 1, "storage": {"createPool": False}, "accounts": value, "features": {}}
+        @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(json_values(max_leaves=60))
+        def test_setup_config_never_returns_unsafe_account_identifiers(self, accounts: object) -> None:
+            raw = {"schemaVersion": 1, "storage": {"createPool": False}, "accounts": accounts, "features": {}}
             try:
                 normalized = setup_config.normalize_config(raw)
             except (setup_config.SetupError, TypeError, ValueError):
-                continue
+                event("setup-accounts:rejected")
+                return
+            event("setup-accounts:accepted")
+            target(len(normalized["accounts"]), label="normalized-account-count")
             for account in normalized["accounts"]:
                 self.assertRegex(account["username"], syncthing.USERNAME_RE)
 
-    def test_identity_model_rejects_or_normalizes_fuzzed_usernames(self):
-        for username in mutate_text(["alice", *ALL_TEXT_PAYLOADS], seed=22019):
+        @settings(max_examples=400, deadline=None)
+        @given(identifier_candidates(max_size=256))
+        def test_identity_model_rejects_or_preserves_usernames(self, username: str) -> None:
+            target(len(username), label="identity-username-length")
             raw = {"groups": [], "users": [{"pk": "1", "username": username, "is_active": True}]}
             try:
                 model = identity.build_model(raw)
             except identity.SyncError:
-                continue
+                event("identity-username:rejected")
+                return
+            event("identity-username:accepted")
             self.assertTrue(all(re.fullmatch(syncthing.USERNAME_RE, user.uid) for user in model.users))
+            self.assertTrue(all(user.uid == username for user in model.users))
+else:
 
-    def test_json_text_fuzzer_is_deterministic_and_bounded(self):
-        first = list(json_texts(seed=91, cases=min(DEFAULT_CASES, 64)))
-        second = list(json_texts(seed=91, cases=min(DEFAULT_CASES, 64)))
-        self.assertEqual(first, second)
-        self.assertTrue(all(len(value.encode("utf-8")) < 65536 for value in first))
+    class StructuredBoundaryFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
+        def test_hypothesis_is_required(self) -> None:
+            self.fail("Hypothesis is required for the structured boundary fuzz suite")
 
 
 if __name__ == "__main__":

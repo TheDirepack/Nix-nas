@@ -28,7 +28,7 @@ class ContractTests(unittest.TestCase):
         secrets = text("modules/nas/internal/secret-tools.nix")
         unlock = text("cockpit/src/api.js")
         self.assertIn("keepassxc-cli", secrets)
-        self.assertIn("--pw-stdin", secrets)
+        self.assertNotIn("--pw-stdin", secrets)
         self.assertRegex(secrets, r"read\s+-r\s+-s")
         self.assertIn("activate-stdin)", secrets)
         self.assertIn('superuser: "require"', unlock)

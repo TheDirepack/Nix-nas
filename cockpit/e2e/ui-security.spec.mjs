@@ -327,7 +327,7 @@ test("backend refresh failure becomes a bounded operator-visible error", async (
   await installCockpitMock(page, {overviewError: "simulated backend outage"});
   await page.goto("/index.html");
   await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
-  await expect(page.getByText("Unable to refresh NAS state", {exact: true})).toBeVisible();
+  await expect(page.getByRole("heading", {name: /Unable to refresh NAS state/})).toBeVisible();
   await expect(page.getByText("simulated backend outage", {exact: true})).toBeVisible();
   await expect(page.getByLabel("Loading NAS state")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -341,7 +341,7 @@ test("privileged action failure stays recoverable and never becomes an uncaught 
   await openApp(page, {actionError: "simulated operation rejection"});
   await page.getByRole("button", {name: "Run system health checks"}).click();
   await page.getByRole("button", {name: "Run action"}).click();
-  await expect(page.getByText("Operation failed", {exact: true})).toBeVisible();
+  await expect(page.getByRole("heading", {name: /Operation failed/})).toBeVisible();
   await expect(page.getByText("simulated operation rejection", {exact: true})).toBeVisible();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", {name: "Cancel"}).click();

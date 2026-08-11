@@ -24,8 +24,25 @@ except ImportError:
 
 
 if HAS_HYPOTHESIS:
-    SAFE_HOSTNAME = st.from_regex(r"[a-z0-9][a-z0-9-]{0,7}\.example\.test", fullmatch=True)
-    SAFE_LABEL = st.from_regex(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,11}", fullmatch=True)
+    # Lifecycle/projection properties need a varied set of valid identifiers,
+    # not regex-parser coverage. Keep these finite so Hypothesis shrinks choices
+    # as indices instead of attempting to co-shrink strings from incompatible
+    # regex alphabets. Malformed/Unicode identifier behavior belongs to the
+    # dedicated boundary suite.
+    SAFE_SERVICE_ID = st.sampled_from(tuple(f"svc{index}" for index in range(24)))
+    SAFE_HOSTNAME = st.sampled_from(tuple(f"host{index}.example.test" for index in range(24)))
+    SAFE_LABEL = st.sampled_from(
+        (
+            "Service",
+            "Media",
+            "Backup",
+            "Home Lab",
+            "AI Gateway",
+            "Files-1",
+            "Status_2",
+            "Portal.3",
+        )
+    )
 
     def _valid_service_doc(service_id: str, label: str, port: int, hostname: str, enabled: bool) -> dict:
         return {
@@ -66,7 +83,7 @@ if HAS_HYPOTHESIS:
 
         @rule(
             target=services_bundle,
-            sid=st.from_regex(r"[a-z][a-z0-9-]{0,8}", fullmatch=True),
+            sid=SAFE_SERVICE_ID,
             label=SAFE_LABEL,
             port=st.integers(1024, 65535),
             hostname=SAFE_HOSTNAME,
@@ -223,7 +240,7 @@ if HAS_HYPOTHESIS:
         @given(
             st.lists(
                 st.tuples(
-                    st.from_regex(r"[a-z][a-z0-9-]{0,8}", fullmatch=True),
+                    SAFE_SERVICE_ID,
                     st.integers(1024, 65535),
                     SAFE_HOSTNAME,
                     st.booleans(),

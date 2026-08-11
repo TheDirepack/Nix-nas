@@ -196,8 +196,6 @@ in
       && !cfg.testing.installationReadyFixture
     ) {
       description = "Verify exact trusted-interface firewall policy before management access";
-      requiredBy = [ "cockpit.socket" ];
-      before = [ "cockpit.socket" ];
       wants = [ "network-online.target" ];
       requires = [ "firewalld.service" "nas-firewall-baseline.service" ];
       after = [ "firewalld.service" "nas-firewall-baseline.service" "NetworkManager.service" "network-online.target" ];

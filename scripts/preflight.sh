@@ -49,12 +49,12 @@ step "custom executable test inventory" ./scripts/validate-test-inventory.py
 step "static security boundaries" ./scripts/security-static-scan.py
 step "Python syntax" ./scripts/validate-python-syntax.py
 
-# Fuzzing is deliberately opt-in. CI owns long-running fuzz/property work in
-# the final slow stage, after static checks, builds, runtime integration, and
-# final-system deterministic qualification have succeeded.
-if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" ]]; then
-  step "deterministic boundary fuzz smoke" ./scripts/fuzz.py --cases "${NAS_PREFLIGHT_FUZZ_CASES:-250}"
-  step "custom executable fuzz smoke" ./scripts/fuzz-executables.py --cases "${NAS_PREFLIGHT_EXECUTABLE_FUZZ_CASES:-1}"
+# Generated fuzz/property work is deliberately opt-in during preflight. The
+# canonical runner owns parallelization and Hypothesis owns input generation;
+# preflight must not maintain a second seed/case-count mutation path. Contract
+# checks of preflight itself set NAS_PREFLIGHT_SKIP_FUZZ to prevent recursion.
+if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" && "${NAS_PREFLIGHT_SKIP_FUZZ:-0}" != "1" ]]; then
+  step "smart fuzz and executable contracts" ./scripts/run-fuzz.py
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
@@ -83,7 +83,7 @@ if command -v node >/dev/null 2>&1; then
   done < <(find cockpit/src -type f -name '*.js' -print0 | sort -z)
   while IFS= read -r -d '' script; do
     node --check "$script"
-  done < <(find cockpit/e2e -type f -name '*.mjs' -print0 2>/dev/null | sort -z)
+  done < <(find cockpit/e2e tests/js-fuzz -type f -name '*.mjs' -print0 2>/dev/null | sort -z)
   node cockpit/build.js --check-source
   cockpit_bundle_available=false
   if [[ "${NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE:-0}" == "1" ]]; then

@@ -28,13 +28,23 @@ let
       keepassxc
       nodejs
       openssh
-      (python3.withPackages (pythonPackages: [ pythonPackages.selenium ]))
+      (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
       procps
       systemd
       util-linux
       zfs
     ];
-    text = builtins.readFile ../vm/guest-test.sh;
+    text = ''
+      # Dedicated CI jobs have already qualified source tests, tooling, the
+      # Cockpit production bundle, and Nix reference configurations before QEMU.
+      # Keep nas-preflight exercised in the installed VM without recursively
+      # rerunning those expensive owners during first-run and command smoke.
+      export NAS_PREFLIGHT_SKIP_TESTS=1
+      export NAS_PREFLIGHT_SKIP_TOOLING=1
+      export NAS_PREFLIGHT_SKIP_NIX=1
+      export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
+      ${builtins.readFile ../vm/guest-test.sh}
+    '';
   };
   secretAdversarialTest = pkgs.writeShellApplication {
     name = "nas-vm-secret-adversarial";
