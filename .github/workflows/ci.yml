@@ -154,7 +154,7 @@ jobs:
       - name: Validate generated Caddy fragment with real Caddy
         run: |
           nix shell nixpkgs#caddy -c caddy version
-          nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v
+          nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v
 
   static:
     name: Fast Nix evaluation, lint, type and formatting checks
@@ -180,7 +180,7 @@ jobs:
         run: |
           nix shell nixpkgs#ruff -c ruff check services tests scripts
           nix shell nixpkgs#ruff -c ruff format --check services tests scripts
-          nix shell nixpkgs#pyright -c pyright --project pyproject.toml
+          nix develop .#test -c pyright --project pyproject.toml
       - name: JavaScript formatting
         run: nix shell nixpkgs#prettier -c prettier --check "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "tests/js/*.mjs" prettier.config.mjs
       - name: Evaluate valid and intentionally-invalid configuration matrix
