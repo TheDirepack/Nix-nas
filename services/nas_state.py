@@ -97,7 +97,6 @@ def default_authorities() -> tuple[Authority, ...]:
     """Fallback registry for direct development use; Nix installs a profile-aware registry."""
 
     return (
-        Authority("feature-control", os.environ.get("NAS_FEATURE_STATE_ROOT", "/var/lib/nas-control")),
         Authority("first-run", os.environ.get("NAS_SETUP_STATE_ROOT", "/var/lib/nas-setup"), optional=True),
         Authority("firewall", os.environ.get("NAS_FIREWALL_STATE_ROOT", "/var/lib/nas-firewall"), optional=True),
         Authority(
@@ -145,7 +144,7 @@ def default_authorities() -> tuple[Authority, ...]:
         Authority("authentik-database", "postgresql://authentik", kind="database", sensitive=True),
         Authority(
             "managed-services",
-            os.environ.get("NAS_MANAGED_SERVICES_STATE_ROOT", "/var/lib/nas-control/services.json"),
+            os.environ.get("NAS_MANAGED_SERVICES_STATE_PATH", "/var/lib/nas-control/services.yaml"),
         ),
         Authority(
             "managed-apps",
@@ -381,8 +380,6 @@ def run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProc
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        # The helpers used here can be wrappers (for example runuser) that spawn
-        # database children. Kill the complete session before rollback starts.
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -1003,8 +1000,6 @@ def authority_root_policy(authority: Authority) -> PathPolicy:
 
     default_mode = 0o700 if authority.sensitive else 0o750
     if authority.owner is None or authority.group is None or authority.rootMode is None:
-        # Direct-development fixtures may use the fallback registry. Installed
-        # execution requires the generated registry with explicit ownership.
         return PathPolicy(0, 0, default_mode, authority.sensitive)
     try:
         uid = pwd.getpwnam(authority.owner).pw_uid
@@ -1163,7 +1158,7 @@ def stop_active_units(snapshot: Mapping[str, bool]) -> None:
         for unit in reversed(stopped):
             try:
                 run_systemctl("start", unit)
-            except Exception as exc:  # retain every failed recovery action
+            except Exception as exc:
                 recovery_errors.append(f"{unit}: {exc}")
         if recovery_errors:
             raise StateError(
@@ -1226,9 +1221,6 @@ def reapply_runtime_consumers(snapshot: Mapping[str, bool]) -> None:
                 run_systemctl("start", unit)
 
     if snapshot.get("NetworkManager.service", False):
-        # Reload connection profiles explicitly. `systemctl reload NetworkManager`
-        # reloads daemon configuration but does not guarantee that restored
-        # system-connections are re-read into NetworkManager's runtime state.
         result = run_process(["nmcli", "connection", "reload"], timeout=60)
         if result.returncode != 0:
             raise StateError("NetworkManager connection profile reload failed")
@@ -1331,8 +1323,6 @@ def restore_bundle(
         restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
         rollback_ready = False
         try:
-            # The appliance is already quiesced. Capture rollback state once without
-            # an additional stop/start cycle before applying the requested bundle.
             export_bundle(rollback, include_sensitive=True, quiesce=False)
             rollback_ready = True
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
@@ -1429,9 +1419,6 @@ def main() -> None:
                 validate_coordination_token(token, ("appliance",))
                 value = export_bundle(args.output, include_sensitive=args.include_sensitive)
             else:
-                # A state bundle spans multiple mutable authorities. Hold the
-                # appliance-wide coordinator so custom writers cannot race the
-                # quiesced service snapshot.
                 with acquire_operation("state-export", ("appliance",)):
                     value = export_bundle(args.output, include_sensitive=args.include_sensitive)
         elif args.command == "validate":

@@ -6,7 +6,10 @@ import pathlib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CONTRACTS = ROOT / "tests" / "custom-script-contracts.json"
+CONTRACTS = (
+    ROOT / "tests" / "custom-script-contracts.json",
+    ROOT / "tests" / "custom-script-contracts-v2.json",
+)
 
 
 def _module_name_from_service_path(path: str) -> str:
@@ -28,10 +31,25 @@ def _imports_in_file(test_path: pathlib.Path) -> set[str]:
     return imports
 
 
+def _python_module_contracts() -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for path in CONTRACTS:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        modules = raw.get("pythonModules", {})
+        if not isinstance(modules, dict):
+            raise AssertionError(f"{path.relative_to(ROOT)} has invalid pythonModules")
+        for module, tests in modules.items():
+            if module in merged:
+                raise AssertionError(f"duplicate python module contract: {module}")
+            if not isinstance(tests, list) or not all(isinstance(test, str) for test in tests):
+                raise AssertionError(f"{module} has invalid focused-test contract")
+            merged[module] = tests
+    return merged
+
+
 class RunnerAccountingTests(unittest.TestCase):
     def test_every_service_module_has_importing_test(self):
-        raw = json.loads(CONTRACTS.read_text(encoding="utf-8"))
-        python_modules: dict[str, list[str]] = raw.get("pythonModules", {})
+        python_modules = _python_module_contracts()
         service_modules = {p.relative_to(ROOT).as_posix() for p in (ROOT / "services").glob("*.py")}
         for mod_path in sorted(service_modules):
             with self.subTest(module=mod_path):
@@ -48,12 +66,12 @@ class RunnerAccountingTests(unittest.TestCase):
                         found_import = True
                         break
                 self.assertTrue(
-                    found_import, msg=f"{mod_path} mapping {test_files} has no import coverage for {module_name}"
+                    found_import,
+                    msg=f"{mod_path} mapping {test_files} has no import coverage for {module_name}",
                 )
 
     def test_python_modules_mapping_has_real_import(self):
-        raw = json.loads(CONTRACTS.read_text(encoding="utf-8"))
-        for module, tests in raw.get("pythonModules", {}).items():
+        for module, tests in _python_module_contracts().items():
             with self.subTest(module=module):
                 module_name = _module_name_from_service_path(module)
                 has_import = False
@@ -76,46 +94,51 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn("unexpectedSuccesses", text)
         self.assertIn("no tests discovered", text)
 
-    def test_caddy_all_skipped_exception_is_backed_by_dedicated_real_binary_job(self):
-        path = ROOT / "tests" / "test_service_caddy_validate.py"
-        self.assertTrue(path.is_file(), msg="test_service_caddy_validate.py must exist")
-        test_text = path.read_text(encoding="utf-8")
-        self.assertIn("SkipTest", test_text)
-        self.assertIn("caddy", test_text.lower())
-        self.assertIn("generate_caddy_fragment", test_text)
+    def test_caddy_ci_entrypoint_delegates_to_real_v2_binary_tests(self):
+        v2_path = ROOT / "tests" / "test_v2_caddy_validate.py"
+        self.assertTrue(v2_path.is_file(), msg="test_v2_caddy_validate.py must exist")
+        v2_text = v2_path.read_text(encoding="utf-8")
+        self.assertIn("SkipTest", v2_text)
+        self.assertIn("nas_v2_caddy", v2_text)
+        self.assertIn("validate_caddyfile", v2_text)
+        self.assertNotIn("nas_service_caddy", v2_text)
+
+        bridge = ROOT / "tests" / "test_service_caddy_validate.py"
+        bridge_text = bridge.read_text(encoding="utf-8")
+        self.assertIn("test_v2_caddy_validate", bridge_text)
+        self.assertNotIn("nas_service_caddy", bridge_text)
+        self.assertNotIn("generate_caddy_fragment", bridge_text)
 
         runner = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
-        self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})', runner)
+        self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})', runner)
+        self.assertNotIn('frozenset({"test_service_caddy_validate.py"})', runner)
 
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         caddy_block = workflow.split("  caddy-validate:\n", 1)[1].split("\n  static:\n", 1)[0]
         self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
+        self.assertIn("tests.test_v2_caddy", caddy_block)
         self.assertIn("tests.test_service_caddy_validate", caddy_block)
 
-    def test_managed_service_has_fast_contract_and_isolated_slow_state_machine(self):
-        fast = ROOT / "tests" / "test_managed_service_stateful.py"
-        slow = ROOT / "tests" / "slow_managed_service_stateful.py"
-        property_tier = ROOT / "tests" / "test_property_invariants.py"
-        orchestrator = ROOT / "scripts" / "run-fuzz.py"
-        self.assertTrue(fast.is_file(), msg="fast managed-service projection contract must exist")
-        self.assertTrue(slow.is_file(), msg="slow managed-service state machine must exist")
+    def test_managed_services_v2_has_runtime_and_property_contracts(self):
+        v2_contracts = {
+            "test_v2_caddy.py": ("nas_v2_caddy", "requiredCapability"),
+            "test_v2_systemd.py": ("nas_v2_systemd", "idle"),
+            "test_v2_session.py": ("nas_v2_session", "volume"),
+            "test_v2_podman_network.py": ("nas_v2_podman_network", "isolated"),
+        }
+        for filename, markers in v2_contracts.items():
+            with self.subTest(filename=filename):
+                path = ROOT / "tests" / filename
+                self.assertTrue(path.is_file(), msg=f"{filename} must exist")
+                text = path.read_text(encoding="utf-8")
+                for marker in markers:
+                    self.assertIn(marker, text)
 
-        fast_text = fast.read_text(encoding="utf-8")
-        self.assertIn("ManagedServiceProjectionContractTests", fast_text)
-        self.assertIn("portal_projection", fast_text)
-        self.assertIn("generate_caddy_fragment", fast_text)
-
-        slow_text = slow.read_text(encoding="utf-8")
-        self.assertIn("RuleBasedStateMachine", slow_text)
-        self.assertIn("run_state_machine_as_test", slow_text)
-        self.assertIn("ProjectionDifferentialTests", slow_text)
-
-        property_text = property_tier.read_text(encoding="utf-8")
+        property_text = (ROOT / "tests" / "test_property_invariants.py").read_text(encoding="utf-8")
+        self.assertIn("PropertyInvariantTests", property_text)
         self.assertNotIn("slow_managed_service_stateful", property_text)
-        orchestrator_text = orchestrator.read_text(encoding="utf-8")
-        self.assertIn(
-            '"stateful": unittest_suite("stateful", "tests.slow_managed_service_stateful")', orchestrator_text
-        )
+        self.assertNotIn("nas_feature_model", property_text)
+        self.assertNotIn("nas_managed_service", property_text)
 
 
 if __name__ == "__main__":

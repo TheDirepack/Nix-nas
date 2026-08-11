@@ -9,11 +9,12 @@ class BacklogCompletionTests(unittest.TestCase):
         self.assertFalse((ROOT / "docs/development/backlog.md").exists())
         self.assertTrue((ROOT / "docs/development/dependencies.md").is_file())
 
-    def test_service_policy_was_split_and_packaged_as_an_application(self) -> None:
+    def test_service_policy_uses_canonical_v2_modules_and_is_packaged(self) -> None:
         account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text()
         pyproject = (ROOT / "pyproject.toml").read_text()
         self.assertIn("buildPythonApplication", account_tools)
-        for name in ("nas_feature_model", "nas_identity_model", "nas_setup_config"):
+        self.assertFalse((ROOT / "services/nas_feature_model.py").exists())
+        for name in ("nas_v2_spec", "nas_v2_control", "nas_v2_editor", "nas_identity_model", "nas_setup_config"):
             self.assertTrue((ROOT / "services" / f"{name}.py").is_file())
             self.assertIn(f'"{name}"', pyproject)
 

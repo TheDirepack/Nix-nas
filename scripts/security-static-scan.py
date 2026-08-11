@@ -61,6 +61,47 @@ def dynamic_sql(node: ast.AST) -> bool:
     return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format"
 
 
+def safe_ruamel_yaml_instances(tree: ast.AST) -> set[str]:
+    """Return variables proven to be safe/round-trip ruamel.yaml YAML instances."""
+
+    factories: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "ruamel.yaml":
+            for alias in node.names:
+                if alias.name == "YAML":
+                    factories.add(alias.asname or alias.name)
+
+    instances: set[str] = set()
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        value: ast.AST | None = None
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
+            continue
+        if value.func.id not in factories:
+            continue
+
+        loader_type = "rt"
+        for keyword in value.keywords:
+            if (
+                keyword.arg == "typ"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ):
+                loader_type = keyword.value.value
+        if loader_type not in {"rt", "safe"}:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                instances.add(target.id)
+    return instances
+
+
 def scan_python(path: pathlib.Path) -> list[Finding]:
     findings: list[Finding] = []
     try:
@@ -68,6 +109,7 @@ def scan_python(path: pathlib.Path) -> list[Finding]:
     except (OSError, SyntaxError) as exc:
         return [Finding(path, getattr(exc, "lineno", 1) or 1, "python-parse", str(exc))]
 
+    safe_ruamel_instances = safe_ruamel_yaml_instances(tree)
     tainted_sql_names: set[str] = set()
     changed = True
     while changed:
@@ -100,6 +142,9 @@ def scan_python(path: pathlib.Path) -> list[Finding]:
         if name in {"pickle.load", "pickle.loads", "marshal.load", "marshal.loads"}:
             findings.append(Finding(path, node.lineno, "unsafe-deserialization", f"forbidden deserializer {name}"))
         if name == "yaml.load":
+            receiver = node.func.value if isinstance(node.func, ast.Attribute) else None
+            if isinstance(receiver, ast.Name) and receiver.id in safe_ruamel_instances:
+                continue
             safe_loader = any(
                 keyword.arg == "Loader"
                 and dotted(keyword.value) in {"yaml.SafeLoader", "SafeLoader", "yaml.CSafeLoader", "CSafeLoader"}

@@ -22,7 +22,7 @@ ALLOWLIST_ZERO = frozenset()
 # Caddy binary. Generic source/non-root jobs may lack that external executable,
 # so an all-skipped result there is allowed only for this explicit capability
 # test. Every other discovered test file must execute at least one real test.
-ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})
+ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})
 FAILURES_RE = re.compile(r"failures=(\d+)")
 ERRORS_RE = re.compile(r"errors=(\d+)")
 SKIPPED_RE = re.compile(r"skipped=(\d+)")

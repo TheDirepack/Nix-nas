@@ -22,11 +22,14 @@ REQUIRED_FILES = {
     "local.nix",
     "modules/nas/internal/default.nix",
     "modules/nas/internal/base.nix",
-    "modules/nas/internal/feature-catalog.nix",
-    "modules/nas/internal/service-registry.nix",
     "modules/nas/internal/caddy-helpers.nix",
     "modules/nas/internal/account-tools.nix",
     "modules/nas/internal/documentation-tools.nix",
+    "modules/nas/config/managed-services.nix",
+    "modules/nas/config/managed-services-native-services.nix",
+    "modules/nas/config/managed-services-platform-routes.nix",
+    "modules/nas/config/managed-services-operations.nix",
+    "modules/nas/config/managed-services-backup-resources.nix",
     "modules/profiles/core-storage.nix",
     "modules/profiles/identity-sharing.nix",
     "modules/profiles/observability.nix",
@@ -63,21 +66,28 @@ REQUIRED_FILES = {
     "scripts/check-mkforce.py",
     "scripts/check-version.py",
     "scripts/package-release.sh",
-    "schemas/feature-catalog.schema.json",
+    "schemas/managed-services-v3.schema.json",
     "schemas/state-bundle.schema.json",
-    "schemas/service-registry.schema.json",
+    "schemas/first-run.schema.json",
     "services/nas_common.py",
     "services/nas_setup.py",
     "services/nas_state.py",
     "services/nas_setup_config.py",
     "services/nas_identity_sync.py",
     "services/nas_identity_model.py",
-    "services/nas_feature_control.py",
-    "services/nas_feature_model.py",
     "services/nas_cockpit_api.py",
     "services/nas_operation_journal.py",
     "services/nas_operation_lock.py",
     "services/nas_syncthing_devices.py",
+    "services/nas_v2_spec.py",
+    "services/nas_v2_plan.py",
+    "services/nas_v2_apply.py",
+    "services/nas_v2_control.py",
+    "services/nas_v2_editor.py",
+    "services/nas_v2_systemd.py",
+    "services/nas_v2_caddy.py",
+    "services/nas_v2_authentik.py",
+    "services/nas_v2_wake.py",
     "scripts/preflight.sh",
     "scripts/live-validation.sh",
     "scripts/nix-config-matrix.sh",
@@ -89,21 +99,17 @@ REQUIRED_FILES = {
     "cockpit/e2e/ui-security.spec.mjs",
     "tests/adversarial_payloads.py",
     "tests/custom-script-contracts.json",
-    "tests/fuzz_strategies.py",
     "tests/test_adversarial_security.py",
     "tests/test_cli_surfaces.py",
-    "tests/test_fuzz_architecture.py",
     "tests/test_fuzz_boundaries.py",
     "tests/test_maintainer_scripts.py",
     "tests/test_script_inventory.py",
     "tests/test_security_surface.py",
     "tests/test_property_invariants.py",
-    "tests/test_secret_security_fuzz.py",
-    "tests/slow_managed_service_stateful.py",
+    "tests/test_v2_control.py",
+    "tests/test_v2_boundary.py",
+    "tests/test_v2_caddy.py",
     "tests/js/security.test.mjs",
-    "tests/js-fuzz/package.json",
-    "tests/js-fuzz/package-lock.json",
-    "tests/js-fuzz/frontend-properties.test.mjs",
     "scripts/qemu-test.sh",
     "scripts/validate-repository-data.py",
     "scripts/validate-doc-links.py",
@@ -126,7 +132,6 @@ REQUIRED_FILES = {
     "cockpit/src/app.scss",
     "cockpit/src/api.js",
     "cockpit/src/view-model.js",
-    "tests/test_feature_control.py",
     "tests/test_cockpit_api.py",
     "tests/test_operation_lock.py",
     "tests/test_comment_policy.py",
@@ -148,6 +153,26 @@ REQUIRED_FILES = {
     ".github/workflows/ci.yml",
 }
 
+FORBIDDEN_V1_FILES = {
+    "modules/nas/internal/feature-catalog.nix",
+    "modules/nas/internal/capability-registry.nix",
+    "modules/nas/internal/service-registry.nix",
+    "schemas/feature-catalog.schema.json",
+    "schemas/capability-registry.schema.json",
+    "schemas/service-registry.schema.json",
+    "schemas/managed-service.schema.json",
+    "services/nas_feature_control.py",
+    "services/nas_managed_service.py",
+    "services/nas_migrate_state.py",
+    "services/nas_v2_identity_migrate.py",
+    "services/nas_v2_schedule_migrate.py",
+    "tests/test_feature_control.py",
+    "tests/test_capability_registry.py",
+    "tests/test_doctor_migrations.py",
+    "tests/test_v2_identity_migrate.py",
+    "tests/test_v2_schedule_migrate.py",
+}
+
 ALLOWED_ROOT_MARKDOWN = {"AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "README.md", "SECURITY.md"}
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9][A-Za-z0-9.-]*)?$")
 STATIC_NIX_PATH_RE = re.compile(r"\$\{(\.\./[^}]+)\}")
@@ -165,6 +190,10 @@ def main() -> int:
     missing = sorted(path for path in REQUIRED_FILES if not (ROOT / path).is_file())
     if missing:
         fail("missing required files: " + ", ".join(missing))
+
+    surviving_v1 = sorted(path for path in FORBIDDEN_V1_FILES if (ROOT / path).exists())
+    if surviving_v1:
+        fail("V1 compatibility files must stay deleted: " + ", ".join(surviving_v1))
 
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not VERSION_RE.fullmatch(version):

@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """First-run and account provisioning CLI for the NixOS NAS appliance.
 
-The command deliberately orchestrates existing appliance tools instead of
-reimplementing their authorities:
+This is a finite setup/orchestration command. It does not own application
+lifecycle or authorization:
 
 * KeePassXC and ``nas-secrets`` own machine and service secrets.
-* ZFS helpers own the managed pool/dataset validation and encryption workflow.
-* Authentik and ``nas-identity-sync`` own human identities and memberships.
-* CopyParty owns share volumes and ACLs; this command creates only required
-  ZFS-backed personal directories.
-* ``nas-feature-control`` owns mutable service lifecycle modes.
+* ZFS helpers own managed storage validation and encryption.
+* Authentik and ``nas-identity-sync`` own human identities and assignments.
+* CopyParty owns share ACLs; setup only creates required backing directories.
+* Managed Services V2 ``services.yaml`` owns mutable service lifecycle policy.
 
-Persistent JSON configuration must not contain plaintext passwords. Account
-passwords are read from mode-0600 files or from standard input for one-off
-account commands, converted to an in-memory Authentik plan, and never written to
-setup state.
+The setup JSON therefore contains only base identity roles and optional V2
+service lifecycle modes. Application capability groups are assigned in
+Authentik after V2 has ensured the corresponding
+``application.<service>.<capability>`` objects.
 """
 
 from __future__ import annotations
@@ -27,20 +26,20 @@ import hmac
 import json
 import os
 import pathlib
-import secrets
 import pwd
 import re
+import secrets
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any
 
-from nas_common import ADMIN_GROUP, CAPABILITY_GROUPS, DISABLED_GROUP, GUEST_GROUP, USER_GROUP, run_command
-from nas_syncthing_devices import DeviceError, validate_username
+from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, USER_GROUP, run_command
 from nas_operation_journal import JournalError, OperationJournal, atomic_write_json, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
@@ -50,6 +49,7 @@ from nas_operation_lock import (
     current_coordination_token,
 )
 from nas_setup_config import (
+    SCHEMA_VERSION,
     SetupError,
     normalize_account,
     normalize_config,
@@ -57,8 +57,8 @@ from nas_setup_config import (
     read_password_file,
     read_secret_stdin,
 )
+from nas_syncthing_devices import DeviceError, validate_username
 
-SCHEMA_VERSION = 1
 ADMIN_USER = os.environ.get("NAS_ADMIN_USER", "admin")
 KEEPASS_DATABASE = pathlib.Path(os.environ.get("NAS_KEEPASS_DATABASE", "/var/lib/nas-secrets/NAS.kdbx"))
 KEEPASS_KEY_FILE = os.environ.get("NAS_KEEPASS_KEY_FILE", "")
@@ -71,21 +71,21 @@ SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 STATE_PATH = pathlib.Path(os.environ.get("NAS_SETUP_STATE", "/var/lib/nas-setup/state.json"))
 JOURNAL_PATH = pathlib.Path(os.environ.get("NAS_SETUP_JOURNAL", "/var/lib/nas-setup/first-run-journal.json"))
 FIRST_START_STATUS_PATH = pathlib.Path(os.environ.get("NAS_FIRST_START_STATUS", "/var/lib/nas-first-start/status.json"))
-SETUP_OPERATION_CLASSES = ("appliance", "first-start", "identity", "runtime", "secrets", "state", "storage", "update")
+MANAGED_SERVICES_CONTROL = os.environ.get("NAS_MANAGED_SERVICES_CONTROL", "nas-managed-services-control")
+SETUP_OPERATION_CLASSES = (
+    "appliance",
+    "first-start",
+    "identity",
+    "runtime",
+    "secrets",
+    "state",
+    "storage",
+    "update",
+)
 FIRST_START_JOB_RETAIN_COUNT = max(1, int(os.environ.get("NAS_FIRST_START_JOB_RETAIN_COUNT", "20")))
 FIRST_START_JOB_RETAIN_SECONDS = max(
     0, int(os.environ.get("NAS_FIRST_START_JOB_RETAIN_SECONDS", str(7 * 24 * 60 * 60)))
 )
-
-RESERVED_GROUPS = {
-    ADMIN_GROUP,
-    USER_GROUP,
-    GUEST_GROUP,
-    DISABLED_GROUP,
-    *(group for pair in CAPABILITY_GROUPS.values() for group in pair),
-}
-FEATURE_MODES = {"off", "on-demand", "always"}
-ZFS_TOPOLOGIES = {"single", "stripe", "mirror", "raidz1", "raidz2", "raidz3"}
 COMMAND_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("NAS_SETUP_COMMAND_TIMEOUT_SECONDS", "900")))
 COMMAND_MAX_OUTPUT_BYTES = max(4096, int(os.environ.get("NAS_SETUP_COMMAND_MAX_OUTPUT_BYTES", str(256 * 1024))))
 
@@ -155,16 +155,12 @@ def run_admin(command: Sequence[str], **kwargs: Any) -> Completed:
 
 
 def run_interactive_privileged(command: Sequence[str], **kwargs: Any) -> Completed:
-    """Run a user-facing helper with privilege while preserving normal CLI ownership."""
-
     if os.geteuid() == 0 and os.environ.get("NAS_SETUP_ALLOW_ROOT") == "1":
         return run(command, **kwargs)
     return run_admin(command, **kwargs)
 
 
 def coordinated_child(command: Sequence[str]) -> list[str]:
-    """Pass a verifiable ancestor-lock token to one nested mutation helper."""
-
     try:
         token = current_coordination_token()
     except RuntimeError as exc:
@@ -182,6 +178,14 @@ def run_root(command: Sequence[str], **kwargs: Any) -> Completed:
     return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
 
 
+def run_root_noninteractive(command: Sequence[str], **kwargs: Any) -> Completed:
+    if os.geteuid() == 0:
+        return run(command, **kwargs)
+    if current_username() != ADMIN_USER:
+        return Completed(tuple(map(str, command)), "", "privileged status requires the configured local administrator", 1)
+    return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
+
+
 def require_setup_operator() -> None:
     current = current_username()
     if os.geteuid() == 0 and os.environ.get("NAS_SETUP_ALLOW_ROOT") == "1":
@@ -189,8 +193,7 @@ def require_setup_operator() -> None:
         return
     if current != ADMIN_USER:
         raise SetupError(
-            f"Run mutating nas-setup commands as the configured local administrator {ADMIN_USER!r}, not {current!r}. "
-            "This preserves KeePassXC database ownership while sudo is used only for privileged appliance operations."
+            f"Run mutating nas-setup commands as the configured local administrator {ADMIN_USER!r}, not {current!r}."
         )
     progress("validating local administrator sudo authorization")
     run(["sudo", "-v"], capture=False)
@@ -198,8 +201,6 @@ def require_setup_operator() -> None:
 
 @contextlib.contextmanager
 def maintained_sudo_authorization() -> Iterator[None]:
-    """Prime sudo and keep its timestamp alive without ever reading command stdin."""
-
     require_setup_operator()
     if os.geteuid() == 0:
         yield
@@ -208,8 +209,7 @@ def maintained_sudo_authorization() -> Iterator[None]:
 
     def refresh() -> None:
         while not stop.wait(30):
-            completed = run(["sudo", "-n", "-v"], check=False)
-            if completed.returncode != 0:
+            if run(["sudo", "-n", "-v"], check=False).returncode != 0:
                 progress("warning: unable to refresh cached sudo authorization")
                 return
 
@@ -220,19 +220,6 @@ def maintained_sudo_authorization() -> Iterator[None]:
     finally:
         stop.set()
         worker.join(timeout=2)
-
-
-def run_root_noninteractive(command: Sequence[str], **kwargs: Any) -> Completed:
-    if os.geteuid() == 0:
-        return run(command, **kwargs)
-    if current_username() != ADMIN_USER:
-        return Completed(
-            tuple(map(str, command)),
-            "",
-            "privileged status requires the configured local administrator",
-            1,
-        )
-    return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
 
 
 def read_json_source(source: str) -> dict[str, Any]:
@@ -246,6 +233,26 @@ def read_json_source(source: str) -> dict[str, Any]:
     return value
 
 
+def pool_exists() -> bool:
+    return subprocess.run(
+        ["zpool", "list", "-H", ZFS_POOL],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=30,
+    ).returncode == 0
+
+
+def dataset_exists() -> bool:
+    return subprocess.run(
+        ["zfs", "list", "-H", ZFS_DATASET],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=30,
+    ).returncode == 0
+
+
 def validate_storage_request(
     storage: Mapping[str, Any],
     confirmed_devices: Sequence[str] | None,
@@ -255,15 +262,13 @@ def validate_storage_request(
         return
     if not storage.get("createPool"):
         raise SetupError(
-            f"ZFS pool {ZFS_POOL} does not exist. Configure "
-            "storage.createPool/devices or create/import it before setup."
+            f"ZFS pool {ZFS_POOL} does not exist. Configure storage.createPool/devices or create/import it before setup."
         )
     devices = [str(item) for item in storage.get("devices", [])]
     confirmed = [str(item) for item in (confirmed_devices or [])]
     if sorted(confirmed) != sorted(devices) or len(confirmed) != len(devices):
         raise SetupError(
-            "Refusing to create the pool: repeat --confirm-storage-device "
-            "once for every configured storage.devices path"
+            "Refusing to create the pool: repeat --confirm-storage-device once for every configured storage.devices path"
         )
     if not allow_destructive:
         raise SetupError("Creating a new ZFS pool requires --allow-destructive-storage")
@@ -295,32 +300,41 @@ def validate_storage_request(
         raise SetupError(f"Multiple configured paths refer to the same block device: {', '.join(aliases)}")
 
 
-def validate_feature_request(features: Mapping[str, str]) -> None:
-    if not features:
-        return
-    result = run_root(["nas-feature-control", "status"])
+def _managed_services_status(*, noninteractive: bool = False) -> dict[str, Any]:
+    runner = run_root_noninteractive if noninteractive else run_root
+    completed = runner([MANAGED_SERVICES_CONTROL, "status"], check=False)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"exit status {completed.returncode}"
+        raise SetupError(f"Managed Services V2 status failed: {detail}")
     try:
-        payload = json.loads(result.stdout)
+        value = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise SetupError("nas-feature-control returned invalid status JSON") from exc
-    entries = payload.get("features") if isinstance(payload, Mapping) else None
-    if not isinstance(entries, list):
-        raise SetupError("nas-feature-control status has no feature catalog")
+        raise SetupError("Managed Services V2 status returned invalid JSON") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("services"), list):
+        raise SetupError("Managed Services V2 status has no service catalog")
+    return value
+
+
+def validate_service_request(services: Mapping[str, str]) -> None:
+    if not services:
+        return
+    status = _managed_services_status()
+    rows = status["services"]
     by_id = {
-        str(entry.get("id")): entry
-        for entry in entries
-        if isinstance(entry, Mapping) and isinstance(entry.get("id"), str)
+        str(row.get("id")): row
+        for row in rows
+        if isinstance(row, Mapping) and isinstance(row.get("id"), str)
     }
-    unknown = sorted(set(features) - set(by_id))
+    unknown = sorted(set(services) - set(by_id))
     if unknown:
-        raise SetupError(f"Unknown configured feature(s): {', '.join(unknown)}")
-    for feature, mode in features.items():
-        entry = by_id[feature]
-        allowed = entry.get("allowedModes", [])
+        raise SetupError(f"Unknown configured Managed Services V2 service(s): {', '.join(unknown)}")
+    for service_id, mode in services.items():
+        row = by_id[service_id]
+        allowed = row.get("allowedModes", [])
         if not isinstance(allowed, list) or mode not in allowed:
-            raise SetupError(f"Feature {feature} does not permit mode {mode}")
-        if mode != "off" and entry.get("available") is not True:
-            raise SetupError(f"Feature {feature} is not available in this NixOS configuration")
+            raise SetupError(f"Managed Services V2 service {service_id} does not permit mode {mode}")
+        if mode != "off" and row.get("available") is not True:
+            raise SetupError(f"Managed Services V2 service {service_id} is unavailable on this host")
 
 
 def identity_plan(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -338,7 +352,7 @@ def identity_plan(config: Mapping[str, Any]) -> dict[str, Any]:
             item["password"] = read_password_file(account["passwordFile"], account["username"])
         accounts.append(item)
     return {
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": 1,
         "accounts": accounts,
         "deactivateMissingManagedAccounts": config["deactivateMissingManagedAccounts"],
     }
@@ -351,18 +365,15 @@ def read_keepass_password(from_stdin: bool) -> str:
 
 
 def verify_or_create_database(password: str, create: bool) -> str:
-    key_args: list[str] = []
-    if KEEPASS_KEY_FILE:
-        key_args = ["--key-file", KEEPASS_KEY_FILE]
+    key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
     if KEEPASS_DATABASE.exists():
         run_admin(
-            ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
+            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(KEEPASS_DATABASE)],
             input_text=password + "\n",
         )
         return "existing"
     if not create:
         raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
-
     run_root(["install", "-d", "-m", "0700", "-o", ADMIN_USER, "-g", "users", str(KEEPASS_DATABASE.parent)])
     create_args = ["keepassxc-cli", "db-create", "--quiet", "-p"]
     if KEEPASS_KEY_FILE:
@@ -372,28 +383,6 @@ def verify_or_create_database(password: str, create: bool) -> str:
     if not KEEPASS_DATABASE.exists():
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
     return "created"
-
-
-def pool_exists() -> bool:
-    completed = subprocess.run(
-        ["zpool", "list", "-H", ZFS_POOL],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=30,
-    )
-    return completed.returncode == 0
-
-
-def dataset_exists() -> bool:
-    completed = subprocess.run(
-        ["zfs", "list", "-H", ZFS_DATASET],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=30,
-    )
-    return completed.returncode == 0
 
 
 def setup_storage(
@@ -409,11 +398,6 @@ def setup_storage(
     topology = str(storage.get("topology", "single"))
     ashift = int(storage.get("ashift", 12))
     if not pool_exists():
-        if not storage.get("createPool"):
-            raise SetupError(
-                f"ZFS pool {ZFS_POOL} does not exist. Configure "
-                "storage.createPool/devices or create/import it before setup."
-            )
         validate_storage_request(storage, confirmed_devices, allow_destructive)
         if storage.get("wipeDevices"):
             for device in devices:
@@ -444,14 +428,12 @@ def setup_storage(
         )
         run_root(["zpool", "set", "autotrim=on", ZFS_POOL])
         created_pool = True
-
     if not dataset_exists():
         if ZFS_ENCRYPTION:
             run_interactive_privileged(["nas-zfs-create-encrypted-dataset"], input_text=keepass_password + "\n")
         else:
             run_root(["zfs", "create", "-o", f"mountpoint={ZFS_ROOT}", ZFS_DATASET])
         created_dataset = True
-
     if not ZFS_ENCRYPTION:
         run_root(["zfs", "mount", ZFS_DATASET], check=False)
         run_root(["nas-zfs-mount-check"])
@@ -474,11 +456,7 @@ def setup_storage(
     }
 
 
-def apply_accounts(
-    plan: Mapping[str, Any],
-    *,
-    confirm_password_reapply: bool = False,
-) -> dict[str, Any]:
+def apply_accounts(plan: Mapping[str, Any], *, confirm_password_reapply: bool = False) -> dict[str, Any]:
     command = coordinated_child(["nas-identity-sync", "apply-accounts", "-"])
     if confirm_password_reapply:
         command.append("--confirm-password-reapply")
@@ -493,26 +471,27 @@ def apply_accounts(
 
 
 def provision_share_directories(accounts: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Prepare backing directories independently of Authentik app assignments."""
     run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(SHARE_ROOT)])
     users_root = SHARE_ROOT / "users"
     run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(users_root)])
     created: list[str] = []
-    allow_files = CAPABILITY_GROUPS["files"][0]
     for account in accounts:
-        groups = set(account["groups"])
-        if account["active"] and (ADMIN_GROUP in groups or allow_files in groups):
-            path = users_root / account["username"]
+        groups = set(account.get("groups", []))
+        if account.get("active") is True and GUEST_GROUP not in groups:
+            path = users_root / str(account["username"])
             run_root(["install", "-d", "-m", "2770", "-o", "copyparty", "-g", "copyparty", str(path)])
             created.append(str(path))
     return created
 
 
-def apply_features(features: Mapping[str, str]) -> dict[str, str]:
-    run_root(
-        coordinated_child(["nas-feature-control", "set-many", "-"]),
-        input_text=json.dumps(dict(features), sort_keys=True) + "\n",
-    )
-    return dict(features)
+def apply_services(services: Mapping[str, str]) -> dict[str, str]:
+    if services:
+        run_root(
+            coordinated_child([MANAGED_SERVICES_CONTROL, "set-many", "-"]),
+            input_text=json.dumps(dict(services), sort_keys=True) + "\n",
+        )
+    return dict(services)
 
 
 def write_state(report: Mapping[str, Any]) -> None:
@@ -530,9 +509,7 @@ def write_state(report: Mapping[str, Any]) -> None:
 
 
 def password_input_authenticators(account_plan: Mapping[str, Any], keepass_password: str) -> dict[str, str]:
-    """Bind journal resume to password values without storing reusable hashes."""
-
-    key = hashlib.sha256(b"nixos-nas/setup-password-fingerprint/v1\0" + keepass_password.encode("utf-8")).digest()
+    key = hashlib.sha256(b"nixos-nas/setup-password-fingerprint/v2\0" + keepass_password.encode("utf-8")).digest()
     authenticators: dict[str, str] = {}
     accounts = account_plan.get("accounts", [])
     if not isinstance(accounts, Sequence):
@@ -550,8 +527,6 @@ def password_input_authenticators(account_plan: Mapping[str, Any], keepass_passw
 
 
 def canonical_setup_plan(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the complete password-free plan that an operator confirms."""
-
     accounts = []
     for account in config.get("accounts", []):
         if not isinstance(account, Mapping):
@@ -578,7 +553,7 @@ def canonical_setup_plan(config: Mapping[str, Any]) -> dict[str, Any]:
         },
         "accounts": accounts,
         "deactivateMissingManagedAccounts": bool(config.get("deactivateMissingManagedAccounts")),
-        "features": dict(config.get("features", {})),
+        "services": dict(config.get("services", {})),
         "runPreflight": bool(config.get("runPreflight")),
     }
 
@@ -651,21 +626,13 @@ def run_setup_stage(
         previous_result = journal.result(step)
         if postcondition is None or bool(postcondition(previous_result)):
             return previous_result
-        journal.fail_step(
-            step,
-            "The completed step no longer satisfies its appliance postcondition",
-            manual_recovery=True,
-        )
+        journal.fail_step(step, "The completed step no longer satisfies its appliance postcondition", manual_recovery=True)
         raise SetupError(f"Completed setup step {step} no longer matches the appliance; explicit recovery is required")
     journal.start_step(step)
     try:
         result = action()
     except Exception as exc:
-        journal.fail_step(
-            step,
-            str(exc),
-            manual_recovery=manual_recovery_on_failure,
-        )
+        journal.fail_step(step, str(exc), manual_recovery=manual_recovery_on_failure)
         raise
     journal.complete_step(step, result)
     return result
@@ -686,13 +653,9 @@ def storage_ready(_result: Any = None) -> bool:
 def protected_stack_ready(_result: Any = None) -> bool:
     if not pathlib.Path("/run/nas-secrets/ready").is_file():
         return False
-    return (
-        run_root_noninteractive(
-            ["systemctl", "is-active", "--quiet", "nas-protected-services.target"],
-            check=False,
-        ).returncode
-        == 0
-    )
+    return run_root_noninteractive(
+        ["systemctl", "is-active", "--quiet", "nas-protected-services.target"], check=False
+    ).returncode == 0
 
 
 def identity_command_ready(command: Sequence[str]) -> bool:
@@ -711,8 +674,7 @@ def account_plan_ready(plan: Mapping[str, Any]) -> bool:
         if not isinstance(desired, Mapping):
             return False
         completed = run_root_noninteractive(
-            ["nas-identity-sync", "export-account", str(desired.get("username", ""))],
-            check=False,
+            ["nas-identity-sync", "export-account", str(desired.get("username", ""))], check=False
         )
         if completed.returncode != 0:
             return False
@@ -742,30 +704,23 @@ def verification_ready(_result: Any = None) -> bool:
 
 
 def preflight_ready(_result: Any = None) -> bool:
-    completed = run(
-        ["nas-preflight"],
-        env={"NAS_PREFLIGHT_VERIFY_MANIFEST": "0"},
-        check=False,
-    )
-    return completed.returncode == 0
+    return run(["nas-preflight"], env={"NAS_PREFLIGHT_VERIFY_MANIFEST": "0"}, check=False).returncode == 0
 
 
-def feature_policy_ready(features: Mapping[str, str]) -> bool:
-    completed = run_root_noninteractive(["nas-feature-control", "status"], check=False)
-    if completed.returncode != 0:
-        return False
+def service_policy_ready(services: Mapping[str, str]) -> bool:
     try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError:
+        status = _managed_services_status(noninteractive=True)
+    except SetupError:
         return False
-    rows = value.get("features", []) if isinstance(value, Mapping) else []
+    rows = status.get("services", [])
     by_id = {row.get("id"): row for row in rows if isinstance(row, Mapping)}
-    return all(by_id.get(feature, {}).get("requestedMode") == mode for feature, mode in features.items())
+    return all(by_id.get(service_id, {}).get("requestedMode") == mode for service_id, mode in services.items())
 
 
 def share_directories_ready(accounts: Sequence[Mapping[str, Any]]) -> bool:
     for account in accounts:
-        if not bool(account.get("active", True)) or GUEST_GROUP in account.get("groups", []):
+        groups = set(account.get("groups", []))
+        if account.get("active") is not True or GUEST_GROUP in groups:
             continue
         path = SHARE_ROOT / "users" / str(account["username"])
         try:
@@ -789,13 +744,8 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
     config = normalize_config(read_json_source(args.config))
     confirmed_plan_digest = require_confirmed_plan(config, getattr(args, "confirm_plan_digest", None))
     with maintained_sudo_authorization():
-        validate_storage_request(
-            config["storage"],
-            args.confirm_storage_device,
-            args.allow_destructive_storage,
-        )
-        validate_feature_request(config["features"])
-
+        validate_storage_request(config["storage"], args.confirm_storage_device, args.allow_destructive_storage)
+        validate_service_request(config["services"])
         account_plan = identity_plan(config)
         password = ""
         started = int(time.time())
@@ -809,7 +759,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             fingerprint = setup_fingerprint(config, args, account_plan, password)
             journal = OperationJournal.open(
                 JOURNAL_PATH,
-                workflow="first-run",
+                workflow="first-run-v2",
                 fingerprint=fingerprint,
                 metadata={
                     "configPath": str(pathlib.Path(args.config).resolve()),
@@ -825,7 +775,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: verify_or_create_database(password, args.create_database),
                 postcondition=keepass_database_ready,
             )
-
             progress("initializing machine and service secrets")
             run_setup_stage(
                 journal,
@@ -835,7 +784,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                     and {"initialized": True}
                 ),
             )
-
             progress("creating or validating managed ZFS storage")
             pool_was_missing = not pool_exists()
             storage_result = run_setup_stage(
@@ -850,7 +798,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 manual_recovery_on_failure=pool_was_missing and args.allow_destructive_storage,
                 postcondition=storage_ready,
             )
-
             progress("activating protected services")
             run_setup_stage(
                 journal,
@@ -863,15 +810,13 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 postcondition=protected_stack_ready,
             )
-
-            progress("bootstrapping Authentik groups")
+            progress("bootstrapping Authentik base identity roles")
             bootstrap_result = run_setup_stage(
                 journal,
                 "identity-bootstrap",
                 lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "bootstrap"])).stdout),
                 postcondition=lambda _result: identity_command_ready(["nas-identity-sync", "status"]),
             )
-
             progress("installing the scoped Authentik runtime token")
             runtime_token_result = run_setup_stage(
                 journal,
@@ -879,7 +824,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: install_runtime_identity_token(password),
                 postcondition=lambda _result: identity_command_ready(["nas-identity-sync", "verify-token"]),
             )
-
             progress("applying Authentik accounts")
             account_result = run_setup_stage(
                 journal,
@@ -890,7 +834,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 postcondition=lambda _result: account_plan_ready(account_plan),
             )
-
             progress("provisioning CopyParty-backed personal directories")
             share_directories = run_setup_stage(
                 journal,
@@ -898,7 +841,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 lambda: provision_share_directories(config["accounts"]),
                 postcondition=lambda _result: share_directories_ready(config["accounts"]),
             )
-
             syncthing_result: dict[str, Any] | None = None
             if SYNCTHING_ENABLED:
                 progress("reconciling Authentik-owned Syncthing folders and devices")
@@ -907,15 +849,13 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                     "syncthing",
                     lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"])).stdout),
                 )
-
-            progress("applying configured feature lifecycle modes")
-            feature_result = run_setup_stage(
+            progress("applying Managed Services V2 lifecycle modes")
+            service_result = run_setup_stage(
                 journal,
-                "feature-policy",
-                lambda: apply_features(config["features"]),
-                postcondition=lambda _result: feature_policy_ready(config["features"]),
+                "managed-services-policy",
+                lambda: apply_services(config["services"]),
+                postcondition=lambda _result: service_policy_ready(config["services"]),
             )
-
             progress("verifying storage and identity state")
             verification = run_setup_stage(
                 journal,
@@ -926,7 +866,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 )[1],
                 postcondition=verification_ready,
             )
-
             preflight_ran = bool(config["runPreflight"] and not args.skip_preflight)
             if preflight_ran:
                 progress("running repository and host preflight validation")
@@ -936,7 +875,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                     lambda: run(["nas-preflight"], env={"NAS_PREFLIGHT_VERIFY_MANIFEST": "0"}) and {"passed": True},
                     postcondition=preflight_ready,
                 )
-
             report_status = "complete" if preflight_ran else "complete-unverified"
             report = {
                 "schemaVersion": SCHEMA_VERSION,
@@ -951,7 +889,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 "accounts": account_result,
                 "shareDirectories": share_directories,
                 "syncthing": syncthing_result,
-                "features": feature_result,
+                "services": service_result,
                 "identity": verification,
                 "preflight": preflight_ran,
                 "journal": str(JOURNAL_PATH),
@@ -984,7 +922,8 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
         finally:
             password = ""
             for account in account_plan.get("accounts", []):
-                account.pop("password", None)
+                if isinstance(account, dict):
+                    account.pop("password", None)
 
 
 def existing_account(username: str) -> dict[str, Any] | None:
@@ -1010,7 +949,6 @@ def one_account(args: argparse.Namespace) -> dict[str, Any]:
         raise SetupError(f"Account username is unsafe: {exc}") from exc
     if username == "akadmin":
         raise SetupError("akadmin is Authentik's bootstrap account and is not managed by nas-setup")
-
     with maintained_sudo_authorization():
         current = existing_account(username)
         explicit_groups = list(args.group or [])
@@ -1026,7 +964,6 @@ def one_account(args: argparse.Namespace) -> dict[str, Any]:
             groups = [DISABLED_GROUP]
         elif args.administrator and ADMIN_GROUP not in groups:
             groups.append(ADMIN_GROUP)
-
         raw: dict[str, Any] = {
             "username": username,
             "name": args.name or (current.get("name") if current else username),
@@ -1041,8 +978,7 @@ def one_account(args: argparse.Namespace) -> dict[str, Any]:
             password = read_secret_stdin(f"Password for {account['username']}")
         elif args.set_password:
             password = normalize_secret_line(
-                getpass.getpass(f"Password for {account['username']}: "),
-                f"Password for {account['username']}",
+                getpass.getpass(f"Password for {account['username']}: "), f"Password for {account['username']}"
             )
         item = {
             "username": account["username"],
@@ -1056,11 +992,7 @@ def one_account(args: argparse.Namespace) -> dict[str, Any]:
             item["password"] = password
         try:
             result = apply_accounts(
-                {
-                    "schemaVersion": SCHEMA_VERSION,
-                    "accounts": [item],
-                    "deactivateMissingManagedAccounts": False,
-                }
+                {"schemaVersion": 1, "accounts": [item], "deactivateMissingManagedAccounts": False}
             )
             shares = provision_share_directories([account])
             if SYNCTHING_ENABLED:
@@ -1080,12 +1012,9 @@ def disable_account(args: argparse.Namespace) -> dict[str, Any]:
         existing = json.loads(run_root(["nas-identity-sync", "export-account", username]).stdout)
         existing["active"] = False
         existing["groups"] = [DISABLED_GROUP]
-        plan = {
-            "schemaVersion": SCHEMA_VERSION,
-            "accounts": [existing],
-            "deactivateMissingManagedAccounts": False,
-        }
-        result = apply_accounts(plan)
+        result = apply_accounts(
+            {"schemaVersion": 1, "accounts": [existing], "deactivateMissingManagedAccounts": False}
+        )
         if SYNCTHING_ENABLED:
             run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"]))
         return result
@@ -1097,33 +1026,25 @@ def setup_authority_health(config: Mapping[str, Any]) -> dict[str, Any]:
         "pool": pool_exists(),
         "dataset": dataset_exists(),
         "identity": None,
-        "features": None,
+        "managedServices": None,
         "shares": share_directories_ready(config.get("accounts", [])),
     }
     if pathlib.Path("/run/nas-secrets/ready").is_file():
         checks["identity"] = identity_command_ready(["nas-identity-sync", "status"])
-        checks["features"] = feature_policy_ready(config.get("features", {}))
+        checks["managedServices"] = service_policy_ready(config.get("services", {}))
     required = [checks["keepassDatabase"], checks["pool"], checks["dataset"], checks["shares"]]
     if checks["identity"] is not None:
         required.append(checks["identity"])
-    if checks["features"] is not None:
-        required.append(checks["features"])
+    if checks["managedServices"] is not None:
+        required.append(checks["managedServices"])
     return {"ok": all(value is True for value in required), "checks": checks}
 
 
 def first_start_status(config_source: str) -> dict[str, Any]:
-    """Recompute the non-secret first-start state instead of trusting boot-time cache."""
-
     try:
         state = load_json(STATE_PATH)
     except JournalError as exc:
-        return {
-            "schemaVersion": SCHEMA_VERSION,
-            "status": "state-invalid",
-            "configPath": config_source,
-            "message": str(exc),
-        }
-
+        return {"schemaVersion": SCHEMA_VERSION, "status": "state-invalid", "configPath": config_source, "message": str(exc)}
     config_path = pathlib.Path(config_source)
     if not config_path.exists():
         return {
@@ -1132,10 +1053,9 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "configPath": config_source,
             "message": "Create the first-run JSON file, then recheck configuration.",
         }
-
     try:
         config = normalize_config(read_json_source(config_source))
-        validate_feature_request(config["features"])
+        validate_service_request(config["services"])
         plan_digest = setup_plan_digest(config)
     except (SetupError, OSError, ValueError, json.JSONDecodeError) as exc:
         return {
@@ -1144,7 +1064,6 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "configPath": config_source,
             "message": str(exc),
         }
-
     if isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}:
         if state.get("planDigest") != plan_digest:
             return {
@@ -1174,13 +1093,10 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "planDigest": plan_digest,
             "completedAt": state.get("completedAt"),
             "authorityHealth": health,
-            "message": (
-                "Initial appliance setup is complete."
-                if status == "complete"
-                else "Initial setup completed without final preflight verification."
-            ),
+            "message": "Initial appliance setup is complete."
+            if status == "complete"
+            else "Initial setup completed without final preflight verification.",
         }
-
     storage = config["storage"]
     devices = [str(item) for item in storage.get("devices", [])]
     pool_present = pool_exists()
@@ -1204,7 +1120,7 @@ def first_start_status(config_source: str) -> dict[str, Any]:
             "ashift": int(storage.get("ashift", 12)),
         },
         "accountCount": len(config["accounts"]),
-        "featureCount": len(config["features"]),
+        "serviceCount": len(config["services"]),
         "runPreflight": bool(config["runPreflight"]),
     }
 
@@ -1219,19 +1135,7 @@ def publish_first_start_status(status: Mapping[str, Any]) -> None:
         temporary = pathlib.Path(handle.name)
     try:
         run_root(["install", "-d", "-m", "0755", str(FIRST_START_STATUS_PATH.parent)])
-        run_root(
-            [
-                "install",
-                "-m",
-                "0644",
-                "-o",
-                "root",
-                "-g",
-                "root",
-                str(temporary),
-                str(FIRST_START_STATUS_PATH),
-            ]
-        )
+        run_root(["install", "-m", "0644", "-o", "root", "-g", "root", str(temporary), str(FIRST_START_STATUS_PATH)])
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1243,11 +1147,7 @@ def prepare_first_start(config_source: str) -> dict[str, Any]:
 
 
 def reconcile_first_run(note: str) -> dict[str, Any]:
-    journal = OperationJournal.acknowledge_manual_recovery(
-        JOURNAL_PATH,
-        workflow="first-run",
-        note=note,
-    )
+    journal = OperationJournal.acknowledge_manual_recovery(JOURNAL_PATH, workflow="first-run-v2", note=note)
     return {
         "ok": True,
         "journal": str(JOURNAL_PATH),
@@ -1282,7 +1182,7 @@ def status_report() -> dict[str, Any]:
     if report["runtimeSecretsActive"]:
         for key, command in {
             "identity": ["nas-identity-sync", "status"],
-            "features": ["nas-feature-control", "status"],
+            "managedServices": [MANAGED_SERVICES_CONTROL, "status"],
         }.items():
             completed = run_root_noninteractive(command, check=False)
             if completed.returncode != 0:
@@ -1291,7 +1191,7 @@ def status_report() -> dict[str, Any]:
                 try:
                     report[key] = json.loads(completed.stdout)
                 except json.JSONDecodeError:
-                    report[key] = {"error": completed.stderr.strip() or "invalid JSON"}
+                    report[key] = {"error": "invalid JSON"}
             else:
                 report[key] = {"error": "command returned no JSON"}
     return report
@@ -1325,8 +1225,6 @@ def _read_secure_job_file(path: pathlib.Path, label: str, *, max_bytes: int) -> 
 
 
 def prune_first_start_job_results(root: pathlib.Path, *, keep: pathlib.Path | None = None) -> None:
-    """Bound reconnect-safe first-start result retention by age and count."""
-
     now = time.time()
     candidates = sorted(
         (item for item in root.glob("*.json") if item != keep and item.is_file()),
@@ -1341,8 +1239,6 @@ def prune_first_start_job_results(root: pathlib.Path, *, keep: pathlib.Path | No
 
 
 def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path) -> dict[str, Any]:
-    """Execute one systemd-managed first-start request and retain a reconnect-safe result."""
-
     reservation_token: str | None = None
     password = ""
     result_path: pathlib.Path | None = None
@@ -1353,10 +1249,6 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
             request = json.loads(request_text)
         except json.JSONDecodeError as exc:
             raise SetupError("First-start job request is invalid") from exc
-        if isinstance(request, dict):
-            candidate = request.get("reservationToken")
-            if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
-                reservation_token = candidate
         required = {
             "schemaVersion",
             "jobId",
@@ -1369,6 +1261,11 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         }
         if not isinstance(request, dict) or set(request) != required or request.get("schemaVersion") != 1:
             raise SetupError("First-start job request contract is invalid")
+        candidate = request.get("reservationToken")
+        if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
+            reservation_token = candidate
+        if reservation_token is None:
+            raise SetupError("First-start reservation token is invalid")
         job_id = request.get("jobId")
         if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{24}", job_id):
             raise SetupError("First-start job identifier is invalid")
@@ -1377,8 +1274,6 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         result_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(result_root, 0o700)
         prune_first_start_job_results(result_root, keep=result_path)
-        if reservation_token is None:
-            raise SetupError("First-start reservation token is invalid")
         config = request.get("config")
         plan_digest = request.get("planDigest")
         devices = request.get("devices")
@@ -1420,13 +1315,7 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         result = first_run(args)
         atomic_write_json(
             result_path,
-            {
-                "schemaVersion": 1,
-                "jobId": job_id,
-                "status": "complete",
-                "completedAt": int(time.time()),
-                "result": result,
-            },
+            {"schemaVersion": 1, "jobId": job_id, "status": "complete", "completedAt": int(time.time()), "result": result},
         )
         prune_first_start_job_results(result_root, keep=result_path)
         return result
@@ -1434,13 +1323,7 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         if result_path is not None and job_id is not None:
             atomic_write_json(
                 result_path,
-                {
-                    "schemaVersion": 1,
-                    "jobId": job_id,
-                    "status": "failed",
-                    "completedAt": int(time.time()),
-                    "error": str(exc),
-                },
+                {"schemaVersion": 1, "jobId": job_id, "status": "failed", "completedAt": int(time.time()), "error": str(exc)},
             )
         raise
     finally:
@@ -1456,11 +1339,7 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(reservation_token, str):
         reservation_token = None
     try:
-        with acquire_operation(
-            "first-start",
-            SETUP_OPERATION_CLASSES,
-            reservation_token=reservation_token,
-        ):
+        with acquire_operation("first-start-v2", SETUP_OPERATION_CLASSES, reservation_token=reservation_token):
             return _first_run_locked(args)
     except OperationBusyError as exc:
         raise SetupError(str(exc)) from exc
@@ -1473,19 +1352,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate-config", help="Validate and normalize a first-run JSON file")
     validate.add_argument("config")
 
-    prepare = sub.add_parser(
-        "prepare-first-start",
-        help="Publish non-secret first-start state for Cockpit and systemd",
-    )
+    prepare = sub.add_parser("prepare-first-start", help="Publish non-secret first-start state for Cockpit and systemd")
     prepare.add_argument("--config", required=True, help="Setup JSON file")
 
     first = sub.add_parser("first-run", help="Perform idempotent first-time appliance setup")
     first.add_argument("--config", required=True, help="Setup JSON file")
-    first.add_argument(
-        "--keepass-password-stdin",
-        action="store_true",
-        help="Read one KeePass password line from stdin",
-    )
+    first.add_argument("--keepass-password-stdin", action="store_true", help="Read one KeePass password line from stdin")
     first.add_argument("--create-database", action=argparse.BooleanOptionalAction, default=True)
     first.add_argument(
         "--confirm-storage-device",
@@ -1514,10 +1386,7 @@ def build_parser() -> argparse.ArgumentParser:
     job.add_argument("--request-file", required=True, type=pathlib.Path)
     job.add_argument("--password-file", required=True, type=pathlib.Path)
 
-    reconcile = sub.add_parser(
-        "reconcile-first-run",
-        help="Acknowledge a manually repaired first-run journal before resuming",
-    )
+    reconcile = sub.add_parser("reconcile-first-run", help="Acknowledge a manually repaired first-run journal before resuming")
     reconcile.add_argument("--note", required=True, help="Operator recovery note recorded in the journal")
 
     account = sub.add_parser("account", help="Create or update one Authentik account")
@@ -1530,9 +1399,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--group",
         action="append",
         default=[],
-        help="Reserved group; when supplied, replaces the current reserved-group set",
+        help="Base identity role; application capability groups are assigned directly in Authentik",
     )
-    add.add_argument("--administrator", action="store_true", help=f"Add {ADMIN_GROUP} without dropping existing groups")
+    add.add_argument("--administrator", action="store_true", help=f"Add {ADMIN_GROUP} without dropping existing roles")
     state = add.add_mutually_exclusive_group()
     state.add_argument("--enabled", dest="active", action="store_true")
     state.add_argument("--disabled", dest="active", action="store_false")
@@ -1542,13 +1411,12 @@ def build_parser() -> argparse.ArgumentParser:
     disable = account_sub.add_parser("disable", help="Disable one managed account without deleting it")
     disable.add_argument("username")
 
-    sub.add_parser("status", help="Report first-run, storage, identity, and feature status")
+    sub.add_parser("status", help="Report first-run, storage, identity, and Managed Services V2 status")
     return parser
 
 
 def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+    args = build_parser().parse_args()
     try:
         if args.command == "validate-config":
             result = normalize_config(read_json_source(args.config))
