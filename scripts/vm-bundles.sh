@@ -19,9 +19,12 @@ set -Eeuo pipefail
 # script, so their recursive closures contain the already-assembled VM systems
 # needed by the downstream checks.
 #
-# Bundles overlap by design; every imported path is content addressed, so
-# duplicate imports are no-ops. `core` is always exported and imported first,
-# and every sub-bundle carries only what it adds on top of core.
+# Every non-core archive is a delta against the `core` closure. Normally core
+# is restored and imported first. GitHub cache entries can be evicted or saved
+# independently, though, so a consumer may see a later delta without the core
+# archive. In that case import builds/fetches the exact current core root first
+# and only then imports the restored deltas; partial cache state must never be
+# allowed to feed nix-store --import with missing base paths.
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -50,7 +53,7 @@ the test-tools bundle additionally includes both NixOS VM test drivers.
   keys [dir]           print key_<name>=<hash> lines (for GITHUB_OUTPUT) and,
                        when dir is given, write <dir>/<name>.key files
   save <dir>           build every bundle, export each as <dir>/<name>.nar.gz
-  import <dir>         gunzip and nix-store --import every bundle, core first
+  import <dir>         restore core (or rebuild it) then import cached deltas
 
 Environment overrides: NAS_BUNDLE_SYSTEM, NAS_BUNDLE_NIX, NAS_BUNDLE_NIX_STORE.
 USAGE
@@ -136,7 +139,16 @@ save() {
 
 import() {
   local dir=$1 name
+
+  if [[ -f "$dir/core.nar.gz" ]]; then
+    gunzip -c "$dir/core.nar.gz" | "$NIX_STORE" --import
+  else
+    printf '%s: core bundle archive is unavailable; building exact core base before cached deltas\n' "$PROG" >&2
+    "$NIX" build --no-link ".#packages.$SYSTEM.core"
+  fi
+
   while IFS= read -r name; do
+    [[ $name == core ]] && continue
     if [[ -f "$dir/$name.nar.gz" ]]; then
       gunzip -c "$dir/$name.nar.gz" | "$NIX_STORE" --import
     fi
@@ -158,6 +170,7 @@ main() {
       ;;
     import)
       [[ $# -eq 1 ]] || die "import requires exactly one directory argument"
+      need "$NIX"
       need "$NIX_STORE"
       need gunzip
       import "$1"
