@@ -44,30 +44,71 @@ let
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
 
-      # guest-test.sh already has stable log() boundaries around its expensive
-      # full-stack phases. Profile those boundaries without changing the test
-      # body, so CI exposes where wall-clock time is actually spent. The DEBUG
-      # trap runs only at the top level; it does not trace every command inside
-      # helper functions, keeping the QEMU log useful rather than noisy.
+      # guest-test.sh has stable top-level log() boundaries. Emit a phase start
+      # immediately, then report the previous phase when the next boundary is
+      # reached. For the known long first-run command, emit a heartbeat every
+      # minute so a timeout still leaves useful elapsed-time evidence instead of
+      # losing the active phase's duration entirely.
       NAS_VM_PHASE_STARTED=$SECONDS
-      NAS_VM_PHASE_NAME="bootstrap"
-      nas_vm_profile_phase() {
+      NAS_VM_PHASE_NAME=""
+      NAS_VM_FIRST_RUN_TIMER_PID=""
+
+      nas_vm_stop_first_run_timer() {
+        if [[ -n "$NAS_VM_FIRST_RUN_TIMER_PID" ]]; then
+          kill "$NAS_VM_FIRST_RUN_TIMER_PID" >/dev/null 2>&1 || true
+          wait "$NAS_VM_FIRST_RUN_TIMER_PID" 2>/dev/null || true
+          NAS_VM_FIRST_RUN_TIMER_PID=""
+        fi
+      }
+
+      nas_vm_start_first_run_timer() {
+        nas_vm_stop_first_run_timer
+        (
+          started=$SECONDS
+          while sleep 60; do
+            printf 'VM-FIRST-RUN-TIMING: %ss elapsed\n' "$((SECONDS - started))"
+          done
+        ) &
+        NAS_VM_FIRST_RUN_TIMER_PID=$!
+      }
+
+      nas_vm_profile_command() {
         local command=$1 now phase_name
         case "$command" in
           log\ *)
+            nas_vm_stop_first_run_timer
             now=$SECONDS
-            printf 'VM-PHASE-TIMING: %s: %ss\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
+            if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
+              printf 'VM-PHASE-TIMING: %s: %ss (complete)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
+            fi
             read -r _ phase_name <<< "$command"
             NAS_VM_PHASE_NAME=$phase_name
             NAS_VM_PHASE_STARTED=$now
+            printf 'VM-PHASE-START: %s\n' "$NAS_VM_PHASE_NAME"
             ;;
-          *"ALL NIXOS NAS VM TESTS PASSED"*)
-            now=$SECONDS
-            printf 'VM-PHASE-TIMING: %s: %ss\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
+          run_as_admin*"timeout 1200 nas-setup first-run"*)
+            printf 'VM-FIRST-RUN-START: %s\n' "$NAS_VM_PHASE_NAME"
+            nas_vm_start_first_run_timer
+            ;;
+          jq\ -e*)
+            # The first jq assertion immediately following first-run marks the
+            # end of that long command. Other jq calls harmlessly see no timer.
+            nas_vm_stop_first_run_timer
             ;;
         esac
       }
-      trap 'nas_vm_profile_phase "$BASH_COMMAND"' DEBUG
+
+      nas_vm_profile_cleanup() {
+        local rc=$? now=$SECONDS
+        nas_vm_stop_first_run_timer
+        if [[ $rc -ne 0 && -n "$NAS_VM_PHASE_NAME" ]]; then
+          printf 'VM-PHASE-TIMING: %s: %ss (failed)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))" >&2
+        fi
+        return "$rc"
+      }
+
+      trap 'nas_vm_profile_command "$BASH_COMMAND"' DEBUG
+      trap nas_vm_profile_cleanup EXIT
 
       ${builtins.readFile ../vm/guest-test.sh}
     '';
