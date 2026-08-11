@@ -37,7 +37,11 @@ class CommonDriftCoverageTests(unittest.TestCase):
 
     def test_run_command_capture_false_and_environment_overlay(self) -> None:
         result = common.run_command(
-            [sys.executable, "-c", "import os; raise SystemExit(0 if os.environ.get('NAS_TEST_OVERLAY') == 'yes' else 3)"],
+            [
+                sys.executable,
+                "-c",
+                "import os; raise SystemExit(0 if os.environ.get('NAS_TEST_OVERLAY') == 'yes' else 3)",
+            ],
             env={"NAS_TEST_OVERLAY": "yes"},
             capture=False,
         )

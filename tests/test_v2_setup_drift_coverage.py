@@ -17,9 +17,7 @@ from nas_operation_journal import JournalError  # noqa: E402
 
 class SetupDriftCoverageTests(unittest.TestCase):
     def test_existing_account_success_missing_and_error_shapes(self) -> None:
-        with mock.patch.object(
-            setup, "run_root", return_value=setup.Completed((), '{"username":"alice"}', "", 0)
-        ):
+        with mock.patch.object(setup, "run_root", return_value=setup.Completed((), '{"username":"alice"}', "", 0)):
             self.assertEqual(setup.existing_account("alice"), {"username": "alice"})
         with mock.patch.object(setup, "run_root", return_value=setup.Completed((), "[]", "", 0)):
             with self.assertRaisesRegex(setup.SetupError, "invalid exported account"):
@@ -27,9 +25,7 @@ class SetupDriftCoverageTests(unittest.TestCase):
         with mock.patch.object(setup, "run_root", return_value=setup.Completed((), "{", "", 0)):
             with self.assertRaisesRegex(setup.SetupError, "invalid exported account JSON"):
                 setup.existing_account("alice")
-        with mock.patch.object(
-            setup, "run_root", return_value=setup.Completed((), "", "account does not exist", 1)
-        ):
+        with mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "account does not exist", 1)):
             self.assertIsNone(setup.existing_account("alice"))
         with mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "denied", 2)):
             with self.assertRaisesRegex(setup.SetupError, "Unable to inspect"):
@@ -81,7 +77,13 @@ class SetupDriftCoverageTests(unittest.TestCase):
             path = pathlib.Path(raw) / "first.json"
             path.write_text("{}", encoding="utf-8")
             normalized = {
-                "storage": {"createPool": False, "devices": [], "topology": "single", "wipeDevices": False, "ashift": 12},
+                "storage": {
+                    "createPool": False,
+                    "devices": [],
+                    "topology": "single",
+                    "wipeDevices": False,
+                    "ashift": 12,
+                },
                 "accounts": [],
                 "services": {},
                 "runPreflight": True,
