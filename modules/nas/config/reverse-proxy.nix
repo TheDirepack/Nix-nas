@@ -6,7 +6,6 @@ let
     caddyForwardAuth
     caddyOnDemandTransport
     cfg
-    cockpitPort
     lanHost
     nasPortalStatic
   ;
@@ -191,21 +190,6 @@ in
         }
       }
       ''}
-
-      # Cockpit currently terminates loopback HTTPS with its own certificate.
-      # Keep this static until V2 has a trusted-CA transport option rather than
-      # adding a generic insecure-TLS switch to the desired-state schema.
-      @console path /console /console/*
-      handle @console {
-        ${caddyForwardAuth}
-        reverse_proxy https://127.0.0.1:${toString cockpitPort} {
-          header_up X-Forwarded-Proto https
-          header_up X-Forwarded-For {remote_host}
-          transport http {
-            tls_insecure_skip_verify
-          }
-        }
-      }
 
       handle /settings/syncthing {
         route {
