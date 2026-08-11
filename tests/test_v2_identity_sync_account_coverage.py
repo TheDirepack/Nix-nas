@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -75,9 +76,9 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         self.journal_context()
         groups = base_groups()
         users = [admin_user()]
-        calls: list[tuple[str, dict[str, object]]] = []
+        calls: list[tuple[str, dict[str, Any]]] = []
 
-        def request(_token: str, path: str, **kwargs: object) -> dict[str, object]:
+        def request(_token: str, path: str, **kwargs: Any) -> dict[str, object]:
             calls.append((path, kwargs))
             if path == "core/users/":
                 return {"pk": 42, "username": "alice"}
@@ -125,7 +126,7 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                 "attributes": {"existing": "kept", "nasManagedBySetup": True},
             },
         ]
-        calls: list[tuple[str, dict[str, object]]] = []
+        calls: list[tuple[str, dict[str, Any]]] = []
         plan = {
             "accounts": [
                 {
@@ -172,7 +173,7 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                 "attributes": {},
             },
         ]
-        calls: list[tuple[str, dict[str, object]]] = []
+        calls: list[tuple[str, dict[str, Any]]] = []
         plan = {
             "accounts": [
                 {
