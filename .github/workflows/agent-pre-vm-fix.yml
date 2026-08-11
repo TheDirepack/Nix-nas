@@ -53,6 +53,11 @@ jobs:
               '        self.assertIn("run_dynamic_web_scan", host)\n',
               '        self.assertNotIn("run_dynamic_web_scan", host)\n',
           )
+          replace(
+              "tests/test_contract_tooling.py",
+              '        self.assertIn("NAS_ZAP_IMAGE", host)\n',
+              '        self.assertNotIn("NAS_ZAP_IMAGE", host)\n',
+          )
           PY
       - name: Apply canonical Ruff formatting
         run: nix shell nixpkgs#ruff -c ruff format services tests scripts
