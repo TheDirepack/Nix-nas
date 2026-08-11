@@ -105,9 +105,6 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
 
     def test_application_listener_rules_are_not_hard_coded_in_host_firewall_baseline(self) -> None:
         firewall_module = (ROOT / "modules" / "nas" / "config" / "network-firewall.nix").read_text(encoding="utf-8")
-        listener_seed = (
-            ROOT / "modules" / "nas" / "config" / "managed-services-direct-listeners.nix"
-        ).read_text(encoding="utf-8")
         native_seed = (
             ROOT / "modules" / "nas" / "config" / "managed-services-native-services.nix"
         ).read_text(encoding="utf-8")
@@ -115,10 +112,15 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
         self.assertNotIn("cfg.tftp", firewall_module)
         self.assertNotIn('port = "22000"', firewall_module)
         self.assertNotIn('port = "3493"', firewall_module)
-        self.assertIn("targetPort = cfg.tftp.internalPort", listener_seed)
-        self.assertIn("responsePortStart", listener_seed)
+        self.assertIn("targetPort = cfg.tftp.internalPort", native_seed)
+        self.assertIn("responsePortStart", native_seed)
         self.assertIn('sync-tcp = portListener "tcp" 22000', native_seed)
         self.assertIn('listeners.nut = portListener "tcp" 3493', native_seed)
+
+    def test_no_parallel_direct_listener_seed_remains(self) -> None:
+        self.assertFalse(
+            (ROOT / "modules" / "nas" / "config" / "managed-services-direct-listeners.nix").exists()
+        )
 
 
 if __name__ == "__main__":
