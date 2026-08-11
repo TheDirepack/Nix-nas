@@ -199,6 +199,7 @@
               jsonschema
               ruamel-yaml
             ]))
+            pkgs.pyright
             pkgs.semgrep
             pkgs.shellcheck
           ];
