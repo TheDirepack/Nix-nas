@@ -12,7 +12,13 @@ LIBRARY = ROOT / "scripts/lib/nas-secret-transaction.sh"
 
 
 class SecretTransactionShellTests(unittest.TestCase):
-    def run_scenario(self, body: str) -> subprocess.CompletedProcess[str]:
+    def run_scenario(
+        self,
+        body: str,
+        *,
+        privilege: str = "",
+        shell_export: str = "",
+    ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             work = pathlib.Path(directory)
             (work / "bin").mkdir()
@@ -61,14 +67,33 @@ class SecretTransactionShellTests(unittest.TestCase):
             )
             mv.chmod(0o755)
 
+            if privilege:
+                priv = work / "bin/priv"
+                priv.write_text(
+                    textwrap.dedent(
+                        """\
+                        #!/usr/bin/env bash
+                        printf '%s\\n' "$*" >> "$NAS_TX_PRIV_LOG"
+                        if [[ "${NAS_TX_SIM_ELEVATE:-0}" != 1 ]]; then
+                          exit 66
+                        fi
+                        exec "$@"
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+                priv.chmod(0o755)
+
             script = textwrap.dedent(
                 f"""\
                 set -Eeuo pipefail
                 export PATH={work / "bin"}:$PATH
-                export NAS_SECRET_TX_PRIVILEGE=""
+                export NAS_SECRET_TX_PRIVILEGE={privilege!s}
                 export NAS_SECRET_TX_SYSTEMCTL={systemctl!s}
                 export NAS_TX_LOG={work / "systemctl.log"!s}
                 export NAS_TX_MV_COUNT={work / "mv.count"!s}
+                export NAS_TX_PRIV_LOG={work / "priv.log"!s}
+                {shell_export}
                 source {LIBRARY!s}
                 {body}
                 """
@@ -249,6 +274,25 @@ class SecretTransactionShellTests(unittest.TestCase):
             """
         )
         self.assert_ok(result)
+
+    def test_transaction_directory_validation_observes_privileged_filesystem(self) -> None:
+        # Activation stages secrets under a root-owned 0700 transaction directory that the
+        # calling administrator cannot traverse. The physical validation checks must run
+        # through the privilege wrapper; without elevation the layout is rejected exactly
+        # as root-owned /run/nas-secret-transactions rejects an unprivileged realpath.
+        unprivileged = """mkdir -p tx/transaction.1/new tx/transaction.1/previous
+export NAS_TX_SIM_ELEVATE=0
+! nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.1/previous" nas-protected-services.target "$PWD/tx/transaction.1"
+[[ -f root/old && -f stage/new ]]"""
+        elevated = """mkdir -p tx/transaction.1/new tx/transaction.1/previous
+export NAS_TX_SIM_ELEVATE=1
+nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.1/previous" nas-protected-services.target "$PWD/tx/transaction.1"
+[[ -f root/old && -f stage/new ]]
+[[ -s "$NAS_TX_PRIV_LOG" ]]"""
+        for body in (unprivileged, elevated):
+            with self.subTest(elevated=body.startswith("export NAS_TX_SIM_ELEVATE=1")):
+                result = self.run_scenario(body, privilege="priv")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_invalid_or_option_like_systemd_targets_are_rejected(self) -> None:
         result = self.run_scenario(
