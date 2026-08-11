@@ -145,7 +145,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
         self.assertIn("Final VM deterministic layout/accessibility/security checks", workflow)
         self.assertIn("Retain active ZAP evidence", workflow)
-        self.assertIn("checks.x86_64-linux.nas-vm", workflow)
+        self.assertIn("check: nas-vm", workflow)
+        self.assertIn("check: nas-vm-encrypted", workflow)
 
     def test_fast_ci_excludes_generated_fuzz_and_slow_ci_parallelizes_it(self) -> None:
         workflow = text(".github/workflows/ci.yml")
