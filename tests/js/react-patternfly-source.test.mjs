@@ -16,7 +16,7 @@ test("Cockpit entry point mounts React 18 and loads PatternFly 6 styles", async 
 test("application uses PatternFly components instead of legacy DOM rendering", async () => {
   const app = await source("src/app.jsx");
   assert.match(app, /from "@patternfly\/react-core"/);
-  for (const component of ["<Page", "<Card", "<Form", "<Alert", "<Modal", "<Label"]) {
+  for (const component of ["<Card", "<Form", "<Alert", "<Label", "<Button", "<Title"]) {
     assert.ok(app.includes(component), `missing ${component}`);
   }
   for (const legacy of ["innerHTML", "querySelector", "createElement", "window.confirm"]) {
