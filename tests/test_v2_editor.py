@@ -85,8 +85,11 @@ class V2EditorTests(unittest.TestCase):
                 platform_path=None,
             )
             self.assertEqual(result["changed"], ["demo", "second"])
-            status = editor.status(desired_path=desired, effective_path=root / "missing-effective.json")
-            by_id = {row["id"]: row for row in status["features"]}
+            status = editor.status(
+                desired_path=desired,
+                effective_path=root / "missing-effective.json",
+            )
+            by_id = {row["id"]: row for row in status["services"]}
             self.assertEqual(by_id["demo"]["requestedMode"], "off")
             self.assertEqual(by_id["second"]["requestedMode"], "always")
 

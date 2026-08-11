@@ -23,6 +23,12 @@ def _caddy_binary() -> str | None:
     return shutil.which("caddy")
 
 
+class ManagedServicesV2CaddyValidationDiscoveryTests(unittest.TestCase):
+    def test_validation_suite_is_discoverable_without_caddy(self) -> None:
+        binary = _caddy_binary()
+        self.assertTrue(binary is None or pathlib.Path(binary).is_file())
+
+
 class ManagedServicesV2RealCaddyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

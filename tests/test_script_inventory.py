@@ -24,7 +24,6 @@ class ScriptInventoryTests(unittest.TestCase):
             [sys.executable, "services/nas_doctor.py", "--help"],
             [sys.executable, "services/nas_v2_control.py", "--help"],
             [sys.executable, "services/nas_identity_sync.py", "--help"],
-            [sys.executable, "services/nas_migrate_state.py", "--help"],
             [sys.executable, "services/nas_setup.py", "--help"],
             [sys.executable, "services/nas_state.py", "--help"],
             ["bash", "scripts/package-release.sh", "--help"],

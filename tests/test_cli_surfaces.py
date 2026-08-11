@@ -32,7 +32,6 @@ class CliSurfaceTests(unittest.TestCase):
             "nas_doctor",
             "nas_v2_control",
             "nas_identity_sync",
-            "nas_migrate_state",
             "nas_setup",
             "nas_state",
         )
@@ -48,7 +47,6 @@ class CliSurfaceTests(unittest.TestCase):
             "nas_doctor",
             "nas_v2_control",
             "nas_identity_sync",
-            "nas_migrate_state",
             "nas_setup",
             "nas_state",
         ):
@@ -71,7 +69,6 @@ class CliSurfaceTests(unittest.TestCase):
             "nas_doctor",
             "nas_v2_control",
             "nas_identity_sync",
-            "nas_migrate_state",
             "nas_setup",
             "nas_state",
         )

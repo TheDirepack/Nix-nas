@@ -63,7 +63,7 @@ class SetupConfigTests(unittest.TestCase):
     def test_service_modes_are_closed(self) -> None:
         bad = self.base()
         bad["services"] = {"ai-workspace": "sometimes"}
-        with self.assertRaisesRegex(setup_config.SetupError, "off, on-demand, always"):
+        with self.assertRaisesRegex(setup_config.SetupError, "always, off, on-demand"):
             setup_config.normalize_config(bad)
 
     def test_plaintext_account_password_is_rejected(self) -> None:
@@ -220,11 +220,13 @@ class FirstStartStatusTests(unittest.TestCase):
             setup.require_confirmed_plan(config, "0" * 64)
 
     def test_status_uses_managed_services_key(self) -> None:
+        def fake_exists(path: pathlib.Path) -> bool:
+            return path == setup.KEEPASS_DATABASE
+
         with (
-            mock.patch.object(setup.KEEPASS_DATABASE, "exists", return_value=True),
+            mock.patch.object(pathlib.Path, "exists", autospec=True, side_effect=fake_exists),
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=True),
-            mock.patch.object(pathlib.Path, "exists", return_value=False),
         ):
             result = setup.status_report()
         self.assertNotIn("features", result)
