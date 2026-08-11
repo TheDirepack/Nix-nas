@@ -5,6 +5,17 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly ROOT
 readonly FLAKE_REF="."
 readonly PLACEHOLDER="nixosConfigurations.nas.config.system.build.toplevel.drvPath"
+readonly -a CONFIGURATIONS=(
+  nas-ci-ready
+  nas-qemu
+  nas-module-consumer
+  nas-profile-core-storage
+  nas-profile-identity-sharing
+  nas-profile-observability
+  nas-profile-virtualization
+  nas-profile-local-ai
+  nas-profile-all
+)
 readonly -a PLACEHOLDER_ERRORS=(
   "root file system"
   "boot.loader.grub.devices"
@@ -46,6 +57,15 @@ evaluate_flake_surface() {
   printf 'Nix flake metadata and module exports evaluated successfully\n'
 }
 
+verify_reference_evaluator_ownership() {
+  local configuration evaluator="$ROOT/scripts/evaluate-reference-configurations.sh"
+  for configuration in "${CONFIGURATIONS[@]}"; do
+    grep -Fq -- "$configuration" "$evaluator" || \
+      die "reference evaluator does not own supported configuration: $configuration"
+  done
+  printf 'Reference configuration evaluation is delegated to the dedicated evaluator\n'
+}
+
 verify_placeholder_is_not_bootable() {
   local log=$1 expected
 
@@ -82,6 +102,7 @@ main() {
   trap cleanup EXIT
 
   evaluate_flake_surface
+  verify_reference_evaluator_ownership
   verify_placeholder_is_not_bootable "$TEMPORARY_DIRECTORY/operator-placeholder.log"
   "$ROOT/scripts/nix-negative-tests.sh"
 }
