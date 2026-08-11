@@ -1,0 +1,59 @@
+name: Agent V2 property fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'agent/managed-services-v2-core' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/managed-services-v2-core
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Migrate V1 feature fuzz invariants to V2 service IDs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          fuzz = Path('tests/test_fuzz_boundaries.py')
+          text = fuzz.read_text()
+          text = text.replace('    import nas_cockpit_api as api\n', '    import nas_v2_spec as v2_spec\n')
+          old = '''        @settings(max_examples=400, deadline=None)\n        @given(identifier_candidates(max_size=512))\n        def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, raw: str) -> None:\n            target(len(raw), label="feature-id-length")\n            try:\n                accepted = api.validate_argument(raw, api.FEATURE_RE, "feature identifier")\n            except api.ApiError:\n                event("feature-id:rejected")\n                self.assertTrue(len(raw) > api.MAX_ARGUMENT_LENGTH or api.FEATURE_RE.fullmatch(raw) is None)\n                return\n            event("feature-id:accepted")\n            self.assertEqual(accepted, raw)\n            self.assertLessEqual(len(accepted), api.MAX_ARGUMENT_LENGTH)\n            self.assertIsNotNone(api.FEATURE_RE.fullmatch(accepted))\n'''
+          new = '''        @settings(max_examples=400, deadline=None)\n        @given(identifier_candidates(max_size=512))\n        def test_v2_service_id_acceptance_matches_compiler_grammar(self, raw: str) -> None:\n            target(len(raw), label="service-id-length")\n            matched = v2_spec.SERVICE_ID_RE.fullmatch(raw)\n            event("service-id:accepted" if matched is not None else "service-id:rejected")\n            if matched is None:\n                return\n            self.assertLessEqual(len(raw), 64)\n            self.assertEqual(matched.group(0), raw)\n'''
+          if old not in text:
+              raise SystemExit('fuzz V1 feature invariant block not found')
+          fuzz.write_text(text.replace(old, new, 1))
+
+          prop = Path('tests/test_property_invariants.py')
+          text = prop.read_text()
+          text = text.replace('    import nas_cockpit_api as cockpit_api\n', '    import nas_v2_spec as v2_spec\n')
+          old = '''        @settings(max_examples=300, deadline=None)\n        @given(st.text(max_size=300))\n        def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, value: str) -> None:\n            try:\n                normalized = cockpit_api.validate_argument(value, cockpit_api.FEATURE_RE, "feature identifier")\n            except cockpit_api.ApiError:\n                self.assertTrue(\n                    len(value) > cockpit_api.MAX_ARGUMENT_LENGTH or cockpit_api.FEATURE_RE.fullmatch(value) is None\n                )\n                return\n            self.assertEqual(normalized, value)\n            self.assertIsNotNone(cockpit_api.FEATURE_RE.fullmatch(normalized))\n            self.assertLessEqual(len(normalized), cockpit_api.MAX_ARGUMENT_LENGTH)\n'''
+          new = '''        @settings(max_examples=300, deadline=None)\n        @given(st.text(max_size=300))\n        def test_v2_service_ids_match_compiler_grammar(self, value: str) -> None:\n            matched = v2_spec.SERVICE_ID_RE.fullmatch(value)\n            if matched is None:\n                return\n            self.assertEqual(matched.group(0), value)\n            self.assertLessEqual(len(value), 64)\n'''
+          if old not in text:
+              raise SystemExit('property V1 feature invariant block not found')
+          prop.write_text(text.replace(old, new, 1))
+          PY
+          nix shell nixpkgs#ruff -c ruff format tests/test_fuzz_boundaries.py tests/test_property_invariants.py
+          nix shell nixpkgs#ruff -c ruff check tests/test_fuzz_boundaries.py tests/test_property_invariants.py
+          nix develop .#test -c pyright --project pyproject.toml
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_fuzz_boundaries.py'
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_property_invariants.py'
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern 'test_maintainer_release.py'
+      - name: Commit V2 property migration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_fuzz_boundaries.py tests/test_property_invariants.py
+          git diff --cached --quiet && exit 0
+          git commit -m "test: migrate feature fuzz invariants to V2 service IDs"
+          git push origin HEAD:agent/managed-services-v2-core
