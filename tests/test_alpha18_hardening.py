@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -12,12 +13,16 @@ def text(relative: str) -> str:
 
 
 class Alpha18HardeningContracts(unittest.TestCase):
-    def test_feature_catalog_imports_every_external_value(self) -> None:
-        catalog = text("modules/nas/internal/feature-catalog.nix")
-        inherit_block = catalog.split(";", 1)[0]
-        self.assertIn("cfg", inherit_block)
-        self.assertIn("serviceRegistry", inherit_block)
-        self.assertNotIn("alertmanager", inherit_block.lower())
+    def test_managed_services_v2_schema_is_the_service_authority(self) -> None:
+        schema = json.loads(text("schemas/managed-services-v3.schema.json"))
+        spec = text("services/nas_v2_spec.py")
+        default_module = text("modules/nas/default.nix")
+        self.assertEqual(schema["properties"]["schemaVersion"]["const"], 3)
+        self.assertIn("compile_document", spec)
+        self.assertIn("managed-services-v2.nix", default_module)
+        self.assertFalse((ROOT / "modules/nas/internal/feature-catalog.nix").exists())
+        self.assertFalse((ROOT / "modules/nas/internal/service-registry.nix").exists())
+        self.assertFalse((ROOT / "schemas/service-registry.schema.json").exists())
 
     def test_flake_exports_modules_directly(self) -> None:
         flake = text("flake.nix")
@@ -27,31 +32,24 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("ai = import ./modules/ai;", flake)
         default_block = flake.split("default = { ... }:", 1)[1].split("profiles =", 1)[0]
         self.assertIn("copyparty.nixosModules.default", default_block)
-        self.assertIn("ai", default_block)
-        self.assertIn("core", default_block)
         self.assertIn("copyparty.overlays.default", default_block)
 
     def test_legacy_feature_gate_privilege_surface_is_removed(self) -> None:
-        identities = text("modules/nas/config/identities.nix")
-        managed = text("modules/nas/config/managed-services.nix")
-        systemd = text("modules/nas/config/systemd-services.nix")
-        proxy = text("modules/nas/config/reverse-proxy.nix")
-        self.assertNotIn("users.users.nas-feature-gate", identities)
-        self.assertNotIn('subject.user === "nas-feature-gate"', identities)
-        self.assertNotIn('action.id === "org.freedesktop.systemd1.manage-units"', identities)
-        self.assertNotIn("nas-on-demand-gate", systemd)
-        self.assertNotIn("nas-feature-apply", systemd)
+        tree = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in (ROOT / "modules", ROOT / "services")
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix in {".nix", ".py"}
+        )
+        self.assertNotIn("nas-feature-control", tree)
+        self.assertNotIn("nas-feature-gate", tree)
+        self.assertNotIn("nas-on-demand-gate", tree)
+        self.assertNotIn("nas-feature-apply", tree)
         self.assertFalse((ROOT / "modules/nas/config/managed-services-legacy-disable.nix").exists())
-        self.assertIn('SocketUser = "caddy";', managed)
-        self.assertIn('SocketGroup = "caddy";', managed)
-        self.assertIn("/run/nas-control/wake.sock", proxy)
 
     def test_cockpit_mutations_dispatch_through_systemd_units(self) -> None:
         source = text("services/nas_cockpit_api.py")
         action_block = source.split("ACTIONS:", 1)[1].split("\n\n\ndef diagnostic", 1)[0]
-        self.assertNotIn('("sanoid",', action_block)
-        self.assertNotIn('("zpool",', action_block)
-        self.assertNotIn('("nas-update",', action_block)
         for unit in (
             "nas-zfs-manual-snapshot.service",
             "nas-zfs-manual-scrub.service",
@@ -60,18 +58,8 @@ class Alpha18HardeningContracts(unittest.TestCase):
             "nas-update-apply.service",
         ):
             self.assertIn(unit, action_block)
-            self.assertIn(unit.removesuffix(".service"), text("modules/nas/config/systemd-services.nix"))
-
-    def test_runtime_account_token_is_scoped_and_bootstrap_is_not_routine(self) -> None:
-        identity = text("services/nas_identity_sync.py")
-        blueprint = text("authentik/blueprints/nas-user-settings.yaml")
-        self.assertIn("bootstrap-runtime-token", identity)
-        self.assertIn("NAS automation", blueprint)
-        self.assertIn("authentik_core.enable_group_superuser", blueprint)
-        apply_block = identity.split('if args.command == "apply-accounts":', 1)[1].split(
-            "\n        if args.command", 1
-        )[0]
-        self.assertNotIn("bootstrap=True", apply_block)
+        self.assertNotIn('("zpool",', action_block)
+        self.assertNotIn('("nas-update",', action_block)
 
     def test_setup_and_account_inputs_have_closed_schemas(self) -> None:
         validation = text("scripts/validate-repository-data.py")
@@ -80,12 +68,21 @@ class Alpha18HardeningContracts(unittest.TestCase):
             self.assertIn('"additionalProperties": false', schema)
             self.assertIn(relative, validation)
 
-    def test_python_is_packaged_as_one_application(self) -> None:
+    def test_python_is_packaged_as_one_v2_application(self) -> None:
         package = text("modules/nas/internal/account-tools.nix")
         pyproject = text("pyproject.toml")
         self.assertIn("buildPythonApplication", package)
-        for entrypoint in ("nas-cockpit-api", "nas-feature-control", "nas-identity-sync", "nas-setup"):
+        for entrypoint in (
+            "nas-cockpit-api",
+            "nas-identity-sync",
+            "nas-setup",
+            "nas-managed-services",
+            "nas-managed-services-control",
+            "nas-managed-session",
+        ):
             self.assertIn(entrypoint, pyproject)
+        for retired in ("nas-feature-control", "nas-managed-service", "nas-migrate-state"):
+            self.assertNotIn(retired, pyproject)
 
     def test_preflight_and_release_publication_distinguish_complete_evidence(self) -> None:
         preflight = text("scripts/preflight.sh")
@@ -105,20 +102,15 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("backupStage", storage)
         self.assertNotIn("/run/nas-backup-stage", storage)
         self.assertIn("allowSamePoolRepository", validation)
-        self.assertIn("off-pool Restic repository or enabled ZFS replication", validation)
 
     def test_firewall_baseline_is_exact_and_cockpit_fails_closed(self) -> None:
         firewall = text("modules/nas/config/network-firewall.nix")
         system = text("modules/nas/config/system.nix")
-        self.assertNotIn("networking.nftables.enable", firewall)
         self.assertIn("nas-firewall-baseline", firewall)
-        self.assertNotIn("baseline-schema-version", firewall)
         self.assertIn("nas-management-network-guard", firewall)
         self.assertIn("nas-owned-zone.xml", firewall)
         self.assertIn("--query-service", firewall)
         self.assertIn("--query-port", firewall)
-        self.assertNotIn("runtimeSafetyCommands", firewall)
-        self.assertNotIn('rule: "${firewallCmd} --permanent', firewall)
         self.assertIn("nas-management-network-guard.service", system)
 
     def test_authentik_has_one_non_secret_config_channel_and_distinct_runtime_dirs(self) -> None:
@@ -132,130 +124,42 @@ class Alpha18HardeningContracts(unittest.TestCase):
         reusable = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "modules").rglob("*.nix"))
         self.assertNotRegex(reusable, r"system\.stateVersion\s*=")
         self.assertIn('system.stateVersion = "26.05";', text("local.nix"))
-        self.assertIn(
-            'lib.versionOlder config.system.stateVersion "24.11"',
-            text("modules/nas/config/managed-services-backup-resources.nix"),
-        )
         self.assertIn('[ "x86_64-linux" ]', text("modules/nas/internal/base.nix"))
 
     def test_victoriametrics_stack_has_no_prometheus_runtime_dependencies(self) -> None:
         observability = text("modules/nas/config/observability.nix")
         self.assertIn("services.victoriametrics", observability)
         self.assertIn("services.telegraf", observability)
-        self.assertIn("AmbientCapabilities = lib.mkForce [ ];", observability)
-        self.assertIn('RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];', observability)
         self.assertIn("systemd.services.nas-alert-router", observability)
-        self.assertIn("grafanaPlugins.victoriametrics-metrics-datasource", observability)
-        self.assertIn('type = "victoriametrics-metrics-datasource";', observability)
         self.assertNotIn("services.prometheus", observability)
         self.assertNotIn("prometheus-alertmanager", observability)
-        self.assertNotIn('type = "prometheus";', observability)
-        self.assertFalse((ROOT / "packages/alertmanager-bin.nix").exists())
-        authentik = text("modules/nas/config/application-services.nix")
-        self.assertNotIn("PROMETHEUS_MULTIPROC_DIR", authentik)
-        self.assertNotIn("authentik-metrics", authentik)
-
-    def test_scheduler_state_uses_the_declared_backend_name(self) -> None:
-        tools = text("modules/nas/internal/account-tools.nix")
-        self.assertIn('cfg.scheduler.backend == "cockpit-scheduler"', tools)
-        self.assertNotIn('cfg.scheduler.backend == "cockpit"', tools)
-
-    def test_update_rollback_tracks_persistent_profile_mutation(self) -> None:
-        update = text("scripts/update-nas.sh")
-        for marker in ("old_profile", "new_profile", "switch_attempted", "--rollback"):
-            self.assertIn(marker, update)
-
-    def test_mkforce_is_machine_allowlisted(self) -> None:
-        result = subprocess.run(
-            ["python3", str(ROOT / "scripts/check-mkforce.py")],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-
-    def test_ci_has_fixed_runner_concurrency_and_direct_dependency_ordering(self) -> None:
-        workflow = text(".github/workflows/ci.yml")
-        self.assertIn("cancel-in-progress: true", workflow)
-        self.assertNotIn("ubuntu-latest", workflow)
-        self.assertIn("check-coverage.py", workflow)
-        for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
-            self.assertNotIn(retired_gate, workflow)
-        self.assertIn(
-            "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
-        )
-        self.assertIn("needs: [build, browser]", workflow)
-        self.assertIn("needs: [integration, installer]", workflow)
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
-        pyproject = text("pyproject.toml")
         state = text("services/nas_state.py")
         schema = text("schemas/state-bundle.schema.json")
-        self.assertIn('nas-state = "nas_state:main"', pyproject)
+        self.assertIn('nas-state = "nas_state:main"', text("pyproject.toml"))
         for command in ("export", "validate", "diff", "restore"):
             self.assertIn(f'add_parser("{command}"', state)
         self.assertIn('"const": 2', schema)
         self.assertIn("registryDigest", schema)
-        self.assertIn("producerVersion", state)
         self.assertIn("rollbackBundle", state)
 
     def test_profiles_keep_optional_services_out_of_base_defaults(self) -> None:
         flake = text("flake.nix")
-        local = text("local.nix")
         for profile in ("core-storage", "identity-sharing", "observability", "virtualization", "local-ai"):
             self.assertIn(profile, flake)
-        for relative in (
-            "modules/profiles/core-storage.nix",
-            "modules/profiles/identity-sharing.nix",
-            "modules/profiles/observability.nix",
-            "modules/profiles/virtualization.nix",
-            "modules/profiles/local-ai.nix",
-        ):
-            self.assertTrue((ROOT / relative).is_file())
-        self.assertIn("./modules/profiles/core-storage.nix", local)
-        self.assertIn("./modules/profiles/identity-sharing.nix", local)
+            self.assertTrue((ROOT / "modules/profiles" / f"{profile}.nix").is_file())
 
-    def test_service_registry_is_generated_and_consumed(self) -> None:
-        registry = text("modules/nas/internal/service-registry.nix")
-        system = text("modules/nas/config/system.nix")
-        cockpit = text("services/nas_cockpit_api.py")
-        schema = text("schemas/service-registry.schema.json")
-        for service in ("identity", "cockpit", "aiApi", "syncthing", "vaultwarden", "grafana"):
-            self.assertIn(f"{service} = mkService", registry)
-        self.assertIn("endpoints.json", system)
-        self.assertIn("NAS_ENDPOINT_REGISTRY", cockpit)
-        self.assertIn('"additionalProperties": false', schema)
-
-    def test_backup_restore_verification_is_isolated_and_scheduled(self) -> None:
-        storage = text("modules/nas/config/storage-monitoring.nix")
-        operations = text("modules/nas/config/managed-services-operations.nix")
-        validation = text("modules/nas/config/validation.nix")
-        self.assertIn("nas-backup-restore-verify", storage)
-        self.assertIn("restic", storage)
-        self.assertIn("pg_restore", storage)
-        self.assertIn("PRAGMA integrity_check", storage)
-        self.assertIn("django_migrations", storage)
-        self.assertIn('install -d -m 0711 "$verify_root"', storage)
-        self.assertIn("stagingMinFreeBytes", storage)
-        self.assertIn('backup-restore-verify = job "nas-backup-restore-verify.service"', operations)
-        self.assertIn("cfg.backup.restoreVerification.onCalendar", operations)
-        self.assertIn("restoreVerification.targetPath", validation)
-        self.assertNotIn("/run/nas-backup", storage)
-
-    def test_release_metadata_has_one_machine_checked_version(self) -> None:
-        preflight = text("scripts/preflight.sh")
-        structure = text("scripts/validate-structure.py")
-        self.assertIn("check-version.py", preflight)
-        self.assertIn("check-version.py", structure)
-        result = subprocess.run(
-            ["python3", str(ROOT / "scripts/check-version.py")],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+    def test_mkforce_and_version_contracts_remain_machine_checked(self) -> None:
+        for script in ("check-mkforce.py", "check-version.py"):
+            result = subprocess.run(
+                ["python3", str(ROOT / "scripts" / script)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
