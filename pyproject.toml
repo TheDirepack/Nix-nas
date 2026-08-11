@@ -103,3 +103,7 @@ select = ["E4", "E7", "E9", "F"]
 [tool.pyright]
 include = ["services", "scripts", "tests"]
 exclude = ["**/__pycache__"]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+reportMissingImports = "none"
+reportMissingTypeStubs = "none"
