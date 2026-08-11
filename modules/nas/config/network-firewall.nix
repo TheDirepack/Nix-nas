@@ -26,22 +26,8 @@ let
   ++ lib.optional cfg.hostPolicy.directCockpitRecovery {
     port = toString cockpitPort;
     protocol = "tcp";
-  }
-  ++ lib.optionals cfg.tftp.enable [
-    {
-      port = "${toString cfg.tftp.responsePortStart}-${toString cfg.tftp.responsePortEnd}";
-      protocol = "udp";
-    }
-  ]
-  ++ lib.optional (cfg.tftp.enable && cfg.tftp.port == cfg.tftp.internalPort) {
-    port = toString cfg.tftp.port;
-    protocol = "udp";
   };
-  ownedForwardPorts = lib.optional (cfg.tftp.enable && cfg.tftp.port != cfg.tftp.internalPort) {
-    port = toString cfg.tftp.port;
-    protocol = "udp";
-    toPort = toString cfg.tftp.internalPort;
-  };
+  ownedForwardPorts = [ ];
   zoneXml = pkgs.writeText "nas-owned-zone.xml" ''
     <zone target="default">
       <short>NixOS NAS trusted management</short>
