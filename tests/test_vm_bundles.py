@@ -220,6 +220,27 @@ class VmBundleScriptTests(unittest.TestCase):
             ],
         )
 
+    def test_import_builds_missing_core_before_restoring_cached_deltas(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        in_dir = self._root / "bundles"
+        in_dir.mkdir()
+        with gzip.open(in_dir / "test-tools.nar.gz", "wb") as stream:
+            stream.write(b"NAR:/nix/store/aaaaaaaaaa-test-tools\n")
+
+        result = self._run("import", str(in_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("core bundle archive is unavailable", result.stderr)
+        self.assertIn(
+            "build --no-link .#packages.x86_64-linux.core",
+            nix_log.read_text(encoding="utf-8").splitlines(),
+        )
+        imports = [
+            line.removeprefix("import:")
+            for line in nix_store_log.read_text(encoding="utf-8").splitlines()
+            if line.startswith("import:")
+        ]
+        self.assertEqual(imports, ["NAR:/nix/store/aaaaaaaaaa-test-tools"])
+
     def test_save_requires_a_directory_argument(self) -> None:
         result = self._run("save")
         self.assertEqual(result.returncode, 1)
