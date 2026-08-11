@@ -94,7 +94,7 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn("unexpectedSuccesses", text)
         self.assertIn("no tests discovered", text)
 
-    def test_caddy_ci_entrypoint_delegates_to_real_v2_binary_tests(self):
+    def test_caddy_ci_entrypoint_uses_real_v2_binary_tests(self):
         v2_path = ROOT / "tests" / "test_v2_caddy_validate.py"
         self.assertTrue(v2_path.is_file(), msg="test_v2_caddy_validate.py must exist")
         v2_text = v2_path.read_text(encoding="utf-8")
@@ -102,12 +102,7 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn("nas_v2_caddy", v2_text)
         self.assertIn("validate_caddyfile", v2_text)
         self.assertNotIn("nas_service_caddy", v2_text)
-
-        bridge = ROOT / "tests" / "test_service_caddy_validate.py"
-        bridge_text = bridge.read_text(encoding="utf-8")
-        self.assertIn("test_v2_caddy_validate", bridge_text)
-        self.assertNotIn("nas_service_caddy", bridge_text)
-        self.assertNotIn("generate_caddy_fragment", bridge_text)
+        self.assertFalse((ROOT / "tests" / "test_service_caddy_validate.py").exists())
 
         runner = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
         self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})', runner)
@@ -117,11 +112,12 @@ class RunnerAccountingTests(unittest.TestCase):
         caddy_block = workflow.split("  caddy-validate:\n", 1)[1].split("\n  static:\n", 1)[0]
         self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
         self.assertIn("tests.test_v2_caddy", caddy_block)
-        self.assertIn("tests.test_service_caddy_validate", caddy_block)
+        self.assertIn("tests.test_v2_caddy_validate", caddy_block)
+        self.assertNotIn("tests.test_service_caddy", caddy_block)
 
     def test_managed_services_v2_has_runtime_and_property_contracts(self):
         v2_contracts = {
-            "test_v2_caddy.py": ("nas_v2_caddy", "requiredCapability"),
+            "test_v2_caddy.py": ("nas_v2_caddy", "missing_capability"),
             "test_v2_systemd.py": ("nas_v2_systemd", "idle"),
             "test_v2_session.py": ("nas_v2_session", "volume"),
             "test_v2_podman_network.py": ("nas_v2_podman_network", "isolated"),
