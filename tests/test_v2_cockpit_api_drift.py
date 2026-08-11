@@ -37,7 +37,9 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_operation_error_redacts_secret_command_output(self) -> None:
         with mock.patch.object(api, "diagnostic") as diagnostic:
-            error = api.operation_error(["/run/current-system/sw/bin/nas-secrets", "show"], CommandResult(1, "secret", "secret"))
+            error = api.operation_error(
+                ["/run/current-system/sw/bin/nas-secrets", "show"], CommandResult(1, "secret", "secret")
+            )
         self.assertRegex(str(error), r"Operation failed \(reference [0-9a-f]{12}\)")
         rendered = diagnostic.call_args.args[0]
         self.assertIn("secret command output redacted", rendered)
@@ -84,7 +86,7 @@ class CockpitApiDriftTests(unittest.TestCase):
     def test_operation_state_adds_action_conflicts_and_handles_io_error(self) -> None:
         with mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": ["runtime"], "active": []}):
             result = api.operation_state()
-        self.assertIn("managed-service-policy", result["conflictsByAction"] if "managed-service-policy" in result["conflictsByAction"] else result["conflictsByAction"])
+        self.assertEqual(result["conflictsByAction"]["identity-sync"], ["identity"])
         self.assertEqual(result["managedServicesConflicts"], ["runtime"])
         self.assertIn("identity-sync", result["workerOwnedActions"])
         with mock.patch.object(api, "shared_operation_state", side_effect=OSError("denied")):
@@ -387,7 +389,13 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_set_ai_provider_rolls_back_failed_config(self) -> None:
         active = self.active()
-        base = {"id": "cloud", "url": "https://cloud.example/v1", "models": ["coder"], "apiKey": "new", "keepassPassword": "db"}
+        base = {
+            "id": "cloud",
+            "url": "https://cloud.example/v1",
+            "models": ["coder"],
+            "apiKey": "new",
+            "keepassPassword": "db",
+        }
         snap = api.PrivateFileSnapshot(True, b"old", 0o600, 1, 1)
         with (
             mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
@@ -450,7 +458,9 @@ class CockpitApiDriftTests(unittest.TestCase):
             mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()),
             mock.patch.object(api.ai_config, "set_role", return_value={"ok": True}),
         ):
-            self.assertTrue(api.set_ai_role({"role": "coding/default", "targets": ["cloud/coder"], "strategy": "pin"})["ok"])
+            self.assertTrue(
+                api.set_ai_role({"role": "coding/default", "targets": ["cloud/coder"], "strategy": "pin"})["ok"]
+            )
         with self.assertRaisesRegex(api.ApiError, "unsupported fields"):
             api.set_ai_advanced({})
         with (
@@ -469,7 +479,9 @@ class CockpitApiDriftTests(unittest.TestCase):
             mock.patch.object(api, "capability_status", return_value={"capabilities": []}),
             mock.patch.object(api, "update_status", return_value={"ok": True}),
             mock.patch.object(api, "ai_configuration", return_value={"ok": True}),
-            mock.patch.object(api, "service_states", return_value={"demo.service": {"activeState": "active"}}) as states,
+            mock.patch.object(
+                api, "service_states", return_value={"demo.service": {"activeState": "active"}}
+            ) as states,
             mock.patch.object(api, "run", return_value=healthy),
             mock.patch.object(api, "operation_state", return_value={"busyClasses": []}),
             mock.patch.object(api, "portal_entries", return_value=[{"url": "/demo"}]),
