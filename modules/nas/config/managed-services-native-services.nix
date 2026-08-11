@@ -77,6 +77,11 @@ let
     visible = true;
     inherit title category icon order;
   };
+  portListener = protocol: port: {
+    inherit protocol;
+    exposure = { inherit port; };
+    firewall = true;
+  };
 
   baselineServices = {
     zfs-mount-guard = platformService (job "nas-zfs-mount-guard.service" "NAS storage mount guard");
@@ -111,6 +116,11 @@ let
         (capability "access" "Use personal Syncthing synchronization")
         (capability "admin" "Administer Syncthing")
       ];
+      listeners = {
+        sync-tcp = portListener "tcp" 22000;
+        sync-quic = portListener "udp" 22000;
+        local-discovery = portListener "udp" 21027;
+      };
       routes.web = (pathRoute [ "/syncthing" ] (httpTarget syncthingGuiPort) (identity "admin")) // {
         proxy.stripPrefix = "/syncthing";
         portal = portal "Syncthing" "Files" "sync" 20;
@@ -255,6 +265,11 @@ let
         portal = portal "Notifications" "Monitoring" "bell" 80;
       };
     };
+  }
+  // lib.optionalAttrs (cfg.power.ups.enable && cfg.power.ups.mode == "netserver") {
+    ups-server = platformService ((daemon "upsd.service" "NUT UPS network server") // {
+      listeners.nut = portListener "tcp" 3493;
+    });
   }
   // lib.optionalAttrs (cfg.power.ups.enable && cfg.power.ups.web.enable) {
     ups-web = (onDemand "podman-nut-webgui.service" "NUT web interface" 600) // {
