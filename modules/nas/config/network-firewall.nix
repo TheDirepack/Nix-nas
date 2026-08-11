@@ -27,15 +27,6 @@ let
     port = toString cockpitPort;
     protocol = "tcp";
   }
-  ++ lib.optionals cfg.syncthing.enable [
-    { port = "22000"; protocol = "tcp"; }
-    { port = "22000"; protocol = "udp"; }
-    { port = "21027"; protocol = "udp"; }
-  ]
-  ++ lib.optional (cfg.power.ups.enable && cfg.power.ups.mode == "netserver") {
-    port = "3493";
-    protocol = "tcp";
-  }
   ++ lib.optionals cfg.tftp.enable [
     {
       port = "${toString cfg.tftp.responsePortStart}-${toString cfg.tftp.responsePortEnd}";
