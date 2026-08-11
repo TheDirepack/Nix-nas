@@ -25,7 +25,7 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Canonical formatting
         run: |
-          sed -i '/^import os$/d' tests/test_v2_identity_sync_coverage.py
+          sed -i '/^import os$/d' tests/test_v2_identity_sync_coverage.py tests/test_v2_setup_runtime_coverage.py
           nix shell nixpkgs#ruff -c ruff format tests/test_v2_*_coverage.py
           nix shell nixpkgs#prettier -c prettier --write cockpit/src/app.jsx cockpit/src/view-model.js tests/js/view-model.test.mjs
       - name: Rebuild and validate Cockpit
