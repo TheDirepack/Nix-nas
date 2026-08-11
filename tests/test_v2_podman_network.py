@@ -72,6 +72,79 @@ class V2PodmanNetworkTests(unittest.TestCase):
             [{"target": "nas-v2-net-demo.network", "source": str(source)}],
         )
 
+    def test_isolated_vlan_is_lowered_into_native_bridge_option(self):
+        effective, service = self.service(
+            policy={
+                "mode": "isolated",
+                "vlanId": 42,
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+        )
+        files: dict[pathlib.Path, bytes] = {}
+        manifest = {"quadletLinks": []}
+        output = pathlib.Path("/run/nas-control/systemd")
+        network.augment_projection(effective, output_dir=output, files=files, manifest=manifest)
+        rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
+        self.assertIn("Driver=bridge", rendered)
+        self.assertIn("Options=isolate=strict", rendered)
+        self.assertIn("Options=vlan=42", rendered)
+
+    def test_network_profile_can_supply_vlan(self):
+        effective, service = self.service()
+        service.pop("network")
+        service["networkProfile"] = "media"
+        effective["networkProfiles"] = {
+            "media": {
+                "mode": "isolated",
+                "vlanId": 120,
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+        }
+        files: dict[pathlib.Path, bytes] = {}
+        manifest = {"quadletLinks": []}
+        output = pathlib.Path("/run/nas-control/systemd")
+        network.augment_projection(effective, output_dir=output, files=files, manifest=manifest)
+        rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
+        self.assertIn("Options=vlan=120", rendered)
+
+    def test_vlan_fails_closed_for_host_and_none_networks(self):
+        for mode in ("host", "none"):
+            effective, service = self.service(
+                policy={
+                    "mode": mode,
+                    "vlanId": 77,
+                    "outboundDefault": "allow" if mode == "host" else "deny",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                }
+            )
+            with self.subTest(mode=mode), self.assertRaises(network.PodmanNetworkProjectionError):
+                network.quadlet_network_reference(effective, "demo", service)
+
+    def test_vlan_id_is_validated_defensively(self):
+        for vlan_id in (0, 4095, True, "42"):
+            effective, service = self.service(
+                policy={
+                    "mode": "isolated",
+                    "vlanId": vlan_id,
+                    "outboundDefault": "deny",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                }
+            )
+            with self.subTest(vlan_id=vlan_id), self.assertRaisesRegex(
+                network.PodmanNetworkProjectionError, "vlanId"
+            ):
+                network.quadlet_network_reference(effective, "demo", service)
+
     def test_disabled_service_projects_no_network_or_firewalld_requirement(self):
         effective, service = self.service()
         service["enabled"] = False
