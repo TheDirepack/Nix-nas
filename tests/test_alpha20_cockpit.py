@@ -118,6 +118,20 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertLess(integration_pos, installer_pos)
         self.assertLess(installer_pos, fuzz_pos)
 
+    def test_ci_parallelizes_independent_qemu_qualifications(self) -> None:
+        workflow = text(".github/workflows/ci.yml")
+        integration = workflow.split("  integration:\n", 1)[1].split("  installer:\n", 1)[0]
+        self.assertIn("name: Post-build full-stack QEMU integration (${{ matrix.vm }})", integration)
+        self.assertIn("fail-fast: false", integration)
+        self.assertIn("max-parallel: 2", integration)
+        self.assertIn("vm: unencrypted", integration)
+        self.assertIn("check: nas-vm", integration)
+        self.assertIn("vm: encrypted", integration)
+        self.assertIn("check: nas-vm-encrypted", integration)
+        self.assertIn('nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L', integration)
+        self.assertNotIn("Run unencrypted NixOS VM integration tests", integration)
+        self.assertNotIn("Run encrypted NixOS VM integration tests", integration)
+
     def test_release_ci_runs_official_installer_and_final_vm_security(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         final_vm = text("scripts/qemu-final-browser.sh")
