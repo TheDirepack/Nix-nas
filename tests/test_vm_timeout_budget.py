@@ -43,7 +43,7 @@ class VmTimeoutBudgetTests(unittest.TestCase):
             "browser authorization timeout",
         )
         ordinary_wait = _seconds(
-            r'NAS_TEST_TIMEOUT:-([0-9]+)',
+            r"NAS_TEST_TIMEOUT:-([0-9]+)",
             guest,
             "ordinary guest wait timeout",
         )
@@ -53,8 +53,8 @@ class VmTimeoutBudgetTests(unittest.TestCase):
         # stages so the outer watchdog cannot undercut its own child budgets.
         minimum = first_run + secret_activation + browser + (2 * ordinary_wait)
         self.assertGreaterEqual(outer, minimum)
-        self.assertNotIn('timeout 1800 nas-vm-guest-test', integration)
-        self.assertIn('timeout --verbose --kill-after=30s', integration)
+        self.assertNotIn("timeout 1800 nas-vm-guest-test", integration)
+        self.assertIn("timeout --verbose --kill-after=30s", integration)
 
 
 if __name__ == "__main__":
