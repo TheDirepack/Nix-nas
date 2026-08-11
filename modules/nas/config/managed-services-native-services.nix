@@ -96,6 +96,19 @@ let
         (capability "webdav" "Use WebDAV")
         (capability "admin" "Administer CopyParty")
       ];
+      listeners = lib.optionalAttrs cfg.tftp.enable {
+        tftp-request = (portListener "udp" cfg.tftp.port) // {
+          targetPort = cfg.tftp.internalPort;
+        };
+        tftp-response = {
+          protocol = "udp";
+          exposure = {
+            start = cfg.tftp.responsePortStart;
+            end = cfg.tftp.responsePortEnd;
+          };
+          firewall = true;
+        };
+      };
       routes = {
         admin = (pathRoute [ "/shares/admin" ] copypartyTarget (identity "admin")) // { portal.visible = false; };
         dav = (pathRoute [ "/dav" ] copypartyTarget (identity "webdav")) // {
