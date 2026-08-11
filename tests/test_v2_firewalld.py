@@ -85,6 +85,44 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertEqual([], manifest["files"])
         self.assertEqual([], manifest["owners"])
 
+    def test_unmanaged_host_listener_still_projects_declared_network_policy(self):
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "platform": {
+                    "managed": False,
+                    "enabled": True,
+                    "runtime": {"type": "systemd", "unit": "platform.service"},
+                    "network": {
+                        "mode": "host",
+                        "outboundDefault": "allow",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
+                    "listeners": {
+                        "native": {"protocol": "tcp", "exposure": {"port": 3493}, "firewall": True},
+                    },
+                }
+            },
+        }
+        self.assertTrue(requires_firewalld(effective))
+        files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
+        policy = files[f"policies/{firewalld.listener_policy_name('platform')}.xml"].decode()
+        self.assertIn('ingress-zone name="trusted"', policy)
+        self.assertIn('egress-zone name="HOST"', policy)
+        self.assertIn('port="3493" protocol="tcp"', policy)
+        self.assertEqual(
+            manifest["owners"],
+            [{"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}.xml"}],
+        )
+
+    def test_unmanaged_isolated_network_fails_closed(self):
+        effective = self.effective()
+        effective["services"]["worker"]["managed"] = False
+        with self.assertRaisesRegex(firewalld.FirewalldProjectionError, "no V2-owned bridge"):
+            firewalld.compile_projection(effective, lan_zone="trusted")
+
     def test_lan_and_default_egress_allow_are_explicit(self):
         effective = self.effective()
         policy = effective["services"]["worker"]["network"]
