@@ -33,7 +33,13 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
-    machine.succeed("timeout 1800 nas-vm-guest-test /dev/vdb")
+    # guest-test.sh is a complete-system qualification suite, not one operation.
+    # Its bounded child stages include a 20-minute first-run, a 10-minute secret
+    # activation, a 5-minute browser flow, and many 5-minute service waits.  The
+    # old 30-minute aggregate watchdog could therefore kill healthy serialized
+    # work before those child budgets were exhausted.  Keep a hard outer guard,
+    # but give the complete suite a budget consistent with its internal bounds.
+    machine.succeed("timeout --verbose --kill-after=30s 3600s nas-vm-guest-test /dev/vdb")
     machine.succeed("timeout 900 nas-vm-secret-adversarial")
     machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout 300 python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
     machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")
