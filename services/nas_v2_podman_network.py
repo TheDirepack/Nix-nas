@@ -62,16 +62,16 @@ def _needs_isolated_firewalld(service: dict[str, Any], policy: dict[str, Any]) -
 
 
 def requires_firewalld(effective: dict[str, Any]) -> bool:
-    """Return whether any enabled managed V2 service needs firewalld for faithful policy."""
+    """Return whether any enabled V2 service needs firewalld for faithful policy."""
     services = effective.get("services")
     if not isinstance(services, dict):
         raise PodmanNetworkProjectionError("compiled effective state is missing services")
     for service in services.values():
-        if not isinstance(service, dict) or not service.get("managed", True) or not service.get("enabled", True):
+        if not isinstance(service, dict) or not service.get("enabled", True):
             continue
         policy = network_policy(effective, service)
         mode = policy.get("mode", "host")
-        if mode == "isolated" and _needs_isolated_firewalld(service, policy):
+        if mode == "isolated" and service.get("managed", True) and _needs_isolated_firewalld(service, policy):
             return True
         if mode == "host" and _listener_firewall_requested(service):
             return True
