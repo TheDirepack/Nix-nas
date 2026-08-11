@@ -53,49 +53,39 @@ jobs:
               text = text.replace(stale, "")
           secrets.write_text(text, encoding="utf-8")
 
-          old_monitored = '''  monitoredUnits = lib.unique (
-            [
-              "nas-*"
-              "zfs-*"
-              "sanoid*"
-              "syncoid*"
-              "NetworkManager.service"
-              "firewalld.service"
-              "sshd.service"
-              "postgresql.service"
-            ]
-            ++ lib.concatMap (entry: entry.runtime.units)
-              (lib.filter (entry: entry.enabled) (lib.attrValues nasInternal.serviceRegistry))
-          );
-          '''
-          new_monitored = '''  monitoredUnits = lib.unique (
-            [
-              "nas-*"
-              "podman-*.service"
-              "zfs-*"
-              "sanoid*"
-              "syncoid*"
-              "NetworkManager.service"
-              "firewalld.service"
-              "sshd.service"
-              "postgresql.service"
-              "authentik.service"
-              "authentik-worker.service"
-              "copyparty.service"
-              "caddy.service"
-              "cockpit.socket"
-            ]
-            ++ lib.optional cfg.syncthing.enable "syncthing.service"
-            ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
-            ++ lib.optional cfg.ai.enable "open-webui.service"
-            ++ lib.optional cfg.virtualization.enable "libvirtd.service"
-            ++ lib.optionals cfg.observability.enable [ "victoriametrics.service" "telegraf.service" ]
-            ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) "vmalert-nas.service"
-            ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) "grafana.service"
-            ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
-          );
-          '''
-          replace("modules/nas/config/observability.nix", old_monitored, new_monitored)
+          observability = Path("modules/nas/config/observability.nix")
+          obs_text = observability.read_text(encoding="utf-8")
+          start = obs_text.index("  monitoredUnits = lib.unique (")
+          end = obs_text.index("  smartctlReadOnly =", start)
+          new_monitored = (
+              "  monitoredUnits = lib.unique (\n"
+              "    [\n"
+              "      \"nas-*\"\n"
+              "      \"podman-*.service\"\n"
+              "      \"zfs-*\"\n"
+              "      \"sanoid*\"\n"
+              "      \"syncoid*\"\n"
+              "      \"NetworkManager.service\"\n"
+              "      \"firewalld.service\"\n"
+              "      \"sshd.service\"\n"
+              "      \"postgresql.service\"\n"
+              "      \"authentik.service\"\n"
+              "      \"authentik-worker.service\"\n"
+              "      \"copyparty.service\"\n"
+              "      \"caddy.service\"\n"
+              "      \"cockpit.socket\"\n"
+              "    ]\n"
+              "    ++ lib.optional cfg.syncthing.enable \"syncthing.service\"\n"
+              "    ++ lib.optional cfg.vaultwarden.enable \"vaultwarden.service\"\n"
+              "    ++ lib.optional cfg.ai.enable \"open-webui.service\"\n"
+              "    ++ lib.optional cfg.virtualization.enable \"libvirtd.service\"\n"
+              "    ++ lib.optionals cfg.observability.enable [ \"victoriametrics.service\" \"telegraf.service\" ]\n"
+              "    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) \"vmalert-nas.service\"\n"
+              "    ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) \"grafana.service\"\n"
+              "    ++ lib.optional cfg.observability.ntfy.enable \"ntfy-sh.service\"\n"
+              "  );\n"
+          )
+          observability.write_text(obs_text[:start] + new_monitored + obs_text[end:], encoding="utf-8")
 
           old_operations = '''function OperationsPage({data, mutate, busy}) {
             const operations = visibleOperations(data || {});
