@@ -19,18 +19,18 @@ from nas_common import CommandResult  # noqa: E402
 
 class CockpitApiCoverageTests(unittest.TestCase):
     def test_json_command_optional_and_strict_failures(self) -> None:
-        failed = CommandResult(("tool",), 1, "", "bad")
+        failed = CommandResult(1, "", "bad")
         with mock.patch.object(api, "run", return_value=failed):
             optional = api._json_command(["tool"], optional=True)
             self.assertFalse(optional["ok"])
             with self.assertRaises(api.ApiError):
                 api._json_command(["tool"])
-        invalid = CommandResult(("tool",), 0, "{", "")
+        invalid = CommandResult(0, "{", "")
         with mock.patch.object(api, "run", return_value=invalid):
             self.assertFalse(api._json_command(["tool"], optional=True)["ok"])
             with self.assertRaisesRegex(api.ApiError, "invalid JSON"):
                 api._json_command(["tool"])
-        sequence = CommandResult(("tool",), 0, "[]", "")
+        sequence = CommandResult(0, "[]", "")
         with mock.patch.object(api, "run", return_value=sequence):
             self.assertFalse(api._json_command(["tool"], optional=True)["ok"])
             with self.assertRaisesRegex(api.ApiError, "invalid data"):
@@ -69,7 +69,7 @@ class CockpitApiCoverageTests(unittest.TestCase):
 
     def test_service_states_handles_empty_command_failure_and_memory_values(self) -> None:
         self.assertEqual(api.service_states([]), {})
-        with mock.patch.object(api, "run", return_value=CommandResult((), 1, "", "")):
+        with mock.patch.object(api, "run", return_value=CommandResult(1, "", "")):
             self.assertEqual(api.service_states(["a.service"]), {})
         output = "\n".join(
             [
@@ -88,21 +88,21 @@ class CockpitApiCoverageTests(unittest.TestCase):
                 "",
             ]
         )
-        with mock.patch.object(api, "run", return_value=CommandResult((), 0, output, "")):
+        with mock.patch.object(api, "run", return_value=CommandResult(0, output, "")):
             states = api.service_states(["a.service", "b.service"])
         self.assertEqual(states["a.service"]["memoryBytes"], 123)
         self.assertIsNone(states["b.service"]["memoryBytes"])
 
     def test_managed_services_status_failures_and_success(self) -> None:
-        with mock.patch.object(api, "run", return_value=CommandResult((), 1, "", "bad")):
+        with mock.patch.object(api, "run", return_value=CommandResult(1, "", "bad")):
             self.assertFalse(api.managed_services_status()["ok"])
-        with mock.patch.object(api, "run", return_value=CommandResult((), 0, "{", "")):
+        with mock.patch.object(api, "run", return_value=CommandResult(0, "{", "")):
             self.assertIn("invalid JSON", api.managed_services_status()["error"])
-        with mock.patch.object(api, "run", return_value=CommandResult((), 0, "{}", "")):
+        with mock.patch.object(api, "run", return_value=CommandResult(0, "{}", "")):
             self.assertIn("no service list", api.managed_services_status()["error"])
-        with mock.patch.object(api, "run", return_value=CommandResult((), 0, '{"services":[],"ok":false}', "")):
+        with mock.patch.object(api, "run", return_value=CommandResult(0, '{"services":[],"ok":false}', "")):
             self.assertFalse(api.managed_services_status()["ok"])
-        with mock.patch.object(api, "run", return_value=CommandResult((), 0, '{"services":[]}', "")):
+        with mock.patch.object(api, "run", return_value=CommandResult(0, '{"services":[]}', "")):
             self.assertTrue(api.managed_services_status()["ok"])
 
     def test_portal_entries_fail_closed_on_schema_and_urls(self) -> None:
