@@ -1,0 +1,172 @@
+name: Agent pre-VM repair
+
+on:
+  push:
+    branches: [agent/managed-services-v2-core]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/managed-services-v2-core
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply semantic post-rebase fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement target, found {count}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace(
+              ".github/workflows/ci.yml",
+              "nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v",
+              "nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v",
+          )
+
+          secrets = Path("modules/nas/internal/secret-tools.nix")
+          text = secrets.read_text(encoding="utf-8")
+          for stale in (
+              "        printf '%s' \"$llama_swap_api_key\" > \"$local_stage/ai/gate-api-key\"\n",
+              "        install_secret \"$local_stage/ai/gate-api-key\" \"$root_stage/ai/gate-api-key\" nas-feature-gate nas-feature-control\n",
+          ):
+              if text.count(stale) != 1:
+                  raise SystemExit(f"secret-tools.nix: expected exactly one stale gate line: {stale!r}")
+              text = text.replace(stale, "")
+          secrets.write_text(text, encoding="utf-8")
+
+          old_operations = '''function OperationsPage({data, mutate, busy}) {
+            const operations = visibleOperations(data || {});
+            const [lastResult, setLastResult] = useState(null);
+            const run = async (id) => {
+              const result = await mutate(() => api(["action", id]));
+              setLastResult(result);
+            };
+            return (
+              <>
+                <Title headingLevel="h2">Operations</Title>
+                <div className="nas-actions nas-actions--wrap">
+                  {operations.map(([id, label]) => (
+                    <Button key={id} variant="secondary" onClick={() => run(id)} isDisabled={busy}>{label}</Button>
+                  ))}
+                </div>
+                <Card>
+                  <CardHeader><CardTitle>Operation coordinator</CardTitle></CardHeader>
+                  <CardBody><pre className="nas-pre">{pretty(data?.operations || {})}</pre></CardBody>
+                </Card>
+                {lastResult ? <Card><CardBody><pre className="nas-pre">{pretty(lastResult)}</pre></CardBody></Card> : null}
+              </>
+            );
+          }
+          '''
+          new_operations = '''function OperationsPage({data, mutate, busy}) {
+            const operations = visibleOperations(data || {});
+            const confirmationRequired = new Set([
+              "snapshot",
+              "zfs-scrub",
+              "backup",
+              "replicate",
+              "update-sync",
+              "update-apply",
+              "protected-restart",
+            ]);
+            const [pending, setPending] = useState(null);
+            const [lastResult, setLastResult] = useState(null);
+            const run = async (id) => {
+              const result = await mutate(() => api(["action", id]));
+              setPending(null);
+              setLastResult(result);
+            };
+            return (
+              <>
+                <Title headingLevel="h2">Operations</Title>
+                <div className="nas-actions nas-actions--wrap">
+                  {operations.map(([id, label]) => (
+                    <Button
+                      key={id}
+                      variant="secondary"
+                      onClick={() => confirmationRequired.has(id) ? setPending({id, label}) : run(id)}
+                      isDisabled={busy}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                {pending ? (
+                  <Card>
+                    <CardHeader><CardTitle>Confirm maintenance action</CardTitle></CardHeader>
+                    <CardBody>
+                      <p>Run <strong>{pending.label}</strong>? This action can change appliance state.</p>
+                      <div className="nas-actions">
+                        <Button variant="danger" onClick={() => run(pending.id)} isDisabled={busy}>Confirm</Button>
+                        <Button variant="link" onClick={() => setPending(null)} isDisabled={busy}>Cancel</Button>
+                      </div>
+                    </CardBody>
+                  </Card>
+                ) : null}
+                <Card>
+                  <CardHeader><CardTitle>Operation coordinator</CardTitle></CardHeader>
+                  <CardBody><pre className="nas-pre">{pretty(data?.operations || {})}</pre></CardBody>
+                </Card>
+                {lastResult ? <Card><CardBody><pre className="nas-pre">{pretty(lastResult)}</pre></CardBody></Card> : null}
+              </>
+            );
+          }
+          '''
+          replace("cockpit/src/app.jsx", old_operations, new_operations)
+          replace(
+              "cockpit/src/app.jsx",
+              '<input type="checkbox" checked={allowDestructive}',
+              '<input id="first-start-destructive" type="checkbox" checked={allowDestructive}',
+          )
+          PY
+      - name: Apply canonical Ruff formatting
+        run: nix shell nixpkgs#ruff -c ruff format services tests scripts
+      - name: Verify Python lint and types
+        run: |
+          nix shell nixpkgs#ruff -c ruff check services tests scripts
+          nix shell nixpkgs#ruff -c ruff format --check services tests scripts
+          nix shell nixpkgs#pyright -c pyright --project pyproject.toml
+      - name: Rebuild reviewed Cockpit bundle
+        run: |
+          npm --prefix cockpit ci --no-audit --no-fund
+          npm --prefix cockpit run build
+          node cockpit/build.js --check
+      - name: Verify focused pre-VM regressions
+        run: |
+          nix develop .#test -c python3 -m unittest \
+            tests.test_alpha18_hardening \
+            tests.test_alpha20_cockpit \
+            tests.test_contract_identity \
+            tests.test_contract_operations \
+            tests.test_runner_accounting -v
+          nix shell nixpkgs#caddy -c bash -c 'nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v'
+      - name: Commit repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/ci.yml modules/nas/internal/secret-tools.nix services tests cockpit/src cockpit/dist cockpit/package-lock.json
+          if git diff --cached --quiet; then
+            echo "No repair changes to commit."
+            exit 0
+          fi
+          git commit -m "fix(ci): align V2 contracts after main rebase"
+          git push origin HEAD:agent/managed-services-v2-core
