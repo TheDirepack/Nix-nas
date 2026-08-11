@@ -53,6 +53,50 @@ jobs:
               text = text.replace(stale, "")
           secrets.write_text(text, encoding="utf-8")
 
+          old_monitored = '''  monitoredUnits = lib.unique (
+            [
+              "nas-*"
+              "zfs-*"
+              "sanoid*"
+              "syncoid*"
+              "NetworkManager.service"
+              "firewalld.service"
+              "sshd.service"
+              "postgresql.service"
+            ]
+            ++ lib.concatMap (entry: entry.runtime.units)
+              (lib.filter (entry: entry.enabled) (lib.attrValues nasInternal.serviceRegistry))
+          );
+          '''
+          new_monitored = '''  monitoredUnits = lib.unique (
+            [
+              "nas-*"
+              "podman-*.service"
+              "zfs-*"
+              "sanoid*"
+              "syncoid*"
+              "NetworkManager.service"
+              "firewalld.service"
+              "sshd.service"
+              "postgresql.service"
+              "authentik.service"
+              "authentik-worker.service"
+              "copyparty.service"
+              "caddy.service"
+              "cockpit.socket"
+            ]
+            ++ lib.optional cfg.syncthing.enable "syncthing.service"
+            ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
+            ++ lib.optional cfg.ai.enable "open-webui.service"
+            ++ lib.optional cfg.virtualization.enable "libvirtd.service"
+            ++ lib.optionals cfg.observability.enable [ "victoriametrics.service" "telegraf.service" ]
+            ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) "vmalert-nas.service"
+            ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) "grafana.service"
+            ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
+          );
+          '''
+          replace("modules/nas/config/observability.nix", old_monitored, new_monitored)
+
           old_operations = '''function OperationsPage({data, mutate, busy}) {
             const operations = visibleOperations(data || {});
             const [lastResult, setLastResult] = useState(null);
@@ -157,12 +201,13 @@ jobs:
             tests.test_contract_identity \
             tests.test_contract_operations \
             tests.test_runner_accounting -v
-          nix shell nixpkgs#caddy -c bash -c 'nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v'
+          CADDY_BIN="$(nix build --no-link --print-out-paths nixpkgs#caddy)/bin/caddy"
+          nix develop .#test -c env CADDY_BIN="$CADDY_BIN" python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v
       - name: Commit repair
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/ci.yml modules/nas/internal/secret-tools.nix services tests cockpit/src cockpit/dist cockpit/package-lock.json
+          git add .github/workflows/ci.yml modules/nas/internal/secret-tools.nix modules/nas/config/observability.nix services tests cockpit/src cockpit/dist cockpit/package-lock.json
           if git diff --cached --quiet; then
             echo "No repair changes to commit."
             exit 0
