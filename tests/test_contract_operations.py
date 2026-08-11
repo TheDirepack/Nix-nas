@@ -68,14 +68,14 @@ class ContractTests(unittest.TestCase):
 
     def test_victoriametrics_replaces_prometheus_and_routes_are_v2_owned(self) -> None:
         observability = text("modules/nas/config/observability.nix")
-        desired = text("config/managed-services-v2.yaml")
+        desired_seed = text("modules/nas/config/managed-services-native-services.nix")
         proxy = text("modules/nas/config/reverse-proxy.nix")
         self.assertIn("services.victoriametrics", observability)
         self.assertIn("services.vmalert.instances.nas", observability)
         self.assertIn("services.telegraf", observability)
         self.assertNotIn("services.prometheus", observability)
-        self.assertIn("victoriametrics", desired)
-        self.assertIn("/victoriametrics", desired)
+        self.assertIn("victoriametrics =", desired_seed)
+        self.assertIn('[ "/victoriametrics/" ]', desired_seed)
         self.assertNotIn("handle /victoriametrics/*", proxy)
         self.assertFalse((ROOT / "modules/nas/internal/feature-catalog.nix").exists())
         self.assertFalse((ROOT / "modules/nas/config/managed-services-migration.nix").exists())
@@ -95,8 +95,9 @@ class ContractTests(unittest.TestCase):
 
     def test_observability_consumes_compiled_v2_service_state(self) -> None:
         observability = text("modules/nas/config/observability.nix")
-        v2 = text("modules/nas/config/managed-services-v2.nix")
-        self.assertIn("managedServicesV2", v2)
+        v2 = text("modules/nas/config/managed-services.nix")
+        self.assertIn('effectivePath = "/run/nas-control/effective.json";', v2)
+        self.assertIn("nas-managed-services-reconcile", v2)
         self.assertNotIn("featureCatalog", observability)
         self.assertNotIn("serviceRegistry", observability)
         self.assertFalse((ROOT / "modules/nas/internal/service-registry.nix").exists())
