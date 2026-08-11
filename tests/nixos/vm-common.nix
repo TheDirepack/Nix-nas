@@ -43,6 +43,32 @@ let
       export NAS_PREFLIGHT_SKIP_TOOLING=1
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
+
+      # guest-test.sh already has stable log() boundaries around its expensive
+      # full-stack phases. Profile those boundaries without changing the test
+      # body, so CI exposes where wall-clock time is actually spent. The DEBUG
+      # trap runs only at the top level; it does not trace every command inside
+      # helper functions, keeping the QEMU log useful rather than noisy.
+      NAS_VM_PHASE_STARTED=$SECONDS
+      NAS_VM_PHASE_NAME="bootstrap"
+      nas_vm_profile_phase() {
+        local command=$1 now phase_name
+        case "$command" in
+          log\ *)
+            now=$SECONDS
+            printf 'VM-PHASE-TIMING: %s: %ss\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
+            read -r _ phase_name <<< "$command"
+            NAS_VM_PHASE_NAME=$phase_name
+            NAS_VM_PHASE_STARTED=$now
+            ;;
+          *"ALL NIXOS NAS VM TESTS PASSED"*)
+            now=$SECONDS
+            printf 'VM-PHASE-TIMING: %s: %ss\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
+            ;;
+        esac
+      }
+      trap 'nas_vm_profile_phase "$BASH_COMMAND"' DEBUG
+
       ${builtins.readFile ../vm/guest-test.sh}
     '';
   };
