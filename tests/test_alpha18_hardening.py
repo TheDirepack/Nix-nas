@@ -228,6 +228,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("restic", storage)
         self.assertIn("pg_restore", storage)
         self.assertIn("PRAGMA integrity_check", storage)
+        self.assertIn("django_migrations", storage)
         self.assertIn('install -d -m 0711 "$verify_root"', storage)
         self.assertIn("stagingMinFreeBytes", storage)
         self.assertIn("nas-backup-restore-verify", schedules)
