@@ -5,17 +5,6 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly ROOT
 readonly FLAKE_REF="."
 readonly PLACEHOLDER="nixosConfigurations.nas.config.system.build.toplevel.drvPath"
-readonly -a CONFIGURATIONS=(
-  nas-ci-ready
-  nas-qemu
-  nas-module-consumer
-  nas-profile-core-storage
-  nas-profile-identity-sharing
-  nas-profile-observability
-  nas-profile-virtualization
-  nas-profile-local-ai
-  nas-profile-all
-)
 readonly -a PLACEHOLDER_ERRORS=(
   "root file system"
   "boot.loader.grub.devices"
@@ -26,9 +15,10 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/nix-config-matrix.sh
 
-Evaluate flake metadata, exported NixOS modules, every supported reference
-configuration, and the intentionally invalid assertion fixtures. This command
-instantiates derivations for evaluation but does not build their closures.
+Evaluate flake metadata and exported NixOS modules, verify the operator hardware
+placeholder remains intentionally non-bootable, and run the intentionally invalid
+assertion fixtures. Complete supported reference configurations and VM check
+outputs are evaluated once by scripts/evaluate-reference-configurations.sh.
 USAGE
 }
 
@@ -74,17 +64,6 @@ verify_placeholder_is_not_bootable() {
   printf 'Nix operator hardware placeholder remains intentionally non-bootable\n'
 }
 
-evaluate_configuration() {
-  local configuration=$1 drv_path
-
-  drv_path="$(nix eval --raw --no-write-lock-file \
-    "$FLAKE_REF#nixosConfigurations.$configuration.config.system.build.toplevel.drvPath")"
-  [[ $drv_path == /nix/store/*.drv ]] || {
-    die "configuration $configuration returned an invalid derivation path: $drv_path"
-  }
-  printf 'Nix configuration evaluation ok: %s (%s)\n' "$configuration" "$drv_path"
-}
-
 main() {
   if [[ ${1:-} == --help ]]; then
     usage
@@ -104,12 +83,6 @@ main() {
 
   evaluate_flake_surface
   verify_placeholder_is_not_bootable "$TEMPORARY_DIRECTORY/operator-placeholder.log"
-
-  local configuration
-  for configuration in "${CONFIGURATIONS[@]}"; do
-    evaluate_configuration "$configuration"
-  done
-
   "$ROOT/scripts/nix-negative-tests.sh"
 }
 
