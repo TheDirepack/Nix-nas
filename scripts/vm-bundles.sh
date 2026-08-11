@@ -92,9 +92,14 @@ closure() {
   "$NIX" path-info -r "${outs[@]}" | sort -u
 }
 
-build_bundle() {
+build_all_bundles() {
+  local name ref
   local -a refs=()
-  mapfile -t refs < <(bundle_refs "$1")
+  while IFS= read -r name; do
+    while IFS= read -r ref; do
+      refs+=("$ref")
+    done < <(bundle_refs "$name")
+  done < <(list_bundles)
   "$NIX" build --no-link "${refs[@]}"
 }
 
@@ -114,14 +119,14 @@ save() {
   mkdir -p "$dir"
   core_file="$dir/.core.paths"
 
-  # Core first: every sub-bundle is the closure "on top of" core.
-  build_bundle core
+  # Submit all bundle roots together so Nix can schedule their shared DAG once.
+  # Export order remains core-first and each archive keeps the same delta shape.
+  build_all_bundles
   closure core > "$core_file"
   xargs "$NIX_STORE" --export < "$core_file" | gzip > "$dir/core.nar.gz"
 
   while IFS= read -r name; do
     [[ $name == core ]] && continue
-    build_bundle "$name"
     comm -23 <(closure "$name") "$core_file" \
       | xargs --no-run-if-empty "$NIX_STORE" --export | gzip > "$dir/$name.nar.gz"
   done < <(list_bundles)
