@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import pathlib
 import sys
 import tempfile
@@ -58,7 +57,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
     def test_http_json_retries_transient_reads_but_not_writes(self) -> None:
         headers = Message()
         headers["Retry-After"] = "0.25"
-        transient = urllib.error.HTTPError("https://example.test", 503, "down", headers, io.BytesIO(b'{}'))
+        transient = urllib.error.HTTPError("https://example.test", 503, "down", headers, io.BytesIO(b"{}"))
         success = mock.MagicMock()
         success.__enter__.return_value.read.return_value = b'{"ok":true}'
         with (
@@ -69,7 +68,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
 
-        denied = urllib.error.HTTPError("https://example.test", 503, "down", Message(), io.BytesIO(b'{}'))
+        denied = urllib.error.HTTPError("https://example.test", 503, "down", Message(), io.BytesIO(b"{}"))
         with mock.patch.object(sync.urllib.request, "urlopen", side_effect=denied) as urlopen:
             with self.assertRaisesRegex(sync.SyncError, "HTTP 503"):
                 sync.http_json("https://example.test/api", method="POST", body={"x": 1})
@@ -134,7 +133,12 @@ class IdentitySyncCoverageTests(unittest.TestCase):
             {"pk": "guest", "name": identity_model.GUEST_GROUP, "is_superuser": False},
         ]
         refreshed = [
-            {"pk": "admin", "name": identity_model.ADMIN_GROUP, "is_superuser": True, "users_obj": [{"username": "admin"}]},
+            {
+                "pk": "admin",
+                "name": identity_model.ADMIN_GROUP,
+                "is_superuser": True,
+                "users_obj": [{"username": "admin"}],
+            },
             {"pk": "users", "name": identity_model.USER_GROUP, "is_superuser": False},
             {"pk": "guest", "name": identity_model.GUEST_GROUP, "is_superuser": False},
             {"pk": "disabled", "name": identity_model.DISABLED_GROUP, "is_superuser": False},
@@ -146,7 +150,9 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         ):
             result = sync.ensure_groups("token")
         self.assertEqual(result["createdGroups"], [identity_model.DISABLED_GROUP])
-        self.assertEqual(set(result["correctedSuperuserGroups"]), {identity_model.ADMIN_GROUP, identity_model.USER_GROUP})
+        self.assertEqual(
+            set(result["correctedSuperuserGroups"]), {identity_model.ADMIN_GROUP, identity_model.USER_GROUP}
+        )
         self.assertTrue(any(call[1].get("method") == "POST" for call in calls))
         self.assertTrue(any(call[1].get("method") == "PATCH" for call in calls))
 
@@ -198,7 +204,9 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         self.assertTrue(any(path.endswith("/set_key/") for path, _ in calls))
 
     def test_provision_runtime_token_rejects_missing_role_or_bad_user_key(self) -> None:
-        with mock.patch.object(sync, "authentik_list", side_effect=[[{"pk": 42, "username": sync.AUTOMATION_USER}], []]):
+        with mock.patch.object(
+            sync, "authentik_list", side_effect=[[{"pk": 42, "username": sync.AUTOMATION_USER}], []]
+        ):
             with self.assertRaisesRegex(sync.SyncError, "automation role is missing"):
                 sync.provision_runtime_token("token")
         with (
@@ -263,10 +271,14 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         with mock.patch.object(sync.sys, "stdin", io.StringIO('{"accounts":[],"extra":1}')):
             with self.assertRaisesRegex(sync.SyncError, "unknown field"):
                 sync.load_account_plan("-")
-        with mock.patch.object(sync.sys, "stdin", io.StringIO('{"accounts":{},"deactivateMissingManagedAccounts":false}')):
+        with mock.patch.object(
+            sync.sys, "stdin", io.StringIO('{"accounts":{},"deactivateMissingManagedAccounts":false}')
+        ):
             with self.assertRaisesRegex(sync.SyncError, "accounts must be a list"):
                 sync.load_account_plan("-")
-        with mock.patch.object(sync.sys, "stdin", io.StringIO('{"accounts":[],"deactivateMissingManagedAccounts":"no"}')):
+        with mock.patch.object(
+            sync.sys, "stdin", io.StringIO('{"accounts":[],"deactivateMissingManagedAccounts":"no"}')
+        ):
             with self.assertRaisesRegex(sync.SyncError, "must be true or false"):
                 sync.load_account_plan("-")
 

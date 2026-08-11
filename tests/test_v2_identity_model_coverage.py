@@ -82,7 +82,9 @@ class IdentityModelCoverageTests(unittest.TestCase):
         self.assertEqual(model.user_device_values(user), ["x"])
 
     def test_desired_syncthing_skips_users_without_capability_or_devices(self) -> None:
-        without_capability = model.User("a", "a@x", "A", frozenset({model.USER_GROUP}), {"nasSyncthingDevices": ["bad"]})
+        without_capability = model.User(
+            "a", "a@x", "A", frozenset({model.USER_GROUP}), {"nasSyncthingDevices": ["bad"]}
+        )
         without_devices = model.User(
             "b", "b@x", "B", frozenset({"application.syncthing.access"}), {"nasSyncthingDevices": []}
         )
@@ -130,9 +132,7 @@ class IdentityModelCoverageTests(unittest.TestCase):
         )
         self.assertEqual(disabled["groups"], [model.DISABLED_GROUP])
         with self.assertRaisesRegex(model.SyncError, "cannot disable"):
-            model.normalized_account_plan(
-                {"username": "admin", "active": False, "groups": [model.ADMIN_GROUP]}, 0
-            )
+            model.normalized_account_plan({"username": "admin", "active": False, "groups": [model.ADMIN_GROUP]}, 0)
         for password in ("", "a\nb", "a\rb", "a\x00b"):
             with self.subTest(password=password), self.assertRaisesRegex(model.SyncError, "exactly one non-empty line"):
                 model.normalized_account_plan({"username": "alice", "password": password}, 0)
@@ -156,9 +156,7 @@ class IdentityModelCoverageTests(unittest.TestCase):
             {"pk": 2, "username": "two", "is_active": True, "groups": []},
             {"pk": 3, "username": "off", "is_active": False, "groups": ["admin-pk"]},
         ]
-        groups = [
-            {"pk": "admin-pk", "name": model.ADMIN_GROUP, "users_obj": [{"pk": 2}, {"username": "off"}]}
-        ]
+        groups = [{"pk": "admin-pk", "name": model.ADMIN_GROUP, "users_obj": [{"pk": 2}, {"username": "off"}]}]
         self.assertEqual(model.enabled_administrator_names(users, groups), {"one", "two"})
         self.assertEqual(model.enabled_administrator_names(users, []), set())
 
