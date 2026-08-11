@@ -43,25 +43,38 @@ jobs:
               '            comparison = "match"\n            if status == "absent":\n',
               '            comparison = "match"\n            current: str | None = None\n            if status == "absent":\n',
           )
+
           tooling = Path("tests/test_contract_tooling.py")
           text = tooling.read_text(encoding="utf-8")
-          if '        final_browser = text("scripts/qemu-final-browser.sh")\n' not in text:
-              marker = '        workflow = text(".github/workflows/ci.yml")\n'
-              if text.count(marker) != 1:
-                  raise SystemExit("test_contract_tooling.py: qemu workflow marker mismatch")
-              text = text.replace(marker, marker + '        final_browser = text("scripts/qemu-final-browser.sh")\n')
-          for old, new in (
+          function_start = text.index("    def test_qemu_harness_covers_native_and_installed_paths(self):\n")
+          next_function = text.find("\n    def ", function_start + 5)
+          function_end = len(text) if next_function < 0 else next_function
+          block = text[function_start:function_end]
+          marker = '        workflow = text(".github/workflows/ci.yml")\n'
+          if '        final_browser = text("scripts/qemu-final-browser.sh")\n' not in block:
+              if marker not in block:
+                  raise SystemExit("test_contract_tooling.py: QEMU workflow marker missing")
+              block = block.replace(marker, marker + '        final_browser = text("scripts/qemu-final-browser.sh")\n', 1)
+          replacements = (
               ('        self.assertIn("run_dynamic_web_scan", host)\n', '        self.assertIn("NAS_FINAL_VM_WORKLOAD", final_browser)\n        self.assertIn("zap-fuzz)", final_browser)\n'),
               ('        self.assertIn("NAS_ZAP_IMAGE", host)\n', '        self.assertIn("NAS_ZAP_IMAGE", final_browser)\n'),
               ('        self.assertIn("zap-security-reports", workflow)\n', '        self.assertIn("zap-fuzz-evidence", workflow)\n        self.assertIn("NAS_FINAL_VM_WORKLOAD: zap-fuzz", workflow)\n'),
-              ('            def log_message(self, *_args):\n                pass\n', '            def log_message(self, format, *args):\n                del format, args\n'),
-          ):
-              if old in text:
-                  if text.count(old) != 1:
-                      raise SystemExit(f"test_contract_tooling.py: non-unique target {old!r}")
-                  text = text.replace(old, new)
-              elif new not in text:
-                  raise SystemExit(f"test_contract_tooling.py: target not found {old!r}")
+          )
+          for old, new in replacements:
+              if old in block:
+                  block = block.replace(old, new, 1)
+              elif new not in block:
+                  raise SystemExit(f"test_contract_tooling.py: QEMU target missing {old!r}")
+          text = text[:function_start] + block + text[function_end:]
+
+          old_log = '            def log_message(self, *_args):\n                pass\n'
+          new_log = '            def log_message(self, format, *args):\n                del format, args\n'
+          if old_log in text:
+              if text.count(old_log) != 1:
+                  raise SystemExit("test_contract_tooling.py: log_message target is not unique")
+              text = text.replace(old_log, new_log)
+          elif new_log not in text:
+              raise SystemExit("test_contract_tooling.py: log_message target missing")
           tooling.write_text(text, encoding="utf-8")
           PY
       - name: Format and typecheck
