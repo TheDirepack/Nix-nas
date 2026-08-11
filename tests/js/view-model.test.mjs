@@ -36,7 +36,9 @@ test("managed service and application link models follow V2 state", () => {
     ["files.web", "syncthing.web"],
   );
   assert.deepEqual(
-    staticLinks(data).map((entry) => entry.key).sort(),
+    staticLinks(data)
+      .map((entry) => entry.key)
+      .sort(),
     ["accountSettings", "identity"],
   );
   assert.equal(

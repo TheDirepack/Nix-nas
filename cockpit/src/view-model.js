@@ -120,10 +120,11 @@ export function managedApplicationLinks(data = {}) {
       category: typeof entry.category === "string" && entry.category ? entry.category : "Other",
       order: Number.isFinite(entry.order) ? entry.order : 0,
     }))
-    .sort((left, right) =>
-      left.order - right.order ||
-      left.category.localeCompare(right.category) ||
-      left.label.localeCompare(right.label),
+    .sort(
+      (left, right) =>
+        left.order - right.order ||
+        left.category.localeCompare(right.category) ||
+        left.label.localeCompare(right.label),
     );
 }
 
@@ -137,7 +138,8 @@ export function setupModel(data = {}) {
       pending: true,
       ready: false,
       status: "unknown",
-      message: "First-start state is unavailable. Recheck the configuration or inspect the setup service.",
+      message:
+        "First-start state is unavailable. Recheck the configuration or inspect the setup service.",
       configPath: "",
       planDigest: "",
       storage: {},
@@ -165,7 +167,8 @@ export function setupModel(data = {}) {
     accountCount: Number(firstStart.accountCount || 0),
     serviceCount: Number(firstStart.serviceCount || 0),
     destructiveRequired: firstStart.requiresDestructiveConfirmation === true,
-    journal: setup.setupJournal && typeof setup.setupJournal === "object" ? setup.setupJournal : null,
+    journal:
+      setup.setupJournal && typeof setup.setupJournal === "object" ? setup.setupJournal : null,
     authorityHealth: firstStart.authorityHealth || null,
   };
 }
@@ -174,9 +177,15 @@ export function managedServiceUnitState(service = {}) {
   service = service && typeof service === "object" && !Array.isArray(service) ? service : {};
   const units = Array.isArray(service.units) ? service.units : [];
   if (!units.length) return service.managed === false ? "Platform service" : "No native unit";
-  const active = units.filter((unit) => unit?.active === true || unit?.activeState === "active").length;
+  const active = units.filter(
+    (unit) => unit?.active === true || unit?.activeState === "active",
+  ).length;
   if (active === units.length) return "Running";
-  return active ? "Partially running" : service.effectiveMode === "on-demand" ? "Sleeping" : "Stopped";
+  return active
+    ? "Partially running"
+    : service.effectiveMode === "on-demand"
+      ? "Sleeping"
+      : "Stopped";
 }
 
 export function managedServiceRuntimeText(service = {}) {
@@ -184,8 +193,10 @@ export function managedServiceRuntimeText(service = {}) {
   const details = [];
   if (service.managed === false) details.push("Lifecycle remains native to the platform");
   if (service.runtimeAvailable === false) details.push("Runtime unavailable");
-  if (service.effectiveMode === "on-demand" && service.running) details.push("Native idle lease active");
-  else if (service.effectiveMode === "on-demand") details.push("Starts on authorized access or explicit wake");
+  if (service.effectiveMode === "on-demand" && service.running)
+    details.push("Native idle lease active");
+  else if (service.effectiveMode === "on-demand")
+    details.push("Starts on authorized access or explicit wake");
   if (Number.isFinite(service.idleSeconds) && service.effectiveMode === "on-demand") {
     details.push(`Idle policy ${Math.ceil(service.idleSeconds / 60)} min`);
   }
@@ -193,14 +204,18 @@ export function managedServiceRuntimeText(service = {}) {
 }
 
 export function operationBusy(data = {}, actionId = "") {
-  const busy = new Set(Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : []);
+  const busy = new Set(
+    Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : [],
+  );
   const conflicts = data?.operations?.conflictsByAction?.[actionId];
   if (!Array.isArray(conflicts)) return busy.size > 0;
   return conflicts.some((item) => busy.has(item));
 }
 
 export function managedServiceOperationsBusy(data = {}) {
-  const busy = new Set(Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : []);
+  const busy = new Set(
+    Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : [],
+  );
   const conflicts = Array.isArray(data?.operations?.managedServicesConflicts)
     ? data.operations.managedServicesConflicts
     : ["runtime", "appliance", "first-start"];
@@ -210,7 +225,8 @@ export function managedServiceOperationsBusy(data = {}) {
 export function visibleOperations(data = {}) {
   const services = managedServiceMap(data);
   return OPERATIONS.filter(([id]) => {
-    if (id === "backup") return Boolean(services.backups?.available ?? services.backup?.available ?? true);
+    if (id === "backup")
+      return Boolean(services.backups?.available ?? services.backup?.available ?? true);
     if (id === "replicate") return data?.zfsReplicationInstalled === true;
     if (id === "syncthing-sync") return Boolean(services.syncthing?.available ?? true);
     return true;

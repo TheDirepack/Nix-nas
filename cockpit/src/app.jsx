@@ -108,35 +108,58 @@ function OverviewPage({data, refresh, busy}) {
   return (
     <div className="nas-grid nas-grid--overview">
       <Card>
-        <CardHeader><CardTitle>Appliance</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Appliance</CardTitle>
+        </CardHeader>
         <CardBody>
-          <p><strong>{data?.host || "NAS"}</strong></p>
-          <p>Protected services: <Status ok={data?.protectedReady === true}>{data?.protectedReady ? "ready" : "locked"}</Status></p>
-          <p>First start: <Status ok={setup.complete}>{setup.status}</Status></p>
+          <p>
+            <strong>{data?.host || "NAS"}</strong>
+          </p>
+          <p>
+            Protected services:{" "}
+            <Status ok={data?.protectedReady === true}>
+              {data?.protectedReady ? "ready" : "locked"}
+            </Status>
+          </p>
+          <p>
+            First start: <Status ok={setup.complete}>{setup.status}</Status>
+          </p>
         </CardBody>
       </Card>
       <Card>
-        <CardHeader><CardTitle>Managed Services V2</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Managed Services V2</CardTitle>
+        </CardHeader>
         <CardBody>
           <p>{services.length} services in the current authority.</p>
           <p>{running} native owner units currently active.</p>
-          <Button variant="secondary" onClick={refresh} isDisabled={busy}>Refresh</Button>
+          <Button variant="secondary" onClick={refresh} isDisabled={busy}>
+            Refresh
+          </Button>
         </CardBody>
       </Card>
       <Card>
-        <CardHeader><CardTitle>ZFS</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>ZFS</CardTitle>
+        </CardHeader>
         <CardBody>
-          <p><Status ok={zfsHealthy}>{zfsHealthy ? "healthy" : "attention required"}</Status></p>
+          <p>
+            <Status ok={zfsHealthy}>{zfsHealthy ? "healthy" : "attention required"}</Status>
+          </p>
           <pre className="nas-pre">{data?.zfs?.summary || "Unavailable"}</pre>
           <pre className="nas-pre">{data?.zfs?.dataset || ""}</pre>
         </CardBody>
       </Card>
       <Card>
-        <CardHeader><CardTitle>Failures</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Failures</CardTitle>
+        </CardHeader>
         <CardBody>
-          {Array.isArray(data?.failedUnits) && data.failedUnits.length
-            ? <pre className="nas-pre">{data.failedUnits.join("\n")}</pre>
-            : <p>No failed units reported.</p>}
+          {Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
+            <pre className="nas-pre">{data.failedUnits.join("\n")}</pre>
+          ) : (
+            <p>No failed units reported.</p>
+          )}
         </CardBody>
       </Card>
     </div>
@@ -160,7 +183,10 @@ function ServiceCard({service, onMode, disabled}) {
         <p>{service.description || service.id}</p>
         <p className="nas-muted">{managedServiceRuntimeText(service)}</p>
         {service.managed === false ? (
-          <p className="nas-muted">This entry is visible to V2 for dependencies/routes; its native lifecycle is platform-owned.</p>
+          <p className="nas-muted">
+            This entry is visible to V2 for dependencies/routes; its native lifecycle is
+            platform-owned.
+          </p>
         ) : (
           <label className="nas-field">
             <span>Lifecycle mode</span>
@@ -169,7 +195,11 @@ function ServiceCard({service, onMode, disabled}) {
               disabled={disabled}
               onChange={(event) => onMode(service.id, event.target.value)}
             >
-              {modes.map((mode) => <option key={mode} value={mode}>{MODE_LABELS[mode] || mode}</option>)}
+              {modes.map((mode) => (
+                <option key={mode} value={mode}>
+                  {MODE_LABELS[mode] || mode}
+                </option>
+              ))}
             </select>
           </label>
         )}
@@ -177,7 +207,9 @@ function ServiceCard({service, onMode, disabled}) {
           <div className="nas-unit-list">
             {service.units.map((unit) => (
               <div key={unit.unit}>
-                <code>{unit.unit}</code> · {unit.activeState || (unit.active ? "active" : "inactive")} · {mib(unit.memoryBytes)} MiB
+                <code>{unit.unit}</code> ·{" "}
+                {unit.activeState || (unit.active ? "active" : "inactive")} ·{" "}
+                {mib(unit.memoryBytes)} MiB
               </div>
             ))}
           </div>
@@ -223,8 +255,13 @@ function ServicesPage({data, mutate, busy}) {
   return (
     <>
       <div className="nas-section-header">
-        <div><Title headingLevel="h2">Managed Services V2</Title><p>/var/lib/nas-control/services.yaml is the sole mutable lifecycle authority.</p></div>
-        <Button variant="secondary" onClick={loadDocument}>Edit YAML</Button>
+        <div>
+          <Title headingLevel="h2">Managed Services V2</Title>
+          <p>/var/lib/nas-control/services.yaml is the sole mutable lifecycle authority.</p>
+        </div>
+        <Button variant="secondary" onClick={loadDocument}>
+          Edit YAML
+        </Button>
       </div>
       <div className="nas-grid">
         {services.map((service) => (
@@ -238,13 +275,24 @@ function ServicesPage({data, mutate, busy}) {
       </div>
       {document ? (
         <Card className="nas-editor-card">
-          <CardHeader><CardTitle>Schema-driven desired state</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Schema-driven desired state</CardTitle>
+          </CardHeader>
           <CardBody>
             {editorError ? <Alert variant="danger" isInline title={editorError} /> : null}
-            <TextArea value={yaml} onChange={(_event, value) => setYaml(value)} rows={24} resizeOrientation="vertical" />
+            <TextArea
+              value={yaml}
+              onChange={(_event, value) => setYaml(value)}
+              rows={24}
+              resizeOrientation="vertical"
+            />
             <div className="nas-actions">
-              <Button onClick={saveDocument} isLoading={saving} isDisabled={saving}>Validate, save, and reconcile</Button>
-              <Button variant="link" onClick={() => setDocument(null)}>Close</Button>
+              <Button onClick={saveDocument} isLoading={saving} isDisabled={saving}>
+                Validate, save, and reconcile
+              </Button>
+              <Button variant="link" onClick={() => setDocument(null)}>
+                Close
+              </Button>
             </div>
           </CardBody>
         </Card>
@@ -267,17 +315,26 @@ function ApplicationsPage({data}) {
   return (
     <>
       <Title headingLevel="h2">Applications</Title>
-      <p>Application links are projected from Managed Services V2 route metadata; Caddy still enforces authorization on every request.</p>
+      <p>
+        Application links are projected from Managed Services V2 route metadata; Caddy still
+        enforces authorization on every request.
+      </p>
       {[...grouped.entries()].map(([category, entries]) => (
         <section key={category} className="nas-section">
           <Title headingLevel="h3">{category}</Title>
-          <div className="nas-grid">{entries.map((entry) => <LinkCard key={entry.id} entry={entry} />)}</div>
+          <div className="nas-grid">
+            {entries.map((entry) => (
+              <LinkCard key={entry.id} entry={entry} />
+            ))}
+          </div>
         </section>
       ))}
       <section className="nas-section">
         <Title headingLevel="h3">Platform tools</Title>
         <div className="nas-grid">
-          {staticEntries.map((entry) => <LinkCard key={entry.key} entry={entry} />)}
+          {staticEntries.map((entry) => (
+            <LinkCard key={entry.key} entry={entry} />
+          ))}
         </div>
       </section>
     </>
@@ -310,7 +367,7 @@ function OperationsPage({data, mutate, busy}) {
           <Button
             key={id}
             variant="secondary"
-            onClick={() => confirmationRequired.has(id) ? setPending({id, label}) : run(id)}
+            onClick={() => (confirmationRequired.has(id) ? setPending({id, label}) : run(id))}
             isDisabled={busy}
           >
             {label}
@@ -319,31 +376,67 @@ function OperationsPage({data, mutate, busy}) {
       </div>
       {pending ? (
         <Card>
-          <CardHeader><CardTitle>Confirm maintenance action</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Confirm maintenance action</CardTitle>
+          </CardHeader>
           <CardBody>
-            <p>Run <strong>{pending.label}</strong>? This action can change appliance state.</p>
+            <p>
+              Run <strong>{pending.label}</strong>? This action can change appliance state.
+            </p>
             <div className="nas-actions">
-              <Button variant="danger" onClick={() => run(pending.id)} isDisabled={busy}>Confirm</Button>
-              <Button variant="link" onClick={() => setPending(null)} isDisabled={busy}>Cancel</Button>
+              <Button variant="danger" onClick={() => run(pending.id)} isDisabled={busy}>
+                Confirm
+              </Button>
+              <Button variant="link" onClick={() => setPending(null)} isDisabled={busy}>
+                Cancel
+              </Button>
             </div>
           </CardBody>
         </Card>
       ) : null}
       <Card>
-        <CardHeader><CardTitle>Operation coordinator</CardTitle></CardHeader>
-        <CardBody><pre className="nas-pre">{pretty(data?.operations || {})}</pre></CardBody>
+        <CardHeader>
+          <CardTitle>Operation coordinator</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <pre className="nas-pre">{pretty(data?.operations || {})}</pre>
+        </CardBody>
       </Card>
-      {lastResult ? <Card><CardBody><pre className="nas-pre">{pretty(lastResult)}</pre></CardBody></Card> : null}
+      {lastResult ? (
+        <Card>
+          <CardBody>
+            <pre className="nas-pre">{pretty(lastResult)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
     </>
   );
 }
 
 function AiPage({data, mutate, busy}) {
   const config = data?.aiConfig && typeof data.aiConfig === "object" ? data.aiConfig : {};
-  const [provider, setProvider] = useState({id: "", url: "", models: "", apiKey: "", keepassPassword: ""});
+  const [provider, setProvider] = useState({
+    id: "",
+    url: "",
+    models: "",
+    apiKey: "",
+    keepassPassword: "",
+  });
   const [providerDelete, setProviderDelete] = useState({id: "", keepassPassword: ""});
-  const [local, setLocal] = useState({id: "", path: "", context: "4096", ttl: "-1", tools: false, extraArgs: ""});
-  const [role, setRole] = useState({role: "default", targets: "", strategy: "fallback", spillover: "1"});
+  const [local, setLocal] = useState({
+    id: "",
+    path: "",
+    context: "4096",
+    ttl: "-1",
+    tools: false,
+    extraArgs: "",
+  });
+  const [role, setRole] = useState({
+    role: "default",
+    targets: "",
+    strategy: "fallback",
+    spillover: "1",
+  });
   const [advanced, setAdvanced] = useState("{}");
   const [result, setResult] = useState(null);
 
@@ -353,71 +446,259 @@ function AiPage({data, mutate, busy}) {
       <Title headingLevel="h2">AI configuration</Title>
       <div className="nas-grid">
         <Card>
-          <CardHeader><CardTitle>Current llama-swap configuration</CardTitle></CardHeader>
-          <CardBody><pre className="nas-pre">{pretty(config)}</pre></CardBody>
+          <CardHeader>
+            <CardTitle>Current llama-swap configuration</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <pre className="nas-pre">{pretty(config)}</pre>
+          </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Set remote provider</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Set remote provider</CardTitle>
+          </CardHeader>
           <CardBody>
             <Form>
-              <FormGroup label="Provider ID"><TextInput value={provider.id} onChange={(_e, value) => setProvider({...provider, id: value})} /></FormGroup>
-              <FormGroup label="OpenAI-compatible URL"><TextInput value={provider.url} onChange={(_e, value) => setProvider({...provider, url: value})} /></FormGroup>
-              <FormGroup label="Models (comma-separated)"><TextInput value={provider.models} onChange={(_e, value) => setProvider({...provider, models: value})} /></FormGroup>
-              <FormGroup label="API key"><TextInput type="password" value={provider.apiKey} onChange={(_e, value) => setProvider({...provider, apiKey: value})} /></FormGroup>
-              <FormGroup label="KeePassXC password"><TextInput type="password" value={provider.keepassPassword} onChange={(_e, value) => setProvider({...provider, keepassPassword: value})} /></FormGroup>
-              <Button isDisabled={busy} onClick={() => submit(() => apiInput(["ai-provider-set"], {...provider, models: provider.models.split(",").map((v) => v.trim()).filter(Boolean)}))}>Save provider</Button>
+              <FormGroup label="Provider ID">
+                <TextInput
+                  value={provider.id}
+                  onChange={(_e, value) => setProvider({...provider, id: value})}
+                />
+              </FormGroup>
+              <FormGroup label="OpenAI-compatible URL">
+                <TextInput
+                  value={provider.url}
+                  onChange={(_e, value) => setProvider({...provider, url: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Models (comma-separated)">
+                <TextInput
+                  value={provider.models}
+                  onChange={(_e, value) => setProvider({...provider, models: value})}
+                />
+              </FormGroup>
+              <FormGroup label="API key">
+                <TextInput
+                  type="password"
+                  value={provider.apiKey}
+                  onChange={(_e, value) => setProvider({...provider, apiKey: value})}
+                />
+              </FormGroup>
+              <FormGroup label="KeePassXC password">
+                <TextInput
+                  type="password"
+                  value={provider.keepassPassword}
+                  onChange={(_e, value) => setProvider({...provider, keepassPassword: value})}
+                />
+              </FormGroup>
+              <Button
+                isDisabled={busy}
+                onClick={() =>
+                  submit(() =>
+                    apiInput(["ai-provider-set"], {
+                      ...provider,
+                      models: provider.models
+                        .split(",")
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    }),
+                  )
+                }
+              >
+                Save provider
+              </Button>
             </Form>
           </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Delete remote provider</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Delete remote provider</CardTitle>
+          </CardHeader>
           <CardBody>
             <Form>
-              <FormGroup label="Provider ID"><TextInput value={providerDelete.id} onChange={(_e, value) => setProviderDelete({...providerDelete, id: value})} /></FormGroup>
-              <FormGroup label="KeePassXC password"><TextInput type="password" value={providerDelete.keepassPassword} onChange={(_e, value) => setProviderDelete({...providerDelete, keepassPassword: value})} /></FormGroup>
-              <Button variant="danger" isDisabled={busy} onClick={() => submit(() => apiInput(["ai-provider-delete"], providerDelete))}>Delete provider</Button>
+              <FormGroup label="Provider ID">
+                <TextInput
+                  value={providerDelete.id}
+                  onChange={(_e, value) => setProviderDelete({...providerDelete, id: value})}
+                />
+              </FormGroup>
+              <FormGroup label="KeePassXC password">
+                <TextInput
+                  type="password"
+                  value={providerDelete.keepassPassword}
+                  onChange={(_e, value) =>
+                    setProviderDelete({...providerDelete, keepassPassword: value})
+                  }
+                />
+              </FormGroup>
+              <Button
+                variant="danger"
+                isDisabled={busy}
+                onClick={() => submit(() => apiInput(["ai-provider-delete"], providerDelete))}
+              >
+                Delete provider
+              </Button>
             </Form>
           </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Local model</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Local model</CardTitle>
+          </CardHeader>
           <CardBody>
             <Form>
-              <FormGroup label="Model ID"><TextInput value={local.id} onChange={(_e, value) => setLocal({...local, id: value})} /></FormGroup>
-              <FormGroup label="GGUF path"><TextInput value={local.path} onChange={(_e, value) => setLocal({...local, path: value})} /></FormGroup>
-              <FormGroup label="Context"><TextInput value={local.context} onChange={(_e, value) => setLocal({...local, context: value})} /></FormGroup>
-              <FormGroup label="TTL"><TextInput value={local.ttl} onChange={(_e, value) => setLocal({...local, ttl: value})} /></FormGroup>
-              <FormGroup label="Extra args (one per line)"><TextArea rows={4} value={local.extraArgs} onChange={(_e, value) => setLocal({...local, extraArgs: value})} /></FormGroup>
-              <label><input type="checkbox" checked={local.tools} onChange={(event) => setLocal({...local, tools: event.target.checked})} /> Tool-capable model</label>
+              <FormGroup label="Model ID">
+                <TextInput
+                  value={local.id}
+                  onChange={(_e, value) => setLocal({...local, id: value})}
+                />
+              </FormGroup>
+              <FormGroup label="GGUF path">
+                <TextInput
+                  value={local.path}
+                  onChange={(_e, value) => setLocal({...local, path: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Context">
+                <TextInput
+                  value={local.context}
+                  onChange={(_e, value) => setLocal({...local, context: value})}
+                />
+              </FormGroup>
+              <FormGroup label="TTL">
+                <TextInput
+                  value={local.ttl}
+                  onChange={(_e, value) => setLocal({...local, ttl: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Extra args (one per line)">
+                <TextArea
+                  rows={4}
+                  value={local.extraArgs}
+                  onChange={(_e, value) => setLocal({...local, extraArgs: value})}
+                />
+              </FormGroup>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={local.tools}
+                  onChange={(event) => setLocal({...local, tools: event.target.checked})}
+                />{" "}
+                Tool-capable model
+              </label>
               <div className="nas-actions">
-                <Button isDisabled={busy} onClick={() => submit(() => apiInput(["ai-local-model-set"], {id: local.id, path: local.path, context: Number(local.context), ttl: Number(local.ttl), tools: local.tools, extraArgs: local.extraArgs.split("\n").map((v) => v.trim()).filter(Boolean)}))}>Save local model</Button>
-                <Button variant="danger" isDisabled={busy} onClick={() => submit(() => apiInput(["ai-local-model-delete"], {id: local.id}))}>Delete local model</Button>
+                <Button
+                  isDisabled={busy}
+                  onClick={() =>
+                    submit(() =>
+                      apiInput(["ai-local-model-set"], {
+                        id: local.id,
+                        path: local.path,
+                        context: Number(local.context),
+                        ttl: Number(local.ttl),
+                        tools: local.tools,
+                        extraArgs: local.extraArgs
+                          .split("\n")
+                          .map((v) => v.trim())
+                          .filter(Boolean),
+                      }),
+                    )
+                  }
+                >
+                  Save local model
+                </Button>
+                <Button
+                  variant="danger"
+                  isDisabled={busy}
+                  onClick={() => submit(() => apiInput(["ai-local-model-delete"], {id: local.id}))}
+                >
+                  Delete local model
+                </Button>
               </div>
             </Form>
           </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Model role</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Model role</CardTitle>
+          </CardHeader>
           <CardBody>
             <Form>
-              <FormGroup label="Role"><TextInput value={role.role} onChange={(_e, value) => setRole({...role, role: value})} /></FormGroup>
-              <FormGroup label="Targets (comma-separated)"><TextInput value={role.targets} onChange={(_e, value) => setRole({...role, targets: value})} /></FormGroup>
-              <FormGroup label="Strategy"><select value={role.strategy} onChange={(event) => setRole({...role, strategy: event.target.value})}><option value="fallback">fallback</option><option value="round-robin">round-robin</option><option value="least-busy">least-busy</option></select></FormGroup>
-              <FormGroup label="Spillover"><TextInput value={role.spillover} onChange={(_e, value) => setRole({...role, spillover: value})} /></FormGroup>
-              <Button isDisabled={busy} onClick={() => submit(() => apiInput(["ai-role-set"], {role: role.role, targets: role.targets.split(",").map((v) => v.trim()).filter(Boolean), strategy: role.strategy, spillover: Number(role.spillover)}))}>Save role</Button>
+              <FormGroup label="Role">
+                <TextInput
+                  value={role.role}
+                  onChange={(_e, value) => setRole({...role, role: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Targets (comma-separated)">
+                <TextInput
+                  value={role.targets}
+                  onChange={(_e, value) => setRole({...role, targets: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Strategy">
+                <select
+                  value={role.strategy}
+                  onChange={(event) => setRole({...role, strategy: event.target.value})}
+                >
+                  <option value="fallback">fallback</option>
+                  <option value="round-robin">round-robin</option>
+                  <option value="least-busy">least-busy</option>
+                </select>
+              </FormGroup>
+              <FormGroup label="Spillover">
+                <TextInput
+                  value={role.spillover}
+                  onChange={(_e, value) => setRole({...role, spillover: value})}
+                />
+              </FormGroup>
+              <Button
+                isDisabled={busy}
+                onClick={() =>
+                  submit(() =>
+                    apiInput(["ai-role-set"], {
+                      role: role.role,
+                      targets: role.targets
+                        .split(",")
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                      strategy: role.strategy,
+                      spillover: Number(role.spillover),
+                    }),
+                  )
+                }
+              >
+                Save role
+              </Button>
             </Form>
           </CardBody>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Advanced AI settings</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Advanced AI settings</CardTitle>
+          </CardHeader>
           <CardBody>
             <p>Submit only supported llama-swap advanced keys.</p>
             <TextArea rows={10} value={advanced} onChange={(_e, value) => setAdvanced(value)} />
-            <Button isDisabled={busy} onClick={() => submit(() => apiInput(["ai-advanced-set"], JSON.parse(advanced)))}>Apply advanced settings</Button>
+            <Button
+              isDisabled={busy}
+              onClick={() => submit(() => apiInput(["ai-advanced-set"], JSON.parse(advanced)))}
+            >
+              Apply advanced settings
+            </Button>
           </CardBody>
         </Card>
       </div>
-      {result ? <Card><CardHeader><CardTitle>Last AI mutation</CardTitle></CardHeader><CardBody><pre className="nas-pre">{pretty(result)}</pre></CardBody></Card> : null}
+      {result ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Last AI mutation</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <pre className="nas-pre">{pretty(result)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
     </>
   );
 }
@@ -425,28 +706,50 @@ function AiPage({data, mutate, busy}) {
 function SourcePage({data, mutate, busy}) {
   const revision = revisionModel(data?.update || {});
   const [result, setResult] = useState(null);
-  const run = async (operation) => setResult(await mutate(() => apiInput(["source-control"], {operation})));
+  const run = async (operation) =>
+    setResult(await mutate(() => apiInput(["source-control"], {operation})));
   return (
     <>
       <Title headingLevel="h2">Source & updates</Title>
       <Card>
         <CardBody>
-          {revision.kind === "error" ? <Alert variant="danger" isInline title={revision.error} /> : (
+          {revision.kind === "error" ? (
+            <Alert variant="danger" isInline title={revision.error} />
+          ) : (
             <dl className="nas-details">
-              <dt>Revision</dt><dd>{revision.revision}</dd>
-              <dt>Branch</dt><dd>{revision.branch}</dd>
-              <dt>Upstream</dt><dd>{revision.upstream}</dd>
-              <dt>State</dt><dd>{revision.divergence}; checkout {revision.checkout}</dd>
+              <dt>Revision</dt>
+              <dd>{revision.revision}</dd>
+              <dt>Branch</dt>
+              <dd>{revision.branch}</dd>
+              <dt>Upstream</dt>
+              <dd>{revision.upstream}</dd>
+              <dt>State</dt>
+              <dd>
+                {revision.divergence}; checkout {revision.checkout}
+              </dd>
             </dl>
           )}
           <div className="nas-actions nas-actions--wrap">
             {["status", "diff", "log", "pull", "rebuild", "pull-rebuild"].map((operation) => (
-              <Button key={operation} variant="secondary" isDisabled={busy} onClick={() => run(operation)}>{operation}</Button>
+              <Button
+                key={operation}
+                variant="secondary"
+                isDisabled={busy}
+                onClick={() => run(operation)}
+              >
+                {operation}
+              </Button>
             ))}
           </div>
         </CardBody>
       </Card>
-      {result ? <Card><CardBody><pre className="nas-pre">{pretty(result)}</pre></CardBody></Card> : null}
+      {result ? (
+        <Card>
+          <CardBody>
+            <pre className="nas-pre">{pretty(result)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
     </>
   );
 }
@@ -490,39 +793,118 @@ function SetupPage({data, mutate, busy}) {
       <Title headingLevel="h2">First start</Title>
       <Card>
         <CardBody>
-          <p><Status ok={model.complete}>{model.status}</Status></p>
+          <p>
+            <Status ok={model.complete}>{model.status}</Status>
+          </p>
           <p>{model.message}</p>
-          <p>{model.accountCount} account definitions · {model.serviceCount} V2 service policy overrides</p>
-          {model.configPath ? <p><code>{model.configPath}</code></p> : null}
+          <p>
+            {model.accountCount} account definitions · {model.serviceCount} V2 service policy
+            overrides
+          </p>
+          {model.configPath ? (
+            <p>
+              <code>{model.configPath}</code>
+            </p>
+          ) : null}
         </CardBody>
       </Card>
       {!model.complete ? (
         <Card>
-          <CardHeader><CardTitle>Run first start</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Run first start</CardTitle>
+          </CardHeader>
           <CardBody>
             <Form>
-              <FormGroup label="KeePassXC database password"><TextInput type="password" value={password} onChange={(_e, value) => setPassword(value)} /></FormGroup>
+              <FormGroup label="KeePassXC database password">
+                <TextInput
+                  type="password"
+                  value={password}
+                  onChange={(_e, value) => setPassword(value)}
+                />
+              </FormGroup>
               {devices.length ? (
                 <FormGroup label="Confirmed storage devices">
                   {devices.map((device) => (
-                    <label key={device} className="nas-checkbox"><input type="checkbox" checked={selectedDevices.includes(device)} onChange={(event) => setSelectedDevices(event.target.checked ? [...selectedDevices, device] : selectedDevices.filter((value) => value !== device))} /> <code>{device}</code></label>
+                    <label key={device} className="nas-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={selectedDevices.includes(device)}
+                        onChange={(event) =>
+                          setSelectedDevices(
+                            event.target.checked
+                              ? [...selectedDevices, device]
+                              : selectedDevices.filter((value) => value !== device),
+                          )
+                        }
+                      />{" "}
+                      <code>{device}</code>
+                    </label>
                   ))}
                 </FormGroup>
               ) : null}
-              {model.destructiveRequired ? <label className="nas-checkbox"><input id="first-start-destructive" type="checkbox" checked={allowDestructive} onChange={(event) => setAllowDestructive(event.target.checked)} /> I reviewed the exact device list and permit destructive pool creation.</label> : null}
-              <label className="nas-checkbox"><input type="checkbox" checked={confirmPasswordReapply} onChange={(event) => setConfirmPasswordReapply(event.target.checked)} /> Permit reapplying password mutations if resuming an incomplete account stage.</label>
-              <Button onClick={submit} isDisabled={busy || !model.ready || !password || (model.destructiveRequired && !allowDestructive)}>Start</Button>
+              {model.destructiveRequired ? (
+                <label className="nas-checkbox">
+                  <input
+                    id="first-start-destructive"
+                    type="checkbox"
+                    checked={allowDestructive}
+                    onChange={(event) => setAllowDestructive(event.target.checked)}
+                  />{" "}
+                  I reviewed the exact device list and permit destructive pool creation.
+                </label>
+              ) : null}
+              <label className="nas-checkbox">
+                <input
+                  type="checkbox"
+                  checked={confirmPasswordReapply}
+                  onChange={(event) => setConfirmPasswordReapply(event.target.checked)}
+                />{" "}
+                Permit reapplying password mutations if resuming an incomplete account stage.
+              </label>
+              <Button
+                onClick={submit}
+                isDisabled={
+                  busy ||
+                  !model.ready ||
+                  !password ||
+                  (model.destructiveRequired && !allowDestructive)
+                }
+              >
+                Start
+              </Button>
             </Form>
           </CardBody>
         </Card>
       ) : null}
-      {job ? <Card><CardHeader><CardTitle>First-start job</CardTitle></CardHeader><CardBody><pre className="nas-pre">{pretty(job)}</pre></CardBody></Card> : null}
+      {job ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>First-start job</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <pre className="nas-pre">{pretty(job)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
       {model.journal?.status === "manual-recovery-required" ? (
         <Card>
-          <CardHeader><CardTitle>Manual recovery acknowledgement</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Manual recovery acknowledgement</CardTitle>
+          </CardHeader>
           <CardBody>
-            <TextArea rows={4} value={recoveryNote} onChange={(_e, value) => setRecoveryNote(value)} />
-            <Button isDisabled={busy || !recoveryNote.trim()} onClick={() => mutate(() => apiInput(["first-start-reconcile"], {note: recoveryNote}))}>Acknowledge repair</Button>
+            <TextArea
+              rows={4}
+              value={recoveryNote}
+              onChange={(_e, value) => setRecoveryNote(value)}
+            />
+            <Button
+              isDisabled={busy || !recoveryNote.trim()}
+              onClick={() =>
+                mutate(() => apiInput(["first-start-reconcile"], {note: recoveryNote}))
+              }
+            >
+              Acknowledge repair
+            </Button>
           </CardBody>
         </Card>
       ) : null}
@@ -538,22 +920,25 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [unlockPassword, setUnlockPassword] = useState("");
 
-  const mutate = useCallback(async (operation) => {
-    setBusy(true);
-    setMutationError("");
-    setNotice("");
-    try {
-      const result = await operation();
-      setNotice("Operation completed.");
-      await refresh();
-      return result;
-    } catch (reason) {
-      setMutationError(message(reason));
-      throw reason;
-    } finally {
-      setBusy(false);
-    }
-  }, [refresh]);
+  const mutate = useCallback(
+    async (operation) => {
+      setBusy(true);
+      setMutationError("");
+      setNotice("");
+      try {
+        const result = await operation();
+        setNotice("Operation completed.");
+        await refresh();
+        return result;
+      } catch (reason) {
+        setMutationError(message(reason));
+        throw reason;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh],
+  );
 
   const unlock = async () => {
     setBusy(true);
@@ -572,10 +957,12 @@ export default function App() {
 
   let content = null;
   if (loading && !data) content = <Spinner size="xl" />;
-  else if (page === "overview") content = <OverviewPage data={data} refresh={refresh} busy={busy} />;
+  else if (page === "overview")
+    content = <OverviewPage data={data} refresh={refresh} busy={busy} />;
   else if (page === "services") content = <ServicesPage data={data} mutate={mutate} busy={busy} />;
   else if (page === "applications") content = <ApplicationsPage data={data} />;
-  else if (page === "operations") content = <OperationsPage data={data} mutate={mutate} busy={busy} />;
+  else if (page === "operations")
+    content = <OperationsPage data={data} mutate={mutate} busy={busy} />;
   else if (page === "ai") content = <AiPage data={data} mutate={mutate} busy={busy} />;
   else if (page === "source") content = <SourcePage data={data} mutate={mutate} busy={busy} />;
   else if (page === "setup") content = <SetupPage data={data} mutate={mutate} busy={busy} />;
@@ -587,25 +974,52 @@ export default function App() {
           <Title headingLevel="h1">NixOS NAS</Title>
           <span className="nas-muted">Managed Services V2</span>
         </div>
-        <Button variant="secondary" onClick={refresh} isDisabled={busy}>Refresh</Button>
+        <Button variant="secondary" onClick={refresh} isDisabled={busy}>
+          Refresh
+        </Button>
       </header>
       <div className="nas-layout">
         <nav className="nas-nav" aria-label="NAS sections">
           {PAGES.map(([id, label]) => (
-            <button key={id} type="button" className={page === id ? "nas-nav-item nas-nav-item--active" : "nas-nav-item"} onClick={() => setPage(id)}>{label}</button>
+            <button
+              key={id}
+              type="button"
+              className={page === id ? "nas-nav-item nas-nav-item--active" : "nas-nav-item"}
+              onClick={() => setPage(id)}
+            >
+              {label}
+            </button>
           ))}
         </nav>
         <main className="nas-main">
-          {error ? <Alert variant="danger" isInline title="Unable to load appliance status">{error}</Alert> : null}
-          {mutationError ? <Alert variant="danger" isInline title="Operation failed">{mutationError}</Alert> : null}
+          {error ? (
+            <Alert variant="danger" isInline title="Unable to load appliance status">
+              {error}
+            </Alert>
+          ) : null}
+          {mutationError ? (
+            <Alert variant="danger" isInline title="Operation failed">
+              {mutationError}
+            </Alert>
+          ) : null}
           {notice ? <Alert variant="success" isInline title={notice} /> : null}
           {data && data.protectedReady === false ? (
             <Card>
-              <CardHeader><CardTitle>Protected services are locked</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle>Protected services are locked</CardTitle>
+              </CardHeader>
               <CardBody>
                 <Form>
-                  <FormGroup label="KeePassXC database password"><TextInput type="password" value={unlockPassword} onChange={(_e, value) => setUnlockPassword(value)} /></FormGroup>
-                  <Button onClick={unlock} isDisabled={busy || !unlockPassword}>Activate secrets</Button>
+                  <FormGroup label="KeePassXC database password">
+                    <TextInput
+                      type="password"
+                      value={unlockPassword}
+                      onChange={(_e, value) => setUnlockPassword(value)}
+                    />
+                  </FormGroup>
+                  <Button onClick={unlock} isDisabled={busy || !unlockPassword}>
+                    Activate secrets
+                  </Button>
                 </Form>
               </CardBody>
             </Card>
