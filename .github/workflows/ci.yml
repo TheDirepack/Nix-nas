@@ -475,11 +475,20 @@ jobs:
             cockpit/test-results
 
   integration:
-    name: Post-build full-stack QEMU integration
+    name: Post-build full-stack QEMU integration (${{ matrix.vm }})
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
     needs: [build, browser]
     runs-on: ubuntu-24.04
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - vm: unencrypted
+            check: nas-vm
+          - vm: encrypted
+            check: nas-vm-encrypted
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -546,10 +555,8 @@ jobs:
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ steps.vm-bundles.outputs.key_test_tools }}
       - name: Reassemble Nix store from VM bundles
         run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
-      - name: Run unencrypted NixOS VM integration tests
-        run: nix build .#checks.x86_64-linux.nas-vm --show-trace -L
-      - name: Run encrypted NixOS VM integration tests
-        run: nix build .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
+      - name: Run ${{ matrix.vm }} NixOS VM integration tests
+        run: nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L
 
   installer:
     name: Official-ISO install, reboot, and final-VM deterministic checks
