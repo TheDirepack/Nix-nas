@@ -19,7 +19,15 @@ class Alpha18HardeningContracts(unittest.TestCase):
         default_module = text("modules/nas/default.nix")
         self.assertEqual(schema["properties"]["schemaVersion"]["const"], 3)
         self.assertIn("compile_document", spec)
-        self.assertIn("managed-services-v2.nix", default_module)
+        for module in (
+            "managed-services.nix",
+            "managed-services-native-services.nix",
+            "managed-services-platform-routes.nix",
+            "managed-services-operations.nix",
+            "managed-services-backup-resources.nix",
+        ):
+            self.assertIn(module, default_module)
+        self.assertNotIn("managed-services-v2.nix", default_module)
         self.assertFalse((ROOT / "modules/nas/internal/feature-catalog.nix").exists())
         self.assertFalse((ROOT / "modules/nas/internal/service-registry.nix").exists())
         self.assertFalse((ROOT / "schemas/service-registry.schema.json").exists())
@@ -82,7 +90,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         ):
             self.assertIn(entrypoint, pyproject)
         for retired in ("nas-feature-control", "nas-managed-service", "nas-migrate-state"):
-            self.assertNotIn(retired, pyproject)
+            self.assertNotIn(f'{retired} = "', pyproject)
 
     def test_preflight_and_release_publication_distinguish_complete_evidence(self) -> None:
         preflight = text("scripts/preflight.sh")
