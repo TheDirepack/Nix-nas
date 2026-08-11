@@ -76,6 +76,10 @@ let
         local command=$1 now phase_name
         case "$command" in
           log\ *)
+            # guest-test.sh temporarily owns EXIT while browser credentials
+            # exist. Re-arm profiling at every stable phase boundary after that
+            # temporary trap has been cleared.
+            trap nas_vm_profile_cleanup EXIT
             nas_vm_stop_first_run_timer
             now=$SECONDS
             if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
@@ -101,8 +105,12 @@ let
       nas_vm_profile_cleanup() {
         local rc=$? now=$SECONDS
         nas_vm_stop_first_run_timer
-        if [[ $rc -ne 0 && -n "$NAS_VM_PHASE_NAME" ]]; then
-          printf 'VM-PHASE-TIMING: %s: %ss (failed)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))" >&2
+        if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
+          if [[ $rc -eq 0 ]]; then
+            printf 'VM-PHASE-TIMING: %s: %ss (complete)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
+          else
+            printf 'VM-PHASE-TIMING: %s: %ss (failed)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))" >&2
+          fi
         fi
         return "$rc"
       }
