@@ -23,8 +23,10 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Canonical Prettier formatting
+      - name: Canonical formatting
         run: |
+          sed -i '/^import os$/d' tests/test_v2_identity_sync_coverage.py
+          nix shell nixpkgs#ruff -c ruff format tests/test_v2_identity_model_coverage.py tests/test_v2_identity_sync_coverage.py
           nix shell nixpkgs#prettier -c prettier --write cockpit/src/app.jsx cockpit/src/view-model.js tests/js/view-model.test.mjs
       - name: Rebuild and validate Cockpit
         run: |
@@ -53,11 +55,11 @@ jobs:
           print(f"TOTAL {report['totals']['percent_covered']:.1f}")
           print('=== END SERVICE COVERAGE ===')
           PY
-      - name: Commit canonical frontend formatting
+      - name: Commit canonical formatting
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cockpit/src/app.jsx cockpit/src/view-model.js tests/js/view-model.test.mjs cockpit/dist cockpit/package-lock.json
+          git add cockpit/src/app.jsx cockpit/src/view-model.js tests/js/view-model.test.mjs cockpit/dist cockpit/package-lock.json tests/test_v2_identity_model_coverage.py tests/test_v2_identity_sync_coverage.py
           git diff --cached --quiet && exit 0
-          git commit -m "style: apply canonical frontend formatting"
+          git commit -m "style: apply canonical test and frontend formatting"
           git push origin HEAD:agent/managed-services-v2-core
