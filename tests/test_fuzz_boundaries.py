@@ -24,7 +24,7 @@ else:
     HAS_HYPOTHESIS = True
 
     import nas_alert_router as alerts
-    import nas_cockpit_api as api
+    import nas_v2_spec as v2_spec
     import nas_common as common
     import nas_identity_model as identity
     import nas_setup_config as setup_config
@@ -65,18 +65,14 @@ if HAS_HYPOTHESIS:
 
         @settings(max_examples=400, deadline=None)
         @given(identifier_candidates(max_size=512))
-        def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, raw: str) -> None:
-            target(len(raw), label="feature-id-length")
-            try:
-                accepted = api.validate_argument(raw, api.FEATURE_RE, "feature identifier")
-            except api.ApiError:
-                event("feature-id:rejected")
-                self.assertTrue(len(raw) > api.MAX_ARGUMENT_LENGTH or api.FEATURE_RE.fullmatch(raw) is None)
+        def test_v2_service_id_acceptance_matches_compiler_grammar(self, raw: str) -> None:
+            target(len(raw), label="service-id-length")
+            matched = v2_spec.SERVICE_ID_RE.fullmatch(raw)
+            event("service-id:accepted" if matched is not None else "service-id:rejected")
+            if matched is None:
                 return
-            event("feature-id:accepted")
-            self.assertEqual(accepted, raw)
-            self.assertLessEqual(len(accepted), api.MAX_ARGUMENT_LENGTH)
-            self.assertIsNotNone(api.FEATURE_RE.fullmatch(accepted))
+            self.assertLessEqual(len(raw), 64)
+            self.assertEqual(matched.group(0), raw)
 
         @settings(max_examples=400, deadline=None)
         @given(st.text(max_size=4200))

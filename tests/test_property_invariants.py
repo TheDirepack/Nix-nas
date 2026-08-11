@@ -16,7 +16,7 @@ except ImportError:
 else:
     HAS_HYPOTHESIS = True
     import nas_alert_router as alert_router
-    import nas_cockpit_api as cockpit_api
+    import nas_v2_spec as v2_spec
     import nas_common as common
     import nas_logging as nas_logging
     import nas_setup_config as setup_config
@@ -75,17 +75,12 @@ if HAS_HYPOTHESIS:
 
         @settings(max_examples=300, deadline=None)
         @given(st.text(max_size=300))
-        def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, value: str) -> None:
-            try:
-                normalized = cockpit_api.validate_argument(value, cockpit_api.FEATURE_RE, "feature identifier")
-            except cockpit_api.ApiError:
-                self.assertTrue(
-                    len(value) > cockpit_api.MAX_ARGUMENT_LENGTH or cockpit_api.FEATURE_RE.fullmatch(value) is None
-                )
+        def test_v2_service_ids_match_compiler_grammar(self, value: str) -> None:
+            matched = v2_spec.SERVICE_ID_RE.fullmatch(value)
+            if matched is None:
                 return
-            self.assertEqual(normalized, value)
-            self.assertIsNotNone(cockpit_api.FEATURE_RE.fullmatch(normalized))
-            self.assertLessEqual(len(normalized), cockpit_api.MAX_ARGUMENT_LENGTH)
+            self.assertEqual(matched.group(0), value)
+            self.assertLessEqual(len(value), 64)
 
         @settings(max_examples=250, deadline=None)
         @given(
