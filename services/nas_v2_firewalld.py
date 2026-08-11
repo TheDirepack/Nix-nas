@@ -6,8 +6,10 @@ outbound policies. V2 routes receive a HOST -> service-zone TCP allowance so
 Caddy can reach loopback-published backends. Explicit listeners with
 ``firewall: true`` receive a trusted-LAN ingress policy. Host-network listeners
 use trusted-LAN -> HOST instead, including platform services whose lifecycle is
-not V2-managed. Numeric policy port lists without an explicit protocol are
-intentionally treated as transport-neutral and emitted for both TCP and UDP.
+not V2-managed. A single-port listener may redirect its exposed port to a
+different host target port without granting the workload low-port capabilities.
+Numeric policy port lists without an explicit protocol are intentionally treated
+as transport-neutral and emitted for both TCP and UDP.
 
 The compiler only materializes configuration files. A separate finite reconciler
 owns replacement/removal/reload of those files in firewalld's system config.
@@ -170,11 +172,45 @@ def _listener_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
         if isinstance(exposure.get("port"), int):
             port = str(exposure["port"])
         elif isinstance(exposure.get("start"), int) and isinstance(exposure.get("end"), int):
+            if "targetPort" in listener:
+                raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
             port = f"{exposure['start']}-{exposure['end']}"
         else:
             raise FirewalldProjectionError("compiled listener exposure is invalid")
         entries.add((port, protocol))
     return sorted(entries)
+
+
+def _host_listener_rules(service: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
+    listeners = service.get("listeners", {})
+    if not isinstance(listeners, dict):
+        return [], []
+    ports: set[tuple[str, str]] = set()
+    forwards: set[tuple[str, str, str]] = set()
+    for listener in listeners.values():
+        if not isinstance(listener, dict) or listener.get("firewall", True) is not True:
+            continue
+        protocol = listener.get("protocol")
+        exposure = listener.get("exposure")
+        if protocol not in {"tcp", "udp"} or not isinstance(exposure, dict):
+            raise FirewalldProjectionError("compiled listener is invalid")
+        target_port = listener.get("targetPort")
+        if target_port is not None:
+            exposed_port = exposure.get("port")
+            if not isinstance(exposed_port, int):
+                raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
+            if not isinstance(target_port, int) or isinstance(target_port, bool) or not 1 <= target_port <= 65535:
+                raise FirewalldProjectionError("listener targetPort is invalid")
+            if target_port != exposed_port:
+                forwards.add((str(exposed_port), protocol, str(target_port)))
+                continue
+        if isinstance(exposure.get("port"), int):
+            ports.add((str(exposure["port"]), protocol))
+        elif isinstance(exposure.get("start"), int) and isinstance(exposure.get("end"), int):
+            ports.add((f"{exposure['start']}-{exposure['end']}", protocol))
+        else:
+            raise FirewalldProjectionError("compiled listener exposure is invalid")
+    return sorted(ports), sorted(forwards)
 
 
 def _route_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
@@ -204,6 +240,7 @@ def _allow_policy_xml(
     egress_zone: str,
     ports: list[tuple[str, str]],
     label: str,
+    forward_ports: list[tuple[str, str, str]] | None = None,
 ) -> bytes:
     lines = [
         '<policy target="CONTINUE" priority="-50">',
@@ -213,6 +250,10 @@ def _allow_policy_xml(
     ]
     for port, protocol in ports:
         lines.append(f"  <port port={quoteattr(port)} protocol={quoteattr(protocol)}/>")
+    for port, protocol, target_port in forward_ports or []:
+        lines.append(
+            f"  <forward-port port={quoteattr(port)} protocol={quoteattr(protocol)} to-port={quoteattr(target_port)}/>"
+        )
     lines.append("</policy>")
     return _xml_document(lines)
 
@@ -285,12 +326,14 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
                     label="listener",
                 )
         elif mode == "host":
-            if listeners:
+            host_ports, forward_ports = _host_listener_rules(service)
+            if host_ports or forward_ports:
                 generated[f"policies/{listener_policy_name(service_id)}.xml"] = _allow_policy_xml(
                     service_id,
                     ingress_zone=lan_zone,
                     egress_zone="HOST",
-                    ports=listeners,
+                    ports=host_ports,
+                    forward_ports=forward_ports,
                     label="listener",
                 )
         elif mode == "none":
