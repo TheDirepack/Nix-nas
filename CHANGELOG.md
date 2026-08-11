@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.0-alpha.8 — 2026-08-11
+
+- Make secret transaction directory validation observe the privileged filesystem so activation paths under root-owned `0700` directories validate identically whether or not a caller first drops privileges, and add a regression test covering both the elevated and unprivileged call paths.
+- Synchronize `VERSION`, `README`, `flake.nix`, `cockpit/package.json`, and the artifact-naming reference to `2.2.0-alpha.8` per `docs/development/artifact-naming.md`.
+
 ## 2.2.0-alpha.7 — 2026-08-08
 
 - Fix Pi network namespace construction (remove `mount --bind /proc/self/ns/net` that overwrote `/run/netns/pi`), provide DNS inside the namespace via `/etc/netns/pi/resolv.conf` pointing at `10.200.1.1` and `systemd-resolved` `DNSStubListenerExtra`, and clean up teardown without `umount` of the ip-managed namespace.
