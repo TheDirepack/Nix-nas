@@ -241,11 +241,6 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
       - name: Coverage on the main-branch fast baseline
         if: steps.main-coverage.outputs.cache-hit != 'true'
         working-directory: main
@@ -347,8 +342,6 @@ jobs:
           test -n "$archive"
           extract="$RUNNER_TEMP/extracted-source"
           mkdir -p "$extract"
-          # Python's zipfile extractor intentionally ignores Unix executable bits;
-          # Info-ZIP unzip preserves the modes encoded by package-release.sh.
           unzip -q "$archive" -d "$extract"
           root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
           test -n "$root"
@@ -477,7 +470,7 @@ jobs:
   integration:
     name: Post-build full-stack QEMU integration (${{ matrix.vm }})
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build, browser]
+    needs: [build]
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
@@ -563,7 +556,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') ||
       (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
-    needs: [integration, build]
+    needs: [integration, browser, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 420
     steps:
@@ -641,12 +634,12 @@ jobs:
   source-fuzz:
     name: Final smart fuzz shard (${{ matrix.shard }})
     if: >-
-      always() && needs.integration.result == 'success' &&
+      always() && needs.integration.result == 'success' && needs.browser.result == 'success' &&
       (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
       (github.event_name == 'pull_request' ||
        (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
        (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
-    needs: [integration, installer]
+    needs: [integration, browser, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
