@@ -1,0 +1,45 @@
+name: Agent Pyright test fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'agent/managed-services-v2-core' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/managed-services-v2-core
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tighten captured mock types
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_v2_identity_sync_account_coverage.py')
+          text = path.read_text()
+          text = text.replace('from unittest import mock\n', 'from unittest import mock\nfrom typing import Any\n', 1)
+          text = text.replace('calls: list[tuple[str, dict[str, object]]] = []', 'calls: list[tuple[str, dict[str, Any]]] = []')
+          text = text.replace('def request(_token: str, path: str, **kwargs: object) -> dict[str, object]:', 'def request(_token: str, path: str, **kwargs: Any) -> dict[str, object]:')
+          path.write_text(text)
+          PY
+          nix shell nixpkgs#ruff -c ruff format tests/test_v2_identity_sync_account_coverage.py
+          nix shell nixpkgs#ruff -c ruff check tests/test_v2_identity_sync_account_coverage.py
+          nix develop .#test -c pyright --project pyproject.toml
+          nix develop .#test -c python3 -m unittest tests.test_v2_identity_sync_account_coverage -v
+      - name: Commit tested type fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_v2_identity_sync_account_coverage.py
+          git diff --cached --quiet && exit 0
+          git commit -m "test: type captured identity reconciliation requests"
+          git push origin HEAD:agent/managed-services-v2-core
