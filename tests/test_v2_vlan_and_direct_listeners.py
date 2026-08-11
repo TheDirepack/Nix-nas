@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import pathlib
+import sys
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SERVICES = ROOT / "services"
+if str(SERVICES) not in sys.path:
+    sys.path.insert(0, str(SERVICES))
+
+import nas_v2_firewalld as firewalld  # noqa: E402
+import nas_v2_podman_network as podman_network  # noqa: E402
+
+
+class V2VlanAndDirectListenerTests(unittest.TestCase):
+    def test_isolated_application_vlan_is_lowered_to_native_podman_network_option(self) -> None:
+        service = {
+            "managed": True,
+            "enabled": True,
+            "runtime": {"type": "oci"},
+            "workload": {"kind": "daemon"},
+            "network": {
+                "mode": "isolated",
+                "vlanId": 42,
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            },
+            "routes": {},
+            "listeners": {},
+        }
+        effective = {
+            "services": {"demo": service},
+            "derived": {"runtime": {"demo": {"ownerUnit": "nas-v2-demo.service"}}},
+        }
+        files: dict[pathlib.Path, bytes] = {}
+        manifest = {"quadletLinks": [], "links": []}
+        podman_network.augment_projection(
+            effective,
+            output_dir=pathlib.Path("/run/nas-control/systemd"),
+            files=files,
+            manifest=manifest,
+            firewalld_enabled=True,
+        )
+        network_file = pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-demo.network")
+        rendered = files[network_file].decode()
+        self.assertIn("Driver=bridge", rendered)
+        self.assertIn("Options=isolate=strict", rendered)
+        self.assertIn("Options=vlan=42", rendered)
+
+    def test_vlan_is_rejected_for_host_network_mode(self) -> None:
+        service = {
+            "runtime": {"type": "oci"},
+            "workload": {"kind": "daemon"},
+            "network": {
+                "mode": "host",
+                "vlanId": 7,
+                "outboundDefault": "allow",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            },
+            "routes": {},
+            "listeners": {},
+        }
+        with self.assertRaisesRegex(podman_network.PodmanNetworkProjectionError, "host-network"):
+            podman_network.quadlet_network_reference({"services": {"demo": service}}, "demo", service)
+
+    def test_host_listener_can_forward_privileged_port_to_unprivileged_backend(self) -> None:
+        effective = {
+            "services": {
+                "tftp": {
+                    "enabled": True,
+                    "managed": False,
+                    "runtime": {"type": "systemd"},
+                    "network": {
+                        "mode": "host",
+                        "outboundDefault": "allow",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
+                    "listeners": {
+                        "request": {
+                            "protocol": "udp",
+                            "exposure": {"port": 69},
+                            "targetPort": 3969,
+                            "firewall": True,
+                        },
+                        "responses": {
+                            "protocol": "udp",
+                            "exposure": {"start": 40000, "end": 40099},
+                            "firewall": True,
+                        },
+                    },
+                }
+            }
+        }
+        files, _manifest = firewalld.compile_projection(effective, lan_zone="nas-trusted")
+        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}.xml"].decode()
+        self.assertIn('forward-port port="69" protocol="udp" to-port="3969"', policy)
+        self.assertIn('port="40000-40099" protocol="udp"', policy)
+
+    def test_application_listener_rules_are_not_hard_coded_in_host_firewall_baseline(self) -> None:
+        firewall_module = (ROOT / "modules" / "nas" / "config" / "network-firewall.nix").read_text(encoding="utf-8")
+        listener_seed = (
+            ROOT / "modules" / "nas" / "config" / "managed-services-direct-listeners.nix"
+        ).read_text(encoding="utf-8")
+        native_seed = (
+            ROOT / "modules" / "nas" / "config" / "managed-services-native-services.nix"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("cfg.tftp", firewall_module)
+        self.assertNotIn('port = "22000"', firewall_module)
+        self.assertNotIn('port = "3493"', firewall_module)
+        self.assertIn("targetPort = cfg.tftp.internalPort", listener_seed)
+        self.assertIn("responsePortStart", listener_seed)
+        self.assertIn('sync-tcp = portListener "tcp" 22000', native_seed)
+        self.assertIn('listeners.nut = portListener "tcp" 3493', native_seed)
+
+
+if __name__ == "__main__":
+    unittest.main()
