@@ -156,7 +156,7 @@ class VmBundleScriptTests(unittest.TestCase):
         )
         self.assertIn("key_test_tools=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
 
-    def test_save_exports_core_first_then_each_application_delta(self) -> None:
+    def test_save_batches_build_then_exports_core_first_and_application_deltas(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
         out_dir = self._root / "bundles"
         result = self._run("save", str(out_dir), env=env)
@@ -172,17 +172,15 @@ class VmBundleScriptTests(unittest.TestCase):
             self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-copyparty\n")
 
         nix_calls = nix_log.read_text(encoding="utf-8").splitlines()
-        for name in EXPECTED_BUNDLES:
-            if name == "test-tools":
-                continue
-            self.assertIn(f"build --no-link .#packages.x86_64-linux.{name}", nix_calls)
-
-        test_tools_build = (
-            "build --no-link .#packages.x86_64-linux.test-tools "
-            ".#checks.x86_64-linux.nas-vm.driver "
-            ".#checks.x86_64-linux.nas-vm-encrypted.driver"
+        build_calls = [call for call in nix_calls if call.startswith("build --no-link ")]
+        expected_build = "build --no-link " + " ".join(
+            [f".#packages.x86_64-linux.{name}" for name in EXPECTED_BUNDLES]
+            + [
+                ".#checks.x86_64-linux.nas-vm.driver",
+                ".#checks.x86_64-linux.nas-vm-encrypted.driver",
+            ]
         )
-        self.assertIn(test_tools_build, nix_calls)
+        self.assertEqual(build_calls, [expected_build])
         self.assertIn(
             "path-info -r /nix/store/aaaaaaaaaa-test-tools "
             "/nix/store/aaaaaaaaaa-nas-vm-driver "
@@ -190,11 +188,6 @@ class VmBundleScriptTests(unittest.TestCase):
             nix_calls,
         )
 
-        first_build = nix_calls.index("build --no-link .#packages.x86_64-linux.core")
-        self.assertLess(
-            first_build,
-            nix_calls.index("build --no-link .#packages.x86_64-linux.copyparty"),
-        )
         store_calls = nix_store_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len([c for c in store_calls if c.startswith("--export")]), len(EXPECTED_BUNDLES))
         driver_export = next(c for c in store_calls if c.startswith("--export") and "nas-vm-driver" in c)
