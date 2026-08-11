@@ -28,7 +28,8 @@ class ContractTests(unittest.TestCase):
         secrets = text("modules/nas/internal/secret-tools.nix")
         unlock = text("cockpit/src/api.js")
         self.assertIn("keepassxc-cli", secrets)
-        self.assertIn("--pw-stdin", secrets)
+        self.assertNotIn("--pw-stdin", secrets)
+        self.assertIn("printf '%s\\n' \"$keepass_password\" | keepassxc-cli", secrets)
         self.assertRegex(secrets, r"read\s+-r\s+-s")
         self.assertIn("activate-stdin)", secrets)
         self.assertIn('superuser: "require"', unlock)
@@ -132,8 +133,7 @@ class ContractTests(unittest.TestCase):
 
     def test_no_request_time_legacy_capability_derivation_remains(self) -> None:
         sources = "\n".join(
-            path.read_text(encoding="utf-8", errors="replace")
-            for path in sorted((ROOT / "services").glob("*.py"))
+            path.read_text(encoding="utf-8", errors="replace") for path in sorted((ROOT / "services").glob("*.py"))
         )
         for legacy in ("nas_allow_files", "nas_allow_ai", "nas_allow_vault", "legacyCapability"):
             self.assertNotIn(legacy, sources)
