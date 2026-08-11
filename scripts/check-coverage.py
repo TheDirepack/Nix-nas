@@ -7,45 +7,23 @@ import argparse
 import json
 from pathlib import Path
 
-# Floors for long-lived modules remain at their pre-V2 values. Modules that were
-# substantially rewritten as part of Managed Services V2 use the first complete
-# post-rewrite fast-suite result as their new regression baseline. This keeps the
-# gate meaningful without comparing unrelated V1 and V2 implementations.
 FLOORS = {
-    "services/nas_ai_config.py": 65.0,
+    "services/nas_ai_config.py": 70.0,
     "services/nas_alert_router.py": 70.0,
-    "services/nas_cockpit_api.py": 37.0,
+    "services/nas_cockpit_api.py": 49.0,
     "services/nas_coding_agent.py": 60.0,
     "services/nas_common.py": 75.0,
-    "services/nas_doctor.py": 50.0,
-    "services/nas_identity_model.py": 47.0,
-    "services/nas_identity_sync.py": 62.0,
+    "services/nas_doctor.py": 60.0,
+    "services/nas_identity_model.py": 79.0,
+    "services/nas_identity_sync.py": 73.0,
     "services/nas_logging.py": 75.0,
     "services/nas_operation_journal.py": 87.0,
     "services/nas_operation_lock.py": 80.0,
-    "services/nas_setup.py": 43.0,
+    "services/nas_setup.py": 51.0,
     "services/nas_setup_config.py": 82.0,
-    "services/nas_state.py": 58.0,
-    "services/nas_syncthing_devices.py": 75.0,
+    "services/nas_state.py": 66.0,
+    "services/nas_syncthing_devices.py": 76.0,
 }
-
-# The main branch still contains the V1 implementations for these paths. Their
-# historical percentages are therefore not comparable to the rewritten V2
-# modules. The explicit floors above become the new baseline; subsequent PRs
-# are again protected by the ordinary floor and total-coverage gates.
-BASELINE_RESET = frozenset(
-    {
-        "services/nas_ai_config.py",
-        "services/nas_cockpit_api.py",
-        "services/nas_doctor.py",
-        "services/nas_identity_model.py",
-        "services/nas_identity_sync.py",
-        "services/nas_setup.py",
-        "services/nas_state.py",
-        "services/nas_syncthing_devices.py",
-    }
-)
-
 TOTAL_FLOOR = 66.0
 
 
@@ -95,7 +73,7 @@ def main() -> int:
         actual = float(summary.get("percent_covered", 0.0))
         if actual + 1e-9 < floor:
             failures.append(f"{path}: {actual:.1f}% is below {floor:.1f}%")
-        if args.baseline and path not in BASELINE_RESET:
+        if args.baseline:
             baseline_row = baseline_files.get(path)
             if isinstance(baseline_row, dict):
                 baseline_value = float(baseline_row.get("summary", {}).get("percent_covered", 0.0))
