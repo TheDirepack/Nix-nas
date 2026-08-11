@@ -941,6 +941,7 @@ def compare_bundle(bundle: pathlib.Path) -> tuple[dict[str, Any], bool]:
             authority = registry[entry["name"]]
             status = entry["status"]
             comparison = "match"
+            current: str | None = None
             if status == "absent":
                 exists = lstat_type(pathlib.Path(authority.source)) != 0 if authority.kind == "path" else True
                 row_status = "drift" if exists else "match-absent"

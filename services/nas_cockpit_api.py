@@ -500,7 +500,6 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
             "first-start-job",
             FIRST_START_CONFLICTS,
             ttl_seconds=3600,
-            metadata={"jobId": job_id},
         )
     except OperationBusyError as exc:
         raise ApiError(str(exc)) from exc

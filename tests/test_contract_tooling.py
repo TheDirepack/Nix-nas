@@ -232,8 +232,8 @@ class ContractTests(unittest.TestCase):
                 self.send_response(204)
                 self.end_headers()
 
-            def log_message(self, *_args):
-                pass
+            def log_message(self, format, *args):
+                del format, args
 
         with socketserver.TCPServer(("127.0.0.1", 0), Handler) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -523,6 +523,7 @@ class ContractTests(unittest.TestCase):
         host = text("scripts/qemu-test.sh")
         guest = text("tests/vm/guest-test.sh")
         workflow = text(".github/workflows/ci.yml")
+        final_browser = text("scripts/qemu-final-browser.sh")
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/integration.nix"))
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/encrypted.nix"))
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/integration.nix"))
@@ -547,11 +548,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-generation-test", reconfigure)
         self.assertIn("post-switch-console.log", host)
         self.assertIn("post-switch VM did not become reachable", host)
-        self.assertIn("run_dynamic_web_scan", host)
-        self.assertIn("NAS_ZAP_IMAGE", host)
+        self.assertIn("NAS_FINAL_VM_WORKLOAD", final_browser)
+        self.assertIn("zap-fuzz)", final_browser)
+        self.assertIn("NAS_ZAP_IMAGE", final_browser)
         self.assertIn("hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443", host)
         self.assertIn("hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092", host)
-        self.assertIn("zap-security-reports", workflow)
+        self.assertIn("zap-fuzz-evidence", workflow)
+        self.assertIn("NAS_FINAL_VM_WORKLOAD: zap-fuzz", workflow)
         self.assertIn('NAS_ZAP_CONFIRM_ACTIVE: "1"', workflow)
         installer = text("tests/vm/install-system.sh")
         self.assertGreaterEqual(installer.count("nixos-install"), 2)
