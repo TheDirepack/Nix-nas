@@ -1,0 +1,86 @@
+name: Agent pre-VM type repair
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'agent/managed-services-v2-core' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/managed-services-v2-core
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply type and tooling-contract fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one target, found {count}: {old!r}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace(
+              "services/nas_cockpit_api.py",
+              '            ttl_seconds=3600,\n            metadata={"jobId": job_id},\n',
+              '            ttl_seconds=3600,\n',
+          )
+          replace(
+              "services/nas_state.py",
+              '            comparison = "match"\n            if status == "absent":\n',
+              '            comparison = "match"\n            current: str | None = None\n            if status == "absent":\n',
+          )
+          tooling = Path("tests/test_contract_tooling.py")
+          text = tooling.read_text(encoding="utf-8")
+          if '        final_browser = text("scripts/qemu-final-browser.sh")\n' not in text:
+              marker = '        workflow = text(".github/workflows/ci.yml")\n'
+              if text.count(marker) != 1:
+                  raise SystemExit("test_contract_tooling.py: qemu workflow marker mismatch")
+              text = text.replace(marker, marker + '        final_browser = text("scripts/qemu-final-browser.sh")\n')
+          for old, new in (
+              ('        self.assertIn("run_dynamic_web_scan", host)\n', '        self.assertIn("NAS_FINAL_VM_WORKLOAD", final_browser)\n        self.assertIn("zap-fuzz)", final_browser)\n'),
+              ('        self.assertIn("NAS_ZAP_IMAGE", host)\n', '        self.assertIn("NAS_ZAP_IMAGE", final_browser)\n'),
+              ('        self.assertIn("zap-security-reports", workflow)\n', '        self.assertIn("zap-fuzz-evidence", workflow)\n        self.assertIn("NAS_FINAL_VM_WORKLOAD: zap-fuzz", workflow)\n'),
+              ('            def log_message(self, *_args):\n                pass\n', '            def log_message(self, format, *args):\n                del format, args\n'),
+          ):
+              if old in text:
+                  if text.count(old) != 1:
+                      raise SystemExit(f"test_contract_tooling.py: non-unique target {old!r}")
+                  text = text.replace(old, new)
+              elif new not in text:
+                  raise SystemExit(f"test_contract_tooling.py: target not found {old!r}")
+          tooling.write_text(text, encoding="utf-8")
+          PY
+      - name: Format and typecheck
+        run: |
+          nix shell nixpkgs#ruff -c ruff format services/nas_cockpit_api.py services/nas_state.py tests/test_contract_tooling.py
+          nix shell nixpkgs#ruff -c ruff check services tests scripts
+          nix shell nixpkgs#ruff -c ruff format --check services tests scripts
+          nix develop .#test -c pyright --project pyproject.toml
+      - name: Run focused regression tests
+        run: |
+          nix develop .#test -c env PYTHONPATH=tests python3 -m unittest \
+            tests.test_cockpit_api \
+            tests.test_state \
+            tests.test_contract_tooling -v
+      - name: Commit validated repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/nas_cockpit_api.py services/nas_state.py tests/test_contract_tooling.py
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(ci): resolve post-rebase type and harness contracts"
+          git push origin HEAD:agent/managed-services-v2-core
