@@ -121,7 +121,9 @@ def _add_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--schema", default=str(DEFAULT_SCHEMA_PATH), help="JSON Schema path")
     parser.add_argument("--platform", default=str(DEFAULT_PLATFORM_PATH), help="platform capability inventory")
     parser.add_argument("--no-platform", action="store_true", help="skip host-capability validation")
-    parser.add_argument("--effective", default="/run/nas-control/effective.json", help="compiled effective-state output")
+    parser.add_argument(
+        "--effective", default="/run/nas-control/effective.json", help="compiled effective-state output"
+    )
     parser.add_argument("--plan", default="/run/nas-control/plan.json", help="projection plan output")
 
 
@@ -152,7 +154,9 @@ def _add_systemd(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_backup(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backup-inventory", help="compiled V2 backup inventory JSON output; defaults beside --effective")
+    parser.add_argument(
+        "--backup-inventory", help="compiled V2 backup inventory JSON output; defaults beside --effective"
+    )
     parser.add_argument("--restic-paths", help="verbatim Restic path-list output; defaults beside --effective")
 
 

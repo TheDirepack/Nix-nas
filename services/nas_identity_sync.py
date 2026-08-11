@@ -1059,7 +1059,9 @@ def main() -> int:
             elif args.command == "verify-token":
                 result = verify_token(authentik_token())
             else:
-                model = fixture_model(args.fixture) if args.command == "status-fixture" else load_model(authentik_token())
+                model = (
+                    fixture_model(args.fixture) if args.command == "status-fixture" else load_model(authentik_token())
+                )
                 if args.command in {"sync", "sync-syncthing"}:
                     result = reconcile_syncthing(model)
                 elif args.command == "capabilities":

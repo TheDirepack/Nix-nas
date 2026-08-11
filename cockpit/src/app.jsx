@@ -286,9 +286,20 @@ function ApplicationsPage({data}) {
 
 function OperationsPage({data, mutate, busy}) {
   const operations = visibleOperations(data || {});
+  const confirmationRequired = new Set([
+    "snapshot",
+    "zfs-scrub",
+    "backup",
+    "replicate",
+    "update-sync",
+    "update-apply",
+    "protected-restart",
+  ]);
+  const [pending, setPending] = useState(null);
   const [lastResult, setLastResult] = useState(null);
   const run = async (id) => {
     const result = await mutate(() => api(["action", id]));
+    setPending(null);
     setLastResult(result);
   };
   return (
@@ -296,9 +307,28 @@ function OperationsPage({data, mutate, busy}) {
       <Title headingLevel="h2">Operations</Title>
       <div className="nas-actions nas-actions--wrap">
         {operations.map(([id, label]) => (
-          <Button key={id} variant="secondary" onClick={() => run(id)} isDisabled={busy}>{label}</Button>
+          <Button
+            key={id}
+            variant="secondary"
+            onClick={() => confirmationRequired.has(id) ? setPending({id, label}) : run(id)}
+            isDisabled={busy}
+          >
+            {label}
+          </Button>
         ))}
       </div>
+      {pending ? (
+        <Card>
+          <CardHeader><CardTitle>Confirm maintenance action</CardTitle></CardHeader>
+          <CardBody>
+            <p>Run <strong>{pending.label}</strong>? This action can change appliance state.</p>
+            <div className="nas-actions">
+              <Button variant="danger" onClick={() => run(pending.id)} isDisabled={busy}>Confirm</Button>
+              <Button variant="link" onClick={() => setPending(null)} isDisabled={busy}>Cancel</Button>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader><CardTitle>Operation coordinator</CardTitle></CardHeader>
         <CardBody><pre className="nas-pre">{pretty(data?.operations || {})}</pre></CardBody>
@@ -479,7 +509,7 @@ function SetupPage({data, mutate, busy}) {
                   ))}
                 </FormGroup>
               ) : null}
-              {model.destructiveRequired ? <label className="nas-checkbox"><input type="checkbox" checked={allowDestructive} onChange={(event) => setAllowDestructive(event.target.checked)} /> I reviewed the exact device list and permit destructive pool creation.</label> : null}
+              {model.destructiveRequired ? <label className="nas-checkbox"><input id="first-start-destructive" type="checkbox" checked={allowDestructive} onChange={(event) => setAllowDestructive(event.target.checked)} /> I reviewed the exact device list and permit destructive pool creation.</label> : null}
               <label className="nas-checkbox"><input type="checkbox" checked={confirmPasswordReapply} onChange={(event) => setConfirmPasswordReapply(event.target.checked)} /> Permit reapplying password mutations if resuming an incomplete account stage.</label>
               <Button onClick={submit} isDisabled={busy || !model.ready || !password || (model.destructiveRequired && !allowDestructive)}>Start</Button>
             </Form>

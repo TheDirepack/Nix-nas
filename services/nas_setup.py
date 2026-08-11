@@ -182,7 +182,9 @@ def run_root_noninteractive(command: Sequence[str], **kwargs: Any) -> Completed:
     if os.geteuid() == 0:
         return run(command, **kwargs)
     if current_username() != ADMIN_USER:
-        return Completed(tuple(map(str, command)), "", "privileged status requires the configured local administrator", 1)
+        return Completed(
+            tuple(map(str, command)), "", "privileged status requires the configured local administrator", 1
+        )
     return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
 
 
@@ -234,23 +236,29 @@ def read_json_source(source: str) -> dict[str, Any]:
 
 
 def pool_exists() -> bool:
-    return subprocess.run(
-        ["zpool", "list", "-H", ZFS_POOL],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=30,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["zpool", "list", "-H", ZFS_POOL],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+        ).returncode
+        == 0
+    )
 
 
 def dataset_exists() -> bool:
-    return subprocess.run(
-        ["zfs", "list", "-H", ZFS_DATASET],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=30,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["zfs", "list", "-H", ZFS_DATASET],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
+        ).returncode
+        == 0
+    )
 
 
 def validate_storage_request(
@@ -320,11 +328,7 @@ def validate_service_request(services: Mapping[str, str]) -> None:
         return
     status = _managed_services_status()
     rows = status["services"]
-    by_id = {
-        str(row.get("id")): row
-        for row in rows
-        if isinstance(row, Mapping) and isinstance(row.get("id"), str)
-    }
+    by_id = {str(row.get("id")): row for row in rows if isinstance(row, Mapping) and isinstance(row.get("id"), str)}
     unknown = sorted(set(services) - set(by_id))
     if unknown:
         raise SetupError(f"Unknown configured Managed Services V2 service(s): {', '.join(unknown)}")
@@ -626,7 +630,9 @@ def run_setup_stage(
         previous_result = journal.result(step)
         if postcondition is None or bool(postcondition(previous_result)):
             return previous_result
-        journal.fail_step(step, "The completed step no longer satisfies its appliance postcondition", manual_recovery=True)
+        journal.fail_step(
+            step, "The completed step no longer satisfies its appliance postcondition", manual_recovery=True
+        )
         raise SetupError(f"Completed setup step {step} no longer matches the appliance; explicit recovery is required")
     journal.start_step(step)
     try:
@@ -653,9 +659,12 @@ def storage_ready(_result: Any = None) -> bool:
 def protected_stack_ready(_result: Any = None) -> bool:
     if not pathlib.Path("/run/nas-secrets/ready").is_file():
         return False
-    return run_root_noninteractive(
-        ["systemctl", "is-active", "--quiet", "nas-protected-services.target"], check=False
-    ).returncode == 0
+    return (
+        run_root_noninteractive(
+            ["systemctl", "is-active", "--quiet", "nas-protected-services.target"], check=False
+        ).returncode
+        == 0
+    )
 
 
 def identity_command_ready(command: Sequence[str]) -> bool:
@@ -991,9 +1000,7 @@ def one_account(args: argparse.Namespace) -> dict[str, Any]:
         if password is not None:
             item["password"] = password
         try:
-            result = apply_accounts(
-                {"schemaVersion": 1, "accounts": [item], "deactivateMissingManagedAccounts": False}
-            )
+            result = apply_accounts({"schemaVersion": 1, "accounts": [item], "deactivateMissingManagedAccounts": False})
             shares = provision_share_directories([account])
             if SYNCTHING_ENABLED:
                 run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"]))
@@ -1012,9 +1019,7 @@ def disable_account(args: argparse.Namespace) -> dict[str, Any]:
         existing = json.loads(run_root(["nas-identity-sync", "export-account", username]).stdout)
         existing["active"] = False
         existing["groups"] = [DISABLED_GROUP]
-        result = apply_accounts(
-            {"schemaVersion": 1, "accounts": [existing], "deactivateMissingManagedAccounts": False}
-        )
+        result = apply_accounts({"schemaVersion": 1, "accounts": [existing], "deactivateMissingManagedAccounts": False})
         if SYNCTHING_ENABLED:
             run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"]))
         return result
@@ -1044,7 +1049,12 @@ def first_start_status(config_source: str) -> dict[str, Any]:
     try:
         state = load_json(STATE_PATH)
     except JournalError as exc:
-        return {"schemaVersion": SCHEMA_VERSION, "status": "state-invalid", "configPath": config_source, "message": str(exc)}
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "state-invalid",
+            "configPath": config_source,
+            "message": str(exc),
+        }
     config_path = pathlib.Path(config_source)
     if not config_path.exists():
         return {
@@ -1315,7 +1325,13 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         result = first_run(args)
         atomic_write_json(
             result_path,
-            {"schemaVersion": 1, "jobId": job_id, "status": "complete", "completedAt": int(time.time()), "result": result},
+            {
+                "schemaVersion": 1,
+                "jobId": job_id,
+                "status": "complete",
+                "completedAt": int(time.time()),
+                "result": result,
+            },
         )
         prune_first_start_job_results(result_root, keep=result_path)
         return result
@@ -1323,7 +1339,13 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         if result_path is not None and job_id is not None:
             atomic_write_json(
                 result_path,
-                {"schemaVersion": 1, "jobId": job_id, "status": "failed", "completedAt": int(time.time()), "error": str(exc)},
+                {
+                    "schemaVersion": 1,
+                    "jobId": job_id,
+                    "status": "failed",
+                    "completedAt": int(time.time()),
+                    "error": str(exc),
+                },
             )
         raise
     finally:
@@ -1357,7 +1379,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     first = sub.add_parser("first-run", help="Perform idempotent first-time appliance setup")
     first.add_argument("--config", required=True, help="Setup JSON file")
-    first.add_argument("--keepass-password-stdin", action="store_true", help="Read one KeePass password line from stdin")
+    first.add_argument(
+        "--keepass-password-stdin", action="store_true", help="Read one KeePass password line from stdin"
+    )
     first.add_argument("--create-database", action=argparse.BooleanOptionalAction, default=True)
     first.add_argument(
         "--confirm-storage-device",
@@ -1386,7 +1410,9 @@ def build_parser() -> argparse.ArgumentParser:
     job.add_argument("--request-file", required=True, type=pathlib.Path)
     job.add_argument("--password-file", required=True, type=pathlib.Path)
 
-    reconcile = sub.add_parser("reconcile-first-run", help="Acknowledge a manually repaired first-run journal before resuming")
+    reconcile = sub.add_parser(
+        "reconcile-first-run", help="Acknowledge a manually repaired first-run journal before resuming"
+    )
     reconcile.add_argument("--note", required=True, help="Operator recovery note recorded in the journal")
 
     account = sub.add_parser("account", help="Create or update one Authentik account")

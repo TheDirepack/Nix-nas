@@ -210,10 +210,7 @@ def capability_status(model: IdentityModel) -> dict[str, Any]:
                 "administrator": ADMIN_GROUP in user.groups,
                 "administratorBypass": ADMIN_GROUP in user.groups,
                 "groups": sorted(user.groups),
-                "capabilities": {
-                    group: {"allowed": True, "source": "authentik-assignment"}
-                    for group in assigned
-                },
+                "capabilities": {group: {"allowed": True, "source": "authentik-assignment"} for group in assigned},
                 "assignedApplicationCapabilities": assigned,
             }
         )

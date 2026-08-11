@@ -54,7 +54,11 @@ class IdentityModelTests(unittest.TestCase):
             "alice@example.test",
             "Alice",
             frozenset({identity_model.USER_GROUP, "nas_allow_syncthing"}),
-            {"nasSyncthingDevices": [json.dumps({"id": "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"})]},
+            {
+                "nasSyncthingDevices": [
+                    json.dumps({"id": "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"})
+                ]
+            },
         )
         self.assertFalse(user.personal_sync)
 
@@ -194,7 +198,9 @@ class IdentitySyncTests(unittest.TestCase):
                 (root / "apikey").write_text("dedicated\n", encoding="utf-8")
                 self.assertEqual(sync.syncthing_api_key(), "dedicated")
                 (root / "apikey").unlink()
-                (root / "config.xml").write_text("<configuration><apikey>xml-key</apikey></configuration>", encoding="utf-8")
+                (root / "config.xml").write_text(
+                    "<configuration><apikey>xml-key</apikey></configuration>", encoding="utf-8"
+                )
                 self.assertEqual(sync.syncthing_api_key(), "xml-key")
 
     def test_source_never_reintroduces_copyparty_or_legacy_capability_authority(self) -> None:

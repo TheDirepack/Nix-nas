@@ -160,7 +160,11 @@ def _secret_command(command: list[str] | tuple[str, ...]) -> bool:
 
 def operation_error(command: list[str] | tuple[str, ...], result: CommandResult) -> ApiError:
     reference = secrets.token_hex(6)
-    detail = "[secret command output redacted]" if _secret_command(command) else (result.stderr or result.stdout).strip()[:1000]
+    detail = (
+        "[secret command output redacted]"
+        if _secret_command(command)
+        else (result.stderr or result.stdout).strip()[:1000]
+    )
     diagnostic(
         f"nas-cockpit-api reference={reference} command={list(command)!r} rc={result.returncode} detail={detail!r}"
     )
@@ -278,7 +282,11 @@ def service_states(units: list[str]) -> dict[str, dict[str, Any]]:
 def managed_services_status() -> dict[str, Any]:
     result = run(["nas-managed-services-control", "status"], check=False, timeout_seconds=120)
     if result.returncode != 0:
-        return {"ok": False, "error": str(operation_error(["nas-managed-services-control", "status"], result)), "services": []}
+        return {
+            "ok": False,
+            "error": str(operation_error(["nas-managed-services-control", "status"], result)),
+            "services": [],
+        }
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -359,7 +367,14 @@ def ai_configuration() -> dict[str, Any]:
     try:
         return ai_config.public_view(ai_config.load_config())
     except (OSError, ai_config.AiConfigError) as exc:
-        return {"ok": False, "error": str(exc), "providers": [], "localModels": [], "codingRoles": {}, "availableTargets": []}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "providers": [],
+            "localModels": [],
+            "codingRoles": {},
+            "availableTargets": [],
+        }
 
 
 def operation_state() -> dict[str, Any]:
@@ -464,7 +479,9 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     if prepared.get("status") in {"complete", "complete-unverified"}:
         return prepared
     if prepared.get("status") != "ready":
-        raise ApiError(str(prepared.get("message") or prepared.get("error") or "First-start configuration is not ready"))
+        raise ApiError(
+            str(prepared.get("message") or prepared.get("error") or "First-start configuration is not ready")
+        )
     current_digest = prepared.get("planDigest")
     if not isinstance(current_digest, str) or not secrets.compare_digest(current_digest, plan_digest):
         raise ApiError("The confirmed first-start plan is stale; refresh and review the current plan")
@@ -689,7 +706,9 @@ def _fetch_existing_provider_key(active: Any, provider_id: str, keepass_password
     command = ["nas-secrets", "show-ai-provider-key-stdin", provider_id]
     result = run(command, check=False, timeout_seconds=30, input_text=f"{keepass_password}\n", env=env)
     if result.returncode != 0:
-        diagnostic(f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}")
+        diagnostic(
+            f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}"
+        )
         raise ApiError("Unable to snapshot the existing provider credential before mutation")
     value = result.stdout.strip()
     if not value or len(value) > 4096 or "\n" in value or "\r" in value or "\x00" in value:
@@ -941,7 +960,11 @@ def set_ai_local_model(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("Local model TTL must be an integer")
     if not isinstance(tools, bool):
         raise ApiError("Local model tools capability must be boolean")
-    if not isinstance(extra_args, list) or len(extra_args) > ai_config.MAX_LOCAL_ARGS or any(not isinstance(item, str) for item in extra_args):
+    if (
+        not isinstance(extra_args, list)
+        or len(extra_args) > ai_config.MAX_LOCAL_ARGS
+        or any(not isinstance(item, str) for item in extra_args)
+    ):
         raise ApiError("Invalid extraArgs")
     try:
         with operation_guard("ai-local-model-set", ("runtime",)):
@@ -1092,7 +1115,12 @@ def source_control(request: dict[str, Any]) -> dict[str, Any]:
             "log": ["git", "-C", str(CONFIG_DIR), "log", "--oneline", "-20"],
         }[operation]
         result = run(command, check=False, timeout_seconds=60)
-        return {"ok": result.returncode == 0, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        return {
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
     try:
         with acquire_operation(f"source-{operation}", ("appliance", "update")) as active:
             env = dict(os.environ)
@@ -1101,13 +1129,27 @@ def source_control(request: dict[str, Any]) -> dict[str, Any]:
             if operation in {"pull", "pull-rebuild"}:
                 command = ["git", "-C", str(CONFIG_DIR), "pull", "--ff-only"]
                 result = run(command, check=False, timeout_seconds=180, env=env)
-                outputs.append({"command": command, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
+                outputs.append(
+                    {
+                        "command": command,
+                        "returncode": result.returncode,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                    }
+                )
                 if result.returncode != 0:
                     raise operation_error(command, result)
             if operation in {"rebuild", "pull-rebuild"}:
                 command = ["nixos-rebuild", "switch", "--flake", f"{CONFIG_DIR}#nas"]
                 result = run(command, check=False, timeout_seconds=1800, env=env)
-                outputs.append({"command": command, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
+                outputs.append(
+                    {
+                        "command": command,
+                        "returncode": result.returncode,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                    }
+                )
                 if result.returncode != 0:
                     raise operation_error(command, result)
             return {"ok": True, "operation": operation, "commands": outputs}

@@ -240,9 +240,10 @@ class CliTests(unittest.TestCase):
                 json.dumps({"schemaVersion": 2, "storage": {"createPool": False}, "accounts": [], "services": {}}),
                 encoding="utf-8",
             )
-            with mock.patch.object(sys, "argv", ["nas-setup", "validate-config", str(path)]), mock.patch(
-                "sys.stdout", new_callable=io.StringIO
-            ) as stdout:
+            with (
+                mock.patch.object(sys, "argv", ["nas-setup", "validate-config", str(path)]),
+                mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
                 self.assertEqual(setup.main(), 0)
         self.assertEqual(json.loads(stdout.getvalue())["schemaVersion"], 2)
 

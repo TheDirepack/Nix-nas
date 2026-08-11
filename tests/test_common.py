@@ -95,8 +95,7 @@ class CommonPolicyTests(unittest.TestCase):
 
     def test_parse_systemd_show_uses_id_as_record_key(self) -> None:
         parsed = common.parse_systemd_show(
-            "Id=demo.service\nActiveState=active\n\n"
-            "Id=second.service\nActiveState=inactive\nResult=success\n"
+            "Id=demo.service\nActiveState=active\n\nId=second.service\nActiveState=inactive\nResult=success\n"
         )
         self.assertEqual(parsed["demo.service"]["ActiveState"], "active")
         self.assertEqual(parsed["second.service"]["Result"], "success")

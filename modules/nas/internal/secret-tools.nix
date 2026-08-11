@@ -489,7 +489,6 @@ NTFY_ENV
           require_secret_atom "$provider_key" "llama-swap provider $provider_id API key" 8 4096
           printf '%s=%s\n' "$provider_env" "$provider_key" >> "$local_stage/ai/llama-swap.env"
         done < <(ai_provider_pairs)
-        printf '%s' "$llama_swap_api_key" > "$local_stage/ai/gate-api-key"
         printf 'WEBUI_SECRET_KEY=%s\nWEBUI_ADMIN_PASSWORD=%s\n' "$open_webui_secret" "$open_webui_admin_password" > "$local_stage/ai/open-webui.env"
         printf 'HF_TOKEN=%s\n' "$huggingface_token" > "$local_stage/ai/hfdownloader.env"
         ''}
@@ -525,7 +524,6 @@ NTFY_ENV
         ${lib.optionalString cfg.ai.enable ''
         install_secret "$local_stage/ai/llama-swap.env" "$root_stage/ai/llama-swap.env" nas-ai nas-ai
         ${lib.optionalString cfg.ai.codingAgent.enable ''install_secret "$local_stage/ai/coding-agent-api-key" "$root_stage/ai/coding-agent-api-key" nas-code-agent nas-code-agent''}
-        install_secret "$local_stage/ai/gate-api-key" "$root_stage/ai/gate-api-key" nas-feature-gate nas-feature-control
         install_secret "$local_stage/ai/open-webui.env" "$root_stage/ai/open-webui.env" root root
         install_secret "$local_stage/ai/hfdownloader.env" "$root_stage/ai/hfdownloader.env" hfdownloader hfdownloader
         ''}

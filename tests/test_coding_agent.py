@@ -158,10 +158,13 @@ class CodingAgentTests(unittest.TestCase):
 
     def test_identity_json_requires_canonical_capability_or_admin_role(self) -> None:
         for groups in ([coding.CODING_CAPABILITY_GROUP], [coding.ADMIN_GROUP]):
-            with self.subTest(groups=groups), mock.patch.dict(
-                os.environ,
-                {"NAS_AUTHENTICATED_IDENTITY_JSON": json.dumps({"username": "alice", "groups": groups})},
-                clear=True,
+            with (
+                self.subTest(groups=groups),
+                mock.patch.dict(
+                    os.environ,
+                    {"NAS_AUTHENTICATED_IDENTITY_JSON": json.dumps({"username": "alice", "groups": groups})},
+                    clear=True,
+                ),
             ):
                 coding._check_coding_access()
 
@@ -175,10 +178,13 @@ class CodingAgentTests(unittest.TestCase):
             with self.assertRaisesRegex(coding.CodingAgentError, "authenticated identity is required"):
                 coding._check_coding_access()
         for value in ("not-json", '{"groups": "not-a-list"}', '{"groups": [123]}'):
-            with self.subTest(value=value), mock.patch.dict(
-                os.environ,
-                {"NAS_AUTHENTICATED_IDENTITY_JSON": value},
-                clear=True,
+            with (
+                self.subTest(value=value),
+                mock.patch.dict(
+                    os.environ,
+                    {"NAS_AUTHENTICATED_IDENTITY_JSON": value},
+                    clear=True,
+                ),
             ):
                 with self.assertRaisesRegex(coding.CodingAgentError, "malformed identity JSON"):
                     coding._check_coding_access()
@@ -229,10 +235,13 @@ class CodingAgentTests(unittest.TestCase):
             session_exec = root / "session"
             session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
             for raw, expected in (("not-a-number", "14400"), ("10", "14400"), ("7200", "7200")):
-                with self.subTest(raw=raw), mock.patch.dict(
-                    os.environ,
-                    {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": raw},
-                    clear=True,
+                with (
+                    self.subTest(raw=raw),
+                    mock.patch.dict(
+                        os.environ,
+                        {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": raw},
+                        clear=True,
+                    ),
                 ):
                     command = coding.session_command(root, [])
                 self.assertIn(f"RuntimeMaxSec={expected}", command)

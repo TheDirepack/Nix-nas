@@ -199,9 +199,11 @@ class SecuritySurfaceTests(unittest.TestCase):
 
     def test_injection_payloads_are_rejected_as_v2_service_ids(self):
         for raw in SHELL_PAYLOADS + SQL_PAYLOADS + XSS_PAYLOADS + PATH_PAYLOADS:
-            with self.subTest(raw=raw), mock.patch.object(api, "acquire_operation") as lock, mock.patch.object(
-                api, "run"
-            ) as run:
+            with (
+                self.subTest(raw=raw),
+                mock.patch.object(api, "acquire_operation") as lock,
+                mock.patch.object(api, "run") as run,
+            ):
                 with self.assertRaises(api.ApiError):
                     api.set_managed_service(raw, "always")
                 lock.assert_not_called()
