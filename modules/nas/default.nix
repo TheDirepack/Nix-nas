@@ -27,6 +27,7 @@
     ./config/managed-services-platform-routes.nix
     ./config/managed-services-operations.nix
     ./config/managed-services-backup-resources.nix
+    ./config/managed-services-direct-listeners.nix
   ];
 
   _module.args.nasInternal = import ./internal { inherit config lib pkgs; };
