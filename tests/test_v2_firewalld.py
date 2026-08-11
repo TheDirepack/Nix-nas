@@ -117,6 +117,71 @@ class V2FirewalldTests(unittest.TestCase):
             [{"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}.xml"}],
         )
 
+    def test_host_listener_can_forward_to_unprivileged_target_port(self):
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "tftp": {
+                    "managed": True,
+                    "enabled": True,
+                    "runtime": {"type": "systemd", "unit": "copyparty.service"},
+                    "network": {
+                        "mode": "host",
+                        "outboundDefault": "allow",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
+                    "listeners": {
+                        "request": {
+                            "protocol": "udp",
+                            "exposure": {"port": 69},
+                            "targetPort": 3969,
+                            "firewall": True,
+                        },
+                        "response": {
+                            "protocol": "udp",
+                            "exposure": {"start": 40000, "end": 40099},
+                            "firewall": True,
+                        },
+                    },
+                }
+            },
+        }
+        files, _ = firewalld.compile_projection(effective, lan_zone="trusted")
+        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}.xml"].decode()
+        self.assertIn('forward-port port="69" protocol="udp" to-port="3969"', policy)
+        self.assertIn('port="40000-40099" protocol="udp"', policy)
+        self.assertNotIn('<port port="69" protocol="udp"', policy)
+
+    def test_listener_target_port_requires_single_port_exposure(self):
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "bad": {
+                    "managed": True,
+                    "runtime": {"type": "systemd", "unit": "bad.service"},
+                    "network": {
+                        "mode": "host",
+                        "outboundDefault": "allow",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
+                    "listeners": {
+                        "bad": {
+                            "protocol": "udp",
+                            "exposure": {"start": 1000, "end": 1001},
+                            "targetPort": 2000,
+                            "firewall": True,
+                        }
+                    },
+                }
+            },
+        }
+        with self.assertRaisesRegex(firewalld.FirewalldProjectionError, "single exposed port"):
+            firewalld.compile_projection(effective, lan_zone="trusted")
+
     def test_unmanaged_isolated_network_fails_closed(self):
         effective = self.effective()
         effective["services"]["worker"]["managed"] = False
