@@ -43,6 +43,15 @@ def network_policy(effective: dict[str, Any], service: dict[str, Any]) -> dict[s
     }
 
 
+def _vlan_id(policy: dict[str, Any]) -> int | None:
+    vlan_id = policy.get("vlanId")
+    if vlan_id is None:
+        return None
+    if not isinstance(vlan_id, int) or isinstance(vlan_id, bool) or not 1 <= vlan_id <= 4094:
+        raise PodmanNetworkProjectionError("network vlanId must be an integer from 1 through 4094")
+    return vlan_id
+
+
 def _listener_firewall_requested(service: dict[str, Any]) -> bool:
     listeners = service.get("listeners", {})
     return isinstance(listeners, dict) and any(
@@ -87,6 +96,7 @@ def _isolated_supported(
 ) -> None:
     runtime = service.get("runtime")
     runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
+    _vlan_id(policy)
     if runtime_type not in {"oci", "quadlet", "compose"}:
         raise PodmanNetworkProjectionError(
             f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented yet"
@@ -119,10 +129,11 @@ def quadlet_network_reference(
     """Return the V2 Podman network reference for one service."""
     policy = network_policy(effective, service)
     mode = policy.get("mode", "host")
+    vlan_id = _vlan_id(policy)
     if mode == "none":
         if service.get("listeners") or service.get("routes"):
             raise PodmanNetworkProjectionError(f"service {service_id!r} network=none cannot expose listeners/routes")
-        if policy.get("allowedHostPorts") or policy.get("allowedEgress") or policy.get("lanAccess"):
+        if policy.get("allowedHostPorts") or policy.get("allowedEgress") or policy.get("lanAccess") or vlan_id is not None:
             raise PodmanNetworkProjectionError(f"service {service_id!r} network=none cannot contain network exceptions")
         return "none"
     if mode == "host":
@@ -131,6 +142,7 @@ def quadlet_network_reference(
             or bool(policy.get("lanAccess"))
             or bool(policy.get("allowedHostPorts"))
             or bool(policy.get("allowedEgress"))
+            or vlan_id is not None
         )
         if constrained:
             raise PodmanNetworkProjectionError(
@@ -167,9 +179,16 @@ def _network_source(
         "Driver=bridge",
         f"Internal={'false' if external_egress else 'true'}",
         "Options=isolate=strict",
-        "NetworkDeleteOnStop=true",
-        "",
     ]
+    vlan_id = _vlan_id(policy)
+    if vlan_id is not None:
+        lines.append(f"Options=vlan={vlan_id}")
+    lines.extend(
+        [
+            "NetworkDeleteOnStop=true",
+            "",
+        ]
+    )
     return "\n".join(lines).encode()
 
 
