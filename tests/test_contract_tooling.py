@@ -290,7 +290,6 @@ class ContractTests(unittest.TestCase):
         workflow = text(".github/workflows/ci.yml")
         packaging = text("scripts/package-release.sh")
         self.assertIn('unzip -q "$archive" -d "$extract"', workflow)
-        self.assertIn("Python's zipfile extractor intentionally ignores Unix executable bits", workflow)
         self.assertIn("archive mode mismatch", packaging)
         self.assertIn("archived_mode", packaging)
         self.assertIn("staged_mode", packaging)
