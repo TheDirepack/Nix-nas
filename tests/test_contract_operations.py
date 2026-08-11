@@ -75,7 +75,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("services.telegraf", observability)
         self.assertNotIn("services.prometheus", observability)
         self.assertIn("victoriametrics =", desired_seed)
-        self.assertIn('[ "/victoriametrics/" ]', desired_seed)
+        self.assertIn('mkRoute "/victoriametrics/"', desired_seed)
         self.assertNotIn("handle /victoriametrics/*", proxy)
         self.assertFalse((ROOT / "modules/nas/internal/feature-catalog.nix").exists())
         self.assertFalse((ROOT / "modules/nas/config/managed-services-migration.nix").exists())
