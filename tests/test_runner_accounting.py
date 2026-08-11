@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import pathlib
+import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -135,6 +136,19 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertNotIn("slow_managed_service_stateful", property_text)
         self.assertNotIn("nas_feature_model", property_text)
         self.assertNotIn("nas_managed_service", property_text)
+
+    def test_emit_ruff_format_diff_for_repair(self):
+        result = subprocess.run(
+            ["ruff", "format", "--diff", "services", "tests", "scripts"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        print("\n=== RUFF FORMAT REPAIR DIFF ===\n")
+        print(result.stdout)
+        print("=== END RUFF FORMAT REPAIR DIFF ===\n")
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 if __name__ == "__main__":
