@@ -1,0 +1,59 @@
+name: Agent coverage recovery probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.event.pull_request.head.ref == 'agent/managed-services-v2-core'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/managed-services-v2-core
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare main-suite probes
+        run: |
+          git fetch origin main
+          mkdir -p /tmp/nas-probe
+          for name in test_identity_sync.py test_setup.py test_cockpit_api.py test_doctor.py test_state.py; do
+            git show origin/main:tests/$name > /tmp/nas-probe/$name
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/nas-probe/test_identity_sync.py')
+          s = p.read_text()
+          marker = 'SPEC.loader.exec_module(sync)\n'
+          inject = '''SPEC.loader.exec_module(sync)\nimport nas_identity_model as identity_model\nsync.User = identity_model.User\nsync.IdentityModel = identity_model.IdentityModel\nsync.USER_GROUP = identity_model.USER_GROUP\nsync.GUEST_GROUP = identity_model.GUEST_GROUP\nsync.DISABLED_GROUP = identity_model.DISABLED_GROUP\n'''
+          if marker not in s:
+              raise SystemExit('identity injection marker missing')
+          p.write_text(s.replace(marker, inject, 1))
+          PY
+      - name: Probe main identity behavior
+        continue-on-error: true
+        run: nix develop .#test -c env PYTHONPATH=services:tests python3 /tmp/nas-probe/test_identity_sync.py -v
+      - name: Probe main setup behavior
+        continue-on-error: true
+        run: nix develop .#test -c env PYTHONPATH=services:tests python3 /tmp/nas-probe/test_setup.py -v
+      - name: Probe main Cockpit API behavior
+        continue-on-error: true
+        run: nix develop .#test -c env PYTHONPATH=services:tests python3 /tmp/nas-probe/test_cockpit_api.py -v
+      - name: Probe main doctor behavior
+        continue-on-error: true
+        run: nix develop .#test -c env PYTHONPATH=services:tests python3 /tmp/nas-probe/test_doctor.py -v
+      - name: Probe main state behavior
+        continue-on-error: true
+        run: nix develop .#test -c env PYTHONPATH=services:tests python3 /tmp/nas-probe/test_state.py -v
+      - name: Show canonical Prettier delta
+        run: |
+          nix shell nixpkgs#prettier -c prettier --write cockpit/src/app.jsx cockpit/src/view-model.js tests/js/view-model.test.mjs
+          git diff --check
+          git diff --stat -- cockpit/src/app.jsx cockpit/src/view-model.js tests/js/view-model.test.mjs
