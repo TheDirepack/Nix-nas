@@ -71,7 +71,7 @@ in
 {
   config = {
     systemd.sockets.cockpit = {
-      wantedBy = lib.mkOverride 90 [ "sockets.target" ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = lib.mkOverride 90 [ ];
       listenStreams = lib.mkOverride 90 (
         if cfg.hostPolicy.directCockpitRecovery
@@ -79,15 +79,20 @@ in
         else [ "127.0.0.1:${toString cockpitPort}" "[::1]:${toString cockpitPort}" ]
       );
       socketConfig.BindIPv6Only = "ipv6-only";
-      unitConfig.ConditionPathExists = lib.mkOverride 90 [ ];
-      requires = lib.optional (
+      unitConfig = {
+        ConditionPathExists = lib.mkOverride 90 [ ];
+        DefaultDependencies = false;
+      };
+      conflicts = [ "shutdown.target" ];
+      before = [ "shutdown.target" ];
+      requires = [ "sysinit.target" ] ++ lib.optional (
         cfg.hostPolicy.directCockpitRecovery
         && cfg.networking.enable
         && cfg.networking.firewall.enable
         && cfg.trustedInterfaces != [ ]
         && !cfg.testing.installationReadyFixture
       ) "nas-management-network-guard.service";
-      after = lib.optional (
+      after = [ "sysinit.target" "basic.target" ] ++ lib.optional (
         cfg.hostPolicy.directCockpitRecovery
         && cfg.networking.enable
         && cfg.networking.firewall.enable
@@ -112,7 +117,7 @@ in
       "d ${copypartyUserConfigDir} 0770 copyparty copyparty -"
       "C ${copypartyUserConfigDir}/00-local-overrides.conf 0660 copyparty copyparty - ${copypartyUserSeed}"
       "d /var/lib/nas-identity-sync 0700 root root -"
-      "d /var/lib/nas-setup 0750 root wheel -"
+      "d /var/lib/nas-setup 0770 root wheel -"
       "d /var/lib/nas-control 0750 root nas-operations -"
       "d /run/nas-operations 2770 root nas-operations -"
       "d /run/nas-state 0700 root root -"
@@ -126,7 +131,7 @@ in
 
     environment.systemPackages = with pkgs; [
       copyparty
-      nasPythonApplication
+      (lib.lowPrio nasPythonApplication)
       keepassxc
       nasSecrets
       nasSetup
