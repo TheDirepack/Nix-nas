@@ -85,7 +85,9 @@ let
             if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
               printf 'VM-PHASE-TIMING: %s: %ss (complete)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
             fi
-            read -r _ phase_name <<< "$command"
+            phase_name="${command#log }"
+            phase_name="${phase_name#\"}"
+            phase_name="${phase_name%\"}"
             NAS_VM_PHASE_NAME=$phase_name
             NAS_VM_PHASE_STARTED=$now
             printf 'VM-PHASE-START: %s\n' "$NAS_VM_PHASE_NAME"
