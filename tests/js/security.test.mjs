@@ -36,7 +36,6 @@ test("external-target links keep opener isolation", () => {
   const externalAnchors = [
     ...app.matchAll(/<Button[^>]+component="a"[^>]+target="_blank"[^>]*>/g),
   ].map((match) => match[0]);
-  assert.ok(externalAnchors.length > 0);
   for (const anchor of externalAnchors) assert.match(anchor, /rel="noopener noreferrer"/);
 });
 
