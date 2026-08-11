@@ -67,7 +67,9 @@ class DoctorCoverageTests(unittest.TestCase):
                 self.write_json(state, {"status": "complete", "planDigest": "bad"})
                 checks = doctor._setup_checks()
                 self.assertTrue(any(check.id == "setup.journal" and check.status == "critical" for check in checks))
-                self.assertTrue(any(check.summary == "Completed setup state has no valid plan digest" for check in checks))
+                self.assertTrue(
+                    any(check.summary == "Completed setup state has no valid plan digest" for check in checks)
+                )
                 self.assertTrue(any(check.id == "setup.commit-consistency" for check in checks))
 
                 self.write_json(journal, {"status": "failed", "error": "retry"})

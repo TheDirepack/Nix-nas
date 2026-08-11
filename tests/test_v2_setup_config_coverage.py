@@ -86,9 +86,7 @@ class SetupConfigCoverageTests(unittest.TestCase):
 
     def test_syncthing_attributes_are_canonicalized_and_conflicts_rejected(self) -> None:
         device = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
-        value = config.normalize_account(
-            {"username": "alice", "attributes": {"nasSyncthingDevice": {"id": device}}}, 0
-        )
+        value = config.normalize_account({"username": "alice", "attributes": {"nasSyncthingDevice": {"id": device}}}, 0)
         self.assertIn("nasSyncthingDevices", value["attributes"])
         self.assertNotIn("nasSyncthingDevice", value["attributes"])
         with self.assertRaisesRegex(config.SetupError, "must not define both"):
@@ -158,8 +156,9 @@ class SetupConfigCoverageTests(unittest.TestCase):
         for topology, devices, required in minimums:
             raw = self.base()
             raw["storage"] = {"createPool": True, "topology": topology, "devices": devices}
-            with self.subTest(topology=topology), self.assertRaisesRegex(
-                config.SetupError, f"requires at least {required}"
+            with (
+                self.subTest(topology=topology),
+                self.assertRaisesRegex(config.SetupError, f"requires at least {required}"),
             ):
                 config.normalize_config(raw)
         raw = self.base()

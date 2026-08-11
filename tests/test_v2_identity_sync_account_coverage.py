@@ -140,7 +140,9 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         with (
             mock.patch.object(sync, "ensure_groups"),
             mock.patch.object(sync, "authentik_list", side_effect=[groups, users]),
-            mock.patch.object(sync, "authentik_request", side_effect=lambda _token, path, **kwargs: calls.append((path, kwargs)) or {}),
+            mock.patch.object(
+                sync, "authentik_request", side_effect=lambda _token, path, **kwargs: calls.append((path, kwargs)) or {}
+            ),
         ):
             result = sync.apply_account_plan("token", plan)
         self.assertEqual(result["updated"], ["alice"])
@@ -185,7 +187,9 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         with (
             mock.patch.object(sync, "ensure_groups"),
             mock.patch.object(sync, "authentik_list", side_effect=[groups, users]),
-            mock.patch.object(sync, "authentik_request", side_effect=lambda _token, path, **kwargs: calls.append((path, kwargs)) or {}),
+            mock.patch.object(
+                sync, "authentik_request", side_effect=lambda _token, path, **kwargs: calls.append((path, kwargs)) or {}
+            ),
         ):
             result = sync.apply_account_plan("token", plan)
         self.assertEqual(result["deactivated"], ["old-managed"])
@@ -343,7 +347,9 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             sync.object_by_identifier([{}], "id", label="folder")
         with self.assertRaisesRegex(sync.SyncError, "duplicate identifier"):
             sync.object_by_identifier([{"id": "a"}, {"id": "a"}], "id", label="folder")
-        self.assertTrue(sync.expected_subset({"devices": [{"deviceID": "A"}, {"deviceID": "B"}]}, {"devices": [{"deviceID": "A"}]}))
+        self.assertTrue(
+            sync.expected_subset({"devices": [{"deviceID": "A"}, {"deviceID": "B"}]}, {"devices": [{"deviceID": "A"}]})
+        )
         self.assertFalse(sync.expected_subset([], {}))
         self.assertFalse(sync.expected_subset({}, []))
         self.assertTrue(sync.expected_subset([1], [1]))

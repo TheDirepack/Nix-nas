@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import os
 import pathlib
 import stat
 import sys
@@ -62,7 +61,9 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             run.assert_called_once_with(["x"])
         with (
             mock.patch.object(setup.os, "geteuid", return_value=1000),
-            mock.patch.object(setup, "run", side_effect=[setup.Completed(("sudo",), "", "", 0), setup.Completed(("x",), "", "")]) as run,
+            mock.patch.object(
+                setup, "run", side_effect=[setup.Completed(("sudo",), "", "", 0), setup.Completed(("x",), "", "")]
+            ) as run,
         ):
             setup.run_root(["x"])
         self.assertEqual(run.call_args_list[-1].args[0][:3], ["sudo", "-n", "--"])
@@ -157,7 +158,10 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
 
     def test_validate_storage_request_preconditions(self) -> None:
         storage = {"createPool": True, "devices": ["/dev/a"]}
-        with mock.patch.object(setup, "pool_exists", return_value=True), mock.patch.object(setup.os, "stat") as stat_call:
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup.os, "stat") as stat_call,
+        ):
             setup.validate_storage_request(storage, [], False)
         stat_call.assert_not_called()
         with mock.patch.object(setup, "pool_exists", return_value=False):
@@ -177,12 +181,18 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             with self.assertRaisesRegex(setup.SetupError, "do not exist"):
                 setup.validate_storage_request(storage, ["/dev/a"], True)
         regular = types.SimpleNamespace(st_mode=stat.S_IFREG, st_rdev=1)
-        with mock.patch.object(setup, "pool_exists", return_value=False), mock.patch.object(setup.os, "stat", return_value=regular):
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=False),
+            mock.patch.object(setup.os, "stat", return_value=regular),
+        ):
             with self.assertRaisesRegex(setup.SetupError, "not block devices"):
                 setup.validate_storage_request(storage, ["/dev/a"], True)
         block = types.SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=7)
         alias_storage = {"createPool": True, "devices": ["/dev/a", "/dev/b"]}
-        with mock.patch.object(setup, "pool_exists", return_value=False), mock.patch.object(setup.os, "stat", return_value=block):
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=False),
+            mock.patch.object(setup.os, "stat", return_value=block),
+        ):
             with self.assertRaisesRegex(setup.SetupError, "same block device"):
                 setup.validate_storage_request(alias_storage, ["/dev/a", "/dev/b"], True)
         with (
@@ -204,7 +214,9 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 with self.assertRaisesRegex(setup.SetupError, "no service catalog"):
                     setup._managed_services_status()
         good = {"services": [{"id": "demo"}]}
-        with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), json.dumps(good), "", 0)) as runner:
+        with mock.patch.object(
+            setup, "run_root_noninteractive", return_value=setup.Completed((), json.dumps(good), "", 0)
+        ) as runner:
             self.assertEqual(setup._managed_services_status(noninteractive=True), good)
         runner.assert_called_once()
 
@@ -281,9 +293,11 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             with mock.patch.object(setup, "KEEPASS_DATABASE", database):
                 with self.assertRaisesRegex(setup.SetupError, "does not exist"):
                     setup.verify_or_create_database("pw", False)
+
             def create(_command: object, **_kwargs: object) -> setup.Completed:
                 database.write_text("created", encoding="utf-8")
                 return setup.Completed((), "", "")
+
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "run_root"),
@@ -306,15 +320,29 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
 
     def test_setup_storage_creates_plain_pool_and_dataset(self) -> None:
         calls: list[list[str]] = []
-        storage = {"createPool": True, "devices": ["/dev/a", "/dev/b"], "topology": "mirror", "ashift": 13, "wipeDevices": True}
+        storage = {
+            "createPool": True,
+            "devices": ["/dev/a", "/dev/b"],
+            "topology": "mirror",
+            "ashift": 13,
+            "wipeDevices": True,
+        }
         with (
             mock.patch.object(setup, "pool_exists", return_value=False),
             mock.patch.object(setup, "dataset_exists", return_value=False),
             mock.patch.object(setup, "validate_storage_request"),
             mock.patch.object(setup, "ZFS_ENCRYPTION", False),
-            mock.patch.object(setup, "run_root", side_effect=lambda command, **_kwargs: calls.append(list(command)) or setup.Completed(tuple(command), "", "")),
+            mock.patch.object(
+                setup,
+                "run_root",
+                side_effect=lambda command, **_kwargs: (
+                    calls.append(list(command)) or setup.Completed(tuple(command), "", "")
+                ),
+            ),
         ):
-            result = setup.setup_storage(storage, keepass_password="pw", confirmed_devices=["/dev/a", "/dev/b"], allow_destructive=True)
+            result = setup.setup_storage(
+                storage, keepass_password="pw", confirmed_devices=["/dev/a", "/dev/b"], allow_destructive=True
+            )
         self.assertTrue(result["createdPool"])
         self.assertTrue(result["createdDataset"])
         rendered = [" ".join(call) for call in calls]
@@ -330,7 +358,9 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "run_interactive_privileged") as privileged,
             mock.patch.object(setup, "run_root") as root,
         ):
-            result = setup.setup_storage({"createPool": False}, keepass_password="pw", confirmed_devices=[], allow_destructive=False)
+            result = setup.setup_storage(
+                {"createPool": False}, keepass_password="pw", confirmed_devices=[], allow_destructive=False
+            )
         privileged.assert_called_once_with(["nas-zfs-create-encrypted-dataset"], input_text="pw\n")
         root.assert_not_called()
         self.assertTrue(result["encrypted"])
@@ -362,8 +392,16 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             {"username": "guest", "active": True, "groups": [setup.GUEST_GROUP]},
             {"username": "off", "active": False, "groups": [setup.USER_GROUP]},
         ]
-        with tempfile.TemporaryDirectory() as raw, mock.patch.object(setup, "SHARE_ROOT", pathlib.Path(raw)), mock.patch.object(
-            setup, "run_root", side_effect=lambda command, **_kwargs: calls.append(list(command)) or setup.Completed(tuple(command), "", "")
+        with (
+            tempfile.TemporaryDirectory() as raw,
+            mock.patch.object(setup, "SHARE_ROOT", pathlib.Path(raw)),
+            mock.patch.object(
+                setup,
+                "run_root",
+                side_effect=lambda command, **_kwargs: (
+                    calls.append(list(command)) or setup.Completed(tuple(command), "", "")
+                ),
+            ),
         ):
             created = setup.provision_share_directories(accounts)
         self.assertEqual(len(created), 1)
@@ -395,7 +433,18 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
     def test_canonical_plan_digest_and_confirmation(self) -> None:
         config = {
             "storage": {"createPool": False},
-            "accounts": [{"username": "alice", "name": "A", "email": "a@x", "active": True, "groups": [setup.USER_GROUP], "attributes": {}, "passwordFile": "/x"}, 1],
+            "accounts": [
+                {
+                    "username": "alice",
+                    "name": "A",
+                    "email": "a@x",
+                    "active": True,
+                    "groups": [setup.USER_GROUP],
+                    "attributes": {},
+                    "passwordFile": "/x",
+                },
+                1,
+            ],
             "services": {"demo": "off"},
             "deactivateMissingManagedAccounts": False,
             "runPreflight": True,
@@ -411,7 +460,9 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
 
     def test_setup_fingerprint_changes_with_execution_controls(self) -> None:
         config = {"storage": {}, "accounts": [], "services": {}, "runPreflight": False}
-        args = argparse.Namespace(create_database=False, confirm_storage_device=[], allow_destructive_storage=False, skip_preflight=False)
+        args = argparse.Namespace(
+            create_database=False, confirm_storage_device=[], allow_destructive_storage=False, skip_preflight=False
+        )
         first = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
         args.skip_preflight = True
         second = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
@@ -446,29 +497,49 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             regular.write_text("x", encoding="utf-8")
             with mock.patch.object(setup, "KEEPASS_DATABASE", regular):
                 self.assertTrue(setup.keepass_database_ready())
-        with mock.patch.object(setup, "pool_exists", return_value=True), mock.patch.object(setup, "dataset_exists", return_value=False):
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=False),
+        ):
             self.assertFalse(setup.storage_ready())
         with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), "{", "", 0)):
             self.assertFalse(setup.identity_command_ready(["x"]))
-        with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), '{"error":"bad"}', "", 0)):
+        with mock.patch.object(
+            setup, "run_root_noninteractive", return_value=setup.Completed((), '{"error":"bad"}', "", 0)
+        ):
             self.assertFalse(setup.identity_command_ready(["x"]))
-        with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), '{"ok":true}', "", 0)):
+        with mock.patch.object(
+            setup, "run_root_noninteractive", return_value=setup.Completed((), '{"ok":true}', "", 0)
+        ):
             self.assertTrue(setup.identity_command_ready(["x"]))
 
     def test_account_plan_ready_compares_exported_fields(self) -> None:
-        desired = {"username": "alice", "name": "Alice", "email": "a@x", "active": True, "groups": [setup.USER_GROUP], "attributes": {"x": 1}}
-        with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), json.dumps(desired), "", 0)):
+        desired = {
+            "username": "alice",
+            "name": "Alice",
+            "email": "a@x",
+            "active": True,
+            "groups": [setup.USER_GROUP],
+            "attributes": {"x": 1},
+        }
+        with mock.patch.object(
+            setup, "run_root_noninteractive", return_value=setup.Completed((), json.dumps(desired), "", 0)
+        ):
             self.assertTrue(setup.account_plan_ready({"accounts": [desired]}))
         bad = dict(desired)
         bad["email"] = "wrong"
-        with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), json.dumps(bad), "", 0)):
+        with mock.patch.object(
+            setup, "run_root_noninteractive", return_value=setup.Completed((), json.dumps(bad), "", 0)
+        ):
             self.assertFalse(setup.account_plan_ready({"accounts": [desired]}))
         self.assertFalse(setup.account_plan_ready({"accounts": [1]}))
 
     def test_service_policy_ready_and_state_match_fail_closed(self) -> None:
         with mock.patch.object(setup, "_managed_services_status", side_effect=setup.SetupError("no")):
             self.assertFalse(setup.service_policy_ready({"demo": "always"}))
-        with mock.patch.object(setup, "_managed_services_status", return_value={"services": [{"id": "demo", "requestedMode": "always"}]}):
+        with mock.patch.object(
+            setup, "_managed_services_status", return_value={"services": [{"id": "demo", "requestedMode": "always"}]}
+        ):
             self.assertTrue(setup.service_policy_ready({"demo": "always"}))
             self.assertFalse(setup.service_policy_ready({"demo": "off"}))
         with tempfile.TemporaryDirectory() as raw:
