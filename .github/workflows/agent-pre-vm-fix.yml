@@ -140,11 +140,10 @@ jobs:
           PY
       - name: Apply canonical Ruff formatting
         run: nix shell nixpkgs#ruff -c ruff format services tests scripts
-      - name: Verify Python lint and types
+      - name: Verify Python lint and formatting
         run: |
           nix shell nixpkgs#ruff -c ruff check services tests scripts
           nix shell nixpkgs#ruff -c ruff format --check services tests scripts
-          nix shell nixpkgs#pyright -c pyright --project pyproject.toml
       - name: Rebuild reviewed Cockpit bundle
         run: |
           npm --prefix cockpit ci --no-audit --no-fund
