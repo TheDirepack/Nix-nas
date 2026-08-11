@@ -151,7 +151,7 @@ jobs:
           node cockpit/build.js --check
       - name: Verify focused pre-VM regressions
         run: |
-          nix develop .#test -c python3 -m unittest \
+          nix develop .#test -c env PYTHONPATH=tests python3 -m unittest \
             tests.test_alpha18_hardening \
             tests.test_alpha20_cockpit \
             tests.test_contract_identity \
