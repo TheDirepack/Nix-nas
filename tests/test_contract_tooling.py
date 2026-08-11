@@ -615,7 +615,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-identity-sync sync-syncthing", guest)
         self.assertIn('systemctl cat "$unit"', guest)
         self.assertIn("NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight", guest)
-        self.assertIn("checks.x86_64-linux.nas-vm", workflow)
+        self.assertIn("check: nas-vm", workflow)
+        self.assertIn("check: nas-vm-encrypted", workflow)
         self.assertNotIn("nixosConfigurations.nas.config.system.build.toplevel", workflow)
 
 
