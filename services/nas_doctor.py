@@ -14,7 +14,6 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
-from nas_migrate_state import MigrationError, plan_all, report as migration_report
 from nas_operation_lock import COORDINATION_TOKEN_ENV, OPERATION_ROOT, operation_state
 from nas_state import StateError, authorities, ensure_safe_tree, registry_digest
 
@@ -22,8 +21,15 @@ VERSION_FILE = pathlib.Path(os.environ.get("NAS_VERSION_FILE", pathlib.Path(__fi
 SETUP_STATE = pathlib.Path(os.environ.get("NAS_SETUP_STATE", "/var/lib/nas-setup/state.json"))
 SETUP_JOURNAL = pathlib.Path(os.environ.get("NAS_SETUP_JOURNAL", "/var/lib/nas-setup/first-run-journal.json"))
 FIRST_START_STATUS = pathlib.Path(os.environ.get("NAS_FIRST_START_STATUS", "/var/lib/nas-first-start/status.json"))
-FEATURE_STATE = pathlib.Path(os.environ.get("NAS_FEATURE_STATE", "/var/lib/nas-control/settings.json"))
-FEATURE_CATALOG = pathlib.Path(os.environ.get("NAS_FEATURE_CATALOG", "/etc/nas-control/features.json"))
+MANAGED_SERVICES_SPEC = pathlib.Path(os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services.yaml"))
+MANAGED_SERVICES_SCHEMA = pathlib.Path(
+    os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json")
+)
+MANAGED_SERVICES_PLATFORM = pathlib.Path(
+    os.environ.get("NAS_V2_PLATFORM", "/run/nas-control/platform-capabilities.json")
+)
+MANAGED_SERVICES_PLATFORM_FALLBACK = pathlib.Path("/etc/nas-control/platform-capabilities.json")
+MANAGED_SERVICES_EFFECTIVE = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
 ALERT_ROUTER_STATE = pathlib.Path(os.environ.get("NAS_ALERT_ROUTER_STATE", "/var/lib/nas-alert-router/state.json"))
 OPERATION_GROUP = os.environ.get("NAS_OPERATION_GROUP", "nas-operations")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+$")
@@ -37,6 +43,10 @@ class Check:
     summary: str
     detail: str | None = None
     remediation: str | None = None
+
+
+class ManagedServicesDiagnosticError(RuntimeError):
+    """Expected V2 compiler/host-inventory failure while diagnosing desired state."""
 
 
 def _read_json(path: pathlib.Path) -> dict[str, Any] | None:
@@ -145,44 +155,96 @@ def _setup_checks() -> list[Check]:
     return checks
 
 
-def _feature_check() -> Check:
+def _managed_services_platform_path() -> pathlib.Path:
+    if MANAGED_SERVICES_PLATFORM.exists():
+        return MANAGED_SERVICES_PLATFORM
+    return MANAGED_SERVICES_PLATFORM_FALLBACK
+
+
+def _compile_managed_services() -> dict[str, Any]:
+    # Keep the diagnostic command's parser/help surface independent from the
+    # runtime-adapter dependency graph. Installed nas-doctor has the complete
+    # V2 dependency set; source-level CLI tests should not need libvirt/XML
+    # packages merely to parse argv.
     try:
-        catalog = _read_json(FEATURE_CATALOG)
-        state = _read_json(FEATURE_STATE)
+        from nas_v2_accelerator import AcceleratorResolutionError
+        from nas_v2_apply import ApplyPaths, compile_paths
+        from nas_v2_spec import ManagedServicesV2Error
+    except ImportError as exc:
+        raise ManagedServicesDiagnosticError(
+            f"Managed Services V2 compiler dependencies are unavailable: {exc}"
+        ) from exc
+
+    try:
+        expected, _plan = compile_paths(
+            ApplyPaths(
+                desired=MANAGED_SERVICES_SPEC,
+                schema=MANAGED_SERVICES_SCHEMA,
+                platform=_managed_services_platform_path(),
+                effective=MANAGED_SERVICES_EFFECTIVE,
+                plan=MANAGED_SERVICES_EFFECTIVE.with_name("plan.json"),
+            )
+        )
+    except (ManagedServicesV2Error, AcceleratorResolutionError) as exc:
+        raise ManagedServicesDiagnosticError(str(exc)) from exc
+    return expected
+
+
+def _managed_services_check() -> Check:
+    try:
+        expected = _compile_managed_services()
+    except ManagedServicesDiagnosticError as exc:
+        return Check(
+            "runtime.managed-services",
+            "critical",
+            "Managed Services V2 desired state is invalid for this host",
+            str(exc),
+            "Repair services.yaml with nas-managed-services-control document/replace-document, then reconcile",
+        )
+    except OSError as exc:
+        return Check(
+            "runtime.managed-services",
+            "critical",
+            "Managed Services V2 authority or installed validation metadata is unreadable",
+            str(exc),
+        )
+
+    try:
+        effective = _read_json(MANAGED_SERVICES_EFFECTIVE)
     except ValueError as exc:
-        return Check("runtime.feature-state", "critical", "Feature authority is unreadable", str(exc))
-    if catalog is None:
-        return Check("runtime.feature-state", "critical", "Feature catalog is missing", str(FEATURE_CATALOG))
-    features = catalog.get("features")
-    if not isinstance(features, dict) or not features:
-        return Check("runtime.feature-state", "critical", "Feature catalog is malformed")
-    if state is None:
         return Check(
-            "runtime.feature-state",
-            "warning",
-            "Mutable feature state is absent",
-            remediation="Run nas-feature-control status or nas-migrate-state plan",
+            "runtime.managed-services",
+            "critical",
+            "Managed Services V2 effective state is unreadable",
+            str(exc),
+            "Run nas-managed-services-control reconcile after repairing the runtime state",
         )
-    if state.get("schemaVersion") != 2 or not isinstance(state.get("features"), dict):
+    if effective is None:
         return Check(
-            "runtime.feature-state",
+            "runtime.managed-services",
             "warning",
-            "Feature state requires migration",
-            remediation="Run nas-migrate-state plan",
+            "Managed Services V2 effective state is absent",
+            str(MANAGED_SERVICES_EFFECTIVE),
+            "Run nas-managed-services-control reconcile",
         )
-    raw = state["features"]
-    unknown = sorted(set(raw) - set(features))
-    missing = sorted(set(features) - set(raw))
-    invalid: list[str] = []
-    for feature_id, value in raw.items():
-        entry = features.get(feature_id)
-        allowed = entry.get("allowedModes", ["off", "always"]) if isinstance(entry, dict) else []
-        if value not in allowed:
-            invalid.append(feature_id)
-    if unknown or missing or invalid:
-        detail = f"unknown={unknown}, missing={missing}, invalid={invalid}"
-        return Check("runtime.feature-state", "critical", "Feature state drifts from the evaluated catalog", detail)
-    return Check("runtime.feature-state", "ok", "Feature state matches the evaluated catalog")
+    if effective != expected:
+        expected_generation = expected.get("generation")
+        actual_generation = effective.get("generation")
+        return Check(
+            "runtime.managed-services",
+            "critical",
+            "Managed Services V2 effective state does not match services.yaml and current host inventory",
+            f"desiredGeneration={expected_generation}, effectiveGeneration={actual_generation}",
+            "Run nas-managed-services-control reconcile; if drift remains, inspect the finite compiler/reconciler",
+        )
+    services = expected.get("services")
+    count = len(services) if isinstance(services, dict) else 0
+    return Check(
+        "runtime.managed-services",
+        "ok",
+        f"Managed Services V2 authority is valid and reconciled ({count} services)",
+        str(MANAGED_SERVICES_SPEC),
+    )
 
 
 def _operation_hygiene_checks(*, deep: bool) -> list[Check]:
@@ -349,38 +411,12 @@ def build_report(*, deep: bool = False) -> dict[str, Any]:
     checks: list[Check] = [
         _version_check(),
         *_setup_checks(),
-        _feature_check(),
+        _managed_services_check(),
         *_operation_hygiene_checks(deep=deep),
         *_alert_router_state_checks(),
     ]
     authority, digest = _authority_checks(deep)
     checks.extend(authority)
-    try:
-        migrations = migration_report(plan_all())
-        migration_status = migrations["status"]
-        if migration_status == "manual-recovery-required":
-            checks.append(
-                Check(
-                    "state.migrations",
-                    "critical",
-                    "A mutable-state schema is unsupported",
-                    remediation="Inspect nas-migrate-state plan and recover manually",
-                )
-            )
-        elif migration_status == "migration-required":
-            checks.append(
-                Check(
-                    "state.migrations",
-                    "warning",
-                    "Mutable state requires a registered migration",
-                    remediation="Run nas-migrate-state plan, then apply with explicit confirmation",
-                )
-            )
-        else:
-            checks.append(Check("state.migrations", "ok", "Mutable state schemas are current"))
-    except MigrationError as exc:
-        migrations = {"schemaVersion": 1, "status": "error", "error": str(exc), "items": []}
-        checks.append(Check("state.migrations", "critical", "Migration status could not be determined", str(exc)))
 
     try:
         operations = operation_state()
@@ -414,7 +450,6 @@ def build_report(*, deep: bool = False) -> dict[str, Any]:
             "info": sum(check.status == "info" for check in checks),
         },
         "checks": [asdict(check) for check in checks],
-        "migrations": migrations,
         "operations": operations,
     }
 

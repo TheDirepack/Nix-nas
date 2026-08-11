@@ -23,6 +23,10 @@
     ./config/schedules.nix
     ./config/system.nix
     ./config/managed-services.nix
+    ./config/managed-services-native-services.nix
+    ./config/managed-services-platform-routes.nix
+    ./config/managed-services-operations.nix
+    ./config/managed-services-backup-resources.nix
   ];
 
   _module.args.nasInternal = import ./internal { inherit config lib pkgs; };

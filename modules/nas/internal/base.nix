@@ -6,7 +6,7 @@ let
     pkgs
   ;
   cfg = config.nas;
-  serviceRegistry = args.serviceRegistry;
+  systemStateVersion = config.system.stateVersion;
   lanHost = "${config.networking.hostName}.local";
   identityAdminGroup = "nas_admin";
   secretRoot = "/run/nas-secrets";
@@ -15,15 +15,15 @@ let
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
   copypartyUserConfigDir = "/var/lib/copyparty/user.d";
-  featureCatalogPath = "/etc/nas-control/features.json";
-  featureSchemaPath = "/etc/nas-control/feature-catalog.schema.json";
-  featureStatePath = "/var/lib/nas-control/settings.json";
-  featureRuntimePath = "/run/nas-control/on-demand.json";
-  onDemandGateSocket = "/run/nas-on-demand/gate.sock";
-  authentikPort = serviceRegistry.identity.endpoints.main.targetPort;
-  cockpitPort = serviceRegistry.cockpit.endpoints.main.targetPort;
-  syncthingGuiPort = serviceRegistry.syncthing.endpoints.main.targetPort;
-  vaultwardenPort = serviceRegistry.vaultwarden.endpoints.main.targetPort;
+
+  # Native application integration constants. Managed Services V2 owns the
+  # service/route model; these values only configure the corresponding native
+  # NixOS services and seed their V2 targets.
+  authentikPort = 9000;
+  cockpitPort = 9092;
+  syncthingGuiPort = 8384;
+  vaultwardenPort = 8222;
+
   vaultwardenSecretDir = "${secretRoot}/vaultwarden";
   zfsSecretDir = "${secretRoot}/zfs";
   aiSecretDir = "${secretRoot}/ai";
@@ -62,7 +62,6 @@ let
     "authentik.service"
     "authentik-worker.service"
     "copyparty.service"
-    "nas-on-demand-gate.service"
     "cockpit.socket"
   ];
 
@@ -74,7 +73,6 @@ let
     "authentik.service"
     "nas-identity-sync.service"
     "copyparty.service"
-    "nas-on-demand-gate.service"
     "caddy.service"
   ] ++ lib.optional cfg.zfsEncryption.enable "nas-zfs-unlock.service";
 
@@ -115,13 +113,11 @@ let
     else if llamaBackend == "vulkan" then pkgs.llama-cpp.override { vulkanSupport = true; }
     else pkgs.llama-cpp;
 
-
 in
 {
   inherit
-    cfg lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
+    cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir
-    featureCatalogPath featureSchemaPath featureStatePath featureRuntimePath onDemandGateSocket
     authentikPort cockpitPort syncthingGuiPort vaultwardenPort
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath

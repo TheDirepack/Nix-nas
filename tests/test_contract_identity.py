@@ -28,7 +28,7 @@ class ContractTests(unittest.TestCase):
         secrets = text("modules/nas/internal/secret-tools.nix")
         unlock = text("cockpit/src/api.js")
         self.assertIn("keepassxc-cli", secrets)
-        self.assertNotIn("--pw-stdin", secrets)
+        self.assertIn("--pw-stdin", secrets)
         self.assertRegex(secrets, r"read\s+-r\s+-s")
         self.assertIn("activate-stdin)", secrets)
         self.assertIn('superuser: "require"', unlock)
@@ -56,10 +56,6 @@ class ContractTests(unittest.TestCase):
         self.assertIn("rwmd.: ''${u}", system)
         self.assertNotIn("A: ''${u}, @nas_admin", system)
         self.assertIn("shr-who: auth", system)
-        # Portal is now a Caddy template that renders portal.json entries via
-        # Remote-Groups, not hardcoded per-capability blocks. Check the template
-        # reads the portal and gates on groups, and that the share ACL is still
-        # copyparty-owned.
         self.assertIn('include "/run/nas-control/portal.json"', portal)
         self.assertIn('placeholder "http.request.header.Remote-Groups"', portal)
         self.assertIn('"shr-adm" = "@nas_admin";', services)
@@ -95,37 +91,50 @@ class ContractTests(unittest.TestCase):
         ast.parse(block_after("      initial_value: |"))
         ast.parse(block_after("      expression: |"))
 
-    def test_portal_is_a_caddy_template_not_an_application_service(self):
+    def test_portal_is_caddy_template_and_share_route_is_v2_owned(self):
         proxy = text("modules/nas/config/reverse-proxy.nix")
+        migration = text("modules/nas/config/managed-services-migration.nix")
         base = text("modules/nas/internal/base.nix")
         systemd = text("modules/nas/config/systemd-services.nix")
         portal = text("web/portal/index.html")
         self.assertIn("templates", proxy)
         self.assertIn("file_server", proxy)
         self.assertIn("nasPortalStatic", proxy)
-        self.assertIn("handle /share/*", proxy)
-        # Portal is a Caddy template that includes portal.json and renders
-        # entries via placeholder Remote-Groups / Remote-User, not a
-        # hard-coded /shares/users path.
         self.assertIn('include "/run/nas-control/portal.json"', portal)
         self.assertIn('placeholder "http.request.header.Remote-Groups"', portal)
         self.assertIn('placeholder "http.request.header.Remote-User"', portal)
-        share_route = proxy.split("handle /share/* {", 1)[1].split("@shares path", 1)[0]
-        self.assertIn("${copypartySsoProxy}", share_route)
-        self.assertNotIn("caddyForwardAuth", share_route)
-        self.assertNotIn("caddyCapabilityAuth", share_route)
+        self.assertIn('share = pathRoute [ "/share" ] copypartyTarget { mode = "upstream"; };', migration)
+        self.assertNotIn("handle /share/*", proxy)
         self.assertNotIn("nas-portal.service", base + systemd)
-        self.assertNotIn("portalPort", text("modules/nas/internal/maintenance-tools.nix"))
         self.assertFalse((ROOT / "services" / "nas_portal.py").exists())
+
+    def test_canonical_capabilities_replace_request_time_legacy_gate(self):
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        migration = text("modules/nas/config/managed-services-migration.nix")
+        identity_migration = text("modules/nas/config/managed-services-identity-migration.nix")
+        systemd = text("modules/nas/config/systemd-services.nix")
+        self.assertIn("application\\.ai-workspace\\.access", proxy)
+        self.assertIn("application\\.ai-workspace\\.admin", proxy)
+        self.assertIn("application\\.ai-downloader\\.admin", proxy)
+        self.assertIn("application\\.syncthing\\.admin", proxy)
+        self.assertIn("unix//run/nas-control/wake.sock", proxy)
+        self.assertNotIn("caddyOnDemandAuth", proxy)
+        self.assertNotIn("caddyCapabilityAuth", proxy)
+        self.assertIn('ai-workspace = (onDemand "open-webui.service"', migration)
+        self.assertIn('"application.ai-workspace.access".legacyCapability = "ai";', identity_migration)
+        self.assertIn('"application.ai-workspace.admin" = admin;', identity_migration)
+        self.assertNotIn("nas-on-demand-gate", systemd)
+        self.assertNotIn("nas-feature-apply", systemd)
+        self.assertFalse((ROOT / "modules/nas/config/managed-services-legacy-disable.nix").exists())
 
     def test_explicit_multi_superuser_group_and_admin_only_global_syncthing(self):
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
-        proxy = text("modules/nas/config/reverse-proxy.nix")
+        identity_migration = text("modules/nas/config/managed-services-identity-migration.nix")
         self.assertIn("No enabled members of", identity)
         self.assertIn("multiple fully trusted administrators", identity)
         self.assertIn("desired_superuser = name == ADMIN_GROUP", identity)
         self.assertIn("add_user/", identity)
-        self.assertIn('caddyOnDemandAuth "syncthing" "admin"', proxy)
+        self.assertIn('"application.syncthing.admin".legacyCapability = "syncthing";', identity_migration)
 
     def test_syncthing_reconciler_reads_authentik_attributes(self):
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
@@ -135,16 +144,17 @@ class ContractTests(unittest.TestCase):
         self.assertIn("expand_attribute_values", devices)
         self.assertNotIn("atomic_write_device_state", devices)
 
-    def test_non_admin_capabilities_default_to_nothing(self):
+    def test_legacy_capability_defaults_are_migrated_once_to_v2(self):
         common = text("services/nas_common.py")
         system = text("modules/nas/config/system.nix")
-        proxy = text("modules/nas/config/reverse-proxy.nix")
+        identity_migration = text("modules/nas/config/managed-services-identity-migration.nix")
+        migrator = text("services/nas_v2_identity_migrate.py")
         self.assertIn("return allow_group in groups", common)
         self.assertIn("u%+nas_allow_files", system)
-        self.assertIn('caddyCapabilityAuth "files"', proxy)
-        self.assertIn('caddyCapabilityAuth "webdav"', proxy)
-        self.assertIn('caddyCapabilityAuth "syncthing"', proxy)
-        self.assertIn('caddyCapabilityAuth "vault"', proxy)
+        self.assertIn('"application.copyparty.files".legacyCapability = "files";', identity_migration)
+        self.assertIn('"application.copyparty.webdav".legacyCapability = "webdav";', identity_migration)
+        self.assertIn('"application.vaultwarden.access".legacyCapability = "vault";', identity_migration)
+        self.assertIn("authentik-owned and are never re-derived from legacy groups", migrator.lower())
 
 
 if __name__ == "__main__":

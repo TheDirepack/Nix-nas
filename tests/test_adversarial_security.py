@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import contextlib
-import io
 import http.client
-from http.server import ThreadingHTTPServer
+import io
 import json
 import pathlib
 import subprocess
@@ -22,11 +21,12 @@ for path in (SERVICES, ROOT / "tests"):
 import adversarial_payloads as payloads
 import nas_alert_router as alert_router
 import nas_cockpit_api as cockpit_api
-import nas_feature_control as feature_control
 import nas_common as common
 import nas_identity_model as identity_model
 import nas_setup_config as setup_config
 import nas_syncthing_devices as syncthing_devices
+import nas_v2_readiness as readiness
+import nas_v2_session as session
 
 
 class AdversarialInputTests(unittest.TestCase):
@@ -36,15 +36,15 @@ class AdversarialInputTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(common.split_groups(payload), set())
 
-    def test_hostile_group_text_never_grants_privilege(self) -> None:
-        allow, _deny = common.CAPABILITY_GROUPS["ai"]
+    def test_hostile_group_text_never_grants_v2_application_privilege(self) -> None:
+        allow = common.application_capability_group("ai-workspace", "access")
         for payload in payloads.ALL_TEXT_PAYLOADS:
             with self.subTest(payload=repr(payload)):
                 with contextlib.redirect_stderr(io.StringIO()):
                     groups = common.split_groups(payload)
                 self.assertNotIn(common.ADMIN_GROUP, groups)
                 self.assertNotIn(allow, groups)
-                self.assertFalse(common.capability_allowed(groups, "ai"))
+                self.assertFalse(common.application_capability_allowed(groups, "ai-workspace", "access"))
 
     def test_identifiers_reject_injection_payloads(self) -> None:
         for payload in payloads.ALL_TEXT_PAYLOADS:
@@ -54,53 +54,23 @@ class AdversarialInputTests(unittest.TestCase):
                 with self.assertRaises(syncthing_devices.DeviceError):
                     syncthing_devices.validate_username(payload)
                 with self.assertRaises(cockpit_api.ApiError):
-                    cockpit_api.validate_argument(payload, cockpit_api.FEATURE_RE, "feature")
+                    cockpit_api.set_managed_service(payload, "always")
 
-    def test_feature_health_probes_reject_ssrf_and_credentialed_urls(self) -> None:
-        for url in payloads.URL_PAYLOADS:
-            catalog = {
-                "schemaVersion": 2,
-                "features": {
-                    "probe": {
-                        "allowedModes": ["off", "always"],
-                        "defaultMode": "off",
-                        "startUnits": [],
-                        "stopUnits": [],
-                        "activePorts": [],
-                        "healthUrls": [url],
-                    }
-                },
-                "memoryComponents": [],
-            }
-            with self.subTest(url=url), self.assertRaises(feature_control.FeatureError):
-                feature_control.normalize_catalog(catalog)
+    def test_session_instance_ids_reject_hostile_payloads(self) -> None:
+        for payload in payloads.ALL_TEXT_PAYLOADS:
+            with self.subTest(payload=repr(payload)), self.assertRaises(session.SessionError):
+                session.validate_instance_id(payload)
 
-    def test_feature_http_probe_accepts_only_loopback_plain_http(self) -> None:
-        good = {
-            "schemaVersion": 2,
-            "features": {
-                "probe": {
-                    "allowedModes": ["off", "always"],
-                    "defaultMode": "off",
-                    "startUnits": [],
-                    "stopUnits": [],
-                    "activePorts": [],
-                    "availabilityProbe": {"type": "http", "url": "http://127.0.0.1:8080/health"},
-                }
-            },
-            "memoryComponents": [],
-        }
-        self.assertEqual(feature_control.normalize_catalog(good)["schemaVersion"], 2)
-
-        for rejected in (
-            "http://10.0.0.1:8080/health",
-            "http://192.168.1.10/health",
-            "https://127.0.0.1/health",
-        ):
-            bad = json.loads(json.dumps(good))
-            bad["features"]["probe"]["availabilityProbe"]["url"] = rejected
-            with self.subTest(url=rejected), self.assertRaises(feature_control.FeatureError):
-                feature_control.normalize_catalog(bad)
+    def test_readiness_http_rejects_credentials_fragments_and_non_http_schemes(self) -> None:
+        rejected = (
+            "http://user:secret@127.0.0.1:8080/health",
+            "http://127.0.0.1:8080/health#secret",
+            "file:///etc/shadow",
+            "javascript:alert(1)",
+        )
+        for url in rejected:
+            with self.subTest(url=url), self.assertRaises(readiness.ReadinessError):
+                readiness._probe_http({"type": "http", "url": url})
 
     def test_setup_username_and_device_paths_fail_closed(self) -> None:
         for payload in payloads.ALL_TEXT_PAYLOADS:
@@ -135,68 +105,23 @@ class AdversarialInputTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
 
-class FeatureGateProtocolTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), feature_control.GateHandler)
-        self.server.daemon_threads = True
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
+class ManagedServicesV2BoundaryTests(unittest.TestCase):
+    def test_deleted_request_time_gate_source_is_absent(self) -> None:
+        self.assertFalse((SERVICES / "nas_feature_control.py").exists())
 
-    def tearDown(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
+    def test_wake_helper_contains_no_identity_or_group_authorization_logic(self) -> None:
+        source = (SERVICES / "nas_v2_wake.py").read_text(encoding="utf-8")
+        self.assertNotIn("Remote-User", source)
+        self.assertNotIn("Remote-Groups", source)
+        self.assertNotIn("X-authentik", source)
+        self.assertNotIn("capability_allowed", source)
 
-    def request(self, path: str, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
-        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
-        try:
-            connection.request("GET", path, headers=headers or {})
-            response = connection.getresponse()
-            return response.status, response.read()
-        finally:
-            connection.close()
-
-    def test_gate_protocol_fuzz_never_turns_hostile_capability_inputs_into_success(self) -> None:
-        candidates = (
-            ("/authorize?scope=files%00admin", 400),
-            ("/authorize?scope=files%0d%0aadmin", 400),
-            ("/authorize?scope=files&scope=admin", 400),
-            ("/authorize?feature=../../etc/shadow&scope=admin", 400),
-            ("/authorize?feature=%3Cscript%3Ealert(1)%3C/script%3E", 400),
-            ("/authorize?feature=%27%20OR%201%3D1%20--", 400),
-            ("/authorize?" + "feature=" + "A" * 8192, 400),
-            ("/authorize?a=1&b=2&c=3&d=4&e=5", 400),
-            ("/authorize/../authorize?scope=admin", 404),
-        )
-        headers = {"Remote-User": "ordinary", "Remote-Groups": common.USER_GROUP}
-        for candidate, expected in candidates:
-            with self.subTest(candidate=candidate):
-                status, body = self.request(candidate, headers)
-                self.assertEqual(status, expected)
-                self.assertNotIn(b"Traceback", body)
-
-    def test_gate_capability_authorization_fails_closed_for_hostile_group_values(self) -> None:
-        for raw in payloads.SQL_PAYLOADS + payloads.XSS_PAYLOADS + payloads.PATH_PAYLOADS:
-            with self.subTest(raw=raw):
-                status, body = self.request(
-                    "/authorize?scope=files",
-                    {"Remote-User": "ordinary", "Remote-Groups": raw},
-                )
-                self.assertEqual(status, 403)
-                self.assertNotIn(b"Traceback", body)
-
-    def test_gate_known_capability_requires_exact_allow_group(self) -> None:
-        allow_group, _deny_group = common.CAPABILITY_GROUPS["files"]
-        denied, _ = self.request(
-            "/authorize?scope=files",
-            {"Remote-User": "ordinary", "Remote-Groups": common.USER_GROUP},
-        )
-        allowed, _ = self.request(
-            "/authorize?scope=files",
-            {"Remote-User": "ordinary", "Remote-Groups": f"{common.USER_GROUP},{allow_group}"},
-        )
-        self.assertEqual(denied, 403)
-        self.assertEqual(allowed, 204)
+    def test_caddy_owns_request_time_identity_header_sanitization(self) -> None:
+        source = (SERVICES / "nas_v2_caddy.py").read_text(encoding="utf-8")
+        self.assertIn("Remote-User", source)
+        self.assertIn("X-Authentik", source)
+        self.assertIn("forward_auth", source)
+        self.assertIn("requiredCapability", source)
 
 
 class AlertRouterProtocolTests(unittest.TestCase):

@@ -31,16 +31,20 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("core", default_block)
         self.assertIn("copyparty.overlays.default", default_block)
 
-    def test_feature_gate_is_unprivileged_and_polkit_is_unit_scoped(self) -> None:
+    def test_legacy_feature_gate_privilege_surface_is_removed(self) -> None:
         identities = text("modules/nas/config/identities.nix")
-        units = text("modules/nas/config/systemd-services.nix")
-        self.assertIn("users.users.nas-feature-gate", identities)
-        self.assertIn('subject.user === "nas-feature-gate"', identities)
-        self.assertIn('action.id === "org.freedesktop.systemd1.manage-units"', identities)
-        self.assertIn("lib.attrValues featureCatalog.features", identities)
-        self.assertIn("entry.stopUnits or [ ]", identities)
-        self.assertIn('User = "nas-feature-gate";', units)
-        self.assertNotIn('User = "root";', units.split("nas-on-demand-gate", 1)[1].split("};", 1)[0])
+        managed = text("modules/nas/config/managed-services.nix")
+        systemd = text("modules/nas/config/systemd-services.nix")
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        self.assertNotIn("users.users.nas-feature-gate", identities)
+        self.assertNotIn('subject.user === "nas-feature-gate"', identities)
+        self.assertNotIn('action.id === "org.freedesktop.systemd1.manage-units"', identities)
+        self.assertNotIn("nas-on-demand-gate", systemd)
+        self.assertNotIn("nas-feature-apply", systemd)
+        self.assertFalse((ROOT / "modules/nas/config/managed-services-legacy-disable.nix").exists())
+        self.assertIn('SocketUser = "caddy";', managed)
+        self.assertIn('SocketGroup = "caddy";', managed)
+        self.assertIn("/run/nas-control/wake.sock", proxy)
 
     def test_cockpit_mutations_dispatch_through_systemd_units(self) -> None:
         source = text("services/nas_cockpit_api.py")
@@ -126,8 +130,12 @@ class Alpha18HardeningContracts(unittest.TestCase):
 
     def test_host_compatibility_policy_is_not_hidden_in_reusable_module(self) -> None:
         reusable = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "modules").rglob("*.nix"))
-        self.assertNotIn("system.stateVersion", reusable)
+        self.assertNotRegex(reusable, r"system\.stateVersion\s*=")
         self.assertIn('system.stateVersion = "26.05";', text("local.nix"))
+        self.assertIn(
+            'lib.versionOlder config.system.stateVersion "24.11"',
+            text("modules/nas/config/managed-services-backup-resources.nix"),
+        )
         self.assertIn('[ "x86_64-linux" ]', text("modules/nas/internal/base.nix"))
 
     def test_victoriametrics_stack_has_no_prometheus_runtime_dependencies(self) -> None:
@@ -189,7 +197,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
             self.assertIn(f'add_parser("{command}"', state)
         self.assertIn('"const": 2', schema)
         self.assertIn("registryDigest", schema)
-        self.assertIn("producerVersion", schema)
+        self.assertIn("producerVersion", state)
         self.assertIn("rollbackBundle", state)
 
     def test_profiles_keep_optional_services_out_of_base_defaults(self) -> None:
@@ -221,7 +229,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
 
     def test_backup_restore_verification_is_isolated_and_scheduled(self) -> None:
         storage = text("modules/nas/config/storage-monitoring.nix")
-        schedules = text("modules/nas/config/schedules.nix")
+        operations = text("modules/nas/config/managed-services-operations.nix")
         validation = text("modules/nas/config/validation.nix")
         self.assertIn("nas-backup-restore-verify", storage)
         self.assertIn("restic", storage)
@@ -230,7 +238,8 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("django_migrations", storage)
         self.assertIn('install -d -m 0711 "$verify_root"', storage)
         self.assertIn("stagingMinFreeBytes", storage)
-        self.assertIn("nas-backup-restore-verify", schedules)
+        self.assertIn('backup-restore-verify = job "nas-backup-restore-verify.service"', operations)
+        self.assertIn("cfg.backup.restoreVerification.onCalendar", operations)
         self.assertIn("restoreVerification.targetPath", validation)
         self.assertNotIn("/run/nas-backup", storage)
 

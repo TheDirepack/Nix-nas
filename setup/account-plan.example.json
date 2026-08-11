@@ -6,7 +6,7 @@
       "name": "Alice",
       "email": "alice@nas.local",
       "active": true,
-      "groups": ["nas_users", "nas_allow_files"],
+      "groups": ["nas_users"],
       "attributes": {}
     }
   ],

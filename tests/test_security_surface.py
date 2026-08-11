@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
@@ -170,7 +171,9 @@ class SecuritySurfaceTests(unittest.TestCase):
         self.assertEqual({"shell-format-string", "insecure-temporary-file"}, rules)
 
     def test_copyparty_backup_uses_sqlite_backup_api_not_meta_commands(self):
-        source = (ROOT / "modules" / "nas" / "config" / "storage-monitoring.nix").read_text(encoding="utf-8")
+        source = (ROOT / "modules" / "nas" / "config" / "managed-services-backup-resources.nix").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("source_db.backup(destination_db)", source)
         self.assertIn('sqlite3.connect(f"file:{source}?mode=ro", uri=True)', source)
         self.assertNotIn(".backup '$destination'", source)
@@ -194,11 +197,15 @@ class SecuritySurfaceTests(unittest.TestCase):
                 self.assertEqual(common.split_groups(raw), set())
                 self.assertFalse(common.account_is_admin(common.split_groups(raw)))
 
-    def test_injection_payloads_are_rejected_as_feature_ids(self):
+    def test_injection_payloads_are_rejected_as_v2_service_ids(self):
         for raw in SHELL_PAYLOADS + SQL_PAYLOADS + XSS_PAYLOADS + PATH_PAYLOADS:
-            with self.subTest(raw=raw):
+            with self.subTest(raw=raw), mock.patch.object(api, "acquire_operation") as lock, mock.patch.object(
+                api, "run"
+            ) as run:
                 with self.assertRaises(api.ApiError):
-                    api.validate_argument(raw, api.FEATURE_RE, "feature identifier")
+                    api.set_managed_service(raw, "always")
+                lock.assert_not_called()
+                run.assert_not_called()
 
     def test_archive_traversal_payloads_cannot_escape_posix_staging_root(self):
         for raw in PATH_PAYLOADS:
@@ -213,10 +220,10 @@ class SecuritySurfaceTests(unittest.TestCase):
     def test_setup_storage_does_not_accept_shellish_devices(self):
         for raw in SHELL_PAYLOADS:
             config = {
-                "schemaVersion": 1,
-                "storage": {"createPool": True, "device": raw},
+                "schemaVersion": 2,
+                "storage": {"createPool": True, "devices": [raw]},
                 "accounts": [],
-                "features": {},
+                "services": {},
             }
             with self.subTest(raw=raw), self.assertRaises(setup_config.SetupError):
                 setup_config.normalize_config(config)

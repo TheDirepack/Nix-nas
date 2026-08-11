@@ -6,18 +6,17 @@ import stat
 import sys
 from typing import Any, Mapping
 
-from nas_common import ADMIN_GROUP, CAPABILITY_GROUPS, DISABLED_GROUP, GUEST_GROUP, USER_GROUP
+from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, USER_GROUP
 from nas_syncthing_devices import DeviceError, normalize_devices, validate_username
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RESERVED_GROUPS = {
     ADMIN_GROUP,
     USER_GROUP,
     GUEST_GROUP,
     DISABLED_GROUP,
-    *(group for pair in CAPABILITY_GROUPS.values() for group in pair),
 }
-FEATURE_MODES = {"off", "on-demand", "always"}
+SERVICE_MODES = {"off", "on-demand", "always"}
 ZFS_TOPOLOGIES = {"single", "stripe", "mirror", "raidz1", "raidz2", "raidz3"}
 
 
@@ -71,11 +70,14 @@ def normalize_account(raw: Any, index: int) -> dict[str, Any]:
 
     raw_groups = raw.get("groups", [USER_GROUP])
     if not isinstance(raw_groups, list) or not all(isinstance(item, str) for item in raw_groups):
-        raise SetupError(f"accounts[{index}].groups must be a list of group names")
+        raise SetupError(f"accounts[{index}].groups must be a list of base identity role names")
     groups = {item.strip() for item in raw_groups if item.strip()}
     unknown = sorted(groups - RESERVED_GROUPS)
     if unknown:
-        raise SetupError(f"accounts[{index}] contains unknown reserved groups: {', '.join(unknown)}")
+        raise SetupError(
+            f"accounts[{index}] contains non-role group(s): {', '.join(unknown)}; "
+            "assign application.<service>.<capability> groups in Authentik after V2 reconciliation"
+        )
     if active:
         groups.discard(DISABLED_GROUP)
         if not ({ADMIN_GROUP, GUEST_GROUP} & groups):
@@ -131,7 +133,7 @@ def normalize_config(raw: Mapping[str, Any]) -> dict[str, Any]:
             "schemaVersion",
             "storage",
             "accounts",
-            "features",
+            "services",
             "deactivateMissingManagedAccounts",
             "runPreflight",
         },
@@ -207,22 +209,22 @@ def normalize_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     elif devices or storage["wipeDevices"]:
         raise SetupError("storage.devices/wipeDevices require storage.createPool=true")
 
-    features_raw = raw.get("features", {})
-    if not isinstance(features_raw, Mapping):
-        raise SetupError("features must be an object")
-    features: dict[str, str] = {}
-    for feature, mode in features_raw.items():
-        feature_name = _string(feature, "feature name")
-        mode_name = _string(mode, f"features.{feature_name}")
-        if mode_name not in FEATURE_MODES:
-            raise SetupError(f"features.{feature_name} must be one of: {', '.join(sorted(FEATURE_MODES))}")
-        features[feature_name] = mode_name
+    services_raw = raw.get("services", {})
+    if not isinstance(services_raw, Mapping):
+        raise SetupError("services must be an object mapping V2 service IDs to lifecycle modes")
+    services: dict[str, str] = {}
+    for service, mode in services_raw.items():
+        service_name = _string(service, "service id")
+        mode_name = _string(mode, f"services.{service_name}")
+        if mode_name not in SERVICE_MODES:
+            raise SetupError(f"services.{service_name} must be one of: {', '.join(sorted(SERVICE_MODES))}")
+        services[service_name] = mode_name
 
     return {
         "schemaVersion": SCHEMA_VERSION,
         "storage": storage,
         "accounts": accounts,
-        "features": features,
+        "services": services,
         "deactivateMissingManagedAccounts": _bool(
             raw.get("deactivateMissingManagedAccounts"),
             "deactivateMissingManagedAccounts",
