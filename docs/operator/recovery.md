@@ -213,7 +213,6 @@ sudo nas-state diff /path/to/nas-state.tar.gz
 
 `nas-state restore` requires an exact hostname confirmation, explicit sensitive-state permission, and creates a rollback bundle before applying authorities. Use `--allow-partial` only when the manifest identifies an understood missing optional authority.
 
-
 The `nas-boot-system` repository contains `/boot`, machine and SSH identity, the Nix configuration, KeePass, Authentik media/database dump, CopyParty mutable configuration plus staged native share-link databases, Syncthing identity, and selected service state.
 
 When the repository is on the same ZFS pool, import/mount the pool before using Restic. Restore the boot/configuration paths to a staging directory first, compare them, and then copy the required files to the new boot device. A same-pool repository does not help when that pool is lost; use the Syncoid replica or an external Restic repository in that scenario.
@@ -246,7 +245,8 @@ sudo nas-secrets status
 sudo nas-secrets check-authentik-token
 sudo nas-identity-sync verify-token
 sudo nas-identity-sync status
-sudo nas-feature-control status
+sudo nas-managed-services-control status
+sudo nas-managed-services-control reconcile
 sudo nas-update --status --json
 ```
 
