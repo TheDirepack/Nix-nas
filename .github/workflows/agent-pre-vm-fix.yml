@@ -17,13 +17,10 @@ jobs:
         with:
           ref: agent/managed-services-v2-core
           fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Apply semantic post-rebase fixes
+      - name: Apply typed post-rebase fixes
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -37,170 +34,42 @@ jobs:
               target.write_text(text.replace(old, new), encoding="utf-8")
 
           replace(
-              ".github/workflows/ci.yml",
-              "nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v",
-              "nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v",
+              "services/nas_cockpit_api.py",
+              '            ttl_seconds=3600,\n            metadata={"jobId": job_id},\n',
+              '            ttl_seconds=3600,\n',
           )
-
-          secrets = Path("modules/nas/internal/secret-tools.nix")
-          text = secrets.read_text(encoding="utf-8")
-          for stale in (
-              "        printf '%s' \"$llama_swap_api_key\" > \"$local_stage/ai/gate-api-key\"\n",
-              "        install_secret \"$local_stage/ai/gate-api-key\" \"$root_stage/ai/gate-api-key\" nas-feature-gate nas-feature-control\n",
-          ):
-              if text.count(stale) != 1:
-                  raise SystemExit(f"secret-tools.nix: expected exactly one stale gate line: {stale!r}")
-              text = text.replace(stale, "")
-          secrets.write_text(text, encoding="utf-8")
-
-          observability = Path("modules/nas/config/observability.nix")
-          obs_text = observability.read_text(encoding="utf-8")
-          start = obs_text.index("  monitoredUnits = lib.unique (")
-          end = obs_text.index("  smartctlReadOnly =", start)
-          new_monitored = (
-              "  monitoredUnits = lib.unique (\n"
-              "    [\n"
-              "      \"nas-*\"\n"
-              "      \"podman-*.service\"\n"
-              "      \"zfs-*\"\n"
-              "      \"sanoid*\"\n"
-              "      \"syncoid*\"\n"
-              "      \"NetworkManager.service\"\n"
-              "      \"firewalld.service\"\n"
-              "      \"sshd.service\"\n"
-              "      \"postgresql.service\"\n"
-              "      \"authentik.service\"\n"
-              "      \"authentik-worker.service\"\n"
-              "      \"copyparty.service\"\n"
-              "      \"caddy.service\"\n"
-              "      \"cockpit.socket\"\n"
-              "    ]\n"
-              "    ++ lib.optional cfg.syncthing.enable \"syncthing.service\"\n"
-              "    ++ lib.optional cfg.vaultwarden.enable \"vaultwarden.service\"\n"
-              "    ++ lib.optional cfg.ai.enable \"open-webui.service\"\n"
-              "    ++ lib.optional cfg.virtualization.enable \"libvirtd.service\"\n"
-              "    ++ lib.optionals cfg.observability.enable [ \"victoriametrics.service\" \"telegraf.service\" ]\n"
-              "    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) \"vmalert-nas.service\"\n"
-              "    ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) \"grafana.service\"\n"
-              "    ++ lib.optional cfg.observability.ntfy.enable \"ntfy-sh.service\"\n"
-              "  );\n"
-          )
-          observability.write_text(obs_text[:start] + new_monitored + obs_text[end:], encoding="utf-8")
-
-          old_operations = '''function OperationsPage({data, mutate, busy}) {
-            const operations = visibleOperations(data || {});
-            const [lastResult, setLastResult] = useState(null);
-            const run = async (id) => {
-              const result = await mutate(() => api(["action", id]));
-              setLastResult(result);
-            };
-            return (
-              <>
-                <Title headingLevel="h2">Operations</Title>
-                <div className="nas-actions nas-actions--wrap">
-                  {operations.map(([id, label]) => (
-                    <Button key={id} variant="secondary" onClick={() => run(id)} isDisabled={busy}>{label}</Button>
-                  ))}
-                </div>
-                <Card>
-                  <CardHeader><CardTitle>Operation coordinator</CardTitle></CardHeader>
-                  <CardBody><pre className="nas-pre">{pretty(data?.operations || {})}</pre></CardBody>
-                </Card>
-                {lastResult ? <Card><CardBody><pre className="nas-pre">{pretty(lastResult)}</pre></CardBody></Card> : null}
-              </>
-            );
-          }
-          '''
-          new_operations = '''function OperationsPage({data, mutate, busy}) {
-            const operations = visibleOperations(data || {});
-            const confirmationRequired = new Set([
-              "snapshot",
-              "zfs-scrub",
-              "backup",
-              "replicate",
-              "update-sync",
-              "update-apply",
-              "protected-restart",
-            ]);
-            const [pending, setPending] = useState(null);
-            const [lastResult, setLastResult] = useState(null);
-            const run = async (id) => {
-              const result = await mutate(() => api(["action", id]));
-              setPending(null);
-              setLastResult(result);
-            };
-            return (
-              <>
-                <Title headingLevel="h2">Operations</Title>
-                <div className="nas-actions nas-actions--wrap">
-                  {operations.map(([id, label]) => (
-                    <Button
-                      key={id}
-                      variant="secondary"
-                      onClick={() => confirmationRequired.has(id) ? setPending({id, label}) : run(id)}
-                      isDisabled={busy}
-                    >
-                      {label}
-                    </Button>
-                  ))}
-                </div>
-                {pending ? (
-                  <Card>
-                    <CardHeader><CardTitle>Confirm maintenance action</CardTitle></CardHeader>
-                    <CardBody>
-                      <p>Run <strong>{pending.label}</strong>? This action can change appliance state.</p>
-                      <div className="nas-actions">
-                        <Button variant="danger" onClick={() => run(pending.id)} isDisabled={busy}>Confirm</Button>
-                        <Button variant="link" onClick={() => setPending(null)} isDisabled={busy}>Cancel</Button>
-                      </div>
-                    </CardBody>
-                  </Card>
-                ) : null}
-                <Card>
-                  <CardHeader><CardTitle>Operation coordinator</CardTitle></CardHeader>
-                  <CardBody><pre className="nas-pre">{pretty(data?.operations || {})}</pre></CardBody>
-                </Card>
-                {lastResult ? <Card><CardBody><pre className="nas-pre">{pretty(lastResult)}</pre></CardBody></Card> : null}
-              </>
-            );
-          }
-          '''
-          replace("cockpit/src/app.jsx", old_operations, new_operations)
           replace(
-              "cockpit/src/app.jsx",
-              '<input type="checkbox" checked={allowDestructive}',
-              '<input id="first-start-destructive" type="checkbox" checked={allowDestructive}',
+              "services/nas_state.py",
+              '            comparison = "match"\n            if status == "absent":\n',
+              '            comparison = "match"\n            current: str | None = None\n            if status == "absent":\n',
+          )
+          replace(
+              "tests/test_contract_tooling.py",
+              '            def log_message(self, *_args):\n                pass\n',
+              '            def log_message(self, format, *args):\n                del format, args\n',
           )
           PY
       - name: Apply canonical Ruff formatting
         run: nix shell nixpkgs#ruff -c ruff format services tests scripts
-      - name: Verify Python lint and formatting
+      - name: Verify Python lint formatting and types
         run: |
           nix shell nixpkgs#ruff -c ruff check services tests scripts
           nix shell nixpkgs#ruff -c ruff format --check services tests scripts
-      - name: Rebuild reviewed Cockpit bundle
-        run: |
-          npm --prefix cockpit ci --no-audit --no-fund
-          npm --prefix cockpit run build
-          node cockpit/build.js --check
-      - name: Verify focused pre-VM regressions
+          nix shell nixpkgs#pyright -c pyright --project pyproject.toml
+      - name: Verify affected regressions
         run: |
           nix develop .#test -c env PYTHONPATH=tests python3 -m unittest \
-            tests.test_alpha18_hardening \
-            tests.test_alpha20_cockpit \
-            tests.test_contract_identity \
-            tests.test_contract_operations \
-            tests.test_runner_accounting -v
-          CADDY_BIN="$(nix build --no-link --print-out-paths nixpkgs#caddy)/bin/caddy"
-          nix develop .#test -c env CADDY_BIN="$CADDY_BIN" python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v
+            tests.test_cockpit_api \
+            tests.test_state \
+            tests.test_contract_tooling -v
       - name: Commit repair
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add modules/nas/internal/secret-tools.nix modules/nas/config/observability.nix services tests cockpit/src cockpit/dist cockpit/package-lock.json
+          git add services tests
           if git diff --cached --quiet; then
             echo "No repair changes to commit."
             exit 0
           fi
-          git commit -m "fix(ci): align V2 contracts after main rebase"
+          git commit -m "fix(ci): repair typed V2 regressions after main rebase"
           git push origin HEAD:agent/managed-services-v2-core
