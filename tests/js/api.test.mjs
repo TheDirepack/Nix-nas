@@ -8,6 +8,7 @@ import {
   managedServicesStatus,
   parseJsonOutput,
   replaceManagedServicesDocument,
+  replaceManagedServicesJsonDocument,
   setManagedServiceMode,
   startFirstRun,
 } from "../../cockpit/src/api.js";
@@ -85,6 +86,27 @@ test("managed services document replacement sends YAML only over stdin", async (
     ["input", yaml],
   ]);
   assert.throws(() => replaceManagedServicesDocument("", spawn), /must not be empty/);
+});
+
+test("schema editor replacement sends only the JSON document over stdin", async () => {
+  const calls = [];
+  const spawn = (command, options) => {
+    const process = Promise.resolve('{"ok":true}');
+    process.input = (value) => calls.push(["input", value]);
+    calls.push(["spawn", command, options]);
+    return process;
+  };
+  const document = {schemaVersion: 3, services: {}};
+  assert.deepEqual(await replaceManagedServicesJsonDocument(document, spawn), {ok: true});
+  assert.deepEqual(calls, [
+    [
+      "spawn",
+      ["nas-managed-services-control", "replace-json-document", "-"],
+      {superuser: "require", err: "message"},
+    ],
+    ["input", JSON.stringify(document)],
+  ]);
+  assert.throws(() => replaceManagedServicesJsonDocument([], spawn), /must be an object/);
 });
 
 test("managed service mode validates identifiers and fixed modes before spawning", async () => {
