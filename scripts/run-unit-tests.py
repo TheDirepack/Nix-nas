@@ -41,6 +41,16 @@ SERIAL_TEST_FILES = frozenset(
 )
 
 
+def _github_escape(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _github_error(title: str, detail: str) -> None:
+    """Expose bounded per-file failures through GitHub check-run annotations."""
+    bounded = detail[-6000:]
+    print(f"::error title={_github_escape(title)}::{_github_escape(bounded)}", file=sys.stderr)
+
+
 def _kill_process_group(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGKILL)
@@ -348,7 +358,9 @@ def main() -> int:
             total_skipped += skip_c
             total_expected += exp_c
             total_unexpected += unexp_c
-            failures.append((path, f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"))
+            detail = f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"
+            failures.append((path, detail))
+            _github_error(f"Unit test timeout: {relative}", detail)
             print(f"FAIL {relative}: exceeded {args.timeout}s", file=sys.stderr)
             return
         if completed.returncode != 0:
@@ -359,19 +371,25 @@ def main() -> int:
             total_expected += exp_c
             total_unexpected += unexp_c
             total_passed += passed_c
-            failures.append((path, f"rc={completed.returncode}\n{(output or '')[-16000:]}"))
+            detail = f"rc={completed.returncode}\n{(output or '')[-16000:]}"
+            failures.append((path, detail))
+            _github_error(f"Unit test failure: {relative}", detail)
             print(f"FAIL {relative}: rc={completed.returncode} after {elapsed:.1f}s", file=sys.stderr)
             return
         if ran == 0 and path.name not in ALLOWLIST_ZERO:
             total_ran += ran
             total_skipped += skip_c
-            failures.append((path, "no tests discovered\n" + (output or "")[-16000:]))
+            detail = "no tests discovered\n" + (output or "")[-16000:]
+            failures.append((path, detail))
+            _github_error(f"No tests discovered: {relative}", detail)
             print(f"FAIL {relative}: no tests discovered after {elapsed:.1f}s", file=sys.stderr)
             return
         if ran > 0 and skip_c == ran and path.name not in ALLOWLIST_ALL_SKIPPED:
             total_ran += ran
             total_skipped += skip_c
-            failures.append((path, "all discovered tests were skipped\n" + (output or "")[-16000:]))
+            detail = "all discovered tests were skipped\n" + (output or "")[-16000:]
+            failures.append((path, detail))
+            _github_error(f"All tests skipped: {relative}", detail)
             print(f"FAIL {relative}: all {ran} discovered tests were skipped after {elapsed:.1f}s", file=sys.stderr)
             return
         total_ran += ran
