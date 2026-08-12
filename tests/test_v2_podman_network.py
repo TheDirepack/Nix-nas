@@ -53,7 +53,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
         script = root / "nmcli"
         script.write_text(
             "#!/bin/sh\n"
-            "case \" $* \" in\n"
+            'case " $* " in\n'
             "  *\" --offline \"*) printf '[connection]\\nid=fake\\n' ;;\n"
             "  *) exit 0 ;;\n"
             "esac\n",
@@ -283,9 +283,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
             with self.subTest(policy=policy):
                 effective, service = self.service(policy=policy)
                 self.assertTrue(network.requires_firewalld(effective))
-                with self.assertRaisesRegex(
-                    network.PodmanNetworkProjectionError, "firewalld policy projection"
-                ):
+                with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
                     network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
 
     def test_isolated_listener_is_published_and_requires_firewalld_when_managed(self):
