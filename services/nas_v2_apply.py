@@ -76,6 +76,9 @@ class SystemdProjection:
     compose_provider_bin: str = "podman-compose"
     virsh_bin: str = "virsh"
     virt_xml_validate_bin: str | None = None
+    nmcli_bin: str = "nmcli"
+    install_bin: str = "install"
+    rm_bin: str = "rm"
 
 
 @dataclass(frozen=True)
@@ -225,6 +228,9 @@ def _systemd_files(
             files=generated,
             manifest=manifest,
             firewalld_enabled=firewalld_enabled,
+            nmcli_bin=projection.nmcli_bin,
+            install_bin=projection.install_bin,
+            rm_bin=projection.rm_bin,
         )
         augment_projection(
             effective,
