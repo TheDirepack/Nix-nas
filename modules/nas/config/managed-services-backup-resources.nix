@@ -197,11 +197,6 @@ PYSQLITEBACKUP
     };
   };
 
-  seedFile = yamlFormat.generate "managed-services-backup-resources-seed-v2.yaml" {
-    schemaVersion = 3;
-    storageResources = backupResources;
-    services = backupServices;
-  };
 in
 {
   config = {
@@ -237,19 +232,6 @@ in
     };
     systemd.timers.backup-vaultwarden = lib.mkIf cfg.vaultwarden.enable {
       wantedBy = lib.mkOverride 90 [ ];
-    };
-
-    systemd.services.nas-managed-services-seed = lib.mkIf cfg.backup.enable {
-      environment.PYTHONPATH = "${v2Source}";
-      postStart = lib.mkAfter ''
-        ${v2Python}/bin/python ${v2Source}/nas_v2_bootstrap.py \
-          --desired ${lib.escapeShellArg desiredPath} \
-          --seed ${lib.escapeShellArg seedFile} \
-          --marker ${lib.escapeShellArg markerPath} \
-          --schema ${lib.escapeShellArg schemaPath} \
-          --platform ${lib.escapeShellArg platformPath}
-      '';
-      serviceConfig.ReadWritePaths = lib.mkAfter [ "/var/lib/nas-control" ];
     };
   };
 }

@@ -119,6 +119,24 @@ def _clear_marker(marker: pathlib.Path) -> None:
     _fsync_directory(marker.parent)
 
 
+def _authority_lock(path: pathlib.Path):
+    import fcntl
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _lock():
+        lock_path = path.with_name(f".{path.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    return _lock()
+
+
 def migrate(
     *,
     desired: pathlib.Path,
@@ -128,35 +146,38 @@ def migrate(
     platform: pathlib.Path | None,
 ) -> dict[str, Any]:
     """Install the baseline only when the seed unit proved no prior authority existed."""
-    if not marker.exists():
-        return {
-            "changed": False,
-            "reason": "authority-exists",
-        }
+    # Use authority lock to serialize concurrent first-start attempts so only one
+    # complete authority is ever created and no partial union occurs.
+    with _authority_lock(desired):
+        if not marker.exists():
+            return {
+                "changed": False,
+                "reason": "authority-exists",
+            }
 
-    current = _load(desired)
-    if not _is_seed_stub(current):
-        # A concurrent writer won the race between preStart and ExecStart. Never
-        # overwrite that authority merely because the one-shot marker exists.
+        current = _load(desired)
+        if not _is_seed_stub(current):
+            # A concurrent writer won the race between preStart and ExecStart. Never
+            # overwrite that authority merely because the one-shot marker exists.
+            _clear_marker(marker)
+            return {
+                "changed": False,
+                "reason": "authority-created-concurrently",
+            }
+
+        baseline = _load(seed)
+        if baseline.get("schemaVersion") != 3:
+            raise BootstrapError("initial baseline must use schemaVersion 3")
+        _validate(baseline, schema_path=schema, platform_path=platform)
+        _atomic_dump(desired, baseline)
         _clear_marker(marker)
+
+        services = baseline.get("services")
         return {
-            "changed": False,
-            "reason": "authority-created-concurrently",
+            "changed": True,
+            "reason": "initial-seed",
+            "services": len(services) if isinstance(services, dict) else 0,
         }
-
-    baseline = _load(seed)
-    if baseline.get("schemaVersion") != 3:
-        raise BootstrapError("initial baseline must use schemaVersion 3")
-    _validate(baseline, schema_path=schema, platform_path=platform)
-    _atomic_dump(desired, baseline)
-    _clear_marker(marker)
-
-    services = baseline.get("services")
-    return {
-        "changed": True,
-        "reason": "initial-seed",
-        "services": len(services) if isinstance(services, dict) else 0,
-    }
 
 
 def main(argv: list[str] | None = None) -> int:

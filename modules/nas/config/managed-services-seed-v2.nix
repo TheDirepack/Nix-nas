@@ -2,7 +2,7 @@
 
 let
   cfg = config.nas;
-  inherit (nasInternal) syncthingGuiPort vaultwardenPort;
+  inherit (nasInternal) syncthingGuiPort vaultwardenPort cockpitPort;
   desiredPath = "/var/lib/nas-control/services.yaml";
   markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
@@ -15,6 +15,7 @@ let
   ]);
   yamlFormat = pkgs.formats.yaml { };
 
+  # --- helpers from managed-services-native-services.nix ---
   durationSeconds = value:
     let
       matched = builtins.match "^([0-9]+)(s|sec|min|m|h|d|w)$" value;
@@ -305,10 +306,284 @@ let
     };
   };
 
+  # --- helpers from managed-services-operations.nix ---
+  operationJob = unit: name: schedules: {
+    inherit name;
+    managed = true;
+    workload = {
+      kind = "job";
+      inherit schedules;
+    };
+    runtime = {
+      type = "systemd";
+      inherit unit;
+    };
+  };
+  operationDependency = service: condition: { inherit service condition; };
+  operationCalendar = expression: randomizedDelaySeconds: {
+    calendar = expression;
+    inherit randomizedDelaySeconds;
+    persistent = true;
+  };
+  operationSystemdSchedules = schedules: lib.optionals (cfg.scheduler.backend == "systemd") schedules;
+  operationHealthSchedule = operationSystemdSchedules [ (operationCalendar "*-*-* 06:00" 1800) ];
+
+  operationServices = {
+    zfs-pool-health = (operationJob "nas-zfs-pool-health.service" "Check ZFS pool health" operationHealthSchedule) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+    zfs-capacity-health = (operationJob "nas-zfs-capacity-health.service" "Check ZFS capacity" operationHealthSchedule) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+    zfs-snapshot-health = (operationJob "nas-zfs-snapshot-health.service" "Check ZFS snapshot freshness" operationHealthSchedule) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+    zfs-manual-snapshot = (operationJob "nas-zfs-manual-snapshot.service" "Create an administrator-requested ZFS snapshot" [ ]) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+    zfs-manual-scrub = (operationJob "nas-zfs-manual-scrub.service" "Start an administrator-requested ZFS scrub" [ ]) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+  }
+  // lib.optionalAttrs cfg.backup.enable {
+    backups = (operationJob "restic-backups-nas-boot-system.service" "Back up authoritative NAS state" (
+      operationSystemdSchedules [ (operationCalendar "daily" 7200) ]
+    )) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+  }
+  // lib.optionalAttrs (cfg.backup.enable && cfg.backup.restoreVerification.enable) {
+    backup-restore-verify = operationJob "nas-backup-restore-verify.service" "Restore and validate the latest NAS recovery backup" (
+      operationSystemdSchedules [ (operationCalendar cfg.backup.restoreVerification.onCalendar 21600) ]
+    );
+  }
+  // lib.optionalAttrs cfg.zfsReplication.enable {
+    zfs-replication = (operationJob "nas-syncoid.service" "Replicate the NAS ZFS dataset" (
+      operationSystemdSchedules [ (operationCalendar cfg.zfsReplication.onCalendar 7200) ]
+    )) // {
+      dependencies = [ (operationDependency "zfs-mount-guard" "completed") ];
+    };
+  }
+  // lib.optionalAttrs cfg.installationReady {
+    update-preview = operationJob "nas-update-preview.service" "Preview and validate configuration updates" [ ];
+    update-sync = operationJob "nas-update-sync.service" "Synchronize the reviewed configuration" [ ];
+    update-apply = operationJob "nas-update-apply.service" "Apply the reviewed configuration" [ ];
+  }
+  // lib.optionalAttrs (cfg.installationReady && cfg.autoUpdate.enable) {
+    auto-update = operationJob "nas-auto-update.service" "Guarded automatic NAS configuration update" (
+      operationSystemdSchedules [ (operationCalendar cfg.autoUpdate.onCalendar 3600) ]
+    );
+  };
+
+  # --- helpers from managed-services-backup-resources.nix ---
+  backupStage = cfg.backup.stagingPath;
+  authentikArtifact = "${backupStage}/authentik";
+  copypartyArtifact = "${backupStage}/copyparty";
+  vaultwardenStateDirectory =
+    if lib.versionOlder config.system.stateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
+  vaultwardenDataDir = "/var/lib/${vaultwardenStateDirectory}";
+  vaultwardenBackupDir = nasInternal.vaultwardenBackupDir;
+
+  backupResources = {
+    authentik-database = {
+      path = config.services.postgresql.dataDir;
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "read" ];
+      backup = {
+        enabled = true;
+        consistency = "native-dump";
+      };
+    };
+    authentik-database-dump = {
+      path = authentikArtifact;
+      scope = "system";
+      stateClass = "derived";
+      capabilities = [ "read" "write" ];
+      backup.enabled = false;
+    };
+    copyparty-databases = {
+      path = "/var/lib/copyparty";
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "read" ];
+      backup = {
+        enabled = true;
+        consistency = "native-dump";
+      };
+    };
+    copyparty-database-dump = {
+      path = copypartyArtifact;
+      scope = "system";
+      stateClass = "derived";
+      capabilities = [ "read" "write" ];
+      backup.enabled = false;
+    };
+  }
+  // lib.optionalAttrs cfg.syncthing.enable {
+    syncthing-config = {
+      path = nasInternal.syncthingConfigDir;
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "read" ];
+      backup = {
+        enabled = true;
+        consistency = "filesystem";
+      };
+    };
+  }
+  // lib.optionalAttrs cfg.vaultwarden.enable {
+    vaultwarden-data = {
+      path = vaultwardenDataDir;
+      scope = "system";
+      stateClass = "authoritative";
+      capabilities = [ "read" ];
+      backup = {
+        enabled = true;
+        consistency = "native-dump";
+      };
+    };
+    vaultwarden-dump = {
+      path = vaultwardenBackupDir;
+      scope = "system";
+      stateClass = "derived";
+      capabilities = [ "read" "write" ];
+      backup.enabled = false;
+    };
+  };
+
+  backupServices = {
+    authentik-database-dump = {
+      name = "Create a consistent Authentik PostgreSQL dump";
+      managed = true;
+      workload.kind = "job";
+      runtime = {
+        type = "systemd";
+        unit = "nas-backup-authentik-dump.service";
+      };
+      storage = [
+        {
+          resource = "authentik-database";
+          mountPath = config.services.postgresql.dataDir;
+          access = "read";
+        }
+        {
+          resource = "authentik-database-dump";
+          mountPath = authentikArtifact;
+          access = "write";
+        }
+      ];
+    };
+    copyparty-database-dump = {
+      name = "Create consistent CopyParty SQLite dumps";
+      managed = true;
+      workload.kind = "job";
+      runtime = {
+        type = "systemd";
+        unit = "nas-backup-copyparty-dump.service";
+      };
+      storage = [
+        {
+          resource = "copyparty-databases";
+          mountPath = "/var/lib/copyparty";
+          access = "read";
+        }
+        {
+          resource = "copyparty-database-dump";
+          mountPath = copypartyArtifact;
+          access = "write";
+        }
+      ];
+    };
+  } // lib.optionalAttrs cfg.vaultwarden.enable {
+    vaultwarden-dump = {
+      name = "Create a consistent Vaultwarden SQLite backup";
+      managed = true;
+      workload.kind = "job";
+      runtime = {
+        type = "systemd";
+        unit = "backup-vaultwarden.service";
+      };
+      storage = [
+        {
+          resource = "vaultwarden-data";
+          mountPath = vaultwardenDataDir;
+          access = "read";
+        }
+        {
+          resource = "vaultwarden-dump";
+          mountPath = vaultwardenBackupDir;
+          access = "write";
+        }
+      ];
+    };
+  };
+
+  # --- helpers from managed-services-platform-routes.nix ---
+  platformServices = {
+    cockpit = {
+      name = "Cockpit system administration";
+      managed = false;
+      workload = {
+        kind = "daemon";
+        activation = "persistent";
+      };
+      runtime = {
+        type = "systemd";
+        unit = "cockpit.socket";
+      };
+      authorization.capabilities = [
+        { id = "admin"; title = "Administer the NAS with Cockpit"; }
+      ];
+      routes.console = {
+        exposure = {
+          type = "path";
+          paths = [ "/console" ];
+        };
+        target = {
+          type = "http";
+          host = "127.0.0.1";
+          port = cockpitPort;
+        };
+        auth = {
+          mode = "identity";
+          capability = "admin";
+        };
+        proxy.requestHeaders = {
+          "X-Forwarded-Proto" = "https";
+          "X-Forwarded-Prefix" = "/console";
+        };
+        portal = {
+          visible = true;
+          title = "System Console";
+          category = "Administration";
+          icon = "terminal";
+          order = 5;
+        };
+      };
+    };
+  };
+
+  mergedServices = baselineServices // operationServices // backupServices // platformServices;
+  mergedStorageResources = backupResources;
+
+  seedFile = yamlFormat.generate "managed-services-seed-v2.yaml" {
+    schemaVersion = 3;
+    services = mergedServices;
+    storageResources = mergedStorageResources;
+  };
 in
 {
-  # Seed generation is now centralized in managed-services-seed-v2.nix which
-  # produces one complete V3 document containing baseline services, operations,
-  # backup resources, and platform routes. This module retains only native
-  # service definitions; it no longer contributes a separate seed file.
+  config.systemd.services.nas-managed-services-seed = {
+    environment.PYTHONPATH = "${v2Source}";
+    postStart = lib.mkAfter ''
+      ${v2Python}/bin/python ${v2Source}/nas_v2_bootstrap.py \
+        --desired ${lib.escapeShellArg desiredPath} \
+        --seed ${lib.escapeShellArg seedFile} \
+        --marker ${lib.escapeShellArg markerPath} \
+        --schema ${lib.escapeShellArg schemaPath} \
+        --platform ${lib.escapeShellArg platformPath}
+    '';
+    serviceConfig.ReadWritePaths = lib.mkAfter [ "/var/lib/nas-control" ];
+  };
 }

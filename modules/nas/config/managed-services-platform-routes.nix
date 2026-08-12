@@ -13,62 +13,9 @@ let
     ruamel-yaml
   ]);
   yamlFormat = pkgs.formats.yaml { };
-  seedFile = yamlFormat.generate "managed-services-platform-routes-seed-v2.yaml" {
-    schemaVersion = 3;
-    services.cockpit = {
-      name = "Cockpit system administration";
-      managed = false;
-      workload = {
-        kind = "daemon";
-        activation = "persistent";
-      };
-      runtime = {
-        type = "systemd";
-        unit = "cockpit.socket";
-      };
-      authorization.capabilities = [
-        { id = "admin"; title = "Administer the NAS with Cockpit"; }
-      ];
-      routes.console = {
-        exposure = {
-          type = "path";
-          paths = [ "/console" ];
-        };
-        target = {
-          type = "http";
-          host = "127.0.0.1";
-          port = cockpitPort;
-        };
-        auth = {
-          mode = "identity";
-          capability = "admin";
-        };
-        proxy.requestHeaders = {
-          "X-Forwarded-Proto" = "https";
-          "X-Forwarded-Prefix" = "/console";
-        };
-        portal = {
-          visible = true;
-          title = "System Console";
-          category = "Administration";
-          icon = "terminal";
-          order = 5;
-        };
-      };
-    };
-  };
 in
 {
-  config.systemd.services.nas-managed-services-seed = {
-    environment.PYTHONPATH = "${v2Source}";
-    postStart = lib.mkAfter ''
-      ${v2Python}/bin/python ${v2Source}/nas_v2_bootstrap.py \
-        --desired ${lib.escapeShellArg desiredPath} \
-        --seed ${lib.escapeShellArg seedFile} \
-        --marker ${lib.escapeShellArg markerPath} \
-        --schema ${lib.escapeShellArg schemaPath} \
-        --platform ${lib.escapeShellArg platformPath}
-    '';
-    serviceConfig.ReadWritePaths = lib.mkAfter [ "/var/lib/nas-control" ];
-  };
+  # Platform cockpit route is now part of the single aggregated seed in
+  # managed-services-seed-v2.nix. Retaining this module as a no-op keeps
+  # historical imports stable while ensuring only one bootstrap runs.
 }

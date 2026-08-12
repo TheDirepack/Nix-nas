@@ -16,10 +16,31 @@ class V2SeedOnceContractTests(unittest.TestCase):
         self.assertNotIn("rm -f ${lib.escapeShellArg initialSeedMarker}", lifecycle)
 
     def test_native_seed_uses_same_one_shot_marker_and_bootstrap_helper(self) -> None:
-        native = (ROOT / "modules/nas/config/managed-services-native-services.nix").read_text(encoding="utf-8")
-        self.assertIn('markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";', native)
-        self.assertIn("${v2Source}/nas_v2_bootstrap.py", native)
-        self.assertIn("--marker ${lib.escapeShellArg markerPath}", native)
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        self.assertIn('markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";', seed)
+        self.assertIn("${v2Source}/nas_v2_bootstrap.py", seed)
+        self.assertIn("--marker ${lib.escapeShellArg markerPath}", seed)
+        # Old split seeds must no longer declare their own bootstrap seeds.
+        for path in (
+            "modules/nas/config/managed-services-native-services.nix",
+            "modules/nas/config/managed-services-operations.nix",
+            "modules/nas/config/managed-services-backup-resources.nix",
+            "modules/nas/config/managed-services-platform-routes.nix",
+        ):
+            content = (ROOT / path).read_text(encoding="utf-8")
+            self.assertNotIn("yamlFormat.generate \"managed-services-", content)
+
+    def test_seed_aggregation_contains_all_built_in_categories(self) -> None:
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        # Must contain baseline, operations, backup, and platform fragments in one document.
+        self.assertIn("baselineServices", seed)
+        self.assertIn("operationServices", seed)
+        self.assertIn("backupResources", seed)
+        self.assertIn("backupServices", seed)
+        self.assertIn("platformServices", seed)
+        self.assertIn("mergedServices = baselineServices // operationServices", seed)
+        self.assertIn("storageResources = mergedStorageResources", seed)
+        self.assertIn('schemaVersion = 3', seed)
 
     def test_bootstrap_contains_no_upgrade_merge_database(self) -> None:
         bootstrap = (ROOT / "services/nas_v2_bootstrap.py").read_text(encoding="utf-8")

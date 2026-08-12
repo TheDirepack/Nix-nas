@@ -85,26 +85,9 @@ let
     );
   };
 
-  seedFile = yamlFormat.generate "managed-services-operations-seed-v2.yaml" {
-    schemaVersion = 3;
-    services = operationServices;
-  };
 in
 {
   config = {
-    systemd.services.nas-managed-services-seed = {
-      environment.PYTHONPATH = "${v2Source}";
-      postStart = lib.mkAfter ''
-        ${v2Python}/bin/python ${v2Source}/nas_v2_bootstrap.py \
-          --desired ${lib.escapeShellArg desiredPath} \
-          --seed ${lib.escapeShellArg seedFile} \
-          --marker ${lib.escapeShellArg markerPath} \
-          --schema ${lib.escapeShellArg schemaPath} \
-          --platform ${lib.escapeShellArg platformPath}
-      '';
-      serviceConfig.ReadWritePaths = lib.mkAfter [ "/var/lib/nas-control" ];
-    };
-
     # The existing Restic service stays the backup implementation. V2 owns its
     # schedule, so the NixOS Restic module must not create a parallel timer.
     services.restic.backups = lib.mkIf cfg.backup.enable {
