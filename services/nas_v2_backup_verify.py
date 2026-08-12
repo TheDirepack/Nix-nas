@@ -27,7 +27,11 @@ def _load_inventory(path: pathlib.Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise BackupVerificationError(f"unable to read compiled backup inventory {path}: {exc}") from exc
-    if not isinstance(value, dict) or value.get("schemaVersion") != 1 or not isinstance(value.get("resources"), list):
+    if (
+        not isinstance(value, dict)
+        or value.get("schemaVersion") != 1
+        or not isinstance(value.get("resources"), list)
+    ):
         raise BackupVerificationError("compiled V2 backup inventory has an unsupported schema")
     return value
 
