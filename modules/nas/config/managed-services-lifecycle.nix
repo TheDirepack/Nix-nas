@@ -12,12 +12,13 @@ in
         # services.yaml only when no V2 authority existed before this oneshot ran.
         # The base seed ExecStart creates a minimal stub when absent; this marker
         # carries the pre-ExecStart fact into the native-services postStart helper.
+        # Once created it must survive a failed initial seed attempt so the next
+        # oneshot invocation can retry. The bootstrap helper clears it after a
+        # successful seed or after detecting a concurrent real authority writer.
         preStart = lib.mkBefore ''
           if [ ! -e ${lib.escapeShellArg desiredPath} ]; then
             ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations /var/lib/nas-control
             : > ${lib.escapeShellArg initialSeedMarker}
-          else
-            ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg initialSeedMarker}
           fi
         '';
       };
