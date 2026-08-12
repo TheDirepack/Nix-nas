@@ -72,5 +72,29 @@ in
         !lib.elem "nas-identity-sync.service" config.systemd.services.nas-managed-services-authentik-reconcile.after;
       message = "The Authentik capability projection must not retain a hidden ordering dependency on identity-sync.";
     }
+    {
+      assertion =
+        !config.nas.syncthing.enable
+        || config.systemd.services.nas-syncthing-sync.requires == [ "authentik.service" ];
+      message = "Syncthing identity reconciliation must not statically start the V2-managed Syncthing application.";
+    }
+    {
+      assertion =
+        !config.nas.syncthing.enable
+        || config.systemd.services.nas-syncthing-sync.after == [ "authentik.service" ];
+      message = "Syncthing identity reconciliation must get its Syncthing ordering edge only from the V2 dependency projection.";
+    }
+    {
+      assertion =
+        !(config.nas.observability.enable && config.nas.alerting.enable)
+        || config.systemd.services.vmalert-nas.requires == [ ];
+      message = "vmalert must not statically start V2-managed observability application dependencies.";
+    }
+    {
+      assertion =
+        !(config.nas.observability.enable && config.nas.alerting.enable)
+        || config.systemd.services.vmalert-nas.after == [ ];
+      message = "vmalert ordering on V2-managed application dependencies must come from the V2 systemd projection.";
+    }
   ];
 }
