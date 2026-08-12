@@ -20,9 +20,11 @@ import {
   apiInput,
   managedServicesDocument,
   replaceManagedServicesDocument,
+  replaceManagedServicesJsonDocument,
   setManagedServiceMode,
   startFirstRun,
 } from "./api.js";
+import {SchemaEditor} from "./schema-editor.jsx";
 import {
   MODE_LABELS,
   managedApplicationLinks,
@@ -223,7 +225,9 @@ function ServicesPage({data, mutate, busy}) {
   const services = managedServiceRows(data || {});
   const serviceBusy = managedServiceOperationsBusy(data || {}) || busy;
   const [document, setDocument] = useState(null);
+  const [formValue, setFormValue] = useState(null);
   const [yaml, setYaml] = useState("");
+  const [editorMode, setEditorMode] = useState("form");
   const [editorError, setEditorError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -231,19 +235,33 @@ function ServicesPage({data, mutate, busy}) {
     try {
       const value = await managedServicesDocument();
       setDocument(value);
+      setFormValue(value.document || null);
       setYaml(value.yaml || "");
+      setEditorMode("form");
       setEditorError("");
     } catch (reason) {
       setEditorError(message(reason));
     }
   };
 
-  const saveDocument = async () => {
+  const saveFormDocument = async () => {
     setSaving(true);
     try {
-      await replaceManagedServicesDocument(yaml);
+      await mutate(() => replaceManagedServicesJsonDocument(formValue));
       setEditorError("");
-      await mutate(async () => ({}));
+      await loadDocument();
+    } catch (reason) {
+      setEditorError(message(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveYamlDocument = async () => {
+    setSaving(true);
+    try {
+      await mutate(() => replaceManagedServicesDocument(yaml));
+      setEditorError("");
       await loadDocument();
     } catch (reason) {
       setEditorError(message(reason));
@@ -260,7 +278,7 @@ function ServicesPage({data, mutate, busy}) {
           <p>/var/lib/nas-control/services.yaml is the sole mutable lifecycle authority.</p>
         </div>
         <Button variant="secondary" onClick={loadDocument}>
-          Edit YAML
+          Edit services
         </Button>
       </div>
       <div className="nas-grid">
@@ -279,15 +297,41 @@ function ServicesPage({data, mutate, busy}) {
             <CardTitle>Schema-driven desired state</CardTitle>
           </CardHeader>
           <CardBody>
+            <p className="nas-muted">
+              The form below is generated from the same JSON Schema used by the V2 compiler.
+              Raw YAML remains available for advanced edits.
+            </p>
             {editorError ? <Alert variant="danger" isInline title={editorError} /> : null}
-            <TextArea
-              value={yaml}
-              onChange={(_event, value) => setYaml(value)}
-              rows={24}
-              resizeOrientation="vertical"
-            />
             <div className="nas-actions">
-              <Button onClick={saveDocument} isLoading={saving} isDisabled={saving}>
+              <Button
+                variant={editorMode === "form" ? "primary" : "secondary"}
+                onClick={() => setEditorMode("form")}
+              >
+                Schema form
+              </Button>
+              <Button
+                variant={editorMode === "yaml" ? "primary" : "secondary"}
+                onClick={() => setEditorMode("yaml")}
+              >
+                Advanced YAML
+              </Button>
+            </div>
+            {editorMode === "form" && formValue ? (
+              <SchemaEditor schema={document.schema} value={formValue} onChange={setFormValue} />
+            ) : (
+              <TextArea
+                value={yaml}
+                onChange={(_event, value) => setYaml(value)}
+                rows={24}
+                resizeOrientation="vertical"
+              />
+            )}
+            <div className="nas-actions">
+              <Button
+                onClick={editorMode === "form" ? saveFormDocument : saveYamlDocument}
+                isLoading={saving}
+                isDisabled={saving || (editorMode === "form" && !formValue)}
+              >
                 Validate, save, and reconcile
               </Button>
               <Button variant="link" onClick={() => setDocument(null)}>
