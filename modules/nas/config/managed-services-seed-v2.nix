@@ -203,6 +203,14 @@ let
         (capability "admin" "Administer Open WebUI")
       ];
       readiness.probes = [ { type = "http"; url = "http://127.0.0.1:${toString cfg.ai.openWebuiPort}/health"; } ];
+      routes.main = (pathRoute [ "/ai/" ] (httpTarget cfg.ai.openWebuiPort) (identity "access")) // {
+        proxy = {
+          stripPrefix = "/ai";
+          requestHeaders."X-Forwarded-Prefix" = "/ai";
+          requestHeaders."X-Forwarded-Proto" = "https";
+        };
+        portal = portal "Open WebUI" "AI" "bot" 40;
+      };
     };
   }
   // lib.optionalAttrs (cfg.ai.enable && cfg.ai.codingAgent.enable) {
