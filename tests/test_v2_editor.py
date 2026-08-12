@@ -7,6 +7,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
+SCHEMA = ROOT / "schemas/managed-services-v3.schema.json"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
@@ -41,7 +42,7 @@ class V2EditorTests(unittest.TestCase):
                 "demo",
                 "on-demand",
                 desired_path=desired,
-                schema_path=ROOT / "schemas/managed-services-v3.schema.json",
+                schema_path=SCHEMA,
                 platform_path=None,
             )
             text = desired.read_text(encoding="utf-8")
@@ -59,7 +60,7 @@ class V2EditorTests(unittest.TestCase):
                     "demo",
                     "on-demand",
                     desired_path=desired,
-                    schema_path=ROOT / "schemas/managed-services-v3.schema.json",
+                    schema_path=SCHEMA,
                     platform_path=None,
                 )
             self.assertEqual(desired.read_text(encoding="utf-8"), before)
@@ -81,7 +82,7 @@ class V2EditorTests(unittest.TestCase):
             result = editor.set_service_modes(
                 {"demo": "off", "second": "always"},
                 desired_path=desired,
-                schema_path=ROOT / "schemas/managed-services-v3.schema.json",
+                schema_path=SCHEMA,
                 platform_path=None,
             )
             self.assertEqual(result["changed"], ["demo", "second"])
@@ -125,6 +126,56 @@ class V2EditorTests(unittest.TestCase):
                     {"unit": "nas-v2-timer-backup-1.timer", "role": "schedule"},
                 ],
             )
+
+    def test_document_returns_same_yaml_parsed_value_and_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = self.write_desired(root)
+            result = editor.read_document(desired_path=desired, schema_path=SCHEMA)
+            self.assertEqual(result["yaml"], desired.read_text(encoding="utf-8"))
+            self.assertEqual(result["document"]["schemaVersion"], 3)
+            self.assertEqual(result["document"]["services"]["demo"]["runtime"]["type"], "systemd")
+            self.assertEqual(result["schema"]["$schema"], "https://json-schema.org/draft/2020-12/schema")
+
+    def test_schema_editor_json_value_renders_back_to_same_yaml_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = self.write_desired(root)
+            value = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+            value["services"]["demo"]["name"] = "Edited through schema form"
+            value["services"]["demo"]["network"] = {"mode": "isolated", "lanAccess": True}
+
+            result = editor.replace_document_value(
+                value,
+                desired_path=desired,
+                schema_path=SCHEMA,
+                platform_path=None,
+            )
+
+            self.assertTrue(result["ok"])
+            text = desired.read_text(encoding="utf-8")
+            self.assertIn("name: Edited through schema form", text)
+            self.assertIn("mode: isolated", text)
+            reparsed = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+            self.assertEqual(reparsed["services"]["demo"]["network"]["lanAccess"], True)
+
+    def test_invalid_schema_editor_value_never_replaces_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = self.write_desired(root)
+            before = desired.read_text(encoding="utf-8")
+            value = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+            value["services"]["demo"]["runtime"] = {"type": "systemd", "unit": ""}
+
+            with self.assertRaises(editor.ManagedServicesEditorError):
+                editor.replace_document_value(
+                    value,
+                    desired_path=desired,
+                    schema_path=SCHEMA,
+                    platform_path=None,
+                )
+
+            self.assertEqual(desired.read_text(encoding="utf-8"), before)
 
 
 if __name__ == "__main__":
