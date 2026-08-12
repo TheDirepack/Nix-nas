@@ -707,6 +707,12 @@ def semantic_validate(
                     path=f"$.services.{service_id}.dependencies[{index}].service",
                     code="missing-reference",
                 )
+            if service["enabled"] and not target["enabled"]:
+                raise ManagedServicesV2Error(
+                    f"Enabled service {service_id!r} depends on disabled service {target_id!r}",
+                    path=f"$.services.{service_id}.dependencies[{index}].service",
+                    code="dependency-disabled",
+                )
             condition = dependency["condition"]
             target_kind = target["workload"]["kind"]
             if condition == "completed" and target_kind != "job":
