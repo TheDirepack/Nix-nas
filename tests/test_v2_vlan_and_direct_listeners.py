@@ -40,7 +40,7 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
         reference = podman_network.quadlet_network_reference(effective, "demo", service)
         vlan = podman_network.vlan_binding(service["network"])
         self.assertEqual(reference, "nas-v2-net-demo.network")
-        self.assertIsNotNone(vlan)
+        assert vlan is not None
         self.assertEqual(vlan["id"], 42)
         self.assertEqual(vlan["parent"], "eno1")
 
