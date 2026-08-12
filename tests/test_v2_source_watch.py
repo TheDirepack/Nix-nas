@@ -28,7 +28,7 @@ class V2SourceWatchTests(unittest.TestCase):
             "fingerprints": {},
         }
 
-    def test_managed_disabled_compose_source_stays_watched(self):
+    def test_managed_enabled_compose_source_is_watched(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             app_root = root / "apps"
@@ -40,7 +40,7 @@ class V2SourceWatchTests(unittest.TestCase):
                 "services": {
                     "demo": {
                         "managed": True,
-                        "enabled": False,
+                        "enabled": True,
                         "runtime": {"type": "compose", "source": str(source)},
                     }
                 }
@@ -58,6 +58,28 @@ class V2SourceWatchTests(unittest.TestCase):
         self.assertIn(unit_name, manifest["ownedUnits"])
         self.assertIn(unit_name, manifest["startUnits"])
         self.assertNotIn(unit_name, manifest["stopUnits"])
+
+    def test_managed_disabled_compose_source_is_not_watched(self):
+        effective = {
+            "services": {
+                "demo": {
+                    "managed": True,
+                    "enabled": False,
+                    "runtime": {"type": "compose", "source": "/var/lib/nas-control/apps/demo/compose.yaml"},
+                }
+            }
+        }
+        files: dict[pathlib.Path, bytes] = {}
+        manifest = self.manifest()
+        source_watch.augment_projection(
+            effective,
+            output_dir=pathlib.Path("/run/nas-control/systemd"),
+            files=files,
+            manifest=manifest,
+        )
+        self.assertEqual(files, {})
+        self.assertEqual(manifest["ownedUnits"], [])
+        self.assertEqual(manifest["startUnits"], [])
 
     def test_unmanaged_source_does_not_get_v2_watch(self):
         effective = {
