@@ -179,8 +179,6 @@ in
 
     nas-vm-storage = lib.mkIf cfg.virtualization.enable {
       description = "Create the libvirt VM storage directory on ZFS";
-      before = [ "libvirtd.service" ];
-      requiredBy = [ "libvirtd.service" ];
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig = {
@@ -227,8 +225,6 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      requires = [ "nas-vm-storage.service" ];
-      after = [ "nas-vm-storage.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
         AssertPathIsMountPoint = cfg.zfsRoot;
