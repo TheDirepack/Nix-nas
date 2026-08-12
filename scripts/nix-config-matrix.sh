@@ -59,14 +59,24 @@ annotation_escape() {
 annotate_failure() {
   local title=$1 log=$2 detail
   detail="$(tail -c 6000 -- "$log" 2>/dev/null || true)"
-  printf '::error title=%s::%s\n' "$(annotation_escape "$title")" "$(annotation_escape "$detail")"
+  printf '::error file=scripts/nix-config-matrix.sh,line=1,title=%s::%s\n' \
+    "$(annotation_escape "$title")" "$(annotation_escape "$detail")"
 }
 
 evaluate_flake_surface() {
-  nix flake metadata --json --no-write-lock-file "$FLAKE_REF" >/dev/null
-  nix eval --json --no-write-lock-file \
-    "$FLAKE_REF#nixosModules" \
-    --apply builtins.attrNames >/dev/null
+  local log="$TEMPORARY_DIRECTORY/flake-surface.log"
+  if ! nix flake metadata --json --no-write-lock-file "$FLAKE_REF" >"$log" 2>&1; then
+    cat "$log" >&2
+    annotate_failure "Nix flake metadata evaluation failed" "$log"
+    return 1
+  fi
+  if ! nix eval --json --no-write-lock-file \
+      "$FLAKE_REF#nixosModules" \
+      --apply builtins.attrNames >"$log" 2>&1; then
+    cat "$log" >&2
+    annotate_failure "Nix module export evaluation failed" "$log"
+    return 1
+  fi
   printf 'Nix flake metadata and module exports evaluated successfully\n'
 }
 
@@ -75,6 +85,8 @@ verify_placeholder_is_not_bootable() {
 
   if nix eval --raw --no-write-lock-file \
       "$FLAKE_REF#$PLACEHOLDER" >"$log" 2>&1; then
+    printf '%s\n' "operator hardware placeholder unexpectedly evaluated as bootable" >>"$log"
+    annotate_failure "Nix operator placeholder unexpectedly bootable" "$log"
     die "operator hardware placeholder unexpectedly evaluated as bootable"
   fi
 
@@ -107,6 +119,16 @@ evaluate_configuration() {
   printf 'Nix configuration evaluation ok: %s (%s)\n' "$configuration" "$drv_path"
 }
 
+run_negative_matrix() {
+  local log="$TEMPORARY_DIRECTORY/negative-matrix.log"
+  if ! "$ROOT/scripts/nix-negative-tests.sh" >"$log" 2>&1; then
+    cat "$log" >&2
+    annotate_failure "Negative Nix configuration matrix failed" "$log"
+    return 1
+  fi
+  cat "$log"
+}
+
 main() {
   if [[ ${1:-} == --help ]]; then
     usage
@@ -132,7 +154,7 @@ main() {
     evaluate_configuration "$configuration"
   done
 
-  "$ROOT/scripts/nix-negative-tests.sh"
+  run_negative_matrix
 }
 
 main "$@"
