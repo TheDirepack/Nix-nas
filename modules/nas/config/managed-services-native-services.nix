@@ -228,10 +228,10 @@ let
     vm-storage = (job "nas-vm-storage.service" "Prepare VM storage") // {
       dependencies = [ (depends "zfs-mount-guard" "completed") ];
     };
-    virtualization = (daemon "libvirtd.service" "libvirt virtual-machine runtime") // {
+    virtualization = platformService ((daemon "libvirtd.service" "libvirt virtual-machine runtime") // {
       dependencies = [ (depends "vm-storage" "completed") ];
       requiresCapabilities = [ "libvirt" "kvm" ];
-    };
+    });
     vm-storage-pool = (daemon "nas-vm-storage-pool.service" "Activate the ZFS-backed libvirt storage pool") // {
       dependencies = [ (depends "vm-storage" "completed") (depends "virtualization" "started") ];
       requiresCapabilities = [ "libvirt" ];
