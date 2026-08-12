@@ -96,5 +96,17 @@ in
         || config.systemd.services.vmalert-nas.after == [ ];
       message = "vmalert ordering on V2-managed application dependencies must come from the V2 systemd projection.";
     }
+    {
+      assertion =
+        !config.nas.observability.ntfy.enable
+        || config.systemd.services."nas-health-alert@".wants == [ ];
+      message = "Host health alerts must not statically start the V2-managed notification application.";
+    }
+    {
+      assertion =
+        !config.nas.observability.ntfy.enable
+        || config.systemd.services."nas-health-alert@".after == [ ];
+      message = "Health-alert ordering on the notification application must remain under V2 lifecycle authority.";
+    }
   ];
 }
