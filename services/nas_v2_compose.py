@@ -44,6 +44,7 @@ _STRICT_SOURCE_FIELDS = frozenset(
         "volumes_from",
     }
 )
+_NETWORK_SOURCE_FIELDS = frozenset({"network_mode", "networks", "ports"})
 
 
 def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dict[str, dict[str, Any]]]:
@@ -99,9 +100,11 @@ def _network_policy(effective: dict[str, Any], service: dict[str, Any]) -> dict[
 
 def _reject_source_networks(service_id: str, source_services: dict[str, dict[str, Any]]) -> None:
     for name, definition in source_services.items():
-        if "network_mode" in definition or "networks" in definition:
+        conflicts = sorted(_NETWORK_SOURCE_FIELDS.intersection(definition))
+        if conflicts:
             raise ComposeProjectionError(
-                f"Compose service {service_id!r} source service {name!r} declares networking while V2 network policy is authoritative"
+                f"Compose service {service_id!r} source service {name!r} declares V2-owned network fields: "
+                + ", ".join(conflicts)
             )
 
 
