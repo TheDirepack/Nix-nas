@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
-"""Compile Managed Services V2 network policy into Podman Quadlet networks."""
+"""Compile Managed Services V2 network policy into Podman Quadlet networks.
+
+V2 keeps application containers on Podman's managed bridge so NAT, DNAT and
+Caddy-facing published ports continue to work. When a service selects an
+802.1Q VLAN, the bridge is attached to a dedicated Linux VRF and NetworkManager
+owns a DHCP-backed VLAN interface in that same VRF. This makes the physical
+VLAN the routing underlay without switching the container to macvlan/ipvlan,
+which would discard Podman's port-forwarding path.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import pathlib
+import re
+import subprocess
+import uuid
 from typing import Any
 
 
 class PodmanNetworkProjectionError(RuntimeError):
     """Raised when V2 network policy cannot be faithfully lowered to Podman."""
+
+
+_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_NM_RUNTIME_DIR = pathlib.PurePosixPath("/run/NetworkManager/system-connections")
+_UUID_NAMESPACE = uuid.UUID("c3c4a6a8-fad7-4e36-8d65-1dc57bcae2ab")
 
 
 def bridge_interface_name(service_id: str) -> str:
@@ -43,13 +59,34 @@ def network_policy(effective: dict[str, Any], service: dict[str, Any]) -> dict[s
     }
 
 
-def _vlan_id(policy: dict[str, Any]) -> int | None:
+def vlan_binding(policy: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the deterministic NetworkManager/VRF resource for a VLAN policy."""
     vlan_id = policy.get("vlanId")
-    if vlan_id is None:
+    parent = policy.get("vlanParent")
+    if vlan_id is None and parent is None:
         return None
+    if vlan_id is None or parent is None:
+        raise PodmanNetworkProjectionError("network vlanId and vlanParent must be specified together")
     if not isinstance(vlan_id, int) or isinstance(vlan_id, bool) or not 1 <= vlan_id <= 4094:
         raise PodmanNetworkProjectionError("network vlanId must be an integer from 1 through 4094")
-    return vlan_id
+    if not isinstance(parent, str) or _INTERFACE_RE.fullmatch(parent) is None:
+        raise PodmanNetworkProjectionError("network vlanParent is not a safe interface name")
+
+    digest = hashlib.sha256(f"{parent}\0{vlan_id}".encode("utf-8")).hexdigest()[:10]
+    vrf_interface = f"nv2vrf{digest[:7]}"
+    vlan_interface = f"nv2vl{digest[:8]}"
+    table = 1_000_000_000 + (int(digest, 16) % 3_000_000_000)
+    return {
+        "id": vlan_id,
+        "parent": parent,
+        "key": digest,
+        "table": table,
+        "vrfInterface": vrf_interface,
+        "vlanInterface": vlan_interface,
+        "vrfProfile": f"nas-v2-vrf-{digest}",
+        "vlanProfile": f"nas-v2-vlan-{digest}",
+        "unit": f"nas-v2-vlan-{digest}.service",
+    }
 
 
 def _listener_firewall_requested(service: dict[str, Any]) -> bool:
@@ -96,7 +133,7 @@ def _isolated_supported(
 ) -> None:
     runtime = service.get("runtime")
     runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
-    _vlan_id(policy)
+    vlan_binding(policy)
     if runtime_type not in {"oci", "quadlet", "compose"}:
         raise PodmanNetworkProjectionError(
             f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented yet"
@@ -129,11 +166,11 @@ def quadlet_network_reference(
     """Return the V2 Podman network reference for one service."""
     policy = network_policy(effective, service)
     mode = policy.get("mode", "host")
-    vlan_id = _vlan_id(policy)
+    vlan = vlan_binding(policy)
     if mode == "none":
         if service.get("listeners") or service.get("routes"):
             raise PodmanNetworkProjectionError(f"service {service_id!r} network=none cannot expose listeners/routes")
-        if policy.get("allowedHostPorts") or policy.get("allowedEgress") or policy.get("lanAccess") or vlan_id is not None:
+        if policy.get("allowedHostPorts") or policy.get("allowedEgress") or policy.get("lanAccess") or vlan is not None:
             raise PodmanNetworkProjectionError(f"service {service_id!r} network=none cannot contain network exceptions")
         return "none"
     if mode == "host":
@@ -142,7 +179,7 @@ def quadlet_network_reference(
             or bool(policy.get("lanAccess"))
             or bool(policy.get("allowedHostPorts"))
             or bool(policy.get("allowedEgress"))
-            or vlan_id is not None
+            or vlan is not None
         )
         if constrained:
             raise PodmanNetworkProjectionError(
@@ -168,28 +205,126 @@ def _network_source(
         or bool(policy.get("lanAccess"))
         or bool(policy.get("allowedEgress"))
     )
+    vlan = vlan_binding(policy)
     lines = [
         "[Unit]",
         f"Description=Managed Services V2 isolated network for {service_id}",
         f"PartOf={owner_unit}",
-        "",
-        "[Network]",
-        f"NetworkName={network_name}",
-        f"InterfaceName={bridge_interface_name(service_id)}",
-        "Driver=bridge",
-        f"Internal={'false' if external_egress else 'true'}",
-        "Options=isolate=strict",
     ]
-    vlan_id = _vlan_id(policy)
-    if vlan_id is not None:
-        lines.append(f"Options=vlan={vlan_id}")
+    if vlan is not None:
+        lines.extend([f"Requires={vlan['unit']}", f"After={vlan['unit']}"])
     lines.extend(
         [
-            "NetworkDeleteOnStop=true",
             "",
+            "[Network]",
+            f"NetworkName={network_name}",
+            f"InterfaceName={bridge_interface_name(service_id)}",
+            "Driver=bridge",
+            f"Internal={'false' if external_egress else 'true'}",
+            "Options=isolate=strict",
         ]
     )
+    if vlan is not None:
+        lines.append(f"Options=vrf={vlan['vrfInterface']}")
+    lines.extend(["NetworkDeleteOnStop=true", ""])
     return "\n".join(lines).encode()
+
+
+def _nmcli_offline_profile(nmcli_bin: str, arguments: list[str], *, label: str) -> bytes:
+    try:
+        result = subprocess.run(
+            [nmcli_bin, "--offline", "connection", "add", *arguments],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PodmanNetworkProjectionError(f"unable to generate {label} NetworkManager profile: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()[:4000]
+        raise PodmanNetworkProjectionError(f"NetworkManager rejected {label} profile: {detail}")
+    if not result.stdout:
+        raise PodmanNetworkProjectionError(f"NetworkManager generated an empty {label} profile")
+    return result.stdout
+
+
+def _vlan_profile_sources(vlan: dict[str, Any], *, nmcli_bin: str) -> tuple[bytes, bytes]:
+    vrf_uuid = str(uuid.uuid5(_UUID_NAMESPACE, f"vrf:{vlan['key']}"))
+    vlan_uuid = str(uuid.uuid5(_UUID_NAMESPACE, f"vlan:{vlan['key']}"))
+    vrf = _nmcli_offline_profile(
+        nmcli_bin,
+        [
+            "connection.type", "vrf",
+            "connection.id", vlan["vrfProfile"],
+            "connection.uuid", vrf_uuid,
+            "connection.interface-name", vlan["vrfInterface"],
+            "connection.autoconnect", "yes",
+            "vrf.table", str(vlan["table"]),
+            "ipv4.method", "disabled",
+            "ipv6.method", "disabled",
+        ],
+        label=f"VLAN {vlan['id']} VRF",
+    )
+    tagged = _nmcli_offline_profile(
+        nmcli_bin,
+        [
+            "connection.type", "vlan",
+            "connection.id", vlan["vlanProfile"],
+            "connection.uuid", vlan_uuid,
+            "connection.interface-name", vlan["vlanInterface"],
+            "connection.controller", vlan["vrfInterface"],
+            "connection.port-type", "vrf",
+            "connection.autoconnect", "yes",
+            "vlan.parent", vlan["parent"],
+            "vlan.id", str(vlan["id"]),
+            "ipv4.method", "auto",
+            "ipv4.route-table", str(vlan["table"]),
+            "ipv4.ignore-auto-dns", "yes",
+            "ipv6.method", "auto",
+            "ipv6.route-table", str(vlan["table"]),
+            "ipv6.ignore-auto-dns", "yes",
+        ],
+        label=f"VLAN {vlan['id']} uplink",
+    )
+    return vrf, tagged
+
+
+def _vlan_service_source(
+    vlan: dict[str, Any],
+    *,
+    vrf_source: pathlib.Path,
+    vlan_source: pathlib.Path,
+    nmcli_bin: str,
+    install_bin: str,
+    rm_bin: str,
+) -> bytes:
+    vrf_target = _NM_RUNTIME_DIR / f"{vlan['vrfProfile']}.nmconnection"
+    vlan_target = _NM_RUNTIME_DIR / f"{vlan['vlanProfile']}.nmconnection"
+    return "\n".join(
+        [
+            "[Unit]",
+            f"Description=Managed Services V2 VLAN {vlan['id']} uplink on {vlan['parent']}",
+            "Requires=NetworkManager.service",
+            "After=NetworkManager.service network-pre.target",
+            "StopWhenUnneeded=yes",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            "RemainAfterExit=yes",
+            f"ExecStartPre={install_bin} -D -m 0600 {vrf_source} {vrf_target}",
+            f"ExecStartPre={install_bin} -D -m 0600 {vlan_source} {vlan_target}",
+            f"ExecStart={nmcli_bin} connection load {vrf_target} {vlan_target}",
+            f"ExecStart={nmcli_bin} --wait 30 connection up id {vlan['vrfProfile']}",
+            f"ExecStart={nmcli_bin} --wait 30 connection up id {vlan['vlanProfile']}",
+            f"ExecStop=-{nmcli_bin} --wait 10 connection down id {vlan['vlanProfile']}",
+            f"ExecStop=-{nmcli_bin} --wait 10 connection down id {vlan['vrfProfile']}",
+            f"ExecStop=-{nmcli_bin} connection delete id {vlan['vlanProfile']}",
+            f"ExecStop=-{nmcli_bin} connection delete id {vlan['vrfProfile']}",
+            f"ExecStopPost=-{rm_bin} -f {vlan_target} {vrf_target}",
+            "",
+        ]
+    ).encode()
 
 
 def _attach_compose_dependency(
@@ -216,6 +351,47 @@ def _attach_compose_dependency(
     files[owner_source] += (f"\n[Unit]\nRequires={network_service}\nAfter={network_service}\n").encode()
 
 
+def _ensure_vlan_resource(
+    vlan: dict[str, Any],
+    *,
+    output_dir: pathlib.Path,
+    files: dict[pathlib.Path, bytes],
+    manifest: dict[str, Any],
+    nmcli_bin: str | None,
+    install_bin: str | None,
+    rm_bin: str | None,
+) -> None:
+    links = manifest.get("links")
+    owned = manifest.get("ownedUnits")
+    if not isinstance(links, list) or not isinstance(owned, list):
+        raise PodmanNetworkProjectionError("systemd projection manifest is missing V2 ownership metadata")
+    if any(isinstance(item, dict) and item.get("target") == vlan["unit"] for item in links):
+        return
+    if not nmcli_bin or not install_bin or not rm_bin:
+        raise PodmanNetworkProjectionError(
+            "VLAN-backed application networking requires nmcli, install, and rm projection binaries"
+        )
+
+    vrf_source = output_dir / "networkmanager" / f"{vlan['vrfProfile']}.nmconnection"
+    vlan_source = output_dir / "networkmanager" / f"{vlan['vlanProfile']}.nmconnection"
+    vrf_profile, vlan_profile = _vlan_profile_sources(vlan, nmcli_bin=nmcli_bin)
+    files[vrf_source] = vrf_profile
+    files[vlan_source] = vlan_profile
+
+    unit_source = output_dir / "units" / vlan["unit"]
+    files[unit_source] = _vlan_service_source(
+        vlan,
+        vrf_source=vrf_source,
+        vlan_source=vlan_source,
+        nmcli_bin=nmcli_bin,
+        install_bin=install_bin,
+        rm_bin=rm_bin,
+    )
+    links.append({"target": vlan["unit"], "source": str(unit_source)})
+    if vlan["unit"] not in owned:
+        owned.append(vlan["unit"])
+
+
 def augment_projection(
     effective: dict[str, Any],
     *,
@@ -223,12 +399,15 @@ def augment_projection(
     files: dict[pathlib.Path, bytes],
     manifest: dict[str, Any],
     firewalld_enabled: bool = True,
+    nmcli_bin: str | None = None,
+    install_bin: str | None = None,
+    rm_bin: str | None = None,
 ) -> None:
-    """Add V2-owned Podman .network Quadlets for enabled managed isolated container services."""
-    links = manifest.get("quadletLinks")
-    if not isinstance(links, list):
+    """Add V2-owned Podman networks and shared 802.1Q uplink resources."""
+    quadlet_links = manifest.get("quadletLinks")
+    if not isinstance(quadlet_links, list):
         raise PodmanNetworkProjectionError("systemd projection manifest is missing quadletLinks")
-    known_targets = {item.get("target") for item in links if isinstance(item, dict)}
+    known_targets = {item.get("target") for item in quadlet_links if isinstance(item, dict)}
 
     services = effective.get("services")
     if not isinstance(services, dict):
@@ -263,14 +442,28 @@ def augment_projection(
             owner = runtime_entry.get("ownerUnit") if isinstance(runtime_entry, dict) else None
         if not isinstance(owner, str) or not owner.endswith((".service", ".target")):
             raise PodmanNetworkProjectionError(f"isolated container service {service_id!r} has an invalid owner unit")
+
+        policy = network_policy(effective, service)
+        vlan = vlan_binding(policy)
+        if vlan is not None:
+            _ensure_vlan_resource(
+                vlan,
+                output_dir=output_dir,
+                files=files,
+                manifest=manifest,
+                nmcli_bin=nmcli_bin,
+                install_bin=install_bin,
+                rm_bin=rm_bin,
+            )
+
         source = output_dir / "quadlet" / reference
         files[source] = _network_source(
             service_id,
             owner,
-            network_policy(effective, service),
+            policy,
             network_name=podman_network_name(service_id, service),
         )
-        links.append({"target": reference, "source": str(source)})
+        quadlet_links.append({"target": reference, "source": str(source)})
         known_targets.add(reference)
         if runtime_type == "compose":
             _attach_compose_dependency(
@@ -281,7 +474,13 @@ def augment_projection(
                 manifest=manifest,
             )
 
-    links.sort(key=lambda item: item["target"])
+    quadlet_links.sort(key=lambda item: item["target"])
+    links = manifest.get("links")
+    owned = manifest.get("ownedUnits")
+    if isinstance(links, list):
+        links.sort(key=lambda item: item["target"])
+    if isinstance(owned, list):
+        owned.sort()
 
 
 __all__ = [
@@ -292,4 +491,5 @@ __all__ = [
     "podman_network_name",
     "quadlet_network_reference",
     "requires_firewalld",
+    "vlan_binding",
 ]
