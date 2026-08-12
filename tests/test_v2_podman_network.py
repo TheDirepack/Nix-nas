@@ -116,7 +116,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
             }
         )
         vlan = network.vlan_binding(service["network"])
-        self.assertIsNotNone(vlan)
+        assert vlan is not None
         with tempfile.TemporaryDirectory() as raw:
             nmcli = self.fake_nmcli(pathlib.Path(raw))
             output = pathlib.Path("/run/nas-control/systemd")
@@ -155,6 +155,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
             }
         }
         vlan = network.vlan_binding(effective["networkProfiles"]["media"])
+        assert vlan is not None
         with tempfile.TemporaryDirectory() as raw:
             nmcli = self.fake_nmcli(pathlib.Path(raw))
             output = pathlib.Path("/run/nas-control/systemd")
@@ -177,6 +178,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
         effective["services"]["second"] = second
         effective["derived"]["runtime"]["second"] = {"ownerUnit": "nas-v2-second.service"}
         vlan = network.vlan_binding(policy)
+        assert vlan is not None
         with tempfile.TemporaryDirectory() as raw:
             nmcli = self.fake_nmcli(pathlib.Path(raw))
             output = pathlib.Path("/run/nas-control/systemd")
