@@ -45,7 +45,7 @@ let
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
   upsMonitorSystem =
-    if cfg.power.ups.monitorSystem != "" then "${cfg.power.ups.name}@localhost"
+    if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
     else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
   syncthingDataDir = "/var/lib/syncthing";
