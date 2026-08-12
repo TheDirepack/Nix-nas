@@ -52,7 +52,7 @@ class V2SystemdDisableReconcileTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def run(
+    def run_reconcile(
         self,
         *,
         manifest: pathlib.Path,
@@ -90,7 +90,7 @@ class V2SystemdDisableReconcileTests(unittest.TestCase):
             systemctl, log = self.make_systemctl(root)
 
             self.write_manifest(manifest, source, enabled=True)
-            self.run(
+            self.run_reconcile(
                 manifest=manifest,
                 projection=projection,
                 runtime=runtime,
@@ -103,7 +103,7 @@ class V2SystemdDisableReconcileTests(unittest.TestCase):
 
             log.write_text("", encoding="utf-8")
             self.write_manifest(manifest, source, enabled=False)
-            disabled = self.run(
+            disabled = self.run_reconcile(
                 manifest=manifest,
                 projection=projection,
                 runtime=runtime,
@@ -121,7 +121,7 @@ class V2SystemdDisableReconcileTests(unittest.TestCase):
 
             log.write_text("", encoding="utf-8")
             self.write_manifest(manifest, None, enabled=False)
-            removed = self.run(
+            removed = self.run_reconcile(
                 manifest=manifest,
                 projection=projection,
                 runtime=runtime,
