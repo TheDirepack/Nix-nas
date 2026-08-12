@@ -37,9 +37,9 @@ def _managed_source(service_id: str, value: str) -> pathlib.Path:
 
 
 def source_paths(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> list[pathlib.Path]:
-    """Return validated source files whose edits require recompiling one managed service."""
+    """Return validated source files whose edits require recompiling one active managed service."""
     del effective
-    if not service["managed"]:
+    if not service["managed"] or not service.get("enabled", True):
         return []
 
     runtime = service["runtime"]
