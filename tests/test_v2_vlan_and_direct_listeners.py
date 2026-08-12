@@ -45,7 +45,7 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
         self.assertEqual(vlan["parent"], "eno1")
 
         source = (ROOT / "services" / "nas_v2_podman_network.py").read_text(encoding="utf-8")
-        self.assertIn('lines.append(f"Options=vrf={vlan[\'vrfInterface\']}"', source)
+        self.assertIn("lines.append(f\"Options=vrf={vlan['vrfInterface']}\"", source)
         self.assertNotIn("Options=vlan=", source)
 
     def test_vlan_is_rejected_for_host_network_mode(self) -> None:
