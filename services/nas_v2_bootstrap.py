@@ -20,7 +20,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
-from nas_v2_spec import compile_document, load_platform_capabilities, load_schema
+from nas_v2_spec import ManagedServicesV2Error, compile_document, load_platform_capabilities, load_schema
 
 
 class BootstrapError(RuntimeError):
@@ -148,11 +148,13 @@ def _stabilize_new_services(
                 continue
             for dependency in dependencies:
                 target = dependency.get("service") if isinstance(dependency, dict) else None
+                if not isinstance(target, str):
+                    continue
                 if target in deferred_ids:
                     deferred_ids.add(service_id)
                     changed = True
                     break
-                if not isinstance(target, str) or target in services:
+                if target in services:
                     continue
                 canonical = f"services.{target}"
                 if target in seed_services and canonical in seen:
@@ -318,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
             schema=args.schema,
             platform=args.platform,
         )
-    except (BootstrapError, OSError, ValueError) as exc:
+    except (BootstrapError, ManagedServicesV2Error, OSError, ValueError) as exc:
         print(f"nas-v2-bootstrap: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True))
