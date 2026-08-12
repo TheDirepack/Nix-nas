@@ -26,7 +26,9 @@ function description(schema) {
 
 function replaceObjectKey(value, oldKey, newKey) {
   const result = {};
-  for (const [key, entry] of Object.entries(value || {})) result[key === oldKey ? newKey : key] = entry;
+  for (const [key, entry] of Object.entries(value || {})) {
+    result[key === oldKey ? newKey : key] = entry;
+  }
   return result;
 }
 
@@ -74,7 +76,10 @@ function ScalarEditor({root, schema, value, onChange, id}) {
         step={type === "integer" ? 1 : "any"}
         onChange={(event) => {
           if (event.target.value === "") return onChange(undefined);
-          const parsed = type === "integer" ? Number.parseInt(event.target.value, 10) : Number(event.target.value);
+          const parsed =
+            type === "integer"
+              ? Number.parseInt(event.target.value, 10)
+              : Number(event.target.value);
           onChange(Number.isFinite(parsed) ? parsed : value);
         }}
       />
@@ -82,7 +87,14 @@ function ScalarEditor({root, schema, value, onChange, id}) {
   }
   const text = typeof value === "string" ? value : "";
   if ((resolved.maxLength || 0) > 256 || resolved.format === "textarea") {
-    return <TextArea id={id} value={text} onChange={(_event, next) => onChange(next)} rows={4} />;
+    return (
+      <TextArea
+        id={id}
+        value={text}
+        onChange={(_event, next) => onChange(next)}
+        rows={4}
+      />
+    );
   }
   return (
     <TextInput
@@ -119,13 +131,19 @@ function ArrayEditor({root, schema, value, onChange, path}) {
           <Button
             variant="danger"
             size="sm"
-            onClick={() => onChange(items.filter((_item, itemIndex) => itemIndex !== index))}
+            onClick={() =>
+              onChange(items.filter((_item, itemIndex) => itemIndex !== index))
+            }
           >
             Remove item
           </Button>
         </div>
       ))}
-      <Button variant="secondary" size="sm" onClick={() => onChange([...items, defaultValue(root, itemSchema)])}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => onChange([...items, defaultValue(root, itemSchema)])}
+      >
         Add item
       </Button>
     </div>
@@ -143,7 +161,9 @@ function ObjectEditor({root, schema, value, onChange, path}) {
       ? resolved.additionalProperties
       : null;
   const dynamicEntries = Object.entries(object).filter(([name]) => !knownNames.has(name));
-  const absentOptional = Object.keys(properties).filter((name) => !required.has(name) && !hasOwn(object, name));
+  const absentOptional = Object.keys(properties).filter(
+    (name) => !required.has(name) && !hasOwn(object, name),
+  );
   const [fieldToAdd, setFieldToAdd] = useState("");
   const [newKey, setNewKey] = useState("");
   const [keyError, setKeyError] = useState("");
@@ -160,7 +180,9 @@ function ObjectEditor({root, schema, value, onChange, path}) {
     const key = newKey.trim();
     if (!key) return setKeyError("Enter a key.");
     if (hasOwn(object, key)) return setKeyError("That key already exists.");
-    if (namePattern && !new RegExp(namePattern).test(key)) return setKeyError(`Key must match ${namePattern}.`);
+    if (namePattern && !new RegExp(namePattern).test(key)) {
+      return setKeyError(`Key must match ${namePattern}.`);
+    }
     setProperty(key, defaultValue(root, dynamicSchema));
     setNewKey("");
     setKeyError("");
@@ -223,7 +245,13 @@ function ObjectEditor({root, schema, value, onChange, path}) {
               value={name}
               aria-label={`Key for ${name}`}
               onChange={(_event, next) => {
-                if (!next || hasOwn(object, next) || (namePattern && !new RegExp(namePattern).test(next))) return;
+                if (
+                  !next ||
+                  hasOwn(object, next) ||
+                  (namePattern && !new RegExp(namePattern).test(next))
+                ) {
+                  return;
+                }
                 onChange(replaceObjectKey(object, name, next));
               }}
             />
@@ -310,10 +338,20 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
 
 export function SchemaEditor({schema, value, onChange}) {
   const root = useMemo(() => schema || {}, [schema]);
-  if (!schema || typeof schema !== "object") return <div>Managed Services V2 schema is unavailable.</div>;
+  if (!schema || typeof schema !== "object") {
+    return <div>Managed Services V2 schema is unavailable.</div>;
+  }
   return (
     <div className="nas-schema-editor">
-      <SchemaNode root={root} schema={root} value={value} onChange={onChange} path="root" label="Desired state" required />
+      <SchemaNode
+        root={root}
+        schema={root}
+        value={value}
+        onChange={onChange}
+        path="root"
+        label="Desired state"
+        required
+      />
     </div>
   );
 }
