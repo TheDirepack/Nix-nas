@@ -1,8 +1,27 @@
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 
+let
+  desiredPath = "/var/lib/nas-control/services.yaml";
+  initialSeedMarker = "/var/lib/nas-control/.managed-services-native-seed-v2";
+in
 {
   config.systemd.services = lib.mkMerge [
     {
+      nas-managed-services-seed = {
+        # The canonical V2 spec permits Nix-provided application defaults to seed
+        # services.yaml only when no V2 authority existed before this oneshot ran.
+        # The base seed ExecStart creates a minimal stub when absent; this marker
+        # carries the pre-ExecStart fact into the native-services postStart helper.
+        preStart = lib.mkBefore ''
+          if [ ! -e ${lib.escapeShellArg desiredPath} ]; then
+            ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations /var/lib/nas-control
+            : > ${lib.escapeShellArg initialSeedMarker}
+          else
+            ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg initialSeedMarker}
+          fi
+        '';
+      };
+
       nas-managed-services-authentik-reconcile = {
         # This finite projection needs the identity provider and compiled effective
         # state, not a direct lifecycle edge to the V2-managed identity-sync job.
