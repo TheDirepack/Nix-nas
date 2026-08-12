@@ -127,6 +127,34 @@ class V2BackupRuntimeTests(unittest.TestCase):
                 runtime._run = original_run
             self.assertFalse(called)
 
+    def test_stale_dump_is_not_accepted_when_job_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            artifact = root / "stale-artifact"
+            artifact.mkdir(parents=True)
+            (artifact / "old.dump").write_bytes(b"old-data")
+            inventory_path = root / "inventory.json"
+            paths_path = root / "paths.txt"
+            state_path = root / "state.json"
+            inventory_path.write_text(json.dumps(self.inventory(artifact)), encoding="utf-8")
+
+            original_run = runtime._run
+            runtime._run = lambda _argv: ""
+            try:
+                with self.assertRaisesRegex(runtime.BackupRuntimeError, "completed without producing data"):
+                    runtime.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            finally:
+                runtime._run = original_run
+            # stale dump should have been cleared, so artifact is empty after failure
+            self.assertEqual(list(artifact.iterdir()), [])
+            self.assertFalse(paths_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

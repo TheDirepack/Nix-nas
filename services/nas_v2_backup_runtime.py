@@ -78,6 +78,22 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
         raise BackupRuntimeError(f"unable to prepare native-dump artifact directory {artifact_path!r}: {exc}") from exc
     if not artifact.is_dir():
         raise BackupRuntimeError(f"native-dump artifact resource {artifact_resource!r} must resolve to a directory")
+    # Ensure fresh preparation: remove any stale dump from previous invocation so a
+    # zero-write success cannot be accepted. This implements generation-specific
+    # freshness without requiring the dump job to know the transaction ID.
+    try:
+        for child in list(artifact.iterdir()):
+            try:
+                if child.is_symlink() or child.is_file():
+                    child.unlink()
+                elif child.is_dir():
+                    import shutil
+
+                    shutil.rmtree(child)
+            except OSError as exc:
+                raise BackupRuntimeError(f"unable to clean stale native-dump artifact {child!r}: {exc}") from exc
+    except OSError as exc:
+        raise BackupRuntimeError(f"unable to inspect native-dump artifact directory {artifact_path!r}: {exc}") from exc
 
     _run([systemctl_bin, "restart", preparation_unit])
     try:
