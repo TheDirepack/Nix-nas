@@ -43,5 +43,17 @@
         == "${pkgs.coreutils}/bin/install";
       message = "Managed Services V2 must use the pinned coreutils install binary for VLAN projection.";
     }
+    {
+      assertion = config.systemd.services.copyparty.wantedBy == [ ];
+      message = "CopyParty must not retain a static NixOS boot target while Managed Services V2 owns its lifecycle.";
+    }
+    {
+      assertion = !lib.elem "copyparty.service" config.systemd.services.caddy.wants;
+      message = "Caddy must not bypass Managed Services V2 by statically starting the CopyParty application backend.";
+    }
+    {
+      assertion = !lib.elem "copyparty.service" config.systemd.targets.nas-protected-services.requires;
+      message = "Secret activation must not bypass Managed Services V2 by statically starting CopyParty.";
+    }
   ];
 }
