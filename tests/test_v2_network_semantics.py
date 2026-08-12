@@ -90,9 +90,7 @@ class V2NetworkSemanticTests(unittest.TestCase):
                 "allowedEgress": [],
             }
             with self.subTest(runtime=candidate["runtime"]["type"], managed=candidate["managed"]):
-                with self.assertRaisesRegex(
-                    v2.ManagedServicesV2Error, "V2-managed OCI, Quadlet, or Compose"
-                ) as raised:
+                with self.assertRaisesRegex(v2.ManagedServicesV2Error, "V2-managed OCI, Quadlet, or Compose") as raised:
                     self.compile({"schemaVersion": 3, "services": {"example": candidate}})
                 self.assertEqual(raised.exception.code, "network-vlan-runtime")
 
