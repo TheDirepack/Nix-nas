@@ -48,7 +48,7 @@ class V2ComposeTests(unittest.TestCase):
             "sandbox": {"mode": "inherit"},
             "storage": [],
             "credentials": [],
-            "routes": [],
+            "routes": {},
             "listeners": {},
         }
         return effective, service
@@ -199,6 +199,101 @@ class V2ComposeTests(unittest.TestCase):
                 override["networks"]["nas_v2"],
                 {"external": True, "name": "nas-v2-demo"},
             )
+
+    def test_isolated_ingress_is_published_on_selected_compose_services(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["network"] = {
+                "mode": "isolated",
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+            service["listeners"] = {
+                "api": {
+                    "protocol": "tcp",
+                    "exposure": {"port": 18080},
+                    "targetPort": 8080,
+                    "runtimeTarget": "web",
+                    "firewall": True,
+                },
+                "discovery": {
+                    "protocol": "udp",
+                    "exposure": {"start": 19000, "end": 19002},
+                    "runtimeTarget": "worker",
+                    "firewall": True,
+                },
+            }
+            service["routes"] = {
+                "ui": {
+                    "runtimeTarget": "web",
+                    "target": {"type": "http", "host": "127.0.0.1", "port": 8081},
+                    "exposure": {"type": "path", "paths": ["/demo"]},
+                    "auth": {"mode": "public"},
+                }
+            }
+
+            _source, override = self.render(effective, service, root / "apps")
+
+            self.assertEqual(
+                override["services"]["web"]["ports"],
+                ["18080:8080/tcp", "127.0.0.1:8081:8081/tcp"],
+            )
+            self.assertEqual(override["services"]["worker"]["ports"], ["19000-19002:19000-19002/udp"])
+
+    def test_isolated_ingress_requires_existing_runtime_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["network"] = {
+                "mode": "isolated",
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+            service["listeners"] = {
+                "api": {
+                    "protocol": "tcp",
+                    "exposure": {"port": 18080},
+                    "runtimeTarget": "missing",
+                    "firewall": True,
+                }
+            }
+
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "runtimeTarget 'missing' does not exist"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_isolated_route_rejects_non_loopback_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["network"] = {
+                "mode": "isolated",
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+            service["routes"] = {
+                "ui": {
+                    "runtimeTarget": "web",
+                    "target": {"type": "http", "host": "0.0.0.0", "port": 8081},
+                    "exposure": {"type": "path", "paths": ["/demo"]},
+                    "auth": {"mode": "public"},
+                }
+            }
+
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "must use a loopback host target"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
 
 
 if __name__ == "__main__":
