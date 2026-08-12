@@ -6,7 +6,6 @@ let
     cfg
     copypartyUserConfigDir
     sanoidPolicy
-    syncthingConfigDir
   ;
   backupStage = cfg.backup.stagingPath;
   v2Source = ../../../services;
@@ -215,26 +214,12 @@ in
         TimeoutStartSec = "6h";
         UMask = "0077";
       };
-      path = [
-        pkgs.coreutils
-        pkgs.gnugrep
-        pkgs.python3
-        pkgs.sqlite
-        pkgs.util-linux
-        config.services.postgresql.package
-      ];
+      path = [ pkgs.coreutils ];
       script = ''
         set -euo pipefail
         verify_root=${lib.escapeShellArg restoreVerifyPath}
         restore_root="$verify_root/restored"
-        pgdata="$verify_root/postgresql"
-        pgsocket="$verify_root/socket"
         cleanup() {
-          if [[ -f "$pgdata/postmaster.pid" ]]; then
-            ${pkgs.util-linux}/bin/runuser -u postgres -- \
-              ${config.services.postgresql.package}/bin/pg_ctl \
-              -D "$pgdata" -m immediate stop >/dev/null 2>&1 || true
-          fi
           rm -rf "$verify_root"
         }
         trap cleanup EXIT
@@ -246,46 +231,16 @@ in
         export RESTIC_PASSWORD_FILE=${lib.escapeShellArg cfg.backup.passwordFile}
         ${resticCommand} restore latest --target "$restore_root"
 
-        staged="$restore_root${backupStage}"
-        [[ -s "$staged/authentik/database.pgdump" ]]
-        install -d -m 0700 -o postgres -g postgres "$pgdata" "$pgsocket"
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/initdb \
-          -D "$pgdata" --auth=trust --no-locale >/dev/null
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/pg_ctl \
-          -D "$pgdata" -o "-k $pgsocket -p 55432 -c listen_addresses=\"\"" \
-          -w start >/dev/null
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/createdb \
-          -h "$pgsocket" -p 55432 authentik_verify
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/pg_restore \
-          -h "$pgsocket" -p 55432 --no-owner \
-          --dbname=authentik_verify "$staged/authentik/database.pgdump"
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/psql \
-          -h "$pgsocket" -p 55432 -d authentik_verify \
-          -Atqc "SELECT count(*) > 0 FROM django_migrations" | grep -Fxq t
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/psql \
-          -h "$pgsocket" -p 55432 -d authentik_verify \
-          -Atqc "SELECT to_regclass('public.authentik_core_user') IS NOT NULL" | grep -Fxq t
+        # Validate every compiled V2 backup resource generically. Native-dump
+        # artifacts get format-aware integrity checks selected from their data;
+        # ordinary filesystem resources are only checked for successful restore
+        # so arbitrary user files are never interpreted as application state.
+        ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_verify.py \
+          --inventory ${lib.escapeShellArg v2BackupInventory} \
+          --restore-root "$restore_root" \
+          --pg-restore ${config.services.postgresql.package}/bin/pg_restore
 
-        for database in "$staged"/copyparty/*.db; do
-          [[ -e "$database" ]] || continue
-          [[ "$(${pkgs.sqlite}/bin/sqlite3 "$database" 'PRAGMA integrity_check;')" == ok ]]
-        done
-        ${lib.optionalString cfg.syncthing.enable ''
-        ${pkgs.python3}/bin/python3 - "$restore_root${syncthingConfigDir}/config.xml" <<'PYXML'
-import pathlib
-import sys
-import xml.etree.ElementTree as ET
-path = pathlib.Path(sys.argv[1])
-if path.exists():
-    ET.parse(path)
-PYXML
-        ''}
+        # These are host recovery substrate rather than application resources.
         [[ -s "$restore_root${cfg.secrets.keepassDatabase}" ]]
         [[ -d "$restore_root/var/lib/nas-control" ]]
       '';
