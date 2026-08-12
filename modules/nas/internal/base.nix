@@ -68,15 +68,14 @@ let
   ];
 
   # Secret activation owns only host/security substrate. In particular, do not
-  # add V2-managed application services here: Requires= on this target would
-  # bypass their mutable services.yaml enabled/lifecycle state.
+  # add V2-managed application services or V2 jobs here: Requires= on this
+  # target would bypass their mutable services.yaml lifecycle state.
   protectedServiceUnits = [
     "nas-zfs-mount-guard.service"
     "postgresql.service"
     "authentik-migrate.service"
     "authentik-worker.service"
     "authentik.service"
-    "nas-identity-sync.service"
     "caddy.service"
   ] ++ lib.optional cfg.zfsEncryption.enable "nas-zfs-unlock.service";
 
