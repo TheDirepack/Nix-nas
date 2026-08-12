@@ -42,13 +42,17 @@ class RevisionTests(unittest.TestCase):
             rev1 = editor.read_document(desired_path=p, schema_path=SCHEMA)["revision"]
             # A saves rev2
             yaml2 = minimal_yaml("b")
-            editor.replace_document(yaml2, desired_path=p, schema_path=SCHEMA, platform_path=None, expected_revision=rev1)
+            editor.replace_document(
+                yaml2, desired_path=p, schema_path=SCHEMA, platform_path=None, expected_revision=rev1
+            )
             rev2 = editor.read_document(desired_path=p, schema_path=SCHEMA)["revision"]
             self.assertNotEqual(rev1, rev2)
             # B tries to save using stale rev1 -> conflict
             yaml3 = minimal_yaml("c")
             with self.assertRaisesRegex(editor.ManagedServicesEditorError, "revision conflict"):
-                editor.replace_document(yaml3, desired_path=p, schema_path=SCHEMA, platform_path=None, expected_revision=rev1)
+                editor.replace_document(
+                    yaml3, desired_path=p, schema_path=SCHEMA, platform_path=None, expected_revision=rev1
+                )
             # ensure rev3 not written
             self.assertEqual(editor.read_document(desired_path=p, schema_path=SCHEMA)["revision"], rev2)
 

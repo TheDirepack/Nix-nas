@@ -17,7 +17,7 @@ FORBIDDEN = [
     r"heartbeat/reaper",
 ]
 
-# Allow historical docs to keep V1 references.
+# Allow docs to keep V1 references.
 ALLOWED_DIRS = {"docs/development/history.md", "CHANGELOG.md", "docs"}
 ALLOWED_FILES = {
     "tests/test_alpha18_hardening.py",  # contains negative assertions about V1 being absent
@@ -38,7 +38,7 @@ def is_allowed(path: pathlib.Path) -> bool:
 class V1RegressionTests(unittest.TestCase):
     def test_no_active_v1_identifiers(self):
         pattern = re.compile("|".join(f"({p})" for p in FORBIDDEN))
-        # Only scan active production code and the now-migrated VM test; historical docs and
+        # Only scan active production code and the now-migrated VM test; docs and
         # hardening negative-assertion tests are allowed to mention V1.
         scan_roots = [ROOT / "services", ROOT / "modules", ROOT / "cockpit" / "src", ROOT / "tests" / "vm"]
         allowed_negative_tests = {

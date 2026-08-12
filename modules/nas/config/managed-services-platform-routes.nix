@@ -17,5 +17,5 @@ in
 {
   # Platform cockpit route is now part of the single aggregated seed in
   # managed-services-seed-v2.nix. Retaining this module as a no-op keeps
-  # historical imports stable while ensuring only one bootstrap runs.
+  # imports stable while ensuring only one bootstrap runs.
 }

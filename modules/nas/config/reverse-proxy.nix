@@ -95,6 +95,16 @@ in
       # V2 now owns all application routes including Open WebUI, downloader
       # compatibility, and Syncthing. Generic primitives cover prefix stripping,
       # headers, and header constraints without app-specific Caddy branches.
+      handle /settings/syncthing {
+        route {
+          ${caddyForwardAuth}
+          @missingSyncthingSettingsAccess {
+            not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)application\.syncthing\.admin([[:space:]]*[|,]|$)
+          }
+          respond @missingSyncthingSettingsAccess 403
+          redir ${cfg.identity.authentikPath}if/flow/nas-user-settings/
+        }
+      }
       redir /settings ${cfg.identity.authentikPath}if/user/
       redir /settings/ ${cfg.identity.authentikPath}if/user/
 
