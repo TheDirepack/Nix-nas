@@ -90,7 +90,10 @@ let
       dependencies = [ (depends "authentik" "started") ];
     };
     copyparty = (daemon "copyparty.service" "CopyParty file service") // {
-      dependencies = [ (depends "zfs-mount-guard" "completed") ];
+      dependencies = [
+        (depends "zfs-mount-guard" "completed")
+        (depends "identity-sync" "completed")
+      ];
       authorization.capabilities = [
         (capability "files" "Browse and manage files")
         (capability "webdav" "Use WebDAV")
@@ -124,7 +127,10 @@ let
   }
   // lib.optionalAttrs cfg.syncthing.enable {
     syncthing = (daemon "syncthing.service" "Syncthing synchronization service") // {
-      dependencies = [ (depends "zfs-mount-guard" "completed") ];
+      dependencies = [
+        (depends "zfs-mount-guard" "completed")
+        (depends "identity-sync" "completed")
+      ];
       authorization.capabilities = [
         (capability "access" "Use personal Syncthing synchronization")
         (capability "admin" "Administer Syncthing")
@@ -140,7 +146,11 @@ let
       };
     };
     syncthing-sync = (scheduledJob "nas-syncthing-sync.service" "Reconcile Syncthing identity-backed configuration" syncSchedules) // {
-      dependencies = [ (depends "authentik" "started") (depends "syncthing" "started") ];
+      dependencies = [
+        (depends "authentik" "started")
+        (depends "identity-sync" "completed")
+        (depends "syncthing" "started")
+      ];
     };
   }
   // lib.optionalAttrs cfg.vaultwarden.enable {
