@@ -190,3 +190,82 @@ export function propertyNamePattern(root, schema) {
   const pattern = resolved.propertyNames?.pattern;
   return typeof pattern === "string" ? pattern : null;
 }
+
+export function migrateVariantValue(root, schema, current, targetIndex) {
+  const resolved = resolveSchema(root, schema);
+  if (!Array.isArray(resolved.oneOf) || !resolved.oneOf.length) return current;
+  const target = selectedSchema(root, resolved, current, targetIndex);
+  if (current === null || typeof current !== "object" || Array.isArray(current)) {
+    return defaultValue(root, target);
+  }
+  const result = {};
+  const properties = target.properties || {};
+  const additional = target.additionalProperties;
+  // Preserve compatible keys that are valid in target.
+  for (const [name, propertySchema] of Object.entries(properties)) {
+    const child = resolveSchema(root, propertySchema);
+    if (Object.hasOwn(child, "const")) {
+      result[name] = clone(child.const);
+      continue;
+    }
+    if (Object.hasOwn(current, name)) {
+      const currentVal = current[name];
+      const expectedType = schemaType(root, child);
+      if (typeMatches(expectedType, currentVal)) {
+        // For nested oneOf, recurse if needed? Keep as-is if type matches; deeper variant
+        // preservation will be handled when that nested node is rendered.
+        result[name] = clone(currentVal);
+        continue;
+      }
+    }
+    if (
+      (target.required || []).includes(name) ||
+      Object.hasOwn(child, "default") ||
+      Object.hasOwn(child, "const")
+    ) {
+      result[name] = defaultValue(root, child);
+    }
+  }
+  // Handle dynamic keys via additionalProperties
+  if (additional && typeof additional === "object") {
+    for (const [name, val] of Object.entries(current)) {
+      if (Object.hasOwn(properties, name)) continue;
+      const expectedType = schemaType(root, resolveSchema(root, additional));
+      if (typeMatches(expectedType, val)) result[name] = clone(val);
+    }
+  } else if (additional === true) {
+    for (const [name, val] of Object.entries(current)) {
+      if (!Object.hasOwn(properties, name)) result[name] = clone(val);
+    }
+  }
+  // Ensure required defaults for any missing required keys.
+  for (const name of target.required || []) {
+    if (!Object.hasOwn(result, name)) {
+      const child = resolveSchema(root, properties[name] || {});
+      result[name] = defaultValue(root, child);
+    }
+  }
+  // For mutually exclusive oneOf (e.g., schedule calendar vs intervalSeconds),
+  // remove fields that are required by other branches but not by the target,
+  // otherwise the result would violate oneOf (both present).
+  if (
+    Array.isArray(resolved.oneOf) &&
+    resolved.oneOf.length > 1 &&
+    typeof targetIndex === "number" &&
+    targetIndex >= 0
+  ) {
+    const targetRequired = new Set(target.required || []);
+    const otherRequired = new Set();
+    resolved.oneOf.forEach((branch, idx) => {
+      if (idx === targetIndex) return;
+      const b = resolveSchema(root, branch);
+      for (const req of b.required || []) otherRequired.add(req);
+    });
+    for (const field of otherRequired) {
+      if (!targetRequired.has(field) && Object.hasOwn(result, field)) {
+        delete result[field];
+      }
+    }
+  }
+  return result;
+}

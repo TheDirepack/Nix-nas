@@ -2,6 +2,7 @@ import React, {useMemo, useState} from "react";
 import {Button, Label, TextArea, TextInput} from "@patternfly/react-core";
 import {
   defaultValue,
+  migrateVariantValue,
   propertyNamePattern,
   resolveSchema,
   schemaType,
@@ -305,7 +306,7 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
             value={selected}
             onChange={(event) => {
               const index = Number.parseInt(event.target.value, 10);
-              onChange(defaultValue(root, selectedSchema(root, resolved, value, index)));
+              onChange(migrateVariantValue(root, resolved, value, index));
             }}
           >
             {options.map((option) => (

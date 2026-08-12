@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   defaultValue,
+  migrateVariantValue,
   propertyNamePattern,
   resolveSchema,
   schemaType,
@@ -76,4 +77,72 @@ test("generic schema model contains no built-in application identifiers", () => 
   ]) {
     assert.equal(source.includes(application), false, `${application} must not be special-cased`);
   }
+});
+
+test("oneOf variant switching preserves compatible shared fields", () => {
+  const runtime = schema.$defs.runtime;
+  const execVal = {
+    type: "exec",
+    command: ["/bin/demo"],
+    environment: {FOO: "bar"},
+    workingDirectory: "/tmp",
+  };
+  const systemdIdx = variantOptions(schema, runtime).findIndex((o) => o.label === "type: systemd");
+  const preserved = migrateVariantValue(schema, runtime, execVal, systemdIdx);
+  // type discriminator should change to systemd, exec-specific fields removed, but no crash
+  assert.equal(preserved.type, "systemd");
+  assert.equal(preserved.command, undefined);
+  // switching back to exec should get defaults for required fields
+  const execIdx = variantOptions(schema, runtime).findIndex((o) => o.label === "type: exec");
+  const back = migrateVariantValue(schema, runtime, preserved, execIdx);
+  assert.equal(back.type, "exec");
+});
+
+test("runtime discriminator oneOf keeps shared sandbox-compatible values", () => {
+  const service = defaultValue(schema, schema.$defs.service);
+  service.resources = {accelerators: [{kind: "gpu", vendor: "NVIDIA"}]};
+  service.sandbox = {mode: "strict"};
+  const runtime = schema.$defs.runtime;
+  const quadletIdx = variantOptions(schema, runtime).findIndex((o) => o.label === "type: quadlet");
+  const execIdx = variantOptions(schema, runtime).findIndex((o) => o.label === "type: exec");
+  const quadletVal = migrateVariantValue(
+    schema,
+    runtime,
+    {type: "exec", command: ["/bin/x"]},
+    quadletIdx,
+  );
+  assert.equal(quadletVal.type, "quadlet");
+  const execVal = migrateVariantValue(schema, runtime, quadletVal, execIdx);
+  assert.equal(execVal.type, "exec");
+});
+
+test("non-discriminator oneOf (schedule) preserves shared fields", () => {
+  const schedule = schema.$defs.schedule;
+  const calendarVal = {calendar: "daily", randomizedDelaySeconds: 100, persistent: true};
+  const intervalIdx = variantOptions(schema, schedule).findIndex((o) =>
+    o.label.includes("intervalSeconds"),
+  );
+  const migrated = migrateVariantValue(schema, schedule, calendarVal, intervalIdx);
+  // shared fields randomizedDelaySeconds and persistent should survive, calendar removed
+  assert.equal(migrated.randomizedDelaySeconds, 100);
+  assert.equal(migrated.persistent, true);
+  assert.equal(migrated.calendar, undefined);
+  assert.ok(typeof migrated.intervalSeconds === "number");
+  const calendarIdx = variantOptions(schema, schedule).findIndex((o) =>
+    o.label.includes("calendar"),
+  );
+  const back = migrateVariantValue(schema, schedule, migrated, calendarIdx);
+  assert.ok(typeof back.calendar === "string");
+  assert.equal(back.intervalSeconds, undefined);
+});
+
+test("obsolete branch-specific properties are removed", () => {
+  const runtime = schema.$defs.runtime;
+  const execVal = {type: "exec", command: ["/bin/x"], workingDirectory: "/tmp"};
+  const systemdIdx = variantOptions(schema, runtime).findIndex((o) => o.label === "type: systemd");
+  const migrated = migrateVariantValue(schema, runtime, execVal, systemdIdx);
+  assert.equal(migrated.command, undefined);
+  assert.equal(migrated.workingDirectory, undefined);
+  assert.equal(migrated.type, "systemd");
+  assert.ok(typeof migrated.unit === "string");
 });
