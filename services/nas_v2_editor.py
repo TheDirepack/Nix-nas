@@ -178,6 +178,20 @@ def owner_unit(service_id: str, service: dict[str, Any]) -> str | None:
     return f"nas-v2-{service_id}.service"
 
 
+def _status_units(service_id: str, service: dict[str, Any]) -> list[dict[str, str]]:
+    units: list[dict[str, str]] = []
+    owner = owner_unit(service_id, service)
+    if owner is not None:
+        units.append({"unit": owner, "role": "owner"})
+    workload = service.get("workload")
+    if isinstance(workload, dict) and workload.get("kind") == "job":
+        schedules = workload.get("schedules", [])
+        if isinstance(schedules, list):
+            for index in range(len(schedules)):
+                units.append({"unit": f"nas-v2-timer-{service_id}-{index}.timer", "role": "schedule"})
+    return units
+
+
 def status(
     *,
     desired_path: pathlib.Path = DEFAULT_SPEC_PATH,
@@ -211,7 +225,6 @@ def status(
         effective_service = effective if isinstance(effective, dict) else service
         mode = _desired_mode(service)
         effective_mode = _desired_mode(effective_service)
-        unit = owner_unit(service_id, effective_service)
         workload = effective_service.get("workload")
         idle_seconds = workload.get("idleSeconds") if isinstance(workload, dict) else None
         rows.append(
@@ -227,7 +240,7 @@ def status(
                 "managed": service.get("managed", True) is not False,
                 "allowedModes": _allowed_modes(service),
                 "idleSeconds": idle_seconds,
-                "units": ([{"unit": unit}] if unit else []),
+                "units": _status_units(service_id, effective_service),
             }
         )
     return {
