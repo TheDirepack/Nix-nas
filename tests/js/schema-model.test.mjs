@@ -11,7 +11,9 @@ import {
   variantOptions,
 } from "../../cockpit/src/schema-model.js";
 
-const schema = JSON.parse(fs.readFileSync(new URL("../../schemas/managed-services-v3.schema.json", import.meta.url)));
+const schema = JSON.parse(
+  fs.readFileSync(new URL("../../schemas/managed-services-v3.schema.json", import.meta.url)),
+);
 
 test("runtime choices are discovered from the canonical schema instead of app UI branches", () => {
   const runtime = schema.$defs.runtime;
@@ -22,14 +24,23 @@ test("runtime choices are discovered from the canonical schema instead of app UI
   assert.ok(options.some((option) => option.label === "type: oci"));
 
   const ociIndex = selectVariantIndex(schema, runtime, {type: "oci", image: "example:v1"});
-  const selected = selectedSchema(schema, runtime, {type: "oci", image: "example:v1"}, ociIndex);
+  const selected = selectedSchema(
+    schema,
+    runtime,
+    {type: "oci", image: "example:v1"},
+    ociIndex,
+  );
   assert.equal(resolveSchema(schema, selected.properties.type).const, "oci");
 });
 
 test("new service values are built from schema required/default/const data", () => {
   const service = defaultValue(schema, schema.$defs.service);
   assert.equal(service.name, "");
-  assert.deepEqual(service.workload, {kind: "daemon", activation: "persistent", schedules: []});
+  assert.deepEqual(service.workload, {
+    kind: "daemon",
+    activation: "persistent",
+    schedules: [],
+  });
   assert.equal(service.runtime.type, "systemd");
   assert.equal(service.runtime.unit, "");
   assert.equal(service.enabled, true);
@@ -56,8 +67,18 @@ test("oneOf without a discriminator keeps the base object properties", () => {
 });
 
 test("generic schema model contains no built-in application identifiers", () => {
-  const source = fs.readFileSync(new URL("../../cockpit/src/schema-model.js", import.meta.url), "utf8");
-  for (const application of ["copyparty", "syncthing", "grafana", "ai-runtime", "ai-workspace", "ntfy"]) {
+  const source = fs.readFileSync(
+    new URL("../../cockpit/src/schema-model.js", import.meta.url),
+    "utf8",
+  );
+  for (const application of [
+    "copyparty",
+    "syncthing",
+    "grafana",
+    "ai-runtime",
+    "ai-workspace",
+    "ntfy",
+  ]) {
     assert.equal(source.includes(application), false, `${application} must not be special-cased`);
   }
 });
