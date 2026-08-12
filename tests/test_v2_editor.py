@@ -93,6 +93,39 @@ class V2EditorTests(unittest.TestCase):
             self.assertEqual(by_id["demo"]["requestedMode"], "off")
             self.assertEqual(by_id["second"]["requestedMode"], "always")
 
+    def test_scheduled_job_status_includes_generated_timer_units(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = root / "services.yaml"
+            desired.write_text(
+                "schemaVersion: 3\n"
+                "services:\n"
+                "  backup:\n"
+                "    name: Backup\n"
+                "    workload:\n"
+                "      kind: job\n"
+                "      schedules:\n"
+                "        - calendar: daily\n"
+                "        - intervalSeconds: 3600\n"
+                "    runtime:\n"
+                "      type: systemd\n"
+                "      unit: backup.service\n",
+                encoding="utf-8",
+            )
+            result = editor.status(
+                desired_path=desired,
+                effective_path=root / "missing-effective.json",
+            )
+            backup = result["services"][0]
+            self.assertEqual(
+                backup["units"],
+                [
+                    {"unit": "backup.service", "role": "owner"},
+                    {"unit": "nas-v2-timer-backup-0.timer", "role": "schedule"},
+                    {"unit": "nas-v2-timer-backup-1.timer", "role": "schedule"},
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
