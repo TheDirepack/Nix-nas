@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import pathlib
 import sys
 import tempfile
@@ -47,6 +49,47 @@ services:
                 )
 
             self.assertEqual(raised.exception.code, "missing-reference")
+            self.assertFalse(marker.exists())
+            self.assertEqual(desired.read_text(encoding="utf-8"), "schemaVersion: 3\nservices: {}\n")
+
+    def test_cli_reports_schema_failure_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            desired = root / "services.yaml"
+            seed = root / "seed.yaml"
+            marker = root / ".bootstrap"
+            desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            seed.write_text(
+                """schemaVersion: 3
+services:
+  frontend:
+    name: Frontend
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: frontend.service}
+    dependencies:
+      - service: [not, a, string]
+        condition: started
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                rc = bootstrap.main(
+                    [
+                        "--desired",
+                        str(desired),
+                        "--seed",
+                        str(seed),
+                        "--marker",
+                        str(marker),
+                        "--schema",
+                        str(SCHEMA),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("nas-v2-bootstrap:", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
             self.assertFalse(marker.exists())
             self.assertEqual(desired.read_text(encoding="utf-8"), "schemaVersion: 3\nservices: {}\n")
 
