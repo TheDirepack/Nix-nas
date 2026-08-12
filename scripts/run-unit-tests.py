@@ -192,18 +192,11 @@ def main() -> int:
         # Use the same hermetic state dir for the journal so it is writable
         _state_journal_dir = pathlib.Path(env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback")))
         env["NAS_STATE_RESTORE_JOURNAL"] = str(_state_journal_dir / "restore-operation.json")
-    # Feature control / setup / operation roots (all under /var/lib or /run on host)
+    # Setup / operation roots that need writable host-independent test locations.
     _hermetic_map = {
-        "NAS_FEATURE_STATE": str(_hermetic_tmp / "nas-control" / "settings.json"),
-        "NAS_FEATURE_JOURNAL": str(_hermetic_tmp / "nas-control" / "transaction.json"),
-        "NAS_FEATURE_LAST_GOOD": str(_hermetic_tmp / "nas-control" / "settings.last-good.json"),
-        "NAS_FEATURE_RUNTIME": str(_hermetic_tmp / "nas-control" / "on-demand.json"),
-        "NAS_FEATURE_LOCK": str(_hermetic_tmp / "nas-control" / "feature-control.lock"),
-        "NAS_FEATURE_CATALOG": str(_hermetic_tmp / "nas-control" / "features.json"),
         "NAS_SETUP_STATE": str(_hermetic_tmp / "nas-setup" / "state.json"),
         "NAS_SETUP_JOURNAL": str(_hermetic_tmp / "nas-setup" / "first-run-journal.json"),
         "NAS_SETUP_STATE_ROOT": str(_hermetic_tmp / "nas-setup"),
-        "NAS_FEATURE_STATE_ROOT": str(_hermetic_tmp / "nas-control"),
         "NAS_OPERATION_ROOT": str(_hermetic_tmp / "nas-operations"),
         "NAS_OPERATION_GROUP": "users",  # host fallback when nas-operations group missing
         "NAS_IDENTITY_LOCK": str(_hermetic_tmp / "nas-identity-sync.lock"),
@@ -211,7 +204,7 @@ def main() -> int:
     }
     for key, val in _hermetic_map.items():
         env.setdefault(key, val)
-    # Ensure secret and state root subdirs exist so lstat() checks pass
+    # Ensure secret and state root subdirs exist so lstat() checks pass.
     try:
         pathlib.Path(env["NAS_SECRET_ROOT"]).mkdir(parents=True, exist_ok=True)
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ai").mkdir(parents=True, exist_ok=True)
@@ -219,9 +212,6 @@ def main() -> int:
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ready").touch(exist_ok=True)
         for key in [
             "NAS_STATE_ROLLBACK_ROOT",
-            "NAS_FEATURE_STATE",
-            "NAS_FEATURE_JOURNAL",
-            "NAS_FEATURE_LAST_GOOD",
             "NAS_SETUP_STATE",
             "NAS_SETUP_JOURNAL",
             "NAS_OPERATION_ROOT",
@@ -231,15 +221,9 @@ def main() -> int:
                 # If it's a file path, ensure parent exists; if dir, ensure dir exists
                 target = p.parent if p.suffix else p
                 target.mkdir(parents=True, exist_ok=True)
-        # Seed minimal feature catalog and setup state so load_state() does not fail
-        _feat_catalog = pathlib.Path(env["NAS_FEATURE_CATALOG"])
-        if not _feat_catalog.exists():
-            _feat_catalog.parent.mkdir(parents=True, exist_ok=True)
-            _feat_catalog.write_text('{"features": {}, "groups": {}}', encoding="utf-8")
-        for pkey in ["NAS_FEATURE_STATE", "NAS_SETUP_STATE"]:
-            p = pathlib.Path(env[pkey])
-            if not p.exists():
-                p.write_text("{}", encoding="utf-8")
+        setup_state = pathlib.Path(env["NAS_SETUP_STATE"])
+        if not setup_state.exists():
+            setup_state.write_text("{}", encoding="utf-8")
     except OSError:
         pass
     python_path = [str(ROOT / "services"), str(ROOT / "tests")]
