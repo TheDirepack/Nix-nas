@@ -447,6 +447,14 @@ def semantic_validate(
                 ) from exc
             raise
 
+    for profile_id, profile in profiles.items():
+        if "vlanId" in profile and profile["mode"] != "isolated":
+            raise ManagedServicesV2Error(
+                "VLAN selection requires network mode 'isolated'",
+                path=f"$.networkProfiles.{profile_id}.vlanId",
+                code="network-vlan",
+            )
+
     route_paths: dict[str, str] = {}
     route_hostnames: dict[str, str] = {}
     listener_owners: dict[tuple[str, int], str] = {}
@@ -504,6 +512,22 @@ def semantic_validate(
                 path=f"$.services.{service_id}.networkProfile",
                 code="missing-reference",
             )
+
+        policy = profiles[service["networkProfile"]] if "networkProfile" in service else service.get("network")
+        if isinstance(policy, dict) and "vlanId" in policy:
+            if policy["mode"] != "isolated":
+                raise ManagedServicesV2Error(
+                    "VLAN selection requires network mode 'isolated'",
+                    path=f"$.services.{service_id}.network.vlanId",
+                    code="network-vlan",
+                )
+            runtime_type = service["runtime"]["type"]
+            if not service["managed"] or runtime_type not in {"oci", "quadlet", "compose"}:
+                raise ManagedServicesV2Error(
+                    "VLAN selection requires a V2-managed OCI, Quadlet, or Compose runtime",
+                    path=f"$.services.{service_id}.network.vlanId",
+                    code="network-vlan-runtime",
+                )
 
         mount_targets: set[str] = set()
         for index, attachment in enumerate(service["storage"]):
@@ -642,6 +666,12 @@ def semantic_validate(
                     "Listener range end must not precede start",
                     path=f"$.services.{service_id}.listeners.{listener_id}.exposure",
                     code="listener-range",
+                )
+            if "targetPort" in listener and "port" not in exposure:
+                raise ManagedServicesV2Error(
+                    "Listener targetPort remapping requires a single exposed port, not a port range",
+                    path=f"$.services.{service_id}.listeners.{listener_id}.targetPort",
+                    code="listener-target-port",
                 )
             for port in _listener_ports(exposure):
                 key = (listener["protocol"], port)
