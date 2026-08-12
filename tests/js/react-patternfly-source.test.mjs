@@ -24,6 +24,22 @@ test("application uses PatternFly components instead of legacy DOM rendering", a
   }
 });
 
+test("managed services editor is generated from the canonical schema with YAML as advanced mode", async () => {
+  const app = await source("src/app.jsx");
+  const schemaEditor = await source("src/schema-editor.jsx");
+  const schemaModel = await source("src/schema-model.js");
+  assert.match(app, /<SchemaEditor schema=\{document\.schema\} value=\{formValue\}/);
+  assert.match(app, /replaceManagedServicesJsonDocument/);
+  assert.match(app, /Advanced YAML/);
+  assert.match(schemaEditor, /additionalProperties/);
+  assert.match(schemaEditor, /variantOptions/);
+  assert.match(schemaModel, /resolved\.oneOf/);
+  for (const application of ["copyparty", "syncthing", "grafana", "ai-runtime", "ai-workspace", "ntfy"]) {
+    assert.equal(schemaEditor.includes(application), false, `${application} must not be special-cased in schema UI`);
+    assert.equal(schemaModel.includes(application), false, `${application} must not be special-cased in schema model`);
+  }
+});
+
 test("build follows the Starter Kit esbuild and Sass source-to-dist pattern", async () => {
   const build = await source("build.js");
   const packageJson = JSON.parse(await source("package.json"));
