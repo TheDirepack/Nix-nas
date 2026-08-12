@@ -232,6 +232,76 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "beneath /run/nas-secrets"):
             self.compile(bad)
 
+    def test_empty_authority_parsing_fails_closed(self):
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "must not be empty"):
+            v2.parse_yaml_text("", source="<test>")
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "must not be empty"):
+            v2.parse_yaml_text("   \n\t\n", source="<test>")
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "must not be empty"):
+            v2.parse_yaml_text("null\n", source="<test>")
+        with self.assertRaises(v2.ManagedServicesV2Error):
+            v2.parse_yaml_text("null", source="<test>")
+
+    def test_root_not_mapping_fails(self):
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "mapping/object"):
+            v2.parse_yaml_text("[]\n", source="<test>")
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "mapping/object"):
+            v2.parse_yaml_text("42\n", source="<test>")
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "mapping/object"):
+            v2.parse_yaml_text('"hello"\n', source="<test>")
+
+    def test_empty_mapping_fails_schema_but_valid_empty_services_succeeds(self):
+        with self.assertRaises(v2.ManagedServicesV2Error):
+            self.compile({})
+        valid = v2.parse_yaml_text("schemaVersion: 3\nservices: {}\n", source="<test>")
+        self.assertEqual(valid, {"schemaVersion": 3, "services": {}})
+        effective = self.compile({"schemaVersion": 3, "services": {}})
+        self.assertEqual(effective["services"], {})
+
+    def test_truncated_authority_leaves_previous_effective_untouched(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            spec = tmp_path / "services.yaml"
+            schema = SCHEMA
+            effective = tmp_path / "effective.json"
+            plan = tmp_path / "plan.json"
+            # initial valid generation A
+            spec.write_text(
+                "schemaVersion: 3\nservices:\n  example:\n    name: Example\n    workload:\n      kind: daemon\n    runtime:\n      type: systemd\n      unit: example.service\n",
+                encoding="utf-8",
+            )
+            from nas_v2_apply import ApplyPaths, compile_paths
+            import nas_v2_apply as apply_mod
+
+            paths = ApplyPaths(
+                desired=spec,
+                schema=schema,
+                platform=None,
+                effective=effective,
+                plan=plan,
+            )
+            eff_a, _ = compile_paths(paths)
+            # write effective manually to simulate successful reconcile
+            effective.write_text(json.dumps(eff_a, sort_keys=True), encoding="utf-8")
+            plan.write_text(json.dumps({"generation": 1}, sort_keys=True), encoding="utf-8")
+            previous_eff = effective.read_text(encoding="utf-8")
+            previous_plan = plan.read_text(encoding="utf-8")
+            # truncate authority
+            spec.write_text("", encoding="utf-8")
+            with self.assertRaises(v2.ManagedServicesV2Error):
+                compile_paths(paths)
+            # ensure apply also fails without mutating effective/plan (transactional compile)
+            try:
+                apply_mod.apply(paths)
+                self.fail("apply should have raised on truncated authority")
+            except v2.ManagedServicesV2Error:
+                pass
+            self.assertEqual(effective.read_text(encoding="utf-8"), previous_eff)
+            self.assertEqual(plan.read_text(encoding="utf-8"), previous_plan)
+
 
 if __name__ == "__main__":
     unittest.main()

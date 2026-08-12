@@ -68,6 +68,11 @@ def _plain(value: Any) -> Any:
 
 
 def parse_yaml_text(text: str, *, source: str = "<memory>") -> dict[str, Any]:
+    if text == "" or text.strip() == "":
+        raise ManagedServicesV2Error(
+            "Managed Services V2 desired state must not be empty",
+            code="yaml-empty",
+        )
     parser = YAML(typ="safe", pure=True)
     parser.version = (1, 2)
     parser.allow_duplicate_keys = False
@@ -86,7 +91,10 @@ def parse_yaml_text(text: str, *, source: str = "<memory>") -> dict[str, Any]:
             code="yaml-parse",
         ) from exc
     if value is None:
-        value = {"schemaVersion": 3, "services": {}}
+        raise ManagedServicesV2Error(
+            "Managed Services V2 desired state must not be empty (YAML null)",
+            code="yaml-empty",
+        )
     plain = _plain(value)
     if not isinstance(plain, dict):
         raise ManagedServicesV2Error(
