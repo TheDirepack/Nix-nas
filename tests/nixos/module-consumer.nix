@@ -55,5 +55,18 @@
       assertion = !lib.elem "copyparty.service" config.systemd.targets.nas-protected-services.requires;
       message = "Secret activation must not bypass Managed Services V2 by statically starting CopyParty.";
     }
+    {
+      assertion = !lib.elem "nas-identity-sync.service" config.systemd.targets.nas-protected-services.requires;
+      message = "Secret activation must not bypass the Managed Services V2 identity-sync job lifecycle.";
+    }
+    {
+      assertion = config.systemd.services.nas-managed-services-authentik-reconcile.requires == [ "authentik.service" ];
+      message = "The Authentik capability projection must not directly start the V2-managed identity-sync job.";
+    }
+    {
+      assertion =
+        !lib.elem "nas-identity-sync.service" config.systemd.services.nas-managed-services-authentik-reconcile.after;
+      message = "The Authentik capability projection must not retain a hidden ordering dependency on identity-sync.";
+    }
   ];
 }
