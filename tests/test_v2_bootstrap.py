@@ -70,6 +70,8 @@ services:
             text = desired.read_text(encoding="utf-8")
             self.assertTrue(result["changed"])
             self.assertEqual(result["added"], ["services.syncthing"])
+            self.assertEqual(result["deferred"], [])
+            self.assertEqual(result["disabled"], [])
             self.assertIn("# administrator comment", text)
             self.assertIn("name: Custom CopyParty", text)
             self.assertIn("syncthing:", text)
@@ -85,6 +87,8 @@ services:
             )
             self.assertFalse(second["changed"])
             self.assertEqual(second["reason"], "seed-current")
+            self.assertEqual(second["deferred"], [])
+            self.assertEqual(second["disabled"], [])
             self.assertNotIn("\n  syncthing:\n", desired.read_text(encoding="utf-8"))
 
     def test_new_seed_keys_are_added_without_readding_old_removed_keys(self):
@@ -125,6 +129,90 @@ services:
             self.assertEqual(result["added"], ["services.second"])
             self.assertNotIn("\n  first:\n", text)
             self.assertIn("\n  second:\n", text)
+
+    def test_new_service_is_seeded_off_when_existing_dependency_is_off(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            desired = root / "services.yaml"
+            seed = root / "seed.yaml"
+            marker = root / ".bootstrap"
+            desired.write_text(
+                """schemaVersion: 3
+services:
+  backend:
+    name: Backend
+    enabled: false
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: backend.service}
+""",
+                encoding="utf-8",
+            )
+            seed.write_text(
+                """schemaVersion: 3
+services:
+  backend:
+    name: Backend baseline
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: backend.service}
+  frontend:
+    name: Frontend
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: frontend.service}
+    dependencies:
+      - service: backend
+        condition: started
+""",
+                encoding="utf-8",
+            )
+
+            result = bootstrap.migrate(desired=desired, seed=seed, marker=marker, schema=SCHEMA, platform=None)
+            text = desired.read_text(encoding="utf-8")
+
+            self.assertEqual(result["added"], ["services.frontend"])
+            self.assertEqual(result["disabled"], ["services.frontend"])
+            self.assertEqual(result["deferred"], [])
+            self.assertIn("frontend:", text)
+            self.assertIn("enabled: false", text)
+            self.assertIn("services.frontend", json.loads(marker.read_text(encoding="utf-8"))["seen"])
+
+    def test_new_service_is_deferred_when_seen_dependency_was_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            desired = root / "services.yaml"
+            seed = root / "seed.yaml"
+            marker = root / ".bootstrap"
+            desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            marker.write_text(
+                json.dumps({"schemaVersion": 2, "seen": ["services.backend"], "added": []}),
+                encoding="utf-8",
+            )
+            seed.write_text(
+                """schemaVersion: 3
+services:
+  backend:
+    name: Backend
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: backend.service}
+  frontend:
+    name: Frontend
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: frontend.service}
+    dependencies:
+      - service: backend
+        condition: started
+""",
+                encoding="utf-8",
+            )
+
+            result = bootstrap.migrate(desired=desired, seed=seed, marker=marker, schema=SCHEMA, platform=None)
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+
+            self.assertFalse(result["changed"])
+            self.assertEqual(result["added"], [])
+            self.assertEqual(result["deferred"], ["services.frontend"])
+            self.assertEqual(result["disabled"], [])
+            self.assertNotIn("frontend:", desired.read_text(encoding="utf-8"))
+            self.assertEqual(payload["seen"], ["services.backend"])
 
     def test_invalid_new_seed_never_replaces_authority_or_advances_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,6 +293,8 @@ services:
             payload = json.loads(marker.read_text(encoding="utf-8"))
             self.assertEqual(payload["schemaVersion"], 2)
             self.assertEqual(payload["added"], ["services.caddy"])
+            self.assertEqual(payload["deferred"], [])
+            self.assertEqual(payload["disabled"], [])
             self.assertEqual(payload["seen"], ["services.caddy", "services.existing"])
 
 
