@@ -7,13 +7,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class V2SeedOnceContractTests(unittest.TestCase):
-    def test_nix_records_preexisting_authority_before_base_seed_execstart(self) -> None:
+    def test_nix_records_missing_authority_before_base_seed_execstart(self) -> None:
         lifecycle = (ROOT / "modules/nas/config/managed-services-lifecycle.nix").read_text(encoding="utf-8")
         self.assertIn('desiredPath = "/var/lib/nas-control/services.yaml";', lifecycle)
         self.assertIn('initialSeedMarker = "/var/lib/nas-control/.managed-services-native-seed-v2";', lifecycle)
         self.assertIn("if [ ! -e ${lib.escapeShellArg desiredPath} ]; then", lifecycle)
         self.assertIn(": > ${lib.escapeShellArg initialSeedMarker}", lifecycle)
-        self.assertIn("${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg initialSeedMarker}", lifecycle)
+        self.assertNotIn("rm -f ${lib.escapeShellArg initialSeedMarker}", lifecycle)
 
     def test_native_seed_uses_same_one_shot_marker_and_bootstrap_helper(self) -> None:
         native = (ROOT / "modules/nas/config/managed-services-native-services.nix").read_text(encoding="utf-8")
