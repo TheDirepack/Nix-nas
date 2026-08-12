@@ -48,6 +48,20 @@ cleanup() {
   [[ -z $TEMPORARY_DIRECTORY ]] || rm -rf -- "$TEMPORARY_DIRECTORY"
 }
 
+annotation_escape() {
+  local value=$1
+  value=${value//'%'/'%25'}
+  value=${value//$'\r'/'%0D'}
+  value=${value//$'\n'/'%0A'}
+  printf '%s' "$value"
+}
+
+annotate_failure() {
+  local title=$1 log=$2 detail
+  detail="$(tail -c 6000 -- "$log" 2>/dev/null || true)"
+  printf '::error title=%s::%s\n' "$(annotation_escape "$title")" "$(annotation_escape "$detail")"
+}
+
 evaluate_flake_surface() {
   nix flake metadata --json --no-write-lock-file "$FLAKE_REF" >/dev/null
   nix eval --json --no-write-lock-file \
@@ -67,6 +81,7 @@ verify_placeholder_is_not_bootable() {
   for expected in "${PLACEHOLDER_ERRORS[@]}"; do
     if ! grep -Fq -- "$expected" "$log"; then
       cat "$log" >&2
+      annotate_failure "Nix operator placeholder failed for the wrong reason" "$log"
       die "operator hardware placeholder failed for the wrong reason; missing: $expected"
     fi
   done
@@ -75,11 +90,18 @@ verify_placeholder_is_not_bootable() {
 }
 
 evaluate_configuration() {
-  local configuration=$1 drv_path
+  local configuration=$1 drv_path log
+  log="$TEMPORARY_DIRECTORY/$configuration.log"
 
-  drv_path="$(nix eval --raw --no-write-lock-file \
-    "$FLAKE_REF#nixosConfigurations.$configuration.config.system.build.toplevel.drvPath")"
+  if ! drv_path="$(nix eval --raw --no-write-lock-file \
+      "$FLAKE_REF#nixosConfigurations.$configuration.config.system.build.toplevel.drvPath" 2>"$log")"; then
+    cat "$log" >&2
+    annotate_failure "Nix configuration evaluation failed: $configuration" "$log"
+    return 1
+  fi
   [[ $drv_path == /nix/store/*.drv ]] || {
+    printf '%s\n' "configuration $configuration returned an invalid derivation path: $drv_path" >"$log"
+    annotate_failure "Nix configuration returned an invalid derivation: $configuration" "$log"
     die "configuration $configuration returned an invalid derivation path: $drv_path"
   }
   printf 'Nix configuration evaluation ok: %s (%s)\n' "$configuration" "$drv_path"
