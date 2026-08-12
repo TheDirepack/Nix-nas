@@ -34,5 +34,14 @@
         after = lib.mkOverride 90 [ ];
       };
     })
+
+    (lib.mkIf config.nas.observability.ntfy.enable {
+      "nas-health-alert@" = {
+        # ntfy is a V2-managed application. A host health failure must not bypass
+        # an explicit notifications=off desired state by pulling ntfy into service.
+        wants = lib.mkOverride 90 [ ];
+        after = lib.mkOverride 90 [ ];
+      };
+    })
   ];
 }
