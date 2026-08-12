@@ -12,6 +12,7 @@ import copy
 import json
 import os
 import pathlib
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any
@@ -168,8 +169,35 @@ def _fsync_directory(directory: pathlib.Path) -> None:
         os.close(fd)
 
 
-def _replace_bundle(files: list[tuple[pathlib.Path, bytes, int]]) -> set[pathlib.Path]:
-    """Replace changed generated files as one bundle, restoring previous bytes on failure."""
+def _projection_stale_files(root: pathlib.Path, current: set[pathlib.Path]) -> set[pathlib.Path]:
+    """Return stale regular files beneath a fully V2-owned projection root."""
+    try:
+        entries = list(root.rglob("*"))
+    except FileNotFoundError:
+        return set()
+    stale: set[pathlib.Path] = set()
+    for path in entries:
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(mode):
+            continue
+        if not stat.S_ISREG(mode):
+            raise SystemdProjectionError(f"unexpected non-regular entry in V2 projection root: {path}")
+        if path not in current:
+            stale.add(path)
+    return stale
+
+
+def _replace_bundle(
+    files: list[tuple[pathlib.Path, bytes, int]],
+    *,
+    remove_paths: set[pathlib.Path] | None = None,
+) -> set[pathlib.Path]:
+    """Replace/delete generated files as one bundle, restoring prior bytes on failure."""
+    replacement_paths = {path for path, _data, _mode in files}
+    removals = set() if remove_paths is None else set(remove_paths) - replacement_paths
     changed_files: list[tuple[pathlib.Path, bytes, int]] = []
     for path, data, mode in files:
         try:
@@ -181,6 +209,7 @@ def _replace_bundle(files: list[tuple[pathlib.Path, bytes, int]]) -> set[pathlib
 
     prepared: list[tuple[pathlib.Path, pathlib.Path]] = []
     previous: dict[pathlib.Path, tuple[bytes, int] | None] = {}
+    mutated: list[pathlib.Path] = []
     try:
         for path, data, mode in changed_files:
             try:
@@ -189,16 +218,27 @@ def _replace_bundle(files: list[tuple[pathlib.Path, bytes, int]]) -> set[pathlib
             except FileNotFoundError:
                 previous[path] = None
             prepared.append((path, _prepare_temp(path, data, mode)))
+        for path in removals:
+            try:
+                stat_result = path.stat()
+                previous[path] = (path.read_bytes(), stat_result.st_mode & 0o777)
+            except FileNotFoundError:
+                previous[path] = None
 
-        replaced: list[pathlib.Path] = []
         try:
             for path, temp in prepared:
                 os.replace(temp, path)
-                replaced.append(path)
-            for directory in {path.parent for path in replaced}:
+                mutated.append(path)
+            for path in sorted(removals, key=str):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                mutated.append(path)
+            for directory in {path.parent for path in mutated}:
                 _fsync_directory(directory)
         except Exception:
-            for path in reversed(replaced):
+            for path in reversed(mutated):
                 old = previous[path]
                 if old is None:
                     path.unlink(missing_ok=True)
@@ -210,7 +250,7 @@ def _replace_bundle(files: list[tuple[pathlib.Path, bytes, int]]) -> set[pathlib
     finally:
         for _path, temp in prepared:
             temp.unlink(missing_ok=True)
-    return {path for path, _data, _mode in changed_files}
+    return {path for path, _data, _mode in changed_files} | {path for path in removals if previous.get(path) is not None}
 
 
 def _compile_document_with_platform(
@@ -339,17 +379,21 @@ def apply(
         (paths.effective, _json_bytes(effective), 0o640),
         (paths.plan, _json_bytes(plan), 0o640),
     ]
+    stale: set[pathlib.Path] = set()
     if caddy is not None:
         files.append((caddy.output, _caddy_bytes(effective, caddy), 0o644))
     if portal is not None:
         files.append((portal.output, portal_bytes(effective), 0o644))
     if systemd is not None:
-        files.extend(_systemd_files(effective, systemd, firewalld_enabled=firewalld is not None))
+        systemd_files = _systemd_files(effective, systemd, firewalld_enabled=firewalld is not None)
+        files.extend(systemd_files)
+        current_systemd_paths = {path for path, _content, _mode in systemd_files}
+        stale.update(_projection_stale_files(systemd.output_dir, current_systemd_paths))
     if backup is not None:
         files.extend(_backup_files(effective, backup))
     if firewalld is not None:
         files.extend(_firewalld_files(effective, firewalld))
-    changed = _replace_bundle(files)
+    changed = _replace_bundle(files, remove_paths=stale)
     plan["changedFiles"] = sorted(str(path) for path in changed)
     return plan
 
