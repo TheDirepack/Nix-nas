@@ -293,10 +293,6 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
                 raise FirewalldProjectionError(
                     f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented yet"
                 )
-            if runtime_type == "compose" and (service.get("routes") or service.get("listeners")):
-                raise FirewalldProjectionError(
-                    f"isolated Compose service {service_id!r} cannot expose routes/listeners while V3 lacks a target container selector"
-                )
             service_zone = zone_name(service_id)
             generated.update(
                 {
