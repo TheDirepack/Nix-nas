@@ -27,11 +27,7 @@ def _load_inventory(path: pathlib.Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise BackupVerificationError(f"unable to read compiled backup inventory {path}: {exc}") from exc
-    if (
-        not isinstance(value, dict)
-        or value.get("schemaVersion") != 1
-        or not isinstance(value.get("resources"), list)
-    ):
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1 or not isinstance(value.get("resources"), list):
         raise BackupVerificationError("compiled V2 backup inventory has an unsupported schema")
     return value
 
@@ -83,7 +79,9 @@ def _resource_candidates(root: pathlib.Path, resource: dict[str, Any]) -> list[p
     except FileNotFoundError:
         return []
     except OSError as exc:
-        raise BackupVerificationError(f"unable to inspect restored ZFS snapshot tree for {resource_id!r}: {exc}") from exc
+        raise BackupVerificationError(
+            f"unable to inspect restored ZFS snapshot tree for {resource_id!r}: {exc}"
+        ) from exc
 
 
 def _native_dump_files(path: pathlib.Path) -> list[pathlib.Path]:
@@ -188,7 +186,9 @@ def verify(*, inventory_path: pathlib.Path, restore_root: pathlib.Path, pg_resto
             for candidate in candidates:
                 files.extend(_native_dump_files(candidate))
             if not any(path.stat().st_size > 0 for path in files):
-                raise BackupVerificationError(f"native-dump resource {resource_id!r} restored no non-empty artifact files")
+                raise BackupVerificationError(
+                    f"native-dump resource {resource_id!r} restored no non-empty artifact files"
+                )
             checks = _verify_native_dump_files(files, pg_restore_bin=pg_restore_bin)
 
         verified.append(
