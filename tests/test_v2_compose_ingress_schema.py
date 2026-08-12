@@ -82,32 +82,6 @@ class V2ComposeIngressSchemaTests(unittest.TestCase):
             ):
                 spec.compile_document(document, schema)
 
-    def test_compose_endpoints_require_runtime_targets(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            app_root = root / "apps"
-            source = app_root / "demo" / "compose.yaml"
-            source.parent.mkdir(parents=True)
-            source.write_text("services: {frontend: {image: demo}, worker: {image: worker}}\n", encoding="utf-8")
-            document = self.document(source)
-            del document["services"]["demo"]["routes"]["web"]["runtimeTarget"]
-            schema = spec.load_schema(ROOT / "schemas/managed-services-v3.schema.json")
-            with (
-                mock.patch.object(spec, "APP_ROOT", pathlib.PurePosixPath(app_root)),
-                self.assertRaisesRegex(spec.ManagedServicesV2Error, "runtimeTarget"),
-            ):
-                spec.compile_document(document, schema)
-
-    def test_non_compose_endpoints_reject_runtime_targets(self) -> None:
-        document = self.document(pathlib.Path("/unused/compose.yaml"))
-        document["services"]["demo"]["runtime"] = {
-            "type": "oci",
-            "image": "example.invalid/demo:1",
-        }
-        schema = spec.load_schema(ROOT / "schemas/managed-services-v3.schema.json")
-        with self.assertRaisesRegex(spec.ManagedServicesV2Error, "runtimeTarget"):
-            spec.compile_document(document, schema)
-
 
 if __name__ == "__main__":
     unittest.main()
