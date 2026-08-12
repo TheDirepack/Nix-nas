@@ -4,7 +4,8 @@ import {readFile} from "node:fs/promises";
 import {spawnSync} from "node:child_process";
 import {fileURLToPath} from "node:url";
 
-const source = async (name) => readFile(new URL(`../../cockpit/${name}`, import.meta.url), "utf8");
+const source = async (name) =>
+  readFile(new URL(`../../cockpit/${name}`, import.meta.url), "utf8");
 
 test("Cockpit entry point mounts React 18 and loads PatternFly 6 styles", async () => {
   const index = await source("src/index.jsx");
@@ -34,9 +35,24 @@ test("managed services editor is generated from the canonical schema with YAML a
   assert.match(schemaEditor, /additionalProperties/);
   assert.match(schemaEditor, /variantOptions/);
   assert.match(schemaModel, /resolved\.oneOf/);
-  for (const application of ["copyparty", "syncthing", "grafana", "ai-runtime", "ai-workspace", "ntfy"]) {
-    assert.equal(schemaEditor.includes(application), false, `${application} must not be special-cased in schema UI`);
-    assert.equal(schemaModel.includes(application), false, `${application} must not be special-cased in schema model`);
+  for (const application of [
+    "copyparty",
+    "syncthing",
+    "grafana",
+    "ai-runtime",
+    "ai-workspace",
+    "ntfy",
+  ]) {
+    assert.equal(
+      schemaEditor.includes(application),
+      false,
+      `${application} must not be special-cased in schema UI`,
+    );
+    assert.equal(
+      schemaModel.includes(application),
+      false,
+      `${application} must not be special-cased in schema model`,
+    );
   }
 });
 
@@ -49,7 +65,9 @@ test("build follows the Starter Kit esbuild and Sass source-to-dist pattern", as
   assert.equal(packageJson.dependencies.react, "18.3.1");
   assert.equal(packageJson.dependencies["@patternfly/react-core"], "6.1.0");
   const buildScript = fileURLToPath(new URL("../../cockpit/build.js", import.meta.url));
-  const result = spawnSync(process.execPath, [buildScript, "--check-source"], {encoding: "utf8"});
+  const result = spawnSync(process.execPath, [buildScript, "--check-source"], {
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr);
 });
 
