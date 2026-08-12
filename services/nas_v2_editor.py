@@ -256,9 +256,10 @@ def read_document(
     desired_path: pathlib.Path = DEFAULT_SPEC_PATH,
     schema_path: pathlib.Path = DEFAULT_SCHEMA_PATH,
 ) -> dict[str, Any]:
-    """Return the editable YAML plus its JSON Schema for schema-driven clients."""
+    """Return YAML, parsed desired state, and the exact schema for generic clients."""
     try:
         yaml_text = desired_path.read_text(encoding="utf-8")
+        document = parse_yaml_text(yaml_text, source=str(desired_path))
         schema = load_schema(schema_path)
     except (OSError, ManagedServicesV2Error) as exc:
         raise ManagedServicesEditorError(str(exc)) from exc
@@ -266,6 +267,7 @@ def read_document(
         "ok": True,
         "authority": str(desired_path),
         "yaml": yaml_text,
+        "document": document,
         "schema": schema,
     }
 
@@ -290,6 +292,24 @@ def replace_document(
         "schemaVersion": effective["schemaVersion"],
         "services": len(effective["services"]),
     }
+
+
+def replace_document_value(
+    value: Any,
+    *,
+    desired_path: pathlib.Path = DEFAULT_SPEC_PATH,
+    schema_path: pathlib.Path = DEFAULT_SCHEMA_PATH,
+    platform_path: pathlib.Path | None = DEFAULT_PLATFORM_PATH,
+) -> dict[str, Any]:
+    """Render a JSON-compatible schema editor value to YAML and replace authority."""
+    if not isinstance(value, dict):
+        raise ManagedServicesEditorError("Managed Services V2 JSON document must be an object")
+    return replace_document(
+        _render(value),
+        desired_path=desired_path,
+        schema_path=schema_path,
+        platform_path=platform_path,
+    )
 
 
 def set_service_modes(
@@ -362,6 +382,7 @@ __all__ = [
     "owner_unit",
     "read_document",
     "replace_document",
+    "replace_document_value",
     "set_service_mode",
     "set_service_modes",
     "status",
