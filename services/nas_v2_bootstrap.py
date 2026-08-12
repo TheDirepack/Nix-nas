@@ -111,6 +111,65 @@ def _merge_new_keys(current: CommentedMap, seed: CommentedMap, *, seen: set[str]
     return added
 
 
+def _stabilize_new_services(current: CommentedMap, added: list[str]) -> tuple[list[str], list[str]]:
+    """Honor existing dependency choices while adding new baseline services.
+
+    A new service whose dependency was deliberately removed is deferred so one
+    future release cannot make the entire bootstrap transaction invalid. A new
+    service whose dependency still exists but is desired off is seeded off too;
+    the administrator can later enable both explicitly through V2.
+    """
+    services = current.get("services")
+    if not isinstance(services, dict):
+        raise BootstrapError("existing section 'services' must be a mapping")
+
+    added_ids = {item.removeprefix("services.") for item in added if item.startswith("services.")}
+    deferred_ids: set[str] = set()
+
+    changed = True
+    while changed:
+        changed = False
+        for service_id in sorted(added_ids - deferred_ids):
+            service = services.get(service_id)
+            if not isinstance(service, dict):
+                continue
+            dependencies = service.get("dependencies", [])
+            if not isinstance(dependencies, list):
+                continue
+            targets = [item.get("service") for item in dependencies if isinstance(item, dict)]
+            if any(not isinstance(target, str) or target not in services or target in deferred_ids for target in targets):
+                deferred_ids.add(service_id)
+                changed = True
+
+    for service_id in deferred_ids:
+        services.pop(service_id, None)
+
+    disabled_ids: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for service_id in sorted(added_ids - deferred_ids):
+            service = services.get(service_id)
+            if not isinstance(service, dict) or service.get("enabled", True) is False:
+                continue
+            dependencies = service.get("dependencies", [])
+            if not isinstance(dependencies, list):
+                continue
+            for dependency in dependencies:
+                target_id = dependency.get("service") if isinstance(dependency, dict) else None
+                target = services.get(target_id) if isinstance(target_id, str) else None
+                if isinstance(target, dict) and target.get("enabled", True) is False:
+                    service["enabled"] = False
+                    disabled_ids.add(service_id)
+                    changed = True
+                    break
+
+    return (
+        [f"services.{service_id}" for service_id in sorted(deferred_ids)],
+        [f"services.{service_id}" for service_id in sorted(disabled_ids)],
+    )
+
+
 def _validate(
     document: CommentedMap,
     *,
@@ -194,23 +253,30 @@ def migrate(
             "changed": False,
             "reason": "seed-current",
             "added": [],
+            "deferred": [],
+            "disabled": [],
             "seen": sorted(seen),
         }
 
     added = _merge_new_keys(current, baseline, seen=seen)
+    deferred, disabled = _stabilize_new_services(current, added)
+    deferred_set = set(deferred)
+    added = [item for item in added if item not in deferred_set]
     _validate(current, schema_path=schema, platform_path=platform)
     if added:
         _atomic_dump(desired, current)
 
-    # Every key in this seed is now considered applied even when it was already
-    # present in administrator-owned desired state. That is what prevents a later
-    # deletion from being silently reintroduced on the next boot.
-    updated_seen = seen | current_seed_keys
+    # Successfully applied/current seed keys become seen. A service deferred
+    # because one of its dependencies is absent intentionally remains pending so
+    # it can be reconsidered if that dependency later returns to desired state.
+    updated_seen = seen | (current_seed_keys - deferred_set)
     result = {
         "schemaVersion": _MARKER_SCHEMA,
         "changed": bool(added),
         "reason": "seed-updated",
         "added": added,
+        "deferred": deferred,
+        "disabled": disabled,
         "seen": sorted(updated_seen),
     }
     _atomic_marker(marker, result)
