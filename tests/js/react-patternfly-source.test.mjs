@@ -4,8 +4,7 @@ import {readFile} from "node:fs/promises";
 import {spawnSync} from "node:child_process";
 import {fileURLToPath} from "node:url";
 
-const source = async (name) =>
-  readFile(new URL(`../../cockpit/${name}`, import.meta.url), "utf8");
+const source = async (name) => readFile(new URL(`../../cockpit/${name}`, import.meta.url), "utf8");
 
 test("Cockpit entry point mounts React 18 and loads PatternFly 6 styles", async () => {
   const index = await source("src/index.jsx");

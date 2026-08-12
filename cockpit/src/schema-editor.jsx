@@ -87,14 +87,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
   }
   const text = typeof value === "string" ? value : "";
   if ((resolved.maxLength || 0) > 256 || resolved.format === "textarea") {
-    return (
-      <TextArea
-        id={id}
-        value={text}
-        onChange={(_event, next) => onChange(next)}
-        rows={4}
-      />
-    );
+    return <TextArea id={id} value={text} onChange={(_event, next) => onChange(next)} rows={4} />;
   }
   return (
     <TextInput
@@ -131,9 +124,7 @@ function ArrayEditor({root, schema, value, onChange, path}) {
           <Button
             variant="danger"
             size="sm"
-            onClick={() =>
-              onChange(items.filter((_item, itemIndex) => itemIndex !== index))
-            }
+            onClick={() => onChange(items.filter((_item, itemIndex) => itemIndex !== index))}
           >
             Remove item
           </Button>

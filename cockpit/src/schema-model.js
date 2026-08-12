@@ -39,7 +39,8 @@ export function resolveSchema(root, schema, seen = new Set()) {
   if (Array.isArray(resolved.allOf)) {
     const allOf = resolved.allOf;
     delete resolved.allOf;
-    for (const branch of allOf) resolved = mergeSchemas(resolved, resolveSchema(root, branch, seen));
+    for (const branch of allOf)
+      resolved = mergeSchemas(resolved, resolveSchema(root, branch, seen));
   }
   return resolved;
 }
@@ -160,11 +161,7 @@ export function defaultValue(root, schema) {
     const required = new Set(resolved.required || []);
     for (const [name, property] of Object.entries(resolved.properties || {})) {
       const child = resolveSchema(root, property);
-      if (
-        required.has(name) ||
-        Object.hasOwn(child, "default") ||
-        Object.hasOwn(child, "const")
-      ) {
+      if (required.has(name) || Object.hasOwn(child, "default") || Object.hasOwn(child, "const")) {
         value[name] = defaultValue(root, child);
       }
     }

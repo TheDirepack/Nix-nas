@@ -298,8 +298,8 @@ function ServicesPage({data, mutate, busy}) {
           </CardHeader>
           <CardBody>
             <p className="nas-muted">
-              The form below is generated from the same JSON Schema used by the V2 compiler.
-              Raw YAML remains available for advanced edits.
+              The form below is generated from the same JSON Schema used by the V2 compiler. Raw
+              YAML remains available for advanced edits.
             </p>
             {editorError ? <Alert variant="danger" isInline title={editorError} /> : null}
             <div className="nas-actions">

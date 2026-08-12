@@ -24,12 +24,7 @@ test("runtime choices are discovered from the canonical schema instead of app UI
   assert.ok(options.some((option) => option.label === "type: oci"));
 
   const ociIndex = selectVariantIndex(schema, runtime, {type: "oci", image: "example:v1"});
-  const selected = selectedSchema(
-    schema,
-    runtime,
-    {type: "oci", image: "example:v1"},
-    ociIndex,
-  );
+  const selected = selectedSchema(schema, runtime, {type: "oci", image: "example:v1"}, ociIndex);
   assert.equal(resolveSchema(schema, selected.properties.type).const, "oci");
 });
 
