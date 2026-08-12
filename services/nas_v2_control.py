@@ -146,10 +146,23 @@ def _reconcile() -> None:
     _systemctl("start", RECONCILE_UNIT)
 
 
-def _rollback(previous: str, original: Exception) -> None:
+def _rollback(previous: str, attempted: str | None, original: Exception) -> None:
     try:
+        # Only rollback if the authority is still the attempted generation B.
+        # If another writer has already installed C, do not overwrite C.
+        if attempted is not None:
+            try:
+                current = DESIRED_PATH.read_text(encoding="utf-8")
+            except OSError:
+                current = None
+            if current is not None and current != attempted:
+                raise ControlError(
+                    f"Managed Services V2 update failed but authority was already superseded; original={original}"
+                ) from original
         replace_document(previous, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
         _reconcile()
+    except ControlError:
+        raise
     except Exception as rollback_error:  # noqa: BLE001
         raise ControlError(
             "Managed Services V2 update failed and rollback was incomplete; "
@@ -166,10 +179,11 @@ def set_mode(service_id: str, mode: str) -> dict[str, Any]:
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
         )
+        attempted = DESIRED_PATH.read_text(encoding="utf-8")
         try:
             _reconcile()
         except Exception as exc:
-            _rollback(previous, exc)
+            _rollback(previous, attempted, exc)
             raise
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
@@ -185,10 +199,11 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
         )
+        attempted = DESIRED_PATH.read_text(encoding="utf-8")
         try:
             _reconcile()
         except Exception as exc:
-            _rollback(previous, exc)
+            _rollback(previous, attempted, exc)
             raise
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
@@ -204,7 +219,7 @@ def replace_from_source(source: str) -> dict[str, Any]:
         try:
             _reconcile()
         except Exception as exc:
-            _rollback(previous, exc)
+            _rollback(previous, text, exc)
             raise
         return result
     except (OSError, ManagedServicesEditorError) as exc:
@@ -216,10 +231,11 @@ def replace_json_from_source(source: str) -> dict[str, Any]:
         value = _read_json_document(source)
         previous = DESIRED_PATH.read_text(encoding="utf-8")
         result = replace_document_value(value, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
+        attempted = DESIRED_PATH.read_text(encoding="utf-8")
         try:
             _reconcile()
         except Exception as exc:
-            _rollback(previous, exc)
+            _rollback(previous, attempted, exc)
             raise
         return result
     except (OSError, ManagedServicesEditorError) as exc:

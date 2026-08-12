@@ -16,6 +16,8 @@ import tempfile
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+import hashlib
+
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
@@ -30,6 +32,10 @@ from nas_v2_spec import (
     load_schema,
     parse_yaml_text,
 )
+
+
+def _revision(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class ManagedServicesEditorError(RuntimeError):
@@ -266,6 +272,7 @@ def read_document(
     return {
         "ok": True,
         "authority": str(desired_path),
+        "revision": _revision(yaml_text),
         "yaml": yaml_text,
         "document": document,
         "schema": schema,
@@ -278,17 +285,30 @@ def replace_document(
     desired_path: pathlib.Path = DEFAULT_SPEC_PATH,
     schema_path: pathlib.Path = DEFAULT_SCHEMA_PATH,
     platform_path: pathlib.Path | None = DEFAULT_PLATFORM_PATH,
+    expected_revision: str | None = None,
 ) -> dict[str, Any]:
     """Validate and atomically replace the complete desired-state document."""
     try:
         effective = _validate_text(yaml_text, schema_path=schema_path, platform_path=platform_path)
     except ManagedServicesV2Error as exc:
         raise ManagedServicesEditorError(f"Desired-state update is invalid at {exc.path}: {exc}") from exc
+    new_revision = _revision(yaml_text)
     with _authority_lock(desired_path):
+        if expected_revision is not None:
+            try:
+                current_text = desired_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ManagedServicesEditorError(f"Unable to read Managed Services V2 authority: {exc}") from exc
+            current_revision = _revision(current_text)
+            if current_revision != expected_revision:
+                raise ManagedServicesEditorError(
+                    f"Desired-state revision conflict: expected {expected_revision}, got {current_revision}"
+                )
         _atomic_replace(desired_path, yaml_text)
     return {
         "ok": True,
         "authority": str(desired_path),
+        "revision": new_revision,
         "schemaVersion": effective["schemaVersion"],
         "services": len(effective["services"]),
     }
@@ -300,6 +320,7 @@ def replace_document_value(
     desired_path: pathlib.Path = DEFAULT_SPEC_PATH,
     schema_path: pathlib.Path = DEFAULT_SCHEMA_PATH,
     platform_path: pathlib.Path | None = DEFAULT_PLATFORM_PATH,
+    expected_revision: str | None = None,
 ) -> dict[str, Any]:
     """Render a JSON-compatible schema editor value to YAML and replace authority."""
     if not isinstance(value, dict):
@@ -309,6 +330,7 @@ def replace_document_value(
         desired_path=desired_path,
         schema_path=schema_path,
         platform_path=platform_path,
+        expected_revision=expected_revision,
     )
 
 
