@@ -2,9 +2,9 @@
 """Resource-oriented restore verification for Managed Services V2 backups.
 
 The verifier consumes the compiled backup inventory and restored Restic tree. It
-never recognizes application names. Generic format checks are selected from the
-restored data itself so native-dump resources can be validated without adding
-application branches to the backup/restore engine.
+never recognizes application names. Generic format checks are selected from
+native-dump artifacts so arbitrary user files are never interpreted merely
+because they resemble a known structured format.
 """
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str) -
         raise BackupVerificationError(f"PostgreSQL custom dump verification failed for {path}: {detail}")
 
 
-def _verify_files(files: list[pathlib.Path], *, pg_restore_bin: str) -> dict[str, int]:
+def _verify_native_dump_files(files: list[pathlib.Path], *, pg_restore_bin: str) -> dict[str, int]:
     checks = {"sqlite": 0, "xml": 0, "postgresqlCustom": 0}
     for path in files:
         if _looks_like_sqlite(path):
@@ -182,10 +182,13 @@ def verify(*, inventory_path: pathlib.Path, restore_root: pathlib.Path, pg_resto
             if not candidate.exists():
                 raise BackupVerificationError(f"restored backup resource {resource_id!r} is missing at {candidate}")
             files.extend(candidate_files)
-        if consistency == "native-dump" and not any(path.stat().st_size > 0 for path in files):
-            raise BackupVerificationError(f"native-dump resource {resource_id!r} restored no non-empty artifact files")
 
-        checks = _verify_files(files, pg_restore_bin=pg_restore_bin)
+        checks = {"sqlite": 0, "xml": 0, "postgresqlCustom": 0}
+        if consistency == "native-dump":
+            if not any(path.stat().st_size > 0 for path in files):
+                raise BackupVerificationError(f"native-dump resource {resource_id!r} restored no non-empty artifact files")
+            checks = _verify_native_dump_files(files, pg_restore_bin=pg_restore_bin)
+
         verified.append(
             {
                 "id": resource_id,
