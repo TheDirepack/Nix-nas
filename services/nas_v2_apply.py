@@ -250,7 +250,9 @@ def _replace_bundle(
     finally:
         for _path, temp in prepared:
             temp.unlink(missing_ok=True)
-    return {path for path, _data, _mode in changed_files} | {path for path in removals if previous.get(path) is not None}
+    return {path for path, _data, _mode in changed_files} | {
+        path for path in removals if previous.get(path) is not None
+    }
 
 
 def _compile_document_with_platform(
