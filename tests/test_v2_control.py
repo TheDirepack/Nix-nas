@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import tempfile
@@ -96,10 +97,16 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
 
     def test_document_and_replace_document_are_schema_driven_surfaces(self):
         with (
-            mock.patch.object(control, "read_document", return_value={"yaml": "services: {}", "schema": {}}),
+            mock.patch.object(
+                control,
+                "read_document",
+                return_value={"yaml": "services: {}", "document": {"services": {}}, "schema": {}},
+            ),
             mock.patch.object(control, "_reconcile") as reconcile,
         ):
-            self.assertEqual(control.document()["yaml"], "services: {}")
+            result = control.document()
+            self.assertEqual(result["yaml"], "services: {}")
+            self.assertEqual(result["document"], {"services": {}})
             reconcile.assert_not_called()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,6 +123,31 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         replace.assert_called_once()
         reconcile.assert_called_once_with()
+
+    def test_replace_json_document_uses_same_rollback_safe_reconcile_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            desired_path = root / "services.yaml"
+            source_path = root / "replacement.json"
+            desired_path.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            source_value = {"schemaVersion": 3, "services": {}}
+            source_path.write_text(json.dumps(source_value), encoding="utf-8")
+            with (
+                mock.patch.object(control, "DESIRED_PATH", desired_path),
+                mock.patch.object(control, "replace_document_value", return_value={"ok": True}) as replace,
+                mock.patch.object(control, "_reconcile") as reconcile,
+            ):
+                result = control.replace_json_from_source(str(source_path))
+        self.assertTrue(result["ok"])
+        replace.assert_called_once_with(source_value, desired_path=desired_path, schema_path=control.SCHEMA_PATH)
+        reconcile.assert_called_once_with()
+
+    def test_replace_json_document_rejects_non_object_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = pathlib.Path(tmp) / "replacement.json"
+            source_path.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(control.ControlError, "must contain an object"):
+                control.replace_json_from_source(str(source_path))
 
 
 if __name__ == "__main__":
