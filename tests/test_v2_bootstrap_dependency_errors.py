@@ -18,13 +18,14 @@ import nas_v2_spec as spec  # noqa: E402
 
 
 class V2BootstrapDependencyErrorTests(unittest.TestCase):
-    def test_unknown_release_seed_dependency_is_not_silently_deferred(self) -> None:
+    def test_unknown_initial_seed_dependency_fails_without_replacing_authority(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             desired = root / "services.yaml"
             seed = root / "seed.yaml"
             marker = root / ".bootstrap"
             desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            marker.touch()
             seed.write_text(
                 """schemaVersion: 3
 services:
@@ -49,7 +50,7 @@ services:
                 )
 
             self.assertEqual(raised.exception.code, "missing-reference")
-            self.assertFalse(marker.exists())
+            self.assertTrue(marker.exists())
             self.assertEqual(desired.read_text(encoding="utf-8"), "schemaVersion: 3\nservices: {}\n")
 
     def test_cli_reports_schema_failure_without_traceback(self) -> None:
@@ -59,6 +60,7 @@ services:
             seed = root / "seed.yaml"
             marker = root / ".bootstrap"
             desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            marker.touch()
             seed.write_text(
                 """schemaVersion: 3
 services:
@@ -90,7 +92,7 @@ services:
             self.assertEqual(rc, 2)
             self.assertIn("nas-v2-bootstrap:", stderr.getvalue())
             self.assertNotIn("Traceback", stderr.getvalue())
-            self.assertFalse(marker.exists())
+            self.assertTrue(marker.exists())
             self.assertEqual(desired.read_text(encoding="utf-8"), "schemaVersion: 3\nservices: {}\n")
 
 
