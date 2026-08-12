@@ -78,6 +78,9 @@ def _systemd(args: argparse.Namespace) -> SystemdProjection | None:
         compose_provider_bin=args.compose_provider_bin,
         virsh_bin=args.virsh_bin,
         virt_xml_validate_bin=args.virt_xml_validate_bin,
+        nmcli_bin=args.nmcli_bin,
+        install_bin=args.install_bin,
+        rm_bin=args.rm_bin,
     )
 
 
@@ -150,6 +153,9 @@ def _add_systemd(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--virsh-bin", default=os.environ.get("NAS_V2_VIRSH_BIN", "virsh"))
     parser.add_argument("--virt-xml-validate-bin", default=os.environ.get("NAS_V2_VIRT_XML_VALIDATE_BIN"))
+    parser.add_argument("--nmcli-bin", default=os.environ.get("NAS_V2_NMCLI_BIN", "nmcli"))
+    parser.add_argument("--install-bin", default=os.environ.get("NAS_V2_INSTALL_BIN", "install"))
+    parser.add_argument("--rm-bin", default=os.environ.get("NAS_V2_RM_BIN", "rm"))
     parser.add_argument("--v2-source", default=str(pathlib.Path(__file__).resolve().parent))
 
 
