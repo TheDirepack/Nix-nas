@@ -104,9 +104,11 @@ def _atomic_dump(path: pathlib.Path, document: CommentedMap) -> None:
 
 def _is_seed_stub(document: CommentedMap) -> bool:
     """Recognize only the minimal authority stub created by the base seed unit."""
-    return set(document) == {"schemaVersion", "services"} and document.get("schemaVersion") == 3 and document.get(
-        "services"
-    ) == {}
+    return (
+        set(document) == {"schemaVersion", "services"}
+        and document.get("schemaVersion") == 3
+        and document.get("services") == {}
+    )
 
 
 def _clear_marker(marker: pathlib.Path) -> None:
