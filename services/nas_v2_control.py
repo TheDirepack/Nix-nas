@@ -21,6 +21,7 @@ from nas_v2_editor import (
     ManagedServicesEditorError,
     read_document,
     replace_document,
+    replace_document_value,
     set_service_mode,
     set_service_modes,
     status as desired_status,
@@ -130,6 +131,17 @@ def _read_mode_document(source: str) -> dict[str, str]:
     return value
 
 
+def _read_json_document(source: str) -> dict[str, Any]:
+    try:
+        text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
+        value = json.loads(text)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ControlError(f"Unable to read Managed Services V2 JSON document from {source}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ControlError("Managed Services V2 JSON document must contain an object")
+    return value
+
+
 def _reconcile() -> None:
     _systemctl("start", RECONCILE_UNIT)
 
@@ -199,6 +211,21 @@ def replace_from_source(source: str) -> dict[str, Any]:
         raise ControlError(str(exc)) from exc
 
 
+def replace_json_from_source(source: str) -> dict[str, Any]:
+    try:
+        value = _read_json_document(source)
+        previous = DESIRED_PATH.read_text(encoding="utf-8")
+        result = replace_document_value(value, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
+        try:
+            _reconcile()
+        except Exception as exc:
+            _rollback(previous, exc)
+            raise
+        return result
+    except (OSError, ManagedServicesEditorError) as exc:
+        raise ControlError(str(exc)) from exc
+
+
 def document() -> dict[str, Any]:
     try:
         return read_document(desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
@@ -227,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="Report policy and live native systemd state")
     sub.add_parser("reconcile", aliases=["apply"], help="Run the finite V2 reconcile transaction")
-    sub.add_parser("document", help="Return the editable YAML and JSON Schema")
+    sub.add_parser("document", help="Return editable YAML, parsed state, and JSON Schema")
 
     set_parser = sub.add_parser("set", help="Set one V2 service to off, on-demand, or always")
     set_parser.add_argument("service", help="Managed Services V2 service identifier")
@@ -238,6 +265,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     replace_parser = sub.add_parser("replace-document", help="Validate, replace, and reconcile the desired YAML")
     replace_parser.add_argument("source", help="YAML file or - for standard input")
+
+    replace_json_parser = sub.add_parser(
+        "replace-json-document",
+        help="Validate a schema-editor JSON value, render YAML, replace authority, and reconcile",
+    )
+    replace_json_parser.add_argument("source", help="JSON object file or - for standard input")
 
     wake_parser = sub.add_parser("wake", help="Acquire the native V2 on-demand lease for one service")
     wake_parser.add_argument("service", help="Managed Services V2 service identifier")
@@ -259,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
             result = set_modes(_read_mode_document(args.source))
         elif args.command == "replace-document":
             result = replace_from_source(args.source)
+        elif args.command == "replace-json-document":
+            result = replace_json_from_source(args.source)
         elif args.command == "wake":
             result = wake(args.service)
         else:
