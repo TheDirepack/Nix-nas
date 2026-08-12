@@ -45,7 +45,7 @@ let
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
   upsMonitorSystem =
-    if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
+    if cfg.power.ups.monitorSystem != "" then "${cfg.power.ups.name}@localhost"
     else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
   syncthingDataDir = "/var/lib/syncthing";
@@ -58,13 +58,18 @@ let
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";
 
+  # These are host/request-routing substrate that Caddy may require directly.
+  # Application backends whose lifecycle is managed by V2 must not appear here:
+  # the finite V2 reconcile transaction starts/stops those from services.yaml.
   caddyBackendUnits = [
     "authentik.service"
     "authentik-worker.service"
-    "copyparty.service"
     "cockpit.socket"
   ];
 
+  # Secret activation owns only host/security substrate. In particular, do not
+  # add V2-managed application services here: Requires= on this target would
+  # bypass their mutable services.yaml enabled/lifecycle state.
   protectedServiceUnits = [
     "nas-zfs-mount-guard.service"
     "postgresql.service"
@@ -72,7 +77,6 @@ let
     "authentik-worker.service"
     "authentik.service"
     "nas-identity-sync.service"
-    "copyparty.service"
     "caddy.service"
   ] ++ lib.optional cfg.zfsEncryption.enable "nas-zfs-unlock.service";
 
