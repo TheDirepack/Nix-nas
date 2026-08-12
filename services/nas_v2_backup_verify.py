@@ -15,7 +15,6 @@ import pathlib
 import sqlite3
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from typing import Any
 
 
@@ -73,23 +72,33 @@ def _resource_candidates(root: pathlib.Path, resource: dict[str, Any]) -> list[p
         raise BackupVerificationError(f"backup resource {resource_id!r} has unsupported consistency {consistency!r}")
 
     snapshot_root = direct / ".zfs" / "snapshot"
+    if snapshot_root.is_symlink():
+        raise BackupVerificationError(f"restored ZFS snapshot root for {resource_id!r} must not be a symlink")
     try:
-        return sorted(path for path in snapshot_root.iterdir() if path.is_dir())
+        return sorted(path for path in snapshot_root.iterdir() if not path.is_symlink() and path.is_dir())
     except FileNotFoundError:
         return []
     except OSError as exc:
         raise BackupVerificationError(f"unable to inspect restored ZFS snapshot tree for {resource_id!r}: {exc}") from exc
 
 
-def _regular_files(path: pathlib.Path) -> list[pathlib.Path]:
+def _native_dump_files(path: pathlib.Path) -> list[pathlib.Path]:
+    if path.is_symlink():
+        raise BackupVerificationError(f"native-dump artifact must not be a symlink: {path}")
     if path.is_file():
         return [path]
     if not path.is_dir():
         return []
+    files: list[pathlib.Path] = []
     try:
-        return sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+        for candidate in path.rglob("*"):
+            if candidate.is_symlink():
+                raise BackupVerificationError(f"native-dump artifact contains a symlink: {candidate}")
+            if candidate.is_file():
+                files.append(candidate)
     except OSError as exc:
-        raise BackupVerificationError(f"unable to enumerate restored resource {path}: {exc}") from exc
+        raise BackupVerificationError(f"unable to enumerate native-dump artifact {path}: {exc}") from exc
+    return sorted(files)
 
 
 def _looks_like_sqlite(path: pathlib.Path) -> bool:
@@ -110,21 +119,14 @@ def _looks_like_postgresql_custom_dump(path: pathlib.Path) -> bool:
 
 def _verify_sqlite(path: pathlib.Path) -> None:
     try:
-        uri = f"file:{path}?mode=ro"
+        uri = f"{path.resolve().as_uri()}?mode=ro"
         with sqlite3.connect(uri, uri=True) as database:
             rows = database.execute("PRAGMA integrity_check").fetchall()
-    except sqlite3.Error as exc:
+    except (OSError, sqlite3.Error) as exc:
         raise BackupVerificationError(f"SQLite integrity verification failed for {path}: {exc}") from exc
     if rows != [("ok",)]:
         detail = "; ".join(str(row[0]) for row in rows) if rows else "no result"
         raise BackupVerificationError(f"SQLite integrity verification failed for {path}: {detail}")
-
-
-def _verify_xml(path: pathlib.Path) -> None:
-    try:
-        ET.parse(path)
-    except (ET.ParseError, OSError) as exc:
-        raise BackupVerificationError(f"XML verification failed for {path}: {exc}") from exc
 
 
 def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str) -> None:
@@ -143,7 +145,7 @@ def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str) -
 
 
 def _verify_native_dump_files(files: list[pathlib.Path], *, pg_restore_bin: str) -> dict[str, int]:
-    checks = {"sqlite": 0, "xml": 0, "postgresqlCustom": 0}
+    checks = {"sqlite": 0, "postgresqlCustom": 0}
     for path in files:
         if _looks_like_sqlite(path):
             _verify_sqlite(path)
@@ -152,10 +154,6 @@ def _verify_native_dump_files(files: list[pathlib.Path], *, pg_restore_bin: str)
         if _looks_like_postgresql_custom_dump(path):
             _verify_postgresql_custom_dump(path, pg_restore_bin=pg_restore_bin)
             checks["postgresqlCustom"] += 1
-            continue
-        if path.suffix.lower() == ".xml":
-            _verify_xml(path)
-            checks["xml"] += 1
     return checks
 
 
@@ -176,15 +174,15 @@ def verify(*, inventory_path: pathlib.Path, restore_root: pathlib.Path, pg_resto
         candidates = _resource_candidates(restore_root, raw_resource)
         if not candidates:
             raise BackupVerificationError(f"restored backup resource {resource_id!r} is missing")
-        files: list[pathlib.Path] = []
         for candidate in candidates:
-            candidate_files = _regular_files(candidate)
             if not candidate.exists():
                 raise BackupVerificationError(f"restored backup resource {resource_id!r} is missing at {candidate}")
-            files.extend(candidate_files)
 
-        checks = {"sqlite": 0, "xml": 0, "postgresqlCustom": 0}
+        files: list[pathlib.Path] = []
+        checks = {"sqlite": 0, "postgresqlCustom": 0}
         if consistency == "native-dump":
+            for candidate in candidates:
+                files.extend(_native_dump_files(candidate))
             if not any(path.stat().st_size > 0 for path in files):
                 raise BackupVerificationError(f"native-dump resource {resource_id!r} restored no non-empty artifact files")
             checks = _verify_native_dump_files(files, pg_restore_bin=pg_restore_bin)
