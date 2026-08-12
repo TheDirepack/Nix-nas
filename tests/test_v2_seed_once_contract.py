@@ -28,7 +28,7 @@ class V2SeedOnceContractTests(unittest.TestCase):
             "modules/nas/config/managed-services-platform-routes.nix",
         ):
             content = (ROOT / path).read_text(encoding="utf-8")
-            self.assertNotIn("yamlFormat.generate \"managed-services-", content)
+            self.assertNotIn('yamlFormat.generate "managed-services-', content)
 
     def test_seed_aggregation_contains_all_built_in_categories(self) -> None:
         seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
@@ -40,7 +40,7 @@ class V2SeedOnceContractTests(unittest.TestCase):
         self.assertIn("platformServices", seed)
         self.assertIn("mergedServices = baselineServices // operationServices", seed)
         self.assertIn("storageResources = mergedStorageResources", seed)
-        self.assertIn('schemaVersion = 3', seed)
+        self.assertIn("schemaVersion = 3", seed)
 
     def test_bootstrap_contains_no_upgrade_merge_database(self) -> None:
         bootstrap = (ROOT / "services/nas_v2_bootstrap.py").read_text(encoding="utf-8")
