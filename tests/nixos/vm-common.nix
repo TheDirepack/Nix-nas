@@ -168,6 +168,11 @@ in
   networking.useDHCP = lib.mkDefault true;
   boot.supportedFilesystems = [ "zfs" ];
 
+  # The NixOS test kernel does not expose the per-service cgroup pressure file
+  # that systemd 260 otherwise tries to bind into copyparty's private mount
+  # namespace. The production service keeps its normal host accounting policy.
+  systemd.services.copyparty.serviceConfig.MemoryPressureWatch = lib.mkForce "off";
+
   users.users.admin.extraGroups = lib.mkAfter [ "wheel" ];
   security.sudo.wheelNeedsPassword = lib.mkForce false;
 
