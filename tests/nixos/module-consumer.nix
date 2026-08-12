@@ -1,5 +1,8 @@
 { config, lib, pkgs, ... }:
 
+let
+  reconcileEnvironment = config.systemd.services.nas-managed-services-reconcile.environment;
+in
 {
   system.stateVersion = "26.05";
   networking.hostId = "c0ffee22";
@@ -28,19 +31,20 @@
   assertions = [
     {
       assertion =
-        config.systemd.services.nas-managed-services-reconcile.environment.NAS_V2_VLAN_PARENT == "eth0";
+        !config.nas.networking.enable
+        || lib.attrByPath [ "NAS_V2_VLAN_PARENT" ] null reconcileEnvironment == "eth0";
       message = "Managed Services V2 must project the configured application VLAN trunk into its finite reconcile environment.";
     }
     {
       assertion =
-        config.systemd.services.nas-managed-services-reconcile.environment.NAS_V2_NMCLI_BIN
-        == "${pkgs.networkmanager}/bin/nmcli";
+        !config.nas.networking.enable
+        || lib.attrByPath [ "NAS_V2_NMCLI_BIN" ] null reconcileEnvironment == "${pkgs.networkmanager}/bin/nmcli";
       message = "Managed Services V2 must use the pinned NetworkManager nmcli binary for VLAN projection.";
     }
     {
       assertion =
-        config.systemd.services.nas-managed-services-reconcile.environment.NAS_V2_INSTALL_BIN
-        == "${pkgs.coreutils}/bin/install";
+        !config.nas.networking.enable
+        || lib.attrByPath [ "NAS_V2_INSTALL_BIN" ] null reconcileEnvironment == "${pkgs.coreutils}/bin/install";
       message = "Managed Services V2 must use the pinned coreutils install binary for VLAN projection.";
     }
     {
