@@ -18,6 +18,14 @@ class V2SecretLifecycleTests(unittest.TestCase):
         self.assertIn("kp_args() {", source)
         self.assertIn("get_secret() {", source)
 
+    def test_secret_activation_validates_platform_substrate_not_copyparty(self) -> None:
+        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+        activate = source.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
+
+        self.assertIn("authentik.service authentik-worker.service caddy.service", activate)
+        self.assertNotIn("copyparty.service", activate)
+        self.assertNotIn("/run/copyparty/http.sock", activate)
+
     def test_discarded_generation_helpers_do_not_return(self) -> None:
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
 
