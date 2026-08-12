@@ -142,10 +142,6 @@ def _isolated_supported(
         raise PodmanNetworkProjectionError(
             f"session service {service_id!r} currently requires direct OCI runtime for per-instance execution"
         )
-    if runtime_type == "compose" and (service.get("routes") or service.get("listeners")):
-        raise PodmanNetworkProjectionError(
-            f"isolated Compose service {service_id!r} cannot expose routes/listeners because V3 has no target container selector for those fields"
-        )
     if service.get("workload", {}).get("kind") == "session" and (service.get("routes") or service.get("listeners")):
         raise PodmanNetworkProjectionError(
             f"session service {service_id!r} cannot expose fixed routes/listeners because concurrent instances require per-instance endpoints"
