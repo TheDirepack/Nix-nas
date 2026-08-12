@@ -62,7 +62,9 @@ class V2PodmanNetworkTests(unittest.TestCase):
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
         return str(script)
 
-    def project_vlan(self, effective: dict, output: pathlib.Path, *, nmcli: str) -> tuple[dict[pathlib.Path, bytes], dict]:
+    def project_vlan(
+        self, effective: dict, output: pathlib.Path, *, nmcli: str
+    ) -> tuple[dict[pathlib.Path, bytes], dict]:
         files: dict[pathlib.Path, bytes] = {}
         manifest = {"quadletLinks": [], "links": [], "ownedUnits": [], "startUnits": []}
         network.augment_projection(
@@ -180,7 +182,10 @@ class V2PodmanNetworkTests(unittest.TestCase):
             output = pathlib.Path("/run/nas-control/systemd")
             _files, manifest = self.project_vlan(effective, output, nmcli=nmcli)
         self.assertEqual(manifest["ownedUnits"].count(vlan["unit"]), 1)
-        self.assertEqual(sum(1 for item in manifest["links"] if item["target"] == vlan["unit"]), 1)
+        self.assertEqual(
+            sum(1 for item in manifest["links"] if item["target"] == vlan["unit"]),
+            1,
+        )
 
     def test_vlan_pair_is_required_and_validated_defensively(self):
         invalid = [
@@ -278,7 +283,9 @@ class V2PodmanNetworkTests(unittest.TestCase):
             with self.subTest(policy=policy):
                 effective, service = self.service(policy=policy)
                 self.assertTrue(network.requires_firewalld(effective))
-                with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
+                with self.assertRaisesRegex(
+                    network.PodmanNetworkProjectionError, "firewalld policy projection"
+                ):
                     network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
 
     def test_isolated_listener_is_published_and_requires_firewalld_when_managed(self):
