@@ -24,7 +24,10 @@ export function resolveSchema(root, schema, seen = new Set()) {
       .slice(2)
       .split("/")
       .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
-      .reduce((value, part) => (value && typeof value === "object" ? value[part] : undefined), root);
+      .reduce(
+        (value, part) => (value && typeof value === "object" ? value[part] : undefined),
+        root,
+      );
     if (target && typeof target === "object") {
       const nextSeen = new Set(seen);
       nextSeen.add(reference);
@@ -63,7 +66,9 @@ export function schemaType(root, schema) {
 }
 
 function typeMatches(type, value) {
-  if (type === "object") return value !== null && typeof value === "object" && !Array.isArray(value);
+  if (type === "object") {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
   if (type === "array") return Array.isArray(value);
   if (type === "integer") return Number.isInteger(value);
   if (type === "number") return typeof value === "number" && Number.isFinite(value);
@@ -123,7 +128,9 @@ function discriminatorLabel(root, branch, index) {
   for (const [name, property] of Object.entries(schema.properties || {})) {
     const resolved = resolveSchema(root, property);
     if (Object.hasOwn(resolved, "const")) return `${name}: ${resolved.const}`;
-    if (Array.isArray(resolved.enum) && resolved.enum.length === 1) return `${name}: ${resolved.enum[0]}`;
+    if (Array.isArray(resolved.enum) && resolved.enum.length === 1) {
+      return `${name}: ${resolved.enum[0]}`;
+    }
   }
   const required = schema.required || [];
   if (required.length) return `requires ${required.join(", ")}`;
@@ -153,7 +160,11 @@ export function defaultValue(root, schema) {
     const required = new Set(resolved.required || []);
     for (const [name, property] of Object.entries(resolved.properties || {})) {
       const child = resolveSchema(root, property);
-      if (required.has(name) || Object.hasOwn(child, "default") || Object.hasOwn(child, "const")) {
+      if (
+        required.has(name) ||
+        Object.hasOwn(child, "default") ||
+        Object.hasOwn(child, "const")
+      ) {
         value[name] = defaultValue(root, child);
       }
     }
@@ -168,7 +179,9 @@ export function defaultValue(root, schema) {
 
 export function propertySchema(root, schema, name) {
   const resolved = selectedSchema(root, schema, undefined);
-  if (resolved.properties && Object.hasOwn(resolved.properties, name)) return resolved.properties[name];
+  if (resolved.properties && Object.hasOwn(resolved.properties, name)) {
+    return resolved.properties[name];
+  }
   if (resolved.additionalProperties && typeof resolved.additionalProperties === "object") {
     return resolved.additionalProperties;
   }
