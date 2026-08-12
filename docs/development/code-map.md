@@ -7,17 +7,17 @@
 | Options | `modules/nas/options/*.nix`, `modules/ai/options.nix` | Public appliance configuration contract. |
 | Validation | `modules/nas/config/validation.nix`, `modules/ai/validation-identities.nix` | Evaluation-time safety assertions. |
 | Core services | `modules/nas/config/systemd-services.nix`, `application-services.nix` | Native upstream applications and appliance units. |
-| Managed Services V2 | `modules/nas/config/managed-services.nix`, `managed-services-backup-resources.nix` | V3 desired-state seed/bootstrap, finite reconciliation, runtime projections, backup resources, and native integration. |
-| Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary. |
+| Managed Services V2 | `modules/nas/config/managed-services.nix`, `managed-services-seed-v2.nix`, `managed-services-lifecycle.nix` | Single complete V3 seed (baseline + operations + backup + platform), seed-once bootstrap, finite reconciliation; no continuous regeneration. |
+| Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary; app routes are data in `services.yaml`, not Caddy branches. |
 | Storage | `modules/nas/config/storage-monitoring.nix`, `internal/zfs-tools.nix` | ZFS, snapshots, restore verification, replication, and Restic integration. |
 | Observability | `modules/nas/config/observability.nix` | VictoriaMetrics, Telegraf, vmalert, NAS alert router, optional Grafana/ntfy. |
-| Identity/capability policy | `modules/nas/internal/capability-registry.nix`, corresponding schemas | Appliance identity capability/group contract; Managed Services V2 itself does not own users, groups, or assignments. |
-| Command packaging | `modules/nas/internal/account-tools.nix` | Installs Python tools, finite V2 control aliases, portal assets, and Authentik blueprint. |
+| Identity/capability policy | `services/nas_v2_authentik.py`, `schemas/managed-services-v3.schema.json` | Appliance identity capability/group contract; V2 creates `application.<service>.<capability>` objects, never assignments. |
+| Command packaging | `modules/nas/internal/account-tools.nix` | Installs Python tools (`nas-managed-services`, `nas-managed-services-control`), finite V2 control aliases, portal assets, and Authentik blueprint. |
 | Documentation/UI packaging | `modules/nas/internal/documentation-tools.nix` | Builds mdBook references and the Cockpit plugin. |
 
 `modules/nas/internal/default.nix` merges internal contexts with duplicate-name detection. New helpers should stay local unless multiple configuration modules consume them.
 
-Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-control/services.yaml`. `features.json` and `settings.json` are migration inputs only and must not become live runtime authority again.
+Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-control/services.yaml` (revision = sha256 of exact bytes). `JSON Schema` at `/etc/nas-control/managed-services-v3.schema.json` is the structural/UI contract. Previous split seeds (`managed-services-native-services.nix` + `managed-services-operations.nix` + `managed-services-backup-resources.nix` + `managed-services-platform-routes.nix`) are now aggregated into `managed-services-seed-v2.nix`. `features.json` is gone.
 
 ## Python services
 
@@ -37,20 +37,21 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_alert_router.py` | Bounded vmalert notification routing, status, deduplication, and optional ntfy delivery | `test_alert_router.py` |
 | `nas_logging.py` | Redacted bounded JSON operation records for journald | `test_logging.py` |
 | `nas_migrate_state.py` | One-time migration compatibility for legacy state authorities | `test_doctor_migrations.py` |
-| `nas_v2_spec.py` | YAML 1.2 parsing, V3 schema validation, normalization, semantic validation, and effective-state compilation | `test_v2_spec.py` |
-| `nas_v2_plan.py`, `nas_v2_apply.py` | Deterministic plan generation and finite transactional apply orchestration | `test_v2_plan_apply.py` |
+| `nas_v2_spec.py` | YAML 1.2 parsing (rejects empty/null), V3 schema validation, normalization, semantic validation, and effective-state compilation | `test_v2_spec.py` |
+| `nas_v2_bootstrap.py` | Seed-once: validates one complete V3 seed and atomically creates `services.yaml` once (with flock) | `test_v2_bootstrap.py`, `test_v2_seed_aggregation.py` |
+| `nas_v2_plan.py`, `nas_v2_apply.py` | Deterministic plan generation and finite transactional file apply (bundle + rollback) | `test_v2_plan_apply.py` |
 | `nas_v2_cli.py` | Administrative compile/plan/apply CLI | `test_v2_cli.py` |
-| `nas_v2_control.py`, `nas_v2_editor.py` | Finite status/document/edit/reconcile API and comment-preserving atomic edits | `test_feature_control.py`, `test_v2_editor.py` |
+| `nas_v2_control.py`, `nas_v2_editor.py` | Finite status/document/edit/reconcile API, revision-safe CAS (sha256), comment-preserving atomic edits | `test_v2_editor.py`, `test_v2_revision.py` |
 | `nas_v2_systemd.py` | Unified systemd lowering for cross-runtime lifecycle, dependencies, jobs, readiness, attachments, leases, and idle timers | `test_v2_systemd.py` |
 | `nas_v2_quadlet.py` | Direct OCI/Quadlet projection | `test_v2_quadlet.py` |
 | `nas_v2_compose.py` | Compose override projection for V2-owned cross-cutting policy | `test_v2_compose.py`, `test_v2_compose_systemd.py` |
 | `nas_v2_libvirt.py` | Libvirt/QEMU projection and explicit passthrough policy | `test_v2_libvirt.py` |
-| `nas_v2_session.py`, `nas_v2_session_projection.py` | Finite transient-session launch and descriptor/resource/network projection | `test_v2_session.py`, `test_v2_session_projection.py` |
-| `nas_v2_accelerator.py` | Generic accelerator resolution for device nodes, CDI, Compose targets, and VM passthrough | `test_v2_accelerator.py` |
-| `nas_v2_podman_network.py`, `nas_v2_firewalld.py` | Native isolated Podman network and firewalld policy projection | `test_v2_podman_network.py`, `test_v2_firewalld.py` |
+| `nas_v2_session.py`, `nas_v2_session_projection.py` | Finite transient-session launch and descriptor/resource/network projection (candidates for `systemd-run --scope` replacement) | `test_v2_session.py`, `test_v2_session_projection.py` |
+| `nas_v2_accelerator.py` | Generic accelerator resolution for device nodes, CDI, Compose targets, and VM passthrough (candidate for `hardware.nvidia` + CDI) | `test_v2_accelerator.py` |
+| `nas_v2_podman_network.py`, `nas_v2_firewalld.py` | Native isolated Podman network and firewalld policy projection (candidates for `networking.firewall`) | `test_v2_podman_network.py`, `test_v2_firewalld.py` |
 | `nas_v2_authentik.py` | Ensures stable `application.<service>.<capability>` objects without owning assignments | `test_v2_authentik.py` |
-| `nas_v2_caddy.py`, `nas_v2_wake.py` | Request-time routing/auth projection and authorization-free post-auth wake plumbing | `test_v2_caddy.py`, `test_v2_wake.py` |
-| `nas_v2_backup.py`, `nas_v2_backup_runtime.py`, `nas_v2_native_dump.py` | Resource-oriented backup inventory and finite preparation/cleanup jobs | `test_v2_backup.py`, `test_v2_backup_runtime.py`, `test_v2_native_dump.py` |
+| `nas_v2_caddy.py`, `nas_v2_wake.py` | Request-time routing/auth projection (generic `proxy.*`, `requireHeaders`, `stripPrefix`, `onDemandWake`) and authorization-free post-auth wake | `test_v2_caddy.py`, `test_v2_wake.py` |
+| `nas_v2_backup.py`, `nas_v2_backup_runtime.py`, `nas_v2_native_dump.py` | Resource-oriented backup inventory and finite preparation/cleanup jobs (freshness via stale-clear) | `test_v2_backup.py`, `test_v2_backup_runtime.py`, `test_v2_native_dump.py` |
 
 The installed legacy command name `nas-feature-control` is only an executable alias to `nas_v2_control:main`; there is no `nas_feature_control.py` implementation. Do not restore the deleted gate/controller/reaper architecture to satisfy old tests or documentation.
 

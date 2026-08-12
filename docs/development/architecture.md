@@ -38,7 +38,8 @@ The arrows describe authority or controlled data flow, not unrestricted write ac
 | Human users, credentials, MFA, groups, application access | Authentik |
 | File volumes, paths, ACLs, quotas, share links, WebDAV policy | CopyParty |
 | Machine secrets and encrypted-storage keys | KeePassXC |
-| Runtime feature modes | NAS feature controller |
+| Application desired state | V2 `services.yaml` (mutable, seed-once from Nix, revision = sha256) |
+| Application runtime topology | V2 effective-state compiler + native systemd/Podman/Caddy/Authentik/firewalld projections (finite, no daemon) |
 | ZFS pool/dataset state | ZFS, with Sanoid/Syncoid for snapshot/replication policy |
 | Appliance-state bundles | `nas-state` registry and signed manifests |
 | Metrics | Telegraf + VictoriaMetrics |
@@ -50,7 +51,7 @@ A new feature should extend an existing authority whenever possible. It should n
 
 Authentik authenticates users and owns group membership. Caddy removes client-supplied identity headers, performs forward authentication, and applies generated capability checks at the edge. Applications keep their own native authorization where applicable. Browser visibility is convenience only; server-side policy is the security boundary.
 
-Capability definitions come from the central registry and fail closed when a protected route references an unknown capability.
+Capability definitions come from V2 `application.<service>.<capability>` objects (ensured by `nas_v2_authentik.py`, never assigned by V2) and fail closed when a protected route references an unknown capability. Caddy strips forged `Remote-*` / `X-Authentik-*` headers, forward-authenticates to Authentik, then checks `X-Authentik-Groups` for `nas_admin` or `application.<service>.<capability>`.
 
 ## Locked boot and secrets
 

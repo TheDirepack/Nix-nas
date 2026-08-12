@@ -19,12 +19,11 @@ Historical context lives in [decision history](history.md). Release-specific imp
 ```text
 modules/       NixOS options, implementation fragments, internal registries
 services/      privileged appliance commands and pure control-plane models
-cockpit/       React/PatternFly Cockpit package
-setup/         first-run configuration examples
-policy/        generated/shared policy data
-schemas/       cross-process JSON schemas
+cockpit/       React/PatternFly Cockpit package (build via `npm --prefix cockpit ci && npm --prefix cockpit run build`)
+schemas/       cross-process JSON schemas (V3 at `schemas/managed-services-v3.schema.json`)
 scripts/       validation, packaging, update, and VM tooling
 tests/         unit, contract, browser, NixOS, and guest tests
+./tmp/         local packaging/VM artifacts (inside project, not /tmp; ignored)
 docs/src/      deployed operator manual
 docs/operator/ long-form recovery/operations runbooks
 docs/development/ maintainer architecture and validation material
