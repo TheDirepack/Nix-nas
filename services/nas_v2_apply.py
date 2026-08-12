@@ -8,11 +8,12 @@ reload/reconcile action is permitted.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import pathlib
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, resolve_effective
@@ -79,6 +80,7 @@ class SystemdProjection:
     nmcli_bin: str = "nmcli"
     install_bin: str = "install"
     rm_bin: str = "rm"
+    vlan_parent: str | None = field(default_factory=lambda: os.environ.get("NAS_V2_VLAN_PARENT"))
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,45 @@ class PortalProjection:
 
 def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _bind_platform_vlan_parent(effective: dict[str, Any], vlan_parent: str | None) -> dict[str, Any]:
+    """Bind host-owned trunk configuration to active VLAN policies for native projection only."""
+    services = effective.get("services")
+    profiles = effective.get("networkProfiles")
+    if not isinstance(services, dict) or not isinstance(profiles, dict):
+        return effective
+
+    direct_services: set[str] = set()
+    referenced_profiles: set[str] = set()
+    for service_id, service in services.items():
+        if not isinstance(service, dict) or not service.get("managed", True) or not service.get("enabled", True):
+            continue
+        profile_id = service.get("networkProfile")
+        if isinstance(profile_id, str):
+            policy = profiles.get(profile_id)
+            if isinstance(policy, dict) and "vlanId" in policy:
+                referenced_profiles.add(profile_id)
+            continue
+        policy = service.get("network")
+        if isinstance(policy, dict) and "vlanId" in policy:
+            direct_services.add(service_id)
+
+    if not direct_services and not referenced_profiles:
+        return effective
+    if not vlan_parent:
+        raise SystemdProjectionError(
+            "network.vlanId requires host platform configuration nas.networking.applicationVlanParent"
+        )
+
+    bound = copy.deepcopy(effective)
+    bound_services = bound["services"]
+    bound_profiles = bound["networkProfiles"]
+    for service_id in direct_services:
+        bound_services[service_id]["network"]["vlanParent"] = vlan_parent
+    for profile_id in referenced_profiles:
+        bound_profiles[profile_id]["vlanParent"] = vlan_parent
+    return bound
 
 
 def _prepare_temp(path: pathlib.Path, data: bytes, mode: int) -> pathlib.Path:
@@ -210,9 +251,10 @@ def _systemd_files(
     *,
     firewalld_enabled: bool,
 ) -> list[tuple[pathlib.Path, bytes, int]]:
+    projection_effective = _bind_platform_vlan_parent(effective, projection.vlan_parent)
     try:
         generated, manifest = generate_systemd_projection(
-            effective,
+            projection_effective,
             output_dir=projection.output_dir,
             python_bin=projection.python_bin,
             source_dir=projection.source_dir,
@@ -223,7 +265,7 @@ def _systemd_files(
             virsh_bin=projection.virsh_bin,
         )
         augment_podman_networks(
-            effective,
+            projection_effective,
             output_dir=projection.output_dir,
             files=generated,
             manifest=manifest,
@@ -233,7 +275,7 @@ def _systemd_files(
             rm_bin=projection.rm_bin,
         )
         augment_projection(
-            effective,
+            projection_effective,
             output_dir=projection.output_dir,
             files=generated,
             manifest=manifest,
