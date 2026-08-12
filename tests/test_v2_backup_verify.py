@@ -43,7 +43,7 @@ class V2BackupVerifyTests(unittest.TestCase):
                 connection.execute("CREATE TABLE item (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
                 connection.execute("INSERT INTO item(value) VALUES ('ok')")
 
-            (artifact / "config.xml").write_text("<config><value>ok</value></config>\n", encoding="utf-8")
+            (artifact / "opaque-native-artifact").write_text("application-owned\n", encoding="utf-8")
             (artifact / "database.pgdump").write_bytes(b"PGDMPfixture")
             inventory = self.write_inventory(
                 root,
@@ -64,10 +64,10 @@ class V2BackupVerifyTests(unittest.TestCase):
             )
 
             checks = result["resources"][0]["checks"]
-            self.assertEqual(checks, {"sqlite": 1, "xml": 1, "postgresqlCustom": 1})
+            self.assertEqual(checks, {"sqlite": 1, "postgresqlCustom": 1})
             self.assertEqual(result["resources"][0]["files"], 3)
 
-    def test_arbitrary_filesystem_content_is_not_format_interpreted(self):
+    def test_arbitrary_filesystem_content_is_not_traversed_or_format_interpreted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             restore = root / "restore"
@@ -85,10 +85,8 @@ class V2BackupVerifyTests(unittest.TestCase):
                 pg_restore_bin=self.fake_pg_restore(root),
             )
 
-            self.assertEqual(
-                result["resources"][0]["checks"],
-                {"sqlite": 0, "xml": 0, "postgresqlCustom": 0},
-            )
+            self.assertEqual(result["resources"][0]["checks"], {"sqlite": 0, "postgresqlCustom": 0})
+            self.assertEqual(result["resources"][0]["files"], 0)
 
     def test_missing_resource_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +123,33 @@ class V2BackupVerifyTests(unittest.TestCase):
                 ],
             )
             with self.assertRaisesRegex(verifier.BackupVerificationError, "no non-empty"):
+                verifier.verify(
+                    inventory_path=inventory,
+                    restore_root=restore,
+                    pg_restore_bin=self.fake_pg_restore(root),
+                )
+
+    def test_native_dump_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            restore = root / "restore"
+            artifact = restore / "run" / "backup" / "links"
+            artifact.mkdir(parents=True)
+            outside = root / "outside"
+            outside.write_text("do not inspect\n", encoding="utf-8")
+            (artifact / "escape").symlink_to(outside)
+            inventory = self.write_inventory(
+                root,
+                [
+                    {
+                        "id": "linked-state",
+                        "path": "/var/lib/linked",
+                        "consistency": "native-dump",
+                        "nativeDump": {"artifactPath": "/run/backup/links"},
+                    }
+                ],
+            )
+            with self.assertRaisesRegex(verifier.BackupVerificationError, "contains a symlink"):
                 verifier.verify(
                     inventory_path=inventory,
                     restore_root=restore,
@@ -205,7 +230,7 @@ class V2BackupVerifyTests(unittest.TestCase):
                 restore_root=restore,
                 pg_restore_bin=self.fake_pg_restore(root),
             )
-            self.assertEqual(result["resources"][0]["files"], 1)
+            self.assertEqual(result["resources"][0]["files"], 0)
             self.assertEqual(result["resources"][0]["sources"], [str(snapshot)])
 
 
