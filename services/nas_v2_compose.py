@@ -24,6 +24,7 @@ class ComposeProjectionError(RuntimeError):
 
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 _NETWORK_KEY = "nas_v2"
+_LOOPBACK_HOSTS = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "[::1]"}
 _STRICT_SOURCE_FIELDS = frozenset(
     {
         "cap_add",
@@ -198,6 +199,128 @@ def _apply_accelerators(
         destination.setdefault("devices", []).append(device)
 
 
+def _compose_ingress_target(
+    service_id: str,
+    endpoint_kind: str,
+    endpoint_id: str,
+    endpoint: dict[str, Any],
+    service_names: set[str],
+    overrides: dict[str, dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    runtime_target = endpoint.get("runtimeTarget")
+    if not isinstance(runtime_target, str) or not runtime_target:
+        raise ComposeProjectionError(
+            f"isolated Compose {endpoint_kind} {endpoint_id!r} for service {service_id!r} requires runtimeTarget"
+        )
+    try:
+        destination = _target(overrides, service_names, runtime_target)
+    except ComposeProjectionError as exc:
+        raise ComposeProjectionError(
+            f"isolated Compose {endpoint_kind} {endpoint_id!r} runtimeTarget {runtime_target!r} does not exist in the Compose source"
+        ) from exc
+    return runtime_target, destination
+
+
+def _apply_isolated_ingress(
+    service_id: str,
+    service: dict[str, Any],
+    service_names: set[str],
+    overrides: dict[str, dict[str, Any]],
+) -> None:
+    published: dict[tuple[str, int], tuple[str, int]] = {}
+    listeners = service.get("listeners", {})
+    if isinstance(listeners, dict):
+        for listener_id in sorted(listeners):
+            listener = listeners[listener_id]
+            if not isinstance(listener, dict):
+                continue
+            runtime_target, destination = _compose_ingress_target(
+                service_id,
+                "listener",
+                listener_id,
+                listener,
+                service_names,
+                overrides,
+            )
+            protocol = listener.get("protocol")
+            exposure = listener.get("exposure")
+            if protocol not in {"tcp", "udp"} or not isinstance(exposure, dict):
+                raise ComposeProjectionError(f"isolated Compose listener {listener_id!r} is invalid")
+            if "port" in exposure:
+                host_port = exposure["port"]
+                target_port = listener.get("targetPort", host_port)
+                if not isinstance(host_port, int) or not isinstance(target_port, int):
+                    raise ComposeProjectionError(f"isolated Compose listener {listener_id!r} has invalid ports")
+                key = (protocol, host_port)
+                previous = published.get(key)
+                mapping = (runtime_target, target_port)
+                if previous is not None and previous != mapping:
+                    raise ComposeProjectionError(
+                        f"isolated Compose listener {listener_id!r} conflicts with an existing {protocol}/{host_port} publication"
+                    )
+                if previous is None:
+                    destination.setdefault("ports", []).append(f"{host_port}:{target_port}/{protocol}")
+                    published[key] = mapping
+                continue
+
+            start = exposure.get("start")
+            end = exposure.get("end")
+            if not isinstance(start, int) or not isinstance(end, int) or end < start:
+                raise ComposeProjectionError(f"isolated Compose listener {listener_id!r} has an invalid port range")
+            for port in range(start, end + 1):
+                key = (protocol, port)
+                previous = published.get(key)
+                mapping = (runtime_target, port)
+                if previous is not None and previous != mapping:
+                    raise ComposeProjectionError(
+                        f"isolated Compose listener {listener_id!r} conflicts with an existing {protocol}/{port} publication"
+                    )
+                published[key] = mapping
+            destination.setdefault("ports", []).append(f"{start}-{end}:{start}-{end}/{protocol}")
+
+    routes = service.get("routes", {})
+    if isinstance(routes, dict):
+        for route_id in sorted(routes):
+            route = routes[route_id]
+            if not isinstance(route, dict):
+                continue
+            runtime_target, destination = _compose_ingress_target(
+                service_id,
+                "route",
+                route_id,
+                route,
+                service_names,
+                overrides,
+            )
+            target = route.get("target")
+            if not isinstance(target, dict):
+                raise ComposeProjectionError(f"isolated Compose route {route_id!r} has an invalid target")
+            if target.get("type") == "unix-http":
+                raise ComposeProjectionError(
+                    f"isolated Compose route {route_id!r} cannot target a host Unix socket; use a TCP route target"
+                )
+            host = target.get("host", "127.0.0.1")
+            bind_host = _LOOPBACK_HOSTS.get(host) if isinstance(host, str) else None
+            if bind_host is None:
+                raise ComposeProjectionError(
+                    f"isolated Compose route {route_id!r} must use a loopback host target so Caddy cannot expose an unintended bind"
+                )
+            port = target.get("port")
+            if not isinstance(port, int):
+                raise ComposeProjectionError(f"isolated Compose route {route_id!r} is missing its TCP target port")
+            key = ("tcp", port)
+            previous = published.get(key)
+            mapping = (runtime_target, port)
+            if previous is not None:
+                if previous != mapping:
+                    raise ComposeProjectionError(
+                        f"isolated Compose route {route_id!r} conflicts with an existing tcp/{port} publication"
+                    )
+                continue
+            destination.setdefault("ports", []).append(f"{bind_host}:{port}:{port}/tcp")
+            published[key] = mapping
+
+
 def render_compose_override(
     effective: dict[str, Any],
     service_id: str,
@@ -268,10 +391,7 @@ def render_compose_override(
         mode = policy["mode"]
         has_fixed_ingress = bool(service.get("routes")) or bool(service.get("listeners"))
         if mode == "isolated":
-            if has_fixed_ingress:
-                raise ComposeProjectionError(
-                    f"Compose service {service_id!r} cannot expose V2 routes/listeners while V3 lacks a target container selector"
-                )
+            _apply_isolated_ingress(service_id, service, service_names, overrides)
             for name in service_names:
                 overrides.setdefault(name, {})["networks"] = [_NETWORK_KEY]
             top_level["networks"] = {
