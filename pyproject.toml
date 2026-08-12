@@ -48,6 +48,7 @@ py-modules = [
   "nas_v2_authentik",
   "nas_v2_backup",
   "nas_v2_backup_runtime",
+  "nas_v2_backup_verify",
   "nas_v2_bootstrap",
   "nas_v2_caddy",
   "nas_v2_cli",
