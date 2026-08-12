@@ -52,6 +52,21 @@ export function replaceManagedServicesDocument(yaml, spawn = globalThis.cockpit?
   return process.then(parseJsonOutput);
 }
 
+export function replaceManagedServicesJsonDocument(document, spawn = globalThis.cockpit?.spawn) {
+  if (document === null || typeof document !== "object" || Array.isArray(document)) {
+    throw new Error("Managed Services V2 schema editor value must be an object.");
+  }
+  const process = requireSpawn(spawn)(
+    ["nas-managed-services-control", "replace-json-document", "-"],
+    {
+      superuser: "require",
+      err: "message",
+    },
+  );
+  process.input(JSON.stringify(document));
+  return process.then(parseJsonOutput);
+}
+
 export function managedServicesStatus(spawn = globalThis.cockpit?.spawn) {
   return requireSpawn(spawn)(["nas-managed-services-control", "status"], {
     superuser: "require",
