@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Additively migrate Nix-provided baseline objects into Managed Services V2.
+"""Seed the Nix-provided Managed Services V2 baseline exactly once.
 
-The migration remembers every baseline key it has already seen. A later release
-may add new baseline services/resources and those new keys are merged once, but
-an administrator who deletes or replaces a previously seeded key remains
-authoritative: previously seen keys are never re-added or overwritten.
+The durable ``services.yaml`` authority belongs to the administrator after it is
+created. Nix may provide the initial baseline only when the seed service observed
+that no authority existed before its ExecStart. The marker passed to this helper
+is therefore a one-shot *pre-existence sentinel*, not a database of previously
+seen application keys and not an upgrade merge mechanism.
 """
 
 from __future__ import annotations
@@ -24,11 +25,7 @@ from nas_v2_spec import ManagedServicesV2Error, compile_document, load_platform_
 
 
 class BootstrapError(RuntimeError):
-    """Raised when a bootstrap migration cannot be applied safely."""
-
-
-_MERGE_MAPS = ("storageResources", "credentials", "networkProfiles", "services")
-_MARKER_SCHEMA = 2
+    """Raised when the one-time V2 baseline cannot be seeded safely."""
 
 
 def _yaml() -> YAML:
@@ -51,146 +48,6 @@ def _load(path: pathlib.Path) -> CommentedMap:
     return value
 
 
-def _seed_keys(seed: CommentedMap) -> set[str]:
-    keys: set[str] = set()
-    for section in _MERGE_MAPS:
-        seed_section = seed.get(section)
-        if seed_section is None:
-            continue
-        if not isinstance(seed_section, dict):
-            raise BootstrapError(f"seed section {section!r} must be a mapping")
-        keys.update(f"{section}.{key}" for key in seed_section)
-    return keys
-
-
-def _load_seen(marker: pathlib.Path) -> set[str]:
-    if not marker.exists():
-        return set()
-    try:
-        value = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BootstrapError(f"invalid bootstrap marker {marker}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise BootstrapError("bootstrap marker must contain a JSON object")
-    # Marker schema 1 was used by the in-development first implementation. Treat
-    # its exact added keys as already seen while allowing keys that were present
-    # in services.yaml at the time to be discovered by the current seed below.
-    if value.get("schemaVersion") in {None, 1}:
-        added = value.get("added", [])
-        if not isinstance(added, list) or not all(isinstance(item, str) for item in added):
-            raise BootstrapError("legacy bootstrap marker contains an invalid added list")
-        return set(added)
-    if value.get("schemaVersion") != _MARKER_SCHEMA:
-        raise BootstrapError("bootstrap marker uses an unsupported schemaVersion")
-    seen = value.get("seen", [])
-    if not isinstance(seen, list) or not all(isinstance(item, str) for item in seen):
-        raise BootstrapError("bootstrap marker contains an invalid seen list")
-    return set(seen)
-
-
-def _merge_new_keys(current: CommentedMap, seed: CommentedMap, *, seen: set[str]) -> list[str]:
-    added: list[str] = []
-    for section in _MERGE_MAPS:
-        seed_section = seed.get(section)
-        if seed_section is None:
-            continue
-        if not isinstance(seed_section, dict):
-            raise BootstrapError(f"seed section {section!r} must be a mapping")
-        current_section = current.get(section)
-        if current_section is None:
-            current_section = CommentedMap()
-            current[section] = current_section
-        if not isinstance(current_section, dict):
-            raise BootstrapError(f"existing section {section!r} must be a mapping")
-        for key, value in seed_section.items():
-            canonical = f"{section}.{key}"
-            if canonical in seen or key in current_section:
-                continue
-            current_section[key] = value
-            added.append(canonical)
-    return added
-
-
-def _stabilize_new_services(
-    current: CommentedMap,
-    seed: CommentedMap,
-    added: list[str],
-    *,
-    seen: set[str],
-) -> tuple[list[str], list[str]]:
-    """Honor existing dependency choices while adding new baseline services.
-
-    A new service whose previously seeded dependency was deliberately removed is
-    deferred so one future release cannot make the entire bootstrap transaction
-    invalid. Unknown dependency names in the release seed are *not* deferred;
-    normal semantic validation rejects those release bugs loudly. A new service
-    whose dependency still exists but is desired off is seeded off too.
-    """
-    services = current.get("services")
-    seed_services = seed.get("services", {})
-    if not isinstance(services, dict):
-        raise BootstrapError("existing section 'services' must be a mapping")
-    if not isinstance(seed_services, dict):
-        raise BootstrapError("seed section 'services' must be a mapping")
-
-    added_ids = {item.removeprefix("services.") for item in added if item.startswith("services.")}
-    deferred_ids: set[str] = set()
-
-    changed = True
-    while changed:
-        changed = False
-        for service_id in sorted(added_ids - deferred_ids):
-            service = services.get(service_id)
-            if not isinstance(service, dict):
-                continue
-            dependencies = service.get("dependencies", [])
-            if not isinstance(dependencies, list):
-                continue
-            for dependency in dependencies:
-                target = dependency.get("service") if isinstance(dependency, dict) else None
-                if not isinstance(target, str):
-                    continue
-                if target in deferred_ids:
-                    deferred_ids.add(service_id)
-                    changed = True
-                    break
-                if target in services:
-                    continue
-                canonical = f"services.{target}"
-                if target in seed_services and canonical in seen:
-                    deferred_ids.add(service_id)
-                    changed = True
-                    break
-
-    for service_id in deferred_ids:
-        services.pop(service_id, None)
-
-    disabled_ids: set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for service_id in sorted(added_ids - deferred_ids):
-            service = services.get(service_id)
-            if not isinstance(service, dict) or service.get("enabled", True) is False:
-                continue
-            dependencies = service.get("dependencies", [])
-            if not isinstance(dependencies, list):
-                continue
-            for dependency in dependencies:
-                target_id = dependency.get("service") if isinstance(dependency, dict) else None
-                target = services.get(target_id) if isinstance(target_id, str) else None
-                if isinstance(target, dict) and target.get("enabled", True) is False:
-                    service["enabled"] = False
-                    disabled_ids.add(service_id)
-                    changed = True
-                    break
-
-    return (
-        [f"services.{service_id}" for service_id in sorted(deferred_ids)],
-        [f"services.{service_id}" for service_id in sorted(disabled_ids)],
-    )
-
-
 def _validate(
     document: CommentedMap,
     *,
@@ -200,6 +57,14 @@ def _validate(
     schema = load_schema(schema_path)
     capabilities = None if platform_path is None else load_platform_capabilities(platform_path)
     compile_document(document, schema, platform_capabilities=capabilities)
+
+
+def _fsync_directory(directory: pathlib.Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _atomic_dump(path: pathlib.Path, document: CommentedMap) -> None:
@@ -230,26 +95,26 @@ def _atomic_dump(path: pathlib.Path, document: CommentedMap) -> None:
         else:
             os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        _fsync_directory(path.parent)
         raw_tmp = None
     finally:
         if raw_tmp is not None:
             pathlib.Path(raw_tmp).unlink(missing_ok=True)
 
 
-def _atomic_marker(path: pathlib.Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    fd, raw_tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    tmp = pathlib.Path(raw_tmp)
+def _is_seed_stub(document: CommentedMap) -> bool:
+    """Recognize only the minimal authority stub created by the base seed unit."""
+    return set(document) == {"schemaVersion", "services"} and document.get("schemaVersion") == 3 and document.get(
+        "services"
+    ) == {}
+
+
+def _clear_marker(marker: pathlib.Path) -> None:
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
+        marker.unlink()
+    except FileNotFoundError:
+        return
+    _fsync_directory(marker.parent)
 
 
 def migrate(
@@ -260,52 +125,40 @@ def migrate(
     schema: pathlib.Path,
     platform: pathlib.Path | None,
 ) -> dict[str, Any]:
-    """Merge only previously unseen baseline keys and record the complete seed set."""
-    current = _load(desired)
-    baseline = _load(seed)
-    if current.get("schemaVersion") != 3 or baseline.get("schemaVersion") != 3:
-        raise BootstrapError("bootstrap migration requires schemaVersion 3 documents")
-
-    seen = _load_seen(marker)
-    current_seed_keys = _seed_keys(baseline)
-    pending = current_seed_keys - seen
-    if not pending:
+    """Install the baseline only when the seed unit proved no prior authority existed."""
+    if not marker.exists():
         return {
             "changed": False,
-            "reason": "seed-current",
-            "added": [],
-            "deferred": [],
-            "disabled": [],
-            "seen": sorted(seen),
+            "reason": "authority-exists",
         }
 
-    added = _merge_new_keys(current, baseline, seen=seen)
-    deferred, disabled = _stabilize_new_services(current, baseline, added, seen=seen)
-    deferred_set = set(deferred)
-    added = [item for item in added if item not in deferred_set]
-    _validate(current, schema_path=schema, platform_path=platform)
-    if added:
-        _atomic_dump(desired, current)
+    current = _load(desired)
+    if not _is_seed_stub(current):
+        # A concurrent writer won the race between preStart and ExecStart. Never
+        # overwrite that authority merely because the one-shot marker exists.
+        _clear_marker(marker)
+        return {
+            "changed": False,
+            "reason": "authority-created-concurrently",
+        }
 
-    # Successfully applied/current seed keys become seen. A service deferred
-    # because one of its dependencies is absent intentionally remains pending so
-    # it can be reconsidered if that dependency later returns to desired state.
-    updated_seen = seen | (current_seed_keys - deferred_set)
-    result = {
-        "schemaVersion": _MARKER_SCHEMA,
-        "changed": bool(added),
-        "reason": "seed-updated",
-        "added": added,
-        "deferred": deferred,
-        "disabled": disabled,
-        "seen": sorted(updated_seen),
+    baseline = _load(seed)
+    if baseline.get("schemaVersion") != 3:
+        raise BootstrapError("initial baseline must use schemaVersion 3")
+    _validate(baseline, schema_path=schema, platform_path=platform)
+    _atomic_dump(desired, baseline)
+    _clear_marker(marker)
+
+    services = baseline.get("services")
+    return {
+        "changed": True,
+        "reason": "initial-seed",
+        "services": len(services) if isinstance(services, dict) else 0,
     }
-    _atomic_marker(marker, result)
-    return result
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Additively migrate Managed Services V2 baseline objects")
+    parser = argparse.ArgumentParser(description="Seed the initial Managed Services V2 baseline")
     parser.add_argument("--desired", required=True, type=pathlib.Path)
     parser.add_argument("--seed", required=True, type=pathlib.Path)
     parser.add_argument("--marker", required=True, type=pathlib.Path)
