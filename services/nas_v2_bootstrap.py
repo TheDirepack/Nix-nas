@@ -111,17 +111,27 @@ def _merge_new_keys(current: CommentedMap, seed: CommentedMap, *, seen: set[str]
     return added
 
 
-def _stabilize_new_services(current: CommentedMap, added: list[str]) -> tuple[list[str], list[str]]:
+def _stabilize_new_services(
+    current: CommentedMap,
+    seed: CommentedMap,
+    added: list[str],
+    *,
+    seen: set[str],
+) -> tuple[list[str], list[str]]:
     """Honor existing dependency choices while adding new baseline services.
 
-    A new service whose dependency was deliberately removed is deferred so one
-    future release cannot make the entire bootstrap transaction invalid. A new
-    service whose dependency still exists but is desired off is seeded off too;
-    the administrator can later enable both explicitly through V2.
+    A new service whose previously seeded dependency was deliberately removed is
+    deferred so one future release cannot make the entire bootstrap transaction
+    invalid. Unknown dependency names in the release seed are *not* deferred;
+    normal semantic validation rejects those release bugs loudly. A new service
+    whose dependency still exists but is desired off is seeded off too.
     """
     services = current.get("services")
+    seed_services = seed.get("services", {})
     if not isinstance(services, dict):
         raise BootstrapError("existing section 'services' must be a mapping")
+    if not isinstance(seed_services, dict):
+        raise BootstrapError("seed section 'services' must be a mapping")
 
     added_ids = {item.removeprefix("services.") for item in added if item.startswith("services.")}
     deferred_ids: set[str] = set()
@@ -136,10 +146,19 @@ def _stabilize_new_services(current: CommentedMap, added: list[str]) -> tuple[li
             dependencies = service.get("dependencies", [])
             if not isinstance(dependencies, list):
                 continue
-            targets = [item.get("service") for item in dependencies if isinstance(item, dict)]
-            if any(not isinstance(target, str) or target not in services or target in deferred_ids for target in targets):
-                deferred_ids.add(service_id)
-                changed = True
+            for dependency in dependencies:
+                target = dependency.get("service") if isinstance(dependency, dict) else None
+                if target in deferred_ids:
+                    deferred_ids.add(service_id)
+                    changed = True
+                    break
+                if not isinstance(target, str) or target in services:
+                    continue
+                canonical = f"services.{target}"
+                if target in seed_services and canonical in seen:
+                    deferred_ids.add(service_id)
+                    changed = True
+                    break
 
     for service_id in deferred_ids:
         services.pop(service_id, None)
@@ -259,7 +278,7 @@ def migrate(
         }
 
     added = _merge_new_keys(current, baseline, seen=seen)
-    deferred, disabled = _stabilize_new_services(current, added)
+    deferred, disabled = _stabilize_new_services(current, baseline, added, seen=seen)
     deferred_set = set(deferred)
     added = [item for item in added if item not in deferred_set]
     _validate(current, schema_path=schema, platform_path=platform)
