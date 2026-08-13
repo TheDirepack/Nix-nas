@@ -256,7 +256,7 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertIn("save requires exactly one directory", result.stderr)
 
     def test_save_missing_preserves_existing_archives(self) -> None:
-        env, _, nix_store_log = self._fake_environment()
+        env, nix_log, nix_store_log = self._fake_environment()
         out_dir = self._root / "bundles"
         out_dir.mkdir()
         with gzip.open(out_dir / "core.nar.gz", "wb") as stream:
@@ -266,10 +266,29 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         with gzip.open(out_dir / "core.nar.gz", "rb") as stream:
             self.assertEqual(stream.read(), b"existing-core\n")
+        build_calls = [call for call in nix_log.read_text(encoding="utf-8").splitlines() if call.startswith("build --no-link ")]
+        self.assertEqual(len(build_calls), 1)
+        self.assertNotIn(".#packages.x86_64-linux.core", build_calls[0])
         exports = [
             line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")
         ]
         self.assertEqual(len(exports), len(EXPECTED_BUNDLES) - 1)
+
+    def test_save_missing_is_a_noop_when_every_archive_exists(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        for name in EXPECTED_BUNDLES:
+            with gzip.open(out_dir / f"{name}.nar.gz", "wb") as stream:
+                stream.write(f"existing-{name}\n".encode())
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertFalse(nix_log.exists())
+        self.assertFalse(nix_store_log.exists())
+        for name in EXPECTED_BUNDLES:
+            with gzip.open(out_dir / f"{name}.nar.gz", "rb") as stream:
+                self.assertEqual(stream.read(), f"existing-{name}\n".encode())
 
     def test_import_requires_a_directory_argument(self) -> None:
         result = self._run("import")
