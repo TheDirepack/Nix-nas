@@ -4,6 +4,7 @@ let
   inherit (nasInternal)
     cockpitPort
     cfg
+    copypartyDataDir
     copypartyMountRoot
     copypartyUserConfigDir
     nasAuthentikBlueprints
@@ -110,15 +111,18 @@ in
     networking.nftables.enable = lib.mkIf cfg.networking.firewall.enable true;
 
     # Seed mutable upstream configuration only when absent.
+    # Per-type ZFS app data (copyparty) lives under cfg.zfsRoot; main partition
+    # retains only Caddy, PAM/Cockpit, and ZFS unencrypt.
     systemd.tmpfiles.rules = [
-      "d /var/lib/copyparty/root 0750 copyparty copyparty -"
+      "d ${copypartyDataDir}/root 0750 copyparty copyparty -"
       # Keep the bind target empty until the ZFS mount guard succeeds.
       "d ${copypartyMountRoot} 2770 copyparty copyparty -"
       "d ${copypartyUserConfigDir} 0770 copyparty copyparty -"
       "C ${copypartyUserConfigDir}/00-local-overrides.conf 0660 copyparty copyparty - ${copypartyUserSeed}"
       "d /var/lib/nas-identity-sync 0700 root root -"
       "d /var/lib/nas-setup 0770 root wheel -"
-      "d /var/lib/nas-control 0750 root nas-operations -"
+      "d ${cfg.zfsRoot}/nas-control 0750 root nas-operations -"
+      "L+ /var/lib/nas-control - - - - ${cfg.zfsRoot}/nas-control"
       "d /run/nas-operations 2770 root nas-operations -"
       "d /run/nas-state 0700 root root -"
       "d /var/log/journal 2755 root systemd-journal -"

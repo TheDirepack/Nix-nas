@@ -3,6 +3,7 @@
 let
   inherit (nasInternal)
     aiStorageRoot
+    authentikDataDir
     cfg
     copypartyUserConfigDir
     sanoidPolicy
@@ -108,9 +109,9 @@ in
           cfg.configurationDir
           cfg.secrets.keepassDatabase
           "/var/lib/caddy"
-          "/var/lib/authentik"
+          authentikDataDir
           copypartyUserConfigDir
-          "/var/lib/nas-control"
+          "${cfg.zfsRoot}/nas-control"
           "/var/lib/nas-identity-sync"
           "/var/lib/nas-setup"
         ]

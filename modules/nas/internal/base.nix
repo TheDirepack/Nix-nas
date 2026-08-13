@@ -14,7 +14,17 @@ let
   authentikEnvironmentFile = "${authentikSecretDir}/environment";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
-  copypartyUserConfigDir = "/var/lib/copyparty/user.d";
+  # Per-type ZFS application roots. Only Caddy, PAM/Cockpit, and the ZFS
+  # unencrypt substrate remain on the main pool; all other app data lives
+  # under cfg.zfsRoot with an L+ symlink for compatibility.
+  authentikDataDir = "${cfg.zfsRoot}/authentik";
+  copypartyDataDir = "${cfg.zfsRoot}/copyparty";
+  copypartyUserConfigDir = "${copypartyDataDir}/user.d";
+  postgresqlDataDir = "${cfg.zfsRoot}/postgresql";
+  vaultwardenStateDirectory =
+    if lib.versionOlder systemStateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
+  vaultwardenDataDir = "${cfg.zfsRoot}/${vaultwardenStateDirectory}";
+  vaultwardenBackupDir = "${cfg.zfsRoot}/vaultwarden/backup";
 
   # Native application integration constants. Managed Services V2 owns the
   # service/route model; these values only configure the corresponding native
@@ -31,7 +41,6 @@ let
   powerSecretDir = "${secretRoot}/power";
   zfsKeyPath = "${zfsSecretDir}/dataset-key";
   zfsKeyFingerprintProperty = "org.nixos:keystore-sha256";
-  vaultwardenBackupDir = "/var/backup/vaultwarden";
   caddyInternalCaPath = "/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt";
   caddyCaExportDir = "/run/nas-caddy-ca";
   caddyCaExportPath = "${caddyCaExportDir}/ca-bundle.crt";
@@ -40,7 +49,7 @@ let
   vaultwardenOidcCallback = "https://${lanHost}/vault/identity/connect/oidc-signin";
   shareRoot = "${cfg.zfsRoot}/shares";
   aiStorageRoot = if cfg.ai.storageRoot != "" then cfg.ai.storageRoot else "${cfg.zfsRoot}/ai";
-  copypartyMountRoot = "/var/lib/copyparty/shares";
+  copypartyMountRoot = "${copypartyDataDir}/shares";
   tftpMountRoot = "${copypartyMountRoot}/tftp";
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
@@ -48,7 +57,7 @@ let
     if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
     else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
-  syncthingDataDir = "/var/lib/syncthing";
+  syncthingDataDir = "${cfg.zfsRoot}/syncthing";
   syncthingConfigDir = "${syncthingDataDir}/.config/syncthing";
   hostSystem = pkgs.stdenv.hostPlatform.system;
   isX86_64 = hostSystem == "x86_64-linux";
@@ -121,8 +130,9 @@ in
 {
   inherit
     cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
-    authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir
+    authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort vaultwardenPort
+    authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
     caddyCaExportDir caddyCaExportPath vaultwardenOidcClientId vaultwardenOidcAuthority

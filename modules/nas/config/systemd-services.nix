@@ -4,6 +4,7 @@ let
   inherit (nasInternal)
     authentikApiTokenFile
     authentikBootstrapTokenFile
+    authentikDataDir
     authentikEnvironmentFile
     authentikPort
     caddyBackendUnits
@@ -11,6 +12,7 @@ let
     caddyCaExportPath
     caddyInternalCaPath
     cfg
+    copypartyDataDir
     copypartyMountRoot
     failureAlert
     nasAlert
@@ -21,11 +23,15 @@ let
     nasZfsMountCheck
     nasZfsUnlock
     observabilitySecretDir
+    postgresqlDataDir
     powerSecretDir
     sanoidMonitorConfig
     secretRoot
     shareRoot
+    syncthingDataDir
     syncthingGuiPort
+    vaultwardenBackupDir
+    vaultwardenDataDir
     vaultwardenSecretDir
     vmStoragePath
     zfsKeyPath
@@ -103,6 +109,9 @@ in
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       before = [ "authentik-migrate.service" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot postgresqlDataDir ];
     };
 
     authentik-migrate = {
@@ -183,7 +192,7 @@ in
       requires = [ "nas-copyparty-share-root.service" ];
       after = [ "nas-copyparty-share-root.service" ];
       unitConfig = {
-        RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
+        RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
         ConditionPathExists = "${secretRoot}/ready";
         AssertPathIsMountPoint = cfg.zfsRoot;
       };
@@ -199,7 +208,7 @@ in
             "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/tftp")}"
         );
         BindPaths = lib.mkOverride 90 [
-          "/var/lib/copyparty"
+          copypartyDataDir
           "/var/cache/copyparty"
           "${shareRoot}:${copypartyMountRoot}"
         ];
@@ -273,13 +282,13 @@ in
       after = [ "nas-zfs-mount-guard.service" "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig = {
-        RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
+        RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
         AssertPathIsMountPoint = cfg.zfsRoot;
         ConditionPathExists = [ "${secretRoot}/ready" ] ++ lib.optional cfg.zfsEncryption.enable zfsKeyPath;
       };
       serviceConfig = {
         UMask = "0007";
-        ReadWritePaths = [ "${shareRoot}/users" ];
+        ReadWritePaths = [ syncthingDataDir "${shareRoot}/users" ];
       };
     };
 
@@ -353,13 +362,17 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" "caddy.service" "nas-caddy-ca-export.service" ];
-      requires = [ "nas-caddy-ca-export.service" ];
-      after = [ "nas-caddy-ca-export.service" ];
+      requires = [ "nas-caddy-ca-export.service" "nas-zfs-mount-guard.service" ];
+      after = [ "nas-caddy-ca-export.service" "nas-zfs-mount-guard.service" ];
       environment = {
         SSL_CERT_FILE = caddyCaExportPath;
         NIX_SSL_CERT_FILE = caddyCaExportPath;
       };
-      unitConfig.ConditionPathExists = "${vaultwardenSecretDir}/environment";
+      unitConfig = {
+        ConditionPathExists = "${vaultwardenSecretDir}/environment";
+        RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
+        AssertPathIsMountPoint = cfg.zfsRoot;
+      };
       serviceConfig.BindReadOnlyPaths = [ caddyCaExportPath ];
     };
 

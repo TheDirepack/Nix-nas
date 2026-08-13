@@ -2,7 +2,7 @@
 
 let
   cfg = config.nas;
-  inherit (nasInternal) failureAlert syncthingConfigDir vaultwardenBackupDir;
+  inherit (nasInternal) copypartyDataDir failureAlert syncthingConfigDir vaultwardenBackupDir vaultwardenDataDir;
   desiredPath = "/var/lib/nas-control/services.yaml";
   markerPath = "/var/lib/nas-control/.managed-services-backup-resources-seed-v2";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
@@ -17,9 +17,6 @@ let
   backupStage = cfg.backup.stagingPath;
   authentikArtifact = "${backupStage}/authentik";
   copypartyArtifact = "${backupStage}/copyparty";
-  vaultwardenStateDirectory =
-    if lib.versionOlder config.system.stateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
-  vaultwardenDataDir = "/var/lib/${vaultwardenStateDirectory}";
 
   authentikDump = pkgs.writeShellScript "nas-backup-authentik-dump" ''
     set -euo pipefail
@@ -37,7 +34,7 @@ let
 
   copypartyDump = pkgs.writeShellScript "nas-backup-copyparty-dump" ''
     set -euo pipefail
-    source_root=/var/lib/copyparty/copyparty
+    source_root=${lib.escapeShellArg "${copypartyDataDir}/copyparty"}
     artifact=${lib.escapeShellArg copypartyArtifact}
     install -d -m 0700 "$artifact"
     ${pkgs.findutils}/bin/find "$artifact" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -81,7 +78,7 @@ PYSQLITEBACKUP
       backup.enabled = false;
     };
     copyparty-databases = {
-      path = "/var/lib/copyparty";
+      path = copypartyDataDir;
       scope = "system";
       stateClass = "authoritative";
       capabilities = [ "read" ];
@@ -163,7 +160,7 @@ PYSQLITEBACKUP
       storage = [
         {
           resource = "copyparty-databases";
-          mountPath = "/var/lib/copyparty";
+          mountPath = copypartyDataDir;
           access = "read";
         }
         {

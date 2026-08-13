@@ -1,7 +1,7 @@
 { config, lib, nasInternal, ... }:
 
 let
-  inherit (nasInternal) cfg;
+  inherit (nasInternal) cfg authentikDataDir;
 in
 {
   config = {
@@ -11,7 +11,7 @@ in
     users.users.authentik = {
       isSystemUser = true;
       group = "authentik";
-      home = "/var/lib/authentik";
+      home = authentikDataDir;
       createHome = true;
       homeMode = "0750";
     };

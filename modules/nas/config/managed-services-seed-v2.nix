@@ -386,10 +386,9 @@ let
   backupStage = cfg.backup.stagingPath;
   authentikArtifact = "${backupStage}/authentik";
   copypartyArtifact = "${backupStage}/copyparty";
-  vaultwardenStateDirectory =
-    if lib.versionOlder config.system.stateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
-  vaultwardenDataDir = "/var/lib/${vaultwardenStateDirectory}";
+  vaultwardenDataDir = nasInternal.vaultwardenDataDir;
   vaultwardenBackupDir = nasInternal.vaultwardenBackupDir;
+  copypartyDataDir = nasInternal.copypartyDataDir;
 
   backupResources = {
     authentik-database = {
@@ -410,7 +409,7 @@ let
       backup.enabled = false;
     };
     copyparty-databases = {
-      path = "/var/lib/copyparty";
+      path = copypartyDataDir;
       scope = "system";
       stateClass = "authoritative";
       capabilities = [ "read" ];
@@ -492,7 +491,7 @@ let
       storage = [
         {
           resource = "copyparty-databases";
-          mountPath = "/var/lib/copyparty";
+          mountPath = copypartyDataDir;
           access = "read";
         }
         {
