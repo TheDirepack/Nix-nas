@@ -61,6 +61,13 @@ class ContractTests(unittest.TestCase):
         blueprints = text("modules/nas/internal/account-tools.nix")
         self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)
 
+    def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
+        zfs_tools = text("modules/nas/internal/zfs-tools.nix")
+        encrypted_guest = text("tests/vm/encrypted-guest-test.sh")
+        self.assertIn("if [[ -t 0 ]]; then", zfs_tools)
+        self.assertIn("show-zfs-key-stdin", zfs_tools)
+        self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
+
     def test_feature_apply_defers_to_an_owned_runtime_operation(self):
         systemd = text("modules/nas/config/systemd-services.nix")
         self.assertIn('"Another privileged operation conflicts with feature-apply:"', systemd)

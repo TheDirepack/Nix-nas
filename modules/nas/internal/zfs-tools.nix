@@ -365,7 +365,11 @@ let
         echo "Run this as ${cfg.adminUser}; the KeePassXC database password will be requested interactively." >&2
         exit 1
       }
-      key="$(${nasSecrets}/bin/nas-secrets show-zfs-key)" || {
+      if [[ -t 0 ]]; then
+        key="$(${nasSecrets}/bin/nas-secrets show-zfs-key)"
+      else
+        key="$(${nasSecrets}/bin/nas-secrets show-zfs-key-stdin)"
+      fi || {
         echo "The KeePassXC ZFS key is missing." >&2
         exit 1
       }
