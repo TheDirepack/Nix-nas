@@ -104,14 +104,14 @@ closure() {
   "$NIX" path-info -r "${outs[@]}" | sort -u
 }
 
-build_all_bundles() {
+build_bundles() {
   local name ref
   local -a refs=()
-  while IFS= read -r name; do
+  for name in "$@"; do
     while IFS= read -r ref; do
       refs+=("$ref")
     done < <(bundle_refs "$name")
-  done < <(list_bundles)
+  done
   "$NIX" build --no-link "${refs[@]}"
 }
 
@@ -128,12 +128,25 @@ keys() {
 
 save() {
   local dir=$1 only_missing=${2:-0} name core_file archive tmp
+  local -a targets=()
   mkdir -p "$dir"
   core_file="$dir/.core.paths"
 
-  # Submit all bundle roots together so Nix can schedule their shared DAG once.
-  # Export order remains core-first and each archive keeps the same delta shape.
-  build_all_bundles
+  if [[ $only_missing == 1 ]]; then
+    while IFS= read -r name; do
+      [[ -f "$dir/$name.nar.gz" ]] || targets+=("$name")
+    done < <(list_bundles)
+  else
+    targets=("${BUNDLES[@]}")
+  fi
+  # A complete cache hit is already the exact handoff needed by downstream
+  # VMs. Do not invoke Nix or rewrite archives when there is nothing missing.
+  ((${#targets[@]} > 0)) || return 0
+
+  # Submit only missing bundle roots together so Nix can schedule their shared
+  # DAG once. Export order remains core-first and each archive keeps the same
+  # delta shape.
+  build_bundles "${targets[@]}"
   closure core > "$core_file"
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
     archive="$dir/core.nar.gz"
