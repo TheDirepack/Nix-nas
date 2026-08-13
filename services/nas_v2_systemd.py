@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Generate native systemd projections for Managed Services V2 workloads.
-
-systemd remains the lifecycle owner across host processes, Python services,
-Compose projects, VMs, and Podman/Quadlet generated services. This module only
-compiles finite unit/source files and a reconciliation manifest; it never runs
-as a resident controller.
-"""
+"""Generate native systemd projections for Managed Services V2 workloads."""
 
 from __future__ import annotations
 
@@ -24,17 +18,26 @@ from nas_v2_systemd_attachments import SystemdAttachmentError, attachment_lines
 
 
 class SystemdProjectionError(RuntimeError):
-    """Raised when a V2 service cannot be faithfully lowered to systemd."""
+    """Raised when a V2 service cannot be lowered to systemd."""
 
 
 _SAFE_IDENTITY = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_.-]{0,63}|[0-9]{1,10})$")
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 VENV_ROOT = pathlib.Path("/var/lib/nas-control/venvs")
+_CTRL = ("\x00", "\r", "\n")
+
+
+def _has_ctrl(value: str) -> bool:
+    return any(c in value for c in _CTRL)
+
+
+def _reject_ctrl(value: str, field: str) -> None:
+    if _has_ctrl(value):
+        raise SystemdProjectionError(f"{field} contains a forbidden control character")
 
 
 def _single_line(value: str, *, field: str) -> str:
-    if any(character in value for character in ("\x00", "\r", "\n")):
-        raise SystemdProjectionError(f"{field} contains a forbidden control character")
+    _reject_ctrl(value, field)
     return value.replace("%", "%%")
 
 
@@ -69,10 +72,6 @@ def _absolute_binary(value: str, *, field: str) -> str:
     return value
 
 
-def _venv_path(service_id: str) -> pathlib.Path:
-    return VENV_ROOT / service_id / "venv"
-
-
 def _owner_unit(effective: dict[str, Any], service_id: str) -> str:
     value = effective["derived"]["runtime"][service_id]["ownerUnit"]
     if not isinstance(value, str) or not value.endswith((".service", ".target")):
@@ -80,40 +79,24 @@ def _owner_unit(effective: dict[str, Any], service_id: str) -> str:
     return value
 
 
-def _ready_unit(service_id: str) -> str:
-    return f"nas-v2-ready-{service_id}.service"
-
-
-def _lease_unit_name(service_id: str) -> str:
-    return f"nas-v2-lease-{service_id}.target"
-
-
-def _idle_timer_name(service_id: str) -> str:
-    return f"nas-v2-idle-{service_id}.timer"
-
-
-def _idle_stop_name(service_id: str) -> str:
-    return f"nas-v2-idle-stop-{service_id}.service"
-
-
 def _is_managed_on_demand(service: dict[str, Any]) -> bool:
-    workload = service["workload"]
-    return service["managed"] and workload["kind"] == "daemon" and workload.get("activation") == "on-demand"
+    w = service["workload"]
+    return service["managed"] and w["kind"] == "daemon" and w.get("activation") == "on-demand"
 
 
-def _owner_lifecycle_lines(service: dict[str, Any]) -> list[str]:
+def _lifecycle_unit_lines(service: dict[str, Any]) -> list[str]:
     return ["StopWhenUnneeded=yes"] if _is_managed_on_demand(service) else []
 
 
 def _dependency_lines(effective: dict[str, Any], service: dict[str, Any]) -> list[str]:
     requires: list[str] = []
     after: list[str] = []
-    for dependency in service["dependencies"]:
-        target = dependency["service"]
+    for dep in service["dependencies"]:
+        target = dep["service"]
         owner = _owner_unit(effective, target)
         requires.append(owner)
-        if dependency["condition"] == "ready":
-            gate = _ready_unit(target)
+        if dep["condition"] == "ready":
+            gate = f"nas-v2-ready-{target}.service"
             requires.append(gate)
             after.append(gate)
         else:
@@ -127,16 +110,16 @@ def _dependency_lines(effective: dict[str, Any], service: dict[str, Any]) -> lis
 
 
 def _resource_lines(service: dict[str, Any]) -> list[str]:
-    resources = service["resources"]
+    r = service["resources"]
     lines: list[str] = []
-    if "cpuQuotaPercent" in resources:
-        lines.append(f"CPUQuota={resources['cpuQuotaPercent']}%")
-    if "memoryHighBytes" in resources:
-        lines.append(f"MemoryHigh={resources['memoryHighBytes']}")
-    if "memoryMaxBytes" in resources:
-        lines.append(f"MemoryMax={resources['memoryMaxBytes']}")
-    if "pidsMax" in resources:
-        lines.append(f"TasksMax={resources['pidsMax']}")
+    if "cpuQuotaPercent" in r:
+        lines.append(f"CPUQuota={r['cpuQuotaPercent']}%")
+    if "memoryHighBytes" in r:
+        lines.append(f"MemoryHigh={r['memoryHighBytes']}")
+    if "memoryMaxBytes" in r:
+        lines.append(f"MemoryMax={r['memoryMaxBytes']}")
+    if "pidsMax" in r:
+        lines.append(f"TasksMax={r['pidsMax']}")
     return lines
 
 
@@ -163,8 +146,8 @@ def _sandbox_lines(service: dict[str, Any]) -> list[str]:
     if set(add) & set(drop):
         raise SystemdProjectionError("sandbox capability may not be both added and dropped")
     if add:
-        capability_list = " ".join(add)
-        lines.extend([f"CapabilityBoundingSet={capability_list}", f"AmbientCapabilities={capability_list}"])
+        caps = " ".join(add)
+        lines.extend([f"CapabilityBoundingSet={caps}", f"AmbientCapabilities={caps}"])
     elif drop:
         lines.append("CapabilityBoundingSet=~" + " ".join(drop))
     return lines
@@ -192,14 +175,14 @@ def _identity_lines(runtime: dict[str, Any]) -> list[str]:
 
 
 def _environment_lines(runtime: dict[str, Any]) -> list[str]:
-    environment = runtime.get("environment", {})
-    if not isinstance(environment, dict):
+    env = runtime.get("environment", {})
+    if not isinstance(env, dict):
         raise SystemdProjectionError("environment must be an object")
     lines: list[str] = []
-    for name, value in sorted(environment.items()):
-        if not isinstance(name, str) or not name or "=" in name or "\x00" in name or "\n" in name or "\r" in name:
+    for name, value in sorted(env.items()):
+        if not isinstance(name, str) or not name or "=" in name or _has_ctrl(name):
             raise SystemdProjectionError(f"invalid environment variable name {name!r}")
-        if not isinstance(value, str) or "\x00" in value or "\n" in value or "\r" in value:
+        if not isinstance(value, str) or _has_ctrl(value):
             raise SystemdProjectionError(f"invalid environment value for {name!r}")
         lines.append(f"Environment={_quote(f'{name}={value}')}")
     return lines
@@ -212,9 +195,22 @@ def _attachment_lines(effective: dict[str, Any], service: dict[str, Any]) -> lis
         raise SystemdProjectionError(str(exc)) from exc
 
 
-def _ensure_supported_generated(service_id: str, service: dict[str, Any], runtime_type: str) -> None:
-    if service["workload"]["kind"] == "session":
-        raise SystemdProjectionError(f"{runtime_type} service {service_id!r} session templates are not implemented yet")
+def _restart_line(service: dict[str, Any], runtime: dict[str, Any], kind: str) -> list[str]:
+    restart = runtime["restart"]
+    if _is_managed_on_demand(service):
+        restart = "no"
+    if kind == "job" and restart == "always":
+        label = "Python" if runtime["type"] == "python" else runtime["type"]
+        raise SystemdProjectionError(f"job {label} runtime may not use restart=always")
+    return [] if restart == "no" else [f"Restart={restart}"]
+
+
+def _unit_header(service: dict[str, Any], effective: dict[str, Any]) -> list[str]:
+    return [
+        "Description=" + _single_line(service["name"], field="service name"),
+        *_lifecycle_unit_lines(service),
+        *_dependency_lines(effective, service),
+    ]
 
 
 def _exec_unit(
@@ -226,14 +222,13 @@ def _exec_unit(
     source_dir: pathlib.Path,
     descriptor_path: pathlib.Path,
 ) -> str:
-    _ensure_supported_generated(service_id, service, "exec")
+    if service["workload"]["kind"] == "session":
+        raise SystemdProjectionError(f"exec service {service_id!r} session templates are not implemented yet")
     runtime = service["runtime"]
     kind = service["workload"]["kind"]
     lines = [
         "[Unit]",
-        "Description=" + _single_line(service["name"], field="service name"),
-        *_owner_lifecycle_lines(service),
-        *_dependency_lines(effective, service),
+        *_unit_header(service, effective),
         "",
         "[Service]",
         "Type=oneshot" if kind == "job" else "Type=simple",
@@ -243,14 +238,8 @@ def _exec_unit(
         *_resource_lines(service),
         *_sandbox_lines(service),
         *_attachment_lines(effective, service),
+        *_restart_line(service, runtime, kind),
     ]
-    restart = runtime["restart"]
-    if _is_managed_on_demand(service):
-        restart = "no"
-    if kind == "job" and restart == "always":
-        raise SystemdProjectionError("job exec runtime may not use restart=always")
-    if restart != "no":
-        lines.append(f"Restart={restart}")
     return "\n".join(lines) + "\n"
 
 
@@ -258,7 +247,6 @@ def _python_environment(service_id: str, runtime: dict[str, Any], *, uv_bin: str
     _absolute_binary(uv_bin, field=f"Python service {service_id!r} uv binary")
     interpreter = runtime["interpreter"]
     _absolute_binary(interpreter, field=f"Python service {service_id!r} interpreter")
-
     requirements = runtime["dependencies"].get("requirementsFile")
     requirements_hash: str | None = None
     if requirements is not None:
@@ -273,40 +261,37 @@ def _python_environment(service_id: str, runtime: dict[str, Any], *, uv_bin: str
         if not resolved.is_file():
             raise SystemdProjectionError(f"Python service {service_id!r} requirementsFile must name a file")
         requirements_hash = _sha256_file(resolved)
-
-    environment_input = {
+    env_input = {
         "uv": uv_bin,
         "interpreter": interpreter,
         "requirementsFile": requirements,
         "requirementsSha256": requirements_hash,
         "requireHashes": runtime["dependencies"]["requireHashes"],
     }
-    environment_fingerprint = _fingerprint(environment_input)
-    descriptor = {
+    fingerprint = _fingerprint(env_input)
+    descriptor: dict[str, Any] = {
         "serviceId": service_id,
         "uv": uv_bin,
         "interpreter": interpreter,
-        "venv": str(_venv_path(service_id)),
+        "venv": str(VENV_ROOT / service_id / "venv"),
         "requireHashes": runtime["dependencies"]["requireHashes"],
-        "environmentFingerprint": environment_fingerprint,
+        "environmentFingerprint": fingerprint,
     }
     if requirements is not None:
         descriptor["requirementsFile"] = requirements
         descriptor["requirementsSha256"] = requirements_hash
-    return descriptor, environment_fingerprint
+    return descriptor, fingerprint
 
 
 def _python_exec_descriptor(service_id: str, runtime: dict[str, Any]) -> dict[str, Any]:
-    venv_python = _venv_path(service_id) / "bin" / "python"
+    venv_python = VENV_ROOT / service_id / "venv" / "bin" / "python"
     entrypoint = runtime["entrypoint"]
-    if "module" in entrypoint:
-        command = [str(venv_python), "-m", entrypoint["module"], *entrypoint["args"]]
-    else:
-        command = [str(venv_python), entrypoint["script"], *entrypoint["args"]]
-    return {
-        "command": command,
-        "workingDirectory": runtime.get("workingDirectory", str(APP_ROOT / service_id)),
-    }
+    cmd = (
+        [str(venv_python), "-m", entrypoint["module"], *entrypoint["args"]]
+        if "module" in entrypoint
+        else [str(venv_python), entrypoint["script"], *entrypoint["args"]]
+    )
+    return {"command": cmd, "workingDirectory": runtime.get("workingDirectory", str(APP_ROOT / service_id))}
 
 
 def _python_unit(
@@ -319,16 +304,15 @@ def _python_unit(
     exec_descriptor_path: pathlib.Path,
     environment_descriptor_path: pathlib.Path,
 ) -> str:
-    _ensure_supported_generated(service_id, service, "python")
+    if service["workload"]["kind"] == "session":
+        raise SystemdProjectionError(f"python service {service_id!r} session templates are not implemented yet")
     runtime = service["runtime"]
     kind = service["workload"]["kind"]
     state_directory = f"nas-control/venvs/{service_id}"
     cache_directory = f"nas-v2-uv/{service_id}"
     lines = [
         "[Unit]",
-        "Description=" + _single_line(service["name"], field="service name"),
-        *_owner_lifecycle_lines(service),
-        *_dependency_lines(effective, service),
+        *_unit_header(service, effective),
         "",
         "[Service]",
         "Type=oneshot" if kind == "job" else "Type=simple",
@@ -344,19 +328,13 @@ def _python_unit(
         *_resource_lines(service),
         *_sandbox_lines(service),
         *_attachment_lines(effective, service),
+        *_restart_line(service, runtime, kind),
     ]
-    restart = runtime["restart"]
-    if _is_managed_on_demand(service):
-        restart = "no"
-    if kind == "job" and restart == "always":
-        raise SystemdProjectionError("job Python runtime may not use restart=always")
-    if restart != "no":
-        lines.append(f"Restart={restart}")
     return "\n".join(lines) + "\n"
 
 
 def _existing_dropin(effective: dict[str, Any], service: dict[str, Any]) -> str | None:
-    unit_lines = [*_owner_lifecycle_lines(service), *_dependency_lines(effective, service)]
+    unit_lines = [*_lifecycle_unit_lines(service), *_dependency_lines(effective, service)]
     service_lines = [*_resource_lines(service), *_attachment_lines(effective, service)]
     if service["sandbox"]["mode"] == "strict":
         service_lines.extend(_sandbox_lines(service))
@@ -377,20 +355,14 @@ def _quadlet_source(effective: dict[str, Any], service_id: str, service: dict[st
         )
     unit_lines = [
         "Description=" + _single_line(service["name"], field="service name"),
-        *_owner_lifecycle_lines(service),
+        *_lifecycle_unit_lines(service),
         *_dependency_lines(effective, service),
     ]
     service_lines = _resource_lines(service)
     if service["workload"]["kind"] == "job":
         service_lines.insert(0, "Type=oneshot")
     try:
-        return render_quadlet(
-            effective,
-            service_id,
-            service,
-            unit_lines=unit_lines,
-            service_lines=service_lines,
-        )
+        return render_quadlet(effective, service_id, service, unit_lines=unit_lines, service_lines=service_lines)
     except QuadletProjectionError as exc:
         raise SystemdProjectionError(str(exc)) from exc
 
@@ -424,7 +396,7 @@ def _compose_unit(
         [
             "[Unit]",
             "Description=" + _single_line(service["name"], field="service name"),
-            *_owner_lifecycle_lines(service),
+            *_lifecycle_unit_lines(service),
             *_dependency_lines(effective, service),
             "",
             "[Service]",
@@ -454,7 +426,7 @@ def _vm_unit(
             "Description=" + _single_line(service["name"], field="service name"),
             "Requires=libvirtd.service",
             "After=libvirtd.service",
-            *_owner_lifecycle_lines(service),
+            *_lifecycle_unit_lines(service),
             *_dependency_lines(effective, service),
             "",
             "[Service]",
@@ -506,8 +478,9 @@ def _lease_unit(service_id: str, owner_unit: str, *, has_readiness: bool) -> str
     requires = [owner_unit]
     after = [owner_unit]
     if has_readiness:
-        requires.append(_ready_unit(service_id))
-        after.append(_ready_unit(service_id))
+        ready = f"nas-v2-ready-{service_id}.service"
+        requires.append(ready)
+        after.append(ready)
     return "\n".join(
         [
             "[Unit]",
@@ -520,7 +493,7 @@ def _lease_unit(service_id: str, owner_unit: str, *, has_readiness: bool) -> str
 
 
 def _idle_stop_unit(service_id: str, *, systemctl_bin: str) -> str:
-    lease = _lease_unit_name(service_id)
+    lease = f"nas-v2-lease-{service_id}.target"
     return "\n".join(
         [
             "[Unit]",
@@ -546,7 +519,7 @@ def _idle_timer_unit(service_id: str, *, idle_seconds: int) -> str:
             "",
             "[Timer]",
             f"OnActiveSec={idle_seconds}s",
-            f"Unit={_idle_stop_name(service_id)}",
+            f"Unit=nas-v2-idle-stop-{service_id}.service",
             "AccuracySec=1s",
             "",
         ]
@@ -586,7 +559,6 @@ def generate_projection(
     compose_provider_bin: str = "podman-compose",
     virsh_bin: str = "virsh",
 ) -> tuple[dict[pathlib.Path, bytes], dict[str, Any]]:
-    """Generate staged files and a reconcile manifest without mutating systemd."""
     files: dict[pathlib.Path, bytes] = {}
     links: dict[str, str] = {}
     quadlet_links: dict[str, str] = {}
@@ -594,194 +566,154 @@ def generate_projection(
     owned_units: set[str] = set()
     stop_units: set[str] = set()
     fingerprints: dict[str, str] = {}
-
     unit_dir = output_dir / "units"
     descriptor_dir = output_dir / "descriptors"
     quadlet_dir = output_dir / "quadlet"
     compose_dir = output_dir / "compose"
     vm_dir = output_dir / "vm"
     services = effective["services"]
-
     for service_id in sorted(services):
         service = services[service_id]
         runtime = service["runtime"]
         owner = _owner_unit(effective, service_id)
         managed = service["managed"]
-        environment_fingerprint: str | None = None
-        runtime_source_fingerprint: str | None = None
-
+        env_fp: str | None = None
+        src_fp: str | None = None
         if runtime["type"] == "exec":
-            descriptor = {
-                "command": runtime["command"],
-                "workingDirectory": runtime.get("workingDirectory"),
-            }
-            descriptor_path = descriptor_dir / f"{service_id}.exec.json"
-            files[descriptor_path] = _json_bytes(descriptor)
-            unit_path = unit_dir / owner
-            files[unit_path] = _exec_unit(
-                effective,
-                service_id,
-                service,
-                python_bin=python_bin,
-                source_dir=source_dir,
-                descriptor_path=descriptor_path,
+            descriptor = {"command": runtime["command"], "workingDirectory": runtime.get("workingDirectory")}
+            dpath = descriptor_dir / f"{service_id}.exec.json"
+            files[dpath] = _json_bytes(descriptor)
+            upath = unit_dir / owner
+            files[upath] = _exec_unit(
+                effective, service_id, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
             ).encode()
-            links[owner] = str(unit_path)
+            links[owner] = str(upath)
         elif runtime["type"] == "python":
-            environment_descriptor, environment_fingerprint = _python_environment(
-                service_id,
-                runtime,
-                uv_bin=uv_bin,
-            )
-            environment_descriptor_path = descriptor_dir / f"{service_id}.python-env.json"
-            files[environment_descriptor_path] = _json_bytes(environment_descriptor)
-            exec_descriptor_path = descriptor_dir / f"{service_id}.python-exec.json"
-            files[exec_descriptor_path] = _json_bytes(_python_exec_descriptor(service_id, runtime))
-            unit_path = unit_dir / owner
-            files[unit_path] = _python_unit(
+            env_desc, env_fp = _python_environment(service_id, runtime, uv_bin=uv_bin)
+            env_path = descriptor_dir / f"{service_id}.python-env.json"
+            files[env_path] = _json_bytes(env_desc)
+            exec_path = descriptor_dir / f"{service_id}.python-exec.json"
+            files[exec_path] = _json_bytes(_python_exec_descriptor(service_id, runtime))
+            upath = unit_dir / owner
+            files[upath] = _python_unit(
                 effective,
                 service_id,
                 service,
                 python_bin=python_bin,
                 source_dir=source_dir,
-                exec_descriptor_path=exec_descriptor_path,
-                environment_descriptor_path=environment_descriptor_path,
+                exec_descriptor_path=exec_path,
+                environment_descriptor_path=env_path,
             ).encode()
-            links[owner] = str(unit_path)
+            links[owner] = str(upath)
         elif runtime["type"] == "compose":
             try:
                 source_path, override = render_compose_override(effective, service_id, service)
             except ComposeProjectionError as exc:
                 raise SystemdProjectionError(str(exc)) from exc
-            override_path = compose_dir / f"{service_id}.override.yaml"
-            files[override_path] = override
-            unit_path = unit_dir / owner
-            files[unit_path] = _compose_unit(
+            opath = compose_dir / f"{service_id}.override.yaml"
+            files[opath] = override
+            upath = unit_dir / owner
+            files[upath] = _compose_unit(
                 effective,
                 service_id,
                 service,
                 source_path=source_path,
-                override_path=override_path,
+                override_path=opath,
                 podman_bin=podman_bin,
                 compose_provider_bin=compose_provider_bin,
             ).encode()
-            links[owner] = str(unit_path)
-            runtime_source_fingerprint = _sha256_file(source_path)
+            links[owner] = str(upath)
+            src_fp = _sha256_file(source_path)
         elif runtime["type"] == "vm":
             _absolute_binary(virsh_bin, field=f"VM service {service_id!r} virsh binary")
             try:
                 source_path, domain_name, domain_xml = render_domain_xml(effective, service_id, service)
             except LibvirtProjectionError as exc:
                 raise SystemdProjectionError(str(exc)) from exc
-            xml_path = vm_dir / f"{service_id}.xml"
-            files[xml_path] = domain_xml
-            descriptor_path = descriptor_dir / f"{service_id}.vm.json"
-            files[descriptor_path] = _json_bytes(
-                {
-                    "virsh": virsh_bin,
-                    "domain": domain_name,
-                    "xml": str(xml_path),
-                    "shutdownTimeoutSeconds": 180,
-                }
+            xpath = vm_dir / f"{service_id}.xml"
+            files[xpath] = domain_xml
+            dpath = descriptor_dir / f"{service_id}.vm.json"
+            files[dpath] = _json_bytes(
+                {"virsh": virsh_bin, "domain": domain_name, "xml": str(xpath), "shutdownTimeoutSeconds": 180}
             )
-            unit_path = unit_dir / owner
-            files[unit_path] = _vm_unit(
-                effective,
-                service_id,
-                service,
-                python_bin=python_bin,
-                source_dir=source_dir,
-                descriptor_path=descriptor_path,
+            upath = unit_dir / owner
+            files[upath] = _vm_unit(
+                effective, service_id, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
             ).encode()
-            links[owner] = str(unit_path)
-            runtime_source_fingerprint = _sha256_file(source_path)
+            links[owner] = str(upath)
+            src_fp = _sha256_file(source_path)
         elif runtime["type"] == "systemd":
             dropin = _existing_dropin(effective, service)
             if dropin is not None:
-                dropin_path = unit_dir / f"{owner}.d" / "50-nas-v2.conf"
-                files[dropin_path] = dropin.encode()
-                links[f"{owner}.d/50-nas-v2.conf"] = str(dropin_path)
+                dpath = unit_dir / f"{owner}.d" / "50-nas-v2.conf"
+                files[dpath] = dropin.encode()
+                links[f"{owner}.d/50-nas-v2.conf"] = str(dpath)
         elif runtime["type"] in {"oci", "quadlet"}:
-            source_path = quadlet_dir / f"nas-v2-{service_id}.container"
-            files[source_path] = _quadlet_source(effective, service_id, service)
-            quadlet_links[source_path.name] = str(source_path)
+            spath = quadlet_dir / f"nas-v2-{service_id}.container"
+            files[spath] = _quadlet_source(effective, service_id, service)
+            quadlet_links[spath.name] = str(spath)
         else:
             raise SystemdProjectionError(
                 f"runtime {runtime['type']!r} for service {service_id!r} needs its native adapter before systemd projection"
             )
-
         if "readiness" in service:
             readiness = json.loads(json.dumps(service["readiness"]))
             for probe in readiness["probes"]:
                 if probe["type"] == "systemd" and not probe.get("unit"):
                     probe["unit"] = owner
-            descriptor_path = descriptor_dir / f"{service_id}.readiness.json"
-            files[descriptor_path] = _json_bytes(readiness)
-            ready_unit = _ready_unit(service_id)
-            ready_path = unit_dir / ready_unit
-            files[ready_path] = _readiness_unit(
+            dpath = descriptor_dir / f"{service_id}.readiness.json"
+            files[dpath] = _json_bytes(readiness)
+            ready_unit = f"nas-v2-ready-{service_id}.service"
+            rpath = unit_dir / ready_unit
+            files[rpath] = _readiness_unit(
                 service_id,
                 owner,
                 python_bin=python_bin,
                 source_dir=source_dir,
-                descriptor_path=descriptor_path,
+                descriptor_path=dpath,
                 systemctl_bin=systemctl_bin,
             ).encode()
-            links[ready_unit] = str(ready_path)
+            links[ready_unit] = str(rpath)
             fingerprints[ready_unit] = _fingerprint(readiness)
             if managed:
                 owned_units.add(ready_unit)
-
         if _is_managed_on_demand(service):
-            lease = _lease_unit_name(service_id)
-            lease_path = unit_dir / lease
-            files[lease_path] = _lease_unit(
-                service_id,
-                owner,
-                has_readiness="readiness" in service,
-            ).encode()
-            links[lease] = str(lease_path)
-
-            idle_stop = _idle_stop_name(service_id)
-            idle_stop_path = unit_dir / idle_stop
-            files[idle_stop_path] = _idle_stop_unit(service_id, systemctl_bin=systemctl_bin).encode()
-            links[idle_stop] = str(idle_stop_path)
-
-            idle_timer = _idle_timer_name(service_id)
-            idle_timer_path = unit_dir / idle_timer
-            files[idle_timer_path] = _idle_timer_unit(
-                service_id,
-                idle_seconds=service["workload"]["idleSeconds"],
-            ).encode()
-            links[idle_timer] = str(idle_timer_path)
-
+            lease = f"nas-v2-lease-{service_id}.target"
+            lpath = unit_dir / lease
+            files[lpath] = _lease_unit(service_id, owner, has_readiness="readiness" in service).encode()
+            links[lease] = str(lpath)
+            idle_stop = f"nas-v2-idle-stop-{service_id}.service"
+            spath = unit_dir / idle_stop
+            files[spath] = _idle_stop_unit(service_id, systemctl_bin=systemctl_bin).encode()
+            links[idle_stop] = str(spath)
+            idle_timer = f"nas-v2-idle-{service_id}.timer"
+            tpath = unit_dir / idle_timer
+            files[tpath] = _idle_timer_unit(service_id, idle_seconds=service["workload"]["idleSeconds"]).encode()
+            links[idle_timer] = str(tpath)
             owned_units.update({lease, idle_stop, idle_timer})
             if not service["enabled"]:
                 stop_units.update({lease, idle_stop, idle_timer})
-
         if service["workload"]["kind"] == "job":
-            for index, schedule in enumerate(service["workload"]["schedules"]):
-                timer_unit, timer_content = _timer_unit(service_id, owner, index, schedule)
-                timer_path = unit_dir / timer_unit
-                files[timer_path] = timer_content.encode()
-                links[timer_unit] = str(timer_path)
+            for idx, schedule in enumerate(service["workload"]["schedules"]):
+                tun, tcontent = _timer_unit(service_id, owner, idx, schedule)
+                tpath = unit_dir / tun
+                files[tpath] = tcontent.encode()
+                links[tun] = str(tpath)
                 if managed:
-                    owned_units.add(timer_unit)
+                    owned_units.add(tun)
                     if service["enabled"]:
-                        start_units.add(timer_unit)
+                        start_units.add(tun)
                     else:
-                        stop_units.add(timer_unit)
-
+                        stop_units.add(tun)
         if managed:
             owned_units.add(owner)
             if not service["enabled"]:
                 stop_units.add(owner)
                 if "readiness" in service:
-                    stop_units.add(_ready_unit(service_id))
+                    stop_units.add(f"nas-v2-ready-{service_id}.service")
             elif service["workload"]["kind"] == "daemon" and service["workload"]["activation"] == "persistent":
                 start_units.add(owner)
-
-        fingerprint_value = {
+        fp_val: dict[str, Any] = {
             "runtime": runtime,
             "dependencies": service["dependencies"],
             "resources": service["resources"],
@@ -792,16 +724,15 @@ def generate_projection(
             "network": service.get("network"),
             "networkProfile": service.get("networkProfile"),
         }
-        if environment_fingerprint is not None:
-            fingerprint_value["pythonEnvironment"] = environment_fingerprint
-        if runtime_source_fingerprint is not None:
-            fingerprint_value["runtimeSourceSha256"] = runtime_source_fingerprint
-        fingerprints[owner] = _fingerprint(fingerprint_value)
-
+        if env_fp is not None:
+            fp_val["pythonEnvironment"] = env_fp
+        if src_fp is not None:
+            fp_val["runtimeSourceSha256"] = src_fp
+        fingerprints[owner] = _fingerprint(fp_val)
     manifest = {
         "schemaVersion": 1,
-        "links": [{"target": target, "source": source} for target, source in sorted(links.items())],
-        "quadletLinks": [{"target": target, "source": source} for target, source in sorted(quadlet_links.items())],
+        "links": [{"target": t, "source": s} for t, s in sorted(links.items())],
+        "quadletLinks": [{"target": t, "source": s} for t, s in sorted(quadlet_links.items())],
         "ownedUnits": sorted(owned_units),
         "startUnits": sorted(start_units),
         "stopUnits": sorted(stop_units),
@@ -818,37 +749,29 @@ def validate_projection(
     quadlet_generator_bin: str | None = None,
     virt_xml_validate_bin: str | None = None,
 ) -> None:
-    """Validate generated systemd, Quadlet, and libvirt sources before activation."""
-    unit_files = {path: data for path, data in files.items() if path.suffix in {".service", ".timer", ".target"}}
+    unit_files = {p: d for p, d in files.items() if p.suffix in {".service", ".timer", ".target"}}
     if unit_files:
         with tempfile.TemporaryDirectory(prefix="nas-v2-systemd-verify-") as raw_tmp:
             tmp = pathlib.Path(raw_tmp)
             verify_paths: list[str] = []
-            for source_path, data in unit_files.items():
-                destination = tmp / source_path.name
-                destination.write_bytes(data)
-                verify_paths.append(str(destination))
+            for src, data in unit_files.items():
+                dst = tmp / src.name
+                dst.write_bytes(data)
+                verify_paths.append(str(dst))
             result = subprocess.run(
-                [systemd_analyze_bin, "verify", *verify_paths],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
+                [systemd_analyze_bin, "verify", *verify_paths], capture_output=True, text=True, timeout=30, check=False
             )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:4000]
             raise SystemdProjectionError(f"systemd-analyze rejected generated units: {detail}")
-
-    has_quadlets = any(path.suffix == ".container" for path in files)
-    if has_quadlets:
+    if any(p.suffix == ".container" for p in files):
         if quadlet_generator_bin is None:
             raise SystemdProjectionError("Quadlet projection requires a Podman system generator binary")
         try:
             validate_quadlets(files, generator_bin=quadlet_generator_bin)
         except QuadletProjectionError as exc:
             raise SystemdProjectionError(str(exc)) from exc
-
-    vm_xml = [data for path, data in files.items() if path.parent.name == "vm" and path.suffix == ".xml"]
+    vm_xml = [d for p, d in files.items() if p.parent.name == "vm" and p.suffix == ".xml"]
     if vm_xml:
         if virt_xml_validate_bin is None:
             raise SystemdProjectionError("VM projection requires a virt-xml-validate binary")
