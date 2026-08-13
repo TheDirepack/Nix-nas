@@ -6,10 +6,12 @@ let
     cfg
     copypartyUserConfigDir
     sanoidPolicy
-    syncthingConfigDir
-    vaultwardenBackupDir
   ;
   backupStage = cfg.backup.stagingPath;
+  v2Source = ../../../services;
+  v2BackupInventory = "/run/nas-control/backup-resources.json";
+  v2BackupRuntimePaths = "/run/nas-control/restic-v2-runtime-paths";
+  v2BackupRuntimeState = "/run/nas-control/backup-runtime-state.json";
   localResticRepository =
     if cfg.backup.localRepository != "" then cfg.backup.localRepository
     else "${cfg.zfsRoot}/backups/restic-system";
@@ -111,7 +113,6 @@ in
           "/var/lib/nas-control"
           "/var/lib/nas-identity-sync"
           "/var/lib/nas-setup"
-          backupStage
         ]
         ++ lib.optionals cfg.networking.enable [
           "/etc/NetworkManager/system-connections"
@@ -128,12 +129,15 @@ in
         ++ lib.optionals cfg.observability.ntfy.enable [
           "/var/lib/ntfy-sh"
         ]
-        ++ lib.optional cfg.vaultwarden.enable vaultwardenBackupDir
         ++ lib.optionals cfg.ai.enable [
           "/var/lib/nas-llama-swap"
           "/var/lib/open-webui"
           "${aiStorageRoot}/downloader-config"
         ];
+        dynamicFilesFrom = ''
+          #!${pkgs.runtimeShell}
+          ${pkgs.coreutils}/bin/cat ${lib.escapeShellArg v2BackupRuntimePaths}
+        '';
         passwordFile = cfg.backup.passwordFile;
         backupPrepareCommand = ''
           #!${pkgs.runtimeShell}
@@ -146,47 +150,25 @@ in
           ${lib.optionalString (cfg.backup.repositoryFile == "") ''
           install -d -m 0700 ${lib.escapeShellArg localResticRepository}
           ''}
-          ${lib.optionalString cfg.vaultwarden.enable ''systemctl start backup-vaultwarden.service''}
 
-          # Capture PostgreSQL consistently instead of copying its live data directory.
-          ${pkgs.util-linux}/bin/runuser -u postgres -- \
-            ${config.services.postgresql.package}/bin/pg_dump --format=custom authentik \
-            > "$backup_stage/authentik.pgdump"
-          chmod 0600 "$backup_stage/authentik.pgdump"
-
-          # Stage only CopyParty databases; its state tree includes NAS data mounts.
-          install -d -m 0700 "$backup_stage/copyparty"
-          for name in shares.db sessions.db; do
-            source=/var/lib/copyparty/copyparty/$name
-            destination="$backup_stage/copyparty/$name"
-            if [[ -f "$source" ]]; then
-              # Use SQLite's online backup API and pass paths as argv, never as SQL text.
-              ${pkgs.python3}/bin/python3 - "$source" "$destination" <<'PYSQLITEBACKUP'
-import pathlib
-import sqlite3
-import sys
-
-source = pathlib.Path(sys.argv[1])
-destination = pathlib.Path(sys.argv[2])
-with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as source_db:
-    with sqlite3.connect(destination) as destination_db:
-        source_db.backup(destination_db)
-PYSQLITEBACKUP
-              chmod 0600 "$destination"
-            fi
-          done
-
-          ${lib.optionalString cfg.syncthing.enable ''
-          install -d -m 0700 "$backup_stage/syncthing"
-          for name in cert.pem key.pem config.xml; do
-            if [[ -f ${syncthingConfigDir}/$name ]]; then
-              install -m 0600 ${syncthingConfigDir}/$name "$backup_stage/syncthing/$name"
-            fi
-          done
-          ''}
+          # Resolve the resource-oriented V2 inventory immediately before Restic
+          # starts. This synchronously creates ZFS snapshots and executes generic
+          # native-dump preparation jobs, then emits only the exact paths Restic
+          # should consume. Application identities are not handled here.
+          ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_runtime.py prepare \
+            --inventory ${lib.escapeShellArg v2BackupInventory} \
+            --paths ${lib.escapeShellArg v2BackupRuntimePaths} \
+            --state ${lib.escapeShellArg v2BackupRuntimeState} \
+            --zfs ${pkgs.zfs}/bin/zfs \
+            --systemctl ${pkgs.systemd}/bin/systemctl
         '';
         backupCleanupCommand = ''
           #!${pkgs.runtimeShell}
+          set -euo pipefail
+          ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_runtime.py cleanup \
+            --paths ${lib.escapeShellArg v2BackupRuntimePaths} \
+            --state ${lib.escapeShellArg v2BackupRuntimeState} \
+            --zfs ${pkgs.zfs}/bin/zfs
           rm -rf ${lib.escapeShellArg backupStage}
         '';
         timerConfig = if cfg.scheduler.backend == "systemd" then {
@@ -206,11 +188,13 @@ PYSQLITEBACKUP
     };
 
     systemd.services.restic-backups-nas-boot-system = lib.mkIf cfg.backup.enable {
-      requires = lib.optional (cfg.backup.repositoryFile == "") "nas-zfs-mount-guard.service";
-      after = lib.optional (cfg.backup.repositoryFile == "") "nas-zfs-mount-guard.service";
+      requires = [ "nas-managed-services-reconcile.service" ]
+        ++ lib.optional (cfg.backup.repositoryFile == "") "nas-zfs-mount-guard.service";
+      after = [ "nas-managed-services-reconcile.service" ]
+        ++ lib.optional (cfg.backup.repositoryFile == "") "nas-zfs-mount-guard.service";
       unitConfig = {
         RequiresMountsFor = [ backupStage ] ++ lib.optional (cfg.backup.repositoryFile == "") cfg.zfsRoot;
-        ConditionPathExists = cfg.backup.passwordFile;
+        ConditionPathExists = [ cfg.backup.passwordFile v2BackupInventory ];
       };
     };
 
@@ -230,26 +214,12 @@ PYSQLITEBACKUP
         TimeoutStartSec = "6h";
         UMask = "0077";
       };
-      path = [
-        pkgs.coreutils
-        pkgs.gnugrep
-        pkgs.python3
-        pkgs.sqlite
-        pkgs.util-linux
-        config.services.postgresql.package
-      ];
+      path = [ pkgs.coreutils ];
       script = ''
         set -euo pipefail
         verify_root=${lib.escapeShellArg restoreVerifyPath}
         restore_root="$verify_root/restored"
-        pgdata="$verify_root/postgresql"
-        pgsocket="$verify_root/socket"
         cleanup() {
-          if [[ -f "$pgdata/postmaster.pid" ]]; then
-            ${pkgs.util-linux}/bin/runuser -u postgres -- \
-              ${config.services.postgresql.package}/bin/pg_ctl \
-              -D "$pgdata" -m immediate stop >/dev/null 2>&1 || true
-          fi
           rm -rf "$verify_root"
         }
         trap cleanup EXIT
@@ -261,46 +231,16 @@ PYSQLITEBACKUP
         export RESTIC_PASSWORD_FILE=${lib.escapeShellArg cfg.backup.passwordFile}
         ${resticCommand} restore latest --target "$restore_root"
 
-        staged="$restore_root${backupStage}"
-        [[ -s "$staged/authentik.pgdump" ]]
-        install -d -m 0700 -o postgres -g postgres "$pgdata" "$pgsocket"
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/initdb \
-          -D "$pgdata" --auth=trust --no-locale >/dev/null
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/pg_ctl \
-          -D "$pgdata" -o "-k $pgsocket -p 55432 -c listen_addresses=\"\"" \
-          -w start >/dev/null
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/createdb \
-          -h "$pgsocket" -p 55432 authentik_verify
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/pg_restore \
-          -h "$pgsocket" -p 55432 --no-owner \
-          --dbname=authentik_verify "$staged/authentik.pgdump"
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/psql \
-          -h "$pgsocket" -p 55432 -d authentik_verify \
-          -Atqc "SELECT count(*) > 0 FROM django_migrations" | grep -Fxq t
-        ${pkgs.util-linux}/bin/runuser -u postgres -- \
-          ${config.services.postgresql.package}/bin/psql \
-          -h "$pgsocket" -p 55432 -d authentik_verify \
-          -Atqc "SELECT to_regclass('public.authentik_core_user') IS NOT NULL" | grep -Fxq t
+        # Validate every compiled V2 backup resource generically. Native-dump
+        # artifacts get format-aware integrity checks selected from their data;
+        # ordinary filesystem resources are only checked for successful restore
+        # so arbitrary user files are never interpreted as application state.
+        ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_verify.py \
+          --inventory ${lib.escapeShellArg v2BackupInventory} \
+          --restore-root "$restore_root" \
+          --pg-restore ${config.services.postgresql.package}/bin/pg_restore
 
-        for database in "$staged"/copyparty/*.db; do
-          [[ -e "$database" ]] || continue
-          [[ "$(${pkgs.sqlite}/bin/sqlite3 "$database" 'PRAGMA integrity_check;')" == ok ]]
-        done
-        ${lib.optionalString cfg.syncthing.enable ''
-        ${pkgs.python3}/bin/python3 - "$staged/syncthing/config.xml" <<'PYXML'
-import pathlib
-import sys
-import xml.etree.ElementTree as ET
-path = pathlib.Path(sys.argv[1])
-if path.exists():
-    ET.parse(path)
-PYXML
-        ''}
+        # These are host recovery substrate rather than application resources.
         [[ -s "$restore_root${cfg.secrets.keepassDatabase}" ]]
         [[ -d "$restore_root/var/lib/nas-control" ]]
       '';

@@ -30,9 +30,8 @@ class CliSurfaceTests(unittest.TestCase):
         commands = (
             "nas_cockpit_api",
             "nas_doctor",
-            "nas_feature_control",
+            "nas_v2_control",
             "nas_identity_sync",
-            "nas_migrate_state",
             "nas_setup",
             "nas_state",
         )
@@ -46,9 +45,8 @@ class CliSurfaceTests(unittest.TestCase):
     def test_unknown_cli_commands_fail_without_tracebacks(self) -> None:
         for command in (
             "nas_doctor",
-            "nas_feature_control",
+            "nas_v2_control",
             "nas_identity_sync",
-            "nas_migrate_state",
             "nas_setup",
             "nas_state",
         ):
@@ -69,9 +67,8 @@ class CliSurfaceTests(unittest.TestCase):
         commands = (
             "nas_cockpit_api",
             "nas_doctor",
-            "nas_feature_control",
+            "nas_v2_control",
             "nas_identity_sync",
-            "nas_migrate_state",
             "nas_setup",
             "nas_state",
         )

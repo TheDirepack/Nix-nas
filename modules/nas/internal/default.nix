@@ -12,18 +12,12 @@ let
       else
         left // right;
 
-  capability_registry = import ./capability-registry.nix common;
-  service_registry = import ./service-registry.nix (common // capability_registry);
-  registries = mergeChecked "capability and service registries" capability_registry service_registry;
-  base = import ./base.nix (common // registries);
-  core_registry = mergeChecked "registries and base" registries base;
-  feature_catalog = import ./feature-catalog.nix (common // core_registry);
-  caddy_helpers = import ./caddy-helpers.nix (common // core_registry);
-  core = mergeChecked "base and feature catalog" core_registry feature_catalog;
-  core_with_caddy = mergeChecked "core and Caddy helpers" core caddy_helpers;
+  base = import ./base.nix common;
+  caddy_helpers = import ./caddy-helpers.nix (common // base);
+  core = mergeChecked "base and Caddy helpers" base caddy_helpers;
 
-  secret_tools = import ./secret-tools.nix (common // core_with_caddy);
-  with_secrets = mergeChecked "core and secret tools" core_with_caddy secret_tools;
+  secret_tools = import ./secret-tools.nix (common // core);
+  with_secrets = mergeChecked "core and secret tools" core secret_tools;
   zfs_tools = import ./zfs-tools.nix (common // with_secrets);
   with_zfs = mergeChecked "secret and ZFS tools" with_secrets zfs_tools;
   power_tools = import ./power-tools.nix (common // with_zfs);

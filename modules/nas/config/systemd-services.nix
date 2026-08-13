@@ -14,7 +14,6 @@ let
     copypartyMountRoot
     failureAlert
     nasAlert
-    nasFeatureControl
     nasIdentitySync
     nasPythonApplication
     nasSetup
@@ -23,7 +22,6 @@ let
     nasZfsUnlock
     observabilitySecretDir
     powerSecretDir
-    protectedServiceUnits
     sanoidMonitorConfig
     secretRoot
     shareRoot
@@ -101,7 +99,6 @@ in
       };
     };
 
-    # Protected services start only after runtime secrets are staged.
     postgresql = {
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
@@ -164,7 +161,6 @@ in
       serviceConfig = {
         RuntimeDirectoryMode = lib.mkOverride 90 "0750";
         UMask = lib.mkForce "0007";
-        # Create share paths only after the ZFS mount guard succeeds.
         ExecStartPre = lib.mkBefore (
           [
             "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg shareRoot}"
@@ -183,8 +179,6 @@ in
 
     nas-vm-storage = lib.mkIf cfg.virtualization.enable {
       description = "Create the libvirt VM storage directory on ZFS";
-      before = [ "libvirtd.service" ];
-      requiredBy = [ "libvirtd.service" ];
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig = {
@@ -201,8 +195,6 @@ in
 
     nas-vm-storage-pool = lib.mkIf cfg.virtualization.enable {
       description = "Define the ZFS-backed libvirt storage pool";
-      # Runtime feature policy owns this unit. Do not make protected-services.target
-      # pull libvirt in when the saved virtualization mode is off.
       wantedBy = lib.mkOverride 90 [ ];
       requires = [ "nas-vm-storage.service" ];
       after = [ "libvirtd.service" "nas-vm-storage.service" ];
@@ -233,8 +225,6 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      requires = [ "nas-vm-storage.service" ];
-      after = [ "nas-vm-storage.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
         AssertPathIsMountPoint = cfg.zfsRoot;
@@ -248,8 +238,6 @@ in
       partOf = [ "nas-protected-services.target" ];
       environment = {
         STNODEFAULTFOLDER = "1";
-        # Balanced Go heap target; Syncthing may briefly exceed this for non-heap
-        # allocations, so this is a GC target rather than a hard cgroup limit.
         GOMEMLIMIT = "192MiB";
       };
       requires = [ "nas-zfs-mount-guard.service" ];
@@ -291,57 +279,6 @@ in
             http://127.0.0.1:${toString syncthingGuiPort}/rest/noauth/health
         '';
         ExecStart = "${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
-      };
-    };
-
-    nas-on-demand-gate = {
-      description = "Authenticated on-demand NAS feature gate and idle reaper";
-      onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
-      partOf = [ "nas-protected-services.target" ];
-      after = [ "authentik.service" ];
-      before = [ "caddy.service" "nas-feature-apply.service" ];
-      unitConfig.ConditionPathExists = "${secretRoot}/ready";
-      serviceConfig = {
-        Type = "simple";
-        User = "nas-feature-gate";
-        Group = "caddy";
-        SupplementaryGroups = [ "nas-feature-control" ] ++ lib.optional cfg.ai.enable "nas-ai-models";
-        Environment = "NAS_AI_API_KEY_FILE=${secretRoot}/ai/gate-api-key";
-        ExecStart = "${nasFeatureControl}/bin/nas-feature-control serve";
-        Restart = "on-failure";
-        RestartSec = "2s";
-        RuntimeDirectory = [ "nas-on-demand" "nas-control" ];
-        RuntimeDirectoryMode = "0750";
-        UMask = "0007";
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        PrivateDevices = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        ProtectKernelTunables = true;
-        ProtectKernelModules = true;
-        ProtectKernelLogs = true;
-        ProtectControlGroups = true;
-        RestrictSUIDSGID = true;
-        RestrictRealtime = true;
-        LockPersonality = true;
-        MemoryDenyWriteExecute = true;
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
-        ReadWritePaths = [ "/var/lib/nas-control" "/run/nas-control" "/run/nas-on-demand" ];
-      };
-    };
-
-    nas-feature-apply = {
-      description = "Apply persistent NAS feature switches";
-      onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
-      partOf = [ "nas-protected-services.target" ];
-      after = protectedServiceUnits;
-      unitConfig.ConditionPathExists = "${secretRoot}/ready";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${nasFeatureControl}/bin/nas-feature-control apply";
       };
     };
 
@@ -419,7 +356,6 @@ in
           http://127.0.0.1:${toString cfg.observability.victoriaMetricsPort}/victoriametrics/ping >/dev/null
       '';
     };
-
 
     vmalert-nas = lib.mkIf (cfg.observability.enable && cfg.alerting.enable) {
       onFailure = failureAlert;
