@@ -25,31 +25,22 @@ def load_platform_inventory(path: pathlib.Path) -> dict[str, Any]:
         raise AcceleratorResolutionError(f"unable to read platform inventory {path}: {exc}") from exc
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise AcceleratorResolutionError("platform inventory must be a schemaVersion 1 object")
-    capabilities = value.get("capabilities")
-    if not isinstance(capabilities, dict):
+    if not isinstance(value.get("capabilities"), dict):
         raise AcceleratorResolutionError("platform inventory capabilities must be an object")
-    accelerators = value.get("accelerators", {})
-    if not isinstance(accelerators, dict):
+    if not isinstance(value.get("accelerators", {}), dict):
         raise AcceleratorResolutionError("platform inventory accelerators must be an object")
     return value
 
 
 def enabled_capabilities(inventory: dict[str, Any]) -> set[str]:
-    capabilities = inventory.get("capabilities", {})
-    if not isinstance(capabilities, dict):
+    caps = inventory.get("capabilities", {})
+    if not isinstance(caps, dict):
         raise AcceleratorResolutionError("platform inventory capabilities must be an object")
-    return {key for key, enabled in capabilities.items() if isinstance(key, str) and enabled is True}
+    return {k for k, v in caps.items() if isinstance(k, str) and v is True}
 
 
 def is_cdi_selector(value: str) -> bool:
     return _CDI_RE.fullmatch(value) is not None
-
-
-def _device_path(value: str) -> str | None:
-    path = pathlib.PurePosixPath(value)
-    if path.is_absolute() and ".." not in path.parts and str(path).startswith("/dev/"):
-        return str(path)
-    return None
 
 
 def _selector(value: Any) -> dict[str, Any] | None:
@@ -57,224 +48,160 @@ def _selector(value: Any) -> dict[str, Any] | None:
         return None
     kind = value.get("type")
     if kind == "devices":
-        raw_values = value.get("values")
-        if not isinstance(raw_values, list) or not raw_values:
+        vals = value.get("values")
+        if not isinstance(vals, list) or not vals:
             return None
-        devices: list[str] = []
-        for raw in raw_values:
+        devs: list[str] = []
+        for raw in vals:
             if not isinstance(raw, str):
                 return None
-            parsed = _device_path(raw)
-            if parsed is None:
+            p = pathlib.PurePosixPath(raw)
+            if not (p.is_absolute() and ".." not in p.parts and str(p).startswith("/dev/")):
                 return None
-            if parsed not in devices:
-                devices.append(parsed)
-        return {"type": "devices", "values": devices}
+            s = str(p)
+            if s not in devs:
+                devs.append(s)
+        return {"type": "devices", "values": devs}
     raw = value.get("value")
     if kind == "device" and isinstance(raw, str):
-        parsed = _device_path(raw)
-        return None if parsed is None else {"type": "devices", "values": [parsed]}
+        p = pathlib.PurePosixPath(raw)
+        if p.is_absolute() and ".." not in p.parts and str(p).startswith("/dev/"):
+            return {"type": "devices", "values": [str(p)]}
+        return None
     if kind == "cdi" and isinstance(raw, str) and is_cdi_selector(raw):
         return {"type": "cdi", "value": raw}
     return None
 
 
-def _selector_sort_value(selector: dict[str, Any]) -> str:
-    if selector["type"] == "cdi":
-        return str(selector["value"])
-    return "\0".join(selector["values"])
-
-
-def _vendor_inventory(
-    inventory: dict[str, Any],
-    vendor: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    raw_all = inventory.get("accelerators", {})
-    raw_vendor = raw_all.get(vendor) if isinstance(raw_all, dict) else None
-    if not isinstance(raw_vendor, dict):
-        return [], None
-    selectors: list[dict[str, Any]] = []
-    for value in raw_vendor.get("selectors", []):
-        parsed = _selector(value)
-        if parsed is not None and parsed not in selectors:
-            selectors.append(parsed)
-    return selectors, _selector(raw_vendor.get("allSelector"))
-
-
-def _runtime_selector_preference(runtime_type: str) -> tuple[str, ...]:
-    if runtime_type in {"compose", "oci", "quadlet"}:
-        return ("cdi", "devices")
-    if runtime_type in {"systemd", "exec", "python", "session-oci"}:
-        return ("devices",)
-    return ()
-
-
-def _filter_selectors(selectors: list[dict[str, Any]], runtime_type: str) -> list[dict[str, Any]]:
-    preferences = _runtime_selector_preference(runtime_type)
-    return sorted(
-        (selector for selector in selectors if selector["type"] in preferences),
-        key=lambda selector: (preferences.index(selector["type"]), _selector_sort_value(selector)),
+def _runtime_selector_preference(rt: str) -> tuple[str, ...]:
+    return (
+        ("cdi", "devices")
+        if rt in {"compose", "oci", "quadlet"}
+        else ("devices",)
+        if rt in {"systemd", "exec", "python", "session-oci"}
+        else ()
     )
 
 
-def _explicit_selector(device: str, runtime_type: str) -> dict[str, Any]:
-    if device.startswith("/dev/"):
-        parsed = _selector({"type": "device", "value": device})
-    elif is_cdi_selector(device):
-        parsed = _selector({"type": "cdi", "value": device})
-    else:
-        parsed = None
-    if parsed is None:
-        raise AcceleratorResolutionError(f"invalid shared GPU device selector {device!r}")
-    if parsed["type"] not in _runtime_selector_preference(runtime_type):
-        raise AcceleratorResolutionError(
-            f"{runtime_type} runtime cannot faithfully lower {parsed['type']} accelerator selector {device!r}"
-        )
-    return parsed
-
-
 def _select_vendor(
-    inventory: dict[str, Any],
-    requested: str,
-    runtime_type: str,
+    inventory: dict[str, Any], requested: str, rt: str
 ) -> tuple[str | None, list[dict[str, Any]], dict[str, Any] | None]:
-    candidates = _VENDOR_ORDER if requested == "any" else (requested,)
-    for vendor in candidates:
-        selectors, all_selector = _vendor_inventory(inventory, vendor)
-        supported = _filter_selectors(selectors, runtime_type)
-        if supported:
-            if all_selector is not None and all_selector["type"] not in _runtime_selector_preference(runtime_type):
-                all_selector = None
-            return vendor, supported, all_selector
+    cands = _VENDOR_ORDER if requested == "any" else (requested,)
+    pref = _runtime_selector_preference(rt)
+    for vendor in cands:
+        raw_all = inventory.get("accelerators", {})
+        raw_vendor = raw_all.get(vendor) if isinstance(raw_all, dict) else None
+        if not isinstance(raw_vendor, dict):
+            continue
+        sels: list[dict[str, Any]] = []
+        for v in raw_vendor.get("selectors", []):
+            parsed = _selector(v)
+            if parsed is None or parsed["type"] not in pref or parsed in sels:
+                continue
+            sels.append(parsed)
+        sels.sort(key=lambda s: (pref.index(s["type"]), s["value"] if s["type"] == "cdi" else "\0".join(s["values"])))
+        if sels:
+            all_sel = _selector(raw_vendor.get("allSelector"))
+            if all_sel is not None and all_sel["type"] not in pref:
+                all_sel = None
+            return vendor, sels, all_sel
     return None, [], None
 
 
-def resolve_service_accelerators(
-    service_id: str,
-    service: dict[str, Any],
-    inventory: dict[str, Any],
-) -> list[dict[str, Any]]:
-    runtime = service.get("runtime", {})
-    runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
-    if not isinstance(runtime_type, str):
-        raise AcceleratorResolutionError(f"service {service_id!r} is missing its runtime type")
-
-    selector_runtime_type = runtime_type
-    if runtime_type == "oci" and service.get("workload", {}).get("kind") == "session":
-        selector_runtime_type = "session-oci"
-
+# fmt: off
+def resolve_service_accelerators(service_id: str, service: dict[str, Any], inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    sid = service_id
+    rt = service.get("runtime", {})
+    rt_type = rt.get("type") if isinstance(rt, dict) else None
+    if not isinstance(rt_type, str):
+        raise AcceleratorResolutionError(f"service {sid!r} is missing its runtime type")
+    sel_rt = "session-oci" if rt_type == "oci" and service.get("workload", {}).get("kind") == "session" else rt_type
     resolved: list[dict[str, Any]] = []
-    raw_accelerators = service.get("resources", {}).get("accelerators", [])
-    for index, request in enumerate(raw_accelerators):
-        if not isinstance(request, dict) or request.get("kind") != "gpu":
-            raise AcceleratorResolutionError(f"service {service_id!r} accelerator {index} is invalid")
-        if runtime_type == "vm":
-            resolved.append(copy.deepcopy(request))
+    for idx, req in enumerate(service.get("resources", {}).get("accelerators", [])):
+        if not isinstance(req, dict) or req.get("kind") != "gpu":
+            raise AcceleratorResolutionError(f"service {sid!r} accelerator {idx} is invalid")
+        if rt_type == "vm":
+            resolved.append(copy.deepcopy(req))
             continue
-        if request.get("mode", "shared") != "shared":
-            raise AcceleratorResolutionError(
-                f"service {service_id!r} accelerator {index} passthrough is valid only for VM runtimes"
-            )
-
-        quantity = request.get("quantity", 1)
-        explicit = request.get("device")
-        if isinstance(explicit, str):
-            if quantity != 1:
-                raise AcceleratorResolutionError(
-                    f"service {service_id!r} accelerator {index} with explicit device must use quantity=1"
-                )
-            selectors = [_explicit_selector(explicit, selector_runtime_type)]
-            vendor = request.get("vendor", "any")
-        else:
-            vendor, selectors, all_selector = _select_vendor(
-                inventory,
-                str(request.get("vendor", "any")),
-                selector_runtime_type,
-            )
-            if quantity == "all" and all_selector is not None:
-                selectors = [all_selector]
-            elif quantity == "all":
-                pass
-            elif isinstance(quantity, int) and not isinstance(quantity, bool):
-                selectors = selectors[:quantity]
+        if req.get("mode", "shared") != "shared":
+            raise AcceleratorResolutionError(f"service {sid!r} accelerator {idx} passthrough is valid only for VM runtimes")
+        qty = req.get("quantity", 1)
+        dev = req.get("device")
+        if isinstance(dev, str):
+            if qty != 1:
+                raise AcceleratorResolutionError(f"service {sid!r} accelerator {idx} with explicit device must use quantity=1")
+            if dev.startswith("/dev/"):
+                parsed = _selector({"type": "device", "value": dev})
+            elif is_cdi_selector(dev):
+                parsed = _selector({"type": "cdi", "value": dev})
             else:
-                raise AcceleratorResolutionError(
-                    f"service {service_id!r} accelerator {index} has invalid quantity {quantity!r}"
-                )
-
-        enough = bool(selectors) if quantity == "all" else isinstance(quantity, int) and len(selectors) >= quantity
+                parsed = None
+            if parsed is None:
+                raise AcceleratorResolutionError(f"invalid shared GPU device selector {dev!r}")
+            if parsed["type"] not in _runtime_selector_preference(sel_rt):
+                raise AcceleratorResolutionError(f"{sel_rt} runtime cannot faithfully lower {parsed['type']} accelerator selector {dev!r}")
+            sels = [parsed]
+            vendor = req.get("vendor", "any")
+        else:
+            vendor, sels, all_sel = _select_vendor(inventory, str(req.get("vendor", "any")), sel_rt)
+            if qty == "all":
+                sels = [all_sel] if all_sel is not None else sels
+            elif isinstance(qty, int) and not isinstance(qty, bool):
+                sels = sels[:qty]
+            else:
+                raise AcceleratorResolutionError(f"service {sid!r} accelerator {idx} has invalid quantity {qty!r}")
+        enough = bool(sels) if qty == "all" else isinstance(qty, int) and len(sels) >= qty
         if not enough:
-            if request.get("required", False):
-                raise AcceleratorResolutionError(
-                    f"service {service_id!r} requires unavailable GPU request {index} "
-                    f"(vendor={request.get('vendor', 'any')}, quantity={quantity})"
-                )
+            if req.get("required", False):
+                msg = f"service {sid!r} requires unavailable GPU request {idx} (vendor={req.get('vendor', 'any')}, quantity={qty})"
+                raise AcceleratorResolutionError(msg)
             continue
-
-        resolved.append(
-            {
-                "kind": "gpu",
-                "vendor": vendor or request.get("vendor", "any"),
-                "required": bool(request.get("required", False)),
-                "mode": "shared",
-                "selectors": selectors,
-                **({"target": request["target"]} if "target" in request else {}),
-            }
-        )
+        extra = {"target": req["target"]} if "target" in req else {}
+        fv = vendor or req.get("vendor", "any")
+        reqd = bool(req.get("required", False))
+        d = {"kind": "gpu", "vendor": fv, "required": reqd, "mode": "shared", "selectors": sels}
+        d.update(extra)
+        resolved.append(d)
     return resolved
-
-
-def _materialize_requests(resolved: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    materialized: list[dict[str, Any]] = []
-    for request in resolved:
-        if request.get("mode") == "passthrough":
-            materialized.append(copy.deepcopy(request))
-            continue
-        for selector in request.get("selectors", []):
-            values = [selector["value"]] if selector["type"] == "cdi" else selector["values"]
-            for value in values:
-                materialized.append(
-                    {
-                        "kind": "gpu",
-                        "vendor": request.get("vendor", "any"),
-                        "quantity": 1,
-                        "required": True,
-                        "mode": "shared",
-                        "device": value,
-                        **({"target": request["target"]} if "target" in request else {}),
-                    }
-                )
-    return materialized
+# fmt: on
 
 
 def resolve_effective(effective: dict[str, Any], inventory: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(effective)
-    services = result.get("services")
-    if not isinstance(services, dict):
+    svcs = result.get("services")
+    if not isinstance(svcs, dict):
         raise AcceleratorResolutionError("compiled effective state is missing services")
     derived = result.setdefault("derived", {})
     if not isinstance(derived, dict):
         raise AcceleratorResolutionError("compiled effective state has invalid derived metadata")
     resolved: dict[str, list[dict[str, Any]]] = {}
-    for service_id in sorted(services):
-        service = services[service_id]
-        if not isinstance(service, dict):
-            raise AcceleratorResolutionError(f"compiled service {service_id!r} is invalid")
-        service_resolved = resolve_service_accelerators(service_id, service, inventory)
-        resolved[service_id] = service_resolved
-        resources = service.get("resources")
-        if not isinstance(resources, dict):
-            raise AcceleratorResolutionError(f"compiled service {service_id!r} has invalid resources")
-        resources["accelerators"] = _materialize_requests(service_resolved)
+    for sid in sorted(svcs):
+        svc = svcs[sid]
+        if not isinstance(svc, dict):
+            raise AcceleratorResolutionError(f"compiled service {sid!r} is invalid")
+        svc_resolved = resolve_service_accelerators(sid, svc, inventory)
+        resolved[sid] = svc_resolved
+        res = svc.get("resources")
+        if not isinstance(res, dict):
+            raise AcceleratorResolutionError(f"compiled service {sid!r} has invalid resources")
+        mats: list[dict[str, Any]] = []
+        for req in svc_resolved:
+            if req.get("mode") == "passthrough":
+                mats.append(copy.deepcopy(req))
+                continue
+            extra = {"target": req["target"]} if "target" in req else {}
+            rv = req.get("vendor", "any")
+            for sel in req.get("selectors", []):
+                vals = [sel["value"]] if sel["type"] == "cdi" else sel["values"]
+                for v in vals:
+                    d = {"kind": "gpu", "vendor": rv, "quantity": 1, "required": True, "mode": "shared", "device": v}
+                    d.update(extra)
+                    mats.append(d)
+        res["accelerators"] = mats
     derived["accelerators"] = resolved
     return result
 
 
-__all__ = [
-    "AcceleratorResolutionError",
-    "enabled_capabilities",
-    "is_cdi_selector",
-    "load_platform_inventory",
-    "resolve_effective",
-    "resolve_service_accelerators",
-]
+# fmt: off
+__all__ = ["AcceleratorResolutionError", "enabled_capabilities", "is_cdi_selector", "load_platform_inventory", "resolve_effective", "resolve_service_accelerators"]
+# fmt: on
