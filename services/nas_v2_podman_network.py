@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Compile Managed Services V2 network policy into Podman Quadlet networks.
-
-V2 keeps application containers on Podman's managed bridge so NAT, DNAT and
-Caddy-facing published ports continue to work. When a service selects an
-802.1Q VLAN, the bridge is attached to a dedicated Linux VRF and NetworkManager
-owns a DHCP-backed VLAN interface in that same VRF. This makes the physical
-VLAN the routing underlay without switching the container to macvlan/ipvlan,
-which would discard Podman's port-forwarding path.
-"""
+"""Compile Managed Services V2 network policy into Podman Quadlet networks."""
 
 from __future__ import annotations
 
@@ -20,7 +12,7 @@ from typing import Any
 
 
 class PodmanNetworkProjectionError(RuntimeError):
-    """Raised when V2 network policy cannot be faithfully lowered to Podman."""
+    pass
 
 
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -29,9 +21,7 @@ _UUID_NAMESPACE = uuid.UUID("c3c4a6a8-fad7-4e36-8d65-1dc57bcae2ab")
 
 
 def bridge_interface_name(service_id: str) -> str:
-    """Return a stable Linux bridge interface name within the 15-byte interface limit."""
-    digest = hashlib.sha256(service_id.encode("utf-8")).hexdigest()[:11]
-    return f"nv2{digest}"
+    return f"nv2{hashlib.sha256(service_id.encode()).hexdigest()[:11]}"
 
 
 def podman_network_name(service_id: str, service: dict[str, Any]) -> str:
@@ -50,55 +40,42 @@ def network_policy(effective: dict[str, Any], service: dict[str, Any]) -> dict[s
     policy = service.get("network")
     if isinstance(policy, dict):
         return policy
-    return {
-        "mode": "host",
-        "outboundDefault": "allow",
-        "lanAccess": False,
-        "allowedHostPorts": [],
-        "allowedEgress": [],
-    }
+    return {"mode": "host", "outboundDefault": "allow", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []}
 
 
 def vlan_binding(policy: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the deterministic NetworkManager/VRF resource for a VLAN policy."""
-    vlan_id = policy.get("vlanId")
+    vid = policy.get("vlanId")
     parent = policy.get("vlanParent")
-    if vlan_id is None and parent is None:
+    if vid is None and parent is None:
         return None
-    if vlan_id is None or parent is None:
+    if vid is None or parent is None:
         raise PodmanNetworkProjectionError("network vlanId and vlanParent must be specified together")
-    if not isinstance(vlan_id, int) or isinstance(vlan_id, bool) or not 1 <= vlan_id <= 4094:
+    if not isinstance(vid, int) or isinstance(vid, bool) or not 1 <= vid <= 4094:
         raise PodmanNetworkProjectionError("network vlanId must be an integer from 1 through 4094")
     if not isinstance(parent, str) or _INTERFACE_RE.fullmatch(parent) is None:
         raise PodmanNetworkProjectionError("network vlanParent is not a safe interface name")
-
-    digest = hashlib.sha256(f"{parent}\0{vlan_id}".encode("utf-8")).hexdigest()[:10]
-    vrf_interface = f"nv2vrf{digest[:7]}"
-    vlan_interface = f"nv2vl{digest[:8]}"
-    table = 1_000_000_000 + (int(digest, 16) % 3_000_000_000)
+    digest = hashlib.sha256(f"{parent}\0{vid}".encode()).hexdigest()[:10]
     return {
-        "id": vlan_id,
+        "id": vid,
         "parent": parent,
         "key": digest,
-        "table": table,
-        "vrfInterface": vrf_interface,
-        "vlanInterface": vlan_interface,
+        "table": 1_000_000_000 + (int(digest, 16) % 3_000_000_000),
+        "vrfInterface": f"nv2vrf{digest[:7]}",
+        "vlanInterface": f"nv2vl{digest[:8]}",
         "vrfProfile": f"nas-v2-vrf-{digest}",
         "vlanProfile": f"nas-v2-vlan-{digest}",
         "unit": f"nas-v2-vlan-{digest}.service",
     }
 
 
-def _listener_firewall_requested(service: dict[str, Any]) -> bool:
-    listeners = service.get("listeners", {})
-    return isinstance(listeners, dict) and any(
-        isinstance(listener, dict) and listener.get("firewall", True) for listener in listeners.values()
-    )
-
-
 def _has_listeners(service: dict[str, Any]) -> bool:
-    listeners = service.get("listeners", {})
-    return isinstance(listeners, dict) and bool(listeners)
+    ls = service.get("listeners", {})
+    return isinstance(ls, dict) and bool(ls)
+
+
+def _listener_firewall_requested(service: dict[str, Any]) -> bool:
+    ls = service.get("listeners", {})
+    return isinstance(ls, dict) and any(isinstance(v, dict) and v.get("firewall", True) for v in ls.values())
 
 
 def _external_egress(policy: dict[str, Any]) -> bool:
@@ -125,37 +102,32 @@ def _needs_isolated_firewalld(service: dict[str, Any], policy: dict[str, Any]) -
 
 
 def requires_firewalld(effective: dict[str, Any]) -> bool:
-    """Return whether any enabled V2 service needs firewalld for faithful policy."""
     services = effective.get("services")
     if not isinstance(services, dict):
         raise PodmanNetworkProjectionError("compiled effective state is missing services")
-    for service in services.values():
-        if not isinstance(service, dict) or not service.get("enabled", True):
+    for svc in services.values():
+        if not isinstance(svc, dict) or not svc.get("enabled", True):
             continue
-        policy = network_policy(effective, service)
+        policy = network_policy(effective, svc)
         mode = policy.get("mode", "host")
-        if mode == "isolated" and service.get("managed", True) and _needs_isolated_firewalld(service, policy):
+        if mode == "isolated" and svc.get("managed", True) and _needs_isolated_firewalld(svc, policy):
             return True
-        if mode == "host" and _listener_firewall_requested(service):
+        if mode == "host" and _listener_firewall_requested(svc):
             return True
     return False
 
 
 def _isolated_supported(
-    service_id: str,
-    service: dict[str, Any],
-    policy: dict[str, Any],
-    *,
-    firewalld_enabled: bool,
+    service_id: str, service: dict[str, Any], policy: dict[str, Any], *, firewalld_enabled: bool
 ) -> None:
     runtime = service.get("runtime")
-    runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
+    rtype = runtime.get("type") if isinstance(runtime, dict) else None
     vlan_binding(policy)
-    if runtime_type not in {"oci", "quadlet", "compose"}:
+    if rtype not in {"oci", "quadlet", "compose"}:
         raise PodmanNetworkProjectionError(
-            f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented yet"
+            f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {rtype!r} is not implemented yet"
         )
-    if service.get("workload", {}).get("kind") == "session" and runtime_type != "oci":
+    if service.get("workload", {}).get("kind") == "session" and rtype != "oci":
         raise PodmanNetworkProjectionError(
             f"session service {service_id!r} currently requires direct OCI runtime for per-instance execution"
         )
@@ -167,20 +139,11 @@ def _isolated_supported(
         raise PodmanNetworkProjectionError(
             f"isolated service {service_id!r} requires the V2 firewalld policy projection in the same apply transaction"
         )
-    if _deny_egress_needs_firewalld(policy) and not firewalld_enabled:
-        raise PodmanNetworkProjectionError(
-            f"isolated service {service_id!r} requires the V2 firewalld policy projection in the same apply transaction"
-        )
 
 
 def quadlet_network_reference(
-    effective: dict[str, Any],
-    service_id: str,
-    service: dict[str, Any],
-    *,
-    firewalld_enabled: bool = True,
+    effective: dict[str, Any], service_id: str, service: dict[str, Any], *, firewalld_enabled: bool = True
 ) -> str:
-    """Return the V2 Podman network reference for one service."""
     policy = network_policy(effective, service)
     mode = policy.get("mode", "host")
     vlan = vlan_binding(policy)
@@ -191,14 +154,13 @@ def quadlet_network_reference(
             raise PodmanNetworkProjectionError(f"service {service_id!r} network=none cannot contain network exceptions")
         return "none"
     if mode == "host":
-        constrained = (
+        if (
             policy.get("outboundDefault", "allow") != "allow"
             or bool(policy.get("lanAccess"))
             or bool(policy.get("allowedHostPorts"))
             or bool(policy.get("allowedEgress"))
             or vlan is not None
-        )
-        if constrained:
+        ):
             raise PodmanNetworkProjectionError(
                 f"host-network service {service_id!r} restrictions are not safely attributable to one workload"
             )
@@ -210,14 +172,7 @@ def quadlet_network_reference(
     return f"{prefix}-{service_id}.network"
 
 
-def _network_source(
-    service_id: str,
-    owner_unit: str,
-    policy: dict[str, Any],
-    *,
-    network_name: str,
-) -> bytes:
-    external_egress = _external_egress(policy)
+def _network_source(service_id: str, owner_unit: str, policy: dict[str, Any], *, network_name: str) -> bytes:
     vlan = vlan_binding(policy)
     lines = [
         "[Unit]",
@@ -233,7 +188,7 @@ def _network_source(
             f"NetworkName={network_name}",
             f"InterfaceName={bridge_interface_name(service_id)}",
             "Driver=bridge",
-            f"Internal={'false' if external_egress else 'true'}",
+            f"Internal={'false' if _external_egress(policy) else 'true'}",
             "Options=isolate=strict",
         ]
     )
@@ -364,27 +319,25 @@ def _vlan_service_source(
 
 
 def _attach_compose_dependency(
-    *,
-    service_id: str,
-    owner: str,
-    reference: str,
-    files: dict[pathlib.Path, bytes],
-    manifest: dict[str, Any],
+    *, service_id: str, owner: str, reference: str, files: dict[pathlib.Path, bytes], manifest: dict[str, Any]
 ) -> None:
     links = manifest.get("links")
     if not isinstance(links, list):
         raise PodmanNetworkProjectionError("systemd projection manifest is missing links")
-    owner_source: pathlib.Path | None = None
-    for item in links:
-        if isinstance(item, dict) and item.get("target") == owner and isinstance(item.get("source"), str):
-            owner_source = pathlib.Path(item["source"])
-            break
-    if owner_source is None or owner_source not in files:
+    src = next(
+        (
+            pathlib.Path(i["source"])
+            for i in links
+            if isinstance(i, dict) and i.get("target") == owner and isinstance(i.get("source"), str)
+        ),
+        None,
+    )
+    if src is None or src not in files:
         raise PodmanNetworkProjectionError(
             f"isolated Compose service {service_id!r} is missing its generated systemd owner source"
         )
-    network_service = reference.removesuffix(".network") + "-network.service"
-    files[owner_source] += (f"\n[Unit]\nRequires={network_service}\nAfter={network_service}\n").encode()
+    svc = reference.removesuffix(".network") + "-network.service"
+    files[src] += f"\n[Unit]\nRequires={svc}\nAfter={svc}\n".encode()
 
 
 def _ensure_vlan_resource(
@@ -401,29 +354,22 @@ def _ensure_vlan_resource(
     owned = manifest.get("ownedUnits")
     if not isinstance(links, list) or not isinstance(owned, list):
         raise PodmanNetworkProjectionError("systemd projection manifest is missing V2 ownership metadata")
-    if any(isinstance(item, dict) and item.get("target") == vlan["unit"] for item in links):
+    if any(isinstance(i, dict) and i.get("target") == vlan["unit"] for i in links):
         return
     if not nmcli_bin or not install_bin or not rm_bin:
         raise PodmanNetworkProjectionError(
             "VLAN-backed application networking requires nmcli, install, and rm projection binaries"
         )
-
-    vrf_source = output_dir / "networkmanager" / f"{vlan['vrfProfile']}.nmconnection"
-    vlan_source = output_dir / "networkmanager" / f"{vlan['vlanProfile']}.nmconnection"
-    vrf_profile, vlan_profile = _vlan_profile_sources(vlan, nmcli_bin=nmcli_bin)
-    files[vrf_source] = vrf_profile
-    files[vlan_source] = vlan_profile
-
-    unit_source = output_dir / "units" / vlan["unit"]
-    files[unit_source] = _vlan_service_source(
-        vlan,
-        vrf_source=vrf_source,
-        vlan_source=vlan_source,
-        nmcli_bin=nmcli_bin,
-        install_bin=install_bin,
-        rm_bin=rm_bin,
+    vrf_src = output_dir / "networkmanager" / f"{vlan['vrfProfile']}.nmconnection"
+    vlan_src = output_dir / "networkmanager" / f"{vlan['vlanProfile']}.nmconnection"
+    vrf_prof, vlan_prof = _vlan_profile_sources(vlan, nmcli_bin=nmcli_bin)
+    files[vrf_src] = vrf_prof
+    files[vlan_src] = vlan_prof
+    unit_src = output_dir / "units" / vlan["unit"]
+    files[unit_src] = _vlan_service_source(
+        vlan, vrf_source=vrf_src, vlan_source=vlan_src, nmcli_bin=nmcli_bin, install_bin=install_bin, rm_bin=rm_bin
     )
-    links.append({"target": vlan["unit"], "source": str(unit_source)})
+    links.append({"target": vlan["unit"], "source": str(unit_src)})
     if vlan["unit"] not in owned:
         owned.append(vlan["unit"])
 
@@ -439,47 +385,34 @@ def augment_projection(
     install_bin: str | None = None,
     rm_bin: str | None = None,
 ) -> None:
-    """Add V2-owned Podman networks and shared 802.1Q uplink resources."""
-    quadlet_links = manifest.get("quadletLinks")
-    if not isinstance(quadlet_links, list):
+    qlinks = manifest.get("quadletLinks")
+    if not isinstance(qlinks, list):
         raise PodmanNetworkProjectionError("systemd projection manifest is missing quadletLinks")
-    known_targets = {item.get("target") for item in quadlet_links if isinstance(item, dict)}
-
+    known = {i.get("target") for i in qlinks if isinstance(i, dict)}
     services = effective.get("services")
     if not isinstance(services, dict):
         raise PodmanNetworkProjectionError("compiled effective state is missing services")
-    for service_id in sorted(services):
-        service = services[service_id]
-        if not isinstance(service, dict):
-            raise PodmanNetworkProjectionError(f"compiled service {service_id!r} is invalid")
-        runtime = service.get("runtime")
-        runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
-        if (
-            not service.get("managed", True)
-            or not service.get("enabled", True)
-            or runtime_type not in {"oci", "quadlet", "compose"}
-        ):
+    for sid in sorted(services):
+        svc = services[sid]
+        if not isinstance(svc, dict):
+            raise PodmanNetworkProjectionError(f"compiled service {sid!r} is invalid")
+        rtype = svc.get("runtime", {}).get("type") if isinstance(svc.get("runtime"), dict) else None
+        if not svc.get("managed", True) or not svc.get("enabled", True) or rtype not in {"oci", "quadlet", "compose"}:
             continue
-        reference = quadlet_network_reference(
-            effective,
-            service_id,
-            service,
-            firewalld_enabled=firewalld_enabled,
-        )
-        if not reference.endswith(".network"):
+        ref = quadlet_network_reference(effective, sid, svc, firewalld_enabled=firewalld_enabled)
+        if not ref.endswith(".network"):
             continue
-        if reference in known_targets:
-            raise PodmanNetworkProjectionError(f"duplicate Quadlet network target {reference!r}")
-        if service.get("workload", {}).get("kind") == "session":
-            owner = f"nas-v2-session-{service_id}.target"
+        if ref in known:
+            raise PodmanNetworkProjectionError(f"duplicate Quadlet network target {ref!r}")
+        if svc.get("workload", {}).get("kind") == "session":
+            owner = f"nas-v2-session-{sid}.target"
         else:
-            runtime_map = effective.get("derived", {}).get("runtime", {})
-            runtime_entry = runtime_map.get(service_id) if isinstance(runtime_map, dict) else None
-            owner = runtime_entry.get("ownerUnit") if isinstance(runtime_entry, dict) else None
+            rt = effective.get("derived", {}).get("runtime", {})
+            entry = rt.get(sid) if isinstance(rt, dict) else None
+            owner = entry.get("ownerUnit") if isinstance(entry, dict) else None
         if not isinstance(owner, str) or not owner.endswith((".service", ".target")):
-            raise PodmanNetworkProjectionError(f"isolated container service {service_id!r} has an invalid owner unit")
-
-        policy = network_policy(effective, service)
+            raise PodmanNetworkProjectionError(f"isolated container service {sid!r} has an invalid owner unit")
+        policy = network_policy(effective, svc)
         vlan = vlan_binding(policy)
         if vlan is not None:
             _ensure_vlan_resource(
@@ -491,30 +424,17 @@ def augment_projection(
                 install_bin=install_bin,
                 rm_bin=rm_bin,
             )
-
-        source = output_dir / "quadlet" / reference
-        files[source] = _network_source(
-            service_id,
-            owner,
-            policy,
-            network_name=podman_network_name(service_id, service),
-        )
-        quadlet_links.append({"target": reference, "source": str(source)})
-        known_targets.add(reference)
-        if runtime_type == "compose":
-            _attach_compose_dependency(
-                service_id=service_id,
-                owner=owner,
-                reference=reference,
-                files=files,
-                manifest=manifest,
-            )
-
-    quadlet_links.sort(key=lambda item: item["target"])
+        src = output_dir / "quadlet" / ref
+        files[src] = _network_source(sid, owner, policy, network_name=podman_network_name(sid, svc))
+        qlinks.append({"target": ref, "source": str(src)})
+        known.add(ref)
+        if rtype == "compose":
+            _attach_compose_dependency(service_id=sid, owner=owner, reference=ref, files=files, manifest=manifest)
+    qlinks.sort(key=lambda i: i["target"])
     links = manifest.get("links")
     owned = manifest.get("ownedUnits")
     if isinstance(links, list):
-        links.sort(key=lambda item: item["target"])
+        links.sort(key=lambda i: i["target"])
     if isinstance(owned, list):
         owned.sort()
 

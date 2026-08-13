@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Compile Managed Services V2 network intent into firewalld XML.
-
-Managed isolated Podman services receive a stable interface-bound zone plus
-outbound policies. V2 routes receive a HOST -> service-zone TCP allowance so
-Caddy can reach loopback-published backends. Explicit listeners with
-``firewall: true`` receive a trusted-LAN ingress policy. Host-network listeners
-use trusted-LAN -> HOST instead, including platform services whose lifecycle is
-not V2-managed. A single-port listener may redirect its exposed port to a
-different host target port without granting the workload low-port capabilities.
-Numeric policy port lists without an explicit protocol are intentionally treated
-as transport-neutral and emitted for both TCP and UDP.
-
-The compiler only materializes configuration files. A separate finite reconciler
-owns replacement/removal/reload of those files in firewalld's system config.
-"""
+"""Compile Managed Services V2 network intent into firewalld XML."""
 
 from __future__ import annotations
 
@@ -30,11 +16,11 @@ from nas_v2_podman_network import bridge_interface_name, network_policy
 
 
 class FirewalldProjectionError(RuntimeError):
-    """Raised when V2 network policy cannot be represented safely."""
+    pass
 
 
 def _digest(service_id: str) -> str:
-    return hashlib.sha256(service_id.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(service_id.encode()).hexdigest()[:12]
 
 
 def zone_name(service_id: str) -> str:
@@ -62,154 +48,153 @@ def listener_policy_name(service_id: str) -> str:
 
 
 def _xml_document(lines: list[str]) -> bytes:
-    return ('<?xml version="1.0" encoding="utf-8"?>\n' + "\n".join(lines) + "\n").encode("utf-8")
+    return ('<?xml version="1.0" encoding="utf-8"?>\n' + "\n".join(lines) + "\n").encode()
 
 
 def _zone_xml(service_id: str) -> bytes:
-    name = escape(service_id)
+    n = escape(service_id)
     return _xml_document(
         [
             "<zone>",
-            f"  <short>V2 {name}</short>",
-            f"  <description>Managed Services V2 isolated network for {name}</description>",
+            f"  <short>V2 {n}</short>",
+            f"  <description>Managed Services V2 isolated network for {n}</description>",
             f"  <interface name={quoteattr(bridge_interface_name(service_id))}/>",
             "</zone>",
         ]
     )
 
 
-def _host_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
-    zone = zone_name(service_id)
+def _policy_xml(
+    target: str,
+    priority: str,
+    ingress: str,
+    egress: str,
+    short: str,
+    ports: list[tuple[str, str]] | None = None,
+    forward_ports: list[tuple[str, str, str]] | None = None,
+    extra: list[str] | None = None,
+) -> bytes:
     lines = [
-        '<policy target="DROP" priority="-50">',
-        f"  <ingress-zone name={quoteattr(zone)}/>",
-        '  <egress-zone name="HOST"/>',
-        f"  <short>V2 host {escape(service_id)}</short>",
+        f'<policy target="{target}" priority="{priority}">',
+        f"  <ingress-zone name={quoteattr(ingress)}/>",
+        f"  <egress-zone name={quoteattr(egress)}/>",
+        f"  <short>{short}</short>",
     ]
-    for port in sorted(set(policy.get("allowedHostPorts", []))):
-        for protocol in ("tcp", "udp"):
-            lines.append(f"  <port port={quoteattr(str(port))} protocol={quoteattr(protocol)}/>")
+    if extra:
+        lines.extend(extra)
+    for port, proto in ports or []:
+        lines.append(f"  <port port={quoteattr(port)} protocol={quoteattr(proto)}/>")
+    for port, proto, tport in forward_ports or []:
+        lines.append(f"  <forward-port port={quoteattr(port)} protocol={quoteattr(proto)} to-port={quoteattr(tport)}/>")
     lines.append("</policy>")
     return _xml_document(lines)
+
+
+def _host_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
+    ports = [(str(p), proto) for p in sorted(set(policy.get("allowedHostPorts", []))) for proto in ("tcp", "udp")]
+    return _policy_xml("DROP", "-50", zone_name(service_id), "HOST", f"V2 host {escape(service_id)}", ports=ports)
 
 
 def _lan_policy_xml(service_id: str, policy: dict[str, Any], *, lan_zone: str) -> bytes:
     target = "ACCEPT" if policy.get("lanAccess", False) else "DROP"
-    return _xml_document(
-        [
-            f'<policy target="{target}" priority="-100">',
-            f"  <ingress-zone name={quoteattr(zone_name(service_id))}/>",
-            f"  <egress-zone name={quoteattr(lan_zone)}/>",
-            f"  <short>V2 LAN {escape(service_id)}</short>",
-            "</policy>",
-        ]
-    )
+    return _policy_xml(target, "-100", zone_name(service_id), lan_zone, f"V2 LAN {escape(service_id)}")
 
 
 def _egress_rule_xml(rule: dict[str, Any]) -> list[str]:
-    raw_cidr = rule.get("cidr")
-    if not isinstance(raw_cidr, str):
+    raw = rule.get("cidr")
+    if not isinstance(raw, str):
         raise FirewalldProjectionError("allowedEgress.cidr must be a string")
     try:
-        network = ipaddress.ip_network(raw_cidr, strict=False)
+        network = ipaddress.ip_network(raw, strict=False)
     except ValueError as exc:
-        raise FirewalldProjectionError(f"invalid allowedEgress CIDR {raw_cidr!r}: {exc}") from exc
+        raise FirewalldProjectionError(f"invalid allowedEgress CIDR {raw!r}: {exc}") from exc
     cidr = str(network)
-    family = "ipv4" if network.version == 4 else "ipv6"
+    fam = "ipv4" if network.version == 4 else "ipv6"
     ports = rule.get("ports", [])
-    if not isinstance(ports, list) or any(not isinstance(port, int) or isinstance(port, bool) for port in ports):
-        raise FirewalldProjectionError(f"allowedEgress ports for {raw_cidr!r} are invalid")
+    if not isinstance(ports, list) or any(not isinstance(p, int) or isinstance(p, bool) for p in ports):
+        raise FirewalldProjectionError(f"allowedEgress ports for {raw!r} are invalid")
     if not ports:
         return [
-            f'  <rule family={quoteattr(family)} priority="-10">',
+            f'  <rule family={quoteattr(fam)} priority="-10">',
             f"    <destination address={quoteattr(cidr)}/>",
             "    <accept/>",
             "  </rule>",
         ]
-    lines: list[str] = []
-    for port in sorted(set(ports)):
-        for protocol in ("tcp", "udp"):
-            lines.extend(
+    out: list[str] = []
+    for p in sorted(set(ports)):
+        for proto in ("tcp", "udp"):
+            out.extend(
                 [
-                    f'  <rule family={quoteattr(family)} priority="-10">',
+                    f'  <rule family={quoteattr(fam)} priority="-10">',
                     f"    <destination address={quoteattr(cidr)}/>",
-                    f"    <port port={quoteattr(str(port))} protocol={quoteattr(protocol)}/>",
+                    f"    <port port={quoteattr(str(p))} protocol={quoteattr(proto)}/>",
                     "    <accept/>",
                     "  </rule>",
                 ]
             )
-    return lines
+    return out
 
 
 def _world_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
     target = "ACCEPT" if policy.get("outboundDefault", "allow") == "allow" else "DROP"
-    lines = [
-        f'<policy target="{target}" priority="0">',
-        f"  <ingress-zone name={quoteattr(zone_name(service_id))}/>",
-        '  <egress-zone name="ANY"/>',
-        f"  <short>V2 egress {escape(service_id)}</short>",
-    ]
+    extra: list[str] = []
     for rule in policy.get("allowedEgress", []):
         if not isinstance(rule, dict):
             raise FirewalldProjectionError("allowedEgress entries must be objects")
-        lines.extend(_egress_rule_xml(rule))
-    lines.append("</policy>")
-    return _xml_document(lines)
+        extra.extend(_egress_rule_xml(rule))
+    return _policy_xml(target, "0", zone_name(service_id), "ANY", f"V2 egress {escape(service_id)}", extra=extra)
 
 
-def _listener_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
+def _exposure_port(exposure: dict[str, Any]) -> str:
+    if isinstance(exposure.get("port"), int):
+        return str(exposure["port"])
+    if isinstance(exposure.get("start"), int) and isinstance(exposure.get("end"), int):
+        return f"{exposure['start']}-{exposure['end']}"
+    raise FirewalldProjectionError("compiled listener exposure is invalid")
+
+
+def _iter_listeners(service: dict[str, Any]):
     listeners = service.get("listeners", {})
     if not isinstance(listeners, dict):
         return []
-    entries: set[tuple[str, str]] = set()
-    for listener in listeners.values():
-        if not isinstance(listener, dict) or listener.get("firewall", True) is not True:
+    out = []
+    for lst in listeners.values():
+        if not isinstance(lst, dict) or lst.get("firewall", True) is not True:
             continue
-        protocol = listener.get("protocol")
-        exposure = listener.get("exposure")
-        if protocol not in {"tcp", "udp"} or not isinstance(exposure, dict):
+        proto = lst.get("protocol")
+        exp = lst.get("exposure")
+        if proto not in {"tcp", "udp"} or not isinstance(exp, dict):
             raise FirewalldProjectionError("compiled listener is invalid")
-        if "targetPort" in listener:
+        out.append(lst)
+    return out
+
+
+def _listener_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
+    entries: set[tuple[str, str]] = set()
+    for lst in _iter_listeners(service):
+        if "targetPort" in lst:
             raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
-        if isinstance(exposure.get("port"), int):
-            port = str(exposure["port"])
-        elif isinstance(exposure.get("start"), int) and isinstance(exposure.get("end"), int):
-            port = f"{exposure['start']}-{exposure['end']}"
-        else:
-            raise FirewalldProjectionError("compiled listener exposure is invalid")
-        entries.add((port, protocol))
+        entries.add((_exposure_port(lst["exposure"]), lst["protocol"]))
     return sorted(entries)
 
 
 def _host_listener_rules(service: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
-    listeners = service.get("listeners", {})
-    if not isinstance(listeners, dict):
-        return [], []
     ports: set[tuple[str, str]] = set()
     forwards: set[tuple[str, str, str]] = set()
-    for listener in listeners.values():
-        if not isinstance(listener, dict) or listener.get("firewall", True) is not True:
-            continue
-        protocol = listener.get("protocol")
-        exposure = listener.get("exposure")
-        if protocol not in {"tcp", "udp"} or not isinstance(exposure, dict):
-            raise FirewalldProjectionError("compiled listener is invalid")
-        target_port = listener.get("targetPort")
-        if target_port is not None:
-            exposed_port = exposure.get("port")
-            if not isinstance(exposed_port, int):
+    for lst in _iter_listeners(service):
+        proto = lst["protocol"]
+        exp = lst["exposure"]
+        tport = lst.get("targetPort")
+        if tport is not None:
+            eport = exp.get("port")
+            if not isinstance(eport, int):
                 raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
-            if not isinstance(target_port, int) or isinstance(target_port, bool) or not 1 <= target_port <= 65535:
+            if not isinstance(tport, int) or isinstance(tport, bool) or not 1 <= tport <= 65535:
                 raise FirewalldProjectionError("listener targetPort is invalid")
-            if target_port != exposed_port:
-                forwards.add((str(exposed_port), protocol, str(target_port)))
+            if tport != eport:
+                forwards.add((str(eport), proto, str(tport)))
                 continue
-        if isinstance(exposure.get("port"), int):
-            ports.add((str(exposure["port"]), protocol))
-        elif isinstance(exposure.get("start"), int) and isinstance(exposure.get("end"), int):
-            ports.add((f"{exposure['start']}-{exposure['end']}", protocol))
-        else:
-            raise FirewalldProjectionError("compiled listener exposure is invalid")
+        ports.add((_exposure_port(exp), proto))
     return sorted(ports), sorted(forwards)
 
 
@@ -218,17 +203,15 @@ def _route_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
     if not isinstance(routes, dict):
         return []
     ports: set[tuple[str, str]] = set()
-    for route_id, route in routes.items():
-        target = route.get("target") if isinstance(route, dict) else None
-        if not isinstance(target, dict):
-            raise FirewalldProjectionError(f"compiled route {route_id!r} is invalid")
-        if target.get("type") == "unix-http":
-            raise FirewalldProjectionError(
-                f"isolated container route {route_id!r} cannot use a host Unix-socket target"
-            )
-        port = target.get("port")
+    for rid, route in routes.items():
+        tgt = route.get("target") if isinstance(route, dict) else None
+        if not isinstance(tgt, dict):
+            raise FirewalldProjectionError(f"compiled route {rid!r} is invalid")
+        if tgt.get("type") == "unix-http":
+            raise FirewalldProjectionError(f"isolated container route {rid!r} cannot use a host Unix-socket target")
+        port = tgt.get("port")
         if not isinstance(port, int):
-            raise FirewalldProjectionError(f"compiled route {route_id!r} is missing a TCP port")
+            raise FirewalldProjectionError(f"compiled route {rid!r} is missing a TCP port")
         ports.add((str(port), "tcp"))
     return sorted(ports)
 
@@ -242,137 +225,94 @@ def _allow_policy_xml(
     label: str,
     forward_ports: list[tuple[str, str, str]] | None = None,
 ) -> bytes:
-    lines = [
-        '<policy target="DROP" priority="-50">',
-        f"  <ingress-zone name={quoteattr(ingress_zone)}/>",
-        f"  <egress-zone name={quoteattr(egress_zone)}/>",
-        f"  <short>V2 {escape(label)} {escape(service_id)}</short>",
-    ]
-    for port, protocol in ports:
-        lines.append(f"  <port port={quoteattr(port)} protocol={quoteattr(protocol)}/>")
-    for port, protocol, target_port in forward_ports or []:
-        lines.append(
-            f"  <forward-port port={quoteattr(port)} protocol={quoteattr(protocol)} to-port={quoteattr(target_port)}/>"
-        )
-    lines.append("</policy>")
-    return _xml_document(lines)
+    return _policy_xml(
+        "DROP",
+        "-50",
+        ingress_zone,
+        egress_zone,
+        f"V2 {escape(label)} {escape(service_id)}",
+        ports=ports,
+        forward_ports=forward_ports,
+    )
 
 
 def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dict[str, bytes], dict[str, Any]]:
-    """Return relative firewalld config files and an ownership manifest."""
-    if (
-        not lan_zone
-        or len(lan_zone) > 17
-        or not all(character.isalnum() or character in "_-" for character in lan_zone)
-    ):
+    if not lan_zone or len(lan_zone) > 17 or not all(c.isalnum() or c in "_-" for c in lan_zone):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
-
     files: dict[str, bytes] = {}
     owners: list[dict[str, str]] = []
     services = effective.get("services")
     if not isinstance(services, dict):
         raise FirewalldProjectionError("compiled effective state is missing services")
-
-    for service_id in sorted(services):
-        service = services[service_id]
-        if not isinstance(service, dict) or not service.get("enabled", True):
+    for sid in sorted(services):
+        svc = services[sid]
+        if not isinstance(svc, dict) or not svc.get("enabled", True):
             continue
-        policy = network_policy(effective, service)
+        policy = network_policy(effective, svc)
         mode = policy.get("mode", "host")
-        runtime = service.get("runtime")
-        runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
-
-        generated: dict[str, bytes] = {}
+        rtype = svc.get("runtime", {}).get("type") if isinstance(svc.get("runtime"), dict) else None
+        gen: dict[str, bytes] = {}
         if mode == "isolated":
-            listeners = _listener_ports(service)
-            if not service.get("managed", True):
+            listeners = _listener_ports(svc)
+            if not svc.get("managed", True):
                 raise FirewalldProjectionError(
-                    f"unmanaged isolated service {service_id!r} has no V2-owned bridge to receive firewalld policy"
+                    f"unmanaged isolated service {sid!r} has no V2-owned bridge to receive firewalld policy"
                 )
-            if runtime_type not in {"oci", "quadlet", "compose"}:
+            if rtype not in {"oci", "quadlet", "compose"}:
                 raise FirewalldProjectionError(
-                    f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented yet"
+                    f"isolated service {sid!r} requires a runtime with a stable V2 bridge; runtime {rtype!r} is not implemented yet"
                 )
-            service_zone = zone_name(service_id)
-            generated.update(
+            z = zone_name(sid)
+            gen.update(
                 {
-                    f"zones/{service_zone}.xml": _zone_xml(service_id),
-                    f"policies/{host_policy_name(service_id)}.xml": _host_policy_xml(service_id, policy),
-                    f"policies/{lan_policy_name(service_id)}.xml": _lan_policy_xml(
-                        service_id, policy, lan_zone=lan_zone
-                    ),
-                    f"policies/{world_policy_name(service_id)}.xml": _world_policy_xml(service_id, policy),
+                    f"zones/{z}.xml": _zone_xml(sid),
+                    f"policies/{host_policy_name(sid)}.xml": _host_policy_xml(sid, policy),
+                    f"policies/{lan_policy_name(sid)}.xml": _lan_policy_xml(sid, policy, lan_zone=lan_zone),
+                    f"policies/{world_policy_name(sid)}.xml": _world_policy_xml(sid, policy),
                 }
             )
-            routes = _route_ports(service)
+            routes = _route_ports(svc)
             if routes:
-                generated[f"policies/{route_policy_name(service_id)}.xml"] = _allow_policy_xml(
-                    service_id,
-                    ingress_zone="HOST",
-                    egress_zone=service_zone,
-                    ports=routes,
-                    label="route",
+                gen[f"policies/{route_policy_name(sid)}.xml"] = _allow_policy_xml(
+                    sid, ingress_zone="HOST", egress_zone=z, ports=routes, label="route"
                 )
             if listeners:
-                generated[f"policies/{listener_policy_name(service_id)}.xml"] = _allow_policy_xml(
-                    service_id,
-                    ingress_zone=lan_zone,
-                    egress_zone=service_zone,
-                    ports=listeners,
-                    label="listener",
+                gen[f"policies/{listener_policy_name(sid)}.xml"] = _allow_policy_xml(
+                    sid, ingress_zone=lan_zone, egress_zone=z, ports=listeners, label="listener"
                 )
         elif mode == "host":
-            host_ports, forward_ports = _host_listener_rules(service)
-            if host_ports or forward_ports:
-                generated[f"policies/{listener_policy_name(service_id)}.xml"] = _allow_policy_xml(
-                    service_id,
-                    ingress_zone=lan_zone,
-                    egress_zone="HOST",
-                    ports=host_ports,
-                    forward_ports=forward_ports,
-                    label="listener",
+            hports, fports = _host_listener_rules(svc)
+            if hports or fports:
+                gen[f"policies/{listener_policy_name(sid)}.xml"] = _allow_policy_xml(
+                    sid, ingress_zone=lan_zone, egress_zone="HOST", ports=hports, forward_ports=fports, label="listener"
                 )
         elif mode == "none":
-            listeners = _listener_ports(service)
-            if listeners:
-                raise FirewalldProjectionError(f"network=none service {service_id!r} cannot expose listeners")
+            if _listener_ports(svc):
+                raise FirewalldProjectionError(f"network=none service {sid!r} cannot expose listeners")
         else:
             raise FirewalldProjectionError(f"unsupported network mode {mode!r}")
-
-        for target, content in generated.items():
-            if target in files:
-                raise FirewalldProjectionError(f"duplicate generated firewalld target {target!r}")
-            files[target] = content
-            owners.append({"service": service_id, "target": target})
-
+        for tgt, content in gen.items():
+            if tgt in files:
+                raise FirewalldProjectionError(f"duplicate generated firewalld target {tgt!r}")
+            files[tgt] = content
+            owners.append({"service": sid, "target": tgt})
     manifest = {
         "schemaVersion": 1,
-        "files": [
-            {
-                "target": target,
-                "sha256": hashlib.sha256(files[target]).hexdigest(),
-            }
-            for target in sorted(files)
-        ],
-        "owners": sorted(owners, key=lambda item: (item["service"], item["target"])),
+        "files": [{"target": t, "sha256": hashlib.sha256(files[t]).hexdigest()} for t in sorted(files)],
+        "owners": sorted(owners, key=lambda i: (i["service"], i["target"])),
     }
     return files, manifest
 
 
-def validate_projection(
-    files: dict[str, bytes],
-    *,
-    firewall_offline_cmd: str,
-) -> None:
-    """Use firewalld's native offline semantic validator before activation."""
+def validate_projection(files: dict[str, bytes], *, firewall_offline_cmd: str) -> None:
     if not files:
         return
-    with tempfile.TemporaryDirectory(prefix="nas-v2-firewalld-") as raw_root:
-        root = pathlib.Path(raw_root)
-        for relative, content in files.items():
-            destination = root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(content)
+    with tempfile.TemporaryDirectory(prefix="nas-v2-firewalld-") as raw:
+        root = pathlib.Path(raw)
+        for rel, content in files.items():
+            dst = root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(content)
         try:
             result = subprocess.run(
                 [firewall_offline_cmd, f"--system-config={root}", "--check-config"],
@@ -390,25 +330,13 @@ def validate_projection(
 
 
 def materialize_projection(
-    effective: dict[str, Any],
-    *,
-    output_dir: pathlib.Path,
-    lan_zone: str,
-    firewall_offline_cmd: str,
+    effective: dict[str, Any], *, output_dir: pathlib.Path, lan_zone: str, firewall_offline_cmd: str
 ) -> list[tuple[pathlib.Path, bytes, int]]:
     files, manifest = compile_projection(effective, lan_zone=lan_zone)
     validate_projection(files, firewall_offline_cmd=firewall_offline_cmd)
-    output: list[tuple[pathlib.Path, bytes, int]] = [
-        (output_dir / relative, content, 0o640) for relative, content in sorted(files.items())
-    ]
-    output.append(
-        (
-            output_dir / "manifest.json",
-            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-            0o640,
-        )
-    )
-    return output
+    out: list[tuple[pathlib.Path, bytes, int]] = [(output_dir / rel, c, 0o640) for rel, c in sorted(files.items())]
+    out.append((output_dir / "manifest.json", (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(), 0o640))
+    return out
 
 
 __all__ = [
