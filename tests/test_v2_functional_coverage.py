@@ -92,7 +92,11 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                         "workload": {"kind": "daemon"},
                         "runtime": {"type": "vm", "source": str(vm_src)},
                         "storage": [{"resource": "data", "mountPath": "/data", "mountTag": "data", "access": "read"}],
-                        "resources": {"accelerators": [{"kind": "gpu", "vendor": "NVIDIA", "mode": "passthrough", "device": "pci:0000:01:00.0"}]},
+                        "resources": {
+                            "accelerators": [
+                                {"kind": "gpu", "vendor": "NVIDIA", "mode": "passthrough", "device": "pci:0000:01:00.0"}
+                            ]
+                        },
                     },
                     "quad-app": {
                         "name": "Quad",
@@ -145,15 +149,23 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         }
         # OCI should prefer CDI for NVIDIA, systemd prefers devices
         for rt, expected_type in [("oci", "cdi"), ("quadlet", "cdi"), ("systemd", "devices"), ("exec", "devices")]:
-            runtime = {"type": rt, "image": "example/test:latest"} if rt in {"oci", "quadlet"} else {"type": rt, "identity": {"mode": "dynamic"}}
+            runtime = (
+                {"type": rt, "image": "example/test:latest"}
+                if rt in {"oci", "quadlet"}
+                else {"type": rt, "identity": {"mode": "dynamic"}}
+            )
             if rt in {"oci", "quadlet"}:
-                runtime.update({"image": "example/test:latest", "pull": "missing", "command": []})
+                runtime.update({"image": "example/test:latest", "pull": "missing", "command": []})  # pyright: ignore[reportCallIssue, reportArgumentType]
             svc = {
                 "name": "t",
                 "managed": True,
                 "workload": {"kind": "daemon", "activation": "persistent"},
                 "runtime": runtime,
-                "resources": {"accelerators": [{"kind": "gpu", "vendor": "NVIDIA", "quantity": 1, "required": True, "mode": "shared"}]},
+                "resources": {
+                    "accelerators": [
+                        {"kind": "gpu", "vendor": "NVIDIA", "quantity": 1, "required": True, "mode": "shared"}
+                    ]
+                },
                 "storage": [],
                 "credentials": [],
                 "sandbox": {"mode": "inherit"},
@@ -167,18 +179,39 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             "managed": True,
             "workload": {"kind": "daemon", "activation": "persistent"},
             "runtime": {"type": "systemd", "unit": "t.service"},
-            "resources": {"accelerators": [{"kind": "gpu", "vendor": "AMD", "quantity": 1, "required": True, "mode": "shared"}]},
+            "resources": {
+                "accelerators": [{"kind": "gpu", "vendor": "AMD", "quantity": 1, "required": True, "mode": "shared"}]
+            },
             "storage": [],
             "credentials": [],
             "sandbox": {"mode": "inherit"},
         }
-        res_amd = accelerator.resolve_service_accelerators("t", svc_amd, inv)
-        eff = {"services": {"t": {**svc_amd, "resources": {"accelerators": [{"kind": "gpu", "vendor": "AMD", "quantity": 1, "required": True, "mode": "shared"}]}}}, "derived": {}}
+        accelerator.resolve_service_accelerators("t", svc_amd, inv)
+        eff = {
+            "services": {
+                "t": {
+                    **svc_amd,
+                    "resources": {
+                        "accelerators": [
+                            {"kind": "gpu", "vendor": "AMD", "quantity": 1, "required": True, "mode": "shared"}
+                        ]
+                    },
+                }
+            },
+            "derived": {},
+        }
         eff_r = accelerator.resolve_effective(eff, inv)
         lines = attachments.attachment_lines(eff_r, eff_r["services"]["t"])
         self.assertIn('DeviceAllow="/dev/dri/renderD128 rw"', lines)
         # VM passthrough preserved verbatim
-        vm_req = {"kind": "gpu", "vendor": "NVIDIA", "quantity": 1, "required": True, "mode": "passthrough", "device": "pci:0000:01:00.0"}
+        vm_req = {
+            "kind": "gpu",
+            "vendor": "NVIDIA",
+            "quantity": 1,
+            "required": True,
+            "mode": "passthrough",
+            "device": "pci:0000:01:00.0",
+        }
         vm_svc = {
             "name": "t",
             "managed": True,
@@ -196,7 +229,11 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             "managed": True,
             "workload": {"kind": "daemon", "activation": "persistent"},
             "runtime": {"type": "oci", "image": "example/test:latest", "pull": "missing", "command": []},
-            "resources": {"accelerators": [{"kind": "gpu", "vendor": "NVIDIA", "quantity": "all", "required": True, "mode": "shared"}]},
+            "resources": {
+                "accelerators": [
+                    {"kind": "gpu", "vendor": "NVIDIA", "quantity": "all", "required": True, "mode": "shared"}
+                ]
+            },
             "storage": [],
             "credentials": [],
             "sandbox": {"mode": "inherit"},
@@ -205,7 +242,7 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         self.assertEqual("nvidia.com/gpu=all", res_all[0]["selectors"][0]["value"])
 
     def test_quadlet_emits_gpu_args(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory():
             inv = {
                 "schemaVersion": 1,
                 "capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True, "gpu-amd": True},
@@ -219,16 +256,28 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                 "managed": True,
                 "workload": {"kind": "daemon", "activation": "persistent"},
                 "runtime": {"type": "oci", "image": "example/gpu:latest", "pull": "missing", "command": []},
-                "resources": {"accelerators": [{"kind": "gpu", "vendor": "NVIDIA", "quantity": 1, "required": True, "mode": "shared"}]},
+                "resources": {
+                    "accelerators": [
+                        {"kind": "gpu", "vendor": "NVIDIA", "quantity": 1, "required": True, "mode": "shared"}
+                    ]
+                },
                 "storage": [],
                 "credentials": [],
                 "sandbox": {"mode": "inherit"},
-                "network": {"mode": "host", "outboundDefault": "allow", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []},
+                "network": {
+                    "mode": "host",
+                    "outboundDefault": "allow",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                },
                 "listeners": {},
                 "routes": {},
             }
             eff = accelerator.resolve_effective({"services": {"gpu": svc}, "derived": {}}, inv)
-            rendered = quadlet.render_quadlet(eff, "gpu", eff["services"]["gpu"], unit_lines=[], service_lines=[]).decode()
+            rendered = quadlet.render_quadlet(
+                eff, "gpu", eff["services"]["gpu"], unit_lines=[], service_lines=[]
+            ).decode()
             self.assertIn('PodmanArgs=--device="nvidia.com/gpu=0"', rendered)
 
     # --------------------------------------------------------------- Compose
@@ -239,7 +288,10 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             svc_root = app_root / "demo"
             svc_root.mkdir(parents=True)
             src = svc_root / "compose.yaml"
-            src.write_text("services:\n  web:\n    image: example/web:latest\n  db:\n    image: example/db:latest\n", encoding="utf-8")
+            src.write_text(
+                "services:\n  web:\n    image: example/web:latest\n  db:\n    image: example/db:latest\n",
+                encoding="utf-8",
+            )
             effective = {
                 "storageResources": {"data": {"path": "/tank/data"}},
                 "credentials": {"tok": {"path": "/run/nas-secrets/tok", "required": True}},
@@ -251,13 +303,31 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                 "enabled": True,
                 "workload": {"kind": "daemon", "activation": "persistent"},
                 "runtime": {"type": "compose", "source": str(src)},
-                "resources": {"accelerators": [{"kind": "gpu", "vendor": "NVIDIA", "quantity": 1, "required": True, "mode": "shared", "device": "nvidia.com/gpu=0", "target": "web"}]},
+                "resources": {
+                    "accelerators": [
+                        {
+                            "kind": "gpu",
+                            "vendor": "NVIDIA",
+                            "quantity": 1,
+                            "required": True,
+                            "mode": "shared",
+                            "device": "nvidia.com/gpu=0",
+                            "target": "web",
+                        }
+                    ]
+                },
                 "sandbox": {"mode": "inherit"},
                 "storage": [{"resource": "data", "mountPath": "/data", "access": "write", "target": "web"}],
                 "credentials": [{"credential": "tok", "use": "environment-file", "target": "web"}],
                 "routes": {},
                 "listeners": {},
-                "network": {"mode": "isolated", "outboundDefault": "deny", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []},
+                "network": {
+                    "mode": "isolated",
+                    "outboundDefault": "deny",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                },
             }
             with mock.patch.object(compose, "APP_ROOT", app_root):
                 source, rendered = compose.render_compose_override(effective, "demo", service)
@@ -278,7 +348,13 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                     "name": "Web",
                     "workload": {"kind": "daemon", "activation": "persistent"},
                     "runtime": {"type": "oci", "image": "example/web:latest", "command": ["serve"]},
-                    "network": {"mode": "isolated", "outboundDefault": "deny", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []},
+                    "network": {
+                        "mode": "isolated",
+                        "outboundDefault": "deny",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
                     "listeners": {"http": {"protocol": "tcp", "exposure": {"port": 8080}, "firewall": True}},
                     "routes": {
                         "ui": {
@@ -293,7 +369,9 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             },
         }
         eff = _compile(doc, self.schema)
-        rendered = quadlet.render_quadlet(eff, "web", eff["services"]["web"], unit_lines=["Description=Web"], service_lines=[]).decode()
+        rendered = quadlet.render_quadlet(
+            eff, "web", eff["services"]["web"], unit_lines=["Description=Web"], service_lines=[]
+        ).decode()
         self.assertIn("Image=", rendered)
         self.assertIn("Network=nas-v2-net-web.network", rendered)
         self.assertIn("PublishPort=", rendered)
@@ -307,7 +385,9 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             svc_root = app_root / "vm-demo"
             svc_root.mkdir(parents=True)
             src = svc_root / "domain.xml"
-            src.write_text('<domain type="kvm"><name>vm-demo</name><os><type>hvm</type></os><devices/></domain>', encoding="utf-8")
+            src.write_text(
+                '<domain type="kvm"><name>vm-demo</name><os><type>hvm</type></os><devices/></domain>', encoding="utf-8"
+            )
             doc = {
                 "schemaVersion": 3,
                 "storageResources": {"data": {"path": "/tank/data", "stateClass": "authoritative"}},
@@ -317,7 +397,11 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                         "workload": {"kind": "daemon"},
                         "runtime": {"type": "vm", "source": str(src)},
                         "storage": [{"resource": "data", "mountPath": "/data", "mountTag": "data", "access": "read"}],
-                        "resources": {"accelerators": [{"kind": "gpu", "vendor": "Intel", "mode": "passthrough", "device": "pci:0000:03:00.0"}]},
+                        "resources": {
+                            "accelerators": [
+                                {"kind": "gpu", "vendor": "Intel", "mode": "passthrough", "device": "pci:0000:03:00.0"}
+                            ]
+                        },
                     }
                 },
             }
@@ -358,7 +442,9 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             compose_src = app_root / "comp" / "compose.yaml"
             compose_src.write_text("services:\n  web:\n    image: example/web:latest\n", encoding="utf-8")
             vm_src = app_root / "vmdemo" / "domain.xml"
-            vm_src.write_text('<domain type="kvm"><name>x</name><os><type>hvm</type></os><devices/></domain>', encoding="utf-8")
+            vm_src.write_text(
+                '<domain type="kvm"><name>x</name><os><type>hvm</type></os><devices/></domain>', encoding="utf-8"
+            )
             py_req = app_root / "pyapp" / "requirements.lock"
             py_req.write_text("example==1.0\n", encoding="utf-8")
             doc = {
@@ -366,15 +452,51 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                 "storageResources": {"data": {"path": "/tank/data", "stateClass": "authoritative"}},
                 "credentials": {"tok": {"path": "/run/nas-secrets/tok", "required": True}},
                 "services": {
-                    "exec-app": {"name": "E", "workload": {"kind": "daemon"}, "runtime": {"type": "exec", "command": ["/bin/true"]}, "storage": [{"resource": "data", "mountPath": "/data", "access": "read"}]},
-                    "pyapp": {"name": "Py", "workload": {"kind": "daemon"}, "runtime": {"type": "python", "dependencies": {"requirementsFile": str(py_req), "requireHashes": False}, "entrypoint": {"module": "demo.main"}}},
-                    "comp": {"name": "C", "workload": {"kind": "daemon"}, "runtime": {"type": "compose", "source": str(compose_src)}},
-                    "vmdemo": {"name": "V", "workload": {"kind": "daemon"}, "runtime": {"type": "vm", "source": str(vm_src)}, "storage": [{"resource": "data", "mountPath": "/data", "mountTag": "data", "access": "read"}]},
-                    "oci-app": {"name": "O", "workload": {"kind": "daemon"}, "runtime": {"type": "oci", "image": "example/oci:latest"}},
-                    "native": {"name": "N", "workload": {"kind": "daemon"}, "runtime": {"type": "systemd", "unit": "existing.service"}, "resources": {"memoryHighBytes": 1234}},
+                    "exec-app": {
+                        "name": "E",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "exec", "command": ["/bin/true"]},
+                        "storage": [{"resource": "data", "mountPath": "/data", "access": "read"}],
+                    },
+                    "pyapp": {
+                        "name": "Py",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {
+                            "type": "python",
+                            "dependencies": {"requirementsFile": str(py_req), "requireHashes": False},
+                            "entrypoint": {"module": "demo.main"},
+                        },
+                    },
+                    "comp": {
+                        "name": "C",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "compose", "source": str(compose_src)},
+                    },
+                    "vmdemo": {
+                        "name": "V",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "vm", "source": str(vm_src)},
+                        "storage": [{"resource": "data", "mountPath": "/data", "mountTag": "data", "access": "read"}],
+                    },
+                    "oci-app": {
+                        "name": "O",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "oci", "image": "example/oci:latest"},
+                    },
+                    "native": {
+                        "name": "N",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "systemd", "unit": "existing.service"},
+                        "resources": {"memoryHighBytes": 1234},
+                    },
                 },
             }
-            with mock.patch.object(spec, "APP_ROOT", pathlib.PurePosixPath(str(app_root))), mock.patch.object(systemd, "APP_ROOT", app_root), mock.patch.object(compose, "APP_ROOT", app_root), mock.patch.object(libvirt, "APP_ROOT", app_root):
+            with (
+                mock.patch.object(spec, "APP_ROOT", pathlib.PurePosixPath(str(app_root))),
+                mock.patch.object(systemd, "APP_ROOT", app_root),
+                mock.patch.object(compose, "APP_ROOT", app_root),
+                mock.patch.object(libvirt, "APP_ROOT", app_root),
+            ):
                 eff = _compile(doc, self.schema)
                 out = root / "out"
                 files, manifest = systemd.generate_projection(
@@ -420,7 +542,11 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                             "target": {"type": "http", "host": "127.0.0.1", "port": 3000},
                             "exposure": {"type": "path", "paths": ["/app"]},
                             "auth": {"mode": "identity", "capability": "access"},
-                            "proxy": {"trustedIdentityHeaders": ["Remote-User"], "stripPrefix": "/app", "requireHeaders": {"X-Custom": "v"}},
+                            "proxy": {
+                                "trustedIdentityHeaders": ["Remote-User"],
+                                "stripPrefix": "/app",
+                                "requireHeaders": {"X-Custom": "v"},
+                            },
                         },
                         "public": {
                             "target": {"type": "http", "host": "127.0.0.1", "port": 3001},
@@ -432,7 +558,9 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             },
         }
         eff = _compile(doc, self.schema)
-        cf = caddy.generate_caddyfile(eff, authentik_upstream="127.0.0.1:9000", authentik_path="/auth/", wake_socket="/run/wake.sock")
+        cf = caddy.generate_caddyfile(
+            eff, authentik_upstream="127.0.0.1:9000", authentik_path="/auth/", wake_socket="/run/wake.sock"
+        )
         self.assertIn("forward_auth 127.0.0.1:9000", cf)
         self.assertIn("X-Authentik-Username", cf)
         self.assertIn("Remote-User", cf)
@@ -450,7 +578,13 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                     "name": "Iso",
                     "workload": {"kind": "daemon"},
                     "runtime": {"type": "oci", "image": "example/iso:latest"},
-                    "network": {"mode": "isolated", "outboundDefault": "deny", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []},
+                    "network": {
+                        "mode": "isolated",
+                        "outboundDefault": "deny",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
                 }
             },
         }
@@ -458,14 +592,24 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         # podman network
         self.assertEqual("nas-v2-iso", podnet.podman_network_name("iso", eff["services"]["iso"]))
         # schema only has vlanId, but podnet vlan_binding expects vlanParent too; test with synthetic policy containing both
-        synthetic = {"mode": "isolated", "vlanId": 10, "vlanParent": "eth0", "outboundDefault": "deny", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []}
+        synthetic = {
+            "mode": "isolated",
+            "vlanId": 10,
+            "vlanParent": "eth0",
+            "outboundDefault": "deny",
+            "lanAccess": False,
+            "allowedHostPorts": [],
+            "allowedEgress": [],
+        }
         binding = podnet.vlan_binding(synthetic)
+        assert binding is not None
         self.assertEqual(10, binding["id"])
         ref = podnet.quadlet_network_reference(eff, "iso", eff["services"]["iso"])
         self.assertEqual("nas-v2-net-iso.network", ref)
         # firewalld is exercised via systemd integration (compile via nas_v2_firewalld)
         import nas_v2_firewalld as fw
-        proj, _ = fw.compile_projection(eff, lan_zone="nas-lan")
+
+        proj, _ = fw.compile_projection(eff, lan_zone="nas-lan")  # pyright: ignore[reportCallIssue]
         self.assertIn("iso", str(proj).lower() if isinstance(proj, (str, bytes)) else str(proj))
 
     # --------------------------------------------------------------- Backup
@@ -473,18 +617,41 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             app_root = pathlib.Path(tmp) / "apps"
             (app_root / "app").mkdir(parents=True)
-            (app_root / "app" / "compose.yaml").write_text("services:\n  web:\n    image: example/web:latest\n", encoding="utf-8")
+            (app_root / "app" / "compose.yaml").write_text(
+                "services:\n  web:\n    image: example/web:latest\n", encoding="utf-8"
+            )
             # need storage resources and a job for native-dump
             doc = {
                 "schemaVersion": 3,
                 "storageResources": {
-                    "fs": {"path": "/tank/fs", "stateClass": "authoritative", "backup": {"enabled": True, "consistency": "filesystem"}},
-                    "zfs": {"path": "/tank/zfs", "dataset": "tank/zfs", "stateClass": "authoritative", "backup": {"enabled": True, "consistency": "zfs-snapshot"}},
-                    "dump": {"path": "/tank/dump", "stateClass": "authoritative", "backup": {"enabled": True, "consistency": "native-dump"}},
+                    "fs": {
+                        "path": "/tank/fs",
+                        "stateClass": "authoritative",
+                        "backup": {"enabled": True, "consistency": "filesystem"},
+                    },
+                    "zfs": {
+                        "path": "/tank/zfs",
+                        "dataset": "tank/zfs",
+                        "stateClass": "authoritative",
+                        "backup": {"enabled": True, "consistency": "zfs-snapshot"},
+                    },
+                    "dump": {
+                        "path": "/tank/dump",
+                        "stateClass": "authoritative",
+                        "backup": {"enabled": True, "consistency": "native-dump"},
+                    },
                 },
                 "services": {
-                    "prep": {"name": "Prep", "workload": {"kind": "job", "schedules": []}, "runtime": {"type": "exec", "command": ["/bin/true"]}},
-                    "app": {"name": "App", "workload": {"kind": "daemon"}, "runtime": {"type": "compose", "source": str(app_root / "app" / "compose.yaml")}},
+                    "prep": {
+                        "name": "Prep",
+                        "workload": {"kind": "job", "schedules": []},
+                        "runtime": {"type": "exec", "command": ["/bin/true"]},
+                    },
+                    "app": {
+                        "name": "App",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "compose", "source": str(app_root / "app" / "compose.yaml")},
+                    },
                 },
             }
             # wire native-dump via companion annotation? use spec's companion detection: need to set storageResources dump to have backup consistency native-dump and a companion service that provides dump
@@ -508,7 +675,9 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                     "name": "Demo",
                     "workload": {"kind": "daemon"},
                     "runtime": {"type": "oci", "image": "example/demo:latest"},
-                    "authorization": {"capabilities": [{"id": "access", "title": "Access"}, {"id": "admin", "title": "Admin"}]},
+                    "authorization": {
+                        "capabilities": [{"id": "access", "title": "Access"}, {"id": "admin", "title": "Admin"}]
+                    },
                 }
             },
         }
@@ -527,7 +696,11 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             doc = {
                 "schemaVersion": 3,
                 "services": {
-                    "demo": {"name": "Demo", "workload": {"kind": "daemon"}, "runtime": {"type": "exec", "command": ["/bin/true"]}},
+                    "demo": {
+                        "name": "Demo",
+                        "workload": {"kind": "daemon"},
+                        "runtime": {"type": "exec", "command": ["/bin/true"]},
+                    },
                 },
             }
             with mock.patch.object(spec, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
@@ -543,6 +716,7 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             )
             self.assertIn(out / "manifest.json", files)
             self.assertIn("nas-v2-demo.service", manifest["ownedUnits"])
+
 
 if __name__ == "__main__":
     unittest.main()
