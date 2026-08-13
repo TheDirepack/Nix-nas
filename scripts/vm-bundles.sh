@@ -127,7 +127,7 @@ keys() {
 }
 
 save() {
-  local dir=$1 only_missing=${2:-0} name core_file
+  local dir=$1 only_missing=${2:-0} name core_file archive tmp
   mkdir -p "$dir"
   core_file="$dir/.core.paths"
 
@@ -136,14 +136,20 @@ save() {
   build_all_bundles
   closure core > "$core_file"
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
-  xargs "$NIX_STORE_CMD" --export < "$core_file" | gzip > "$dir/core.nar.gz"
+    archive="$dir/core.nar.gz"
+    tmp="$archive.tmp.$$"
+    xargs "$NIX_STORE_CMD" --export < "$core_file" | gzip > "$tmp"
+    mv -- "$tmp" "$archive"
   fi
 
   while IFS= read -r name; do
     [[ $name == core ]] && continue
     [[ $only_missing == 1 && -f "$dir/$name.nar.gz" ]] && continue
+    archive="$dir/$name.nar.gz"
+    tmp="$archive.tmp.$$"
     comm -23 <(closure "$name") "$core_file" \
-      | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$dir/$name.nar.gz"
+      | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
+    mv -- "$tmp" "$archive"
   done < <(list_bundles)
 
   rm -f "$core_file"
