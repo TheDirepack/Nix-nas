@@ -1,0 +1,29 @@
+schemaVersion: 3
+storageResources:
+  data:
+    path: /srv/data
+    stateClass: authoritative
+    capabilities: [read, write]
+credentials:
+  api-key:
+    path: /run/nas-secrets/api-key
+    required: true
+networkProfiles:
+  isolated-deny:
+    mode: isolated
+    outboundDefault: deny
+services:
+  web:
+    name: Web Service
+    workload: {kind: daemon, activation: on-demand, idleSeconds: 600}
+    runtime: {type: oci, image: example/web:latest}
+    storage:
+      - resource: data
+        mountPath: /data
+        access: write
+    routes:
+      main:
+        target: {type: http, port: 8080}
+        exposure: {type: path, paths: ["/web"]}
+        auth: {mode: identity, capability: access}
+        portal: {visible: true, title: Web, category: Services, order: 1}

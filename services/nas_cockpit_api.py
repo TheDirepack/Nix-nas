@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import concurrent.futures
+import contextlib
 import json
 import os
 import pathlib
 import re
 import secrets
-import shutil
 import socket
 import stat
 import sys
@@ -20,8 +19,8 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
-from nas_common import CommandResult, parse_systemd_show, run_command
 import nas_ai_config as ai_config
+from nas_common import CommandResult, parse_systemd_show, run_command
 from nas_operation_lock import (
     OperationBusyError,
     acquire_operation,
@@ -33,18 +32,26 @@ from nas_operation_lock import (
 ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
 CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas"))
-ENDPOINT_REGISTRY = pathlib.Path(os.environ.get("NAS_ENDPOINT_REGISTRY", "/etc/nas-control/endpoints.json"))
+PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
 BACKUP_INSTALLED = os.environ.get("NAS_BACKUP_ENABLE", "0") == "1"
 ZFS_REPLICATION_INSTALLED = os.environ.get("NAS_ZFS_REPLICATION_ENABLE", "0") == "1"
 SYNCTHING_INSTALLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
 MAX_PASSWORD_LENGTH = 4096
-FIRST_START_CONFLICTS = ("appliance", "first-start", "identity", "runtime", "secrets", "state", "storage", "update")
-
-FEATURE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 MAX_ARGUMENT_LENGTH = 128
 MAX_JSON_INPUT_BYTES = 128 * 1024
 MAX_PRIVATE_SNAPSHOT_BYTES = 4 * 1024 * 1024
+SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+FIRST_START_CONFLICTS = (
+    "appliance",
+    "first-start",
+    "identity",
+    "runtime",
+    "secrets",
+    "state",
+    "storage",
+    "update",
+)
 
 
 class ApiError(RuntimeError):
@@ -93,7 +100,7 @@ ACTIONS: dict[str, ActionSpec] = {
         (("systemctl", "start", "nas-zfs-manual-snapshot.service"),),
         conflicts=("storage",),
     ),
-    "scrub": ActionSpec(
+    "zfs-scrub": ActionSpec(
         (("systemctl", "start", "nas-zfs-manual-scrub.service"),),
         conflicts=("storage",),
     ),
@@ -102,7 +109,7 @@ ACTIONS: dict[str, ActionSpec] = {
         conflicts=("storage",),
         requires_backup=True,
     ),
-    "zfs-replicate": ActionSpec(
+    "replicate": ActionSpec(
         (("systemctl", "start", "nas-syncoid.service"),),
         conflicts=("storage",),
         requires_replication=True,
@@ -130,7 +137,7 @@ ACTIONS: dict[str, ActionSpec] = {
         conflicts=("identity", "runtime"),
         worker_owns_operation=True,
     ),
-    "syncthing-reconcile": ActionSpec(
+    "syncthing-sync": ActionSpec(
         (("systemctl", "start", "nas-syncthing-sync.service"),),
         conflicts=("identity",),
         requires_syncthing=True,
@@ -139,17 +146,402 @@ ACTIONS: dict[str, ActionSpec] = {
 }
 
 
+def diagnostic(message: str) -> None:
+    try:
+        syslog.syslog(syslog.LOG_ERR, message[:2000])
+    except OSError:
+        if os.environ.get("NAS_DIAGNOSTICS_STDERR") == "1":
+            print(message[:2000], file=sys.stderr)
+
+
+def _secret_command(command: list[str] | tuple[str, ...]) -> bool:
+    return bool(command) and pathlib.PurePath(str(command[0])).name == "nas-secrets"
+
+
+def operation_error(command: list[str] | tuple[str, ...], result: CommandResult) -> ApiError:
+    reference = secrets.token_hex(6)
+    detail = (
+        "[secret command output redacted]"
+        if _secret_command(command)
+        else (result.stderr or result.stdout).strip()[:1000]
+    )
+    diagnostic(
+        f"nas-cockpit-api reference={reference} command={list(command)!r} rc={result.returncode} detail={detail!r}"
+    )
+    return ApiError(f"Operation failed (reference {reference})")
+
+
+def run(
+    command: list[str] | tuple[str, ...],
+    *,
+    check: bool = True,
+    timeout_seconds: int = 120,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+) -> CommandResult:
+    argv = list(command)
+    result = run_command(argv, timeout_seconds=timeout_seconds, input_text=input_text, env=env)
+    if check and result.returncode != 0:
+        raise operation_error(argv, result)
+    return result
+
+
+def _json_command(command: list[str], *, optional: bool = False, timeout_seconds: int = 30) -> dict[str, Any]:
+    result = run(command, check=False, timeout_seconds=timeout_seconds)
+    if result.returncode != 0:
+        error = operation_error(command, result)
+        if optional:
+            return {"ok": False, "error": str(error)}
+        raise error
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        if optional:
+            return {"ok": False, "error": f"{' '.join(command)} returned invalid JSON"}
+        raise ApiError(f"{' '.join(command)} returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        if optional:
+            return {"ok": False, "error": f"{' '.join(command)} returned invalid data"}
+        raise ApiError(f"{' '.join(command)} returned invalid data")
+    return value
+
+
+def _json_input() -> dict[str, Any]:
+    raw = sys.stdin.buffer.read(MAX_JSON_INPUT_BYTES + 1)
+    if len(raw) > MAX_JSON_INPUT_BYTES:
+        raise ApiError("JSON request exceeds the input limit")
+    try:
+        value = json.loads(raw.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ApiError("Invalid JSON request") from exc
+    if not isinstance(value, dict):
+        raise ApiError("JSON request must be an object")
+    return value
+
+
+def _json_string(request: dict[str, Any], name: str, *, required: bool = False, max_length: int = 4096) -> str:
+    value = request.get(name, "")
+    if not isinstance(value, str) or len(value) > max_length or "\x00" in value:
+        raise ApiError(f"{name} must be a string no longer than {max_length} characters")
+    if required and not value:
+        raise ApiError(f"{name} is required")
+    return value
+
+
+def _json_string_list(request: dict[str, Any], name: str, *, required: bool = False) -> list[str]:
+    value = request.get(name, [])
+    if (
+        not isinstance(value, list)
+        or len(value) > ai_config.MAX_MODELS
+        or not all(
+            isinstance(item, str)
+            and 0 < len(item) <= max(ai_config.MAX_MODEL_ID, MAX_ARGUMENT_LENGTH)
+            and "\x00" not in item
+            for item in value
+        )
+    ):
+        raise ApiError(f"{name} must be a bounded list of non-empty strings")
+    if required and not value:
+        raise ApiError(f"{name} is required")
+    return value
+
+
+def service_states(units: list[str]) -> dict[str, dict[str, Any]]:
+    if not units:
+        return {}
+    result = run(
+        [
+            "systemctl",
+            "show",
+            "--property=Id,LoadState,ActiveState,SubState,UnitFileState,MemoryCurrent,Result",
+            *units,
+        ],
+        check=False,
+        timeout_seconds=30,
+    )
+    if result.returncode != 0:
+        return {}
+    output: dict[str, dict[str, Any]] = {}
+    for unit, row in parse_systemd_show(result.stdout).items():
+        memory_raw = row.get("MemoryCurrent")
+        try:
+            memory = int(memory_raw) if memory_raw and memory_raw != "[not set]" else None
+        except ValueError:
+            memory = None
+        output[unit] = {
+            "loadState": row.get("LoadState", "unknown"),
+            "activeState": row.get("ActiveState", "unknown"),
+            "subState": row.get("SubState", "unknown"),
+            "unitFileState": row.get("UnitFileState", "unknown"),
+            "result": row.get("Result", "unknown"),
+            "memoryBytes": memory,
+        }
+    return output
+
+
+def managed_services_status() -> dict[str, Any]:
+    result = run(["nas-managed-services-control", "status"], check=False, timeout_seconds=120)
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "error": str(operation_error(["nas-managed-services-control", "status"], result)),
+            "services": [],
+        }
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "Managed Services V2 status returned invalid JSON", "services": []}
+    if not isinstance(value, dict) or not isinstance(value.get("services"), list):
+        return {"ok": False, "error": "Managed Services V2 status has no service list", "services": []}
+    value["ok"] = value.get("ok", True) is not False
+    return value
+
+
+def portal_entries() -> list[dict[str, Any]]:
+    try:
+        value = json.loads(PORTAL_MODEL.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(value, dict) or value.get("schemaVersion") != 2 or value.get("source") != "managed-services-v2":
+        return []
+    entries = value.get("entries")
+    if not isinstance(entries, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url")
+        if not isinstance(url, str) or not url.startswith("/") or url.startswith("//"):
+            continue
+        if any(ord(character) < 32 or ord(character) == 127 for character in url):
+            continue
+        output.append(dict(entry))
+    return output
+
+
+def static_links() -> dict[str, str]:
+    return {
+        "identity": os.environ.get("NAS_IDENTITY_URL", "/identity/if/user/"),
+        "copypartyConfig": os.environ.get("NAS_COPYPARTY_CONFIG_URL", "/shares/admin/copyparty-config/"),
+        "scheduler": "/console/system/services#/timers",
+        "virtualMachines": "/console/@localhost/machines",
+        "containers": "/console/podman",
+        "files": "/console/files",
+        "storage": "/console/storage",
+        "network": "/console/network",
+        "power": "/console/system",
+        "logs": "/console/system/logs",
+        "softwareUpdates": "/console/system/software",
+        "terminal": "/console/system/terminal",
+        "docs": "/console/nas/docs/",
+        "accountSettings": "/settings/",
+    }
+
+
+def setup_status() -> dict[str, Any]:
+    prepared = _json_command(
+        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
+        optional=True,
+        timeout_seconds=60,
+    )
+    status = _json_command(["nas-setup", "status"], optional=True)
+    if prepared.get("ok") is False and "firstStart" not in status:
+        status["firstStart"] = prepared
+    return status
+
+
+def identity_status() -> dict[str, Any]:
+    return _json_command(["nas-identity-sync", "status"], optional=True)
+
+
+def capability_status() -> dict[str, Any]:
+    return _json_command(["nas-identity-sync", "capabilities"], optional=True)
+
+
+def update_status() -> dict[str, Any]:
+    return _json_command(["nas-update", "--status", "--json"], optional=True)
+
+
+def ai_configuration() -> dict[str, Any]:
+    try:
+        return ai_config.public_view(ai_config.load_config())
+    except (OSError, ai_config.AiConfigError) as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "providers": [],
+            "localModels": [],
+            "codingRoles": {},
+            "availableTargets": [],
+        }
+
+
 def operation_state() -> dict[str, Any]:
-    value = shared_operation_state()
+    try:
+        value = shared_operation_state()
+    except OSError as exc:
+        value = {"busyClasses": [], "active": [], "error": str(exc)}
+    busy = set(value.get("busyClasses", []))
     value.update(
         {
             "conflictsByAction": {name: list(spec.conflicts) for name, spec in ACTIONS.items()},
             "workerOwnedActions": [name for name, spec in ACTIONS.items() if spec.worker_owns_operation],
-            "featureConflicts": ["runtime"],
-            "firstStartConflicts": ["appliance", "first-start", "identity", "runtime", "storage", "update"],
+            "managedServicesConflicts": sorted(busy & {"runtime", "appliance", "first-start"}),
+            "firstStartConflicts": list(FIRST_START_CONFLICTS),
         }
     )
     return value
+
+
+def first_start_status() -> dict[str, Any]:
+    return _json_command(
+        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
+        optional=True,
+        timeout_seconds=60,
+    )
+
+
+def first_start_job_status(job_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-f]{24}", job_id):
+        raise ApiError("Invalid first-start job identifier")
+    path = pathlib.Path("/var/lib/nas-setup/jobs") / f"{job_id}.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"schemaVersion": 1, "jobId": job_id, "status": "pending"}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ApiError(f"Unable to read first-start job status: {exc}") from exc
+    if not isinstance(value, dict) or value.get("jobId") != job_id:
+        raise ApiError("First-start job status is invalid")
+    return value
+
+
+def _write_private_new(path: pathlib.Path, content: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_path: pathlib.Path) -> None:
+    command = [
+        "systemd-run",
+        "--unit",
+        f"nas-first-start-{job_id}.service",
+        "--collect",
+        "--property=Type=exec",
+        "--property=User=root",
+        "--property=Group=root",
+        "--property=UMask=0077",
+        "--property=NoNewPrivileges=yes",
+        "--property=PrivateTmp=yes",
+        "--property=PrivateDevices=yes",
+        "--property=ProtectHome=yes",
+        "--property=ProtectSystem=strict",
+        "--property=ReadWritePaths=/var/lib/nas-setup /run/nas-secrets /run/nas-operations /run/lock /run/nas-first-start",
+        "--property=TimeoutStartSec=6h",
+        "--",
+        "nas-setup",
+        "run-first-start-job",
+        "--request-file",
+        str(request_path),
+        "--password-file",
+        str(password_path),
+    ]
+    result = run(command, check=False, timeout_seconds=30)
+    if result.returncode != 0:
+        raise operation_error(command, result)
+
+
+def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
+    password = _json_string(request, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
+    if "\n" in password or "\r" in password:
+        raise ApiError("KeePassXC database password must be a single line")
+    plan_digest = _json_string(request, "planDigest", required=True, max_length=64)
+    if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
+        raise ApiError("Invalid first-start plan digest")
+    devices = _json_string_list(request, "devices")
+    if len(devices) != len(set(devices)):
+        raise ApiError("First-start devices contain duplicates")
+    allow_destructive = request.get("allowDestructiveStorage", False)
+    confirm_password_reapply = request.get("confirmPasswordReapply", False)
+    if not isinstance(allow_destructive, bool) or not isinstance(confirm_password_reapply, bool):
+        raise ApiError("First-start confirmation flags must be boolean")
+
+    prepared = first_start_status()
+    if prepared.get("status") in {"complete", "complete-unverified"}:
+        return prepared
+    if prepared.get("status") != "ready":
+        raise ApiError(
+            str(prepared.get("message") or prepared.get("error") or "First-start configuration is not ready")
+        )
+    current_digest = prepared.get("planDigest")
+    if not isinstance(current_digest, str) or not secrets.compare_digest(current_digest, plan_digest):
+        raise ApiError("The confirmed first-start plan is stale; refresh and review the current plan")
+    storage = prepared.get("storage")
+    planned_devices = storage.get("devices", []) if isinstance(storage, dict) else []
+    if not isinstance(planned_devices, list) or any(not isinstance(device, str) for device in planned_devices):
+        raise ApiError("First-start storage device plan is invalid")
+    if sorted(devices) != sorted(planned_devices):
+        raise ApiError("Confirmed first-start storage devices do not match the reviewed plan")
+    if prepared.get("requiresDestructiveConfirmation") is True and not allow_destructive:
+        raise ApiError("Confirm destructive storage creation before continuing")
+
+    job_id = secrets.token_hex(12)
+    try:
+        reservation = reserve_operation(
+            "first-start-job",
+            FIRST_START_CONFLICTS,
+            ttl_seconds=3600,
+        )
+    except OperationBusyError as exc:
+        raise ApiError(str(exc)) from exc
+    request_root = pathlib.Path("/run/nas-first-start")
+    request_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(request_root, 0o700)
+    request_path = request_root / f"{job_id}.json"
+    password_path = request_root / f"{job_id}.password"
+    job = {
+        "schemaVersion": 1,
+        "jobId": job_id,
+        "reservationToken": reservation.token,
+        "config": str(pathlib.Path(FIRST_RUN_CONFIG).resolve()),
+        "planDigest": plan_digest,
+        "devices": devices,
+        "allowDestructiveStorage": allow_destructive,
+        "confirmPasswordReapply": confirm_password_reapply,
+    }
+    try:
+        _write_private_new(request_path, json.dumps(job, sort_keys=True) + "\n")
+        _write_private_new(password_path, password + "\n")
+        _start_first_start_unit(job_id, request_path, password_path)
+        return {"schemaVersion": 1, "jobId": job_id, "status": "submitted"}
+    except Exception:
+        request_path.unlink(missing_ok=True)
+        password_path.unlink(missing_ok=True)
+        cancel_reservation(reservation.token)
+        raise
+    finally:
+        password = ""
+
+
+def reconcile_first_start(request: dict[str, Any]) -> dict[str, Any]:
+    note = _json_string(request, "note", required=True, max_length=2048)
+    result = run(["nas-setup", "reconcile-first-run", "--note", note], check=False, timeout_seconds=60)
+    if result.returncode != 0:
+        raise operation_error(["nas-setup", "reconcile-first-run"], result)
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ApiError("nas-setup returned invalid recovery JSON") from exc
+    return value if isinstance(value, dict) else {"ok": True}
 
 
 @contextlib.contextmanager
@@ -161,217 +553,55 @@ def operation_guard(action: str, conflicts: tuple[str, ...]):
         raise ApiError(str(exc)) from exc
 
 
-def diagnostic(message: str) -> None:
-    syslog.syslog(syslog.LOG_ERR, message[:2000])
+def run_action(name: str) -> dict[str, Any]:
+    spec = ACTIONS.get(name)
+    if spec is None:
+        raise ApiError(f"Unknown action: {name}")
+    if spec.requires_backup and not BACKUP_INSTALLED:
+        raise ApiError("Backup support is not installed in this NixOS generation.")
+    if spec.requires_replication and not ZFS_REPLICATION_INSTALLED:
+        raise ApiError("Replication support is not installed in this NixOS generation.")
+    if spec.requires_syncthing and not SYNCTHING_INSTALLED:
+        raise ApiError("Syncthing support is not installed in this NixOS generation.")
+
+    outputs: list[dict[str, Any]] = []
+    guard = contextlib.nullcontext() if spec.worker_owns_operation else operation_guard(name, spec.conflicts)
+    with guard:
+        for command in spec.commands:
+            result = run(command, check=False, timeout_seconds=spec.timeout_seconds)
+            outputs.append(
+                {
+                    "command": list(command),
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+            )
+            if result.returncode != 0:
+                raise operation_error(command, result)
+    return {"ok": True, "action": name, "commands": outputs}
 
 
-def _secret_command(command: list[str] | tuple[str, ...]) -> bool:
-    if not command:
-        return False
-    return pathlib.PurePath(str(command[0])).name == "nas-secrets"
-
-
-def operation_error(command: list[str] | tuple[str, ...], result: CommandResult) -> ApiError:
-    reference = secrets.token_hex(6)
-    if _secret_command(command):
-        detail = "[secret command output redacted]"
-    else:
-        detail = (result.stderr or result.stdout).strip()[:1000]
-    diagnostic(
-        f"nas-cockpit-api reference={reference} command={list(command)!r} rc={result.returncode} detail={detail!r}"
-    )
-    return ApiError(f"Operation failed (reference {reference})")
-
-
-def run(
-    cmd: list[str] | tuple[str, ...],
-    *,
-    check: bool = True,
-    timeout_seconds: int = 120,
-    input_text: str | None = None,
-    env: dict[str, str] | None = None,
-) -> CommandResult:
-    command = list(cmd)
-    result = run_command(
-        command,
-        timeout_seconds=timeout_seconds,
-        input_text=input_text,
-        env=env,
-    )
-    if check and result.returncode != 0:
-        raise operation_error(command, result)
-    return result
-
-
-def json_command(
-    cmd: list[str],
-    *,
-    optional: bool = False,
-    timeout_seconds: int = 30,
-) -> dict[str, Any]:
-    proc = run(cmd, check=False, timeout_seconds=timeout_seconds)
-    if proc.returncode != 0:
-        error = operation_error(cmd, proc)
-        if optional:
-            return {"ok": False, "error": str(error)}
-        raise error
+def set_managed_service(service_id: str, mode: str) -> dict[str, Any]:
+    if not SERVICE_ID_RE.fullmatch(service_id):
+        raise ApiError("Invalid Managed Services V2 service identifier")
+    if mode not in {"off", "on-demand", "always"}:
+        raise ApiError("Invalid service mode")
     try:
-        value = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise ApiError(f"{' '.join(cmd)} returned invalid JSON") from exc
-    if not isinstance(value, dict):
-        raise ApiError(f"{' '.join(cmd)} returned a non-object JSON value")
-    return value
-
-
-def validate_argument(value: str, pattern: re.Pattern[str], label: str) -> str:
-    if len(value) > MAX_ARGUMENT_LENGTH or not pattern.fullmatch(value):
-        raise ApiError(f"Invalid {label}")
-    return value
-
-
-def service_states(units: list[str]) -> list[dict[str, str]]:
-    if not units:
-        return []
-    proc = run(
-        [
-            "systemctl",
-            "show",
-            "--property=Id,LoadState,ActiveState,SubState,UnitFileState",
-            *units,
-        ],
-        check=False,
-        timeout_seconds=30,
-    )
-    records = {
-        unit: {
-            "unit": unit,
-            "active": values.get("ActiveState", "unknown"),
-            "enabled": values.get("UnitFileState", "unknown"),
-            "sub": values.get("SubState", "unknown"),
-            "load": values.get("LoadState", "unknown"),
-        }
-        for unit, values in parse_systemd_show(proc.stdout).items()
-    }
-    return [
-        records.get(
-            unit, {"unit": unit, "active": "unknown", "enabled": "unknown", "sub": "unknown", "load": "unknown"}
-        )
-        for unit in units
-    ]
-
-
-def feature_status() -> dict[str, Any]:
-    return json_command(["nas-feature-control", "status"], optional=True)
-
-
-def identity_status() -> dict[str, Any]:
-    return json_command(["nas-identity-sync", "status"], optional=True)
-
-
-def capability_status() -> dict[str, Any]:
-    return json_command(["nas-identity-sync", "capabilities"], optional=True)
-
-
-def update_status() -> dict[str, Any]:
-    return json_command(["nas-update", "--status", "--json"], optional=True)
-
-
-def setup_status() -> dict[str, Any]:
-    prepared = json_command(
-        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
-        optional=True,
-    )
-    status = json_command(["nas-setup", "status"], optional=True)
-    if prepared.get("ok") is False and "firstStart" not in status:
-        status["firstStart"] = prepared
-    return status
-
-
-def read_optional_text(path: pathlib.Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return None
-
-
-def endpoint_links(path: pathlib.Path = ENDPOINT_REGISTRY) -> dict[str, str]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
-    if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
-        return {}
-    endpoints = payload.get("endpoints")
-    if not isinstance(endpoints, dict):
-        return {}
-    links: dict[str, str] = {}
-    for value in endpoints.values():
-        if not isinstance(value, dict) or value.get("available") is not True:
-            continue
-        key = value.get("linkKey")
-        public_path = value.get("publicPath")
-        if (
-            isinstance(key, str)
-            and key
-            and isinstance(public_path, str)
-            and public_path.startswith("/")
-            and not public_path.startswith("//")
-            and "\\" not in public_path
-            and not any(ord(character) < 32 or ord(character) == 127 for character in public_path)
-        ):
-            links[key] = public_path
-    return links
-
-
-def read_json_request() -> dict[str, Any]:
-    raw = sys.stdin.buffer.read(MAX_JSON_INPUT_BYTES + 1)
-    if len(raw) > MAX_JSON_INPUT_BYTES:
-        raise ApiError("Request body is too large")
-    try:
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ApiError("Request body must be a JSON object") from exc
-    if not isinstance(value, dict):
-        raise ApiError("Request body must be a JSON object")
-    return value
-
-
-def ai_configuration() -> dict[str, Any]:
-    try:
-        return ai_config.public_view(ai_config.load_config())
-    except (ai_config.AiConfigError, OSError) as exc:
-        return {"ok": False, "error": str(exc), "providers": [], "codingRoles": {}, "availableTargets": []}
-
-
-def _json_string(request: dict[str, Any], key: str, *, required: bool = False, max_length: int = 4096) -> str:
-    value = request.get(key, "")
-    if not isinstance(value, str) or len(value) > max_length or "\x00" in value:
-        raise ApiError(f"Invalid {key}")
-    if required and not value:
-        raise ApiError(f"{key} is required")
-    return value
-
-
-def _json_string_list(request: dict[str, Any], key: str, *, required: bool = False) -> list[str]:
-    value = request.get(key, [])
-    if (
-        not isinstance(value, list)
-        or len(value) > ai_config.MAX_MODELS
-        or any(not isinstance(item, str) for item in value)
-    ):
-        raise ApiError(f"Invalid {key}")
-    if required and not value:
-        raise ApiError(f"{key} is required")
-    return value
-
-
-def _coordinated_secret_command(active: Any, command: list[str], input_text: str) -> None:
-    env = dict(os.environ)
-    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-    result = run(command, check=False, timeout_seconds=120, input_text=input_text, env=env)
+        with acquire_operation("managed-service-policy", ("runtime",)) as active:
+            env = dict(os.environ)
+            env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+            command = ["nas-managed-services-control", "set", service_id, mode]
+            result = run(command, check=False, timeout_seconds=180, env=env)
+    except OperationBusyError as exc:
+        raise ApiError(str(exc)) from exc
     if result.returncode != 0:
         raise operation_error(command, result)
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ApiError("Managed Services V2 control returned invalid JSON") from exc
+    return value if isinstance(value, dict) else {"ok": True}
 
 
 def _snapshot_private_file(path: pathlib.Path, label: str) -> PrivateFileSnapshot:
@@ -383,32 +613,31 @@ def _snapshot_private_file(path: pathlib.Path, label: str) -> PrivateFileSnapsho
         raise ApiError(f"Unable to snapshot {label}") from exc
     if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
         raise ApiError(f"Refusing unsafe {label} path")
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
+        descriptor = os.open(path, flags)
     except OSError as exc:
         raise ApiError(f"Unable to snapshot {label}") from exc
     try:
-        current = os.fstat(fd)
+        current = os.fstat(descriptor)
         if current.st_dev != before.st_dev or current.st_ino != before.st_ino or not stat.S_ISREG(current.st_mode):
             raise ApiError(f"{label} changed while it was being snapshotted")
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1
+        if current.st_size > MAX_PRIVATE_SNAPSHOT_BYTES:
+            raise ApiError(f"{label} is unexpectedly large")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
             content = handle.read(MAX_PRIVATE_SNAPSHOT_BYTES + 1)
         if len(content) > MAX_PRIVATE_SNAPSHOT_BYTES:
             raise ApiError(f"{label} is unexpectedly large")
-        return PrivateFileSnapshot(
-            True,
-            content,
-            stat.S_IMODE(current.st_mode),
-            current.st_uid,
-            current.st_gid,
-        )
+        return PrivateFileSnapshot(True, content, stat.S_IMODE(current.st_mode), current.st_uid, current.st_gid)
     finally:
-        if fd >= 0:
-            os.close(fd)
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _private_file_snapshot(path: pathlib.Path, label: str) -> PrivateFileSnapshot:
+    """Compatibility-free internal alias retained only for local call-site clarity."""
+    return _snapshot_private_file(path, label)
 
 
 def _fsync_parent(path: pathlib.Path) -> None:
@@ -434,49 +663,29 @@ def _restore_private_file(path: pathlib.Path, snapshot: PrivateFileSnapshot, lab
         except OSError as exc:
             raise ApiError(f"Unable to restore absent {label}") from exc
         return
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.rollback.", dir=parent)
-    temporary_path = pathlib.Path(temporary)
+    fd, raw = tempfile.mkstemp(prefix=f".{path.name}.rollback.", dir=parent)
+    temporary = pathlib.Path(raw)
     replaced = False
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(snapshot.content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary_path, snapshot.mode)
+        os.chmod(temporary, snapshot.mode)
         if os.geteuid() == 0:
-            os.chown(temporary_path, snapshot.uid, snapshot.gid)
-        os.replace(temporary_path, path)
+            os.chown(temporary, snapshot.uid, snapshot.gid)
+        os.replace(temporary, path)
         replaced = True
         _fsync_parent(path)
     except OSError as exc:
         raise ApiError(f"Unable to restore {label}") from exc
     finally:
         if not replaced:
-            temporary_path.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
 
 
 def _secret_env_path() -> pathlib.Path:
     return pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets")) / "ai" / "llama-swap.env"
-
-
-def _read_secret_env() -> bytes | None:
-    snapshot = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
-    return snapshot.content if snapshot.exists else None
-
-
-def _restore_secret_env(content: bytes | None, active: Any) -> None:
-    del active
-    path = _secret_env_path()
-    if content is None:
-        return
-    try:
-        current = _snapshot_private_file(path, "llama-swap runtime secret environment")
-        snapshot = PrivateFileSnapshot(
-            True, content, current.mode if current.exists else 0o400, current.uid, current.gid
-        )
-        _restore_private_file(path, snapshot, "llama-swap runtime secret environment")
-    except ApiError:
-        raise
 
 
 def _provider_reference_configured(config: dict[str, Any], provider_id: str) -> bool:
@@ -491,16 +700,10 @@ def _provider_reference_configured(config: dict[str, Any], provider_id: str) -> 
 
 
 def _fetch_existing_provider_key(active: Any, provider_id: str, keepass_password: str) -> str:
-    fetch_env = dict(os.environ)
-    fetch_env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+    env = dict(os.environ)
+    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
     command = ["nas-secrets", "show-ai-provider-key-stdin", provider_id]
-    result = run(
-        command,
-        check=False,
-        timeout_seconds=30,
-        input_text=f"{keepass_password}\n",
-        env=fetch_env,
-    )
+    result = run(command, check=False, timeout_seconds=30, input_text=f"{keepass_password}\n", env=env)
     if result.returncode != 0:
         diagnostic(
             f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}"
@@ -545,21 +748,17 @@ def _restart_llama_swap(active: Any, *, was_active: bool | None = None) -> None:
     should_restart = _llama_swap_active(active) if was_active is None else was_active
     if not should_restart:
         return
-    result = run(
-        ["systemctl", "restart", "nas-llama-swap.service"],
-        check=False,
-        timeout_seconds=60,
-        env=env,
-    )
+    command = ["systemctl", "restart", "nas-llama-swap.service"]
+    result = run(command, check=False, timeout_seconds=60, env=env)
     if result.returncode != 0:
-        raise operation_error(["systemctl", "restart", "nas-llama-swap.service"], result)
-    result = run(
+        raise operation_error(command, result)
+    active_result = run(
         ["systemctl", "is-active", "--quiet", "nas-llama-swap.service"],
         check=False,
         timeout_seconds=10,
         env=env,
     )
-    if result.returncode != 0:
+    if active_result.returncode != 0:
         raise ApiError("llama-swap failed to start after provider update")
 
 
@@ -579,12 +778,7 @@ def _rollback_provider_mutation(
     failures: list[str] = []
     if credential_attempted:
         try:
-            _write_provider_key(
-                active,
-                provider_id,
-                keepass_password,
-                old_keepass_key if had_credential else None,
-            )
+            _write_provider_key(active, provider_id, keepass_password, old_keepass_key if had_credential else None)
         except Exception:
             failures.append("KeePass credential")
     if old_env is not None:
@@ -625,7 +819,7 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError(str(exc)) from exc
     if api_key and not keepass_password:
         raise ApiError("KeePassXC database password is required when setting a provider API key")
-    if "\n" in keepass_password or "\r" in keepass_password or "\n" in api_key or "\r" in api_key:
+    if any("\n" in value or "\r" in value for value in (keepass_password, api_key)):
         raise ApiError("Provider credentials must be single-line values")
 
     old_keepass_key: str | None = None
@@ -635,15 +829,14 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
             before = ai_config.load_config()
             had_credential = _provider_reference_configured(before, provider_id)
             old_env: PrivateFileSnapshot | None = None
-            credential_attempted = False
-            config_attempted = False
             service_was_active = _llama_swap_active(active)
+            credential_attempted = False
             if api_key:
                 old_env = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
                 if had_credential:
                     old_keepass_key = _fetch_existing_provider_key(active, provider_id, keepass_password)
+                credential_attempted = True
                 try:
-                    credential_attempted = True
                     _write_provider_key(active, provider_id, keepass_password, api_key)
                 except Exception as original:
                     try:
@@ -655,7 +848,7 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
                             old_env=old_env,
                             had_credential=had_credential,
                             old_keepass_key=old_keepass_key,
-                            credential_attempted=credential_attempted,
+                            credential_attempted=True,
                             config_attempted=False,
                             service_was_active=False,
                         )
@@ -663,7 +856,6 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
                         raise rollback_error from original
                     raise
             try:
-                config_attempted = True
                 value = ai_config.set_provider(
                     provider_id,
                     url,
@@ -685,7 +877,7 @@ def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
                         had_credential=had_credential,
                         old_keepass_key=old_keepass_key,
                         credential_attempted=credential_attempted,
-                        config_attempted=config_attempted,
+                        config_attempted=True,
                         service_was_active=service_was_active,
                     )
                 except ApiError as rollback_error:
@@ -711,23 +903,19 @@ def delete_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
         with acquire_operation("ai-provider-delete", ("secrets", "runtime")) as active:
             old_config = _snapshot_private_file(pathlib.Path(ai_config.CONFIG_PATH), "llama-swap configuration")
             before = ai_config.load_config()
-            has_credential = _provider_reference_configured(before, provider_id)
-            if has_credential and not keepass_password:
+            had_credential = _provider_reference_configured(before, provider_id)
+            if had_credential and not keepass_password:
                 raise ApiError("KeePassXC database password is required to remove the stored provider credential")
             if "\n" in keepass_password or "\r" in keepass_password:
                 raise ApiError("KeePassXC database password must be a single line")
             old_env: PrivateFileSnapshot | None = None
-            if has_credential:
+            if had_credential:
                 old_env = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
                 old_keepass_key = _fetch_existing_provider_key(active, provider_id, keepass_password)
             service_was_active = _llama_swap_active(active)
-            credential_attempted = False
-            config_attempted = False
             try:
-                config_attempted = True
                 value = ai_config.delete_provider(provider_id)
-                if has_credential:
-                    credential_attempted = True
+                if had_credential:
                     _write_provider_key(active, provider_id, keepass_password, None)
                 _restart_llama_swap(active, was_active=service_was_active)
                 return value
@@ -739,10 +927,10 @@ def delete_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
                         keepass_password=keepass_password,
                         old_config=old_config,
                         old_env=old_env,
-                        had_credential=has_credential,
+                        had_credential=had_credential,
                         old_keepass_key=old_keepass_key,
-                        credential_attempted=credential_attempted,
-                        config_attempted=config_attempted,
+                        credential_attempted=had_credential,
+                        config_attempted=True,
                         service_was_active=service_was_active,
                     )
                 except ApiError as rollback_error:
@@ -825,14 +1013,12 @@ def set_ai_advanced(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def overview() -> dict[str, Any]:
-    features = feature_status()
-    feature_rows = features.get("features", []) if isinstance(features.get("features"), list) else []
+    managed = managed_services_status()
     units = [
         "nas-protected-services.target",
         "postgresql.service",
         "authentik.service",
         "authentik-worker.service",
-        "nas-identity-sync.timer",
         "copyparty.service",
         "cockpit.socket",
         "caddy.service",
@@ -840,10 +1026,11 @@ def overview() -> dict[str, Any]:
     ]
     if ZFS_REPLICATION_INSTALLED:
         units.append("nas-syncoid.service")
-    for feature in feature_rows:
-        if not isinstance(feature, dict):
+    rows = managed.get("services", []) if isinstance(managed.get("services"), list) else []
+    for service in rows:
+        if not isinstance(service, dict):
             continue
-        for unit in feature.get("units", []):
+        for unit in service.get("units", []):
             if isinstance(unit, dict) and isinstance(unit.get("unit"), str):
                 units.append(unit["unit"])
     units = list(dict.fromkeys(units))
@@ -880,8 +1067,6 @@ def overview() -> dict[str, Any]:
     zfs = results["zfs"]
     failed = results["failed"]
     timers = results["timers"]
-    failed_lines = failed.stdout.strip().splitlines() if isinstance(failed, CommandResult) else []
-    timer_lines = timers.stdout.splitlines() if isinstance(timers, CommandResult) else []
     return {
         "host": socket.gethostname(),
         "protectedReady": pathlib.Path("/run/nas-secrets/ready").exists(),
@@ -890,280 +1075,156 @@ def overview() -> dict[str, Any]:
         "setup": results["setup"],
         "identity": results["identity"],
         "capabilities": results["capabilities"],
-        "featureControl": features,
+        "managedServices": managed,
         "update": results["update"],
         "aiConfig": results["aiConfig"],
-        "services": results["services"] if isinstance(results["services"], list) else [],
-        "zpool": {
-            "ok": isinstance(zpool, CommandResult) and zpool.returncode == 0,
-            "text": (
-                (zpool.stdout or zpool.stderr).strip()
-                if isinstance(zpool, CommandResult)
-                else str(zpool.get("error", "unavailable"))
-            ),
-        },
+        "operations": operation_state(),
+        "services": results["services"],
         "zfs": {
-            "ok": isinstance(zfs, CommandResult) and zfs.returncode == 0,
-            "text": (
-                (zfs.stdout or zfs.stderr).strip()
-                if isinstance(zfs, CommandResult)
-                else str(zfs.get("error", "unavailable"))
-            ),
+            "healthy": isinstance(zpool, CommandResult) and zpool.returncode == 0,
+            "summary": (zpool.stdout or zpool.stderr).strip() if isinstance(zpool, CommandResult) else "unavailable",
+            "dataset": (zfs.stdout or zfs.stderr).strip() if isinstance(zfs, CommandResult) else "unavailable",
         },
-        "failedUnits": failed_lines,
-        "timers": [
-            line
-            for line in timer_lines
-            if any(name in line for name in ("nas-", "sanoid", "zfs-scrub", "smart", "restic"))
-        ],
-        "operationState": operation_state(),
-        "links": {
-            **endpoint_links(),
-            "shares": "/shares/",
-            "copypartyConfig": "/shares/admin/copyparty-config/",
-            "settings": "/settings/",
-            "documentation": "/console/@localhost/nas/docs/index.html",
-            "files": "/console/@localhost/files",
-            "zfs": "/console/@localhost/zfs",
-            "podman": "/console/@localhost/podman",
-            "machines": "/console/@localhost/machines",
-            "network": "/console/@localhost/network",
-            "scheduler": "/console/@localhost/scheduler",
-        },
+        "failedUnits": failed.stdout.strip().splitlines() if isinstance(failed, CommandResult) else [],
+        "timers": timers.stdout.splitlines()[:80] if isinstance(timers, CommandResult) else [],
+        "links": static_links(),
+        "managedServiceLinks": portal_entries(),
     }
 
 
-def safe_action(name: str) -> dict[str, Any]:
-    spec = ACTIONS.get(name)
-    if spec is None:
-        raise ApiError(f"Unknown action: {name}")
-    if spec.requires_backup and not BACKUP_INSTALLED:
-        raise ApiError("Backup support is not installed in this NixOS generation.")
-    if spec.requires_replication and not ZFS_REPLICATION_INSTALLED:
-        raise ApiError("ZFS replication is not installed in this NixOS generation.")
-    if spec.requires_syncthing and not SYNCTHING_INSTALLED:
-        raise ApiError("Syncthing support is not installed in this NixOS generation.")
-
-    outputs: list[str] = []
-    guard = contextlib.nullcontext() if spec.worker_owns_operation else operation_guard(name, spec.conflicts)
-    with guard:
-        for command in spec.commands:
-            proc = run(command, check=False, timeout_seconds=spec.timeout_seconds)
-            if proc.returncode != 0:
-                raise operation_error(command, proc)
-            if proc.stdout.strip():
-                outputs.append(proc.stdout.strip())
-    return {"action": name, "ok": True, "output": "\n".join(outputs)}
-
-
-def set_feature(feature: str, mode: str) -> dict[str, Any]:
-    feature = validate_argument(feature, FEATURE_RE, "feature identifier")
-    if mode not in {"off", "on-demand", "always"}:
-        raise ApiError("Feature mode must be off, on-demand, or always")
-    return json_command(["nas-feature-control", "set", feature, mode])
-
-
-def read_secret_line() -> str:
-    line = sys.stdin.readline(MAX_PASSWORD_LENGTH + 2)
-    if not line:
-        raise ApiError("A KeePassXC database password is required")
-    if len(line) > MAX_PASSWORD_LENGTH + 1 or not line.endswith("\n"):
-        raise ApiError("KeePassXC database password input is invalid")
-    password = line[:-1]
-    if not password or "\x00" in password or "\r" in password:
-        raise ApiError("KeePassXC database password input is invalid")
-    if sys.stdin.read(1):
-        raise ApiError("Unexpected data after KeePassXC database password")
-    return password
-
-
-def write_private_file(path: pathlib.Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+def read_optional_text(path: pathlib.Path) -> str | None:
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except Exception:
-        path.unlink(missing_ok=True)
-        raise
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
 
 
-def start_first_start_unit(command: list[str], password: str) -> dict[str, Any]:
-    try:
-        digest_index = command.index("--confirm-plan-digest")
-        plan_digest = command[digest_index + 1]
-        devices = [command[index + 1] for index, value in enumerate(command) if value == "--confirm-storage-device"]
-    except (ValueError, IndexError) as exc:
-        raise ApiError("First-start launch command is incomplete") from exc
-    reservation = reserve_operation("first-start", FIRST_START_CONFLICTS, ttl_seconds=300)
-    job_id = secrets.token_hex(12)
-    root = pathlib.Path(os.environ.get("NAS_OPERATION_ROOT", "/run/nas-operations"))
-    password_path = root / f"first-start-{job_id}.password"
-    request_path = root / f"first-start-{job_id}.json"
-    request = {
-        "schemaVersion": 1,
-        "jobId": job_id,
-        "reservationToken": reservation.token,
-        "config": FIRST_RUN_CONFIG,
-        "planDigest": plan_digest,
-        "devices": devices,
-        "allowDestructiveStorage": "--allow-destructive-storage" in command,
-        "confirmPasswordReapply": "--confirm-password-reapply" in command,
-    }
-    try:
-        write_private_file(password_path, password + "\n")
-        write_private_file(request_path, json.dumps(request, sort_keys=True) + "\n")
-        setup_program = shutil.which("nas-setup") or "nas-setup"
-        unit = f"nas-first-start-job-{job_id}.service"
-        launch = [
-            "systemd-run",
-            "--quiet",
-            "--collect",
-            f"--unit={unit}",
-            "--property=Type=exec",
-            "--property=TimeoutStartSec=6h",
-            "--property=RuntimeMaxSec=6h",
-            "--property=Nice=5",
-            "--setenv=NAS_SETUP_ALLOW_ROOT=1",
-            setup_program,
-            "run-first-start-job",
-            "--request-file",
-            str(request_path),
-            "--password-file",
-            str(password_path),
-        ]
-        result = run(launch, check=False, timeout_seconds=30)
-        if result.returncode != 0:
-            raise operation_error(launch, result)
+def source_control(request: dict[str, Any]) -> dict[str, Any]:
+    operation = _json_string(request, "operation", required=True, max_length=32)
+    allowed = {"status", "diff", "log", "pull", "rebuild", "pull-rebuild"}
+    if operation not in allowed:
+        raise ApiError("Unsupported source-control operation")
+    if not CONFIG_DIR.is_dir():
+        raise ApiError(f"Configuration directory does not exist: {CONFIG_DIR}")
+    if operation in {"status", "diff", "log"}:
+        command = {
+            "status": ["git", "-C", str(CONFIG_DIR), "status", "--short", "--branch"],
+            "diff": ["git", "-C", str(CONFIG_DIR), "diff", "--stat"],
+            "log": ["git", "-C", str(CONFIG_DIR), "log", "--oneline", "-20"],
+        }[operation]
+        result = run(command, check=False, timeout_seconds=60)
         return {
-            "status": "started",
-            "operationId": job_id,
-            "unit": unit,
-            "reservationExpiresAt": reservation.expires_at,
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
         }
-    except Exception:
-        password_path.unlink(missing_ok=True)
-        request_path.unlink(missing_ok=True)
-        cancel_reservation(reservation.token)
-        raise
-
-
-def run_first_start(
-    *,
-    plan_digest: str,
-    allow_destructive_storage: bool,
-    confirm_password_reapply: bool = False,
-) -> dict[str, Any]:
-    if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
-        raise ApiError("First-start plan digest is invalid")
-    status = json_command(
-        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
-        optional=False,
-    )
-    if status.get("status") in {"complete", "complete-unverified"}:
-        return status
-    if status.get("status") != "ready":
-        raise ApiError(str(status.get("message") or "First-start configuration is not ready"))
-
-    current_digest = status.get("planDigest")
-    if not isinstance(current_digest, str) or not secrets.compare_digest(current_digest, plan_digest):
-        raise ApiError("The confirmed first-start plan is stale; refresh and review the current plan")
-
-    requires_destructive = status.get("requiresDestructiveConfirmation") is True
-    if requires_destructive and not allow_destructive_storage:
-        raise ApiError("Confirm destructive storage creation before continuing")
-
-    storage = status.get("storage")
-    devices = storage.get("devices", []) if isinstance(storage, dict) else []
-    if not isinstance(devices, list) or any(not isinstance(device, str) for device in devices):
-        raise ApiError("First-start storage device plan is invalid")
-
-    command = [
-        "nas-setup",
-        "first-run",
-        "--config",
-        FIRST_RUN_CONFIG,
-        "--keepass-password-stdin",
-        "--confirm-plan-digest",
-        plan_digest,
-    ]
-    for device in devices:
-        command.extend(["--confirm-storage-device", device])
-    if allow_destructive_storage:
-        command.append("--allow-destructive-storage")
-    if confirm_password_reapply:
-        command.append("--confirm-password-reapply")
-
-    password = read_secret_line()
     try:
-        return start_first_start_unit(command, password)
-    finally:
-        password = ""
+        with acquire_operation(f"source-{operation}", ("appliance", "update")) as active:
+            env = dict(os.environ)
+            env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
+            outputs: list[dict[str, Any]] = []
+            if operation in {"pull", "pull-rebuild"}:
+                command = ["git", "-C", str(CONFIG_DIR), "pull", "--ff-only"]
+                result = run(command, check=False, timeout_seconds=180, env=env)
+                outputs.append(
+                    {
+                        "command": command,
+                        "returncode": result.returncode,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                    }
+                )
+                if result.returncode != 0:
+                    raise operation_error(command, result)
+            if operation in {"rebuild", "pull-rebuild"}:
+                command = ["nixos-rebuild", "switch", "--flake", f"{CONFIG_DIR}#nas"]
+                result = run(command, check=False, timeout_seconds=1800, env=env)
+                outputs.append(
+                    {
+                        "command": command,
+                        "returncode": result.returncode,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                    }
+                )
+                if result.returncode != 0:
+                    raise operation_error(command, result)
+            return {"ok": True, "operation": operation, "commands": outputs}
+    except OperationBusyError as exc:
+        raise ApiError(str(exc)) from exc
 
 
-def main() -> None:
-    # Allow --help/-h without superuser so `test_all_argument_driven_python_commands_have_working_help`
-    # and `python -m pytest` on host (non-root) can validate CLI surfaces without escalation.
-    # All other commands still require root.
-    if os.geteuid() != 0 and "--help" not in sys.argv and "-h" not in sys.argv:
-        print(json.dumps({"error": "nas-cockpit-api requires Cockpit superuser escalation"}), file=sys.stderr)
-        raise SystemExit(1)
-
-    parser = argparse.ArgumentParser()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("overview")
-    sub.add_parser("ai-config")
+    sub.add_parser("operations")
+    sub.add_parser("first-start-status")
+    job = sub.add_parser("first-start-job-status")
+    job.add_argument("job_id")
+    sub.add_parser("first-start")
+    sub.add_parser("first-start-reconcile")
+    action = sub.add_parser("action")
+    action.add_argument("name", choices=sorted(ACTIONS))
+    managed = sub.add_parser("managed-service")
+    managed.add_argument("service")
+    managed.add_argument("mode", choices=["off", "on-demand", "always"])
     sub.add_parser("ai-provider-set")
     sub.add_parser("ai-provider-delete")
     sub.add_parser("ai-local-model-set")
     sub.add_parser("ai-local-model-delete")
     sub.add_parser("ai-role-set")
     sub.add_parser("ai-advanced-set")
-    action = sub.add_parser("action")
-    action.add_argument("name", choices=sorted(ACTIONS))
-    feature = sub.add_parser("feature")
-    feature.add_argument("feature")
-    feature.add_argument("mode", choices=["off", "on-demand", "always"])
-    first = sub.add_parser("first-run")
-    first.add_argument("--allow-destructive-storage", action="store_true")
-    first.add_argument("--plan-digest", required=True)
-    first.add_argument("--confirm-password-reapply", action="store_true")
-    args = parser.parse_args()
+    sub.add_parser("source-control")
+    return parser
 
+
+def main() -> int:
+    if os.geteuid() != 0 and "--help" not in sys.argv and "-h" not in sys.argv:
+        print("nas-cockpit-api requires Cockpit superuser escalation", file=sys.stderr)
+        return 1
+    args = build_parser().parse_args()
     try:
         if args.command == "overview":
             result = overview()
-        elif args.command == "ai-config":
-            result = ai_configuration()
-        elif args.command == "ai-provider-set":
-            result = set_ai_provider(read_json_request())
-        elif args.command == "ai-provider-delete":
-            result = delete_ai_provider(read_json_request())
-        elif args.command == "ai-local-model-set":
-            result = set_ai_local_model(read_json_request())
-        elif args.command == "ai-local-model-delete":
-            result = delete_ai_local_model(read_json_request())
-        elif args.command == "ai-role-set":
-            result = set_ai_role(read_json_request())
-        elif args.command == "ai-advanced-set":
-            result = set_ai_advanced(read_json_request())
+        elif args.command == "operations":
+            result = operation_state()
+        elif args.command == "first-start-status":
+            result = first_start_status()
+        elif args.command == "first-start-job-status":
+            result = first_start_job_status(args.job_id)
+        elif args.command == "first-start":
+            result = start_first_start(_json_input())
+        elif args.command == "first-start-reconcile":
+            result = reconcile_first_start(_json_input())
         elif args.command == "action":
-            result = safe_action(args.name)
-        elif args.command == "feature":
-            result = set_feature(args.feature, args.mode)
-        else:
-            result = run_first_start(
-                plan_digest=args.plan_digest,
-                allow_destructive_storage=args.allow_destructive_storage,
-                confirm_password_reapply=args.confirm_password_reapply,
-            )
+            result = run_action(args.name)
+        elif args.command == "managed-service":
+            result = set_managed_service(args.service, args.mode)
+        elif args.command == "ai-provider-set":
+            result = set_ai_provider(_json_input())
+        elif args.command == "ai-provider-delete":
+            result = delete_ai_provider(_json_input())
+        elif args.command == "ai-local-model-set":
+            result = set_ai_local_model(_json_input())
+        elif args.command == "ai-local-model-delete":
+            result = delete_ai_local_model(_json_input())
+        elif args.command == "ai-role-set":
+            result = set_ai_role(_json_input())
+        elif args.command == "ai-advanced-set":
+            result = set_ai_advanced(_json_input())
+        elif args.command == "source-control":
+            result = source_control(_json_input())
+        else:  # pragma: no cover
+            raise ApiError(f"Unsupported command: {args.command}")
         print(json.dumps(result, indent=2, sort_keys=True))
-    except ApiError as exc:
-        print(json.dumps({"error": str(exc)}), file=sys.stderr)
-        raise SystemExit(1) from exc
+        return 0
+    except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:
+        print(f"nas-cockpit-api: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

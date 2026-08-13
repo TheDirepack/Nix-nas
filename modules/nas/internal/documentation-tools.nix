@@ -1,8 +1,8 @@
 args:
 let
   inherit (args)
-    nasFeatureControl
     nasIdentitySync
+    nasPythonApplication
     nasSecrets
     nasSetup
     nasState
@@ -33,7 +33,8 @@ let
     }
     emit_help nas-identity-sync ${nasIdentitySync}/bin/nas-identity-sync
     emit_help nas-setup ${nasSetup}/bin/nas-setup
-    emit_help nas-feature-control ${nasFeatureControl}/bin/nas-feature-control
+    emit_help nas-managed-services-control ${nasPythonApplication}/bin/nas-managed-services-control
+    emit_help nas-managed-services ${nasPythonApplication}/bin/nas-managed-services
     emit_help nas-state ${nasState}/bin/nas-state
     emit_help nas-secrets ${nasSecrets}/bin/nas-secrets
     emit_help nas-update ${nasUpdate}/bin/nas-update
@@ -173,9 +174,12 @@ let
       printf '# Deployed custom configuration source\n\n'
       printf 'Generated from the exact release source. These pages are reference-only; edit the repository and rebuild rather than changing generated documentation.\n'
       append_source "Operator configuration template" ${../../../local.nix} local.nix nix
-      append_source "Reverse proxy and authorization routes" ${../../../modules/nas/config/reverse-proxy.nix} modules/nas/config/reverse-proxy.nix nix
+      append_source "Managed Services V2 integration" ${../../../modules/nas/config/managed-services.nix} modules/nas/config/managed-services.nix nix
+      append_source "Managed Services V2 native service catalog" ${../../../modules/nas/config/managed-services-native-services.nix} modules/nas/config/managed-services-native-services.nix nix
+      append_source "Managed Services V2 schema" ${../../../schemas/managed-services-v3.schema.json} schemas/managed-services-v3.schema.json json
+      append_source "Reverse proxy bootstrap routes" ${../../../modules/nas/config/reverse-proxy.nix} modules/nas/config/reverse-proxy.nix nix
       append_source "Application service definitions" ${../../../modules/nas/config/application-services.nix} modules/nas/config/application-services.nix nix
-      append_source "System and mutable seed configuration" ${../../../modules/nas/config/system.nix} modules/nas/config/system.nix nix
+      append_source "System configuration" ${../../../modules/nas/config/system.nix} modules/nas/config/system.nix nix
       append_source "Systemd service definitions" ${../../../modules/nas/config/systemd-services.nix} modules/nas/config/systemd-services.nix nix
       append_source "Identity and local accounts" ${../../../modules/nas/config/identities.nix} modules/nas/config/identities.nix nix
       append_source "Network and firewall" ${../../../modules/nas/config/network-firewall.nix} modules/nas/config/network-firewall.nix nix
@@ -190,15 +194,15 @@ let
       append_source "Power tooling" ${../../../modules/nas/internal/power-tools.nix} modules/nas/internal/power-tools.nix nix
       append_source "Storage tooling" ${../../../modules/nas/internal/zfs-tools.nix} modules/nas/internal/zfs-tools.nix nix
       append_source "Core internal context" ${../../../modules/nas/internal/base.nix} modules/nas/internal/base.nix nix
-      append_source "Feature catalog and policy" ${../../../modules/nas/internal/feature-catalog.nix} modules/nas/internal/feature-catalog.nix nix
-      append_source "Capability and group registry" ${../../../modules/nas/internal/capability-registry.nix} modules/nas/internal/capability-registry.nix nix
-      append_source "Capability registry schema" ${../../../schemas/capability-registry.schema.json} schemas/capability-registry.schema.json json
-      append_source "Caddy authorization helpers" ${../../../modules/nas/internal/caddy-helpers.nix} modules/nas/internal/caddy-helpers.nix nix
+      append_source "Caddy bootstrap helpers" ${../../../modules/nas/internal/caddy-helpers.nix} modules/nas/internal/caddy-helpers.nix nix
       append_source "Identity reconciler" ${../../../services/nas_identity_sync.py} services/nas_identity_sync.py python
       append_source "First-run setup orchestrator" ${../../../services/nas_setup.py} services/nas_setup.py python
       append_source "First-run setup example" ${../../../setup/first-run.example.json} setup/first-run.example.json json
       append_source "Syncthing device validator" ${../../../services/nas_syncthing_devices.py} services/nas_syncthing_devices.py python
-      append_source "Feature controller" ${../../../services/nas_feature_control.py} services/nas_feature_control.py python
+      append_source "Managed Services V2 control" ${../../../services/nas_v2_control.py} services/nas_v2_control.py python
+      append_source "Managed Services V2 compiler" ${../../../services/nas_v2_spec.py} services/nas_v2_spec.py python
+      append_source "Managed Services V2 systemd projection" ${../../../services/nas_v2_systemd.py} services/nas_v2_systemd.py python
+      append_source "Managed Services V2 Caddy projection" ${../../../services/nas_v2_caddy.py} services/nas_v2_caddy.py python
       append_source "Cockpit privileged API" ${../../../services/nas_cockpit_api.py} services/nas_cockpit_api.py python
       append_source "Caddy portal template" ${../../../web/portal/index.html} web/portal/index.html html
       append_source "AI runtime services" ${../../../modules/ai/services.nix} modules/ai/services.nix nix

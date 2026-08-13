@@ -33,6 +33,7 @@ let
   monitoredUnits = lib.unique (
     [
       "nas-*"
+      "podman-*.service"
       "zfs-*"
       "sanoid*"
       "syncoid*"
@@ -40,9 +41,20 @@ let
       "firewalld.service"
       "sshd.service"
       "postgresql.service"
+      "authentik.service"
+      "authentik-worker.service"
+      "copyparty.service"
+      "caddy.service"
+      "cockpit.socket"
     ]
-    ++ lib.concatMap (entry: entry.runtime.units)
-      (lib.filter (entry: entry.enabled) (lib.attrValues nasInternal.serviceRegistry))
+    ++ lib.optional cfg.syncthing.enable "syncthing.service"
+    ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
+    ++ lib.optional cfg.ai.enable "open-webui.service"
+    ++ lib.optional cfg.virtualization.enable "libvirtd.service"
+    ++ lib.optionals cfg.observability.enable [ "victoriametrics.service" "telegraf.service" ]
+    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) "vmalert-nas.service"
+    ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) "grafana.service"
+    ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
   );
   smartctlReadOnly = pkgs.writeShellScript "nas-smartctl-readonly" ''
     set -euo pipefail

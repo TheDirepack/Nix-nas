@@ -1,5 +1,8 @@
-{ lib, ... }:
+{ config, lib, pkgs, ... }:
 
+let
+  reconcileEnvironment = config.systemd.services.nas-managed-services-reconcile.environment;
+in
 {
   system.stateVersion = "26.05";
   networking.hostId = "c0ffee22";
@@ -22,5 +25,88 @@
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
     zfsImportAtBoot = lib.mkForce false;
+    networking.applicationVlanParent = "eth0";
   };
+
+  assertions = [
+    {
+      assertion =
+        !config.nas.networking.enable
+        || lib.attrByPath [ "NAS_V2_VLAN_PARENT" ] null reconcileEnvironment == "eth0";
+      message = "Managed Services V2 must project the configured application VLAN trunk into its finite reconcile environment.";
+    }
+    {
+      assertion =
+        !config.nas.networking.enable
+        || lib.attrByPath [ "NAS_V2_NMCLI_BIN" ] null reconcileEnvironment == "${pkgs.networkmanager}/bin/nmcli";
+      message = "Managed Services V2 must use the pinned NetworkManager nmcli binary for VLAN projection.";
+    }
+    {
+      assertion =
+        !config.nas.networking.enable
+        || lib.attrByPath [ "NAS_V2_INSTALL_BIN" ] null reconcileEnvironment == "${pkgs.coreutils}/bin/install";
+      message = "Managed Services V2 must use the pinned coreutils install binary for VLAN projection.";
+    }
+    {
+      assertion = config.systemd.services.copyparty.wantedBy == [ ];
+      message = "CopyParty must not retain a static NixOS boot target while Managed Services V2 owns its lifecycle.";
+    }
+    {
+      assertion = !lib.elem "copyparty.service" config.systemd.services.caddy.wants;
+      message = "Caddy must not bypass Managed Services V2 by statically starting the CopyParty application backend.";
+    }
+    {
+      assertion = !lib.elem "copyparty.service" config.systemd.targets.nas-protected-services.requires;
+      message = "Secret activation must not bypass Managed Services V2 by statically starting CopyParty.";
+    }
+    {
+      assertion = !lib.elem "nas-identity-sync.service" config.systemd.targets.nas-protected-services.requires;
+      message = "Secret activation must not bypass the Managed Services V2 identity-sync job lifecycle.";
+    }
+    {
+      assertion = config.systemd.services.nas-managed-services-authentik-reconcile.requires == [ "authentik.service" ];
+      message = "The Authentik capability projection must not directly start the V2-managed identity-sync job.";
+    }
+    {
+      assertion =
+        !lib.elem "nas-identity-sync.service" config.systemd.services.nas-managed-services-authentik-reconcile.after;
+      message = "The Authentik capability projection must not retain a hidden ordering dependency on identity-sync.";
+    }
+    {
+      assertion =
+        !config.nas.syncthing.enable
+        || config.systemd.services.nas-syncthing-sync.requires == [ "authentik.service" ];
+      message = "Syncthing identity reconciliation must not statically start the V2-managed Syncthing application.";
+    }
+    {
+      assertion =
+        !config.nas.syncthing.enable
+        || config.systemd.services.nas-syncthing-sync.after == [ "authentik.service" ];
+      message = "Syncthing identity reconciliation must get its Syncthing ordering edge only from the V2 dependency projection.";
+    }
+    {
+      assertion =
+        !(config.nas.observability.enable && config.nas.alerting.enable)
+        || config.systemd.services.vmalert-nas.requires == [ ];
+      message = "vmalert must not statically start V2-managed observability application dependencies.";
+    }
+    {
+      assertion =
+        !(config.nas.observability.enable && config.nas.alerting.enable)
+        || config.systemd.services.vmalert-nas.after == [ ];
+      message = "vmalert ordering on V2-managed application dependencies must come from the V2 systemd projection.";
+    }
+    {
+      assertion =
+        !config.nas.observability.ntfy.enable
+        || config.systemd.services."nas-health-alert@".wants == [ ];
+      message = "Host health alerts must not statically start the V2-managed notification application.";
+    }
+    {
+      assertion =
+        !config.nas.observability.ntfy.enable
+        || config.systemd.services."nas-health-alert@".after == [ ];
+      message = "Health-alert ordering on the notification application must remain under V2 lifecycle authority.";
+    }
+  ];
 }

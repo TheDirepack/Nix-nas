@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -24,13 +25,22 @@ else:
     HAS_HYPOTHESIS = True
 
     import nas_alert_router as alerts
-    import nas_cockpit_api as api
     import nas_common as common
     import nas_identity_model as identity
     import nas_setup_config as setup_config
     import nas_state as state
     import nas_syncthing_devices as syncthing
-    from fuzz_strategies import identifier_candidates, json_values, path_candidates
+    import nas_v2_accelerator as accelerator
+    import nas_v2_caddy as caddy
+    import nas_v2_spec as v2_spec
+    from fuzz_strategies import (
+        bounded_paths,
+        identifier_candidates,
+        json_values,
+        path_candidates,
+        v2_capabilities,
+        v2_service_ids,
+    )
 
 
 if HAS_HYPOTHESIS:
@@ -65,18 +75,14 @@ if HAS_HYPOTHESIS:
 
         @settings(max_examples=400, deadline=None)
         @given(identifier_candidates(max_size=512))
-        def test_cockpit_feature_argument_acceptance_matches_declared_grammar(self, raw: str) -> None:
-            target(len(raw), label="feature-id-length")
-            try:
-                accepted = api.validate_argument(raw, api.FEATURE_RE, "feature identifier")
-            except api.ApiError:
-                event("feature-id:rejected")
-                self.assertTrue(len(raw) > api.MAX_ARGUMENT_LENGTH or api.FEATURE_RE.fullmatch(raw) is None)
+        def test_v2_service_id_acceptance_matches_compiler_grammar(self, raw: str) -> None:
+            target(len(raw), label="service-id-length")
+            matched = v2_spec.SERVICE_ID_RE.fullmatch(raw)
+            event("service-id:accepted" if matched is not None else "service-id:rejected")
+            if matched is None:
                 return
-            event("feature-id:accepted")
-            self.assertEqual(accepted, raw)
-            self.assertLessEqual(len(accepted), api.MAX_ARGUMENT_LENGTH)
-            self.assertIsNotNone(api.FEATURE_RE.fullmatch(accepted))
+            self.assertLessEqual(len(raw), 64)
+            self.assertEqual(matched.group(0), raw)
 
         @settings(max_examples=400, deadline=None)
         @given(st.text(max_size=4200))
@@ -196,6 +202,83 @@ if HAS_HYPOTHESIS:
             event("identity-username:accepted")
             self.assertTrue(all(re.fullmatch(syncthing.USERNAME_RE, user.uid) for user in model.users))
             self.assertTrue(all(user.uid == username for user in model.users))
+
+        @settings(max_examples=600, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(v2_service_ids(), v2_capabilities(), st.text(max_size=2000))
+        def test_v2_capability_group_is_strict_and_never_empty(
+            self, service_id: str, capability: str, suffix: str
+        ) -> None:
+            target(len(service_id) + len(capability), label="capability-input-length")
+            try:
+                group = common.application_capability_group(service_id, capability)
+            except ValueError:
+                event("capability:rejected")
+                return
+            event("capability:accepted")
+            self.assertTrue(group.startswith("application."))
+            self.assertNotIn("\x00", group)
+            self.assertNotIn("\n", group)
+            self.assertLessEqual(len(group), 256)
+
+        @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(st.text(max_size=8192), st.text(max_size=1024))
+        def test_caddy_header_and_path_are_control_safe(self, raw_header: str, raw_path: str) -> None:
+            target(len(raw_header) + len(raw_path), label="caddy-input-length")
+            # Header names must be rejected if they contain controls
+            try:
+                caddy._header_name(raw_header)  # type: ignore[attr-defined]
+            except caddy.CaddyProjectionError:
+                event("caddy-header:rejected")
+            else:
+                event("caddy-header:accepted")
+                self.assertNotIn("\x00", raw_header)
+            try:
+                caddy._path_patterns(raw_path)  # type: ignore[attr-defined]
+            except caddy.CaddyProjectionError:
+                event("caddy-path:rejected")
+            else:
+                event("caddy-path:accepted")
+                self.assertTrue(raw_path.startswith("/"))
+
+        @settings(max_examples=500, deadline=None)
+        @given(st.text(max_size=2048), st.text(max_size=64))
+        def test_accelerator_cdi_selector_never_accepts_device_paths(self, raw: str, dev: str) -> None:
+            target(len(raw), label="cdi-input-length")
+            is_cdi = accelerator.is_cdi_selector(raw)
+            event("cdi:accepted" if is_cdi else "cdi:rejected")
+            if is_cdi:
+                self.assertNotIn("/", raw.split("=")[0] if "=" in raw else raw)
+                self.assertIn("/", raw)
+                self.assertIn("=", raw)
+
+        @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(bounded_paths(prefix="/tank"), st.text(max_size=2048))
+        def test_state_path_containment_is_strict(self, safe: str, raw: str) -> None:
+            target(len(safe), label="path-length")
+            # safe path should always hash without symlink error when it exists
+            self.assertTrue(safe.startswith("/tank/"))
+            try:
+                state.safe_member_name(raw)
+            except state.StateError:
+                event("safe-member:rejected")
+            else:
+                event("safe-member:accepted")
+                self.assertFalse(raw.startswith("/"))
+
+        @settings(max_examples=400, deadline=None)
+        @given(json_values(max_leaves=30))
+        def test_common_read_json_object_never_returns_non_dict(self, raw: object) -> None:
+            target(len(str(raw)), label="json-input-length")
+            with tempfile.TemporaryDirectory() as tmp:
+                path = pathlib.Path(tmp) / "obj.json"
+                path.write_text(json.dumps(raw), encoding="utf-8")
+                try:
+                    obj = common.read_json_object(path)
+                except Exception:
+                    event("read-json:rejected")
+                    return
+                event("read-json:accepted")
+                self.assertIsInstance(obj, dict)
 else:
 
     class StructuredBoundaryFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]

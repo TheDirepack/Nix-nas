@@ -22,15 +22,13 @@ class ScriptInventoryTests(unittest.TestCase):
     def test_safe_cli_help_surfaces_do_not_touch_system_state(self):
         commands = [
             [sys.executable, "services/nas_doctor.py", "--help"],
-            [sys.executable, "services/nas_feature_control.py", "--help"],
+            [sys.executable, "services/nas_v2_control.py", "--help"],
             [sys.executable, "services/nas_identity_sync.py", "--help"],
-            [sys.executable, "services/nas_migrate_state.py", "--help"],
             [sys.executable, "services/nas_setup.py", "--help"],
             [sys.executable, "services/nas_state.py", "--help"],
             ["bash", "scripts/package-release.sh", "--help"],
             ["bash", "scripts/qemu-test.sh", "--help"],
             ["bash", "scripts/update-nas.sh", "--help"],
-            ["bash", "scripts/vm-bundles.sh", "--help"],
         ]
         for command in commands:
             with self.subTest(command=command):

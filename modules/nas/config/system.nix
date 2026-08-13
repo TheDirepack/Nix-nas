@@ -3,19 +3,16 @@
 let
   inherit (nasInternal)
     cockpitPort
-    capabilityRegistryDocument
     cfg
     copypartyMountRoot
     copypartyUserConfigDir
-    featureCatalog
+    nasAuthentikBlueprints
     lanHost
     llamaCppPackage
     nasAlert
     nasCockpitApi
     nasDoctor
-    nasFeatureControl
     nasIdentitySync
-    nasMigrateState
     nasPythonApplication
     nasPreflight
     nasSecrets
@@ -28,8 +25,6 @@ let
     nasZfsLock
     nasZfsMountCheck
     nasZfsUnlock
-    secretRoot
-    serviceRegistry
   ;
   copypartyUserSeed = pkgs.writeText "00-local-overrides.conf" ''
     # Mutable seed; edit through /shares/admin/copyparty-config and reload CopyParty.
@@ -39,7 +34,7 @@ let
       accs:
         A: @nas_admin
 
-    [/shares/users/''${u%+nas_allow_files}]
+    [/shares/users/''${u%+application.copyparty.files}]
       ${copypartyMountRoot}/users/''${u}
       accs:
         rwmd.: ''${u}
@@ -123,25 +118,14 @@ in
       "C ${copypartyUserConfigDir}/00-local-overrides.conf 0660 copyparty copyparty - ${copypartyUserSeed}"
       "d /var/lib/nas-identity-sync 0700 root root -"
       "d /var/lib/nas-setup 0770 root wheel -"
-      "d /var/lib/nas-control 0770 nas-feature-gate nas-feature-control -"
+      "d /var/lib/nas-control 0750 root nas-operations -"
       "d /run/nas-operations 2770 root nas-operations -"
       "d /run/nas-state 0700 root root -"
-      "f /var/lib/nas-control/feature-control.lock 0660 nas-feature-gate nas-feature-control -"
       "d /var/log/journal 2755 root systemd-journal -"
       "f /run/lock/nas-update.lock 0660 root wheel -"
       "f /run/lock/nas-secrets.lock 0660 root wheel -"
       "f /run/lock/nas-identity-sync.lock 0660 root wheel -"
     ];
-
-    environment.etc."nas-control/capabilities.json".text = builtins.toJSON capabilityRegistryDocument;
-    environment.etc."nas-control/capability-registry.schema.json".source = ../../../schemas/capability-registry.schema.json;
-    environment.etc."nas-control/features.json".text = builtins.toJSON featureCatalog;
-    environment.etc."nas-control/endpoints.json".text = builtins.toJSON nasInternal.serviceRegistryV2;
-    environment.etc."nas-control/endpoints-v1.json".text = builtins.toJSON {
-      schemaVersion = 1;
-      endpoints = serviceRegistry;
-    };
-    environment.etc."nas-control/feature-catalog.schema.json".source = ../../../schemas/feature-catalog.schema.json;
 
     environment.systemPackages = with pkgs; [
       copyparty
@@ -151,9 +135,7 @@ in
       nasSetup
       nasState
       nasDoctor
-      nasMigrateState
       nasIdentitySync
-      nasFeatureControl
       nasCockpitApi
       nasPreflight
       nasUpdate

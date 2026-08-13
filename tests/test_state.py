@@ -682,6 +682,110 @@ class StateBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(state.StateError, "nonempty JSON command array"):
                 state.database_command("TEST_DATABASE_COMMAND", ["x"], "{x}", "value")
 
+    def test_post_restore_validation_triggers_rollback_when_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("bundle-public\n", encoding="utf-8")
+            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("pre-restore-public\n", encoding="utf-8")
+                sensitive.write_text("pre-restore-sensitive\n", encoding="utf-8")
+                journal = root / "journal.json"
+
+                corrupted = False
+
+                def corrupting_reapply(snapshot: object) -> None:
+                    nonlocal corrupted
+                    if not corrupted:
+                        state.run_systemctl("daemon-reload")
+                        public.write_text("corrupted-after-apply\n", encoding="utf-8")
+                        corrupted = True
+                    else:
+                        # rollback path should not re-corrupt
+                        state.run_systemctl("daemon-reload")
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "RESTORE_JOURNAL", journal),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=corrupting_reapply),
+                ):
+                    with self.assertRaisesRegex(state.StateError, "Post-restore validation failed"):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+                self.assertEqual("pre-restore-public\n", public.read_text(encoding="utf-8"))
+                self.assertEqual("pre-restore-sensitive\n", sensitive.read_text(encoding="utf-8"))
+                self.assertTrue(journal.is_file())
+                data = json.loads(journal.read_text(encoding="utf-8"))
+                self.assertNotEqual("committed", data.get("status"))
+                self.assertEqual("failed-rolled-back", data.get("status"))
+
+    def test_rollback_snapshot_captured_before_quiesce(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("original-public\n", encoding="utf-8")
+            sensitive.write_text("original-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("mutated-public\n", encoding="utf-8")
+                journal = root / "journal.json"
+                call_order: list[str] = []
+                quiesce_args: list[bool | None] = []
+                original_export = state.export_bundle
+                original_stop = state.stop_active_units
+
+                def tracking_export(output: pathlib.Path, *, include_sensitive: bool, quiesce: bool | None = None):
+                    call_order.append("export")
+                    quiesce_args.append(quiesce)
+                    return original_export(output, include_sensitive=include_sensitive, quiesce=quiesce)
+
+                def tracking_stop(snapshot):
+                    call_order.append("stop")
+                    return original_stop(snapshot)
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "RESTORE_JOURNAL", journal),
+                    mock.patch.object(state, "export_bundle", side_effect=tracking_export),
+                    mock.patch.object(state, "stop_active_units", side_effect=tracking_stop),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    state.restore_bundle(
+                        bundle,
+                        confirm_host=socket.gethostname(),
+                        allow_partial=False,
+                        include_sensitive=True,
+                    )
+                self.assertIn("export", call_order)
+                self.assertIn("stop", call_order)
+                self.assertLess(call_order.index("export"), call_order.index("stop"))
+                self.assertIn(False, quiesce_args)
+
 
 if __name__ == "__main__":
     unittest.main()

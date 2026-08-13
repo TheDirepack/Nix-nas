@@ -1,0 +1,9 @@
+schemaVersion: 3
+services:
+  nightly-job:
+    name: Nightly Job
+    workload:
+      kind: job
+      schedules:
+        - calendar: "02:00"
+    runtime: {type: systemd, unit: nightly-job.service}
