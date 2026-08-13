@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.12 — 2026-08-13
+
+- Apply Authentik outpost redirect rewriting as a deferred Caddy response-header operation so loopback authentication origins cannot escape to browsers.
+
 ## 2.2.0-alpha.11 — 2026-08-13
 
 - Rewrite internal Authentik outpost redirect origins at Caddy’s public boundary so browser authentication never receives the VM’s loopback URL.
