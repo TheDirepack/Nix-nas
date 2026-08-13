@@ -11,7 +11,6 @@ from typing import Any, Iterator
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, WebDriverException
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -23,6 +22,8 @@ class RouteExpectation:
 
 
 def browser() -> webdriver.Chrome:
+    from selenium.webdriver.chrome.service import Service
+
     options = webdriver.ChromeOptions()
     chromium = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     chromedriver = shutil.which("chromedriver")
