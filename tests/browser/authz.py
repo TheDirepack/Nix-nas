@@ -294,8 +294,12 @@ def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
 
 
 def verify_native_share_route(driver: webdriver.Chrome, origin: str) -> None:
-    driver.get(origin + "/share/not-a-real-token")
-    if "/identity/if/flow/" in driver.current_url:
+    # An invalid native share can execute CopyParty's own error-page script;
+    # inspect the response without allowing that page to interrupt WebDriver.
+    result = fetch_status(driver, origin + "/share/not-a-real-token")
+    if result["status"] == 0:
+        raise RuntimeError(f"CopyParty native share route request failed: {result!r}")
+    if "/identity/if/flow/" in result["url"]:
         raise RuntimeError("CopyParty native share route was intercepted by Authentik")
 
 
