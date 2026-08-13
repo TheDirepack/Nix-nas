@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.0-alpha.15 — 2026-08-13
+
+- Preserve the exact byte content of the staged ZFS encryption key when exporting an offline recovery copy, allowing encrypted VM qualification to verify the recovery artifact byte-for-byte.
+
+## 2.2.0-alpha.14 — 2026-08-13
+
+- Rewrite Authentik outpost redirects inside Caddy’s response interception path so internal loopback URLs cannot reach the browser.
+
 ## 2.2.0-alpha.13 — 2026-08-13
 
 - Make the isolated QEMU browser fixture resolve its public Authentik hostname locally, without depending on host DNS or a physical network interface.

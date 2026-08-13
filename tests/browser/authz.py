@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import stat
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, WebDriverException
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -22,6 +24,11 @@ class RouteExpectation:
 
 def browser() -> webdriver.Chrome:
     options = webdriver.ChromeOptions()
+    chromium = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+    chromedriver = shutil.which("chromedriver")
+    if not chromium or not chromedriver:
+        raise RuntimeError("The VM browser suite requires packaged chromium and chromedriver binaries")
+    options.binary_location = chromium
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
     for argument in [
         "--headless=new",
@@ -31,17 +38,34 @@ def browser() -> webdriver.Chrome:
         "--window-size=1280,900",
     ]:
         options.add_argument(argument)
-    return webdriver.Chrome(options=options)
+    return webdriver.Chrome(service=Service(executable_path=chromedriver), options=options)
+
+
+def search_roots(driver: webdriver.Chrome) -> Iterator[Any]:
+    roots: list[Any] = [driver]
+    for root in roots:
+        yield root
+        try:
+            children = root.find_elements(By.CSS_SELECTOR, "*")
+        except WebDriverException:
+            continue
+        for child in children:
+            try:
+                shadow_root = child.shadow_root
+            except WebDriverException:
+                continue
+            roots.append(shadow_root)
 
 
 def first(driver: webdriver.Chrome, selectors: list[str]) -> Any:
-    for selector in selectors:
-        try:
-            element = driver.find_element(By.CSS_SELECTOR, selector)
-            if element.is_displayed():
-                return element
-        except NoSuchElementException:
-            pass
+    for root in search_roots(driver):
+        for selector in selectors:
+            try:
+                element = root.find_element(By.CSS_SELECTOR, selector)
+                if element.is_displayed():
+                    return element
+            except (NoSuchElementException, WebDriverException):
+                pass
     raise NoSuchElementException(", ".join(selectors))
 
 

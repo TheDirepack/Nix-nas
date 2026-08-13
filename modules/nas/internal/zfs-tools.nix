@@ -357,7 +357,7 @@ let
       tmp="$(mktemp)"
       trap 'rm -f -- "$tmp"; unset key' EXIT
       chmod 0600 "$tmp"
-      printf '%s\n' "$key" > "$tmp"
+      printf '%s' "$key" > "$tmp"
       sudo install -m 0400 -o root -g root "$tmp" "$output"
       echo "Wrote a root-only recovery key to $output. Store it offline and test it before relying on encryption."
     '';
