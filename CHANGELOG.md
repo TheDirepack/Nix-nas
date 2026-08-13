@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.18 — 2026-08-13
+
+- Make the unencrypted VM first-run checkpoints report the captured setup state when a qualification assertion fails.
+
 ## 2.2.0-alpha.17 — 2026-08-13
 
 - Harden the QEMU wrapper lifecycle, align managed-service schema/runtime validation, and make CI-provided VM dependencies explicit.

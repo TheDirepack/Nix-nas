@@ -310,24 +310,42 @@ run_as_admin "printf '%s\n' '$KEEPASS_PASSWORD' | timeout 1200 nas-setup first-r
   --confirm-plan-digest '$plan_digest' \
   --confirm-storage-device '$ZFS_DEVICE' \
   --allow-destructive-storage" >/tmp/nas-first-run.json
-jq -e '
+if ! jq -e '
   .storage.createdPool == true and
   .storage.createdDataset == true and
   (.accounts.created | sort) == ["alice", "baseline", "guest", "operator"] and
   (.identity.administrators | index("operator")) != null
-' /tmp/nas-first-run.json >/dev/null
+' /tmp/nas-first-run.json >/dev/null; then
+  printf '%s\n' '--- first-run report ---' >&2
+  jq . /tmp/nas-first-run.json >&2 || cat /tmp/nas-first-run.json >&2
+  fail "nas-setup first-run report did not contain the expected storage, account, and administrator state"
+fi
+pass "nas-setup first-run created the expected storage and accounts"
 run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json" \
   >/tmp/nas-first-start-status.json
-jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
-  /tmp/nas-first-start-status.json >/dev/null
-nas-setup status | jq -e '
+if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
+  /tmp/nas-first-start-status.json >/dev/null; then
+  printf '%s\n' '--- first-start status ---' >&2
+  jq . /tmp/nas-first-start-status.json >&2 || cat /tmp/nas-first-start-status.json >&2
+  fail "first-start status did not report complete for the configured plan"
+fi
+if ! nas-setup status | jq -e '
   .runtimeSecretsActive == true and
   .poolPresent == true and
   .datasetPresent == true and
   .setupState
-' >/dev/null
-[[ -d /tank/shares/users/alice && -d /tank/shares/users/operator ]]
-[[ "$(stat -c '%a:%U:%G' /tank/shares/users/alice)" == "2770:copyparty:copyparty" ]]
+' >/dev/null; then
+  nas-setup status >&2 || true
+  fail "nas-setup status did not report an active completed setup"
+fi
+if [[ ! -d /tank/shares/users/alice || ! -d /tank/shares/users/operator ]]; then
+  find /tank/shares/users -maxdepth 1 -mindepth 1 -printf '%M %u:%g %p\n' >&2 || true
+  fail "first-run did not create both expected personal share directories"
+fi
+if [[ "$(stat -c '%a:%U:%G' /tank/shares/users/alice)" != "2770:copyparty:copyparty" ]]; then
+  stat -c '%a:%U:%G %n' /tank/shares/users/alice >&2 || true
+  fail "Alice's personal share directory has unexpected ownership or mode"
+fi
 findmnt -n -o FSTYPE,SOURCE,TARGET /tank | grep -q '^zfs tank/nas /tank$'
 pass "nas-setup created storage, KeePass secrets, accounts, shares, and activated the stack"
 
