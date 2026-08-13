@@ -8,6 +8,15 @@
         default = true;
         description = "Use NetworkManager as the runtime network configuration authority exposed through Cockpit.";
       };
+      applicationVlanParent = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "^[A-Za-z0-9_.:-]+$");
+        default = null;
+        description = ''
+          Optional host trunk interface used when a Managed Services V2 application selects
+          network.vlanId. Applications choose only the VLAN ID; the physical parent remains
+          platform configuration so the same services.yaml stays portable across hosts.
+        '';
+      };
       firewall = {
         enable = lib.mkOption {
           type = lib.types.bool;
@@ -31,7 +40,7 @@
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Install single-node VictoriaMetrics, Telegraf collectors, optional Grafana, vmalert, the NAS alert router, and native ntfy notification components.";
+        description = "Install single-node VictoriaMetrics, Telegraf, optional Grafana, vmalert, the NAS alert router, and native ntfy notification components.";
       };
       retentionTime = lib.mkOption {
         type = lib.types.str;

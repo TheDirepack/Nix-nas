@@ -1,10 +1,3 @@
-export const CAPABILITIES = [
-  ["files", "Files"],
-  ["webdav", "WebDAV"],
-  ["ai", "AI UI"],
-  ["vault", "Vault SSO"],
-];
-
 export const MODE_LABELS = {
   off: "Off",
   "on-demand": "On demand",
@@ -13,63 +6,62 @@ export const MODE_LABELS = {
 
 export const LINK_LABELS = {
   identity: "Identity (Authentik)",
-  settings: "My account settings",
-  documentation: "NAS help",
-  shares: "Files (CopyParty)",
+  accountSettings: "My account settings",
+  docs: "NAS help",
   copypartyConfig: "CopyParty settings",
-  aiWorkspace: "AI workspace",
-  aiRuntime: "AI runtime",
-  syncthing: "Syncthing",
-  vaultwarden: "Vaultwarden",
   files: "Host files",
-  zfs: "ZFS storage",
-  podman: "Containers",
-  machines: "Virtual machines",
+  storage: "ZFS storage",
+  containers: "Containers",
+  virtualMachines: "Virtual machines",
   network: "Network and firewall",
-  ups: "UPS",
-  alerts: "Alerts",
-  metrics: "Grafana dashboards",
-  notifications: "Notifications",
-  victoriaMetrics: "Metrics explorer",
+  power: "Power",
+  logs: "System logs",
+  softwareUpdates: "Software updates",
+  terminal: "Terminal",
   scheduler: "Schedules",
 };
 
 export const OPERATIONS = [
   ["identity-sync", "Validate identity model"],
   ["health", "Run system health checks"],
-  ["snapshot", "Create ZFS snapshots"],
-  ["scrub", "Start ZFS scrub"],
+  ["snapshot", "Create ZFS snapshot"],
+  ["zfs-scrub", "Start ZFS scrub"],
   ["backup", "Run system backup"],
-  ["syncthing-reconcile", "Reconcile Syncthing"],
-  ["update-preview", "Preview and validate updates"],
-  ["update-sync", "Sync and validate approved updates"],
-  ["update-apply", "Deploy validated checkout"],
+  ["replicate", "Replicate ZFS now"],
+  ["syncthing-sync", "Reconcile Syncthing"],
+  ["update-preview", "Preview approved updates"],
+  ["update-sync", "Sync approved updates"],
+  ["update-apply", "Apply validated update"],
   ["protected-restart", "Restart protected services"],
 ];
 
-export function featureMap(data = {}) {
-  const features = Array.isArray(data?.featureControl?.features)
-    ? data.featureControl.features
+export function managedServiceMap(data = {}) {
+  const services = Array.isArray(data?.managedServices?.services)
+    ? data.managedServices.services
     : [];
   return Object.fromEntries(
-    features
+    services
       .filter(
-        (feature) =>
-          feature && typeof feature === "object" && typeof feature.id === "string" && feature.id,
+        (service) =>
+          service && typeof service === "object" && typeof service.id === "string" && service.id,
       )
-      .map((feature) => [feature.id, feature]),
+      .map((service) => [service.id, service]),
   );
 }
 
-export function inactiveServiceCount(services = []) {
-  const rows = Array.isArray(services) ? services : [];
-  return rows.filter(
-    (item) =>
-      item &&
-      typeof item === "object" &&
-      item.active !== "active" &&
-      !String(item.unit || "").endsWith(".timer"),
-  ).length;
+export function managedServiceRows(data = {}) {
+  return Object.values(managedServiceMap(data)).sort((left, right) =>
+    String(left.label || left.id).localeCompare(String(right.label || right.id)),
+  );
+}
+
+export function inactiveServiceCount(services = {}) {
+  const rows = Array.isArray(services) ? services : Object.values(services || {});
+  return rows.filter((item) => {
+    if (!item || typeof item !== "object") return false;
+    if (typeof item.activeState === "string") return item.activeState !== "active";
+    return item.active !== true;
+  }).length;
 }
 
 export function revisionModel(update = {}) {
@@ -102,33 +94,38 @@ export function safeInternalPath(value) {
   return value;
 }
 
-export function enabledLinkKeys(data = {}) {
-  const features = featureMap(data);
-  const enabled = {
-    identity: true,
-    settings: true,
-    documentation: true,
-    shares: true,
-    copypartyConfig: true,
-    files: true,
-    zfs: true,
-    podman: true,
-    network: true,
-    scheduler: true,
-    aiWorkspace: Boolean(features.aiWorkspace?.effective),
-    aiRuntime: Boolean(features.aiRuntime?.effective),
-    syncthing: Boolean(features.syncthing?.effective),
-    vaultwarden: Boolean(features.vaultwarden?.effective),
-    machines: Boolean(features.virtualization?.effective),
-    ups: Boolean(features.upsWeb?.effective),
-    alerts: Boolean(features.alerts?.effective),
-    victoriaMetrics: Boolean(features.observability?.effective),
-    metrics: Boolean(features.grafana?.effective),
-    notifications: Boolean(features.notifications?.effective),
-  };
+export function staticLinks(data = {}) {
   const links =
     data?.links && typeof data.links === "object" && !Array.isArray(data.links) ? data.links : {};
-  return Object.keys(links).filter((key) => Boolean(enabled[key]));
+  return Object.entries(links)
+    .map(([key, url]) => ({key, label: LINK_LABELS[key] || key, url: safeInternalPath(url)}))
+    .filter((entry) => entry.url);
+}
+
+export function managedApplicationLinks(data = {}) {
+  const entries = Array.isArray(data?.managedServiceLinks) ? data.managedServiceLinks : [];
+  return entries
+    .filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        typeof entry.label === "string" &&
+        typeof entry.url === "string" &&
+        safeInternalPath(entry.url),
+    )
+    .map((entry) => ({
+      ...entry,
+      url: safeInternalPath(entry.url),
+      category: typeof entry.category === "string" && entry.category ? entry.category : "Other",
+      order: Number.isFinite(entry.order) ? entry.order : 0,
+    }))
+    .sort(
+      (left, right) =>
+        left.order - right.order ||
+        left.category.localeCompare(right.category) ||
+        left.label.localeCompare(right.label),
+    );
 }
 
 export function setupModel(data = {}) {
@@ -147,7 +144,7 @@ export function setupModel(data = {}) {
       planDigest: "",
       storage: {},
       accountCount: 0,
-      featureCount: 0,
+      serviceCount: 0,
       destructiveRequired: false,
       journal: null,
     };
@@ -168,7 +165,7 @@ export function setupModel(data = {}) {
     planDigest: firstStart.planDigest || setup.setupState?.planDigest || "",
     storage: firstStart.storage || {},
     accountCount: Number(firstStart.accountCount || 0),
-    featureCount: Number(firstStart.featureCount || 0),
+    serviceCount: Number(firstStart.serviceCount || 0),
     destructiveRequired: firstStart.requiresDestructiveConfirmation === true,
     journal:
       setup.setupJournal && typeof setup.setupJournal === "object" ? setup.setupJournal : null,
@@ -176,68 +173,62 @@ export function setupModel(data = {}) {
   };
 }
 
-export function featureUnitState(feature = {}) {
-  feature = feature && typeof feature === "object" && !Array.isArray(feature) ? feature : {};
-  const units = Array.isArray(feature?.units) ? feature.units : [];
-  if (!units.length) return "Logical group";
-  const active = units.filter((unit) => unit.active).length;
+export function managedServiceUnitState(service = {}) {
+  service = service && typeof service === "object" && !Array.isArray(service) ? service : {};
+  const units = Array.isArray(service.units) ? service.units : [];
+  if (!units.length) return service.managed === false ? "Platform service" : "No native unit";
+  const active = units.filter(
+    (unit) => unit?.active === true || unit?.activeState === "active",
+  ).length;
   if (active === units.length) return "Running";
-  return active ? "Partially running" : "Sleeping";
+  return active
+    ? "Partially running"
+    : service.effectiveMode === "on-demand"
+      ? "Sleeping"
+      : "Stopped";
 }
 
-export function featureRuntimeText(feature = {}) {
-  feature = feature && typeof feature === "object" && !Array.isArray(feature) ? feature : {};
+export function managedServiceRuntimeText(service = {}) {
+  service = service && typeof service === "object" && !Array.isArray(service) ? service : {};
   const details = [];
-  if (feature.runtimeAvailable === false) {
-    details.push(`Runtime unavailable: ${feature.availabilityReason || "probe failed"}`);
+  if (service.managed === false) details.push("Lifecycle remains native to the platform");
+  if (service.runtimeAvailable === false) details.push("Runtime unavailable");
+  if (service.effectiveMode === "on-demand" && service.running)
+    details.push("Native idle lease active");
+  else if (service.effectiveMode === "on-demand")
+    details.push("Starts on authorized access or explicit wake");
+  if (Number.isFinite(service.idleSeconds) && service.effectiveMode === "on-demand") {
+    details.push(`Idle policy ${Math.ceil(service.idleSeconds / 60)} min`);
   }
-  if (feature.effectiveMode === "on-demand" && feature.running) {
-    details.push(
-      `Idle stop in ${feature.idleRemainingSeconds == null ? "—" : `${Math.ceil(feature.idleRemainingSeconds / 60)} min`}`,
-    );
-  } else if (feature.effectiveMode === "on-demand") {
-    details.push("Starts on first authorized access");
-  }
-  if (Number.isFinite(feature.lastStartDurationMs)) {
-    details.push(`Last cold start ${(feature.lastStartDurationMs / 1000).toFixed(1)}s`);
-  }
-  if (feature.startupEstimateSeconds) {
-    details.push(
-      `Expected warm ${feature.startupEstimateSeconds.warm}s; first ${feature.startupEstimateSeconds.first}s`,
-    );
-  }
-  if (Array.isArray(feature.heldBy) && feature.heldBy.length)
-    details.push(`Kept resident by ${feature.heldBy.join(", ")}`);
   return details.join(" · ");
 }
 
-export function operationConflicts(data = {}, actionId) {
-  const value = data?.operationState?.conflictsByAction?.[actionId];
-  return Array.isArray(value) ? value : [];
+export function operationBusy(data = {}, actionId = "") {
+  const busy = new Set(
+    Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : [],
+  );
+  const conflicts = data?.operations?.conflictsByAction?.[actionId];
+  if (!Array.isArray(conflicts)) return busy.size > 0;
+  return conflicts.some((item) => busy.has(item));
 }
 
-export function operationBusy(data = {}, actionId) {
+export function managedServiceOperationsBusy(data = {}) {
   const busy = new Set(
-    Array.isArray(data?.operationState?.busyClasses) ? data.operationState.busyClasses : [],
+    Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : [],
   );
-  return operationConflicts(data, actionId).some((item) => busy.has(item));
-}
-
-export function featureOperationsBusy(data = {}) {
-  const busy = new Set(
-    Array.isArray(data?.operationState?.busyClasses) ? data.operationState.busyClasses : [],
-  );
-  const conflicts = Array.isArray(data?.operationState?.featureConflicts)
-    ? data.operationState.featureConflicts
-    : ["runtime"];
+  const conflicts = Array.isArray(data?.operations?.managedServicesConflicts)
+    ? data.operations.managedServicesConflicts
+    : ["runtime", "appliance", "first-start"];
   return conflicts.some((item) => busy.has(item));
 }
 
 export function visibleOperations(data = {}) {
-  const features = featureMap(data);
+  const services = managedServiceMap(data);
   return OPERATIONS.filter(([id]) => {
-    if (id === "backup") return Boolean(features.backups?.available);
-    if (id === "syncthing-reconcile") return Boolean(features.syncthing?.available);
+    if (id === "backup")
+      return Boolean(services.backups?.available ?? services.backup?.available ?? true);
+    if (id === "replicate") return data?.zfsReplicationInstalled === true;
+    if (id === "syncthing-sync") return Boolean(services.syncthing?.available ?? true);
     return true;
   });
 }

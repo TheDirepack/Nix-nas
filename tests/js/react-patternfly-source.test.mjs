@@ -16,11 +16,42 @@ test("Cockpit entry point mounts React 18 and loads PatternFly 6 styles", async 
 test("application uses PatternFly components instead of legacy DOM rendering", async () => {
   const app = await source("src/app.jsx");
   assert.match(app, /from "@patternfly\/react-core"/);
-  for (const component of ["<Page", "<Card", "<Form", "<Alert", "<Modal", "<Label"]) {
+  for (const component of ["<Card", "<Form", "<Alert", "<Label", "<Button", "<Title"]) {
     assert.ok(app.includes(component), `missing ${component}`);
   }
   for (const legacy of ["innerHTML", "querySelector", "createElement", "window.confirm"]) {
     assert.equal(app.includes(legacy), false, `legacy renderer API remains: ${legacy}`);
+  }
+});
+
+test("managed services editor is generated from the canonical schema with YAML as advanced mode", async () => {
+  const app = await source("src/app.jsx");
+  const schemaEditor = await source("src/schema-editor.jsx");
+  const schemaModel = await source("src/schema-model.js");
+  assert.match(app, /<SchemaEditor schema=\{document\.schema\} value=\{formValue\}/);
+  assert.match(app, /replaceManagedServicesJsonDocument/);
+  assert.match(app, /Advanced YAML/);
+  assert.match(schemaEditor, /additionalProperties/);
+  assert.match(schemaEditor, /variantOptions/);
+  assert.match(schemaModel, /resolved\.oneOf/);
+  for (const application of [
+    "copyparty",
+    "syncthing",
+    "grafana",
+    "ai-runtime",
+    "ai-workspace",
+    "ntfy",
+  ]) {
+    assert.equal(
+      schemaEditor.includes(application),
+      false,
+      `${application} must not be special-cased in schema UI`,
+    );
+    assert.equal(
+      schemaModel.includes(application),
+      false,
+      `${application} must not be special-cased in schema model`,
+    );
   }
 });
 
@@ -33,7 +64,9 @@ test("build follows the Starter Kit esbuild and Sass source-to-dist pattern", as
   assert.equal(packageJson.dependencies.react, "18.3.1");
   assert.equal(packageJson.dependencies["@patternfly/react-core"], "6.1.0");
   const buildScript = fileURLToPath(new URL("../../cockpit/build.js", import.meta.url));
-  const result = spawnSync(process.execPath, [buildScript, "--check-source"], {encoding: "utf8"});
+  const result = spawnSync(process.execPath, [buildScript, "--check-source"], {
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr);
 });
 

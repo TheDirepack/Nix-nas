@@ -17,7 +17,6 @@ SMART_FUZZ_FILES = (
     "tests/test_fuzz_boundaries.py",
     "tests/test_property_invariants.py",
     "tests/test_secret_security_fuzz.py",
-    "tests/slow_managed_service_stateful.py",
 )
 
 

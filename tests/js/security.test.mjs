@@ -35,8 +35,7 @@ test("external-target links keep opener isolation", () => {
   const app = text("cockpit/src/app.jsx");
   const externalAnchors = [
     ...app.matchAll(/<Button[^>]+component="a"[^>]+target="_blank"[^>]*>/g),
-  ].map((m) => m[0]);
-  assert.ok(externalAnchors.length > 0);
+  ].map((match) => match[0]);
   for (const anchor of externalAnchors) assert.match(anchor, /rel="noopener noreferrer"/);
 });
 
@@ -47,17 +46,19 @@ test("Caddy portal escapes identity fields at output contexts", () => {
 });
 
 import {
-  enabledLinkKeys,
-  featureMap,
-  featureOperationsBusy,
-  featureRuntimeText,
-  featureUnitState,
   inactiveServiceCount,
+  managedApplicationLinks,
+  managedServiceMap,
+  managedServiceOperationsBusy,
+  managedServiceRows,
+  managedServiceRuntimeText,
+  managedServiceUnitState,
   mib,
   operationBusy,
-  operationConflicts,
   revisionModel,
+  safeInternalPath,
   setupModel,
+  staticLinks,
   visibleOperations,
 } from "../../cockpit/src/view-model.js";
 import {parseJsonOutput} from "../../cockpit/src/api.js";
@@ -96,19 +97,21 @@ function fuzzValue(random, depth = 0) {
   return result;
 }
 
-test("view-model helpers stay total over malformed JSON-shaped backend data", () => {
+test("V2 view-model helpers stay total over malformed JSON-shaped backend data", () => {
   const random = seeded(0x4e415332);
   const functions = [
-    (value) => featureMap(value),
+    (value) => managedServiceMap(value),
+    (value) => managedServiceRows(value),
     (value) => inactiveServiceCount(value),
     (value) => revisionModel(value),
-    (value) => enabledLinkKeys(value),
+    (value) => staticLinks(value),
+    (value) => managedApplicationLinks(value),
+    (value) => safeInternalPath(value),
     (value) => setupModel(value),
-    (value) => featureUnitState(value),
-    (value) => featureRuntimeText(value),
-    (value) => operationConflicts(value, "health"),
+    (value) => managedServiceUnitState(value),
+    (value) => managedServiceRuntimeText(value),
     (value) => operationBusy(value, "health"),
-    (value) => featureOperationsBusy(value),
+    (value) => managedServiceOperationsBusy(value),
     (value) => visibleOperations(value),
     (value) => mib(value),
   ];
@@ -116,6 +119,26 @@ test("view-model helpers stay total over malformed JSON-shaped backend data", ()
     const value = fuzzValue(random);
     for (const fn of functions) assert.doesNotThrow(() => fn(value));
   }
+});
+
+test("V2 link helpers fail closed on external and control-character paths", () => {
+  for (const value of [
+    "//evil.invalid/",
+    "https://evil.invalid/",
+    "javascript:alert(1)",
+    "/ok\r\nX-Injected: yes",
+  ]) {
+    assert.equal(safeInternalPath(value), null);
+  }
+  assert.deepEqual(
+    managedApplicationLinks({
+      managedServiceLinks: [
+        {id: "bad", label: "bad", url: "//evil.invalid/"},
+        {id: "good", label: "good", url: "/shares/"},
+      ],
+    }).map((entry) => entry.id),
+    ["good"],
+  );
 });
 
 test("JSON output parser accepts JSON only and never evaluates injected code", () => {

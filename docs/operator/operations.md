@@ -10,7 +10,7 @@ nas-doctor --json
 systemctl --failed
 ```
 
-`nas-doctor` combines setup state, feature policy, state-authority health, migrations, and active privileged-operation status. Human output includes the next recovery action when one is known; use `--json` for automation.
+`nas-doctor` combines setup state, Managed Services V2 desired/effective-state validation, state-authority health, and active privileged-operation status. Human output includes the next recovery action when one is known; use `--json` for automation.
 
 ## First installation
 
@@ -52,13 +52,25 @@ nas-identity-sync status
 nas-identity-sync sync
 ```
 
-## Feature and service policy
+Authentik owns human identities, groups, and capability assignments. Managed Services V2 only ensures the `application.<service>.<capability>` objects referenced by `services.yaml`.
+
+## Managed Services V2 policy
+
+`/var/lib/nas-control/services.yaml` is the only mutable application desired-state authority. Use the finite V2 operator commands; there is no resident feature controller or feature database.
 
 ```bash
-nas-feature-control status
-nas-feature-control set grafana always
-nas-feature-control set aiRuntime on-demand
-systemctl status nas-protected-services.target
+nas-managed-services-control status
+nas-managed-services-control document
+nas-managed-services-control set grafana always
+nas-managed-services-control set ai-runtime on-demand
+nas-managed-services-control reconcile
+systemctl status nas-managed-services-reconcile.service
+```
+
+For larger edits, retrieve the current YAML/schema with `document`, edit the YAML, then atomically validate/replace it:
+
+```bash
+nas-managed-services-control replace-document /path/to/services.yaml
 ```
 
 See [Configuration and management map](../src/admin/service-map.md) before changing mutable application settings from the command line.

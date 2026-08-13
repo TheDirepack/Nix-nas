@@ -1,4 +1,9 @@
-"""Shared identity-policy and feature-state helpers for NAS service scripts."""
+"""Shared identity-policy and subprocess helpers for NAS service scripts.
+
+Application authorization is Managed Services V2-native: Authentik groups are
+named ``application.<service>.<capability>``. The only non-application groups
+owned here are the base identity roles used by the appliance itself.
+"""
 
 from __future__ import annotations
 
@@ -13,156 +18,16 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-_DEFAULT_CAPABILITY_REGISTRY: dict[str, dict[str, Any]] = {
-    name: {
-        "id": name,
-        "allowGroup": f"nas_allow_{name}",
-        "denyGroup": f"nas_deny_{name}",
-        "description": f"Development fallback for {name} capability.",
-        "owner": owner,
-        "routes": routes,
-        "administratorBypass": True,
-        "canWakeService": name == "ai",
-        "exposedInSetup": True,
-        "exposedInCockpit": True,
-        "authentikClaims": ["groups"],
-        "available": True,
-    }
-    for name, owner, routes in (
-        ("files", "copyparty", ["/shares/"]),
-        ("webdav", "copyparty", ["/dav/"]),
-        ("ai", "open-webui", ["/ai/"]),
-        ("coding", "pi", []),
-        ("vault", "vaultwarden", ["/vault/"]),
-        ("syncthing", "syncthing", ["/settings/syncthing"]),
-    )
-}
-
-_CAPABILITY_FIELDS = frozenset(
-    {
-        "id",
-        "allowGroup",
-        "denyGroup",
-        "description",
-        "owner",
-        "routes",
-        "administratorBypass",
-        "canWakeService",
-        "exposedInSetup",
-        "exposedInCockpit",
-        "authentikClaims",
-        "available",
-    }
-)
-_REGISTRY_REQUIRED = os.environ.get("NAS_CAPABILITY_REGISTRY_REQUIRED") == "1"
-
-
-def _load_capability_registry() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
-    path_value = os.environ.get("NAS_CAPABILITY_REGISTRY_FILE", "")
-    if not path_value:
-        if _REGISTRY_REQUIRED:
-            raise RuntimeError("NAS capability registry is required in installed/production execution")
-        return {}, {name: dict(entry) for name, entry in _DEFAULT_CAPABILITY_REGISTRY.items()}
-    path = pathlib.Path(path_value)
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Unable to load NAS capability registry {path}: {exc}") from exc
-    if not isinstance(raw, Mapping) or raw.get("schemaVersion") != 1:
-        raise RuntimeError(f"Invalid NAS capability registry header in {path}")
-    identity_groups = raw.get("identityGroups")
-    capabilities = raw.get("capabilities")
-    if not isinstance(identity_groups, Mapping) or not isinstance(capabilities, Mapping):
-        raise RuntimeError(f"Invalid NAS capability registry structure in {path}")
-    required_identity_groups = {"administrator", "user", "guest", "disabled"}
-    if set(identity_groups) != required_identity_groups:
-        raise RuntimeError(f"Invalid identity groups in {path}")
-    group_pattern = re.compile(r"^[a-z_][a-z0-9_-]*$")
-    groups: dict[str, str] = {}
-    for key in sorted(required_identity_groups):
-        value = identity_groups.get(key)
-        if not isinstance(value, str) or not group_pattern.fullmatch(value):
-            raise RuntimeError(f"Invalid identity group {key!r} in {path}")
-        groups[key] = value
-    if len(set(groups.values())) != len(groups):
-        raise RuntimeError(f"Duplicate identity group names in {path}")
-
-    capability_pattern = re.compile(r"^[a-z][a-z0-9-]*$")
-    allow_pattern = re.compile(r"^nas_allow_[a-z0-9_]+$")
-    deny_pattern = re.compile(r"^nas_deny_[a-z0-9_]+$")
-    normalized: dict[str, dict[str, Any]] = {}
-    reserved_groups = set(groups.values())
-    capability_groups: set[str] = set()
-    for name, entry in capabilities.items():
-        if not isinstance(name, str) or not capability_pattern.fullmatch(name) or not isinstance(entry, Mapping):
-            raise RuntimeError(f"Invalid capability entry in {path}")
-        capability_id = entry.get("id")
-        allow_group = entry.get("allowGroup")
-        deny_group = entry.get("denyGroup")
-        administrator_bypass = entry.get("administratorBypass")
-        routes = entry.get("routes")
-        claims = entry.get("authentikClaims")
-        if (
-            set(entry) != _CAPABILITY_FIELDS
-            or capability_id != name
-            or not isinstance(allow_group, str)
-            or allow_pattern.fullmatch(allow_group) is None
-            or not isinstance(deny_group, str)
-            or deny_pattern.fullmatch(deny_group) is None
-            or not isinstance(entry.get("description"), str)
-            or not entry["description"]
-            or not isinstance(entry.get("owner"), str)
-            or not entry["owner"]
-            or not isinstance(routes, list)
-            or not all(isinstance(route, str) and route.startswith("/") for route in routes)
-            or not isinstance(administrator_bypass, bool)
-            or not isinstance(entry.get("canWakeService"), bool)
-            or not isinstance(entry.get("exposedInSetup"), bool)
-            or not isinstance(entry.get("exposedInCockpit"), bool)
-            or not isinstance(claims, list)
-            or not all(isinstance(claim, str) and claim for claim in claims)
-            or not isinstance(entry.get("available"), bool)
-            or allow_group == deny_group
-            or allow_group in reserved_groups
-            or deny_group in reserved_groups
-            or allow_group in capability_groups
-            or deny_group in capability_groups
-        ):
-            raise RuntimeError(f"Invalid capability {name!r} in {path}")
-        capability_groups.update((allow_group, deny_group))
-        normalized[name] = dict(entry)
-    if not normalized:
-        raise RuntimeError(f"Capability registry contains no capabilities in {path}")
-    return groups, normalized
-
-
-_IDENTITY_GROUPS, CAPABILITY_REGISTRY = _load_capability_registry()
-
-
-def _policy_value(environment_name: str, registry_value: str) -> str:
-    if _REGISTRY_REQUIRED:
-        return registry_value
-    return os.environ.get(environment_name, registry_value)
-
-
-ADMIN_GROUP = _policy_value("NAS_IDENTITY_ADMIN_GROUP", _IDENTITY_GROUPS.get("administrator", "nas_admin"))
-USER_GROUP = _policy_value("NAS_IDENTITY_USER_GROUP", _IDENTITY_GROUPS.get("user", "nas_users"))
-GUEST_GROUP = _policy_value("NAS_IDENTITY_GUEST_GROUP", _IDENTITY_GROUPS.get("guest", "nas_guests"))
-DISABLED_GROUP = _policy_value("NAS_IDENTITY_DISABLED_GROUP", _IDENTITY_GROUPS.get("disabled", "nas_disabled"))
-
-CAPABILITY_GROUPS: dict[str, tuple[str, str]] = {
-    name: (
-        _policy_value(f"NAS_IDENTITY_ALLOW_{name.upper()}_GROUP", str(entry["allowGroup"])),
-        _policy_value(f"NAS_IDENTITY_DENY_{name.upper()}_GROUP", str(entry["denyGroup"])),
-    )
-    for name, entry in CAPABILITY_REGISTRY.items()
-}
-
+ADMIN_GROUP = os.environ.get("NAS_IDENTITY_ADMIN_GROUP", "nas_admin")
+USER_GROUP = os.environ.get("NAS_IDENTITY_USER_GROUP", "nas_users")
+GUEST_GROUP = os.environ.get("NAS_IDENTITY_GUEST_GROUP", "nas_guests")
+DISABLED_GROUP = os.environ.get("NAS_IDENTITY_DISABLED_GROUP", "nas_disabled")
 
 MAX_GROUP_HEADER_BYTES = max(256, int(os.environ.get("NAS_MAX_GROUP_HEADER_BYTES", "8192")))
 MAX_GROUPS = max(8, int(os.environ.get("NAS_MAX_GROUPS", "256")))
-MAX_GROUP_NAME_LENGTH = max(16, int(os.environ.get("NAS_MAX_GROUP_NAME_LENGTH", "128")))
-_MISSING = object()
+MAX_GROUP_NAME_LENGTH = max(16, int(os.environ.get("NAS_MAX_GROUP_NAME_LENGTH", "256")))
+_APPLICATION_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_CAPABILITY_ID_RE = re.compile(r"^[a-z][a-z0-9.-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -193,7 +58,6 @@ def run_command(
     with a fixed diagnostic. Secret-bearing children must never be able to reflect
     protected stdin into an exception, journal entry, syslog message, or UI error.
     """
-
     command = [str(item) for item in cmd]
     merged_env = None
     if env is not None:
@@ -301,8 +165,7 @@ def run_command(
 
 
 def parse_systemd_show(output: str) -> dict[str, dict[str, str]]:
-    """Parse block-separated `systemctl show` output by the unit Id field."""
-
+    """Parse block-separated ``systemctl show`` output by the unit Id field."""
     records: dict[str, dict[str, str]] = {}
     stripped = output.strip()
     if not stripped:
@@ -319,29 +182,15 @@ def parse_systemd_show(output: str) -> dict[str, dict[str, str]]:
     return records
 
 
-class FeatureStateError(ValueError):
-    """Persistent feature state contains a type that cannot be interpreted safely."""
-
-
 def split_groups(raw: str) -> set[str]:
-    """Parse a proxy group header with explicit resource bounds.
-
-    Caddy removes client-provided identity headers and writes trusted values, but
-    bounded parsing still keeps malformed directory data from consuming
-    unbounded memory or CPU in the portal and on-demand authorization gate.
-    """
-
+    """Parse a proxy group header with explicit resource bounds."""
     byte_count = len(raw.encode("utf-8", errors="ignore"))
     if any(ord(character) < 32 or ord(character) == 127 for character in raw):
-        print(
-            "nas-identity-policy: rejected group header containing control characters",
-            file=sys.stderr,
-        )
+        print("nas-identity-policy: rejected group header containing control characters", file=sys.stderr)
         return set()
     if byte_count > MAX_GROUP_HEADER_BYTES:
         print(
-            f"nas-identity-policy: rejected oversized group header ({byte_count} bytes; "
-            f"limit {MAX_GROUP_HEADER_BYTES})",
+            f"nas-identity-policy: rejected oversized group header ({byte_count} bytes; limit {MAX_GROUP_HEADER_BYTES})",
             file=sys.stderr,
         )
         return set()
@@ -357,16 +206,12 @@ def split_groups(raw: str) -> set[str]:
     for name in names:
         if len(name) > MAX_GROUP_NAME_LENGTH:
             print(
-                f"nas-identity-policy: rejected group header containing a name longer than "
-                f"{MAX_GROUP_NAME_LENGTH} characters",
+                f"nas-identity-policy: rejected group header containing a name longer than {MAX_GROUP_NAME_LENGTH} characters",
                 file=sys.stderr,
             )
             return set()
         if any(ord(character) < 32 or ord(character) == 127 for character in name):
-            print(
-                "nas-identity-policy: rejected group header containing control characters",
-                file=sys.stderr,
-            )
+            print("nas-identity-policy: rejected group header containing control characters", file=sys.stderr)
             return set()
         output.add(name)
     return output
@@ -381,23 +226,34 @@ def account_is_admin(groups: set[str]) -> bool:
 
 
 def account_has_portal_access(groups: set[str]) -> bool:
-    """Authenticated accounts may reach the neutral landing/settings page only."""
+    """Authenticated enabled accounts may reach the neutral landing/settings page."""
     return account_enabled(groups)
 
 
-def account_has_personal_share(groups: set[str]) -> bool:
-    return capability_allowed(groups, "files") and GUEST_GROUP not in groups
+def application_capability_group(service_id: str, capability: str = "access") -> str:
+    if not _APPLICATION_ID_RE.fullmatch(service_id):
+        raise ValueError(f"Invalid V2 service id {service_id!r}")
+    if not _CAPABILITY_ID_RE.fullmatch(capability):
+        raise ValueError(f"Invalid V2 capability id {capability!r}")
+    return f"application.{service_id}.{capability}"
 
 
-def capability_allowed(groups: set[str], name: str) -> bool:
-    if name not in CAPABILITY_GROUPS or not account_enabled(groups):
+def application_capability_allowed(
+    groups: set[str],
+    service_id: str,
+    capability: str = "access",
+    *,
+    administrator_bypass: bool = True,
+) -> bool:
+    if not account_enabled(groups):
         return False
-    if ADMIN_GROUP in groups and bool(CAPABILITY_REGISTRY[name].get("administratorBypass", True)):
+    if administrator_bypass and ADMIN_GROUP in groups:
         return True
-    allow_group, deny_group = CAPABILITY_GROUPS[name]
-    if deny_group in groups:
-        return False
-    return allow_group in groups
+    return application_capability_group(service_id, capability) in groups
+
+
+def account_has_personal_share(groups: set[str]) -> bool:
+    return GUEST_GROUP not in groups and application_capability_allowed(groups, "copyparty", "files")
 
 
 def read_json_object(
@@ -407,7 +263,6 @@ def read_json_object(
     warn: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Read a JSON object, optionally returning a fail-closed fallback."""
-
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
@@ -419,62 +274,3 @@ def read_json_object(
         if missing is None:
             raise
         return dict(missing)
-
-
-def feature_requested_mode(entry: Mapping[str, Any], value: Any = _MISSING) -> str:
-    """Normalize schema-v1 booleans and schema-v2 modes without unsafe fallbacks."""
-
-    if value is _MISSING:
-        default = entry.get("defaultMode")
-        if isinstance(default, str):
-            return default
-        return "always" if bool(entry.get("default", False)) else "off"
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        if not value:
-            return "off"
-        preferred = entry.get("legacyTrueMode")
-        if isinstance(preferred, str):
-            return preferred
-        return "always"
-    raise FeatureStateError(f"Unsupported feature mode value: {value!r}")
-
-
-def effective_feature_modes(catalog: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, str]:
-    """Evaluate feature availability, requested modes, and parent closure once."""
-
-    raw_features = catalog.get("features", {})
-    raw_state = state.get("features", {})
-    if not isinstance(raw_features, Mapping) or not isinstance(raw_state, Mapping):
-        return {}
-    features = {str(key): value for key, value in raw_features.items() if isinstance(value, Mapping)}
-    requested = {
-        feature_id: feature_requested_mode(entry, raw_state[feature_id] if feature_id in raw_state else _MISSING)
-        for feature_id, entry in features.items()
-    }
-    output: dict[str, str] = {}
-    for feature_id, entry in features.items():
-        mode = requested[feature_id]
-        if not bool(entry.get("available", False)) or mode == "off":
-            output[feature_id] = "off"
-            continue
-        seen = {feature_id}
-        parent = entry.get("parent")
-        enabled = True
-        while isinstance(parent, str):
-            if parent in seen or parent not in features:
-                enabled = False
-                break
-            seen.add(parent)
-            parent_entry = features[parent]
-            if not bool(parent_entry.get("available", False)) or requested[parent] == "off":
-                enabled = False
-                break
-            parent = parent_entry.get("parent")
-        output[feature_id] = mode if enabled else "off"
-    return output
-
-
-def effective_feature_flags(catalog: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, bool]:
-    return {feature_id: mode != "off" for feature_id, mode in effective_feature_modes(catalog, state).items()}

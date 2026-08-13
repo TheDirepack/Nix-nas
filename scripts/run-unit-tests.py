@@ -22,7 +22,7 @@ ALLOWLIST_ZERO = frozenset()
 # Caddy binary. Generic source/non-root jobs may lack that external executable,
 # so an all-skipped result there is allowed only for this explicit capability
 # test. Every other discovered test file must execute at least one real test.
-ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})
+ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})
 FAILURES_RE = re.compile(r"failures=(\d+)")
 ERRORS_RE = re.compile(r"errors=(\d+)")
 SKIPPED_RE = re.compile(r"skipped=(\d+)")
@@ -39,6 +39,16 @@ SERIAL_TEST_FILES = frozenset(
         "test_script_inventory.py",
     }
 )
+
+
+def _github_escape(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _github_error(title: str, detail: str) -> None:
+    """Expose bounded per-file failures through GitHub check-run annotations."""
+    bounded = detail[-6000:]
+    print(f"::error title={_github_escape(title)}::{_github_escape(bounded)}", file=sys.stderr)
 
 
 def _kill_process_group(pid: int) -> None:
@@ -182,18 +192,11 @@ def main() -> int:
         # Use the same hermetic state dir for the journal so it is writable
         _state_journal_dir = pathlib.Path(env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback")))
         env["NAS_STATE_RESTORE_JOURNAL"] = str(_state_journal_dir / "restore-operation.json")
-    # Feature control / setup / operation roots (all under /var/lib or /run on host)
+    # Setup / operation roots that need writable host-independent test locations.
     _hermetic_map = {
-        "NAS_FEATURE_STATE": str(_hermetic_tmp / "nas-control" / "settings.json"),
-        "NAS_FEATURE_JOURNAL": str(_hermetic_tmp / "nas-control" / "transaction.json"),
-        "NAS_FEATURE_LAST_GOOD": str(_hermetic_tmp / "nas-control" / "settings.last-good.json"),
-        "NAS_FEATURE_RUNTIME": str(_hermetic_tmp / "nas-control" / "on-demand.json"),
-        "NAS_FEATURE_LOCK": str(_hermetic_tmp / "nas-control" / "feature-control.lock"),
-        "NAS_FEATURE_CATALOG": str(_hermetic_tmp / "nas-control" / "features.json"),
         "NAS_SETUP_STATE": str(_hermetic_tmp / "nas-setup" / "state.json"),
         "NAS_SETUP_JOURNAL": str(_hermetic_tmp / "nas-setup" / "first-run-journal.json"),
         "NAS_SETUP_STATE_ROOT": str(_hermetic_tmp / "nas-setup"),
-        "NAS_FEATURE_STATE_ROOT": str(_hermetic_tmp / "nas-control"),
         "NAS_OPERATION_ROOT": str(_hermetic_tmp / "nas-operations"),
         "NAS_OPERATION_GROUP": "users",  # host fallback when nas-operations group missing
         "NAS_IDENTITY_LOCK": str(_hermetic_tmp / "nas-identity-sync.lock"),
@@ -201,7 +204,7 @@ def main() -> int:
     }
     for key, val in _hermetic_map.items():
         env.setdefault(key, val)
-    # Ensure secret and state root subdirs exist so lstat() checks pass
+    # Ensure secret and state root subdirs exist so lstat() checks pass.
     try:
         pathlib.Path(env["NAS_SECRET_ROOT"]).mkdir(parents=True, exist_ok=True)
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ai").mkdir(parents=True, exist_ok=True)
@@ -209,9 +212,6 @@ def main() -> int:
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ready").touch(exist_ok=True)
         for key in [
             "NAS_STATE_ROLLBACK_ROOT",
-            "NAS_FEATURE_STATE",
-            "NAS_FEATURE_JOURNAL",
-            "NAS_FEATURE_LAST_GOOD",
             "NAS_SETUP_STATE",
             "NAS_SETUP_JOURNAL",
             "NAS_OPERATION_ROOT",
@@ -221,15 +221,9 @@ def main() -> int:
                 # If it's a file path, ensure parent exists; if dir, ensure dir exists
                 target = p.parent if p.suffix else p
                 target.mkdir(parents=True, exist_ok=True)
-        # Seed minimal feature catalog and setup state so load_state() does not fail
-        _feat_catalog = pathlib.Path(env["NAS_FEATURE_CATALOG"])
-        if not _feat_catalog.exists():
-            _feat_catalog.parent.mkdir(parents=True, exist_ok=True)
-            _feat_catalog.write_text('{"features": {}, "groups": {}}', encoding="utf-8")
-        for pkey in ["NAS_FEATURE_STATE", "NAS_SETUP_STATE"]:
-            p = pathlib.Path(env[pkey])
-            if not p.exists():
-                p.write_text("{}", encoding="utf-8")
+        setup_state = pathlib.Path(env["NAS_SETUP_STATE"])
+        if not setup_state.exists():
+            setup_state.write_text("{}", encoding="utf-8")
     except OSError:
         pass
     python_path = [str(ROOT / "services"), str(ROOT / "tests")]
@@ -348,7 +342,9 @@ def main() -> int:
             total_skipped += skip_c
             total_expected += exp_c
             total_unexpected += unexp_c
-            failures.append((path, f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"))
+            detail = f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"
+            failures.append((path, detail))
+            _github_error(f"Unit test timeout: {relative}", detail)
             print(f"FAIL {relative}: exceeded {args.timeout}s", file=sys.stderr)
             return
         if completed.returncode != 0:
@@ -359,19 +355,25 @@ def main() -> int:
             total_expected += exp_c
             total_unexpected += unexp_c
             total_passed += passed_c
-            failures.append((path, f"rc={completed.returncode}\n{(output or '')[-16000:]}"))
+            detail = f"rc={completed.returncode}\n{(output or '')[-16000:]}"
+            failures.append((path, detail))
+            _github_error(f"Unit test failure: {relative}", detail)
             print(f"FAIL {relative}: rc={completed.returncode} after {elapsed:.1f}s", file=sys.stderr)
             return
         if ran == 0 and path.name not in ALLOWLIST_ZERO:
             total_ran += ran
             total_skipped += skip_c
-            failures.append((path, "no tests discovered\n" + (output or "")[-16000:]))
+            detail = "no tests discovered\n" + (output or "")[-16000:]
+            failures.append((path, detail))
+            _github_error(f"No tests discovered: {relative}", detail)
             print(f"FAIL {relative}: no tests discovered after {elapsed:.1f}s", file=sys.stderr)
             return
         if ran > 0 and skip_c == ran and path.name not in ALLOWLIST_ALL_SKIPPED:
             total_ran += ran
             total_skipped += skip_c
-            failures.append((path, "all discovered tests were skipped\n" + (output or "")[-16000:]))
+            detail = "all discovered tests were skipped\n" + (output or "")[-16000:]
+            failures.append((path, detail))
+            _github_error(f"All tests skipped: {relative}", detail)
             print(f"FAIL {relative}: all {ran} discovered tests were skipped after {elapsed:.1f}s", file=sys.stderr)
             return
         total_ran += ran

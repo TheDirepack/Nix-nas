@@ -4,587 +4,179 @@
       "source": "cockpit/build.js",
       "sourceFuzzStrategy": "source-check",
       "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
+      "tests": ["tests/test_maintainer_scripts.py"]
     },
     "nas-ai-config": {
       "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_ai_config.py"
-      ],
+      "sources": ["services/nas_ai_config.py"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_ai_config.py",
-        "tests/test_cockpit_api.py"
-      ]
+      "tests": ["tests/test_ai_config.py", "tests/test_cockpit_api.py"]
     },
     "nas-alert": {
       "fuzzStrategy": "alert-header",
       "source": "modules/nas/internal/maintenance-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
     "nas-alert-router": {
       "fuzzStrategy": "protocol-system-test",
       "source": "services/nas_alert_router.py",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_alert_router.py",
-        "tests/test_adversarial_security.py",
-        "tests/test_fuzz_boundaries.py"
-      ]
+      "tests": ["tests/test_alert_router.py", "tests/test_adversarial_security.py", "tests/test_fuzz_boundaries.py"]
     },
     "nas-cockpit-api": {
       "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_cockpit_api.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
+      "sources": ["services/nas_cockpit_api.py", "modules/nas/internal/account-tools.nix"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_cockpit_api.py",
-        "tests/test_adversarial_security.py"
-      ]
+      "tests": ["tests/test_cockpit_api.py", "tests/test_adversarial_security.py"]
     },
     "nas-code": {
       "fuzzStrategy": "system-lifecycle",
-      "sources": [
-        "modules/ai/coding-agent.nix"
-      ],
+      "sources": ["modules/ai/coding-agent.nix"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_coding_agent.py"
-      ]
+      "tests": ["tests/test_coding_agent.py"]
     },
     "nas-code-agent": {
       "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_coding_agent.py"
-      ],
+      "sources": ["services/nas_coding_agent.py"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_coding_agent.py"
-      ]
+      "tests": ["tests/test_coding_agent.py"]
     },
     "nas-doctor": {
       "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_doctor.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
+      "sources": ["services/nas_doctor.py", "modules/nas/internal/account-tools.nix"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_doctor_migrations.py"
-      ]
-    },
-    "nas-feature-control": {
-      "fuzzStrategy": "feature-id",
-      "sources": [
-        "services/nas_feature_control.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_feature_control.py",
-        "tests/test_fuzz_boundaries.py"
-      ]
+      "tests": ["tests/test_doctor.py"]
     },
     "nas-identity-sync": {
       "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_identity_sync.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
+      "sources": ["services/nas_identity_sync.py", "modules/nas/internal/account-tools.nix"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_identity_sync.py",
-        "tests/test_contract_identity.py"
-      ]
-    },
-    "nas-managed-service": {
-      "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_managed_service.py",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_managed_service.py"
-      ]
-    },
-    "nas-migrate-state": {
-      "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_migrate_state.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_doctor_migrations.py"
-      ]
+      "tests": ["tests/test_identity_sync.py", "tests/test_contract_identity.py"]
     },
     "nas-operation-run": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_operation_lock.py",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_operation_lock.py",
-        "tests/test_script_inventory.py"
-      ]
+      "tests": ["tests/test_operation_lock.py", "tests/test_script_inventory.py"]
     },
     "nas-preflight": {
       "fuzzStrategy": "system-lifecycle",
       "source": "modules/nas/internal/maintenance-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_tooling.py"
-      ]
+      "tests": ["tests/test_contract_tooling.py"]
     },
     "nas-secrets": {
       "fuzzStrategy": "unknown-verb",
       "source": "modules/nas/internal/secret-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_secret_transaction.py",
-        "tests/bats/nas-secret-transaction.bats"
-      ]
+      "tests": ["tests/test_secret_transaction.py", "tests/bats/nas-secret-transaction.bats"]
     },
     "nas-setup": {
       "fuzzStrategy": "username",
-      "sources": [
-        "services/nas_setup.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
+      "sources": ["services/nas_setup.py", "modules/nas/internal/account-tools.nix"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_setup.py",
-        "tests/test_adversarial_security.py",
-        "tests/test_fuzz_boundaries.py"
-      ]
+      "tests": ["tests/test_setup.py", "tests/test_adversarial_security.py", "tests/test_fuzz_boundaries.py"]
     },
     "nas-state": {
       "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_state.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
+      "sources": ["services/nas_state.py", "modules/nas/internal/account-tools.nix"],
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_state.py",
-        "tests/test_secret_transaction.py"
-      ]
+      "tests": ["tests/test_state.py", "tests/test_secret_transaction.py"]
     },
     "nas-update": {
       "fuzzStrategy": "unknown-argv",
       "source": "modules/nas/internal/maintenance-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py",
-        "tests/test_contract_tooling.py"
-      ]
+      "tests": ["tests/test_contract_operations.py", "tests/test_contract_tooling.py"]
     },
     "nas-ups-init-password": {
       "fuzzStrategy": "disabled-state",
       "source": "modules/nas/internal/power-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
     "nas-zfs-create-encrypted-dataset": {
       "fuzzStrategy": "disposable-zfs-lifecycle",
       "source": "modules/nas/internal/zfs-tools.nix",
       "systemTest": "tests/vm/encrypted-guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
     "nas-zfs-export-recovery-key": {
       "fuzzStrategy": "output-path",
       "source": "modules/nas/internal/zfs-tools.nix",
       "systemTest": "tests/vm/encrypted-guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
     "nas-zfs-lock": {
       "fuzzStrategy": "disposable-zfs-lifecycle",
       "source": "modules/nas/internal/zfs-tools.nix",
       "systemTest": "tests/vm/encrypted-guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
     "nas-zfs-mount-check": {
       "fuzzStrategy": "system-lifecycle",
       "source": "modules/nas/internal/zfs-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
     "nas-zfs-unlock": {
       "fuzzStrategy": "disposable-zfs-lifecycle",
       "source": "modules/nas/internal/zfs-tools.nix",
       "systemTest": "tests/vm/encrypted-guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     },
-    "scripts/check-coverage.py": {
-      "source": "scripts/check-coverage.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/check-mkforce.py": {
-      "source": "scripts/check-mkforce.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/check-version.py": {
-      "source": "scripts/check-version.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/fuzz-executables.py": {
-      "source": "scripts/fuzz-executables.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/fuzz.py": {
-      "source": "scripts/fuzz.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/lib/nas-secret-transaction.sh": {
-      "source": "scripts/lib/nas-secret-transaction.sh",
-      "sourceFuzzStrategy": "shell-parse",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_secret_transaction.py",
-        "tests/bats/nas-secret-transaction.bats",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/live-validation.sh": {
-      "source": "scripts/live-validation.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/nix-config-matrix.sh": {
-      "source": "scripts/nix-config-matrix.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_contract_tooling.py",
-      "tests": [
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/nix-negative-tests.sh": {
-      "source": "scripts/nix-negative-tests.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_contract_tooling.py",
-      "tests": [
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/package-release.sh": {
-      "source": "scripts/package-release.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/preflight.sh": {
-      "source": "scripts/preflight.sh",
-      "sourceFuzzStrategy": "shell-parse",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/prepare-coverage-baseline.py": {
-      "source": "scripts/prepare-coverage-baseline.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_prepare_coverage_baseline.py",
-      "tests": [
-        "tests/test_prepare_coverage_baseline.py"
-      ]
-    },
-    "scripts/qemu-test.sh": {
-      "source": "scripts/qemu-test.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/vm/install-system.sh",
-      "tests": [
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/run-fuzz.py": {
-      "source": "scripts/run-fuzz.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/run-matrix-fuzz.py": {
-      "source": "scripts/run-matrix-fuzz.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/run-security-tests.py": {
-      "source": "scripts/run-security-tests.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py",
-        "tests/test_security_surface.py"
-      ]
-    },
-    "scripts/run-unit-tests.py": {
-      "source": "scripts/run-unit-tests.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/security-static-scan.py": {
-      "source": "scripts/security-static-scan.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/test-matrix.py": {
-      "source": "scripts/test-matrix.py",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/test-runtime-renderers.py": {
-      "source": "scripts/test-runtime-renderers.py",
-      "sourceFuzzStrategy": "aggregate-contract",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/update-nas.sh": {
-      "source": "scripts/update-nas.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py",
-        "tests/test_contract_tooling.py",
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/validate-cockpit-jsx.cjs": {
-      "source": "scripts/validate-cockpit-jsx.cjs",
-      "sourceFuzzStrategy": "syntax-contract",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/validate-doc-links.py": {
-      "source": "scripts/validate-doc-links.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/validate-python-syntax.py": {
-      "source": "scripts/validate-python-syntax.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/validate-repository-data.py": {
-      "source": "scripts/validate-repository-data.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/validate-structure.py": {
-      "source": "scripts/validate-structure.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/validate-test-inventory.py": {
-      "source": "scripts/validate-test-inventory.py",
-      "sourceFuzzStrategy": "hostile-argv",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py"
-      ]
-    },
-    "scripts/zap-scan.sh": {
-      "source": "scripts/zap-scan.sh",
-      "sourceFuzzStrategy": "unknown-option",
-      "systemTest": "tests/test_maintainer_scripts.py",
-      "tests": [
-        "tests/test_maintainer_scripts.py",
-        "tests/test_security_surface.py"
-      ]
-    },
+    "scripts/check-coverage.py": {"source":"scripts/check-coverage.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/check-mkforce.py": {"source":"scripts/check-mkforce.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/check-version.py": {"source":"scripts/check-version.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/fuzz-executables.py": {"source":"scripts/fuzz-executables.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/fuzz.py": {"source":"scripts/fuzz.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/lib/nas-secret-transaction.sh": {"source":"scripts/lib/nas-secret-transaction.sh","sourceFuzzStrategy":"shell-parse","systemTest":"tests/vm/guest-test.sh","tests":["tests/test_secret_transaction.py","tests/bats/nas-secret-transaction.bats","tests/test_maintainer_scripts.py"]},
+    "scripts/live-validation.sh": {"source":"scripts/live-validation.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/vm/guest-test.sh","tests":["tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/nix-config-matrix.sh": {"source":"scripts/nix-config-matrix.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_contract_tooling.py","tests":["tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/nix-negative-tests.sh": {"source":"scripts/nix-negative-tests.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_contract_tooling.py","tests":["tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/package-release.sh": {"source":"scripts/package-release.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/vm/guest-test.sh","tests":["tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/preflight.sh": {"source":"scripts/preflight.sh","sourceFuzzStrategy":"shell-parse","systemTest":"tests/vm/guest-test.sh","tests":["tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/prepare-coverage-baseline.py": {"source":"scripts/prepare-coverage-baseline.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_prepare_coverage_baseline.py","tests":["tests/test_prepare_coverage_baseline.py"]},
+    "scripts/qemu-test.sh": {"source":"scripts/qemu-test.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/vm/install-system.sh","tests":["tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/run-fuzz.py": {"source":"scripts/run-fuzz.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/run-matrix-fuzz.py": {"source":"scripts/run-matrix-fuzz.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/run-security-tests.py": {"source":"scripts/run-security-tests.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py","tests/test_security_surface.py"]},
+    "scripts/run-unit-tests.py": {"source":"scripts/run-unit-tests.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/security-static-scan.py": {"source":"scripts/security-static-scan.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/test-matrix.py": {"source":"scripts/test-matrix.py","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/test-runtime-renderers.py": {"source":"scripts/test-runtime-renderers.py","sourceFuzzStrategy":"aggregate-contract","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/update-nas.sh": {"source":"scripts/update-nas.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/vm/guest-test.sh","tests":["tests/test_contract_operations.py","tests/test_contract_tooling.py","tests/test_maintainer_scripts.py"]},
+    "scripts/validate-cockpit-jsx.cjs": {"source":"scripts/validate-cockpit-jsx.cjs","sourceFuzzStrategy":"syntax-contract","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/validate-doc-links.py": {"source":"scripts/validate-doc-links.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/validate-python-syntax.py": {"source":"scripts/validate-python-syntax.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/validate-repository-data.py": {"source":"scripts/validate-repository-data.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/validate-structure.py": {"source":"scripts/validate-structure.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/validate-test-inventory.py": {"source":"scripts/validate-test-inventory.py","sourceFuzzStrategy":"hostile-argv","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py"]},
+    "scripts/zap-scan.sh": {"source":"scripts/zap-scan.sh","sourceFuzzStrategy":"unknown-option","systemTest":"tests/test_maintainer_scripts.py","tests":["tests/test_maintainer_scripts.py","tests/test_security_surface.py"]},
     "zfs": {
       "fuzzStrategy": "disposable-zfs-lifecycle",
       "source": "modules/nas/internal/zfs-tools.nix",
       "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_contract_operations.py"
-      ]
+      "tests": ["tests/test_contract_operations.py"]
     }
   },
   "pythonModules": {
-    "services/nas_ai_config.py": [
-      "tests/test_ai_config.py",
-      "tests/test_cockpit_api.py"
-    ],
-    "services/nas_alert_router.py": [
-      "tests/test_alert_router.py",
-      "tests/test_adversarial_security.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_cockpit_api.py": [
-      "tests/test_cockpit_api.py",
-      "tests/test_adversarial_security.py",
-      "tests/test_security_surface.py"
-    ],
-    "services/nas_coding_agent.py": [
-      "tests/test_coding_agent.py"
-    ],
-    "services/nas_common.py": [
-      "tests/test_common.py",
-      "tests/test_adversarial_security.py",
-      "tests/test_fuzz_boundaries.py",
-      "tests/test_property_invariants.py"
-    ],
-    "services/nas_doctor.py": [
-      "tests/test_doctor_migrations.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_feature_control.py": [
-      "tests/test_feature_control.py",
-      "tests/test_fuzz_boundaries.py",
-      "tests/test_adversarial_security.py"
-    ],
-    "services/nas_feature_model.py": [
-      "tests/test_feature_control.py",
-      "tests/test_contract_operations.py",
-      "tests/test_property_invariants.py"
-    ],
-    "services/nas_identity_model.py": [
-      "tests/test_identity_sync.py",
-      "tests/test_contract_identity.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_identity_sync.py": [
-      "tests/test_identity_sync.py",
-      "tests/test_contract_identity.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_logging.py": [
-      "tests/test_logging.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_managed_service.py": [
-      "tests/test_managed_service.py",
-      "tests/test_managed_service_stateful.py",
-      "tests/test_property_invariants.py"
-    ],
-    "services/nas_service_caddy.py": [
-      "tests/test_service_caddy.py",
-      "tests/test_service_caddy_validate.py",
-      "tests/test_managed_service_stateful.py"
-    ],
-    "services/nas_service_authentik.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_firewall.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_runtime_compose.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_runtime_libvirt.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_runtime_podman.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_migrate_state.py": [
-      "tests/test_doctor_migrations.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_operation_journal.py": [
-      "tests/test_operation_journal.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_operation_lock.py": [
-      "tests/test_operation_lock.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_setup.py": [
-      "tests/test_setup.py",
-      "tests/test_adversarial_security.py"
-    ],
-    "services/nas_setup_config.py": [
-      "tests/test_setup.py",
-      "tests/test_adversarial_security.py",
-      "tests/test_fuzz_boundaries.py",
-      "tests/test_property_invariants.py"
-    ],
-    "services/nas_state.py": [
-      "tests/test_state.py",
-      "tests/test_security_surface.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_syncthing_devices.py": [
-      "tests/test_syncthing_devices.py",
-      "tests/test_fuzz_boundaries.py",
-      "tests/test_property_invariants.py"
-    ]
+    "services/nas_ai_config.py": ["tests/test_ai_config.py", "tests/test_cockpit_api.py"],
+    "services/nas_alert_router.py": ["tests/test_alert_router.py", "tests/test_adversarial_security.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_cockpit_api.py": ["tests/test_cockpit_api.py", "tests/test_adversarial_security.py", "tests/test_security_surface.py", "tests/test_ai_secret_transaction.py"],
+    "services/nas_coding_agent.py": ["tests/test_coding_agent.py"],
+    "services/nas_common.py": ["tests/test_common.py", "tests/test_adversarial_security.py", "tests/test_fuzz_boundaries.py", "tests/test_property_invariants.py"],
+    "services/nas_doctor.py": ["tests/test_doctor.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_identity_model.py": ["tests/test_identity_sync.py", "tests/test_contract_identity.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_identity_sync.py": ["tests/test_identity_sync.py", "tests/test_contract_identity.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_logging.py": ["tests/test_logging.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_operation_journal.py": ["tests/test_operation_journal.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_operation_lock.py": ["tests/test_operation_lock.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_setup.py": ["tests/test_setup.py", "tests/test_adversarial_security.py"],
+    "services/nas_setup_config.py": ["tests/test_setup.py", "tests/test_adversarial_security.py", "tests/test_fuzz_boundaries.py", "tests/test_property_invariants.py"],
+    "services/nas_state.py": ["tests/test_state.py", "tests/test_security_surface.py", "tests/test_fuzz_boundaries.py"],
+    "services/nas_syncthing_devices.py": ["tests/test_syncthing_devices.py", "tests/test_fuzz_boundaries.py", "tests/test_property_invariants.py"]
   },
   "schemaVersion": 3
 }

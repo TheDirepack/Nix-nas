@@ -16,12 +16,10 @@ JSON_FILES = (
     "flake.lock",
     "setup/first-run.example.json",
     "setup/account-plan.example.json",
-    "schemas/feature-catalog.schema.json",
+    "schemas/managed-services-v3.schema.json",
     "schemas/first-run.schema.json",
     "schemas/account-plan.schema.json",
     "schemas/state-bundle.schema.json",
-    "schemas/service-registry.schema.json",
-    "schemas/capability-registry.schema.json",
     "policy/mkforce-allowlist.json",
 )
 
@@ -41,6 +39,12 @@ def main() -> int:
         fail(book, exc)
         errors += 1
 
+    expected_versions = {
+        "schemas/managed-services-v3.schema.json": 3,
+        "schemas/first-run.schema.json": 2,
+        "schemas/account-plan.schema.json": 1,
+        "schemas/state-bundle.schema.json": 2,
+    }
     for relative in JSON_FILES:
         path = ROOT / relative
         try:
@@ -50,18 +54,6 @@ def main() -> int:
                     raise ValueError("schemas must use JSON Schema draft 2020-12")
                 if value.get("type") != "object" or value.get("additionalProperties") is not False:
                     raise ValueError("top-level schema must be a closed object")
-            if (
-                relative == "schemas/feature-catalog.schema.json"
-                and value.get("properties", {}).get("schemaVersion", {}).get("const") != 2
-            ):
-                raise ValueError("feature catalog schema must require schemaVersion 2")
-            expected_versions = {
-                "schemas/first-run.schema.json": 1,
-                "schemas/account-plan.schema.json": 1,
-                "schemas/state-bundle.schema.json": 2,
-                "schemas/service-registry.schema.json": 2,
-                "schemas/capability-registry.schema.json": 1,
-            }
             if (
                 relative in expected_versions
                 and value.get("properties", {}).get("schemaVersion", {}).get("const") != expected_versions[relative]

@@ -62,10 +62,8 @@ let
       export NAS_PI_SESSION_EXEC=${lib.escapeShellArg sessionExec}
       export NAS_PI_CREDENTIAL=${lib.escapeShellArg "${aiSecretDir}/coding-agent-api-key"}
       export NAS_PI_STATE_DIR=${lib.escapeShellArg stateDir}
-      export NAS_FEATURE_CONTROL=${lib.escapeShellArg "${nasPythonApplication}/bin/nas-feature-control"}
+      export NAS_MANAGED_SERVICES_CONTROL=${lib.escapeShellArg "${nasPythonApplication}/bin/nas-managed-services-control"}
       export NAS_CODING_HEARTBEAT_SECONDS=${toString code.heartbeatSeconds}
-      export NAS_CAPABILITY_REGISTRY_FILE=${lib.escapeShellArg "${nasInternal.capabilityRegistryFile}"}
-      export NAS_CAPABILITY_REGISTRY_REQUIRED=1
       exec ${nasPythonApplication}/bin/nas-code-agent "$@"
     '';
   };
@@ -79,8 +77,11 @@ in
       };
     }
     (lib.mkIf (cfg.enable && code.enable && piPackageAvailable) {
+      # The caller must supply the already-authenticated identity. Authorization
+      # itself is the canonical application.ai-coding.access Authentik assignment;
+      # no Linux-group or UID fallback is retained.
       security.sudo.extraConfig = ''
-        Defaults env_keep += "NAS_AUTHENTICATED_IDENTITY_JSON NAS_CODING_INSECURE_UID_AUTH"
+        Defaults env_keep += "NAS_AUTHENTICATED_IDENTITY_JSON"
       '';
 
       environment.etc."systemd/resolved.conf.d/10-pi-netns.conf".text = ''
@@ -103,6 +104,9 @@ in
         partOf = [ "nas-protected-services.target" ];
         requires = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
         after = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
+        # Managed Services V2 adds StopWhenUnneeded=yes in its owned drop-in for
+        # the on-demand ai-coding service and refreshes its native lease while a
+        # transient session is active.
         unitConfig.StopWhenUnneeded = false;
       };
 
@@ -199,7 +203,7 @@ in
               echo "Fix with: chown :nas-code-agent ${root} && chmod 2770 ${root} or add ACL via setfacl -m g:nas-code-agent:rwx ${root}" >&2
               exit 1
             fi
-            # Group/ACL-based access is preferred over recursive ownership changes; do not blindly chown existing trees.
+            # Group/ACL-based filesystem access is distinct from application authorization.
           '') code.workspaceRoots}
         '';
       };

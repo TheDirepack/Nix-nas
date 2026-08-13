@@ -1,6 +1,6 @@
 args:
 let
-  inherit (args) authentikPort capabilityRegistry cfg lib onDemandGateSocket vaultwardenPort;
+  inherit (args) authentikPort cfg vaultwardenPort;
   caddyForwardAuth = ''
     request_header -Remote-User
     request_header -Remote-Groups
@@ -24,33 +24,6 @@ let
     request_header Remote-Email {http.request.header.X-Authentik-Email}
     request_header Remote-UID {http.request.header.X-Authentik-Uid}
   '';
-  caddyOnDemandAuth = feature: scope: ''
-    forward_auth unix/${onDemandGateSocket} {
-      uri /authorize?feature=${feature}&scope=${scope}
-      header_up Remote-User {http.request.header.Remote-User}
-      header_up Remote-Groups {http.request.header.Remote-Groups}
-      header_up Remote-Name {http.request.header.Remote-Name}
-      header_up Remote-Email {http.request.header.Remote-Email}
-      header_up Remote-UID {http.request.header.Remote-UID}
-      header_up Authorization {http.request.header.Authorization}
-      header_up X-API-Key {http.request.header.X-API-Key}
-    }
-  '';
-  caddyCapabilityAuth = capability:
-    let
-      entry = lib.attrByPath [ capability ]
-        (throw "Unknown NAS capability referenced by a Caddy route: ${capability}")
-        capabilityRegistry;
-    in ''
-    forward_auth unix/${onDemandGateSocket} {
-      uri /authorize?scope=${entry.id}
-      header_up Remote-User {http.request.header.Remote-User}
-      header_up Remote-Groups {http.request.header.Remote-Groups}
-      header_up Remote-Name {http.request.header.Remote-Name}
-      header_up Remote-Email {http.request.header.Remote-Email}
-      header_up Remote-UID {http.request.header.Remote-UID}
-    }
-  '';
   caddyOnDemandTransport = ''
     transport http {
       # Allow idle on-demand backends to stop promptly.
@@ -70,8 +43,6 @@ in
 {
   inherit
     caddyForwardAuth
-    caddyOnDemandAuth
-    caddyCapabilityAuth
     caddyOnDemandTransport
     copypartySsoProxy
     vaultwardenProxy
