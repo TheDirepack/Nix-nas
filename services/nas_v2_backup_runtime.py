@@ -7,11 +7,15 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from typing import Any
+
+from nas_v2_backup import BackupProjectionError as _BackupProjectionError
+from nas_v2_backup import _safe_absolute_path as _shared_safe_path
 
 
 class BackupRuntimeError(RuntimeError):
@@ -41,12 +45,10 @@ def _write_atomic(path: pathlib.Path, data: bytes, mode: int) -> None:
 
 
 def _safe_absolute_path(value: Any, *, label: str) -> str:
-    if not isinstance(value, str) or any(character in value for character in ("\x00", "\r", "\n")):
-        raise BackupRuntimeError(f"{label} is not a safe absolute path")
-    candidate = pathlib.PurePosixPath(value)
-    if not candidate.is_absolute() or ".." in candidate.parts:
-        raise BackupRuntimeError(f"{label} is not a safe absolute path")
-    return value
+    try:
+        return _shared_safe_path(value, label=label)
+    except _BackupProjectionError:
+        raise BackupRuntimeError(f"{label} is not a safe absolute path") from None
 
 
 def _run(argv: list[str]) -> str:
@@ -55,10 +57,6 @@ def _run(argv: list[str]) -> str:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
         raise BackupRuntimeError(f"native backup command failed: {detail}")
     return result.stdout.strip()
-
-
-def _snapshot_name() -> str:
-    return f"nas-v2-restic-{time.time_ns()}-{os.getpid()}"
 
 
 def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_bin: str) -> tuple[str, dict[str, str]]:
@@ -79,7 +77,6 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
         or ".." in pathlib.PurePosixPath(artifact_path).parts
     ):
         raise BackupRuntimeError(f"backup resource {resource_id!r} has an invalid compiled native-dump job mapping")
-
     artifact = pathlib.Path(artifact_path)
     try:
         artifact.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -101,23 +98,17 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
         raise BackupRuntimeError(
             f"unable to enforce native-dump artifact directory mode {artifact_path!r}: {exc}"
         ) from exc
-    # Ensure fresh preparation: remove any stale dump from previous invocation so a
-    # zero-write success cannot be accepted. This implements generation-specific
-    # freshness without requiring the dump job to know the transaction ID.
     try:
         for child in list(artifact.iterdir()):
             try:
                 if child.is_symlink() or child.is_file():
                     child.unlink()
                 elif child.is_dir():
-                    import shutil
-
                     shutil.rmtree(child)
             except OSError as exc:
                 raise BackupRuntimeError(f"unable to clean stale native-dump artifact {child!r}: {exc}") from exc
     except OSError as exc:
         raise BackupRuntimeError(f"unable to inspect native-dump artifact directory {artifact_path!r}: {exc}") from exc
-
     _run([systemctl_bin, "restart", preparation_unit])
     try:
         produced = any(artifact.iterdir())
@@ -147,7 +138,6 @@ def prepare(
     inventory = _load_json(inventory_path)
     if inventory.get("schemaVersion") != 1 or not isinstance(inventory.get("resources"), list):
         raise BackupRuntimeError("compiled V2 backup inventory has an unsupported schema")
-
     runtime_paths: list[str] = []
     snapshots: list[dict[str, str]] = []
     native_dumps: list[dict[str, str]] = []
@@ -169,7 +159,6 @@ def prepare(
                 raise BackupRuntimeError("compiled V2 backup inventory contains an invalid resource id")
             _safe_absolute_path(path, label=f"backup resource {resource_id!r} path")
             assert isinstance(path, str)
-
             if consistency in {"filesystem", "none"}:
                 runtime_paths.append(path)
                 continue
@@ -182,41 +171,30 @@ def prepare(
                 continue
             if consistency != "zfs-snapshot":
                 raise BackupRuntimeError(f"backup resource {resource_id!r} has unsupported consistency {consistency!r}")
-
             dataset = resource.get("dataset")
             if not isinstance(dataset, str) or not dataset:
                 raise BackupRuntimeError(
                     f"backup resource {resource_id!r} requires dataset for zfs-snapshot consistency"
                 )
-
+            mountpoint = dataset_mountpoints.get(dataset)
+            if mountpoint is None:
+                mountpoint = _run([zfs_bin, "get", "-H", "-o", "value", "mountpoint", dataset])
+                dataset_mountpoints[dataset] = mountpoint
+            if mountpoint != path:
+                raise BackupRuntimeError(
+                    f"backup resource {resource_id!r} path {path!r} does not match ZFS dataset {dataset!r} mountpoint {mountpoint!r}"
+                )
             current = snapshots_by_dataset.get(dataset)
             if current is None:
-                mountpoint = _run([zfs_bin, "get", "-H", "-o", "value", "mountpoint", dataset])
-                if mountpoint != path:
-                    raise BackupRuntimeError(
-                        f"backup resource {resource_id!r} path {path!r} does not match ZFS dataset {dataset!r} "
-                        f"mountpoint {mountpoint!r}"
-                    )
-                dataset_mountpoints[dataset] = mountpoint
-                name = _snapshot_name()
+                name = f"nas-v2-restic-{time.time_ns()}-{os.getpid()}"
                 _run([zfs_bin, "snapshot", f"{dataset}@{name}"])
                 snapshot_path = str(pathlib.PurePosixPath(path) / ".zfs" / "snapshot" / name)
                 snapshots.append({"dataset": dataset, "name": name})
                 snapshots_by_dataset[dataset] = (name, snapshot_path)
                 _persist_state()
             else:
-                cached_mountpoint = dataset_mountpoints.get(dataset)
-                if cached_mountpoint is None:
-                    cached_mountpoint = _run([zfs_bin, "get", "-H", "-o", "value", "mountpoint", dataset])
-                    dataset_mountpoints[dataset] = cached_mountpoint
-                if cached_mountpoint != path:
-                    raise BackupRuntimeError(
-                        f"backup resource {resource_id!r} path {path!r} does not match ZFS dataset {dataset!r} "
-                        f"mountpoint {cached_mountpoint!r}"
-                    )
-                _name, snapshot_path = current
+                _, snapshot_path = current
             runtime_paths.append(snapshot_path)
-
         unique_paths = sorted(set(runtime_paths))
         state = {"schemaVersion": 1, "snapshots": snapshots, "nativeDumps": native_dumps}
         _write_atomic(paths_path, "".join(f"{path}\n" for path in unique_paths).encode("utf-8"), 0o640)
@@ -246,7 +224,6 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
     snapshots = state.get("snapshots")
     if state.get("schemaVersion") != 1 or not isinstance(snapshots, list):
         raise BackupRuntimeError("V2 backup runtime state has an unsupported schema")
-
     destroyed: list[str] = []
     failures: list[str] = []
     for snapshot in reversed(snapshots):
@@ -263,7 +240,6 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
             destroyed.append(reference)
         except BackupRuntimeError as exc:
             failures.append(f"{reference}: {exc}")
-
     if failures:
         raise BackupRuntimeError("failed to clean V2 backup snapshot(s): " + "; ".join(failures))
     state_path.unlink(missing_ok=True)

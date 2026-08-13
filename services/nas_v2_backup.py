@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
-
 import pathlib
+from typing import Any
 
 from nas_v2_native_dump import NativeDumpProjectionError, resolve_native_dump
 
@@ -24,10 +23,6 @@ def _safe_absolute_path(value: Any, *, label: str) -> str:
     return value
 
 
-def _json_bytes(value: Any) -> bytes:
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-
-
 def compile_backup_projection(effective: dict[str, Any]) -> tuple[bytes, bytes]:
     """Return a resource inventory JSON document and direct Restic path list.
 
@@ -37,19 +32,16 @@ def compile_backup_projection(effective: dict[str, Any]) -> tuple[bytes, bytes]:
     """
     if effective.get("schemaVersion") != 3:
         raise BackupProjectionError("compiled effective state must use schema version 3")
-
     resources = effective.get("storageResources")
     derived = effective.get("derived")
     backup_ids = derived.get("backupResources") if isinstance(derived, dict) else None
     if not isinstance(resources, dict) or not isinstance(backup_ids, list):
         raise BackupProjectionError("compiled effective state is missing backup resource metadata")
-
     inventory: list[dict[str, Any]] = []
     direct_paths: list[str] = []
     seen_paths: set[str] = set()
     seen_datasets: set[str] = set()
     seen_restic_sources: set[str] = set()
-
     for resource_id in backup_ids:
         if not isinstance(resource_id, str):
             raise BackupProjectionError("compiled backup resource identity is invalid")
@@ -77,14 +69,12 @@ def compile_backup_projection(effective: dict[str, Any]) -> tuple[bytes, bytes]:
         if path in seen_paths:
             raise BackupProjectionError(f"multiple backup resources resolve to the same path {path!r}")
         seen_paths.add(path)
-
         native_dump: dict[str, str] | None = None
         if consistency == "native-dump":
             try:
                 native_dump = resolve_native_dump(effective, resource_id)
             except NativeDumpProjectionError as exc:
                 raise BackupProjectionError(str(exc)) from exc
-
         restic_source: str | None = path if consistency in {"filesystem", "none"} else None
         if restic_source is not None:
             if restic_source in seen_restic_sources:
@@ -117,13 +107,9 @@ def compile_backup_projection(effective: dict[str, Any]) -> tuple[bytes, bytes]:
         if native_dump is not None:
             entry["nativeDump"] = native_dump
         inventory.append(entry)
-
-    document = {
-        "schemaVersion": 1,
-        "resources": inventory,
-    }
+    document = {"schemaVersion": 1, "resources": inventory}
     path_list = "".join(f"{path}\n" for path in sorted(direct_paths)).encode("utf-8")
-    return _json_bytes(document), path_list
+    return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8"), path_list
 
 
 __all__ = ["BackupProjectionError", "compile_backup_projection"]

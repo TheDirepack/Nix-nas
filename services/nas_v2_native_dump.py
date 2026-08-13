@@ -28,18 +28,6 @@ def _absolute_path(value: Any, *, label: str) -> str:
     return value
 
 
-def _runtime_owner(effective: dict[str, Any], service_id: str) -> str:
-    derived = effective.get("derived")
-    runtimes = derived.get("runtime") if isinstance(derived, dict) else None
-    runtime = runtimes.get(service_id) if isinstance(runtimes, dict) else None
-    owner = runtime.get("ownerUnit") if isinstance(runtime, dict) else None
-    if not isinstance(owner, str) or not owner.endswith(".service"):
-        raise NativeDumpProjectionError(
-            f"native-dump preparation job {service_id!r} is missing a concrete systemd owner unit"
-        )
-    return owner
-
-
 def resolve_native_dump(effective: dict[str, Any], source_id: str) -> dict[str, str]:
     resources = effective.get("storageResources")
     services = effective.get("services")
@@ -54,7 +42,6 @@ def resolve_native_dump(effective: dict[str, Any], source_id: str) -> dict[str, 
     if source.get("stateClass") != "authoritative":
         raise NativeDumpProjectionError(f"native-dump source resource {source_id!r} must be authoritative")
     _absolute_path(source.get("path"), label=f"native-dump source {source_id!r} path")
-
     candidates: list[tuple[str, str]] = []
     malformed: list[str] = []
     for service_id in sorted(services):
@@ -80,32 +67,29 @@ def resolve_native_dump(effective: dict[str, Any], source_id: str) -> dict[str, 
         if not isinstance(workload, dict) or workload.get("kind") != "job":
             malformed.append(f"{service_id}: a service reading the native-dump source is not a job")
             continue
-
-        artifact_ids: list[str] = []
-        for attachment in storage:
-            if not isinstance(attachment, dict) or attachment.get("access", "read") != "write":
-                continue
-            artifact_id = attachment.get("resource")
-            if not isinstance(artifact_id, str):
-                continue
-            artifact = resources.get(artifact_id)
-            if isinstance(artifact, dict) and artifact.get("stateClass") == "derived":
-                artifact_ids.append(artifact_id)
-        artifact_ids = sorted(set(artifact_ids))
+        artifact_ids = sorted(
+            {
+                str(attachment.get("resource"))
+                for attachment in storage
+                if isinstance(attachment, dict)
+                and attachment.get("access", "read") == "write"
+                and isinstance(attachment.get("resource"), str)
+                and isinstance(resources.get(attachment.get("resource")), dict)
+                and resources.get(attachment.get("resource"), {}).get("stateClass") == "derived"
+            }
+        )
         if len(artifact_ids) != 1:
             malformed.append(
                 f"{service_id}: expected exactly one writable derived artifact resource, found {len(artifact_ids)}"
             )
             continue
         candidates.append((service_id, artifact_ids[0]))
-
     if len(candidates) != 1:
         detail = "; ".join(malformed)
         suffix = f" ({detail})" if detail else ""
         raise NativeDumpProjectionError(
             f"native-dump source {source_id!r} requires exactly one enabled managed preparation job; found {len(candidates)}{suffix}"
         )
-
     service_id, artifact_id = candidates[0]
     artifact = resources[artifact_id]
     if artifact.get("scope", "system") != "system":
@@ -117,16 +101,20 @@ def resolve_native_dump(effective: dict[str, Any], source_id: str) -> dict[str, 
         raise NativeDumpProjectionError(
             f"native-dump artifact resource {artifact_id!r} must not be independently backup-enabled"
         )
-    artifact_path = _absolute_path(
-        artifact.get("path"),
-        label=f"native-dump artifact {artifact_id!r} path",
-    )
+    artifact_path = _absolute_path(artifact.get("path"), label=f"native-dump artifact {artifact_id!r} path")
     if artifact_path == source.get("path"):
         raise NativeDumpProjectionError("native-dump artifact path must differ from its authoritative source path")
-
+    derived = effective.get("derived")
+    runtimes = derived.get("runtime") if isinstance(derived, dict) else None
+    runtime = runtimes.get(service_id) if isinstance(runtimes, dict) else None
+    owner = runtime.get("ownerUnit") if isinstance(runtime, dict) else None
+    if not isinstance(owner, str) or not owner.endswith(".service"):
+        raise NativeDumpProjectionError(
+            f"native-dump preparation job {service_id!r} is missing a concrete systemd owner unit"
+        )
     return {
         "preparationService": service_id,
-        "preparationUnit": _runtime_owner(effective, service_id),
+        "preparationUnit": owner,
         "artifactResource": artifact_id,
         "artifactPath": artifact_path,
     }
