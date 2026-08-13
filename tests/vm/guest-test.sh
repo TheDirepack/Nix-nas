@@ -127,15 +127,18 @@ ensure_authentik_proxy_fixture() {
   # application through the same API used by an operator. This keeps the
   # browser test independent of an external Authentik export and makes the
   # provider assignment survive an Authentik restart.
-  local auth_flow invalidation_flow provider_id outpost_id existing_providers outpost_config payload
+  local auth_flow authorization_flow invalidation_flow provider_id outpost_id existing_providers outpost_config payload
   AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-secrets/authentik/bootstrap-token)"
   auth_flow="$(authentik_api GET 'flows/instances/?slug=default-authentication-flow' | jq -er '.results[0].pk')"
+  authorization_flow="$(authentik_api GET 'flows/instances/?slug=default-provider-authorization-implicit-consent' | jq -er '.results[0].pk')"
   invalidation_flow="$(authentik_api GET 'flows/instances/?slug=default-invalidation-flow' | jq -er '.results[0].pk')"
 
   provider_id="$(authentik_api GET 'providers/proxy/?page_size=100' | jq -er '.results[] | select(.name == "NAS VM Test Proxy") | .pk' | head -n1 || true)"
+  payload="$(jq -cn --arg name 'NAS VM Test Proxy' --arg authentication "$auth_flow" --arg authorization "$authorization_flow" --arg invalidation "$invalidation_flow" '{name:$name, authentication_flow:$authentication, authorization_flow:$authorization, invalidation_flow:$invalidation, mode:"forward_single", external_host:"https://nas-test.local", internal_host:"http://127.0.0.1:8080", internal_host_ssl_validation:false}')"
   if [[ -z "$provider_id" ]]; then
-    payload="$(jq -cn --arg name 'NAS VM Test Proxy' --arg authorization "$auth_flow" --arg invalidation "$invalidation_flow" '{name:$name, authorization_flow:$authorization, invalidation_flow:$invalidation, mode:"forward_single", external_host:"https://nas-test.local", internal_host:"http://127.0.0.1:8080", internal_host_ssl_validation:false}')"
     provider_id="$(authentik_api POST 'providers/proxy/' "$payload" | jq -er '.pk')"
+  else
+    authentik_api PATCH "providers/proxy/$provider_id/" "$payload" >/dev/null
   fi
 
   if ! authentik_api GET 'core/applications/?page_size=100' | jq -e '.results[] | select(.slug == "nas-vm-portal") | .pk' >/dev/null; then

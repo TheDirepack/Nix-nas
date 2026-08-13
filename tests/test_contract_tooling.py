@@ -505,6 +505,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("pythonPackages.selenium", vm)
         self.assertIn("tests/browser/authz.py", guest)
 
+    def test_browser_fixture_assigns_authentik_flow_roles_correctly(self):
+        guest = text("tests/vm/guest-test.sh")
+        self.assertIn("default-authentication-flow", guest)
+        self.assertIn("default-provider-authorization-implicit-consent", guest)
+        self.assertIn("authentication_flow:$authentication", guest)
+        self.assertIn("authorization_flow:$authorization", guest)
+
     def test_nix_matrix_covers_reusable_profiles_and_rejected_configurations(self):
         flake = text("flake.nix")
         workflow = text(".github/workflows/ci.yml")
