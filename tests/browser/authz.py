@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException, WebDriverException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -219,14 +219,39 @@ def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password
     )
 
 
+def browser_diagnostics(driver: webdriver.Chrome) -> dict[str, Any]:
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+    except WebDriverException as error:
+        body_text = f"<unable to read body: {error}>"
+    try:
+        console = driver.get_log("browser")[-20:]
+    except (WebDriverException, ValueError):
+        console = []
+    return {
+        "url": driver.current_url,
+        "title": driver.title,
+        "body": body_text[:5000],
+        "console": console,
+    }
+
+
+def wait_for_page_text(driver: webdriver.Chrome, wait: WebDriverWait, text: str, label: str) -> None:
+    try:
+        wait.until(lambda current: text in current.page_source)
+    except TimeoutException as error:
+        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+        raise RuntimeError(f"{label} did not render {text!r}:\n{details}") from error
+
+
 def verify_cockpit_react_interactions(origin: str, username: str, password: str) -> None:
     driver = browser()
     try:
         cockpit_login(driver, origin, username, password)
         driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
         wait = WebDriverWait(driver, 90)
-        wait.until(lambda current: "NAS Overview" in current.page_source)
-        wait.until(lambda current: "Maintenance actions" in current.page_source)
+        wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
+        wait_for_page_text(driver, wait, "Maintenance actions", "Cockpit NAS page")
         wait.until(lambda current: button_with_text(current, "Refresh")).click()
         wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
         wait.until(lambda current: "Confirm maintenance action" in current.page_source)

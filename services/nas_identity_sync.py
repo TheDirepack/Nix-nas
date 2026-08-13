@@ -1072,6 +1072,27 @@ def identity_mutation_operation(action: str):
         raise SyncError(str(exc)) from exc
 
 
+READ_ONLY_COMMANDS = frozenset(
+    {
+        "capabilities",
+        "export-account",
+        "plan-accounts",
+        "status",
+        "status-fixture",
+        "verify-token",
+    }
+)
+
+
+@contextlib.contextmanager
+def identity_command_lock(command: str):
+    if command in READ_ONLY_COMMANDS:
+        yield
+        return
+    with acquire_lock():
+        yield
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1104,7 +1125,7 @@ def main() -> int:
             if args.command in mutating
             else contextlib.nullcontext()
         )
-        with operation, acquire_lock():
+        with operation, identity_command_lock(args.command):
             if args.command == "bootstrap":
                 result = ensure_groups(authentik_token(bootstrap=True))
             elif args.command == "bootstrap-runtime-token":

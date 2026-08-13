@@ -45,6 +45,7 @@ def load_authz():
     setattr(webdriver, "Chrome", DummyChrome)
     setattr(webdriver, "ChromeOptions", DummyChromeOptions)
     setattr(exceptions, "NoSuchElementException", DummySeleniumError)
+    setattr(exceptions, "TimeoutException", DummySeleniumError)
     setattr(exceptions, "WebDriverException", DummySeleniumError)
     setattr(by, "By", DummyBy)
     setattr(support_ui, "WebDriverWait", DummyWait)

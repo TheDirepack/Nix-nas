@@ -850,6 +850,16 @@ class IdentitySyncTests(unittest.TestCase):
         token.assert_called_once_with()
         self.assertEqual(apply.call_args.args[0], "runtime-token")
 
+    def test_read_only_status_cli_does_not_wait_for_mutation_lock(self):
+        with (
+            mock.patch.object(sync.sys, "argv", ["nas-identity-sync", "status"]),
+            mock.patch.object(sync, "authentik_token", return_value="runtime-token"),
+            mock.patch.object(sync, "load_model", return_value=mock.sentinel.model),
+            mock.patch.object(sync, "model_status", return_value={"ok": True}),
+            mock.patch.object(sync, "acquire_lock", side_effect=AssertionError("read-only status locked")),
+        ):
+            self.assertEqual(sync.main(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -155,6 +155,8 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("optionalString (!cfg.power.ups.enable)", power)
         self.assertIn("pkgs.nodejs_22", zfs)
         self.assertIn("pkgs.buildPackages.nodejs_22", zfs)
+        self.assertIn("zfs_retry unload-key unload-key -r", zfs)
+        self.assertIn("Timed out waiting to $label", zfs)
         self.assertIn("serviceGid = lib.mkOption", management)
         self.assertIn("cfg.observability.serviceGid", validation)
         self.assertIn("obs.serviceGid", observability)
