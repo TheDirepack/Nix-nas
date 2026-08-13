@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 DISK="${NAS_INSTALL_DISK:-/dev/vda}"
+ROOT_PARTITION="${DISK}1"
 SOURCE="${NAS_INSTALL_SOURCE:-/mnt-source}"
 TARGET="${NAS_INSTALL_TARGET:-/mnt}"
 SSH_PUBLIC_KEY="${NAS_INSTALL_SSH_PUBLIC_KEY:-}"
@@ -22,7 +23,18 @@ parted --script "$DISK" \
 udevadm settle
 mkfs.ext4 -F -L NIXOS_QEMU_ROOT "${DISK}1"
 install -d -m 0755 "$TARGET"
-mount /dev/disk/by-label/NIXOS_QEMU_ROOT "$TARGET"
+mount -t ext4 "$ROOT_PARTITION" "$TARGET"
+
+# The Open WebUI frontend can briefly exceed the installer VM's physical
+# memory while Nix builds the complete appliance closure. Keep the full AI
+# profile enabled and provide guest-local swap instead of reducing coverage.
+swap_file="$TARGET/swapfile"
+if [[ ! -e "$swap_file" ]]; then
+  fallocate -l "${NAS_INSTALL_SWAP_GIB:-8}G" "$swap_file"
+  chmod 0600 "$swap_file"
+  mkswap "$swap_file" >/dev/null
+fi
+swapon "$swap_file" 2>/dev/null || true
 
 export NIX_CONFIG="experimental-features = nix-command flakes"
 nixos-install \
@@ -30,6 +42,8 @@ nixos-install \
   --flake "path:$SOURCE#$FLAKE" \
   --no-root-passwd \
   --option accept-flake-config true \
+  --option max-jobs 1 \
+  --option cores 2 \
   --option warn-dirty false
 
 # A second declarative install onto the mounted root must be non-destructive to
@@ -42,6 +56,8 @@ nixos-install \
   --flake "path:$SOURCE#$FLAKE" \
   --no-root-passwd \
   --option accept-flake-config true \
+  --option max-jobs 1 \
+  --option cores 2 \
   --option warn-dirty false
 grep -qx preserve-me "$TARGET/var/lib/nas-install-test/reinstall-sentinel" || {
   echo "Repeated nixos-install destroyed unrelated persistent state" >&2

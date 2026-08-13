@@ -11,6 +11,7 @@ let
         || lib.hasSuffix ".pyc" name
       );
   };
+  authentikProxy = pkgs.authentik-outposts.proxy;
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
     runtimeInputs = with pkgs; [
@@ -33,6 +34,7 @@ let
       systemd
       util-linux
       zfs
+      authentikProxy
     ];
     text = ''
       # Dedicated CI jobs have already qualified source tests, tooling, the
@@ -168,6 +170,11 @@ in
   networking.useDHCP = lib.mkDefault true;
   boot.supportedFilesystems = [ "zfs" ];
 
+  # The NixOS test kernel does not expose the per-service cgroup pressure file
+  # that systemd 260 otherwise tries to bind into copyparty's private mount
+  # namespace. The production service keeps its normal host accounting policy.
+  systemd.services.copyparty.serviceConfig.MemoryPressureWatch = lib.mkForce "off";
+
   users.users.admin.extraGroups = lib.mkAfter [ "wheel" ];
   security.sudo.wheelNeedsPassword = lib.mkForce false;
 
@@ -179,9 +186,16 @@ in
 
   nas = {
     installationReady = lib.mkForce true;
+    identity.authentikOutpostPort = lib.mkForce 9010;
     testing.installationReadyFixture = true;
     configurationDir = lib.mkForce "/var/lib/nas-test/repo";
-    adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "!"));
+    # The guest suite creates its first-run plan here; keep the installed
+    # Cockpit status source aligned with the plan used by the test.
+    firstStart.configFile = "/var/lib/nas-test/setup/first-run.json";
+    # The browser qualification logs into Cockpit through its direct PAM
+    # recovery listener. Keep this credential scoped to the disposable VM
+    # fixture; production configurations must provide their own root-only hash.
+    adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$Hsg1F2Cw2J25Jj9ZMzgEC8uiPgOS.DP/A8Pi28n.oXWw.CuB529luz/tBoCaxVXkuP6NqDmqUUUf5scB1/7jU1"));
     zfsImportAtBoot = lib.mkForce false;
     zfsEncryption.enable = lib.mkDefault false;
     autoUpdate.enable = lib.mkForce false;

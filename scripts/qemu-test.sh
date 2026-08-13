@@ -12,10 +12,11 @@ SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
 HTTP_PORT="${NAS_QEMU_HTTP_PORT:-8088}"
 HTTPS_PORT="${NAS_QEMU_HTTPS_PORT:-8443}"
 COCKPIT_PORT="${NAS_QEMU_COCKPIT_PORT:-9094}"
-MEMORY_MIB="${NAS_QEMU_MEMORY_MIB:-10240}"
-CPUS="${NAS_QEMU_CPUS:-4}"
-OS_DISK_GIB="${NAS_QEMU_OS_DISK_GIB:-32}"
+MEMORY_MIB="${NAS_QEMU_MEMORY_MIB:-8192}"
+CPUS="${NAS_QEMU_CPUS:-2}"
+OS_DISK_GIB="${NAS_QEMU_OS_DISK_GIB:-64}"
 DATA_DISK_GIB="${NAS_QEMU_DATA_DISK_GIB:-8}"
+BASELINE_SNAPSHOT="nas-test-clean"
 KEEP_VM="${NAS_QEMU_KEEP_VM:-0}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -24,12 +25,22 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/qemu-test.sh [static|native|installer|all|clean]
+Usage: scripts/qemu-test.sh [static|native|installer|persistent-start|persistent-test|persistent-stop|persistent-reset|all|clean]
 
   static     Run repository tests, Nix evaluation, and build the installable VM closure.
   native     Build and execute both runNixOSTest QEMU integration tests.
   installer  Download/verify the NixOS 26.05 ISO, install the NAS into a fresh
              QEMU disk, reboot it, and execute the in-guest full-stack suite.
+  persistent-start
+             Install the NAS into a reusable QEMU disk on first use and leave
+             the VM running for the developer wrapper.
+  persistent-test
+             Refresh the current worktree inside the reusable VM and run the
+             complete source and appliance suite there.
+  persistent-stop
+             Stop the reusable QEMU VM without deleting its installed disk.
+  persistent-reset
+             Stop the reusable VM and delete its installed disk and logs.
   all        Run static, native, and installer paths (default).
   clean      Remove cached VM disks, extracted ISO boot files, and logs.
 
@@ -41,7 +52,7 @@ USAGE
 
 ensure_host_tools() {
   local cmd
-  for cmd in curl sha256sum qemu-system-x86_64 qemu-img expect bsdtar ssh ssh-keygen timeout; do
+  for cmd in curl sha256sum qemu-system-x86_64 qemu-img expect bsdtar ssh ssh-keygen timeout python3 tar; do
     need "$cmd"
   done
 }
@@ -98,7 +109,7 @@ download_iso() {
 }
 
 extract_iso_boot() {
-  local iso=$1 out="$CACHE_DIR/iso-boot" entry candidate linux_path initrd_path options
+  local iso=$1 out="$CACHE_DIR/iso-boot" entry candidate linux_path initrd_path options isolinux_config
   install -d -m 0755 "$out"
   entry=""
   while IFS= read -r candidate; do
@@ -110,6 +121,18 @@ extract_iso_boot() {
       break
     fi
   done < <(bsdtar -tf "$iso" | grep -E '(^|/)loader/entries/.*\.conf$' || true)
+  if [[ -z "$entry" ]] && isolinux_config="$(bsdtar -xOf "$iso" isolinux/isolinux.cfg 2>/dev/null)"; then
+    linux_path="$(printf '%s\n' "$isolinux_config" | awk '$1 == "LINUX" {print $2; exit}')"
+    initrd_path="$(printf '%s\n' "$isolinux_config" | awk '$1 == "INITRD" {print $2; exit}')"
+    options="$(printf '%s\n' "$isolinux_config" | awk '$1 == "APPEND" {$1=""; sub(/^[[:space:]]+/, ""); print; exit}')"
+    linux_path="${linux_path#/}"
+    linux_path="${linux_path//\/\//\/}"
+    initrd_path="${initrd_path#/}"
+    initrd_path="${initrd_path//\/\//\/}"
+    if [[ -n "$linux_path" && -n "$initrd_path" && -n "$options" ]]; then
+      entry="isolinux/isolinux.cfg"
+    fi
+  fi
   [[ -n "$entry" ]] || die "could not find a usable systemd-boot loader entry in the NixOS ISO"
   bsdtar -xOf "$iso" "$linux_path" > "$out/bzImage"
   bsdtar -xOf "$iso" "$initrd_path" > "$out/initrd"
@@ -138,7 +161,16 @@ import sys
 
 root = pathlib.Path(sys.argv[1]).resolve()
 stage = pathlib.Path(sys.argv[2]).resolve()
-ignored_parts = {".git", ".cache", ".pytest_cache", "__pycache__", "node_modules", ".direnv", ".venv"}
+ignored_parts = {
+    ".git",
+    ".cache",
+    ".hypothesis",
+    ".pytest_cache",
+    "__pycache__",
+    "node_modules",
+    ".direnv",
+    ".venv",
+}
 ignored_names = {".coverage", "coverage.json"}
 ignored_suffixes = {".pyc", ".zip", ".qcow2", ".iso", ".log"}
 
@@ -167,14 +199,12 @@ if (root / ".git").exists():
     untracked = subprocess.check_output(
         ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "-z"]
     )
-    unexpected = [
-        item.decode()
+    selected.extend(
+        pathlib.PurePosixPath(item.decode())
         for item in untracked.split(b"\0")
         if item and not ignored(pathlib.PurePosixPath(item.decode()))
-    ]
-    if unexpected:
-        raise SystemExit("QEMU source has unreviewed files: " + ", ".join(sorted(unexpected)[:20]))
-    policy = "git-tracked"
+    )
+    policy = "git-tracked-and-worktree"
 else:
     manifest = root / "MANIFEST.sha256"
     if not manifest.is_file():
@@ -265,14 +295,104 @@ wait_for_ssh() {
   return 1
 }
 
+sync_source_to_guest() {
+  local source_stage=$1 ssh_key=$2
+  local -a ssh_args
+  mapfile -t ssh_args < <(ssh_options "$ssh_key")
+  log "Refreshing the current worktree inside the running VM"
+  set +e
+  tar --exclude=./.nas-source-selection.json -C "$source_stage" -cf - . | \
+    ssh "${ssh_args[@]}" \
+      -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
+      -p "$SSH_PORT" admin@127.0.0.1 \
+      'sudo -n rm -rf /var/lib/nas-test/repo &&
+       sudo -n install -d -m 0755 /var/lib/nas-test/repo &&
+       sudo -n tar -C /var/lib/nas-test/repo -xf - &&
+       sudo -n git -C /var/lib/nas-test/repo init -q &&
+       sudo -n git -C /var/lib/nas-test/repo config user.name "NixOS NAS VM" &&
+       sudo -n git -C /var/lib/nas-test/repo config user.email "vm-test@nas.local" &&
+       sudo -n git -C /var/lib/nas-test/repo add -A &&
+       sudo -n git -C /var/lib/nas-test/repo commit -q -m "VM test source"'
+  local -a pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  if (( pipeline_status[0] != 0 || pipeline_status[1] != 0 )); then
+    die "failed to copy the current worktree into the VM (tar=${pipeline_status[0]}, ssh=${pipeline_status[1]})"
+  fi
+}
+
+rebuild_guest_source() {
+  local ssh_key=$1 timeout_seconds="${NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT:-3600}"
+  local -a ssh_args
+  mapfile -t ssh_args < <(ssh_options "$ssh_key")
+  log "Updating the installed NixOS generation from the refreshed worktree"
+  timeout --foreground "$timeout_seconds" \
+    ssh "${ssh_args[@]}" \
+      -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
+      -p "$SSH_PORT" admin@127.0.0.1 \
+      'sudo -n systemctl reset-failed &&
+       sudo -n nixos-rebuild switch --flake path:/var/lib/nas-test/repo#nas-qemu --option max-jobs 1 --option cores 2 --option warn-dirty false'
+}
+
+stop_persistent_vm() {
+  local pidfile="$STATE_DIR/qemu.pid" pid
+  if [[ ! -s "$pidfile" ]]; then
+    log "Persistent VM is not running."
+    return 0
+  fi
+  pid="$(cat "$pidfile")"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pidfile"
+    log "Persistent VM is not running."
+    return 0
+  fi
+  log "Stopping persistent VM (pid $pid)"
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 30); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  rm -f "$pidfile"
+}
+
+has_snapshot() {
+  local disk=$1
+  qemu-img snapshot -l "$disk" | awk -v tag="$BASELINE_SNAPSHOT" '
+    NR > 2 && $2 == tag { found = 1 }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+restore_persistent_baseline() {
+  local os_disk=$1 data_disk=$2
+  stop_persistent_vm
+  if ! has_snapshot "$os_disk" || ! has_snapshot "$data_disk"; then
+    die "persistent VM baseline is missing; run scripts/vm-reset.sh once to recreate it"
+  fi
+  log "Restoring the clean persistent VM baseline"
+  qemu-img snapshot -a "$BASELINE_SNAPSHOT" "$os_disk"
+  qemu-img snapshot -a "$BASELINE_SNAPSHOT" "$data_disk"
+}
+
+reset_persistent_state() {
+  case "$STATE_DIR" in
+    ""|/|"$ROOT"|"$ROOT"/*)
+      die "refusing to reset an unsafe VM state path: $STATE_DIR"
+      ;;
+  esac
+  stop_persistent_vm
+  rm -rf -- "$STATE_DIR"
+  log "Persistent VM state removed; the cached installer ISO was kept."
+}
+
 run_installer() {
   ensure_host_tools
   install -d -m 0755 "$STATE_DIR"
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
-  local ssh_key ssh_key_dir
+  local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
+  local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
+  local ssh_key ssh_key_dir full_suite_skip_fuzz
   local -a accel ssh_args
-  iso="$(download_iso)"
-  boot_dir="$(extract_iso_boot "$iso")"
   os_disk="$STATE_DIR/nixos-nas-os.qcow2"
   data_disk="$STATE_DIR/nixos-nas-zfs.qcow2"
   install_log="$STATE_DIR/installer-console.log"
@@ -285,8 +405,25 @@ run_installer() {
   source_id="$(source_fingerprint "$source_stage")"
   marker_id="$(cat "$install_marker" 2>/dev/null || true)"
 
-  rm -f "$pidfile" "$install_log" "$boot_log"
-  if [[ "$KEEP_VM" != 1 || ! -s "$os_disk" || ! -s "$ssh_key" || "$marker_id" != "$source_id" ]]; then
+  if [[ "$persistent_mode" == 1 && "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test \
+    && -s "$os_disk" && -s "$data_disk" && -s "$ssh_key" && -s "$install_marker" ]]; then
+    restore_persistent_baseline "$os_disk" "$data_disk"
+    rm -f "$boot_log"
+  fi
+
+  if [[ "$persistent_mode" != 1 || ! -s "$pidfile" ]]; then
+    rm -f "$pidfile"
+  elif ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    rm -f "$pidfile"
+  fi
+  rm -f "$install_log"
+  if [[ "$persistent_mode" != 1 || ! -s "$pidfile" ]]; then
+    rm -f "$boot_log"
+  fi
+  if [[ "$reuse_installed" != 1 && ( "$KEEP_VM" != 1 || ! -s "$os_disk" || ! -s "$ssh_key" || "$marker_id" != "$source_id" ) ]] || \
+     [[ ! -s "$os_disk" || ! -s "$ssh_key" || ! -s "$install_marker" ]]; then
+    iso="$(download_iso)"
+    boot_dir="$(extract_iso_boot "$iso")"
     rm -f "$os_disk" "$data_disk" "$install_marker" "$ssh_key" "$ssh_key.pub"
     rm -rf "$ssh_key_dir"
     install -d -m 0700 "$ssh_key_dir"
@@ -298,7 +435,7 @@ run_installer() {
     mapfile -t accel < <(qemu_acceleration)
     options="$(cat "$boot_dir/options") console=ttyS0,115200n8 systemd.show_status=1"
     log "Installing NixOS NAS into a fresh QEMU disk"
-    "$ROOT/tests/vm/install.expect" \
+    expect "$ROOT/tests/vm/install.expect" \
       qemu-system-x86_64 \
       "${accel[@]}" \
       -m "$MEMORY_MIB" -smp "$CPUS" \
@@ -311,34 +448,45 @@ run_installer() {
       -device virtio-rng-pci \
       -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
       -no-reboot -nographic 2>&1 | tee "$install_log"
+    if [[ "$persistent_mode" == 1 ]]; then
+      qemu-img snapshot -c "$BASELINE_SNAPSHOT" "$os_disk"
+      qemu-img snapshot -c "$BASELINE_SNAPSHOT" "$data_disk"
+    fi
     printf '%s\n' "$source_id" > "$install_marker"
   else
-    log "Reusing the installed OS disk because NAS_QEMU_KEEP_VM=1 and the source tree is unchanged"
+    log "Reusing the installed OS disk for the persistent wrapper"
   fi
 
-  rm -f "$data_disk"
-  qemu-img create -q -f qcow2 "$data_disk" "${DATA_DISK_GIB}G"
+  if [[ "$persistent_mode" != 1 || ! -s "$data_disk" ]]; then
+    rm -f "$data_disk"
+    qemu-img create -q -f qcow2 "$data_disk" "${DATA_DISK_GIB}G"
+  fi
 
   mapfile -t accel < <(qemu_acceleration)
-  log "Booting installed NAS and running the full suite inside the VM"
-  qemu-system-x86_64 \
-    "${accel[@]}" \
-    -m "$MEMORY_MIB" -smp "$CPUS" \
-    -drive "file=$os_disk,format=qcow2,if=virtio" \
-    -drive "file=$data_disk,format=qcow2,if=virtio" \
-    -device virtio-rng-pci \
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443,hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092" \
-    -device virtio-net-pci,netdev=net0 \
-    -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
+  if [[ ! -s "$pidfile" ]] || ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    log "Booting installed NAS in a disposable QEMU VM"
+    qemu-system-x86_64 \
+      "${accel[@]}" \
+      -m "$MEMORY_MIB" -smp "$CPUS" \
+      -drive "file=$os_disk,format=qcow2,if=virtio" \
+      -drive "file=$data_disk,format=qcow2,if=virtio" \
+      -device virtio-rng-pci \
+      -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443,hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092" \
+      -device virtio-net-pci,netdev=net0 \
+      -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
+  else
+    log "Persistent QEMU VM is already running (pid $(cat "$pidfile"))"
+  fi
 
   cleanup_vm() {
-    if [[ -s "$pidfile" ]]; then
+    local cleanup_pidfile="$STATE_DIR/qemu.pid"
+    if [[ -s "$cleanup_pidfile" ]]; then
       local pid
-      pid="$(cat "$pidfile")"
+      pid="$(cat "$cleanup_pidfile")"
       kill "$pid" 2>/dev/null || true
       for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
       kill -KILL "$pid" 2>/dev/null || true
-      rm -f "$pidfile"
+      rm -f "$cleanup_pidfile"
     fi
   }
   trap cleanup_vm EXIT INT TERM
@@ -347,6 +495,33 @@ run_installer() {
   if ! wait_for_ssh "$ssh_key"; then
     cat "$boot_log" >&2 || true
     die "installed VM did not become reachable over SSH on port $SSH_PORT"
+  fi
+
+  if [[ "$persistent_mode" == 1 ]]; then
+    trap - EXIT INT TERM
+    full_suite_skip_fuzz="${NAS_QEMU_SKIP_FUZZ:-0}"
+    sync_source_to_guest "$source_stage" "$ssh_key"
+    if [[ "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test || "$marker_id" != "$source_id" ]]; then
+      rebuild_guest_source "$ssh_key"
+      printf '%s\n' "$source_id" > "$install_marker"
+    fi
+    # Leave a failed persistent run available for inspection. The explicit
+    # stop/reset wrappers own its lifecycle and can remove it deliberately.
+    if [[ "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test ]]; then
+      log "Running the complete source and appliance suite inside the persistent VM"
+      timeout --foreground "${NAS_QEMU_SOURCE_SUITE_TIMEOUT:-14400}" \
+        ssh "${ssh_args[@]}" \
+          -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
+          -p "$SSH_PORT" admin@127.0.0.1 \
+          "cd /var/lib/nas-test/repo &&
+           sudo -n systemctl reset-failed &&
+           sudo -n nas-secrets stop &&
+           sudo -n env NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
+             nix develop path:/var/lib/nas-test/repo#test -c \
+             bash /var/lib/nas-test/repo/tests/vm/full-suite.sh"
+    fi
+    log "Persistent VM is ready; use scripts/vm-pytest.sh or scripts/vm-stop.sh."
+    return 0
   fi
 
   timeout --foreground "${NAS_QEMU_GUEST_TEST_TIMEOUT:-3600}" \
@@ -406,6 +581,14 @@ case "$MODE" in
   static) run_static ;;
   native) run_native ;;
   installer) run_installer ;;
+  persistent-start)
+    NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=start NAS_QEMU_REUSE_INSTALLED=1 run_installer
+    ;;
+  persistent-test)
+    NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=test NAS_QEMU_REUSE_INSTALLED=1 run_installer
+    ;;
+  persistent-stop) stop_persistent_vm ;;
+  persistent-reset) reset_persistent_state ;;
   all) run_static; run_native; run_installer ;;
   clean) rm -rf "$CACHE_DIR"; log "Removed $CACHE_DIR" ;;
   -h|--help|help) usage ;;

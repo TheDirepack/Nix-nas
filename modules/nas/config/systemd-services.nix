@@ -139,9 +139,16 @@ in
         "${secretRoot}/ready"
         authentikApiTokenFile
         authentikBootstrapTokenFile
+        "/var/lib/nas-setup/state.json"
       ];
       serviceConfig = {
         Type = "oneshot";
+        # Authentik restarts and feature reconciliation can briefly hold the
+        # runtime operation class. Retry the timer-triggered validation after
+        # that transient coordination conflict instead of leaving the target
+        # failed until the next timer tick.
+        Restart = "on-failure";
+        RestartSec = "5s";
         ExecStart = [
           "${nasIdentitySync}/bin/nas-identity-sync bootstrap"
           "${nasIdentitySync}/bin/nas-identity-sync status"
@@ -150,12 +157,34 @@ in
       };
     };
 
+    nas-copyparty-share-root = {
+      description = "Prepare the ZFS-backed CopyParty share root";
+      partOf = [ "nas-protected-services.target" ];
+      before = [ "copyparty.service" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig = {
+        RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
+        AssertPathIsMountPoint = cfg.zfsRoot;
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = [
+          "${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg shareRoot}"
+          "${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/admin")}"
+          "${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/users")}"
+        ] ++ lib.optional cfg.tftp.enable
+          "${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/tftp")}";
+      };
+    };
+
     copyparty = {
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" ];
+      requires = [ "nas-copyparty-share-root.service" ];
+      after = [ "nas-copyparty-share-root.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
         ConditionPathExists = "${secretRoot}/ready";
@@ -164,15 +193,9 @@ in
       serviceConfig = {
         RuntimeDirectoryMode = lib.mkOverride 90 "0750";
         UMask = lib.mkForce "0007";
-        # Create share paths only after the ZFS mount guard succeeds.
-        ExecStartPre = lib.mkBefore (
-          [
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg shareRoot}"
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/users")}"
-          ]
-          ++ lib.optional cfg.tftp.enable
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/tftp")}"
-        );
+        # CopyParty's private namespace needs the host account database for
+        # its startup hook; TemporaryFileSystem otherwise hides /etc/passwd.
+        BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];
         BindPaths = lib.mkOverride 90 [
           "/var/lib/copyparty"
           "/var/cache/copyparty"
@@ -311,7 +334,7 @@ in
         ExecStart = "${nasFeatureControl}/bin/nas-feature-control serve";
         Restart = "on-failure";
         RestartSec = "2s";
-        RuntimeDirectory = [ "nas-on-demand" "nas-control" ];
+        RuntimeDirectory = "nas-on-demand";
         RuntimeDirectoryMode = "0750";
         UMask = "0007";
         NoNewPrivileges = true;
@@ -341,7 +364,23 @@ in
       unitConfig.ConditionPathExists = "${secretRoot}/ready";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${nasFeatureControl}/bin/nas-feature-control apply";
+        ExecStart = pkgs.writeShellScript "nas-feature-apply" ''
+          set -euo pipefail
+          error_file="$(${pkgs.coreutils}/bin/mktemp)"
+          if ${nasFeatureControl}/bin/nas-feature-control apply 2>"$error_file"; then
+            rm -f -- "$error_file"
+            exit 0
+          fi
+          if ${pkgs.gnugrep}/bin/grep -qF \
+            "Another privileged operation conflicts with feature-apply:" "$error_file"; then
+            echo "Feature policy application deferred to the owning operation." >&2
+            rm -f -- "$error_file"
+            exit 0
+          fi
+          ${pkgs.coreutils}/bin/cat "$error_file" >&2
+          rm -f -- "$error_file"
+          exit 1
+        '';
       };
     };
 
@@ -465,7 +504,8 @@ in
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       wants = caddyBackendUnits;
-      after = caddyBackendUnits;
+      requires = [ "nas-managed-services-reconcile.service" ];
+      after = caddyBackendUnits ++ [ "nas-managed-services-reconcile.service" ];
       unitConfig.ConditionPathExists = "${secretRoot}/ready";
     };
 

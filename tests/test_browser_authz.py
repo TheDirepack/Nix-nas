@@ -99,6 +99,8 @@ class BrowserAuthzInputTests(unittest.TestCase):
                     "argv",
                     [
                         "authz.py",
+                        "--cockpit-password-file",
+                        str(operator),
                         "--operator-password-file",
                         str(operator),
                         "--alice-password-file",
@@ -115,7 +117,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "first-browser-operation"):
                     self.authz.main()
-            first_browser.assert_called_once_with("https://127.0.0.1:9092", "operator", "operator-secret")
+            first_browser.assert_called_once_with("https://localhost:9092", "admin", "operator-secret")
 
     def test_secret_reader_rejects_symlink_and_permissive_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

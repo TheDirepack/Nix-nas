@@ -257,10 +257,14 @@ in
           # VictoriaMetrics' Influx ingestion maps non-numeric fields to zero.
           # Normalize SMART's boolean health field before output so healthy=1
           # and failed=0 remain distinguishable to vmalert.
-          processors.converter = {
-            namepass = [ "smart_device" ];
-            fields.float = [ "health_ok" ];
-          };
+          # Telegraf processors are TOML array-of-table plugins, even when only
+          # one processor instance is configured.
+          processors.converter = [
+            {
+              namepass = [ "smart_device" ];
+              fields.float = [ "health_ok" ];
+            }
+          ];
           inputs = {
             cpu = {
               percpu = true;
@@ -493,7 +497,7 @@ in
         enable = true;
         environmentFile = "${observabilitySecretDir}/ntfy-environment";
         settings = {
-          base-url = "https://${lanHost}/notifications";
+          base-url = "https://${lanHost}";
           listen-http = "127.0.0.1:${toString obs.ntfy.port}";
           web-root = "/notifications";
           behind-proxy = true;

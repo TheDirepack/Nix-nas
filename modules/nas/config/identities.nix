@@ -18,7 +18,7 @@ in
     users.users.nas-feature-gate = {
       isSystemUser = true;
       group = "nas-feature-control";
-      extraGroups = [ "caddy" ] ++ lib.optional cfg.ai.enable "nas-ai-models";
+      extraGroups = [ "caddy" "nas-operations" ] ++ lib.optional cfg.ai.enable "nas-ai-models";
     };
     users.users.authentik = {
       isSystemUser = true;

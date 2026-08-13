@@ -322,7 +322,12 @@ def _validate_with_llama_swap(candidate: pathlib.Path) -> None:
                 return
             stderr = (result.stderr or b"").decode(errors="ignore")[:500].lower()
             # If the binary does not recognize the validation flag, fall back to python validation only.
-            if "unknown" in stderr or "unrecognized" in stderr or "invalid" in stderr and "flag" in stderr:
+            if (
+                "unknown" in stderr
+                or "unrecognized" in stderr
+                or "flag provided but not defined" in stderr
+                or ("invalid" in stderr and "flag" in stderr)
+            ):
                 return
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or b"").decode(errors="ignore")[:500]

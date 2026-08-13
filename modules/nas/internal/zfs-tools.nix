@@ -252,7 +252,7 @@ let
         exit 1
       fi
 
-      key="$($secret_reader show-zfs-key)" || {
+      key="$($secret_reader show-zfs-key-stdin)" || {
         echo "The KeePassXC ZFS key is missing. Run nas-secrets init first." >&2
         exit 1
       }

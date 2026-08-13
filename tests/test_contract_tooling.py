@@ -396,7 +396,12 @@ class ContractTests(unittest.TestCase):
             result = subprocess.run(
                 ["bash", "scripts/package-release.sh", "--source-only", str(output)],
                 cwd=linked,
-                env={**os.environ, "NAS_PREFLIGHT_SKIP_TESTS": "1", "NAS_PREFLIGHT_SKIP_NIX": "1"},
+                env={
+                    **os.environ,
+                    "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
+                    "NAS_PREFLIGHT_SKIP_TESTS": "1",
+                    "NAS_PREFLIGHT_SKIP_NIX": "1",
+                },
                 text=True,
                 capture_output=True,
                 timeout=90,
@@ -596,7 +601,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("sshpass", host)
         vm_common = text("tests/nixos/vm-common.nix")
         self.assertIn("PasswordAuthentication = lib.mkForce false", vm_common)
-        self.assertIn('(pkgs.writeText "vm-admin-password-hash" "!")', vm_common)
+        self.assertIn('(pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$', vm_common)
         self.assertNotIn("authorizedKeys.keys", vm_common)
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))

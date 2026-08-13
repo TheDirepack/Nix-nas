@@ -358,7 +358,12 @@ class StateBundleTests(unittest.TestCase):
             sensitive.write_text("sensitive", encoding="utf-8")
             registry = self.registry(public, sensitive, root / "optional")
             bundle = root / "valid.tar.gz"
-            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+            environment = self.environment(registry) | {
+                # Keep this structural-manifest test independent of a signing key
+                # exported by the installed VM's production environment.
+                "NAS_STATE_SIGNING_KEY": str(root / "missing-signing-key"),
+            }
+            with mock.patch.dict(os.environ, environment, clear=False):
                 state.export_bundle(bundle, include_sensitive=True)
                 extracted = root / "extracted"
                 state.extract_bundle(bundle, extracted)

@@ -3,6 +3,7 @@
 let
   inherit (nasInternal)
     authentikPort
+    authentikOutpostPort
     caddyForwardAuth
     caddyCapabilityAuth
     caddyOnDemandAuth
@@ -59,8 +60,8 @@ in
 
       @authentikOutpost path /outpost.goauthentik.io/*
       handle @authentikOutpost {
-        uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
-        reverse_proxy 127.0.0.1:${toString authentikPort} {
+        reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+          ${lib.optionalString (authentikOutpostPort == authentikPort) ''uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io''}
           header_up Host {http.request.host}
           header_up X-Forwarded-Proto https
           header_up X-Forwarded-For {remote_host}
@@ -283,7 +284,7 @@ in
         route {
           ${caddyForwardAuth}
           ${caddyCapabilityAuth "syncthing"}
-          redir ${cfg.identity.authentikPath}if/flow/nas-user-settings/
+          redir * ${cfg.identity.authentikPath}if/flow/nas-user-settings/
         }
       }
       redir /settings ${cfg.identity.authentikPath}if/user/

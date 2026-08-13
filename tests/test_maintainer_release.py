@@ -100,6 +100,7 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
     def test_preflight_wrapper_runs_its_safe_local_tier(self) -> None:
         result = self.run_clean(
             "env",
+            "NAS_PREFLIGHT_REQUIRE_COMPLETE=0",
             "NAS_PREFLIGHT_SKIP_TESTS=1",
             "NAS_PREFLIGHT_SKIP_FUZZ=1",
             "NAS_PREFLIGHT_SKIP_NIX=1",

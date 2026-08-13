@@ -45,14 +45,34 @@ def first(driver: webdriver.Chrome, selectors: list[str]) -> Any:
     raise NoSuchElementException(", ".join(selectors))
 
 
+def login_form_visible(driver: webdriver.Chrome) -> bool:
+    try:
+        return any(element.is_displayed() for element in driver.find_elements(By.CSS_SELECTOR, "#login-user-input"))
+    except WebDriverException:
+        # Authentik/Cockpit can replace the login form while the redirect is
+        # completing; let WebDriverWait re-query the new document instead of
+        # treating that normal transition as a test failure.
+        return True
+
+
 def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
     for element in driver.find_elements(By.TAG_NAME, "button"):
-        if element.is_displayed() and element.text.strip() == label:
-            return element
+        try:
+            if element.is_displayed() and element.text.strip() == label:
+                return element
+        except WebDriverException:
+            continue
     return None
 
 
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
+
+
+def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
+    message = str(entry.get("message", ""))
+    return ("/favicon.ico" in message and "404" in message) or (
+        "/console/cockpit/login" in message and "401" in message
+    )
 
 
 def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
@@ -98,7 +118,11 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
         if result["duplicates"]:
             failures.append({"viewport": [width, height], "reason": "duplicate-dom-ids", **result})
     try:
-        severe = [entry for entry in driver.get_log("browser") if entry.get("level") == "SEVERE"]
+        severe = [
+            entry
+            for entry in driver.get_log("browser")
+            if entry.get("level") == "SEVERE" and not expected_cockpit_shell_entry(entry)
+        ]
     except (WebDriverException, ValueError):
         severe = []
     if severe:
@@ -138,7 +162,8 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
 
 
 def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
-    driver.get(origin + "/")
+    cockpit_root = origin.rstrip("/") + "/console/"
+    driver.get(cockpit_root)
     wait = WebDriverWait(driver, 60)
     username_input = wait.until(
         lambda current: first(
@@ -162,19 +187,23 @@ def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password
     )
     password_input.send_keys(password)
     first(driver, ["#login-button", 'button[type="submit"]']).click()
-    wait.until(lambda current: "/cockpit/" in current.current_url)
+    wait.until(
+        lambda current: (
+            current.current_url.startswith(origin.rstrip("/") + "/console/") and not login_form_visible(current)
+        )
+    )
 
 
 def verify_cockpit_react_interactions(origin: str, username: str, password: str) -> None:
     driver = browser()
     try:
         cockpit_login(driver, origin, username, password)
-        driver.get(origin + "/cockpit/@localhost/nas/index.html")
+        driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
         wait = WebDriverWait(driver, 90)
         wait.until(lambda current: "NAS Overview" in current.page_source)
         wait.until(lambda current: "Maintenance actions" in current.page_source)
         wait.until(lambda current: button_with_text(current, "Refresh")).click()
-        wait.until(lambda current: button_with_text(current, "Run health checks")).click()
+        wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
         wait.until(lambda current: "Confirm maintenance action" in current.page_source)
         cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
         cancel.click()
@@ -281,15 +310,17 @@ def read_secret(path: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--origin", default="https://nas-test.local")
-    parser.add_argument("--cockpit-origin", default="https://127.0.0.1:9092")
+    parser.add_argument("--cockpit-origin", default="https://localhost:9092")
+    parser.add_argument("--cockpit-password-file", required=True)
     parser.add_argument("--operator-password-file", required=True)
     parser.add_argument("--alice-password-file", required=True)
     parser.add_argument("--baseline-password-file", required=True)
     args = parser.parse_args()
+    cockpit_password = read_secret(args.cockpit_password_file)
     operator_password = read_secret(args.operator_password_file)
     alice_password = read_secret(args.alice_password_file)
     baseline_password = read_secret(args.baseline_password_file)
-    verify_cockpit_react_interactions(args.cockpit_origin, "operator", operator_password)
+    verify_cockpit_react_interactions(args.cockpit_origin, "admin", cockpit_password)
     capability_routes = {
         "files": "/shares/",
         "webdav": "/dav/",

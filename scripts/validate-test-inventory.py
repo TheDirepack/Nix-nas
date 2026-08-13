@@ -19,6 +19,9 @@ NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/qemu-final-browser.sh",
     "scripts/vm-bundles.sh",
     "scripts/vm-pytest.sh",
+    "scripts/vm-reset.sh",
+    "scripts/vm-start.sh",
+    "scripts/vm-stop.sh",
     "scripts/zap-automation-scan.sh",
 }
 

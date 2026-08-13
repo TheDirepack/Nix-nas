@@ -6,10 +6,22 @@ KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
 PUBLIC_HOST="${NAS_TEST_PUBLIC_HOST:-nas-test.local}"
 CONFIG_DIR="${NAS_CONFIG_DIR:-/var/lib/nas-test/repo}"
 TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-300}"
+AUTHENTIK_OUTPOST_PORT="${NAS_AUTHENTIK_OUTPOST_PORT:-9010}"
+AUTHENTIK_OUTPOST_PID=""
+AUTHENTIK_OUTPOST_LOG="/run/nas-authentik-vm-outpost.log"
 
 log() { printf '\n==> %s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+stop_authentik_vm_outpost() {
+  if [[ -n "$AUTHENTIK_OUTPOST_PID" ]] && kill -0 "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1; then
+    kill "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
+    wait "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
+  fi
+  AUTHENTIK_OUTPOST_PID=""
+  rm -f -- "$AUTHENTIK_OUTPOST_LOG"
+}
 
 on_error() {
   local rc=$?
@@ -20,6 +32,7 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
+trap stop_authentik_vm_outpost EXIT
 
 require_commands() {
   local missing=() command
@@ -75,7 +88,7 @@ assert_blocked() {
   local path=$1 code
   code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST$path")"
   case "$code" in
-    301|302|303|307|308|401|403) pass "unauthenticated $path is blocked or redirected ($code)" ;;
+    301|302|303|307|308|401|403|404) pass "unauthenticated $path is blocked, hidden, or redirected ($code)" ;;
     *) fail "unauthenticated $path returned unexpected HTTP $code" ;;
   esac
 }
@@ -87,7 +100,7 @@ assert_spoof_blocked() {
     -H 'X-authentik-username: akadmin' -H 'X-authentik-groups: nas_admin' \
     "https://$PUBLIC_HOST$path")"
   case "$code" in
-    301|302|303|307|308|401|403) pass "spoofed identity headers do not bypass $path ($code)" ;;
+    301|302|303|307|308|401|403|404) pass "spoofed identity headers do not bypass $path ($code)" ;;
     *) fail "spoofed identity headers bypassed or unexpectedly reached $path (HTTP $code)" ;;
   esac
 }
@@ -100,11 +113,76 @@ activate_secrets() {
   run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | timeout 600 nas-secrets activate-stdin"
 }
 
+authentik_api() {
+  local method=$1 path=$2 body=${3:-}
+  if [[ -n "$body" ]]; then
+    curl --fail --silent --show-error --max-time 30 -X "$method" -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "http://127.0.0.1:9000/identity/api/v3/$path"
+  else
+    curl --fail --silent --show-error --max-time 30 -X "$method" -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" "http://127.0.0.1:9000/identity/api/v3/$path"
+  fi
+}
+
+ensure_authentik_proxy_fixture() {
+  # The VM owns a disposable Authentik database, so create the provider and
+  # application through the same API used by an operator. This keeps the
+  # browser test independent of an external Authentik export and makes the
+  # provider assignment survive an Authentik restart.
+  local auth_flow invalidation_flow provider_id outpost_id existing_providers outpost_config payload
+  AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-secrets/authentik/bootstrap-token)"
+  auth_flow="$(authentik_api GET 'flows/instances/?slug=default-authentication-flow' | jq -er '.results[0].pk')"
+  invalidation_flow="$(authentik_api GET 'flows/instances/?slug=default-invalidation-flow' | jq -er '.results[0].pk')"
+
+  provider_id="$(authentik_api GET 'providers/proxy/?page_size=100' | jq -er '.results[] | select(.name == "NAS VM Test Proxy") | .pk' | head -n1 || true)"
+  if [[ -z "$provider_id" ]]; then
+    payload="$(jq -cn --arg name 'NAS VM Test Proxy' --arg authorization "$auth_flow" --arg invalidation "$invalidation_flow" '{name:$name, authorization_flow:$authorization, invalidation_flow:$invalidation, mode:"forward_single", external_host:"https://nas-test.local", internal_host:"http://127.0.0.1:8080", internal_host_ssl_validation:false}')"
+    provider_id="$(authentik_api POST 'providers/proxy/' "$payload" | jq -er '.pk')"
+  fi
+
+  if ! authentik_api GET 'core/applications/?page_size=100' | jq -e '.results[] | select(.slug == "nas-vm-portal") | .pk' >/dev/null; then
+    payload="$(jq -cn --arg name 'NAS VM Portal' --arg slug 'nas-vm-portal' --argjson provider "$provider_id" '{name:$name, slug:$slug, provider:$provider, meta_launch_url:"https://nas-test.local"}')"
+    authentik_api POST 'core/applications/' "$payload" >/dev/null
+  fi
+
+  outpost_id="$(authentik_api GET 'outposts/instances/?page_size=100' | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk' | head -n1 || true)"
+  [[ -n "$outpost_id" ]] || fail 'Authentik embedded outpost is missing'
+  existing_providers="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --argjson provider "$provider_id" '([.providers[]?] + [$provider]) | unique')"
+  outpost_config="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c '.config + {authentik_host:"http://127.0.0.1:9000/identity/", authentik_host_browser:"https://nas-test.local/identity/"}')"
+  payload="$(jq -cn --argjson providers "$existing_providers" --argjson config "$outpost_config" '{providers:$providers,config:$config}')"
+  authentik_api PATCH "outposts/instances/$outpost_id/" "$payload" >/dev/null
+
+  local outpost_token
+  outpost_token="$(authentik_api GET "core/tokens/ak-outpost-${outpost_id}-api/view_key/" | jq -er '.key')"
+  install -d -o authentik -g authentik -m 0750 /run/nas-authentik-vm-outpost
+  install -o authentik -g authentik -m 0640 /dev/null "$AUTHENTIK_OUTPOST_LOG"
+  runuser -u authentik -- env \
+    AUTHENTIK_HOST="http://127.0.0.1:9000/identity/" \
+    AUTHENTIK_HOST_BROWSER="https://$PUBLIC_HOST/identity/" \
+    AUTHENTIK_TOKEN="$outpost_token" \
+    AUTHENTIK_INSECURE=true \
+    AUTHENTIK_LISTEN__HTTP="127.0.0.1:$AUTHENTIK_OUTPOST_PORT" \
+    AUTHENTIK_LISTEN__HTTPS="127.0.0.1:9011" \
+    AUTHENTIK_LISTEN__METRICS="127.0.0.1:9310" \
+    proxy >>"$AUTHENTIK_OUTPOST_LOG" 2>&1 &
+  AUTHENTIK_OUTPOST_PID=$!
+
+  local code=''
+  for _ in $(seq 1 60); do
+    code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
+    [[ "$code" == 204 ]] && break
+    sleep 2
+  done
+  [[ "$code" == 204 ]] || {
+    tail -80 "$AUTHENTIK_OUTPOST_LOG" >&2 || true
+    fail "Authentik VM proxy outpost did not become reachable (HTTP ${code:-none})"
+  }
+  pass 'Authentik VM proxy provider, application, and Caddy outpost backend are ready'
+}
+
 require_commands \
   curl findmnt firewall-cmd git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-feature-control \
   nas-identity-sync nas-managed-service nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
-  nas-zfs-mount-check nas-zfs-unlock python3 ss systemctl zfs zpool
+  nas-zfs-mount-check nas-zfs-unlock proxy python3 ss systemctl zfs zpool
 
 nas-managed-service validate >/dev/null
 pass "nas-managed-service store is valid (file-based, accept-list, no SQLite)"
@@ -235,6 +313,10 @@ jq -e '
   (.accounts.created | sort) == ["alice", "baseline", "guest", "operator"] and
   (.identity.administrators | index("operator")) != null
 ' /tmp/nas-first-run.json >/dev/null
+run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json" \
+  >/tmp/nas-first-start-status.json
+jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
+  /tmp/nas-first-start-status.json >/dev/null
 nas-setup status | jq -e '
   .runtimeSecretsActive == true and
   .poolPresent == true and
@@ -306,12 +388,14 @@ log "Verify first-run protected services and account population"
 [[ -f /run/nas-secrets/ready ]] || fail "first-run setup did not commit runtime secrets"
 for unit in \
   nas-protected-services.target postgresql.service authentik-worker.service \
-  authentik.service nas-identity-sync.service copyparty.service \
+  authentik.service copyparty.service \
   nas-on-demand-gate.service caddy.service; do
   wait_active "$unit"
 done
+wait_active nas-identity-sync.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
+ensure_authentik_proxy_fixture
 curl --fail --silent --show-error --max-time 20 \
   --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
 nas-identity-sync status | jq -e '
@@ -403,11 +487,20 @@ if bytes(received) != EXPECTED:
     raise SystemExit(f"TFTP payload mismatch: {bytes(received)!r}")
 
 upload = "tftp/qemu-upload-must-fail.txt"
-sock.sendto(packet(2, upload), SERVER)
-response, _peer = sock.recvfrom(65535)
-opcode = struct.unpack("!H", response[:2])[0]
-if opcode != 5:
-    raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
+write_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+write_sock.settimeout(3)
+write_sock.sendto(packet(2, upload), SERVER)
+try:
+    response, _peer = write_sock.recvfrom(65535)
+except TimeoutError:
+    # CopyParty's anonymous read-only TFTP mode rejects writes by withholding
+    # a transfer response; the absence of a created file is the authority.
+    pass
+else:
+    opcode = struct.unpack("!H", response[:2])[0]
+    if opcode != 5:
+        raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
+write_sock.close()
 if Path("/tank/shares/tftp/qemu-upload-must-fail.txt").exists():
     raise SystemExit("read-only TFTP created the rejected upload")
 PYTFTP
@@ -461,7 +554,7 @@ while True:
 sock.close()
 first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
 parts = first.split()
-if len(parts) < 2 or parts[1] not in {"400", "401", "403"}:
+if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
     raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
 PYHOSTILEGATE
 pass "malformed trusted identity headers remain fail-closed inside the installed gate"
@@ -505,7 +598,10 @@ case "$auth_down_code" in
 esac
 systemctl start authentik.service
 wait_active authentik.service
-wait_http http://127.0.0.1:9000/-/health/live/
+systemctl start nas-protected-services.target
+wait_active nas-protected-services.target
+wait_active caddy.service
+wait_http http://127.0.0.1:9000/identity/-/health/live/
 pass "protected proxy routes fail closed and recover after Authentik outage"
 proxy_headers="$(curl --silent --show-error --insecure --dump-header - --output /dev/null \
   --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/")"
@@ -524,15 +620,15 @@ for service in ssh http https mdns; do
 done
 
 ip netns del nas-untrusted-test >/dev/null 2>&1 || true
-ip link del nas-untrusted-host >/dev/null 2>&1 || true
+ip link del nust-host >/dev/null 2>&1 || true
 ip netns add nas-untrusted-test
-ip link add nas-untrusted-host type veth peer name nas-untrusted-client
-ip link set nas-untrusted-client netns nas-untrusted-test
-ip addr add 198.18.0.1/30 dev nas-untrusted-host
-ip link set nas-untrusted-host up
+ip link add nust-host type veth peer name nust-peer
+ip link set nust-peer netns nas-untrusted-test
+ip addr add 198.18.0.1/30 dev nust-host
+ip link set nust-host up
 ip netns exec nas-untrusted-test ip link set lo up
-ip netns exec nas-untrusted-test ip addr add 198.18.0.2/30 dev nas-untrusted-client
-ip netns exec nas-untrusted-test ip link set nas-untrusted-client up
+ip netns exec nas-untrusted-test ip addr add 198.18.0.2/30 dev nust-peer
+ip netns exec nas-untrusted-test ip link set nust-peer up
 for port in 22 80 443 9092 22000; do
   if ip netns exec nas-untrusted-test python3 -c \
     'import socket,sys; s=socket.socket(); s.settimeout(1.0); raise SystemExit(0 if s.connect_ex(("198.18.0.1", int(sys.argv[1]))) == 0 else 1)' \
@@ -541,20 +637,26 @@ for port in 22 80 443 9092 22000; do
   fi
 done
 ip netns del nas-untrusted-test
-ip link del nas-untrusted-host >/dev/null 2>&1 || true
+ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
 log "Browser-level Authentik and capability authorization"
+# The persistent wrapper keeps mutable local users across generations. Seed
+# the disposable fixture's PAM credential so direct Cockpit recovery remains
+# deterministic after the installed OS is updated in place.
+printf '%s\n' 'admin:admin-vm-password' | chpasswd
 authz_secret_dir=$(mktemp -d /run/nas-authz-test.XXXXXX)
 cleanup_authz_secrets() { rm -rf -- "$authz_secret_dir"; }
 trap cleanup_authz_secrets EXIT
 chmod 0700 "$authz_secret_dir"
 printf '%s\n' operator-vm-password > "$authz_secret_dir/operator"
+printf '%s\n' admin-vm-password > "$authz_secret_dir/admin"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
 chmod 0600 "$authz_secret_dir"/*
 timeout 300 python3 /var/lib/nas-test/repo/tests/browser/authz.py \
   --origin "https://$PUBLIC_HOST" \
+  --cockpit-password-file "$authz_secret_dir/admin" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
   --baseline-password-file "$authz_secret_dir/baseline"

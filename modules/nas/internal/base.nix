@@ -21,6 +21,7 @@ let
   featureRuntimePath = "/run/nas-control/on-demand.json";
   onDemandGateSocket = "/run/nas-on-demand/gate.sock";
   authentikPort = serviceRegistry.identity.endpoints.main.targetPort;
+  authentikOutpostPort = cfg.identity.authentikOutpostPort;
   cockpitPort = serviceRegistry.cockpit.endpoints.main.targetPort;
   syncthingGuiPort = serviceRegistry.syncthing.endpoints.main.targetPort;
   vaultwardenPort = serviceRegistry.vaultwarden.endpoints.main.targetPort;
@@ -72,7 +73,8 @@ let
     "authentik-migrate.service"
     "authentik-worker.service"
     "authentik.service"
-    "nas-identity-sync.service"
+    # First-run owns the initial identity bootstrap; the recurring timer
+    # starts this service after setup releases the identity operation lock.
     "copyparty.service"
     "nas-on-demand-gate.service"
     "caddy.service"
@@ -98,6 +100,7 @@ let
     authentikPort
     cockpitPort
   ]
+  ++ lib.optional (authentikOutpostPort != authentikPort) authentikOutpostPort
   ++ lib.optional cfg.syncthing.enable syncthingGuiPort
   ++ lib.optional cfg.vaultwarden.enable vaultwardenPort
   ++ managementPorts
@@ -120,7 +123,7 @@ in
 {
   inherit
     cfg lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
-    authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir
+    authentikApiTokenFile authentikBootstrapTokenFile authentikOutpostPort copypartyUserConfigDir
     featureCatalogPath featureSchemaPath featureStatePath featureRuntimePath onDemandGateSocket
     authentikPort cockpitPort syncthingGuiPort vaultwardenPort
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir

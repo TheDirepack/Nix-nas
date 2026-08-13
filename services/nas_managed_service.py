@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import tempfile
 from typing import Any
 
@@ -27,10 +28,12 @@ STORE_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SERVICE_STORE", "/var/lib/
 EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
 PORTAL_PATH = pathlib.Path(os.environ.get("NAS_PORTAL_JSON", "/run/nas-control/portal.json"))
 BUILTIN_REGISTRY = pathlib.Path(os.environ.get("NAS_BUILTIN_REGISTRY", "/etc/nas-control/endpoints.json"))
+_SOURCE_SCHEMA = pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json"
+_RUNTIME_SCHEMA = pathlib.Path("/etc/nas-control/managed-service.schema.json")
 SCHEMA_PATH = pathlib.Path(
     os.environ.get(
         "NAS_MANAGED_SERVICE_SCHEMA",
-        str(pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json"),
+        str(_RUNTIME_SCHEMA if _RUNTIME_SCHEMA.is_file() else _SOURCE_SCHEMA),
     )
 )
 
@@ -560,6 +563,20 @@ def write_portal(
     return portal
 
 
+def _systemd_unit_is_active(unit: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
@@ -594,6 +611,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "reconcile":
             effective = write_effective()
             portal = write_portal()
+            import nas_service_caddy
+
+            nas_service_caddy.write_caddy_fragment(
+                effective=effective,
+                reload_caddy=_systemd_unit_is_active("caddy"),
+            )
             print(json.dumps({"effective": effective, "portal": portal}, indent=2))
             return 0
         elif args.command == "validate":

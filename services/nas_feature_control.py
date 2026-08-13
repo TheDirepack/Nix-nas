@@ -66,7 +66,9 @@ from nas_feature_model import (
 )
 
 CATALOG_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_CATALOG", "/etc/nas-control/features.json"))
-_SCHEMA_DEFAULT = pathlib.Path(__file__).resolve().parents[1] / "schemas" / "feature-catalog.schema.json"
+_SOURCE_SCHEMA = pathlib.Path(__file__).resolve().parents[1] / "schemas" / "feature-catalog.schema.json"
+_RUNTIME_SCHEMA = pathlib.Path("/etc/nas-control/feature-catalog.schema.json")
+_SCHEMA_DEFAULT = _RUNTIME_SCHEMA if _RUNTIME_SCHEMA.is_file() else _SOURCE_SCHEMA
 SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_SCHEMA", str(_SCHEMA_DEFAULT)))
 STATE_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_STATE", "/var/lib/nas-control/settings.json"))
 JOURNAL_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_JOURNAL", "/var/lib/nas-control/transaction.json"))

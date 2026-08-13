@@ -560,6 +560,22 @@ class SetupConfigTests(unittest.TestCase):
                 setup.run_root(["must-not-run"])
         run_mock.assert_called_once_with(["sudo", "-n", "-v"], check=False)
 
+    def test_feature_policy_uses_a_private_nonsecret_document(self):
+        completed = setup.Completed(("nas-feature-control",), "", "")
+        with (
+            mock.patch.object(
+                setup,
+                "coordinated_child",
+                side_effect=lambda command: ["env", "TOKEN=coord", *command],
+            ),
+            mock.patch.object(setup, "run_root", return_value=completed) as run_root,
+        ):
+            self.assertEqual(setup.apply_features({"observability": "always"}), {"observability": "always"})
+        command = run_root.call_args.args[0]
+        self.assertEqual(command[:4], ["env", "TOKEN=coord", "nas-feature-control", "set-many"])
+        source = pathlib.Path(command[4])
+        self.assertFalse(source.exists())
+
     def test_mutations_require_configured_admin_and_prime_sudo(self):
         with mock.patch.object(setup, "current_username", return_value="root"):
             with self.assertRaisesRegex(setup.SetupError, "configured local administrator"):
@@ -722,6 +738,10 @@ class SetupConfigTests(unittest.TestCase):
         self.assertEqual(len(staged_payloads), 1)
         self.assertNotIn("must-not-survive", staged_payloads[0])
         self.assertNotIn('"password"', staged_payloads[0])
+        self.assertIn(
+            ["install", "-d", "-m", "0770", "-o", "root", "-g", "wheel", str(pathlib.Path(tmp))],
+            calls,
+        )
 
     def test_prepare_first_start_publishes_missing_configuration_without_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

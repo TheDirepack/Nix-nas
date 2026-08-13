@@ -1,6 +1,10 @@
 args:
 let
-  inherit (args) authentikPort capabilityRegistry cfg lib onDemandGateSocket vaultwardenPort;
+  inherit (args) authentikOutpostPort authentikPort capabilityRegistry cfg lib onDemandGateSocket vaultwardenPort;
+  authentikOutpostPath =
+    if authentikOutpostPort == authentikPort
+    then "${cfg.identity.authentikPath}outpost.goauthentik.io/auth/caddy"
+    else "/outpost.goauthentik.io/auth/caddy";
   caddyForwardAuth = ''
     request_header -Remote-User
     request_header -Remote-Groups
@@ -12,9 +16,9 @@ let
     request_header -X-Authentik-Name
     request_header -X-Authentik-Email
     request_header -X-Authentik-Uid
-    forward_auth 127.0.0.1:${toString authentikPort} {
-      uri ${cfg.identity.authentikPath}outpost.goauthentik.io/auth/caddy
-      copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid
+    forward_auth 127.0.0.1:${toString authentikOutpostPort} {
+      uri ${authentikOutpostPath}
+      copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements X-Authentik-Name X-Authentik-Email X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
     }
     @missingAuthentikIdentity not header X-Authentik-Username *
     respond @missingAuthentikIdentity 403

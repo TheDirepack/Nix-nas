@@ -31,9 +31,9 @@ in
       };
 
       nas-identity-sync = {
-        wantedBy = [ "nas-protected-services.target" ];
-        partOf = [ "nas-protected-services.target" ];
+        wantedBy = [ "timers.target" ];
         timerConfig = {
+          OnBootSec = cfg.identity.syncInterval;
           OnUnitActiveSec = cfg.identity.syncInterval;
           Unit = "nas-identity-sync.service";
           Persistent = false;

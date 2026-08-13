@@ -91,6 +91,19 @@ fuzz tiers with bounded subprocesses. `all --require-all` additionally requires
 Nix configuration, browser, native-QEMU, and installer tiers. JSON evidence can
 be retained with `--report`.
 
+For a non-NixOS host that needs the whole source and appliance suite in one
+isolated guest, use the persistent QEMU wrappers:
+
+```bash
+./scripts/vm-start.sh   # install the standard NixOS ISO once, then boot it
+./scripts/vm-pytest.sh  # refresh this worktree in the guest and run everything
+./scripts/vm-stop.sh    # stop the VM but keep its installed disk
+./scripts/vm-reset.sh   # delete the VM disk; the next start reinstalls it
+```
+
+The VM uses QEMU user-mode networking and never needs a host bridge, tap
+device, or physical NIC. Runtime disks and logs stay outside the worktree.
+
 ## Security testing
 
 `scripts/run-security-tests.py` runs the project scanner, Python adversarial tests,

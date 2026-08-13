@@ -1,5 +1,5 @@
 {
-  description = "NixOS NAS 2.2.0-alpha.8 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
+  description = "NixOS NAS 2.2.0-alpha.10 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -196,9 +196,13 @@
               bandit
               coverage
               hypothesis
+              selenium
             ]))
             pkgs.semgrep
             pkgs.shellcheck
+            pkgs.nodejs
+            pkgs.pyright
+            pkgs.ruff
           ];
           shellHook = ''
             echo "NixOS NAS security, property, and fuzz test tools are available." >&2

@@ -105,6 +105,10 @@ REQUIRED_FILES = {
     "tests/js-fuzz/package-lock.json",
     "tests/js-fuzz/frontend-properties.test.mjs",
     "scripts/qemu-test.sh",
+    "scripts/vm-pytest.sh",
+    "scripts/vm-start.sh",
+    "scripts/vm-stop.sh",
+    "scripts/vm-reset.sh",
     "scripts/validate-repository-data.py",
     "scripts/validate-doc-links.py",
     "scripts/validate-python-syntax.py",
@@ -145,6 +149,7 @@ REQUIRED_FILES = {
     "tests/nixos/encrypted.nix",
     "tests/vm/guest-test.sh",
     "tests/vm/encrypted-guest-test.sh",
+    "tests/vm/full-suite.sh",
     ".github/workflows/ci.yml",
 }
 

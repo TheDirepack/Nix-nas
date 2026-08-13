@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.0-alpha.10 — 2026-08-13
+
+- Add the persistent, user-mode-networked QEMU wrapper with a 64 GiB OS disk, one-time NixOS installation, worktree refresh, and explicit start/stop/reset controls.
+- Qualify the complete non-fuzz VM path through the installed appliance, including an isolated Caddy-owned Authentik outpost fixture and resilient browser authorization checks.
+
+## 2.2.0-alpha.9 — 2026-08-12
+
+- Add optional persistent-VM start, stop, reset, and test wrappers that install the standard NixOS ISO once, refresh the current worktree inside the guest on every run, and leave existing CI invocation modes and check ownership untouched.
+- Synchronize `VERSION`, `README`, `flake.nix`, Cockpit package metadata, and the artifact-naming reference to `2.2.0-alpha.9` per `docs/development/artifact-naming.md`.
+
 ## 2.2.0-alpha.8 — 2026-08-11
 
 - Make secret transaction directory validation observe the privileged filesystem so activation paths under root-owned `0700` directories validate identically whether or not a caller first drops privileges, and add a regression test covering both the elevated and unprivileged call paths.

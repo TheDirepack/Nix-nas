@@ -372,8 +372,20 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
     if not isinstance(user_pk, int):
         raise SyncError("Authentik automation service account has no numeric primary key")
 
-    roles = authentik_list(token, f"rbac/roles/?name={urllib.parse.quote(AUTOMATION_ROLE)}")
-    role = next((item for item in roles if item.get("name") == AUTOMATION_ROLE), None)
+    role: Mapping[str, Any] | None = None
+    role_wait = max(float(os.environ.get("NAS_AUTOMATION_ROLE_WAIT_SECONDS", "60")), 0.0)
+    deadline = time.monotonic() + role_wait
+    attempt = 0
+    while role is None:
+        attempt += 1
+        roles = authentik_list(token, f"rbac/roles/?name={urllib.parse.quote(AUTOMATION_ROLE)}")
+        candidate = next((item for item in roles if item.get("name") == AUTOMATION_ROLE), None)
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("pk"), str):
+            role = candidate
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(min(_retry_delay(attempt), max(deadline - time.monotonic(), 0.0)))
     if not isinstance(role, Mapping) or not isinstance(role.get("pk"), str):
         raise SyncError("Authentik NAS automation role is missing; verify blueprint deployment")
     authentik_request(token, f"rbac/roles/{role['pk']}/add_user/", method="POST", body={"pk": user_pk})

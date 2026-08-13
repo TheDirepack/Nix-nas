@@ -262,16 +262,42 @@ class IdentitySyncTests(unittest.TestCase):
         )
 
     def test_bootstrap_runtime_token_requires_deployed_role(self):
-        with mock.patch.object(
-            sync,
-            "authentik_list",
-            side_effect=[
-                [{"pk": 42, "username": sync.AUTOMATION_USER}],
-                [],
-            ],
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_AUTOMATION_ROLE_WAIT_SECONDS": "0"}),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=[
+                    [{"pk": 42, "username": sync.AUTOMATION_USER}],
+                    [],
+                ],
+            ),
         ):
             with self.assertRaisesRegex(sync.SyncError, "automation role is missing"):
                 sync.provision_runtime_token("bootstrap")
+
+    def test_bootstrap_runtime_token_waits_for_async_blueprint_role(self):
+        roles = [[], [{"pk": "role-pk", "name": sync.AUTOMATION_ROLE}]]
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_AUTOMATION_ROLE_WAIT_SECONDS": "1"}),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=lambda _token, path: (
+                    [{"pk": 42, "username": sync.AUTOMATION_USER}]
+                    if path.startswith("core/users/")
+                    else roles.pop(0)
+                    if path.startswith("rbac/roles/")
+                    else []
+                ),
+            ),
+            mock.patch.object(sync, "authentik_request", return_value={}),
+            mock.patch.object(sync, "_retry_delay", return_value=0.01),
+            mock.patch.object(sync.time, "sleep"),
+            mock.patch.object(sync.secrets, "token_urlsafe", return_value="scoped-runtime-token-value"),
+        ):
+            result = sync.provision_runtime_token("bootstrap")
+        self.assertEqual(result["role"], sync.AUTOMATION_ROLE)
 
     def test_disabled_syncthing_returns_reconciliation_shape(self):
         with mock.patch.object(sync, "SYNCTHING_ENABLED", False):

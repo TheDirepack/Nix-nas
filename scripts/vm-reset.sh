@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+if (($#)); then
+  printf 'Usage: scripts/vm-reset.sh\n' >&2
+  exit 2
+fi
+
+exec "$ROOT/scripts/qemu-test.sh" persistent-reset

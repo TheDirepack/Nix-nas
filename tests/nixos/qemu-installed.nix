@@ -1,7 +1,17 @@
-{ lib, ... }:
+{ lib, pkgs, ... }:
 
 {
   imports = [ ./vm-common.nix ];
+
+  # The persistent non-NixOS wrapper runs source qualification inside this
+  # installed guest. These are ordinary guest tools; CI's existing test
+  # outputs and job graph remain unchanged.
+  environment.systemPackages = with pkgs; [
+    curl
+    git
+    jq
+    nix
+  ];
 
   networking.usePredictableInterfaceNames = lib.mkForce false;
   nas.trustedInterfaces = lib.mkForce [ "eth0" ];
@@ -27,5 +37,5 @@
     device = "/dev/disk/by-label/NIXOS_QEMU_ROOT";
     fsType = "ext4";
   };
-  swapDevices = [ ];
+swapDevices = [{ device = "/swapfile"; }];
 }

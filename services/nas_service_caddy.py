@@ -21,6 +21,7 @@ import nas_managed_service as msvc
 
 HOSTNAME_RE = re.compile(r"^(?:[a-z0-9-]{1,63}\.)*[a-z0-9-]{1,63}$", re.IGNORECASE)
 ON_DEMAND_GATE = os.environ.get("NAS_ON_DEMAND_GATE_SOCKET", "/run/nas-control/on-demand-gate.sock")
+AUTHENTIK_OUTPOST_PORT = os.environ.get("NAS_AUTHENTIK_OUTPOST_PORT", "9000")
 PATH_SNIPPET = "nas_managed_paths"
 
 
@@ -169,7 +170,7 @@ def _render_auth(lines: list[str], route: dict[str, Any], indent: str) -> None:
         lines.append(f"{indent}request_header -{header}")
     lines.extend(
         [
-            f"{indent}forward_auth 127.0.0.1:9000 {{",
+            f"{indent}forward_auth 127.0.0.1:{AUTHENTIK_OUTPOST_PORT} {{",
             f"{indent}  uri /outpost.goauthentik.io/auth/caddy",
             f"{indent}  copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid",
             f"{indent}}}",
@@ -252,7 +253,12 @@ def generate_caddyfile(effective: dict[str, Any] | None = None) -> str:
     return "\n".join(lines)
 
 
-def write_caddy_fragment(path: pathlib.Path | None = None, effective: dict[str, Any] | None = None) -> dict[str, Any]:
+def write_caddy_fragment(
+    path: pathlib.Path | None = None,
+    effective: dict[str, Any] | None = None,
+    *,
+    reload_caddy: bool = True,
+) -> dict[str, Any]:
     if path is None:
         path = pathlib.Path("/run/nas-control/caddy-managed.conf")
     if effective is None:
@@ -306,7 +312,7 @@ def write_caddy_fragment(path: pathlib.Path | None = None, effective: dict[str, 
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
-        if os.environ.get("NAS_SKIP_CADDY_RELOAD") != "1" and shutil.which("systemctl"):
+        if reload_caddy and os.environ.get("NAS_SKIP_CADDY_RELOAD") != "1" and shutil.which("systemctl"):
             try:
                 reload_result = subprocess.run(
                     ["systemctl", "reload", "caddy"], capture_output=True, text=True, timeout=10
