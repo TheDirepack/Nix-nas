@@ -4,6 +4,7 @@ This directory documents how the appliance is built and validated. It is intenti
 
 ## Start here
 
+- [Managed Services V2 specification](managed-services-v2-spec.md) — the V2 application-definition and provisioning contract.
 - [Architecture](architecture.md) — major components, trust boundaries, and data flow.
 - [Non-negotiable invariants](invariants.md) — rules that code and configuration must preserve.
 - [Code map](code-map.md) — where a change belongs.
