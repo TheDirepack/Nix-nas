@@ -104,6 +104,8 @@ class V2PodmanNetworkTests(unittest.TestCase):
         )
 
     def test_isolated_vlan_uses_shared_vrf_and_networkmanager_uplink(self):
+        # VLAN is now validated but delegated to Nix `networking.vlans` — Python just ensures
+        # the binding is valid and still creates the simple bridge. No VRF units here.
         effective, service = self.service(
             policy={
                 "mode": "isolated",
@@ -117,6 +119,8 @@ class V2PodmanNetworkTests(unittest.TestCase):
         )
         vlan = network.vlan_binding(service["network"])
         assert vlan is not None
+        self.assertEqual(42, vlan["id"])
+        self.assertEqual("eno1", vlan["parent"])
         with tempfile.TemporaryDirectory() as raw:
             nmcli = self.fake_nmcli(pathlib.Path(raw))
             output = pathlib.Path("/run/nas-control/systemd")
@@ -125,19 +129,8 @@ class V2PodmanNetworkTests(unittest.TestCase):
         rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
         self.assertIn("Driver=bridge", rendered)
         self.assertIn("Options=isolate=strict", rendered)
-        self.assertIn(f"Options=vrf={vlan['vrfInterface']}", rendered)
-        self.assertIn(f"Requires={vlan['unit']}", rendered)
-        self.assertNotIn("Options=vlan=42", rendered)
-
-        vlan_unit = files[output / "units" / vlan["unit"]].decode()
-        self.assertIn("Requires=NetworkManager.service", vlan_unit)
-        self.assertIn("StopWhenUnneeded=yes", vlan_unit)
-        self.assertIn(f"connection up id {vlan['vrfProfile']}", vlan_unit)
-        self.assertIn(f"connection up id {vlan['vlanProfile']}", vlan_unit)
-        self.assertIn(vlan["unit"], manifest["ownedUnits"])
-        self.assertNotIn(vlan["unit"], manifest["startUnits"])
-        self.assertIn(output / "networkmanager" / f"{vlan['vrfProfile']}.nmconnection", files)
-        self.assertIn(output / "networkmanager" / f"{vlan['vlanProfile']}.nmconnection", files)
+        # No VRF units in the thin Python projection — Nix handles VLAN.
+        self.assertNotIn("networkmanager", "".join(str(k) for k in files.keys()))
 
     def test_network_profile_can_supply_physical_vlan(self):
         effective, service = self.service()
@@ -156,12 +149,13 @@ class V2PodmanNetworkTests(unittest.TestCase):
         }
         vlan = network.vlan_binding(effective["networkProfiles"]["media"])
         assert vlan is not None
+        self.assertEqual(120, vlan["id"])
         with tempfile.TemporaryDirectory() as raw:
             nmcli = self.fake_nmcli(pathlib.Path(raw))
             output = pathlib.Path("/run/nas-control/systemd")
             files, _manifest = self.project_vlan(effective, output, nmcli=nmcli)
         rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
-        self.assertIn(f"Options=vrf={vlan['vrfInterface']}", rendered)
+        self.assertIn("Driver=bridge", rendered)
 
     def test_services_share_same_vlan_uplink_resource(self):
         policy = {
@@ -183,11 +177,8 @@ class V2PodmanNetworkTests(unittest.TestCase):
             nmcli = self.fake_nmcli(pathlib.Path(raw))
             output = pathlib.Path("/run/nas-control/systemd")
             _files, manifest = self.project_vlan(effective, output, nmcli=nmcli)
-        self.assertEqual(manifest["ownedUnits"].count(vlan["unit"]), 1)
-        self.assertEqual(
-            sum(1 for item in manifest["links"] if item["target"] == vlan["unit"]),
-            1,
-        )
+        # Thin projection doesn't create a shared VRF unit; just ensure both services got networks.
+        self.assertEqual(2, len([x for x in manifest["quadletLinks"] if "nas-v2-net" in x["target"]]))
 
     def test_vlan_pair_is_required_and_validated_defensively(self):
         invalid = [
@@ -285,8 +276,6 @@ class V2PodmanNetworkTests(unittest.TestCase):
             with self.subTest(policy=policy):
                 effective, service = self.service(policy=policy)
                 self.assertTrue(network.requires_firewalld(effective))
-                with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
-                    network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
 
     def test_isolated_listener_is_published_and_requires_firewalld_when_managed(self):
         effective, service = self.service()

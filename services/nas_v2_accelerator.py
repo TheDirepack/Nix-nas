@@ -45,6 +45,32 @@ def is_cdi_selector(value: str) -> bool:
     return _CDI_RE.fullmatch(value) is not None
 
 
+def _vendor_available(vendor: str, inventory: dict[str, Any]) -> bool:
+    caps = inventory.get("capabilities", {})
+    acc = inventory.get("accelerators", {})
+    if not isinstance(caps, dict):
+        caps = {}
+    if not isinstance(acc, dict):
+        acc = {}
+    if vendor == "any":
+        for v in ("NVIDIA", "AMD", "Intel"):
+            if caps.get(f"gpu-{v.lower()}") is True or v in acc:
+                # Check if that vendor actually has selectors or is marked configured
+                vend = acc.get(v)
+                if isinstance(vend, dict) and vend.get("selectors"):
+                    return True
+                if caps.get(f"gpu-{v.lower()}") is True:
+                    return True
+        return False
+    # specific vendor
+    if caps.get(f"gpu-{vendor.lower()}") is True:
+        return True
+    vend = acc.get(vendor)
+    if isinstance(vend, dict) and vend.get("selectors"):
+        return True
+    return False
+
+
 def resolve_service_accelerators(
     service_id: str,
     service: dict[str, Any],
@@ -58,12 +84,23 @@ def resolve_service_accelerators(
     for idx, req in enumerate(service.get("resources", {}).get("accelerators", [])):
         if not isinstance(req, dict) or req.get("kind") != "gpu":
             raise AcceleratorResolutionError(f"service {service_id!r} accelerator {idx} is invalid")
-        # Keep VM passthrough as-is; for others just validate shape and pass through.
-        # Nix will decide actual device/CDI availability at activation time.
         if req.get("mode", "shared") not in {"shared", "passthrough"}:
             raise AcceleratorResolutionError(f"invalid mode {req.get('mode')!r}")
         if req.get("vendor", "any") not in {"any", "NVIDIA", "AMD", "Intel"}:
             raise AcceleratorResolutionError(f"invalid vendor {req.get('vendor')!r}")
+        # Explicit device passthrough: Nix will handle, always pass through
+        if isinstance(req.get("device"), str):
+            out.append(copy.deepcopy(req))
+            continue
+        vendor = req.get("vendor", "any")
+        required = bool(req.get("required", False))
+        available = _vendor_available(vendor, inventory)
+        if not available:
+            if required:
+                raise AcceleratorResolutionError(
+                    f"service {service_id!r} requires unavailable GPU request {idx} (vendor={vendor})"
+                )
+            continue
         out.append(copy.deepcopy(req))
     return out
 
