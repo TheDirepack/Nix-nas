@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.11 — 2026-08-13
+
+- Rewrite internal Authentik outpost redirect origins at Caddy’s public boundary so browser authentication never receives the VM’s loopback URL.
+
 ## 2.2.0-alpha.10 — 2026-08-13
 
 - Add the persistent, user-mode-networked QEMU wrapper with a 64 GiB OS disk, one-time NixOS installation, worktree refresh, and explicit start/stop/reset controls.

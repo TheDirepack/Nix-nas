@@ -65,6 +65,7 @@ in
           header_up Host {http.request.host}
           header_up X-Forwarded-Proto https
           header_up X-Forwarded-For {remote_host}
+          header_down Location http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath} https://${lanHost}${cfg.identity.authentikPath}
         }
       }
       redir ${authentikPathNoSlash} ${cfg.identity.authentikPath}
