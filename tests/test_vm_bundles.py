@@ -27,6 +27,10 @@ EXPECTED_BUNDLES = [
 FAKE_NIX = """\
 #!/usr/bin/env bash
 set -eu
+if [[ ${NIX_STORE:-} == nix-store ]]; then
+  echo "NIX_STORE was overwritten by the bundle helper" >&2
+  exit 91
+fi
 printf '%s\\n' "$*" >> "$NAS_TEST_NIX_LOG"
 case "$1" in
   eval)
@@ -147,6 +151,7 @@ class VmBundleScriptTests(unittest.TestCase):
 
     def test_vm_drivers_key_tracks_core_and_both_exact_nixos_test_drivers(self) -> None:
         env, nix_log, _ = self._fake_environment()
+        env["NIX_STORE"] = "/nix/store"
         result = self._run("keys", env=env)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         calls = nix_log.read_text(encoding="utf-8").splitlines()
