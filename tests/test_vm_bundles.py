@@ -266,7 +266,9 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         with gzip.open(out_dir / "core.nar.gz", "rb") as stream:
             self.assertEqual(stream.read(), b"existing-core\n")
-        build_calls = [call for call in nix_log.read_text(encoding="utf-8").splitlines() if call.startswith("build --no-link ")]
+        build_calls = [
+            call for call in nix_log.read_text(encoding="utf-8").splitlines() if call.startswith("build --no-link ")
+        ]
         self.assertEqual(len(build_calls), 1)
         self.assertNotIn(".#packages.x86_64-linux.core", build_calls[0])
         exports = [
