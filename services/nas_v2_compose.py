@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Render deterministic Compose overrides for Managed Services V2.
-
-Compose remains the container-definition authority. V2 contributes generic
-cross-cutting policy: storage, credentials, resources, sandboxing, devices, and
-network intent. Lifecycle is lowered separately into systemd.
-"""
+"""Render deterministic Compose overrides for Managed Services V2."""
 
 from __future__ import annotations
 
@@ -49,13 +44,10 @@ _NETWORK_SOURCE_FIELDS = frozenset({"network_mode", "networks", "ports"})
 
 def _is_host_volume_source(volume: Any) -> bool:
     if isinstance(volume, str):
-        if ":" in volume:
-            source = volume.split(":", 1)[0]
-            return source.startswith("/")
-        return False
+        return ":" in volume and volume.split(":", 1)[0].startswith("/")
     if isinstance(volume, dict):
-        source = volume.get("source")
-        return isinstance(source, str) and source.startswith("/")
+        src = volume.get("source")
+        return isinstance(src, str) and src.startswith("/")
     return False
 
 
@@ -63,17 +55,23 @@ def _volume_target(volume: Any) -> str | None:
     if isinstance(volume, str):
         if ":" not in volume:
             return volume.strip() or None
-        _source, rest = volume.split(":", 1)
-        target = rest.split(":", 1)[0]
-        return target.strip() or None
+        return volume.split(":", 1)[1].split(":", 1)[0].strip() or None
     if isinstance(volume, dict):
-        target = volume.get("target")
-        if isinstance(target, str) and target:
-            return target
-        destination = volume.get("destination")
-        if isinstance(destination, str) and destination:
-            return destination
+        for key in ("target", "destination"):
+            val = volume.get(key)
+            if isinstance(val, str) and val:
+                return val
     return None
+
+
+def _bind_mount(source: str, target: str, read_only: bool) -> dict[str, Any]:
+    return {
+        "type": "bind",
+        "source": source,
+        "target": target,
+        "read_only": read_only,
+        "bind": {"create_host_path": False},
+    }
 
 
 def _reject_duplicate_targets(
@@ -82,29 +80,22 @@ def _reject_duplicate_targets(
     overrides: dict[str, dict[str, Any]],
 ) -> None:
     for name in set(source_services) | set(overrides):
-        seen: dict[str, str] = {}
-        source_volumes = source_services.get(name, {}).get("volumes")
-        if isinstance(source_volumes, list):
-            for volume in source_volumes:
+        seen: set[str] = set()
+        for vols in (
+            source_services.get(name, {}).get("volumes"),
+            overrides.get(name, {}).get("volumes"),
+        ):
+            if not isinstance(vols, list):
+                continue
+            for volume in vols:
                 target = _volume_target(volume)
-                if target is None:
+                if target is None or target in seen:
+                    if target is not None:
+                        raise ComposeProjectionError(
+                            f"Compose service {service_id!r} has duplicate mount target {target!r} for container {name!r}"
+                        )
                     continue
-                if target in seen:
-                    raise ComposeProjectionError(
-                        f"Compose service {service_id!r} has duplicate mount target {target!r} for container {name!r}"
-                    )
-                seen[target] = "source"
-        override_volumes = overrides.get(name, {}).get("volumes")
-        if isinstance(override_volumes, list):
-            for volume in override_volumes:
-                target = _volume_target(volume)
-                if target is None:
-                    continue
-                if target in seen:
-                    raise ComposeProjectionError(
-                        f"Compose service {service_id!r} has duplicate mount target {target!r} for container {name!r}"
-                    )
-                seen[target] = "override"
+                seen.add(target)
 
 
 def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dict[str, dict[str, Any]]]:
@@ -146,32 +137,6 @@ def _target(overrides: dict[str, dict[str, Any]], names: set[str], target: Any) 
     return overrides.setdefault(target, {})
 
 
-def _network_policy(effective: dict[str, Any], service: dict[str, Any]) -> dict[str, Any] | None:
-    if "network" in service:
-        return service["network"]
-    profile = service.get("networkProfile")
-    if profile is None:
-        return None
-    policy = effective.get("networkProfiles", {}).get(profile)
-    if not isinstance(policy, dict):
-        raise ComposeProjectionError(f"compiled network profile {profile!r} is missing")
-    return policy
-
-
-def _reject_source_networks(service_id: str, source_services: dict[str, dict[str, Any]]) -> None:
-    for name, definition in source_services.items():
-        conflicts = sorted(_NETWORK_SOURCE_FIELDS.intersection(definition))
-        if conflicts:
-            raise ComposeProjectionError(
-                f"Compose service {service_id!r} source service {name!r} declares V2-owned network fields: "
-                + ", ".join(conflicts)
-            )
-
-
-def _compose_capability(value: str) -> str:
-    return value.removeprefix("CAP_")
-
-
 def _apply_resource_policy(
     service: dict[str, Any],
     service_names: set[str],
@@ -182,18 +147,18 @@ def _apply_resource_policy(
     memory_high = resources.get("memoryHighBytes")
     memory_max = resources.get("memoryMaxBytes")
     pids = resources.get("pidsMax")
-    if all(value is None for value in (cpu, memory_high, memory_max, pids)):
+    if all(v is None for v in (cpu, memory_high, memory_max, pids)):
         return
     for name in service_names:
-        destination = overrides.setdefault(name, {})
+        dest = overrides.setdefault(name, {})
         if cpu is not None:
-            destination["cpus"] = cpu / 100
+            dest["cpus"] = cpu / 100
         if memory_high is not None:
-            destination["mem_reservation"] = str(memory_high)
+            dest["mem_reservation"] = str(memory_high)
         if memory_max is not None:
-            destination["mem_limit"] = str(memory_max)
+            dest["mem_limit"] = str(memory_max)
         if pids is not None:
-            destination["pids_limit"] = pids
+            dest["pids_limit"] = pids
 
 
 def _apply_sandbox_policy(
@@ -209,7 +174,6 @@ def _apply_sandbox_policy(
         raise ComposeProjectionError(
             f"Compose service {service_id!r} strict sandbox writablePaths must use explicit storage or tmpfs attachments"
         )
-
     for name, source in source_services.items():
         conflicts = sorted(_STRICT_SOURCE_FIELDS.intersection(source))
         if conflicts:
@@ -217,49 +181,44 @@ def _apply_sandbox_policy(
                 f"Compose service {service_id!r} source service {name!r} declares security fields that conflict with V2 strict sandboxing: "
                 + ", ".join(conflicts)
             )
-        volumes = source.get("volumes")
-        if isinstance(volumes, list):
-            for volume in volumes:
-                if _is_host_volume_source(volume):
+        vols = source.get("volumes")
+        if isinstance(vols, list):
+            for vol in vols:
+                if _is_host_volume_source(vol):
                     raise ComposeProjectionError(
-                        f"Compose service {service_id!r} source service {name!r} declares host volume {volume!r} that conflicts with V2 strict sandboxing"
+                        f"Compose service {service_id!r} source service {name!r} declares host volume {vol!r} that conflicts with V2 strict sandboxing"
                     )
         if "env_file" in source:
             raise ComposeProjectionError(
                 f"Compose service {service_id!r} source service {name!r} declares env_file that conflicts with V2 strict sandboxing"
             )
-
     read_only = sandbox.get("readOnlyRoot", True)
     no_new_privileges = sandbox.get("noNewPrivileges", True)
-    cap_add = [_compose_capability(value) for value in sandbox.get("addCapabilities", [])]
-    cap_drop = [_compose_capability(value) for value in sandbox.get("dropCapabilities", [])]
+    cap_add = [v.removeprefix("CAP_") for v in sandbox.get("addCapabilities", [])]
+    cap_drop = [v.removeprefix("CAP_") for v in sandbox.get("dropCapabilities", [])]
     tmpfs = sandbox.get("tmpfs", [])
-
     for entry in tmpfs:
         path = entry.get("path") if isinstance(entry, dict) else None
-        if not isinstance(path, str) or not pathlib.PurePosixPath(path).is_absolute():
+        pp = pathlib.PurePosixPath(path) if isinstance(path, str) else None
+        if pp is None or not pp.is_absolute():
             raise ComposeProjectionError(f"Compose service {service_id!r} tmpfs path {path!r} must be an absolute path")
-        if ".." in pathlib.PurePosixPath(path).parts:
+        if ".." in pp.parts:
             raise ComposeProjectionError(f"Compose service {service_id!r} tmpfs path {path!r} must not contain '..'")
-
     for name in source_services:
-        destination = overrides.setdefault(name, {})
-        destination["privileged"] = False
-        destination["read_only"] = read_only
+        dest = overrides.setdefault(name, {})
+        dest["privileged"] = False
+        dest["read_only"] = read_only
         if no_new_privileges:
-            destination["security_opt"] = ["no-new-privileges"]
+            dest["security_opt"] = ["no-new-privileges"]
         if cap_add:
-            destination["cap_add"] = cap_add
+            dest["cap_add"] = cap_add
         if cap_drop:
-            destination["cap_drop"] = cap_drop
+            dest["cap_drop"] = cap_drop
         for entry in tmpfs:
-            mount: dict[str, Any] = {
-                "type": "tmpfs",
-                "target": entry["path"],
-            }
+            mount: dict[str, Any] = {"type": "tmpfs", "target": entry["path"]}
             if "sizeBytes" in entry:
                 mount["tmpfs"] = {"size": entry["sizeBytes"]}
-            destination.setdefault("volumes", []).append(mount)
+            dest.setdefault("volumes", []).append(mount)
 
 
 def _apply_accelerators(
@@ -269,7 +228,7 @@ def _apply_accelerators(
     overrides: dict[str, dict[str, Any]],
 ) -> None:
     for accelerator in service["resources"]["accelerators"]:
-        destination = _target(overrides, service_names, accelerator.get("target"))
+        dest = _target(overrides, service_names, accelerator.get("target"))
         device = accelerator.get("device")
         if accelerator["mode"] != "shared" or not isinstance(device, str):
             raise ComposeProjectionError(f"Compose service {service_id!r} has an unresolved GPU request")
@@ -277,7 +236,7 @@ def _apply_accelerators(
             raise ComposeProjectionError(
                 f"Compose service {service_id!r} accelerator selector {device!r} is neither a device path nor CDI selector"
             )
-        destination.setdefault("devices", []).append(device)
+        dest.setdefault("devices", []).append(device)
 
 
 def _compose_ingress_target(
@@ -294,12 +253,12 @@ def _compose_ingress_target(
             f"isolated Compose {endpoint_kind} {endpoint_id!r} for service {service_id!r} requires runtimeTarget"
         )
     try:
-        destination = _target(overrides, service_names, runtime_target)
+        dest = _target(overrides, service_names, runtime_target)
     except ComposeProjectionError as exc:
         raise ComposeProjectionError(
             f"isolated Compose {endpoint_kind} {endpoint_id!r} runtimeTarget {runtime_target!r} does not exist in the Compose source"
         ) from exc
-    return runtime_target, destination
+    return runtime_target, dest
 
 
 def _apply_isolated_ingress(
@@ -315,13 +274,8 @@ def _apply_isolated_ingress(
             listener = listeners[listener_id]
             if not isinstance(listener, dict):
                 continue
-            runtime_target, destination = _compose_ingress_target(
-                service_id,
-                "listener",
-                listener_id,
-                listener,
-                service_names,
-                overrides,
+            runtime_target, dest = _compose_ingress_target(
+                service_id, "listener", listener_id, listener, service_names, overrides
             )
             protocol = listener.get("protocol")
             exposure = listener.get("exposure")
@@ -333,17 +287,16 @@ def _apply_isolated_ingress(
                 if not isinstance(host_port, int) or not isinstance(target_port, int):
                     raise ComposeProjectionError(f"isolated Compose listener {listener_id!r} has invalid ports")
                 key = (protocol, host_port)
-                previous = published.get(key)
+                prev = published.get(key)
                 mapping = (runtime_target, target_port)
-                if previous is not None and previous != mapping:
+                if prev is not None and prev != mapping:
                     raise ComposeProjectionError(
                         f"isolated Compose listener {listener_id!r} conflicts with an existing {protocol}/{host_port} publication"
                     )
-                if previous is None:
-                    destination.setdefault("ports", []).append(f"{host_port}:{target_port}/{protocol}")
+                if prev is None:
+                    dest.setdefault("ports", []).append(f"{host_port}:{target_port}/{protocol}")
                     published[key] = mapping
                 continue
-
             start = exposure.get("start")
             end = exposure.get("end")
             if not isinstance(start, int) or not isinstance(end, int) or end < start:
@@ -351,17 +304,17 @@ def _apply_isolated_ingress(
             new_ports = False
             for port in range(start, end + 1):
                 key = (protocol, port)
-                previous = published.get(key)
+                prev = published.get(key)
                 mapping = (runtime_target, port)
-                if previous is not None and previous != mapping:
+                if prev is not None and prev != mapping:
                     raise ComposeProjectionError(
                         f"isolated Compose listener {listener_id!r} conflicts with an existing {protocol}/{port} publication"
                     )
-                if previous is None:
+                if prev is None:
                     new_ports = True
                 published[key] = mapping
             if new_ports:
-                destination.setdefault("ports", []).append(f"{start}-{end}:{start}-{end}/{protocol}")
+                dest.setdefault("ports", []).append(f"{start}-{end}:{start}-{end}/{protocol}")
 
     routes = service.get("routes", {})
     if isinstance(routes, dict):
@@ -369,13 +322,8 @@ def _apply_isolated_ingress(
             route = routes[route_id]
             if not isinstance(route, dict):
                 continue
-            runtime_target, destination = _compose_ingress_target(
-                service_id,
-                "route",
-                route_id,
-                route,
-                service_names,
-                overrides,
+            runtime_target, dest = _compose_ingress_target(
+                service_id, "route", route_id, route, service_names, overrides
             )
             target = route.get("target")
             if not isinstance(target, dict):
@@ -394,15 +342,15 @@ def _apply_isolated_ingress(
             if not isinstance(port, int):
                 raise ComposeProjectionError(f"isolated Compose route {route_id!r} is missing its TCP target port")
             key = ("tcp", port)
-            previous = published.get(key)
+            prev = published.get(key)
             mapping = (runtime_target, port)
-            if previous is not None:
-                if previous != mapping:
+            if prev is not None:
+                if prev != mapping:
                     raise ComposeProjectionError(
                         f"isolated Compose route {route_id!r} conflicts with an existing tcp/{port} publication"
                     )
                 continue
-            destination.setdefault("ports", []).append(f"{bind_host}:{port}:{port}/tcp")
+            dest.setdefault("ports", []).append(f"{bind_host}:{port}:{port}/tcp")
             published[key] = mapping
 
 
@@ -411,7 +359,7 @@ def render_compose_override(
     service_id: str,
     service: dict[str, Any],
 ) -> tuple[pathlib.Path, bytes]:
-    """Return the validated source path and a deterministic Compose override."""
+    """Return validated source path and deterministic Compose override."""
     if service["runtime"]["type"] != "compose":
         raise ComposeProjectionError(f"service {service_id!r} is not a Compose runtime")
     if service["workload"]["kind"] != "daemon":
@@ -425,22 +373,17 @@ def render_compose_override(
 
     resources = effective.get("storageResources", {})
     for attachment in service["storage"]:
-        destination = _target(overrides, service_names, attachment.get("target"))
+        dest = _target(overrides, service_names, attachment.get("target"))
         resource = resources.get(attachment["resource"])
         if not isinstance(resource, dict) or not isinstance(resource.get("path"), str):
             raise ComposeProjectionError(f"compiled storage resource {attachment['resource']!r} is missing")
-        volume = {
-            "type": "bind",
-            "source": resource["path"],
-            "target": attachment["mountPath"],
-            "read_only": attachment["access"] == "read",
-            "bind": {"create_host_path": False},
-        }
-        destination.setdefault("volumes", []).append(volume)
+        dest.setdefault("volumes", []).append(
+            _bind_mount(resource["path"], attachment["mountPath"], attachment["access"] == "read")
+        )
 
     credentials = effective.get("credentials", {})
     for attachment in service["credentials"]:
-        destination = _target(overrides, service_names, attachment.get("target"))
+        dest = _target(overrides, service_names, attachment.get("target"))
         credential = credentials.get(attachment["credential"])
         if not isinstance(credential, dict) or not isinstance(credential.get("path"), str):
             raise ComposeProjectionError(f"compiled credential {attachment['credential']!r} is missing")
@@ -453,40 +396,37 @@ def render_compose_override(
             mount = attachment.get("mountPath")
             if not isinstance(mount, str):
                 raise ComposeProjectionError("Compose file credentials require mountPath")
-            destination.setdefault("volumes", []).append(
-                {
-                    "type": "bind",
-                    "source": credential["path"],
-                    "target": mount,
-                    "read_only": True,
-                    "bind": {"create_host_path": False},
-                }
-            )
+            dest.setdefault("volumes", []).append(_bind_mount(credential["path"], mount, True))
         elif use == "environment-file":
-            destination.setdefault("env_file", []).append(credential["path"])
+            dest.setdefault("env_file", []).append(credential["path"])
         else:
             raise ComposeProjectionError(f"Compose credential use {use!r} is not implemented")
 
     _reject_duplicate_targets(service_id, source_services, overrides)
-
     _apply_accelerators(service_id, service, service_names, overrides)
-
     top_level: dict[str, Any] = {}
-    policy = _network_policy(effective, service)
+    policy = service.get("network")
+    if policy is None:
+        profile = service.get("networkProfile")
+        if profile is not None:
+            policy = effective.get("networkProfiles", {}).get(profile)
+            if not isinstance(policy, dict):
+                raise ComposeProjectionError(f"compiled network profile {profile!r} is missing")
     if policy is not None:
-        _reject_source_networks(service_id, source_services)
+        for name, definition in source_services.items():
+            conflicts = sorted(_NETWORK_SOURCE_FIELDS.intersection(definition))
+            if conflicts:
+                raise ComposeProjectionError(
+                    f"Compose service {service_id!r} source service {name!r} declares V2-owned network fields: "
+                    + ", ".join(conflicts)
+                )
         mode = policy["mode"]
         has_fixed_ingress = bool(service.get("routes")) or bool(service.get("listeners"))
         if mode == "isolated":
             _apply_isolated_ingress(service_id, service, service_names, overrides)
             for name in service_names:
                 overrides.setdefault(name, {})["networks"] = [_NETWORK_KEY]
-            top_level["networks"] = {
-                _NETWORK_KEY: {
-                    "external": True,
-                    "name": f"nas-v2-{service_id}",
-                }
-            }
+            top_level["networks"] = {_NETWORK_KEY: {"external": True, "name": f"nas-v2-{service_id}"}}
         elif mode == "host":
             if (
                 policy["outboundDefault"] != "allow"
