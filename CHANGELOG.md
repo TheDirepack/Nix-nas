@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.13 — 2026-08-13
+
+- Make the isolated QEMU browser fixture resolve its public Authentik hostname locally, without depending on host DNS or a physical network interface.
+
 ## 2.2.0-alpha.12 — 2026-08-13
 
 - Apply Authentik outpost redirect rewriting as a deferred Caddy response-header operation so loopback authentication origins cannot escape to browsers.

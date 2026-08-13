@@ -168,6 +168,10 @@ in
   networking.hostName = lib.mkForce "nas-test";
   networking.hostId = lib.mkForce "c1a05eed";
   networking.useDHCP = lib.mkDefault true;
+  # Browser checks use the same public hostname as the Authentik provider. Keep
+  # that name resolvable inside the isolated guest without depending on a host
+  # DNS service or a physical NIC.
+  networking.extraHosts = "127.0.0.1 nas-test.local";
   boot.supportedFilesystems = [ "zfs" ];
 
   # The NixOS test kernel does not expose the per-service cgroup pressure file
