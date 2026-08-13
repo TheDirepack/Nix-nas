@@ -62,5 +62,7 @@ def remove_libvirt(service_id: str, *, dry_run: bool = False) -> None:
 def _render_domain(service_id: str, service: dict[str, Any]) -> str:
     resources = service.get("resources", {})
     memory = resources.get("memoryBytes", 2147483648)
-    cpus = int(resources.get("cpus", 2))
+    cpus = resources.get("cpus", 2)
+    if isinstance(cpus, bool) or not isinstance(cpus, int) or not 1 <= cpus <= 64:
+        raise ManagedServiceError(f"VM CPU count for {service_id} must be an integer from 1 to 64")
     return f"""<domain type='kvm'><name>{service_id}</name><metadata><nas:service xmlns:nas="https://nixos-nas.local/service"><id>{service_id}</id><generation>{service.get("generation", 1)}</generation></nas:service></metadata><memory unit='B'>{memory}</memory><vcpu>{cpus}</vcpu><os><type arch='x86_64'>hvm</type></os><devices><emulator>/run/current-system/sw/bin/qemu-kvm</emulator></devices></domain>"""

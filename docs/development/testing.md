@@ -45,6 +45,9 @@ node cockpit/build.js --check-source
 
 `tests/custom-script-contracts.json` is the executable coverage authority. Every NAS-owned installed command and every executable repository-maintenance script must declare focused tests plus an adversarial/whole-process strategy. Installed commands must also declare an installed-system test. `scripts/validate-test-inventory.py` discovers the executable surfaces and fails closed when a command is added, removed, or assigned an unsupported strategy without updating the test architecture.
 
+The `qemu-test` development shell includes the host-side QEMU, SSH, archive,
+Git, Python, and core utility commands required by the wrapper.
+
 ## 2. Smart fuzzing and generated properties
 
 The project does not maintain a project-local RNG mutator. **Hypothesis** is the canonical engine for Python structured input and stateful testing: it owns generation, edge-case search, shrinking, reproduction, and rule-based operation sequences. Project code defines strategies and invariants rather than manually generating thousands of arbitrary strings.

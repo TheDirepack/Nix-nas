@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
 
@@ -44,6 +46,10 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn('OS_DISK_GIB="${NAS_QEMU_OS_DISK_GIB:-64}"', qemu)
         self.assertIn('BASELINE_SNAPSHOT="nas-test-clean"', qemu)
         self.assertIn("restore_persistent_baseline", qemu)
+        self.assertIn("CACHE_MARKER_CONTENT=", qemu)
+        self.assertIn("qemu_pid_from_pidfile", qemu)
+        self.assertIn("except FileNotFoundError:", qemu)
+        self.assertIn("realpath", qemu)
         self.assertIn('qemu-img snapshot -c "$BASELINE_SNAPSHOT"', qemu)
         self.assertIn('qemu-img snapshot -a "$BASELINE_SNAPSHOT"', qemu)
         self.assertIn('mount -t ext4 "$ROOT_PARTITION" "$TARGET"', installer)
@@ -72,6 +78,33 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("installer) run_installer", qemu)
         self.assertIn("all) run_static; run_native; run_installer", qemu)
         self.assertNotIn("nix develop .#test", qemu)
+
+    def test_reset_and_clean_refuse_unmanaged_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = pathlib.Path(tmp) / "cache"
+            cache.mkdir()
+            env = {**os.environ, "NAS_QEMU_CACHE_DIR": str(cache)}
+            reset = subprocess.run(
+                ["bash", str(QEMU), "persistent-reset"],
+                cwd=ROOT,
+                env={**env, "NAS_QEMU_STATE_DIR": str(pathlib.Path(tmp) / "outside")},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(reset.returncode, 0)
+            self.assertIn("state path must be below", reset.stderr)
+            clean = subprocess.run(
+                ["bash", str(QEMU), "clean"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(clean.returncode, 0)
+            self.assertTrue(cache.exists())
+            self.assertIn("unrecognized QEMU cache", clean.stderr)
 
 
 if __name__ == "__main__":

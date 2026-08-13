@@ -690,7 +690,7 @@ jobs:
       - name: Install from the official NixOS ISO and reboot-test the appliance
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM deterministic layout/accessibility/security checks
-        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs -c bash ./scripts/qemu-final-browser.sh
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Retain final-VM browser evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -792,7 +792,7 @@ jobs:
           NAS_FINAL_VM_WORKLOAD: installed-command-fuzz
           NAS_INSTALLED_FUZZ_OUT: installed-command-fuzz.json
           NAS_HTTP_ADVERSARIAL_OUT: http-adversarial.json
-        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Retain installed-command and HTTP adversarial evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -850,7 +850,7 @@ jobs:
           NAS_ZAP_BROWSER_WORKERS: "2"
         run: |
           test -n "$NAS_ZAP_IMAGE"
-          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
+          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Retain active ZAP evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

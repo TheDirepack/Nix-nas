@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-CACHE_DIR="${NAS_QEMU_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu}"
+DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu"
+CACHE_DIR="${NAS_QEMU_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
 STATE_DIR="${NAS_QEMU_STATE_DIR:-$CACHE_DIR/state}"
 SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
 HTTP_PORT="${NAS_QEMU_HTTP_PORT:-8088}"
@@ -24,7 +25,39 @@ log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
 
-for cmd in qemu-system-x86_64 qemu-img ssh curl python3; do need "$cmd"; done
+for cmd in qemu-system-x86_64 qemu-img ssh curl python3 realpath readlink; do need "$cmd"; done
+validate_state_path() {
+  local cache_resolved state_resolved
+  [[ -n "$CACHE_DIR" ]] || die "NAS_QEMU_CACHE_DIR must not be empty"
+  cache_resolved="$(realpath -m -- "$CACHE_DIR")" || die "cannot resolve QEMU cache path: $CACHE_DIR"
+  state_resolved="$(realpath -m -- "$STATE_DIR")" || die "cannot resolve QEMU state path: $STATE_DIR"
+  case "$cache_resolved" in
+    /|"$ROOT"|"$ROOT"/*|"$HOME") die "refusing to use an unsafe QEMU cache path: $CACHE_DIR" ;;
+  esac
+  case "$state_resolved" in
+    "$cache_resolved"/*) ;;
+    *) die "QEMU state path must be below the cache path: $STATE_DIR" ;;
+  esac
+  [[ "$state_resolved" != "$cache_resolved" ]] || die "QEMU state path must not equal the cache path"
+  [[ ! -L "$CACHE_DIR" && ! -L "$STATE_DIR" ]] || die "QEMU cache and state paths must not be symlinks"
+}
+
+qemu_pid_from_pidfile() {
+  local pidfile=$1 pid executable
+  QEMU_PID=""
+  [[ -s "$pidfile" ]] || return 1
+  pid="$(<"$pidfile")"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+  [[ "${executable##*/}" == qemu-system-x86_64 ]] || {
+    printf 'error: refusing to signal pid %s from %s because it is not qemu-system-x86_64\n' "$pid" "$pidfile" >&2
+    return 2
+  }
+  QEMU_PID="$pid"
+}
+
+validate_state_path
 [[ "$WORKLOAD" =~ ^(deterministic-browser|installed-command-fuzz|zap-fuzz)$ ]] || die "invalid NAS_FINAL_VM_WORKLOAD"
 if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
 [[ "$TEST_USER" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] || die "invalid NAS_VM_TEST_USER"
@@ -32,11 +65,16 @@ if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
 [[ -s "$SSH_KEY" ]] || die "installer SSH key is missing; run qemu-test.sh installer first"
 
 cleanup() {
-  if [[ -s "$PIDFILE" ]]; then
-    pid="$(cat "$PIDFILE")"
+  if [[ -s "$PIDFILE" ]] && qemu_pid_from_pidfile "$PIDFILE"; then
+    pid="$QEMU_PID"
     kill "$pid" 2>/dev/null || true
     for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     kill -KILL "$pid" 2>/dev/null || true
+  elif [[ -s "$PIDFILE" ]]; then
+    qemu_pid_from_pidfile "$PIDFILE" || {
+      local pid_status=$?
+      (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $PIDFILE"
+    }
   fi
   rm -f "$PIDFILE" "$OVERLAY" "$DATA_DISK"
 }

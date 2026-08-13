@@ -41,6 +41,7 @@ test("safeInternalPath accepts only same-origin root-relative control-free strin
         assert.equal(typeof accepted, "string");
         assert.ok(accepted.startsWith("/"));
         assert.ok(!accepted.startsWith("//"));
+        assert.ok(!accepted.includes("\\"));
         assert.ok(
           ![...accepted].some((character) => {
             const code = character.charCodeAt(0);
@@ -51,7 +52,7 @@ test("safeInternalPath accepts only same-origin root-relative control-free strin
     ),
     {
       numRuns: 1500,
-      examples: [["//example.invalid/path"], ["/safe/path"], ["/bad\npath"], ["javascript:alert(1)"]],
+      examples: [["//example.invalid/path"], ["/safe/path"], ["/\\evil.example/path"], ["/bad\npath"], ["javascript:alert(1)"]],
     },
   );
 });

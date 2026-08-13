@@ -3,8 +3,11 @@ set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-all}"
-CACHE_DIR="${NAS_QEMU_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu}"
+DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu"
+CACHE_DIR="${NAS_QEMU_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
 STATE_DIR="${NAS_QEMU_STATE_DIR:-$CACHE_DIR/state}"
+CACHE_MARKER="$CACHE_DIR/.nas-qemu-cache"
+CACHE_MARKER_CONTENT="nixos-nas-qemu-cache-v1"
 NIXOS_CHANNEL="${NAS_NIXOS_CHANNEL:-nixos-26.05}"
 ISO_URL="${NAS_NIXOS_ISO_URL:-https://channels.nixos.org/$NIXOS_CHANNEL/latest-nixos-minimal-x86_64-linux.iso}"
 ISO_SHA256="${NAS_NIXOS_ISO_SHA256:-}"
@@ -52,9 +55,75 @@ USAGE
 
 ensure_host_tools() {
   local cmd
-  for cmd in curl sha256sum qemu-system-x86_64 qemu-img expect bsdtar ssh ssh-keygen timeout python3 tar; do
+  for cmd in curl sha256sum realpath readlink qemu-system-x86_64 qemu-img expect bsdtar ssh ssh-keygen timeout python3 tar; do
     need "$cmd"
   done
+}
+
+validate_cache_path() {
+  local resolved
+  [[ -n "$CACHE_DIR" ]] || die "NAS_QEMU_CACHE_DIR must not be empty"
+  resolved="$(realpath -m -- "$CACHE_DIR")" || die "cannot resolve NAS_QEMU_CACHE_DIR: $CACHE_DIR"
+  case "$resolved" in
+    /|"$ROOT"|"$ROOT"/*|"$HOME")
+      die "refusing to use an unsafe QEMU cache path: $CACHE_DIR"
+      ;;
+  esac
+  [[ ! -L "$CACHE_DIR" ]] || die "NAS_QEMU_CACHE_DIR must not be a symlink: $CACHE_DIR"
+}
+
+ensure_cache_dir() {
+  local existed=0
+  validate_cache_path
+  [[ -e "$CACHE_DIR" ]] && existed=1
+  [[ ! -e "$CACHE_DIR" || -d "$CACHE_DIR" ]] || die "QEMU cache path is not a directory: $CACHE_DIR"
+  install -d -m 0755 "$CACHE_DIR"
+  if [[ -e "$CACHE_MARKER" ]]; then
+    [[ ! -L "$CACHE_MARKER" && -f "$CACHE_MARKER" ]] || die "QEMU cache marker is not a regular file: $CACHE_MARKER"
+    [[ "$(<"$CACHE_MARKER")" == "$CACHE_MARKER_CONTENT" ]] || die "QEMU cache marker is invalid: $CACHE_MARKER"
+  elif (( existed == 1 )) && [[ "$CACHE_DIR" != "$DEFAULT_CACHE_DIR" ]]; then
+    die "refusing to use an existing unrecognized QEMU cache directory: $CACHE_DIR"
+  else
+    printf '%s\n' "$CACHE_MARKER_CONTENT" > "$CACHE_MARKER"
+    chmod 0644 "$CACHE_MARKER"
+  fi
+}
+
+require_cache_marker() {
+  validate_cache_path
+  [[ -d "$CACHE_DIR" ]] || return 0
+  [[ -e "$CACHE_MARKER" && ! -L "$CACHE_MARKER" && -f "$CACHE_MARKER" ]] || \
+    die "refusing to remove an unrecognized QEMU cache directory: $CACHE_DIR"
+  [[ "$(<"$CACHE_MARKER")" == "$CACHE_MARKER_CONTENT" ]] || \
+    die "refusing to remove a QEMU cache directory with an invalid marker: $CACHE_DIR"
+}
+
+validate_state_path() {
+  local cache_resolved state_resolved
+  validate_cache_path
+  cache_resolved="$(realpath -m -- "$CACHE_DIR")" || die "cannot resolve QEMU cache path: $CACHE_DIR"
+  state_resolved="$(realpath -m -- "$STATE_DIR")" || die "cannot resolve QEMU state path: $STATE_DIR"
+  case "$state_resolved" in
+    "$cache_resolved"/*) ;;
+    *) die "QEMU state path must be below the cache path: $STATE_DIR" ;;
+  esac
+  [[ "$state_resolved" != "$cache_resolved" ]] || die "QEMU state path must not equal the cache path"
+  [[ ! -L "$STATE_DIR" ]] || die "NAS_QEMU_STATE_DIR must not be a symlink: $STATE_DIR"
+}
+
+qemu_pid_from_pidfile() {
+  local pidfile=$1 pid executable
+  QEMU_PID=""
+  [[ -s "$pidfile" ]] || return 1
+  pid="$(<"$pidfile")"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+  [[ "${executable##*/}" == qemu-system-x86_64 ]] || {
+    printf 'error: refusing to signal pid %s from %s because it is not qemu-system-x86_64\n' "$pid" "$pidfile" >&2
+    return 2
+  }
+  QEMU_PID="$pid"
 }
 
 run_static() {
@@ -77,7 +146,7 @@ download_iso() {
   iso="$CACHE_DIR/$(basename "${ISO_URL%%\?*}")"
   local checksum_file="$iso.sha256.remote"
   local expected="$ISO_SHA256"
-  install -d -m 0755 "$CACHE_DIR"
+  ensure_cache_dir
 
   if [[ -z "$expected" ]]; then
     if curl --fail --location --retry 3 --retry-all-errors \
@@ -230,7 +299,10 @@ for relative in sorted(selected, key=lambda value: value.as_posix()):
         raise SystemExit(f"duplicate QEMU source path: {name}")
     seen.add(name)
     source = root.joinpath(*relative.parts)
-    mode = source.lstat().st_mode
+    try:
+        mode = source.lstat().st_mode
+    except FileNotFoundError:
+        continue
     if not stat.S_ISREG(mode):
         raise SystemExit(f"QEMU source path is not a regular file: {relative}")
     resolved = source.resolve(strict=True)
@@ -339,8 +411,11 @@ stop_persistent_vm() {
     log "Persistent VM is not running."
     return 0
   fi
-  pid="$(cat "$pidfile")"
-  if ! kill -0 "$pid" 2>/dev/null; then
+  if qemu_pid_from_pidfile "$pidfile"; then
+    pid="$QEMU_PID"
+  else
+    local status=$?
+    (( status == 2 )) && die "refusing to stop the process recorded in $pidfile"
     rm -f "$pidfile"
     log "Persistent VM is not running."
     return 0
@@ -375,11 +450,9 @@ restore_persistent_baseline() {
 }
 
 reset_persistent_state() {
-  case "$STATE_DIR" in
-    ""|/|"$ROOT"|"$ROOT"/*)
-      die "refusing to reset an unsafe VM state path: $STATE_DIR"
-      ;;
-  esac
+  [[ -d "$CACHE_DIR" ]] || { log "Persistent VM state is not present."; return 0; }
+  validate_state_path
+  require_cache_marker
   stop_persistent_vm
   rm -rf -- "$STATE_DIR"
   log "Persistent VM state removed; the cached installer ISO was kept."
@@ -387,6 +460,8 @@ reset_persistent_state() {
 
 run_installer() {
   ensure_host_tools
+  ensure_cache_dir
+  validate_state_path
   install -d -m 0755 "$STATE_DIR"
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
@@ -413,7 +488,11 @@ run_installer() {
 
   if [[ "$persistent_mode" != 1 || ! -s "$pidfile" ]]; then
     rm -f "$pidfile"
-  elif ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+  elif qemu_pid_from_pidfile "$pidfile"; then
+    :
+  else
+    local pid_status=$?
+    (( pid_status == 2 )) && die "refusing to reuse a pidfile owned by a non-QEMU process: $pidfile"
     rm -f "$pidfile"
   fi
   rm -f "$install_log"
@@ -463,8 +542,17 @@ run_installer() {
   fi
 
   mapfile -t accel < <(qemu_acceleration)
-  if [[ ! -s "$pidfile" ]] || ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+  if [[ ! -s "$pidfile" ]]; then
     log "Booting installed NAS in a disposable QEMU VM"
+  elif qemu_pid_from_pidfile "$pidfile"; then
+    log "Persistent QEMU VM is already running (pid $(<"$pidfile"))"
+  else
+    local pid_status=$?
+    (( pid_status == 2 )) && die "refusing to reuse a pidfile owned by a non-QEMU process: $pidfile"
+    rm -f "$pidfile"
+    log "Booting installed NAS in a disposable QEMU VM"
+  fi
+  if [[ ! -s "$pidfile" ]]; then
     qemu-system-x86_64 \
       "${accel[@]}" \
       -m "$MEMORY_MIB" -smp "$CPUS" \
@@ -474,19 +562,22 @@ run_installer() {
       -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443,hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092" \
       -device virtio-net-pci,netdev=net0 \
       -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
-  else
-    log "Persistent QEMU VM is already running (pid $(cat "$pidfile"))"
   fi
 
   cleanup_vm() {
     local cleanup_pidfile="$STATE_DIR/qemu.pid"
-    if [[ -s "$cleanup_pidfile" ]]; then
-      local pid
-      pid="$(cat "$cleanup_pidfile")"
+    if [[ -s "$cleanup_pidfile" ]] && qemu_pid_from_pidfile "$cleanup_pidfile"; then
+      local pid="$QEMU_PID"
       kill "$pid" 2>/dev/null || true
       for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
       kill -KILL "$pid" 2>/dev/null || true
       rm -f "$cleanup_pidfile"
+    elif [[ -s "$cleanup_pidfile" ]]; then
+      qemu_pid_from_pidfile "$cleanup_pidfile" || {
+        local pid_status=$?
+        (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $cleanup_pidfile"
+        rm -f "$cleanup_pidfile"
+      }
     fi
   }
   trap cleanup_vm EXIT INT TERM
@@ -540,8 +631,13 @@ run_installer() {
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
   if [[ -s "$pidfile" ]]; then
-    pid="$(cat "$pidfile")"
-    for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    if qemu_pid_from_pidfile "$pidfile"; then
+      pid="$QEMU_PID"
+      for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    else
+      local pid_status=$?
+      (( pid_status == 2 )) && die "refusing to wait on a pidfile owned by a non-QEMU process: $pidfile"
+    fi
   fi
   cleanup_vm
 
@@ -569,8 +665,13 @@ run_installer() {
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
   if [[ -s "$pidfile" ]]; then
-    pid="$(cat "$pidfile")"
-    for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    if qemu_pid_from_pidfile "$pidfile"; then
+      pid="$QEMU_PID"
+      for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    else
+      local pid_status=$?
+      (( pid_status == 2 )) && die "refusing to wait on a pidfile owned by a non-QEMU process: $pidfile"
+    fi
   fi
   trap - EXIT INT TERM
   cleanup_vm
@@ -587,10 +688,16 @@ case "$MODE" in
   persistent-test)
     NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=test NAS_QEMU_REUSE_INSTALLED=1 run_installer
     ;;
-  persistent-stop) stop_persistent_vm ;;
+  persistent-stop) validate_state_path; stop_persistent_vm ;;
   persistent-reset) reset_persistent_state ;;
   all) run_static; run_native; run_installer ;;
-  clean) rm -rf "$CACHE_DIR"; log "Removed $CACHE_DIR" ;;
+  clean)
+    require_cache_marker
+    validate_state_path
+    stop_persistent_vm
+    rm -rf -- "$CACHE_DIR"
+    log "Removed $CACHE_DIR"
+    ;;
   -h|--help|help) usage ;;
   *) usage >&2; die "unknown mode: $MODE" ;;
 esac

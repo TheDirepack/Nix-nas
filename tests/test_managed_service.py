@@ -84,6 +84,11 @@ class ManagedServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(msvc.ManagedServiceError, "transport"):
                 msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {"x": service}}, path)
 
+            service = service_template()
+            service["endpoints"] = {"web": visible_endpoint({"type": "port", "value": 8443})}
+            msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {"x": service}}, path)
+            self.assertEqual(msvc.load_store(path)["services"]["x"]["endpoints"]["web"]["exposure"]["value"], 8443)
+
     def test_validate_image_and_port(self):
         service = service_template()
         service["runtime"]["image"] = "docker.io/library/nginx@sha256:" + "a" * 64
@@ -227,6 +232,11 @@ class ManagedServiceTests(unittest.TestCase):
 
         vm = service_template("vm")
         self.assertEqual(nas_service_runtime_libvirt.plan_libvirt("x", vm)["runtime"], "vm")
+        vm["resources"] = {"cpus": 0.5}
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "CPU count"):
+            nas_service_runtime_libvirt._render_domain("x", vm)
+        vm["resources"] = {"cpus": 2}
+        self.assertIn("<vcpu>2</vcpu>", nas_service_runtime_libvirt._render_domain("x", vm))
 
         secured = service_template()
         secured["endpoints"] = {

@@ -5,7 +5,10 @@ import argparse
 import json
 import os
 import shutil
+import ssl
 import stat
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -293,12 +296,23 @@ def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
         raise RuntimeError("Authentik NAS user-settings flow did not render the Syncthing field")
 
 
-def verify_native_share_route(driver: webdriver.Chrome, origin: str) -> None:
+def native_share_response(origin: str) -> dict[str, Any]:
+    url = origin.rstrip("/") + "/share/not-a-real-token"
+    request = urllib.request.Request(url, headers={"Accept": "text/html"})
+    context = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=30) as response:
+            return {"status": response.status, "url": response.geturl()}
+    except urllib.error.HTTPError as response:
+        return {"status": response.code, "url": response.geturl()}
+    except (OSError, urllib.error.URLError, TimeoutError) as error:
+        raise RuntimeError(f"CopyParty native share route request failed: {error}") from error
+
+
+def verify_native_share_route(_driver: webdriver.Chrome, origin: str) -> None:
     # An invalid native share can execute CopyParty's own error-page script;
-    # inspect the response without allowing that page to interrupt WebDriver.
-    result = fetch_status(driver, origin + "/share/not-a-real-token")
-    if result["status"] == 0:
-        raise RuntimeError(f"CopyParty native share route request failed: {result!r}")
+    # inspect the response with a non-browser client so that page cannot run.
+    result = native_share_response(origin)
     if "/identity/if/flow/" in result["url"]:
         raise RuntimeError("CopyParty native share route was intercepted by Authentik")
 

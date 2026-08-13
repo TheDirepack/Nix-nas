@@ -1,5 +1,5 @@
 {
-  description = "NixOS NAS 2.2.0-alpha.16 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
+  description = "NixOS NAS 2.2.0-alpha.17 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -218,11 +218,15 @@
         in pkgs.mkShell {
           packages = with pkgs; [
             bats
+            coreutils
             curl
             expect
+            git
+            gnutar
             jq
             libarchive
             openssh
+            python3
             qemu
           ];
           shellHook = ''

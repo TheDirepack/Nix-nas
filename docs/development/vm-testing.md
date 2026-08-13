@@ -53,7 +53,8 @@ The guest uses QEMU user-mode networking (`-netdev user`) solely for the ISO,
 Nix input, and package downloads. No host bridge, tap device, NIC passthrough,
 or physical host interface is required. VM state is kept under the user cache,
 not in the repository. These wrappers are additive developer tools and do not
-change the existing CI jobs or their check ownership.
+change CI check ownership; the CI VM jobs invoke the same lifecycle and now
+declare their host-side dependencies explicitly.
 
 The persistent wrapper defaults to a 64 GiB OS disk so the complete Nix store,
 test dependencies, and repeated rebuild generations fit comfortably. Override
@@ -197,6 +198,11 @@ and Nix store paths. QEMU user networking provides this by default.
 The installer harness creates an ephemeral Ed25519 key under the private VM
 state directory, injects only its public key, disables password and
 keyboard-interactive SSH authentication, and removes the key with `clean`.
+The cache and state overrides must name dedicated directories. The wrapper
+creates a marker in a new cache directory and refuses to remove an existing
+directory that it did not create; `NAS_QEMU_STATE_DIR` must remain below
+`NAS_QEMU_CACHE_DIR`. This prevents `clean` and `persistent-reset` from
+mistaking a general-purpose directory for VM state.
 
 ## Failure evidence
 

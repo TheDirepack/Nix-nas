@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.17 — 2026-08-13
+
+- Harden the QEMU wrapper lifecycle, align managed-service schema/runtime validation, and make CI-provided VM dependencies explicit.
+
 ## 2.2.0-alpha.16 — 2026-08-13
 
 - Restore exact Nix VM bundle caches before configuration builds, export only missing bundle archives, and isolate config-sensitive VM test drivers so unchanged package versions are reused across configuration-only changes.

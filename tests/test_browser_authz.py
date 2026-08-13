@@ -133,19 +133,18 @@ class BrowserAuthzInputTests(unittest.TestCase):
                 self.authz.read_secret(str(secure))
 
     def test_native_share_route_checks_response_without_executing_error_page(self) -> None:
-        driver = object()
         with mock.patch.object(
             self.authz,
-            "fetch_status",
+            "native_share_response",
             return_value={"status": 403, "url": "https://nas-test.local/share/not-a-real-token"},
         ) as fetch:
-            self.authz.verify_native_share_route(driver, "https://nas-test.local")
-        fetch.assert_called_once_with(driver, "https://nas-test.local/share/not-a-real-token")
+            self.authz.verify_native_share_route(object(), "https://nas-test.local")
+        fetch.assert_called_once_with("https://nas-test.local")
 
     def test_native_share_route_rejects_authentik_redirect(self) -> None:
         with mock.patch.object(
             self.authz,
-            "fetch_status",
+            "native_share_response",
             return_value={"status": 302, "url": "https://nas-test.local/identity/if/flow/login/"},
         ):
             with self.assertRaisesRegex(RuntimeError, "intercepted by Authentik"):

@@ -317,6 +317,7 @@ def endpoint_links(path: pathlib.Path = ENDPOINT_REGISTRY) -> dict[str, str]:
             and isinstance(public_path, str)
             and public_path.startswith("/")
             and not public_path.startswith("//")
+            and "\\" not in public_path
             and not any(ord(character) < 32 or ord(character) == 127 for character in public_path)
         ):
             links[key] = public_path

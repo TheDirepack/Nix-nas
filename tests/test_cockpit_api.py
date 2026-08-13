@@ -919,6 +919,7 @@ class CockpitApiTests(unittest.TestCase):
                         "endpoints": {
                             "good": {"available": True, "linkKey": "good", "publicPath": "/safe/"},
                             "schemeRelative": {"available": True, "linkKey": "bad1", "publicPath": "//evil.example/"},
+                            "backslash": {"available": True, "linkKey": "bad3", "publicPath": "/\\evil.example/"},
                             "newline": {"available": True, "linkKey": "bad2", "publicPath": "/safe\nInjected"},
                         },
                     }

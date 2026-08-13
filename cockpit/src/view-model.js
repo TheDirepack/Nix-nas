@@ -92,6 +92,7 @@ export function revisionModel(update = {}) {
 
 export function safeInternalPath(value) {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return null;
+  if (value.includes("\\")) return null;
   if (
     [...value].some((character) => {
       const code = character.charCodeAt(0);
