@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.17 — 2026-08-13
+
+- Hand off the exact VM bundle archives from the qualified build to every QEMU matrix entry, while persisting cache misses in a separate job so later VMs do not re-export or rebuild the same bundles.
+
 ## 2.2.0-alpha.16 — 2026-08-13
 
 - Restore exact Nix VM bundle caches before configuration builds, export only missing bundle archives, and isolate config-sensitive VM test drivers so unchanged package versions are reused across configuration-only changes.
