@@ -1,10 +1,10 @@
-# NixOS NAS 2.2.0-alpha.17
+# NixOS NAS 2.2.0-alpha.16
 
 A NixOS-based NAS appliance that keeps storage, identity, secrets, applications, and recovery paths explicit and independently understandable.
 
 The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secrets, with optional Syncthing, Vaultwarden, virtualization, local AI, and a lightweight VictoriaMetrics/Telegraf observability stack.
 
-> **Release status:** 2.2.0-alpha.17 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
+> **Release status:** 2.2.0-alpha.16 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
 
 ## First installation
 
