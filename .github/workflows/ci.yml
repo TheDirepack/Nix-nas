@@ -320,6 +320,61 @@ jobs:
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
+      - name: Resolve Nix store bundle versions
+        id: vm-bundles
+        run: ./scripts/vm-bundles.sh keys >> "$GITHUB_OUTPUT"
+      - name: "Restore/cache Nix store bundle: core"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm-bundles.outputs.key_core }}
+      - name: "Restore/cache Nix store bundle: copyparty"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/copyparty.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-copyparty-${{ steps.vm-bundles.outputs.key_copyparty }}
+      - name: "Restore/cache Nix store bundle: caddy"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/caddy.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-caddy-${{ steps.vm-bundles.outputs.key_caddy }}
+      - name: "Restore/cache Nix store bundle: identity"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm-bundles.outputs.key_identity }}
+      - name: "Restore/cache Nix store bundle: observability"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm-bundles.outputs.key_observability }}
+      - name: "Restore/cache Nix store bundle: storage"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm-bundles.outputs.key_storage }}
+      - name: "Restore/cache Nix store bundle: ai"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm-bundles.outputs.key_ai }}
+      - name: "Restore/cache Nix store bundle: test-browser"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/test-browser.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-browser-${{ steps.vm-bundles.outputs.key_test_browser }}
+      - name: "Restore/cache Nix store bundle: test-tools"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/test-tools.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ steps.vm-bundles.outputs.key_test_tools }}
+      - name: "Restore/cache Nix store bundle: vm-drivers"
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm-bundles.outputs.key_vm_drivers }}
+      - name: Reassemble cached Nix store bundles before configuration builds
+        run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Package and verify as an untrusted consumer
         run: |
           set -euo pipefail
@@ -366,56 +421,8 @@ jobs:
         run: |
           nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
           nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
-      - name: Resolve Nix store bundle versions
-        id: vm-bundles
-        run: ./scripts/vm-bundles.sh keys >> "$GITHUB_OUTPUT"
-      - name: Export Nix store bundles for downstream VMs
-        run: ./scripts/vm-bundles.sh save "$RUNNER_TEMP/vm-bundles"
-      - name: "Cache Nix store bundle: core"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm-bundles.outputs.key_core }}
-      - name: "Cache Nix store bundle: copyparty"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/copyparty.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-copyparty-${{ steps.vm-bundles.outputs.key_copyparty }}
-      - name: "Cache Nix store bundle: caddy"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/caddy.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-caddy-${{ steps.vm-bundles.outputs.key_caddy }}
-      - name: "Cache Nix store bundle: identity"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm-bundles.outputs.key_identity }}
-      - name: "Cache Nix store bundle: observability"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm-bundles.outputs.key_observability }}
-      - name: "Cache Nix store bundle: storage"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm-bundles.outputs.key_storage }}
-      - name: "Cache Nix store bundle: ai"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm-bundles.outputs.key_ai }}
-      - name: "Cache Nix store bundle: test-browser"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/test-browser.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-browser-${{ steps.vm-bundles.outputs.key_test_browser }}
-      - name: "Cache Nix store bundle: test-tools"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/test-tools.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ steps.vm-bundles.outputs.key_test_tools }}
+      - name: Build and export missing Nix store bundles for downstream VMs
+        run: ./scripts/vm-bundles.sh save-missing "$RUNNER_TEMP/vm-bundles"
 
   browser:
     name: Post-build deterministic Cockpit layout, XSS, and accessibility
@@ -546,6 +553,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/vm-bundles/test-tools.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ steps.vm-bundles.outputs.key_test_tools }}
+      - name: "Restore Nix store bundle: vm-drivers"
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm-bundles.outputs.key_vm_drivers }}
       - name: Reassemble Nix store from VM bundles
         run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Run ${{ matrix.vm }} NixOS VM integration tests

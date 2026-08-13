@@ -1,5 +1,5 @@
 {
-  description = "NixOS NAS 2.2.0-alpha.15 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
+  description = "NixOS NAS 2.2.0-alpha.16 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -185,6 +185,10 @@
           test-tools = pkgs.buildEnv {
             name = "nas-vm-bundle-test-tools";
             paths = bundlePaths.test-tools;
+          };
+          vm-drivers = pkgs.buildEnv {
+            name = "nas-vm-bundle-vm-drivers";
+            paths = [ ];
           };
         };
 
