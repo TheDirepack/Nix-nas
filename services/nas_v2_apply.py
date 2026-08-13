@@ -45,6 +45,15 @@ from nas_v2_spec import (
 from nas_v2_systemd import SystemdProjectionError
 from nas_v2_systemd import validate_projection as validate_systemd_projection
 
+try:
+    from nas_v2_editor import authority_lock
+except ImportError:  # pragma: no cover - fallback for minimal test harnesses
+    from contextlib import contextmanager as _cm
+
+    @_cm
+    def authority_lock(path: pathlib.Path):  # type: ignore[no-redef]  # pyright: ignore[reportAssignmentType]
+        yield
+
 
 @dataclass(frozen=True)
 class ApplyPaths:
@@ -169,6 +178,38 @@ def _fsync_directory(directory: pathlib.Path) -> None:
         os.close(fd)
 
 
+_V2_OWNED_DIRS = {
+    "units",
+    "descriptors",
+    "networks",
+    "policies",
+    "zones",
+    "quadlet",
+    "compose",
+    "vm",
+    "networkmanager",
+}
+_V2_STALE_SUFFIXES = (".service", ".timer", ".target", ".path", ".network", ".container", ".json")
+
+
+def _is_v2_stale_candidate(path: pathlib.Path, root: pathlib.Path) -> bool:
+    name = path.name
+    if name.startswith("nas-v2-"):
+        return True
+    if name.endswith(_V2_STALE_SUFFIXES):
+        return True
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+    if rel.parts and rel.parts[0] in _V2_OWNED_DIRS:
+        return True
+    for part in rel.parts[:-1]:
+        if part in _V2_OWNED_DIRS:
+            return True
+    return False
+
+
 def _projection_stale_files(root: pathlib.Path, current: set[pathlib.Path]) -> set[pathlib.Path]:
     """Return stale regular files beneath a fully V2-owned projection root."""
     try:
@@ -185,7 +226,7 @@ def _projection_stale_files(root: pathlib.Path, current: set[pathlib.Path]) -> s
             continue
         if not stat.S_ISREG(mode):
             raise SystemdProjectionError(f"unexpected non-regular entry in V2 projection root: {path}")
-        if path not in current:
+        if path not in current and _is_v2_stale_candidate(path, root):
             stale.add(path)
     return stale
 
@@ -269,10 +310,15 @@ def _compile_document_with_platform(
     return effective if inventory is None else resolve_effective(effective, inventory)
 
 
-def compile_paths(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
+def _compile_paths_inner(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
     schema = load_schema(paths.schema)
     effective = _compile_document_with_platform(parse_yaml(paths.desired), schema, paths.platform)
     return effective, build_plan(effective)
+
+
+def compile_paths(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
+    with authority_lock(paths.desired):
+        return _compile_paths_inner(paths)
 
 
 def _caddy_bytes(effective: dict[str, Any], projection: CaddyProjection) -> bytes:
@@ -367,37 +413,57 @@ def apply(
     firewalld: FirewalldProjection | None = None,
     portal: PortalProjection | None = None,
 ) -> dict[str, Any]:
-    effective, plan = compile_paths(paths)
-    try:
-        needs_firewalld = requires_firewalld(effective)
-    except PodmanNetworkProjectionError as exc:
-        raise SystemdProjectionError(str(exc)) from exc
-    if needs_firewalld and firewalld is None:
-        raise SystemdProjectionError(
-            "desired state requires V2 firewalld policy, but this apply transaction has no firewalld projection"
-        )
+    with authority_lock(paths.desired):
+        effective, plan = _compile_paths_inner(paths)
+        try:
+            needs_firewalld = requires_firewalld(effective)
+        except PodmanNetworkProjectionError as exc:
+            raise SystemdProjectionError(str(exc)) from exc
+        if needs_firewalld and firewalld is None:
+            raise SystemdProjectionError(
+                "desired state requires V2 firewalld policy, but this apply transaction has no firewalld projection"
+            )
 
-    files = [
-        (paths.effective, _json_bytes(effective), 0o640),
-        (paths.plan, _json_bytes(plan), 0o640),
-    ]
-    stale: set[pathlib.Path] = set()
-    if caddy is not None:
-        files.append((caddy.output, _caddy_bytes(effective, caddy), 0o644))
-    if portal is not None:
-        files.append((portal.output, portal_bytes(effective), 0o644))
-    if systemd is not None:
-        systemd_files = _systemd_files(effective, systemd, firewalld_enabled=firewalld is not None)
-        files.extend(systemd_files)
-        current_systemd_paths = {path for path, _content, _mode in systemd_files}
-        stale.update(_projection_stale_files(systemd.output_dir, current_systemd_paths))
-    if backup is not None:
-        files.extend(_backup_files(effective, backup))
-    if firewalld is not None:
-        files.extend(_firewalld_files(effective, firewalld))
-    changed = _replace_bundle(files, remove_paths=stale)
-    plan["changedFiles"] = sorted(str(path) for path in changed)
-    return plan
+        files: list[tuple[pathlib.Path, bytes, int]] = [
+            (paths.effective, _json_bytes(effective), 0o640),
+        ]
+        stale: set[pathlib.Path] = set()
+        if caddy is not None:
+            files.append((caddy.output, _caddy_bytes(effective, caddy), 0o644))
+        if portal is not None:
+            files.append((portal.output, portal_bytes(effective), 0o644))
+        if systemd is not None:
+            systemd_files = _systemd_files(effective, systemd, firewalld_enabled=firewalld is not None)
+            files.extend(systemd_files)
+            current_systemd_paths = {path for path, _content, _mode in systemd_files}
+            stale.update(_projection_stale_files(systemd.output_dir, current_systemd_paths))
+        if backup is not None:
+            files.extend(_backup_files(effective, backup))
+        if firewalld is not None:
+            files.extend(_firewalld_files(effective, firewalld))
+
+        def _would_change(path: pathlib.Path, data: bytes, mode: int) -> bool:
+            try:
+                return path.read_bytes() != data or (path.stat().st_mode & 0o777) != mode
+            except FileNotFoundError:
+                return True
+
+        # Predict changed set before serializing plan so plan on disk contains changedFiles.
+        predicted: set[pathlib.Path] = {path for path, data, mode in files if _would_change(path, data, mode)}
+        predicted.update({p for p in stale if p.exists()})
+        plan["changedFiles"] = sorted(str(p) for p in predicted)
+        plan_bytes = _json_bytes(plan)
+        if _would_change(paths.plan, plan_bytes, 0o640):
+            predicted.add(paths.plan)
+            plan["changedFiles"] = sorted(str(p) for p in predicted)
+            plan_bytes = _json_bytes(plan)
+        files.append((paths.plan, plan_bytes, 0o640))
+        changed = _replace_bundle(files, remove_paths=stale)
+        # Ensure plan's changedFiles reflects actual changed set (covers race-free prediction).
+        if {str(p) for p in changed} != set(plan["changedFiles"]):
+            plan["changedFiles"] = sorted(str(p) for p in changed)
+            _replace_bundle([(paths.plan, _json_bytes(plan), 0o640)], remove_paths=set())
+        return plan
 
 
 def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str, Any]:
@@ -407,33 +473,55 @@ def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str
     effective = _compile_document_with_platform(document, schema, paths.platform)
     plan = build_plan(effective)
 
-    try:
-        old_stat = paths.desired.stat()
-        old_desired: tuple[bytes, int] | None = (paths.desired.read_bytes(), old_stat.st_mode & 0o777)
-    except FileNotFoundError:
-        old_desired = None
-
-    desired_temp = _prepare_temp(paths.desired, yaml_text.encode("utf-8"), 0o660)
-    try:
-        os.replace(desired_temp, paths.desired)
-        _fsync_directory(paths.desired.parent)
+    with authority_lock(paths.desired):
         try:
-            _replace_bundle(
-                [
-                    (paths.effective, _json_bytes(effective), 0o640),
-                    (paths.plan, _json_bytes(plan), 0o640),
-                ]
+            old_stat = paths.desired.stat()
+            old_mode = old_stat.st_mode & 0o777
+            old_uid = old_stat.st_uid
+            old_gid = old_stat.st_gid
+            old_desired: tuple[bytes, int, int, int] | None = (
+                paths.desired.read_bytes(),
+                old_mode,
+                old_uid,
+                old_gid,
             )
-        except Exception:
-            if old_desired is None:
-                paths.desired.unlink(missing_ok=True)
-            else:
-                rollback = _prepare_temp(paths.desired, old_desired[0], old_desired[1])
-                os.replace(rollback, paths.desired)
+        except FileNotFoundError:
+            old_mode = 0o640
+            old_uid = 0
+            old_gid = 0
+            old_desired = None
+
+        desired_temp = _prepare_temp(paths.desired, yaml_text.encode("utf-8"), old_mode)
+        if os.geteuid() == 0 and old_desired is not None:
+            try:
+                os.chown(desired_temp, old_uid, old_gid)
+            except OSError:
+                pass
+        try:
+            os.replace(desired_temp, paths.desired)
             _fsync_directory(paths.desired.parent)
-            raise
-    finally:
-        desired_temp.unlink(missing_ok=True)
+            try:
+                _replace_bundle(
+                    [
+                        (paths.effective, _json_bytes(effective), 0o640),
+                        (paths.plan, _json_bytes(plan), 0o640),
+                    ]
+                )
+            except Exception:
+                if old_desired is None:
+                    paths.desired.unlink(missing_ok=True)
+                else:
+                    rollback = _prepare_temp(paths.desired, old_desired[0], old_desired[1])
+                    if os.geteuid() == 0:
+                        try:
+                            os.chown(rollback, old_desired[2], old_desired[3])
+                        except OSError:
+                            pass
+                    os.replace(rollback, paths.desired)
+                _fsync_directory(paths.desired.parent)
+                raise
+        finally:
+            desired_temp.unlink(missing_ok=True)
 
     return plan
 

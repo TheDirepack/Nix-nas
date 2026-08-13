@@ -260,6 +260,127 @@ class V2QuadletTests(unittest.TestCase):
         with self.assertRaisesRegex(systemd.SystemdProjectionError, "generator binary"):
             systemd.validate_projection(files, systemd_analyze_bin="systemd-analyze")
 
+    def test_strict_sandbox_rejects_privileged_volume_seccomp_rootfs_and_service_keys(self):
+        cases = [
+            ("Privileged", "[Container]\nImage=example.invalid/demo:1\nPrivileged=true\n"),
+            ("Volume", "[Container]\nImage=example.invalid/demo:1\nVolume=/data:/data\n"),
+            ("SeccompProfile", "[Container]\nImage=example.invalid/demo:1\nSeccompProfile=/tmp/seccomp.json\n"),
+            ("Rootfs", "[Container]\nImage=example.invalid/demo:1\nRootfs=/\n"),
+            ("ProtectSystem", "[Container]\nImage=example.invalid/demo:1\n[Service]\nProtectSystem=strict\n"),
+            ("PrivateTmp", "[Container]\nImage=example.invalid/demo:1\n[Service]\nPrivateTmp=yes\n"),
+            (
+                "RestrictAddressFamilies",
+                "[Container]\nImage=example.invalid/demo:1\n[Service]\nRestrictAddressFamilies=AF_INET\n",
+            ),
+            ("DeviceAllow", "[Container]\nImage=example.invalid/demo:1\n[Service]\nDeviceAllow=/dev/null r\n"),
+            ("LimitNOFILE", "[Container]\nImage=example.invalid/demo:1\n[Service]\nLimitNOFILE=1024\n"),
+            ("SecurityOpt", "[Container]\nImage=example.invalid/demo:1\nSecurityOpt=label=disable\n"),
+            ("UsernsMode", "[Container]\nImage=example.invalid/demo:1\nUsernsMode=keep-id\n"),
+            ("Mount", "[Container]\nImage=example.invalid/demo:1\nMount=type=bind,src=/,dst=/\n"),
+            ("Init", "[Container]\nImage=example.invalid/demo:1\nInit=true\n"),
+            ("LabelDisable", "[Container]\nImage=example.invalid/demo:1\nLabelDisable=true\n"),
+            ("SecurityLabelDisable", "[Container]\nImage=example.invalid/demo:1\nSecurityLabelDisable=true\n"),
+        ]
+        for label, content in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    app_root = pathlib.Path(tmp) / "apps"
+                    service_root = app_root / "demo"
+                    service_root.mkdir(parents=True)
+                    source = service_root / "demo.container"
+                    source.write_text(content, encoding="utf-8")
+                    with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
+                        with mock.patch.object(quadlet, "APP_ROOT", pathlib.Path(str(app_root))):
+                            effective, service = self.compile_service(
+                                {
+                                    "name": "Demo",
+                                    "workload": {"kind": "daemon", "activation": "persistent"},
+                                    "runtime": {"type": "quadlet", "source": str(source)},
+                                    "sandbox": {"mode": "strict"},
+                                }
+                            )
+                            with self.assertRaisesRegex(quadlet.QuadletProjectionError, "strict sandbox"):
+                                self.render(effective, service)
+
+    def test_inherit_sandbox_allows_security_keys(self):
+        cases = [
+            "[Container]\nImage=example.invalid/demo:1\nPrivileged=true\n",
+            "[Container]\nImage=example.invalid/demo:1\nVolume=/data:/data\n",
+            "[Container]\nImage=example.invalid/demo:1\nSeccompProfile=/tmp/seccomp.json\n",
+            "[Container]\nImage=example.invalid/demo:1\nRootfs=/\n",
+            "[Container]\nImage=example.invalid/demo:1\n[Service]\nProtectSystem=strict\n",
+            "[Container]\nImage=example.invalid/demo:1\n[Service]\nPrivateTmp=yes\n",
+            "[Container]\nImage=example.invalid/demo:1\n[Service]\nDeviceAllow=/dev/null r\n",
+            "[Container]\nImage=example.invalid/demo:1\n[Service]\nLimitNOFILE=1024\n",
+        ]
+        for content in cases:
+            with self.subTest(content=content[:30]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    app_root = pathlib.Path(tmp) / "apps"
+                    service_root = app_root / "demo"
+                    service_root.mkdir(parents=True)
+                    source = service_root / "demo.container"
+                    source.write_text(content, encoding="utf-8")
+                    with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
+                        with mock.patch.object(quadlet, "APP_ROOT", pathlib.Path(str(app_root))):
+                            effective, service = self.compile_service(
+                                {
+                                    "name": "Demo",
+                                    "workload": {"kind": "daemon", "activation": "persistent"},
+                                    "runtime": {"type": "quadlet", "source": str(source)},
+                                    "sandbox": {"mode": "inherit"},
+                                }
+                            )
+                            rendered = self.render(effective, service)
+                            self.assertIn("Image=", rendered)
+
+    def test_render_time_symlink_escape_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_root = pathlib.Path(tmp) / "apps"
+            service_root = app_root / "demo"
+            service_root.mkdir(parents=True)
+            source = service_root / "demo.container"
+            source.write_text("[Container]\nImage=example.invalid/demo:1\n", encoding="utf-8")
+            with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
+                with mock.patch.object(quadlet, "APP_ROOT", pathlib.Path(str(app_root))):
+                    effective, service = self.compile_service(
+                        {
+                            "name": "Demo",
+                            "workload": {"kind": "daemon", "activation": "persistent"},
+                            "runtime": {"type": "quadlet", "source": str(source)},
+                            "sandbox": {"mode": "inherit"},
+                        }
+                    )
+                    # TOCTOU: replace file with symlink escaping app root after compile
+                    evil_target = pathlib.Path(tmp) / "evil.container"
+                    evil_target.write_text("[Container]\nImage=example.invalid/demo:1\n", encoding="utf-8")
+                    source.unlink()
+                    source.symlink_to(evil_target)
+                    with self.assertRaisesRegex(quadlet.QuadletProjectionError, "escapes"):
+                        self.render(effective, service)
+
+    def test_render_time_out_of_root_allowed_via_option_b(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Source lives outside the default APP_ROOT; compile validates via mocked v2 APP_ROOT
+            # but render with default quadlet APP_ROOT should still allow it (Option B).
+            alt_root = pathlib.Path(tmp) / "alt" / "apps"
+            alt_service_root = alt_root / "demo"
+            alt_service_root.mkdir(parents=True)
+            outside = alt_service_root / "demo.container"
+            outside.write_text("[Container]\nImage=example.invalid/demo:1\n", encoding="utf-8")
+            with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(alt_root))):
+                effective, service = self.compile_service(
+                    {
+                        "name": "Demo",
+                        "workload": {"kind": "daemon", "activation": "persistent"},
+                        "runtime": {"type": "quadlet", "source": str(outside)},
+                        "sandbox": {"mode": "inherit"},
+                    }
+                )
+                # quadlet APP_ROOT remains default /var/lib/nas-control/apps, nominal is outside -> no containment check
+                rendered = self.render(effective, service)
+                self.assertIn("Image=", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

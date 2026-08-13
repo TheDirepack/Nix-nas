@@ -30,8 +30,10 @@ def _route_url(exposure: dict[str, Any], portal: dict[str, Any]) -> str:
     exposure_type = exposure.get("type")
     if exposure_type == "path":
         paths = exposure.get("paths")
-        if isinstance(paths, list) and paths and isinstance(paths[0], str):
-            return paths[0]
+        candidate = paths[0] if isinstance(paths, list) and paths and isinstance(paths[0], str) else None
+        if isinstance(candidate, str) and candidate.startswith("/") and not candidate.startswith("//"):
+            return candidate
+        raise PortalProjectionError("visible portal path route has no safe path")
     if exposure_type == "hostname":
         hostnames = exposure.get("hostnames")
         path = exposure.get("path", "/")

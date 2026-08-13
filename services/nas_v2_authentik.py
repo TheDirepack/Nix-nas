@@ -63,6 +63,11 @@ def _api_root(authentik_url: str) -> str:
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/") + "/api/v3", "", ""))
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, hdrs, newurl):  # noqa: ARG002
+        raise urllib.error.HTTPError(newurl, code, f"redirect blocked to {newurl!r} to avoid token leak", hdrs, fp)
+
+
 def _request_json(
     *,
     url: str,
@@ -76,8 +81,9 @@ def _request_json(
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    opener = urllib.request.build_opener(_NoRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             payload = response.read()
     except urllib.error.HTTPError as exc:
         # Never include a response body here: an upstream error may echo secrets or

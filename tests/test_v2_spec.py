@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import tempfile
@@ -149,6 +150,96 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         two["listeners"] = {"other": {"protocol": "tcp", "exposure": {"port": 22005}}}
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "conflicts"):
             self.compile({"schemaVersion": 3, "services": {"one": one, "two": two}})
+
+    def test_prefix_overlapping_route_paths_are_rejected(self):
+        parent = minimal_service()
+        parent["routes"] = {
+            "api": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/api"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        child = minimal_service()
+        child["routes"] = {
+            "users": {
+                "target": {"type": "http", "port": 8082},
+                "exposure": {"type": "path", "paths": ["/api/users"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "overlaps"):
+            self.compile({"schemaVersion": 3, "services": {"parent": parent, "child": child}})
+
+        root = minimal_service()
+        root["routes"] = {
+            "catchall": {
+                "target": {"type": "http", "port": 8083},
+                "exposure": {"type": "path", "paths": ["/"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        other = minimal_service()
+        other["routes"] = {
+            "specific": {
+                "target": {"type": "http", "port": 8084},
+                "exposure": {"type": "path", "paths": ["/anything"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "overlaps"):
+            self.compile({"schemaVersion": 3, "services": {"root": root, "other": other}})
+
+        sibling = minimal_service()
+        sibling["routes"] = {
+            "one": {
+                "target": {"type": "http", "port": 8085},
+                "exposure": {"type": "path", "paths": ["/api/v1"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        sibling2 = minimal_service()
+        sibling2["routes"] = {
+            "two": {
+                "target": {"type": "http", "port": 8086},
+                "exposure": {"type": "path", "paths": ["/api/v2"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        self.compile({"schemaVersion": 3, "services": {"one": sibling, "two": sibling2}})
+
+    def test_systemd_runtime_unit_must_be_a_safe_unit_name(self):
+        good = minimal_service()
+        self.compile({"schemaVersion": 3, "services": {"example": good}})
+        for unit in ("foo.service", "nas-v2-foo.target", "timer@1.service"):
+            service = minimal_service(runtime={"type": "systemd", "unit": unit})
+            self.compile({"schemaVersion": 3, "services": {"example": service}})
+        for unit in ("bad unit.service", "evil\n.service", "no-suffix", ".service", "x.unknown"):
+            service = minimal_service(runtime={"type": "systemd", "unit": unit})
+            with self.assertRaisesRegex(v2.ManagedServicesV2Error, "runtime unit"):
+                self.compile({"schemaVersion": 3, "services": {"example": service}})
+
+    def test_paths_reject_all_control_characters(self):
+        service = minimal_service()
+        service["storage"] = [{"resource": "data", "mountPath": "/data"}]
+        parent = {
+            "schemaVersion": 3,
+            "storageResources": {"data": {"path": "/srv/data", "stateClass": "authoritative"}},
+            "services": {"example": service},
+        }
+        for bad in ("/srv/tab\tpath", "/srv/esc\x1b", "/srv/del\x7f"):
+            mutated = json.loads(json.dumps(parent))
+            mutated["storageResources"]["data"]["path"] = bad
+            with self.assertRaisesRegex(v2.ManagedServicesV2Error, "control character"):
+                self.compile(mutated)
+
+    def test_session_workload_defaults_to_isolated_deny_network(self):
+        service = minimal_service()
+        service["workload"] = {"kind": "session"}
+        effective = self.compile({"schemaVersion": 3, "services": {"example": service}})
+        network = effective["services"]["example"]["network"]
+        self.assertEqual(network["mode"], "isolated")
+        self.assertEqual(network["outboundDefault"], "deny")
 
     def test_identity_route_capability_is_service_scoped(self):
         service = minimal_service()

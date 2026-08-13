@@ -295,6 +295,211 @@ class V2ComposeTests(unittest.TestCase):
             ):
                 compose.render_compose_override(effective, "demo", service)
 
+    def test_strict_rejects_host_bind_mount_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            source = pathlib.Path(service["runtime"]["source"])
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    volumes:\n      - /:/host:rw\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            service["sandbox"] = {"mode": "strict"}
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "host volume"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_strict_rejects_host_bind_mount_dict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            source = pathlib.Path(service["runtime"]["source"])
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    volumes:\n      - type: bind\n        source: /etc/shadow\n        target: /shadow\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            service["sandbox"] = {"mode": "strict"}
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "host volume"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_strict_rejects_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            source = pathlib.Path(service["runtime"]["source"])
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    env_file: /etc/shadow\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            service["sandbox"] = {"mode": "strict"}
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "env_file"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    env_file:\n      - /etc/shadow\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "env_file"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_strict_allows_non_host_volume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            source = pathlib.Path(service["runtime"]["source"])
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    volumes:\n      - data:/data\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            service["sandbox"] = {"mode": "strict"}
+            _source, override = self.render(effective, service, root / "apps")
+            self.assertIn("web", override["services"])
+
+    def test_isolated_listener_range_not_duplicated_when_all_ports_already_published(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["network"] = {
+                "mode": "isolated",
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+            service["listeners"] = {
+                "a": {
+                    "protocol": "udp",
+                    "exposure": {"start": 19000, "end": 19002},
+                    "runtimeTarget": "web",
+                    "firewall": True,
+                },
+                "b": {
+                    "protocol": "udp",
+                    "exposure": {"start": 19000, "end": 19002},
+                    "runtimeTarget": "web",
+                    "firewall": True,
+                },
+            }
+            _source, override = self.render(effective, service, root / "apps")
+            ports = override["services"]["web"]["ports"]
+            self.assertEqual(ports.count("19000-19002:19000-19002/udp"), 1)
+            self.assertEqual(len(ports), 1)
+
+    def test_isolated_listener_range_appended_when_some_port_new(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["network"] = {
+                "mode": "isolated",
+                "outboundDefault": "deny",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+            service["listeners"] = {
+                "a": {
+                    "protocol": "tcp",
+                    "exposure": {"port": 19000},
+                    "runtimeTarget": "web",
+                    "firewall": True,
+                },
+                "b": {
+                    "protocol": "tcp",
+                    "exposure": {"start": 19000, "end": 19001},
+                    "runtimeTarget": "web",
+                    "firewall": True,
+                },
+            }
+            _source, override = self.render(effective, service, root / "apps")
+            ports = override["services"]["web"]["ports"]
+            self.assertIn("19000:19000/tcp", ports)
+            self.assertIn("19000-19001:19000-19001/tcp", ports)
+
+    def test_tmpfs_requires_absolute_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["sandbox"] = {"mode": "strict", "tmpfs": [{"path": "relative/path"}]}
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "absolute path"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+            service["sandbox"] = {"mode": "strict", "tmpfs": [{"path": "/tmp/../escape"}]}
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, r"\.\."),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+            service["sandbox"] = {"mode": "strict", "tmpfs": [{"path": "/cache", "sizeBytes": 1024}]}
+            _source, override = self.render(effective, service, root / "apps")
+            self.assertEqual(override["services"]["web"]["volumes"][0]["target"], "/cache")
+
+    def test_duplicate_mount_targets_via_storage_and_tmpfs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["sandbox"] = {"mode": "strict", "tmpfs": [{"path": "/data"}]}
+            service["storage"] = [{"resource": "data", "mountPath": "/data", "access": "write", "target": "web"}]
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "duplicate mount target"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_duplicate_mount_targets_via_storage_and_credential(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            service["storage"] = [{"resource": "data", "mountPath": "/shared", "access": "write", "target": "web"}]
+            service["credentials"] = [{"credential": "token", "use": "file", "mountPath": "/shared", "target": "web"}]
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "duplicate mount target"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_duplicate_mount_targets_app_vs_v2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            source = pathlib.Path(service["runtime"]["source"])
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    volumes:\n      - data:/data\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            service["storage"] = [{"resource": "data", "mountPath": "/data", "access": "write", "target": "web"}]
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "duplicate mount target"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
+    def test_duplicate_mount_targets_within_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, service = self.fixture(root)
+            source = pathlib.Path(service["runtime"]["source"])
+            source.write_text(
+                "services:\n  web:\n    image: example/web:latest\n    volumes:\n      - data:/data\n      - other:/data\n  worker:\n    image: example/worker:latest\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                self.assertRaisesRegex(compose.ComposeProjectionError, "duplicate mount target"),
+            ):
+                compose.render_compose_override(effective, "demo", service)
+
 
 if __name__ == "__main__":
     unittest.main()

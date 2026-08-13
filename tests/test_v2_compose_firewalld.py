@@ -38,7 +38,6 @@ class V2ComposeFirewalldTests(unittest.TestCase):
                 "api": {
                     "protocol": "tcp",
                     "exposure": {"port": 18080},
-                    "targetPort": 8080,
                     "runtimeTarget": "web",
                     "firewall": True,
                 },

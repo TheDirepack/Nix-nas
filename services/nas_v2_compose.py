@@ -47,6 +47,66 @@ _STRICT_SOURCE_FIELDS = frozenset(
 _NETWORK_SOURCE_FIELDS = frozenset({"network_mode", "networks", "ports"})
 
 
+def _is_host_volume_source(volume: Any) -> bool:
+    if isinstance(volume, str):
+        if ":" in volume:
+            source = volume.split(":", 1)[0]
+            return source.startswith("/")
+        return False
+    if isinstance(volume, dict):
+        source = volume.get("source")
+        return isinstance(source, str) and source.startswith("/")
+    return False
+
+
+def _volume_target(volume: Any) -> str | None:
+    if isinstance(volume, str):
+        if ":" not in volume:
+            return volume.strip() or None
+        _source, rest = volume.split(":", 1)
+        target = rest.split(":", 1)[0]
+        return target.strip() or None
+    if isinstance(volume, dict):
+        target = volume.get("target")
+        if isinstance(target, str) and target:
+            return target
+        destination = volume.get("destination")
+        if isinstance(destination, str) and destination:
+            return destination
+    return None
+
+
+def _reject_duplicate_targets(
+    service_id: str,
+    source_services: dict[str, dict[str, Any]],
+    overrides: dict[str, dict[str, Any]],
+) -> None:
+    for name in set(source_services) | set(overrides):
+        seen: dict[str, str] = {}
+        source_volumes = source_services.get(name, {}).get("volumes")
+        if isinstance(source_volumes, list):
+            for volume in source_volumes:
+                target = _volume_target(volume)
+                if target is None:
+                    continue
+                if target in seen:
+                    raise ComposeProjectionError(
+                        f"Compose service {service_id!r} has duplicate mount target {target!r} for container {name!r}"
+                    )
+                seen[target] = "source"
+        override_volumes = overrides.get(name, {}).get("volumes")
+        if isinstance(override_volumes, list):
+            for volume in override_volumes:
+                target = _volume_target(volume)
+                if target is None:
+                    continue
+                if target in seen:
+                    raise ComposeProjectionError(
+                        f"Compose service {service_id!r} has duplicate mount target {target!r} for container {name!r}"
+                    )
+                seen[target] = "override"
+
+
 def _source(service_id: str, service: dict[str, Any]) -> tuple[pathlib.Path, dict[str, dict[str, Any]]]:
     raw = service["runtime"]["source"]
     candidate = pathlib.Path(raw)
@@ -157,12 +217,30 @@ def _apply_sandbox_policy(
                 f"Compose service {service_id!r} source service {name!r} declares security fields that conflict with V2 strict sandboxing: "
                 + ", ".join(conflicts)
             )
+        volumes = source.get("volumes")
+        if isinstance(volumes, list):
+            for volume in volumes:
+                if _is_host_volume_source(volume):
+                    raise ComposeProjectionError(
+                        f"Compose service {service_id!r} source service {name!r} declares host volume {volume!r} that conflicts with V2 strict sandboxing"
+                    )
+        if "env_file" in source:
+            raise ComposeProjectionError(
+                f"Compose service {service_id!r} source service {name!r} declares env_file that conflicts with V2 strict sandboxing"
+            )
 
     read_only = sandbox.get("readOnlyRoot", True)
     no_new_privileges = sandbox.get("noNewPrivileges", True)
     cap_add = [_compose_capability(value) for value in sandbox.get("addCapabilities", [])]
     cap_drop = [_compose_capability(value) for value in sandbox.get("dropCapabilities", [])]
     tmpfs = sandbox.get("tmpfs", [])
+
+    for entry in tmpfs:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str) or not pathlib.PurePosixPath(path).is_absolute():
+            raise ComposeProjectionError(f"Compose service {service_id!r} tmpfs path {path!r} must be an absolute path")
+        if ".." in pathlib.PurePosixPath(path).parts:
+            raise ComposeProjectionError(f"Compose service {service_id!r} tmpfs path {path!r} must not contain '..'")
 
     for name in source_services:
         destination = overrides.setdefault(name, {})
@@ -270,6 +348,7 @@ def _apply_isolated_ingress(
             end = exposure.get("end")
             if not isinstance(start, int) or not isinstance(end, int) or end < start:
                 raise ComposeProjectionError(f"isolated Compose listener {listener_id!r} has an invalid port range")
+            new_ports = False
             for port in range(start, end + 1):
                 key = (protocol, port)
                 previous = published.get(key)
@@ -278,8 +357,11 @@ def _apply_isolated_ingress(
                     raise ComposeProjectionError(
                         f"isolated Compose listener {listener_id!r} conflicts with an existing {protocol}/{port} publication"
                     )
+                if previous is None:
+                    new_ports = True
                 published[key] = mapping
-            destination.setdefault("ports", []).append(f"{start}-{end}:{start}-{end}/{protocol}")
+            if new_ports:
+                destination.setdefault("ports", []).append(f"{start}-{end}:{start}-{end}/{protocol}")
 
     routes = service.get("routes", {})
     if isinstance(routes, dict):
@@ -384,6 +466,8 @@ def render_compose_override(
             destination.setdefault("env_file", []).append(credential["path"])
         else:
             raise ComposeProjectionError(f"Compose credential use {use!r} is not implemented")
+
+    _reject_duplicate_targets(service_id, source_services, overrides)
 
     _apply_accelerators(service_id, service, service_names, overrides)
 

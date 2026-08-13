@@ -74,7 +74,16 @@ def _probe_http(probe: dict[str, Any]) -> bool:
         raise ReadinessError("http readiness probe requires an http(s) URL")
     if parsed.username is not None or parsed.password is not None or parsed.fragment:
         raise ReadinessError("http readiness URL may not contain credentials or a fragment")
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        raw_port = parsed.port
+    except ValueError as exc:
+        raise ReadinessError(f"invalid URL port in {url!r}: {exc}") from exc
+    if raw_port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    else:
+        if not 1 <= raw_port <= 65535:
+            raise ReadinessError(f"invalid URL port in {url!r}: port {raw_port} out of range")
+        port = raw_port
     target = parsed.path or "/"
     if parsed.query:
         target += "?" + parsed.query

@@ -65,9 +65,13 @@ class RevisionTests(unittest.TestCase):
             p = root / "services.yaml"
             # patch control's DESIRED_PATH and RECONCILE_UNIT
             orig_desired = control.DESIRED_PATH
+            orig_schema = control.SCHEMA_PATH
             orig_reconcile = control.RECONCILE_UNIT
+            orig_load_platform = editor.load_platform_capabilities
             try:
                 control.DESIRED_PATH = p
+                control.SCHEMA_PATH = SCHEMA
+                editor.load_platform_capabilities = lambda _path: set()  # type: ignore[method-assign]
                 # use a fake systemctl that fails
                 control.RECONCILE_UNIT = "fake-reconcile-unit"
 
@@ -87,7 +91,9 @@ class RevisionTests(unittest.TestCase):
                 self.assertEqual(p.read_text(encoding="utf-8"), yaml3)
             finally:
                 control.DESIRED_PATH = orig_desired
+                control.SCHEMA_PATH = orig_schema
                 control.RECONCILE_UNIT = orig_reconcile
+                editor.load_platform_capabilities = orig_load_platform  # type: ignore[method-assign]
 
 
 if __name__ == "__main__":

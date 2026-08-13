@@ -10,6 +10,7 @@ native systemd lease/timer behavior.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -148,18 +149,23 @@ def _reconcile() -> None:
 
 def _rollback(previous: str, attempted: str | None, original: Exception) -> None:
     try:
-        # Only rollback if the authority is still the attempted generation B.
-        # If another writer has already installed C, do not overwrite C.
         if attempted is not None:
+            expected_revision = hashlib.sha256(attempted.encode("utf-8")).hexdigest()
             try:
-                current = DESIRED_PATH.read_text(encoding="utf-8")
-            except OSError:
-                current = None
-            if current is not None and current != attempted:
-                raise ControlError(
-                    f"Managed Services V2 update failed but authority was already superseded; original={original}"
-                ) from original
-        replace_document(previous, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
+                replace_document(
+                    previous,
+                    desired_path=DESIRED_PATH,
+                    schema_path=SCHEMA_PATH,
+                    expected_revision=expected_revision,
+                )
+            except ManagedServicesEditorError as exc:
+                if "revision conflict" in str(exc).lower() or "expected" in str(exc).lower():
+                    raise ControlError(
+                        f"Managed Services V2 update failed but authority was already superseded; original={original}"
+                    ) from original
+                raise
+        else:
+            replace_document(previous, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
         _reconcile()
     except ControlError:
         raise

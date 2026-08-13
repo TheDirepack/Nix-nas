@@ -233,12 +233,82 @@ class V2FirewalldTests(unittest.TestCase):
                 plan=root / "plan.json",
             )
             original = apply_mod.compile_paths
+            original_inner = getattr(apply_mod, "_compile_paths_inner", None)
             apply_mod.compile_paths = lambda _paths: (self.effective(), {"schemaVersion": 1})
+            if original_inner is not None:
+                apply_mod._compile_paths_inner = lambda _paths: (self.effective(), {"schemaVersion": 1})  # type: ignore[attr-defined]
             try:
                 with self.assertRaisesRegex(SystemdProjectionError, "no firewalld projection"):
                     apply_mod.apply(paths)
             finally:
                 apply_mod.compile_paths = original
+                if original_inner is not None:
+                    apply_mod._compile_paths_inner = original_inner  # type: ignore[attr-defined]
+
+    def test_isolated_listener_target_port_fails_closed(self):
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "isolated": {
+                    "managed": True,
+                    "enabled": True,
+                    "runtime": {"type": "oci"},
+                    "network": {
+                        "mode": "isolated",
+                        "outboundDefault": "deny",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
+                    "listeners": {
+                        "web": {
+                            "protocol": "tcp",
+                            "exposure": {"port": 8080},
+                            "targetPort": 18080,
+                            "firewall": True,
+                        },
+                    },
+                }
+            },
+        }
+        with self.assertRaisesRegex(firewalld.FirewalldProjectionError, "targetPort"):
+            firewalld.compile_projection(effective, lan_zone="trusted")
+
+    def test_isolated_listener_and_route_policies_use_drop(self):
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "demo": {
+                    "managed": True,
+                    "enabled": True,
+                    "runtime": {"type": "oci"},
+                    "network": {
+                        "mode": "isolated",
+                        "outboundDefault": "deny",
+                        "lanAccess": False,
+                        "allowedHostPorts": [],
+                        "allowedEgress": [],
+                    },
+                    "listeners": {
+                        "web": {"protocol": "tcp", "exposure": {"port": 8080}, "firewall": True},
+                    },
+                    "routes": {
+                        "web": {
+                            "target": {"type": "http", "host": "127.0.0.1", "port": 8081},
+                            "exposure": {"type": "path", "paths": ["/"]},
+                            "auth": {"mode": "public"},
+                        }
+                    },
+                }
+            },
+        }
+        files, _ = firewalld.compile_projection(effective, lan_zone="trusted")
+        listener = files[f"policies/{firewalld.listener_policy_name('demo')}.xml"].decode()
+        route = files[f"policies/{firewalld.route_policy_name('demo')}.xml"].decode()
+        self.assertIn('target="DROP"', listener)
+        self.assertNotIn('target="CONTINUE"', listener)
+        self.assertIn('target="DROP"', route)
+        self.assertNotIn('target="CONTINUE"', route)
 
 
 if __name__ == "__main__":

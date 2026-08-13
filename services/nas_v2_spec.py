@@ -31,6 +31,7 @@ DEFAULT_EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/n
 
 SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 CAPABILITY_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+SYSTEMD_UNIT_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,255}\.(?:service|timer|target|path|socket|mount)$")
 APP_ROOT = pathlib.PurePosixPath("/var/lib/nas-control/apps")
 SECRET_ROOT = pathlib.PurePosixPath("/run/nas-secrets")
 
@@ -152,7 +153,7 @@ def validate_schema(document: dict[str, Any], schema: dict[str, Any]) -> None:
 
 
 def _safe_absolute_path(value: str, *, path: str) -> pathlib.PurePosixPath:
-    if any(character in value for character in ("\x00", "\n", "\r")):
+    if any(ord(character) < 0x20 or character == "\x7f" for character in value):
         raise ManagedServicesV2Error("Path contains a forbidden control character", path=path, code="unsafe-path")
     candidate = pathlib.PurePosixPath(value)
     if not candidate.is_absolute() or ".." in candidate.parts:
@@ -270,6 +271,11 @@ def _normalize_service(service: dict[str, Any]) -> None:
 
     if "network" in service:
         _normalize_network(service["network"])
+    elif workload.get("kind") == "session":
+        policy = service.setdefault("network", {})
+        policy.setdefault("mode", "isolated")
+        policy.setdefault("outboundDefault", "deny")
+        _normalize_network(policy)
 
     for dependency in service["dependencies"]:
         dependency.setdefault("condition", "ready")
@@ -361,6 +367,14 @@ def _validate_runtime_paths(service_id: str, service: dict[str, Any]) -> None:
                 path=f"$.services.{service_id}.runtime.command[0]",
                 code="runtime-command",
             )
+    elif runtime_type == "systemd":
+        unit = runtime["unit"]
+        if not SYSTEMD_UNIT_RE.fullmatch(unit):
+            raise ManagedServicesV2Error(
+                "systemd runtime unit must name a .service, .timer, .target, or .path unit without control characters",
+                path=f"$.services.{service_id}.runtime.unit",
+                code="runtime-unit",
+            )
 
 
 def _validate_dependency_graph(services: dict[str, dict[str, Any]]) -> None:
@@ -394,6 +408,23 @@ def _listener_ports(exposure: dict[str, Any]) -> range:
     if "port" in exposure:
         return range(exposure["port"], exposure["port"] + 1)
     return range(exposure["start"], exposure["end"] + 1)
+
+
+def _routes_conflict(first: str, second: str) -> bool:
+    """True when two path exposures can shadow one another in Caddy.
+
+    Caddy matches a path route with ``path /x /x/*``; ``/api`` therefore
+    matches every request that ``/api/users`` does. Treat '/' as the root
+    that shadows every other path, compare by leading path segments, and
+    ignore redundant `/` characters within each candidate.
+    """
+    first = first.rstrip("/") or "/"
+    second = second.rstrip("/") or "/"
+    if first == "/" or second == "/":
+        return True
+    first_parts = first.strip("/").split("/")
+    second_parts = second.strip("/").split("/")
+    return first_parts[: len(second_parts)] == second_parts or second_parts[: len(first_parts)] == first_parts
 
 
 def semantic_validate(
@@ -655,6 +686,13 @@ def semantic_validate(
                             path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
                             code="route-conflict",
                         )
+                    for registered_path, registered_owner in route_paths.items():
+                        if _routes_conflict(route_path, registered_path):
+                            raise ManagedServicesV2Error(
+                                f"Route path {route_path!r} overlaps {registered_path!r} already used by {registered_owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
+                                code="route-overlap",
+                            )
                     route_paths[route_path] = f"{service_id}:{route_id}"
             else:
                 for hostname in exposure["hostnames"]:

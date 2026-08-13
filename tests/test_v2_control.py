@@ -149,6 +149,64 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             with self.assertRaisesRegex(control.ControlError, "must contain an object"):
                 control.replace_json_from_source(str(source_path))
 
+    def test_rollback_uses_expected_revision_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            desired_path = pathlib.Path(tmp) / "services.yaml"
+            attempted = "schemaVersion: 3\nservices:\n  extra: {}\n"
+            desired_path.write_text(attempted, encoding="utf-8")
+
+            def reconcile_fail() -> None:
+                raise control.ControlError("activation failed")
+
+            import hashlib
+
+            expected_revision = hashlib.sha256(attempted.encode("utf-8")).hexdigest()
+            with (
+                mock.patch.object(control, "DESIRED_PATH", desired_path),
+                mock.patch.object(control, "replace_document") as replace,
+                mock.patch.object(control, "_reconcile", side_effect=reconcile_fail),
+                mock.patch.object(control, "set_service_mode", return_value={"ok": True}),
+                mock.patch.object(control, "status", return_value={"ok": True}),
+            ):
+                replace.side_effect = lambda *a, **k: (
+                    self.assertEqual(k.get("expected_revision"), expected_revision) or {"ok": True}
+                )
+                with self.assertRaises(control.ControlError):
+                    control.set_mode("demo", "always")
+                self.assertTrue(replace.call_count >= 1)
+                _, kwargs = replace.call_args
+                self.assertEqual(kwargs.get("expected_revision"), expected_revision)
+
+    def test_rollback_superseded_is_detected_via_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            desired_path = pathlib.Path(tmp) / "services.yaml"
+            previous = "schemaVersion: 3\nservices: {}\n"
+            attempted = "schemaVersion: 3\nservices:\n  a: {}\n"
+            superseded = "schemaVersion: 3\nservices:\n  b: {}\n"
+            desired_path.write_text(attempted, encoding="utf-8")
+
+            def fake_replace_document(text, *, desired_path, schema_path, expected_revision=None):
+                # Simulate superseded: current on disk is superseded, so revision mismatch
+                import hashlib
+
+                cur = hashlib.sha256(superseded.encode("utf-8")).hexdigest()
+                if expected_revision is not None and expected_revision != cur:
+                    # But our attempted revision is hash(attempted), which != hash(superseded)
+                    raise control.ManagedServicesEditorError(
+                        f"Desired-state revision conflict: expected {expected_revision}, got {cur}"
+                    )
+                return {"ok": True}
+
+            # Now make desired_path actually contain superseded before rollback
+            desired_path.write_text(superseded, encoding="utf-8")
+            with (
+                mock.patch.object(control, "DESIRED_PATH", desired_path),
+                mock.patch.object(control, "replace_document", side_effect=fake_replace_document),
+                mock.patch.object(control, "_reconcile", side_effect=control.ControlError("fail")),
+            ):
+                with self.assertRaisesRegex(control.ControlError, "already superseded"):
+                    control._rollback(previous, attempted, control.ControlError("original"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -145,6 +145,81 @@ services:
             self.assertFalse(paths.effective.exists())
             self.assertFalse(paths.plan.exists())
 
+    def test_apply_writes_plan_with_changed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            schema = root / "schema.json"
+            schema.write_text(SCHEMA.read_text(encoding="utf-8"), encoding="utf-8")
+            desired = root / "services.yaml"
+            desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            effective = root / "effective.json"
+            plan_path = root / "plan.json"
+            paths = v2apply.ApplyPaths(
+                desired=desired,
+                schema=schema,
+                platform=None,
+                effective=effective,
+                plan=plan_path,
+            )
+            result = v2apply.apply(paths)
+            self.assertIn("changedFiles", result)
+            on_disk = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(on_disk.get("changedFiles"), result["changedFiles"])
+            self.assertTrue(any(str(plan_path) in f for f in result["changedFiles"]))
+
+    def test_save_and_apply_preserves_existing_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            schema = root / "schema.json"
+            schema.write_text(SCHEMA.read_text(encoding="utf-8"), encoding="utf-8")
+            desired = root / "services.yaml"
+            desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            desired.chmod(0o600)
+            paths = v2apply.ApplyPaths(
+                desired=desired,
+                schema=schema,
+                platform=None,
+                effective=root / "effective.json",
+                plan=root / "plan.json",
+            )
+            text = "schemaVersion: 3\nservices:\n  demo:\n    name: Demo\n    workload:\n      kind: daemon\n    runtime:\n      type: systemd\n      unit: demo.service\n"
+            v2apply.save_and_apply(text, paths)
+            self.assertEqual(oct(desired.stat().st_mode & 0o777), oct(0o600))
+
+    def test_compile_paths_and_apply_hold_authority_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            schema = root / "schema.json"
+            schema.write_text(SCHEMA.read_text(encoding="utf-8"), encoding="utf-8")
+            desired = root / "services.yaml"
+            desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            paths = v2apply.ApplyPaths(
+                desired=desired,
+                schema=schema,
+                platform=None,
+                effective=root / "effective.json",
+                plan=root / "plan.json",
+            )
+            import unittest.mock as mock
+
+            with mock.patch("nas_v2_apply.authority_lock") as mock_lock:
+                mock_lock.return_value.__enter__ = mock.Mock(return_value=None)
+                mock_lock.return_value.__exit__ = mock.Mock(return_value=False)
+                # authority_lock is used as context manager, patch needs to be CM
+                from contextlib import contextmanager
+
+                @contextmanager
+                def fake_lock(_path):
+                    mock_lock(_path)
+                    yield
+
+                with mock.patch("nas_v2_apply.authority_lock", fake_lock):
+                    v2apply.compile_paths(paths)
+                    self.assertTrue(mock_lock.called)
+                    mock_lock.reset_mock()
+                    v2apply.apply(paths)
+                    self.assertTrue(mock_lock.called)
+
 
 if __name__ == "__main__":
     unittest.main()

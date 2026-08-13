@@ -25,12 +25,12 @@ def load_descriptor(path: pathlib.Path) -> dict[str, Any]:
     return value
 
 
-def validate_descriptor(value: dict[str, Any]) -> tuple[list[str], str | None, dict[str, str]]:
+def validate_descriptor(value: dict[str, Any]) -> tuple[list[str], str | None]:
     command = value.get("command")
     if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
         raise ExecRunnerError("exec descriptor command must be a non-empty string array")
     executable = pathlib.PurePosixPath(command[0])
-    if not executable.is_absolute() or ".." in executable.parts:
+    if command[0] == "/" or str(executable) == "/" or not executable.is_absolute() or ".." in executable.parts:
         raise ExecRunnerError("exec descriptor executable must be an absolute safe path")
 
     working_directory = value.get("workingDirectory")
@@ -41,27 +41,14 @@ def validate_descriptor(value: dict[str, Any]) -> tuple[list[str], str | None, d
         if not directory.is_absolute() or ".." in directory.parts:
             raise ExecRunnerError("workingDirectory must be an absolute safe path")
 
-    environment = value.get("environment", {})
-    if not isinstance(environment, dict):
-        raise ExecRunnerError("environment must be an object")
-    validated_environment: dict[str, str] = {}
-    for name, item in environment.items():
-        if not isinstance(name, str) or not name or "=" in name or "\x00" in name:
-            raise ExecRunnerError(f"invalid environment variable name {name!r}")
-        if not isinstance(item, str) or "\x00" in item:
-            raise ExecRunnerError(f"invalid environment value for {name!r}")
-        validated_environment[name] = item
-
-    return command, working_directory, validated_environment
+    return command, working_directory
 
 
 def run_descriptor(value: dict[str, Any]) -> None:
-    command, working_directory, configured_environment = validate_descriptor(value)
+    command, working_directory = validate_descriptor(value)
     if working_directory is not None:
         os.chdir(working_directory)
-    environment = os.environ.copy()
-    environment.update(configured_environment)
-    os.execve(command[0], command, environment)
+    os.execve(command[0], command, os.environ.copy())
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -191,6 +191,20 @@ def _identity_lines(runtime: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _environment_lines(runtime: dict[str, Any]) -> list[str]:
+    environment = runtime.get("environment", {})
+    if not isinstance(environment, dict):
+        raise SystemdProjectionError("environment must be an object")
+    lines: list[str] = []
+    for name, value in sorted(environment.items()):
+        if not isinstance(name, str) or not name or "=" in name or "\x00" in name or "\n" in name or "\r" in name:
+            raise SystemdProjectionError(f"invalid environment variable name {name!r}")
+        if not isinstance(value, str) or "\x00" in value or "\n" in value or "\r" in value:
+            raise SystemdProjectionError(f"invalid environment value for {name!r}")
+        lines.append(f"Environment={_quote(f'{name}={value}')}")
+    return lines
+
+
 def _attachment_lines(effective: dict[str, Any], service: dict[str, Any]) -> list[str]:
     try:
         return attachment_lines(effective, service)
@@ -225,11 +239,14 @@ def _exec_unit(
         "Type=oneshot" if kind == "job" else "Type=simple",
         f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config {_quote(str(descriptor_path))}",
         *_identity_lines(runtime),
+        *_environment_lines(runtime),
         *_resource_lines(service),
         *_sandbox_lines(service),
         *_attachment_lines(effective, service),
     ]
     restart = runtime["restart"]
+    if _is_managed_on_demand(service):
+        restart = "no"
     if kind == "job" and restart == "always":
         raise SystemdProjectionError("job exec runtime may not use restart=always")
     if restart != "no":
@@ -289,7 +306,6 @@ def _python_exec_descriptor(service_id: str, runtime: dict[str, Any]) -> dict[st
     return {
         "command": command,
         "workingDirectory": runtime.get("workingDirectory", str(APP_ROOT / service_id)),
-        "environment": runtime["environment"],
     }
 
 
@@ -319,6 +335,7 @@ def _python_unit(
         f"ExecStartPre={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_python_prepare.py'))} --config {_quote(str(environment_descriptor_path))}",
         f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config {_quote(str(exec_descriptor_path))}",
         *_identity_lines(runtime),
+        *_environment_lines(runtime),
         f"StateDirectory={state_directory}",
         "StateDirectoryMode=0750",
         f"CacheDirectory={cache_directory}",
@@ -329,6 +346,8 @@ def _python_unit(
         *_attachment_lines(effective, service),
     ]
     restart = runtime["restart"]
+    if _is_managed_on_demand(service):
+        restart = "no"
     if kind == "job" and restart == "always":
         raise SystemdProjectionError("job Python runtime may not use restart=always")
     if restart != "no":
@@ -595,7 +614,6 @@ def generate_projection(
             descriptor = {
                 "command": runtime["command"],
                 "workingDirectory": runtime.get("workingDirectory"),
-                "environment": runtime["environment"],
             }
             descriptor_path = descriptor_dir / f"{service_id}.exec.json"
             files[descriptor_path] = _json_bytes(descriptor)

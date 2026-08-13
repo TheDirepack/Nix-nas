@@ -63,9 +63,98 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                     }
                 }
                 rendered = caddy.generate_caddyfile(self.compile(service))
-                self.assertNotIn("X-Authentik-Username", rendered)
                 self.assertNotIn("forward_auth 127.0.0.1:9000", rendered)
+                self.assertNotIn("copy_headers", rendered)
                 self.assertIn("reverse_proxy 127.0.0.1:8080", rendered)
+
+    def test_public_routes_strip_all_identity_headers(self):
+        service = self.base_service()
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/demo/"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service))
+        for header in caddy.IDENTITY_HEADERS:
+            with self.subTest(header=header):
+                self.assertIn(f"request_header -{header}", rendered)
+        # Ensure stripping happens before proxy and no auth injection occurs
+        self.assertLess(rendered.index("request_header -Remote-User"), rendered.index("reverse_proxy"))
+        self.assertNotIn("Remote-User {http.request.header", rendered)
+
+    def test_upstream_routes_strip_all_identity_headers(self):
+        service = self.base_service()
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/demo/"]},
+                "auth": {"mode": "upstream"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service))
+        for header in caddy.IDENTITY_HEADERS:
+            with self.subTest(header=header):
+                self.assertIn(f"request_header -{header}", rendered)
+        self.assertNotIn("forward_auth", rendered)
+
+    def test_identity_route_strips_full_corpus(self):
+        service = self.base_service()
+        service["authorization"] = {"capabilities": [{"id": "admin", "title": "Administration"}]}
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/demo/"]},
+                "auth": {"mode": "identity", "capability": "admin"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service))
+        expected_headers = (
+            "Remote-User",
+            "Remote-Groups",
+            "Remote-Name",
+            "Remote-Email",
+            "Remote-UID",
+            "Remote-Role",
+            "X-Authentik-Username",
+            "X-Authentik-Groups",
+            "X-Authentik-Name",
+            "X-Authentik-Email",
+            "X-Authentik-Uid",
+            "X-Authentik-Jwt",
+            "X-Authentik-Entitlements",
+            "X-Authentik-Meta-Outpost",
+            "X-Authentik-Meta-App",
+            "X-Authentik-Meta-Provider",
+            "X-Authentik-Meta-User",
+            "X-Authentik-Meta-Is-Superuser",
+            "X-Authentik-Role",
+        )
+        for header in expected_headers:
+            with self.subTest(header=header):
+                self.assertIn(f"request_header -{header}", rendered)
+        # Corpus must match module constant
+        self.assertEqual(set(caddy.IDENTITY_HEADERS), set(expected_headers))
+        self.assertEqual(caddy.TRUSTED_IDENTITY_HEADERS, frozenset(expected_headers))
+        # Stripping must occur before forward_auth
+        self.assertLess(rendered.index("request_header -Remote-User"), rendered.index("forward_auth"))
+
+    def test_wake_socket_rejects_newline_and_brace(self):
+        service = self.base_service()
+        service["workload"] = {"kind": "daemon", "activation": "on-demand", "idleSeconds": 60}
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/demo/"]},
+                "auth": {"mode": "identity"},
+            }
+        }
+        effective = self.compile(service)
+        for bad in ("/run/wake\n.sock", "/run/wake\r.sock", "/run/wake\x00.sock", "/run/wake{.sock", "/run/wake}.sock"):
+            with self.subTest(bad=repr(bad)):
+                with self.assertRaisesRegex(caddy.CaddyProjectionError, "absolute safe path"):
+                    caddy.generate_caddyfile(effective, wake_socket=bad)
 
     def test_on_demand_route_requires_new_wake_boundary(self):
         service = self.base_service()

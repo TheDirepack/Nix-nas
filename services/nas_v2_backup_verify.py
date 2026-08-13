@@ -75,7 +75,31 @@ def _resource_candidates(root: pathlib.Path, resource: dict[str, Any]) -> list[p
     if snapshot_root.is_symlink():
         raise BackupVerificationError(f"restored ZFS snapshot root for {resource_id!r} must not be a symlink")
     try:
-        return sorted(path for path in snapshot_root.iterdir() if not path.is_symlink() and path.is_dir())
+        candidates = sorted(
+            path
+            for path in snapshot_root.iterdir()
+            if not path.is_symlink() and path.is_dir() and path.name.startswith("nas-v2-restic-")
+        )
+        # Require at least one candidate to be non-empty to avoid accepting empty restores.
+        filtered: list[pathlib.Path] = []
+        for candidate in candidates:
+            try:
+                if candidate.is_symlink():
+                    continue
+                has_content = False
+                for _child in candidate.iterdir():
+                    has_content = True
+                    break
+                if has_content:
+                    filtered.append(candidate)
+            except OSError as exc:
+                raise BackupVerificationError(
+                    f"unable to inspect restored ZFS snapshot {candidate} for {resource_id!r}: {exc}"
+                ) from exc
+        # If candidates exist but none are non-empty, treat as missing/invalid restore.
+        if candidates and not filtered:
+            return []
+        return filtered
     except FileNotFoundError:
         return []
     except OSError as exc:
@@ -103,7 +127,17 @@ def _native_dump_files(path: pathlib.Path) -> list[pathlib.Path]:
     return sorted(files)
 
 
-def _looks_like_sqlite(path: pathlib.Path) -> bool:
+def _assert_within_restore_root(path: pathlib.Path, restore_root: pathlib.Path) -> None:
+    resolved_root = restore_root.resolve()
+    resolved_path = path.resolve()
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise BackupVerificationError(f"restored file {path} escapes verification root {restore_root}") from exc
+
+
+def _looks_like_sqlite(path: pathlib.Path, *, restore_root: pathlib.Path) -> bool:
+    _assert_within_restore_root(path, restore_root)
     try:
         with path.open("rb") as handle:
             return handle.read(16) == b"SQLite format 3\x00"
@@ -111,7 +145,8 @@ def _looks_like_sqlite(path: pathlib.Path) -> bool:
         raise BackupVerificationError(f"unable to inspect restored file {path}: {exc}") from exc
 
 
-def _looks_like_postgresql_custom_dump(path: pathlib.Path) -> bool:
+def _looks_like_postgresql_custom_dump(path: pathlib.Path, *, restore_root: pathlib.Path) -> bool:
+    _assert_within_restore_root(path, restore_root)
     try:
         with path.open("rb") as handle:
             return handle.read(5) == b"PGDMP"
@@ -119,7 +154,8 @@ def _looks_like_postgresql_custom_dump(path: pathlib.Path) -> bool:
         raise BackupVerificationError(f"unable to inspect restored file {path}: {exc}") from exc
 
 
-def _verify_sqlite(path: pathlib.Path) -> None:
+def _verify_sqlite(path: pathlib.Path, *, restore_root: pathlib.Path) -> None:
+    _assert_within_restore_root(path, restore_root)
     try:
         uri = f"{path.resolve().as_uri()}?mode=ro"
         with sqlite3.connect(uri, uri=True) as database:
@@ -131,7 +167,8 @@ def _verify_sqlite(path: pathlib.Path) -> None:
         raise BackupVerificationError(f"SQLite integrity verification failed for {path}: {detail}")
 
 
-def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str) -> None:
+def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str, restore_root: pathlib.Path) -> None:
+    _assert_within_restore_root(path, restore_root)
     try:
         result = subprocess.run(
             [pg_restore_bin, "--list", str(path)],
@@ -146,15 +183,17 @@ def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str) -
         raise BackupVerificationError(f"PostgreSQL custom dump verification failed for {path}: {detail}")
 
 
-def _verify_native_dump_files(files: list[pathlib.Path], *, pg_restore_bin: str) -> dict[str, int]:
+def _verify_native_dump_files(
+    files: list[pathlib.Path], *, pg_restore_bin: str, restore_root: pathlib.Path
+) -> dict[str, int]:
     checks = {"sqlite": 0, "postgresqlCustom": 0}
     for path in files:
-        if _looks_like_sqlite(path):
-            _verify_sqlite(path)
+        if _looks_like_sqlite(path, restore_root=restore_root):
+            _verify_sqlite(path, restore_root=restore_root)
             checks["sqlite"] += 1
             continue
-        if _looks_like_postgresql_custom_dump(path):
-            _verify_postgresql_custom_dump(path, pg_restore_bin=pg_restore_bin)
+        if _looks_like_postgresql_custom_dump(path, restore_root=restore_root):
+            _verify_postgresql_custom_dump(path, pg_restore_bin=pg_restore_bin, restore_root=restore_root)
             checks["postgresqlCustom"] += 1
     return checks
 
@@ -185,11 +224,13 @@ def verify(*, inventory_path: pathlib.Path, restore_root: pathlib.Path, pg_resto
         if consistency == "native-dump":
             for candidate in candidates:
                 files.extend(_native_dump_files(candidate))
+            for candidate_file in files:
+                _assert_within_restore_root(candidate_file, restore_root)
             if not any(path.stat().st_size > 0 for path in files):
                 raise BackupVerificationError(
                     f"native-dump resource {resource_id!r} restored no non-empty artifact files"
                 )
-            checks = _verify_native_dump_files(files, pg_restore_bin=pg_restore_bin)
+            checks = _verify_native_dump_files(files, pg_restore_bin=pg_restore_bin, restore_root=restore_root)
 
         verified.append(
             {

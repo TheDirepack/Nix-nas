@@ -169,11 +169,11 @@ def _listener_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
         exposure = listener.get("exposure")
         if protocol not in {"tcp", "udp"} or not isinstance(exposure, dict):
             raise FirewalldProjectionError("compiled listener is invalid")
+        if "targetPort" in listener:
+            raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
         if isinstance(exposure.get("port"), int):
             port = str(exposure["port"])
         elif isinstance(exposure.get("start"), int) and isinstance(exposure.get("end"), int):
-            if "targetPort" in listener:
-                raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
             port = f"{exposure['start']}-{exposure['end']}"
         else:
             raise FirewalldProjectionError("compiled listener exposure is invalid")
@@ -243,7 +243,7 @@ def _allow_policy_xml(
     forward_ports: list[tuple[str, str, str]] | None = None,
 ) -> bytes:
     lines = [
-        '<policy target="CONTINUE" priority="-50">',
+        '<policy target="DROP" priority="-50">',
         f"  <ingress-zone name={quoteattr(ingress_zone)}/>",
         f"  <egress-zone name={quoteattr(egress_zone)}/>",
         f"  <short>V2 {escape(label)} {escape(service_id)}</short>",
@@ -281,10 +281,10 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
         mode = policy.get("mode", "host")
         runtime = service.get("runtime")
         runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
-        listeners = _listener_ports(service)
 
         generated: dict[str, bytes] = {}
         if mode == "isolated":
+            listeners = _listener_ports(service)
             if not service.get("managed", True):
                 raise FirewalldProjectionError(
                     f"unmanaged isolated service {service_id!r} has no V2-owned bridge to receive firewalld policy"
@@ -333,6 +333,7 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
                     label="listener",
                 )
         elif mode == "none":
+            listeners = _listener_ports(service)
             if listeners:
                 raise FirewalldProjectionError(f"network=none service {service_id!r} cannot expose listeners")
         else:

@@ -414,6 +414,126 @@ class V2SystemdProjectionTests(unittest.TestCase):
             ['LoadCredential="token:/run/nas-secrets/demo/token"'],
         )
 
+    def test_exec_environment_emitted_via_unit_not_persisted(self):
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {
+                        "type": "exec",
+                        "command": ["/bin/true"],
+                        "environment": {"SECRET_TOKEN": "super-secret-value", "NORMAL": "hello world"},
+                    },
+                }
+            }
+        )
+        files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        descriptor = json.loads(files[pathlib.Path("/run/nas-control/systemd/descriptors/demo.exec.json")].decode())
+        self.assertNotIn("environment", descriptor)
+        self.assertNotIn("super-secret-value", json.dumps(descriptor))
+        self.assertIn('Environment="NORMAL=hello world"', unit)
+        self.assertIn('Environment="SECRET_TOKEN=super-secret-value"', unit)
+
+    def test_python_environment_emitted_via_unit_not_persisted(self):
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo Python",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {
+                        "type": "python",
+                        "interpreter": "/run/current-system/sw/bin/python3",
+                        "dependencies": {"requireHashes": False},
+                        "entrypoint": {"module": "demo.server"},
+                        "environment": {"SECRET": "s3cr3t"},
+                    },
+                }
+            }
+        )
+        files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        exec_descriptor = json.loads(
+            files[pathlib.Path("/run/nas-control/systemd/descriptors/demo.python-exec.json")].decode()
+        )
+        self.assertNotIn("environment", exec_descriptor)
+        self.assertNotIn("s3cr3t", json.dumps(exec_descriptor))
+        self.assertIn('Environment="SECRET=s3cr3t"', unit)
+
+    def test_on_demand_daemon_forces_restart_no(self):
+        for runtime in [
+            {"type": "exec", "command": ["/bin/true"], "restart": "always"},
+            {"type": "exec", "command": ["/bin/true"], "restart": "on-failure"},
+        ]:
+            effective = self.compile(
+                {
+                    "demo": {
+                        "name": "Demo",
+                        "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30},
+                        "runtime": runtime,
+                    }
+                }
+            )
+            files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+            unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+            self.assertNotIn("Restart=always", unit)
+            self.assertNotIn("Restart=on-failure", unit)
+            self.assertNotIn("Restart=", unit)
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo Python",
+                    "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 45},
+                    "runtime": {
+                        "type": "python",
+                        "interpreter": "/run/current-system/sw/bin/python3",
+                        "dependencies": {"requireHashes": False},
+                        "entrypoint": {"module": "demo.server"},
+                        "restart": "always",
+                    },
+                }
+            }
+        )
+        files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        self.assertNotIn("Restart=always", unit)
+        self.assertNotIn("Restart=", unit)
+        # persistent daemon should still respect restart
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "exec", "command": ["/bin/true"], "restart": "always"},
+                }
+            }
+        )
+        files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        self.assertIn("Restart=always", unit)
+
+    def test_environment_file_credential_references_secret_path_not_value(self):
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "exec", "command": ["/bin/true"]},
+                    "credentials": [{"credential": "env", "use": "environment-file"}],
+                }
+            },
+            credentials={"env": {"path": "/run/nas-secrets/demo/app.env", "required": True}},
+        )
+        files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        self.assertIn('EnvironmentFile="/run/nas-secrets/demo/app.env"', unit)
+        self.assertNotIn("super-secret-value", unit)
+        for line in unit.splitlines():
+            if "app.env" in line:
+                self.assertIn("EnvironmentFile=", line)
+                self.assertNotIn("Environment=", line.replace("EnvironmentFile=", ""))
+
     def test_systemd_analyze_validation_failure_is_fatal(self):
         effective = self.compile(
             {

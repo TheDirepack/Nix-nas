@@ -40,6 +40,15 @@ def _write_atomic(path: pathlib.Path, data: bytes, mode: int) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _safe_absolute_path(value: Any, *, label: str) -> str:
+    if not isinstance(value, str) or any(character in value for character in ("\x00", "\r", "\n")):
+        raise BackupRuntimeError(f"{label} is not a safe absolute path")
+    candidate = pathlib.PurePosixPath(value)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        raise BackupRuntimeError(f"{label} is not a safe absolute path")
+    return value
+
+
 def _run(argv: list[str]) -> str:
     result = subprocess.run(argv, check=False, capture_output=True, text=True)
     if result.returncode != 0:
@@ -74,10 +83,24 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
     artifact = pathlib.Path(artifact_path)
     try:
         artifact.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(artifact, 0o700)
     except OSError as exc:
         raise BackupRuntimeError(f"unable to prepare native-dump artifact directory {artifact_path!r}: {exc}") from exc
     if not artifact.is_dir():
         raise BackupRuntimeError(f"native-dump artifact resource {artifact_resource!r} must resolve to a directory")
+    try:
+        mode = artifact.stat().st_mode & 0o777
+        if mode != 0o700:
+            os.chmod(artifact, 0o700)
+            mode = artifact.stat().st_mode & 0o777
+            if mode != 0o700:
+                raise BackupRuntimeError(
+                    f"native-dump artifact directory {artifact_path!r} has unsafe mode {oct(mode)}"
+                )
+    except OSError as exc:
+        raise BackupRuntimeError(
+            f"unable to enforce native-dump artifact directory mode {artifact_path!r}: {exc}"
+        ) from exc
     # Ensure fresh preparation: remove any stale dump from previous invocation so a
     # zero-write success cannot be accepted. This implements generation-specific
     # freshness without requiring the dump job to know the transaction ID.
@@ -129,6 +152,12 @@ def prepare(
     snapshots: list[dict[str, str]] = []
     native_dumps: list[dict[str, str]] = []
     snapshots_by_dataset: dict[str, tuple[str, str]] = {}
+    dataset_mountpoints: dict[str, str] = {}
+
+    def _persist_state() -> None:
+        state = {"schemaVersion": 1, "snapshots": list(snapshots), "nativeDumps": list(native_dumps)}
+        _write_atomic(state_path, (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"), 0o600)
+
     try:
         for resource in inventory["resources"]:
             if not isinstance(resource, dict):
@@ -136,16 +165,20 @@ def prepare(
             resource_id = resource.get("id")
             path = resource.get("path")
             consistency = resource.get("consistency")
-            if not isinstance(resource_id, str) or not isinstance(path, str) or not path.startswith("/"):
-                raise BackupRuntimeError("compiled V2 backup inventory contains an invalid path")
+            if not isinstance(resource_id, str):
+                raise BackupRuntimeError("compiled V2 backup inventory contains an invalid resource id")
+            _safe_absolute_path(path, label=f"backup resource {resource_id!r} path")
+            assert isinstance(path, str)
 
             if consistency in {"filesystem", "none"}:
                 runtime_paths.append(path)
                 continue
             if consistency == "native-dump":
                 artifact_path, prepared = _native_dump_path(resource_id, resource, systemctl_bin=systemctl_bin)
+                _safe_absolute_path(artifact_path, label=f"backup resource {resource_id!r} native-dump artifactPath")
                 runtime_paths.append(artifact_path)
                 native_dumps.append(prepared)
+                _persist_state()
                 continue
             if consistency != "zfs-snapshot":
                 raise BackupRuntimeError(f"backup resource {resource_id!r} has unsupported consistency {consistency!r}")
@@ -164,12 +197,23 @@ def prepare(
                         f"backup resource {resource_id!r} path {path!r} does not match ZFS dataset {dataset!r} "
                         f"mountpoint {mountpoint!r}"
                     )
+                dataset_mountpoints[dataset] = mountpoint
                 name = _snapshot_name()
                 _run([zfs_bin, "snapshot", f"{dataset}@{name}"])
                 snapshot_path = str(pathlib.PurePosixPath(path) / ".zfs" / "snapshot" / name)
                 snapshots.append({"dataset": dataset, "name": name})
                 snapshots_by_dataset[dataset] = (name, snapshot_path)
+                _persist_state()
             else:
+                cached_mountpoint = dataset_mountpoints.get(dataset)
+                if cached_mountpoint is None:
+                    cached_mountpoint = _run([zfs_bin, "get", "-H", "-o", "value", "mountpoint", dataset])
+                    dataset_mountpoints[dataset] = cached_mountpoint
+                if cached_mountpoint != path:
+                    raise BackupRuntimeError(
+                        f"backup resource {resource_id!r} path {path!r} does not match ZFS dataset {dataset!r} "
+                        f"mountpoint {cached_mountpoint!r}"
+                    )
                 _name, snapshot_path = current
             runtime_paths.append(snapshot_path)
 
@@ -178,14 +222,19 @@ def prepare(
         _write_atomic(paths_path, "".join(f"{path}\n" for path in unique_paths).encode("utf-8"), 0o640)
         _write_atomic(state_path, (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"), 0o600)
         return {"paths": unique_paths, "snapshots": snapshots, "nativeDumps": native_dumps}
-    except Exception:
+    except Exception as exc:
+        failures: list[str] = []
         for snapshot in reversed(snapshots):
             try:
                 _run([zfs_bin, "destroy", f"{snapshot['dataset']}@{snapshot['name']}"])
-            except BackupRuntimeError:
-                pass
+            except BackupRuntimeError as destroy_exc:
+                failures.append(f"{snapshot['dataset']}@{snapshot['name']}: {destroy_exc}")
         paths_path.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
+        if failures:
+            raise BackupRuntimeError(
+                f"backup preparation failed ({exc}); failed to clean snapshot(s): {'; '.join(failures)}"
+            ) from exc
         raise
 
 

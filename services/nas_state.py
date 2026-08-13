@@ -533,7 +533,9 @@ def signing_key() -> bytes:
             return b""
         raise StateError(f"State bundle signing key is unavailable: {key_path}") from exc
     if not re.fullmatch(r"[0-9A-Fa-f]{64,256}", raw):
-        raise StateError("State bundle signing key has an invalid format")
+        raise StateError(f"State bundle signing key at {key_path} has an invalid format: must be 64-256 hex digits")
+    if raw.strip("0") == "":
+        raise StateError(f"State bundle signing key at {key_path} must not be all zeros")
     return bytes.fromhex(raw)
 
 
@@ -1123,6 +1125,72 @@ def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_
             restore_path(payload, pathlib.Path(authority.source), authority)
 
 
+def _file_content_digest(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _dir_content_digest(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    for child in sorted(path.rglob("*")):
+        rel = child.relative_to(path).as_posix()
+        if child.is_dir():
+            digest.update(f"d\0{rel}\0".encode())
+        elif child.is_file():
+            digest.update(f"f\0{rel}\0".encode())
+            with child.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_restored_state(staging: pathlib.Path, manifest: dict[str, Any]) -> None:
+    """Post-restore validation: re-hash each restored authority and compare to manifest.
+
+    Re-hashes the live filesystem/database state and compares it to the
+    manifest payload. For path authorities this compares content digests
+    (payload file vs live file, or directory tree contents) so that
+    mode-preserving restores (local_path_policies) do not trigger false
+    failures while still detecting content corruption. Database authorities
+    use the existing comparison digest. Failures are fatal and trigger
+    rollback before the journal is marked committed.
+    """
+
+    registry = {item.name: item for item in authorities()}
+    for entry in canonical_apply_entries(manifest):
+        if entry["status"] != "captured":
+            continue
+        authority = registry[entry["name"]]
+        if authority.kind == "database":
+            current = database_comparison_digest()
+            if current != entry["comparisonDigest"]:
+                raise StateError(
+                    f"Post-restore validation failed for {authority.name}: database comparison digest mismatch"
+                )
+        else:
+            source = pathlib.Path(authority.source)
+            if lstat_type(source) == 0:
+                raise StateError(
+                    f"Post-restore validation failed for {authority.name}: restored path is missing at {authority.source}"
+                )
+            payload = staging.joinpath(*safe_member_name(entry["payload"]).parts)
+            src_mode = source.lstat().st_mode
+            payload_mode = payload.lstat().st_mode
+            if stat.S_ISREG(src_mode) and stat.S_ISREG(payload_mode):
+                current = _file_content_digest(source)
+                expected = _file_content_digest(payload)
+            elif stat.S_ISDIR(src_mode) and stat.S_ISDIR(payload_mode):
+                current = _dir_content_digest(source)
+                expected = _dir_content_digest(payload)
+            else:
+                raise StateError(f"Post-restore validation failed for {authority.name}: restored kind mismatch")
+            if current != expected:
+                raise StateError(f"Post-restore validation failed for {authority.name}: digest mismatch")
+
+
 def restore_units() -> tuple[str, ...]:
     raw = os.environ.get("NAS_STATE_RESTORE_UNITS_JSON")
     if raw:
@@ -1320,16 +1388,23 @@ def restore_bundle(
         prune_rollbacks()
         rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
         unit_snapshot = capture_unit_state(restore_units())
-        stop_active_units(unit_snapshot)
-        restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+        # BUG 2 fix: capture rollback BEFORE quiescing. Services that finalize
+        # writes on shutdown would otherwise leave a post-stop quiesced baseline
+        # in the rollback instead of the true pre-restore state. We export
+        # with quiesce=False while units are still running (mildly incoherent
+        # snapshot) and then stop; post-restore digest validation (BUG 1) covers
+        # incoherence by failing the restore before it is marked committed.
         rollback_ready = False
         try:
             export_bundle(rollback, include_sensitive=True, quiesce=False)
             rollback_ready = True
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
+            stop_active_units(unit_snapshot)
+            restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
             reapply_runtime_consumers(unit_snapshot)
+            verify_restored_state(staging, manifest)
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:
             if not rollback_ready:

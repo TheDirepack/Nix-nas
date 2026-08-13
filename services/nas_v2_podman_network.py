@@ -96,6 +96,23 @@ def _listener_firewall_requested(service: dict[str, Any]) -> bool:
     )
 
 
+def _has_listeners(service: dict[str, Any]) -> bool:
+    listeners = service.get("listeners", {})
+    return isinstance(listeners, dict) and bool(listeners)
+
+
+def _external_egress(policy: dict[str, Any]) -> bool:
+    return (
+        policy.get("outboundDefault", "allow") == "allow"
+        or bool(policy.get("lanAccess"))
+        or bool(policy.get("allowedEgress"))
+    )
+
+
+def _deny_egress_needs_firewalld(policy: dict[str, Any]) -> bool:
+    return policy.get("outboundDefault", "allow") == "deny" and _external_egress(policy)
+
+
 def _needs_isolated_firewalld(service: dict[str, Any], policy: dict[str, Any]) -> bool:
     return (
         policy.get("outboundDefault", "allow") != "deny"
@@ -103,7 +120,7 @@ def _needs_isolated_firewalld(service: dict[str, Any], policy: dict[str, Any]) -
         or bool(policy.get("allowedHostPorts"))
         or bool(policy.get("allowedEgress"))
         or bool(service.get("routes"))
-        or _listener_firewall_requested(service)
+        or _has_listeners(service)
     )
 
 
@@ -147,6 +164,10 @@ def _isolated_supported(
             f"session service {service_id!r} cannot expose fixed routes/listeners because concurrent instances require per-instance endpoints"
         )
     if _needs_isolated_firewalld(service, policy) and not firewalld_enabled:
+        raise PodmanNetworkProjectionError(
+            f"isolated service {service_id!r} requires the V2 firewalld policy projection in the same apply transaction"
+        )
+    if _deny_egress_needs_firewalld(policy) and not firewalld_enabled:
         raise PodmanNetworkProjectionError(
             f"isolated service {service_id!r} requires the V2 firewalld policy projection in the same apply transaction"
         )
@@ -196,11 +217,7 @@ def _network_source(
     *,
     network_name: str,
 ) -> bytes:
-    external_egress = (
-        policy.get("outboundDefault", "allow") == "allow"
-        or bool(policy.get("lanAccess"))
-        or bool(policy.get("allowedEgress"))
-    )
+    external_egress = _external_egress(policy)
     vlan = vlan_binding(policy)
     lines = [
         "[Unit]",

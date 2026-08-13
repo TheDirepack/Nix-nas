@@ -155,12 +155,12 @@ class V2BackupTests(unittest.TestCase):
                 restic_paths=root / "backup-paths.txt",
             )
 
-            original_compile_paths = apply_mod.compile_paths
-            apply_mod.compile_paths = lambda _paths: (effective, plan)
+            original_compile_paths_inner = apply_mod._compile_paths_inner
+            apply_mod._compile_paths_inner = lambda _paths: (effective, plan)  # type: ignore[method-assign]
             try:
                 result = apply_mod.apply(paths, backup=projection)
             finally:
-                apply_mod.compile_paths = original_compile_paths
+                apply_mod._compile_paths_inner = original_compile_paths_inner  # type: ignore[method-assign]
 
             self.assertEqual((root / "backup-paths.txt").read_text(encoding="utf-8"), "/tank/data\n")
             inventory = json.loads((root / "backup-resources.json").read_text(encoding="utf-8"))

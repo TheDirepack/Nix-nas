@@ -32,11 +32,37 @@ _SERVICE_NAME_RE = re.compile(r"(?mi)^\s*ServiceName\s*=")
 _NETWORK_RE = re.compile(r"(?mi)^\s*Network\s*=")
 _PUBLISH_PORT_RE = re.compile(r"(?mi)^\s*PublishPort\s*=")
 _PODMAN_ARGS_RE = re.compile(r"(?mi)^\s*PodmanArgs\s*=")
+APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 _STRICT_SOURCE_KEY_RE = re.compile(
-    r"(?mi)^\s*(?:ReadOnly|NoNewPrivileges|AddCapability|DropCapability|Tmpfs|AddDevice)\s*="
+    r"(?mi)^\s*(?:ReadOnly|NoNewPrivileges|AddCapability|DropCapability|Tmpfs|AddDevice|Protect\w*|Private\w*|Restrict\w*|DeviceAllow|DevicePolicy|Privileged|SecurityOpt|UsernsMode|Rootfs|Init|Mount|Volume|SeccompProfile|LabelDisable|SecurityLabelDisable|Limit\w*)\s*="
 )
 _DEV_ROOT = pathlib.PurePosixPath("/dev")
 _LOOPBACK_HOSTS = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "[::1]"}
+
+
+def _managed_source(service_id: str, source: pathlib.Path) -> pathlib.Path:
+    candidate = pathlib.Path(source)
+    if candidate.suffix != ".container":
+        raise QuadletProjectionError("V2 quadlet runtime currently supports .container sources only")
+    try:
+        # Use lexical absolute path for nominal check so symlink does not hide containment.
+        nominal = candidate.absolute()
+        root = (APP_ROOT / service_id).resolve(strict=False)
+        nominal_inside = nominal.is_relative_to(root)
+    except (OSError, ValueError, RuntimeError):
+        nominal_inside = False
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise QuadletProjectionError(f"unable to read Quadlet source {candidate}: {exc}") from exc
+    if nominal_inside:
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise QuadletProjectionError(f"Quadlet source {candidate} escapes its managed app root") from exc
+    if not resolved.is_file():
+        raise QuadletProjectionError(f"Quadlet source {candidate} must name a file")
+    return resolved
 
 
 def _single_line(value: str, *, field: str) -> str:
@@ -349,9 +375,7 @@ def render_quadlet(
     if runtime_type != "quadlet":
         raise QuadletProjectionError(f"runtime {runtime_type!r} is not a Quadlet runtime")
 
-    source = pathlib.Path(runtime["source"])
-    if source.suffix != ".container":
-        raise QuadletProjectionError("V2 quadlet runtime currently supports .container sources only")
+    source = _managed_source(service_id, pathlib.Path(runtime["source"]))
     try:
         text = source.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:

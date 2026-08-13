@@ -136,6 +136,34 @@ class V2AuthentikTests(unittest.TestCase):
         with self.assertRaisesRegex(authentik.AuthentikProjectionError, "unsafe"):
             authentik.desired_capabilities(value)
 
+    def test_bearer_token_not_leaked_on_redirect(self):
+        import urllib.error
+        import urllib.request
+
+        handler = authentik._NoRedirectHandler()
+        req = urllib.request.Request(
+            "http://auth.example/api/v3/core/groups/", headers={"Authorization": "Bearer secret-token"}
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            handler.redirect_request(req, None, 302, "Found", {}, "http://evil.example/steal")
+        self.assertEqual(ctx.exception.code, 302)
+        self.assertIn("evil.example", str(ctx.exception))
+
+        # Integration: _request_json surfaces redirect as failure and does not follow
+        fake_error = urllib.error.HTTPError("http://auth.example/api/v3/core/groups/", 302, "Found", {}, None)  # pyright: ignore[reportArgumentType, reportCallIssue]
+        opener_mock = mock.MagicMock()
+        opener_mock.open.side_effect = fake_error
+        opener_mock.__enter__ = mock.MagicMock(return_value=opener_mock)
+        opener_mock.__exit__ = mock.MagicMock(return_value=False)
+        with mock.patch.object(urllib.request, "build_opener", return_value=opener_mock) as build_mock:
+            with self.assertRaisesRegex(authentik.AuthentikProjectionError, "HTTP 302"):
+                authentik._request_json(url="http://auth.example/api/v3/core/groups/", token="secret-token")
+            build_mock.assert_called_once()
+            self.assertEqual(opener_mock.open.call_count, 1)
+            called_req = opener_mock.open.call_args[0][0]
+            self.assertEqual(called_req.full_url, "http://auth.example/api/v3/core/groups/")
+            self.assertEqual(called_req.get_header("Authorization"), "Bearer secret-token")
+
 
 if __name__ == "__main__":
     unittest.main()

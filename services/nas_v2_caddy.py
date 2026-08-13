@@ -41,6 +41,14 @@ IDENTITY_HEADERS = (
     "X-Authentik-Name",
     "X-Authentik-Email",
     "X-Authentik-Uid",
+    "X-Authentik-Jwt",
+    "X-Authentik-Entitlements",
+    "X-Authentik-Meta-Outpost",
+    "X-Authentik-Meta-App",
+    "X-Authentik-Meta-Provider",
+    "X-Authentik-Meta-User",
+    "X-Authentik-Meta-Is-Superuser",
+    "X-Authentik-Role",
 )
 TRUSTED_IDENTITY_HEADERS = frozenset(IDENTITY_HEADERS)
 AUTHENTIK_COPY_HEADERS = (
@@ -169,6 +177,8 @@ def _render_wake(
         )
     if wake_socket is None:
         raise CaddyProjectionError(f"On-demand service {service_id!r} requires the authorization-free V2 wake socket")
+    if any(character in wake_socket for character in ("\x00", "\r", "\n", "{", "}")):
+        raise CaddyProjectionError("Wake socket must be an absolute safe path")
     socket = pathlib.PurePosixPath(wake_socket)
     if not socket.is_absolute() or ".." in socket.parts:
         raise CaddyProjectionError("Wake socket must be an absolute safe path")
@@ -254,6 +264,8 @@ def _render_handler(
     route_id = route["route"]
     lines.append(f"{indent}route {{")
     inner = indent + "  "
+    for header in IDENTITY_HEADERS:
+        lines.append(f"{inner}request_header -{header}")
 
     _render_required_headers(
         lines,

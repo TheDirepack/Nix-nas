@@ -177,6 +177,92 @@ class V2EditorTests(unittest.TestCase):
 
             self.assertEqual(desired.read_text(encoding="utf-8"), before)
 
+    def test_always_mode_on_job_does_not_set_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = root / "services.yaml"
+            desired.write_text(
+                "schemaVersion: 3\n"
+                "services:\n"
+                "  backup:\n"
+                "    name: Backup\n"
+                "    enabled: false\n"
+                "    workload:\n"
+                "      kind: job\n"
+                "      schedules:\n"
+                "        - calendar: daily\n"
+                "    runtime:\n"
+                "      type: systemd\n"
+                "      unit: backup.service\n",
+                encoding="utf-8",
+            )
+            result = editor.set_service_mode(
+                "backup",
+                "always",
+                desired_path=desired,
+                schema_path=SCHEMA,
+                platform_path=None,
+            )
+            self.assertEqual(result["effectiveMode"], "always")
+            text = desired.read_text(encoding="utf-8")
+            self.assertIn("enabled: true", text)
+            self.assertNotIn("activation", text)
+            # Also verify semantic validation passes via read
+            editor.read_document(desired_path=desired, schema_path=SCHEMA)
+
+    def test_always_mode_on_session_does_not_set_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = root / "services.yaml"
+            desired.write_text(
+                "schemaVersion: 3\n"
+                "services:\n"
+                "  sess:\n"
+                "    name: Sess\n"
+                "    enabled: false\n"
+                "    workload:\n"
+                "      kind: session\n"
+                "    runtime:\n"
+                "      type: systemd\n"
+                "      unit: sess.service\n",
+                encoding="utf-8",
+            )
+            editor.set_service_mode(
+                "sess",
+                "always",
+                desired_path=desired,
+                schema_path=SCHEMA,
+                platform_path=None,
+            )
+            text = desired.read_text(encoding="utf-8")
+            self.assertNotIn("activation", text)
+
+    def test_always_mode_on_daemon_sets_persistent_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = self.write_desired(root)
+            # Set to off then back to always to ensure activation added
+            editor.set_service_mode(
+                "demo",
+                "off",
+                desired_path=desired,
+                schema_path=SCHEMA,
+                platform_path=None,
+            )
+            editor.set_service_mode(
+                "demo",
+                "always",
+                desired_path=desired,
+                schema_path=SCHEMA,
+                platform_path=None,
+            )
+            text = desired.read_text(encoding="utf-8")
+            self.assertIn("activation: persistent", text)
+
+    def test_authority_lock_is_exposed(self) -> None:
+        self.assertTrue(hasattr(editor, "authority_lock"))
+        self.assertIn("authority_lock", editor.__all__)
+
 
 if __name__ == "__main__":
     unittest.main()

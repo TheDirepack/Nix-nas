@@ -52,7 +52,7 @@ def _round_trip_yaml() -> YAML:
 
 
 @contextmanager
-def _authority_lock(path: pathlib.Path) -> Iterator[None]:
+def authority_lock(path: pathlib.Path) -> Iterator[None]:
     lock_path = path.with_name(f".{path.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as handle:
@@ -61,6 +61,9 @@ def _authority_lock(path: pathlib.Path) -> Iterator[None]:
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+_authority_lock = authority_lock
 
 
 def _render(value: Any) -> str:
@@ -159,7 +162,8 @@ def _set_mode(service_id: str, service: Any, mode: str) -> None:
         return
     if mode == "always":
         service["enabled"] = True
-        workload["activation"] = "persistent"
+        if workload.get("kind") == "daemon":
+            workload["activation"] = "persistent"
         return
     if mode != "on-demand":
         raise ManagedServicesEditorError("Service mode must be off, on-demand, or always")
@@ -401,6 +405,7 @@ def set_service_mode(
 
 __all__ = [
     "ManagedServicesEditorError",
+    "authority_lock",
     "owner_unit",
     "read_document",
     "replace_document",

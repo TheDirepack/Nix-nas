@@ -334,6 +334,58 @@ class V2PodmanNetworkTests(unittest.TestCase):
         self.assertEqual(target, pathlib.Path("/run/containers/systemd/nas-v2-net-demo.network"))
         self.assertEqual(affected, "nas-v2-demo.service")
 
+    def test_deny_with_allowed_egress_requires_firewalld_and_sets_internal_false(self):
+        policy = {
+            "mode": "isolated",
+            "outboundDefault": "deny",
+            "lanAccess": False,
+            "allowedHostPorts": [],
+            "allowedEgress": [{"cidr": "1.1.1.0/24", "ports": [443]}],
+        }
+        effective, service = self.service(policy=policy)
+        self.assertTrue(network.requires_firewalld(effective))
+        self.assertTrue(network._external_egress(policy))
+        self.assertTrue(network._deny_egress_needs_firewalld(policy))
+        with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
+            network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
+        # with firewalld enabled it succeeds and Internal is false
+        self.assertEqual(
+            network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=True),
+            "nas-v2-net-demo.network",
+        )
+        files: dict[pathlib.Path, bytes] = {}
+        manifest = {"quadletLinks": []}
+        output = pathlib.Path("/run/nas-control/systemd")
+        network.augment_projection(effective, output_dir=output, files=files, manifest=manifest)
+        rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
+        self.assertIn("Internal=false", rendered)
+
+    def test_isolated_listener_firewall_false_still_requires_firewalld(self):
+        effective, service = self.service()
+        service["listeners"] = {
+            "web": {"protocol": "tcp", "exposure": {"port": 8080}, "firewall": False},
+        }
+        self.assertTrue(network._has_listeners(service))
+        self.assertFalse(network._listener_firewall_requested(service))
+        self.assertTrue(network.requires_firewalld(effective))
+        with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
+            network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
+
+    def test_host_listener_firewall_false_does_not_require_firewalld(self):
+        effective, service = self.service(
+            policy={
+                "mode": "host",
+                "outboundDefault": "allow",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            }
+        )
+        service["listeners"] = {
+            "web": {"protocol": "tcp", "exposure": {"port": 8080}, "firewall": False},
+        }
+        self.assertFalse(network.requires_firewalld(effective))
+
 
 if __name__ == "__main__":
     unittest.main()

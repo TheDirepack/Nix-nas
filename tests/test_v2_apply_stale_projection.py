@@ -79,6 +79,40 @@ class V2ApplyStaleProjectionTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemdProjectionError, "non-regular entry"):
                 apply_v2._projection_stale_files(root, set())
 
+    def test_stale_detection_ignores_operator_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "systemd"
+            root.mkdir(parents=True)
+            operator_file = root / "operator.conf"
+            operator_file.write_text("operator\n", encoding="utf-8")
+            owned_stale = root / "nas-v2-demo.service"
+            owned_stale.write_text("old\n", encoding="utf-8")
+            # owned file not in current should be stale, operator file should not
+            stale = apply_v2._projection_stale_files(root, set())
+            self.assertIn(owned_stale, stale)
+            self.assertNotIn(operator_file, stale)
+
+    def test_stale_detection_only_considers_v2_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "systemd"
+            root.mkdir(parents=True)
+            custom = root / "custom.service"
+            custom.write_text("custom\n", encoding="utf-8")
+            # custom.service ends with .service but is that considered V2? Yes suffix matches.
+            # Operator file without V2 prefix/suffix and not under owned dir should be ignored
+            operator_txt = root / "notes.txt"
+            operator_txt.write_text("notes\n", encoding="utf-8")
+            stale = apply_v2._projection_stale_files(root, set())
+            self.assertIn(custom, stale)
+            self.assertNotIn(operator_txt, stale)
+            # File under owned dir should be considered stale even with arbitrary extension? e.g., txt under descriptors
+            owned_dir = root / "descriptors"
+            owned_dir.mkdir()
+            desc_file = owned_dir / "old.json"
+            desc_file.write_text("{}", encoding="utf-8")
+            stale2 = apply_v2._projection_stale_files(root, set())
+            self.assertIn(desc_file, stale2)
+
 
 if __name__ == "__main__":
     unittest.main()

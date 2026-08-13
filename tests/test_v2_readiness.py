@@ -50,6 +50,19 @@ class V2ReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(readiness.ReadinessError, "absolute"):
             readiness.probe_ready({"type": "path", "path": "../ready"}, systemctl="/bin/false")
 
+    def test_http_probe_rejects_out_of_range_port(self):
+        for url in ("http://127.0.0.1:99999/", "http://127.0.0.1:0/"):
+            with self.subTest(url=url), self.assertRaises(readiness.ReadinessError) as ctx:
+                readiness.probe_ready({"type": "http", "url": url}, systemctl="/bin/false")
+            self.assertIn("port", str(ctx.exception).lower())
+        with self.assertRaises(readiness.ReadinessError):
+            readiness._probe_http({"url": "http://127.0.0.1:99999/"})
+
+    def test_http_probe_rejects_malformed_url(self):
+        for url in ("http:///nohost", "not-a-url", "http://127.0.0.1:99999/path?q=1"):
+            with self.subTest(url=url), self.assertRaises(readiness.ReadinessError):
+                readiness.probe_ready({"type": "http", "url": url}, systemctl="/bin/false")
+
 
 if __name__ == "__main__":
     unittest.main()
