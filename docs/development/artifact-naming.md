@@ -14,7 +14,7 @@ For the current prerelease version:
 
 ```text
 VERSION:                         2.2.0-alpha.17
-source archive filename:        Nix OS NAS 2.2.16 source.zip
+source archive filename:        Nix OS NAS 2.2.17 source.zip
 ```
 
 For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.MINOR.N`. This keeps development archives short and readable without changing `VERSION` or creating a new software release merely to repackage the same source.
