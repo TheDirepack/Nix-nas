@@ -122,9 +122,6 @@
       "tests/test_v2_libvirt.py",
       "tests/test_v2_session_projection.py"
     ],
-    "services/nas_v2_systemd_attachments.py": [
-      "tests/test_v2_systemd.py"
-    ],
     "services/nas_v2_systemd_reconcile.py": [
       "tests/test_v2_systemd_reconcile.py",
       "tests/test_v2_source_watch.py",

@@ -22,7 +22,7 @@ import nas_v2_network as podnet  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
 import nas_v2_spec as spec  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
-import nas_v2_systemd_attachments as attachments  # noqa: E402
+import nas_v2_systemd as attachments  # noqa: E402
 import nas_v2_backup as backup  # noqa: E402
 import nas_v2_authentik as authentik  # noqa: E402
 
