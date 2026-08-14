@@ -204,8 +204,12 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         self.assertTrue(any(path.endswith("/set_key/") for path, _ in calls))
 
     def test_provision_runtime_token_rejects_missing_role_or_bad_user_key(self) -> None:
-        with mock.patch.object(
-            sync, "authentik_list", side_effect=[[{"pk": 42, "username": sync.AUTOMATION_USER}], []]
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_AUTOMATION_ROLE_WAIT_SECONDS": "0"}),
+            mock.patch.object(sync.time, "sleep"),
+            mock.patch.object(
+                sync, "authentik_list", side_effect=[[{"pk": 42, "username": sync.AUTOMATION_USER}], []]
+            ),
         ):
             with self.assertRaisesRegex(sync.SyncError, "automation role is missing"):
                 sync.provision_runtime_token("token")

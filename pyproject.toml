@@ -58,7 +58,6 @@ py-modules = [
   "nas_v2_network",
   "nas_v2_plan",
   "nas_v2_platform_probe",
-  "nas_v2_podman_network",
   "nas_v2_portal",
   "nas_v2_python_prepare",
   "nas_v2_quadlet",
