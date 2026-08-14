@@ -966,7 +966,9 @@ def reconcile(
 
 
 def reconcile_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Activate V2-owned firewalld files with rollback and one native reload.")
+    parser = argparse.ArgumentParser(
+        description="Activate V2-owned firewalld files with rollback and one native reload."
+    )
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--projection-root", required=True)
     parser.add_argument("--system-config", required=True)

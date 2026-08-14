@@ -405,7 +405,9 @@ def prepare(
                 continue
             if consistency == "native-dump":
                 artifact_path, prepared = _native_dump_path(resource_id, resource, systemctl_bin=systemctl_bin)
-                _runtime_safe_absolute_path(artifact_path, label=f"backup resource {resource_id!r} native-dump artifactPath")
+                _runtime_safe_absolute_path(
+                    artifact_path, label=f"backup resource {resource_id!r} native-dump artifactPath"
+                )
                 runtime_paths.append(artifact_path)
                 native_dumps.append(prepared)
                 _persist_state()

@@ -187,7 +187,7 @@ in
           # starts. This synchronously creates ZFS snapshots and executes generic
           # native-dump preparation jobs, then emits only the exact paths Restic
           # should consume. Application identities are not handled here.
-          ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_runtime.py prepare \
+          ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup.py prepare \
             --inventory ${lib.escapeShellArg v2BackupInventory} \
             --paths ${lib.escapeShellArg v2BackupRuntimePaths} \
             --state ${lib.escapeShellArg v2BackupRuntimeState} \
@@ -197,7 +197,7 @@ in
         backupCleanupCommand = ''
           #!${pkgs.runtimeShell}
           set -euo pipefail
-          ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_runtime.py cleanup \
+          ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup.py cleanup \
             --paths ${lib.escapeShellArg v2BackupRuntimePaths} \
             --state ${lib.escapeShellArg v2BackupRuntimeState} \
             --zfs ${pkgs.zfs}/bin/zfs
@@ -276,7 +276,7 @@ in
         # artifacts get format-aware integrity checks selected from their data;
         # ordinary filesystem resources are only checked for successful restore
         # so arbitrary user files are never interpreted as application state.
-        ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup_verify.py \
+        ${pkgs.python3}/bin/python3 ${v2Source}/nas_v2_backup.py \
           --inventory ${lib.escapeShellArg v2BackupInventory} \
           --restore-root "$restore_root" \
           --pg-restore ${config.services.postgresql.package}/bin/pg_restore

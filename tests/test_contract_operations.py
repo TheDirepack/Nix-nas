@@ -13,7 +13,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("zfsReplication", options)
         self.assertIn("syncoid", storage)
         self.assertIn("nas-boot-system", storage)
-        self.assertIn("nas_v2_backup_runtime.py prepare", storage)
+        self.assertIn("nas_v2_backup.py prepare", storage)
         self.assertIn("backupStage = cfg.backup.stagingPath", storage)
         self.assertNotIn("/run/nas-backup-stage", storage)
         self.assertIn("source_db.backup(destination_db)", backup_resources)

@@ -120,7 +120,7 @@ class RunnerAccountingTests(unittest.TestCase):
             "test_v2_caddy.py": ("nas_v2_caddy", "missing_capability"),
             "test_v2_systemd.py": ("nas_v2_systemd", "idle"),
             "test_v2_session.py": ("nas_v2_session", "volume"),
-            "test_v2_podman_network.py": ("nas_v2_podman_network", "isolated"),
+            "test_v2_podman_network.py": ("nas_v2_network", "isolated"),
         }
         for filename, markers in v2_contracts.items():
             with self.subTest(filename=filename):

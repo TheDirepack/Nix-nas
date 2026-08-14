@@ -73,7 +73,7 @@ let
     "${pkgs.systemd}/bin/systemctl"
   ];
   firewalldReconcileArgs = [
-    "${v2Source}/nas_v2_firewalld_reconcile.py"
+    "${v2Source}/nas_v2_network.py"
     "--manifest"
     firewalldManifestPath
     "--projection-root"

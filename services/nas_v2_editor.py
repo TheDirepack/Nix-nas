@@ -71,7 +71,7 @@ def _revision_for_path(path: pathlib.Path) -> str:
     return _revision(text)
 
 
-def _read_authority_document(path: pathlib.Path) -> tuple[str, dict[str, any]]:
+def _read_authority_document(path: pathlib.Path) -> tuple[str, dict[str, Any]]:
     if _is_directory_authority(path):
         try:
             document = parse_yaml(path)
