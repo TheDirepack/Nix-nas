@@ -1,5 +1,4 @@
 {
-  "schemaVersion": 3,
   "executables": {
     "nas-managed-services-control": {
       "fuzzStrategy": "feature-id",
@@ -49,7 +48,8 @@
     ],
     "services/nas_v2_caddy.py": [
       "tests/test_v2_caddy.py",
-      "tests/test_v2_caddy_validate.py"
+      "tests/test_v2_caddy_validate.py",
+      "tests/test_v2_portal.py"
     ],
     "services/nas_v2_compose.py": [
       "tests/test_v2_compose.py",
@@ -64,8 +64,14 @@
       "tests/test_v2_editor.py",
       "tests/test_v2_control.py"
     ],
+    "services/nas_v2_entry.py": [
+      "tests/test_v2_boundary.py"
+    ],
     "services/nas_v2_exec_runner.py": [
       "tests/test_v2_exec_runner.py"
+    ],
+    "services/nas_v2_libvirt.py": [
+      "tests/test_v2_libvirt.py"
     ],
     "services/nas_v2_network.py": [
       "tests/test_v2_firewalld.py",
@@ -74,19 +80,11 @@
       "tests/test_v2_vlan_and_direct_listeners.py",
       "tests/test_v2_generic_listeners.py"
     ],
-    "services/nas_v2_libvirt.py": [
-      "tests/test_v2_libvirt.py"
-    ],
-
     "services/nas_v2_plan.py": [
       "tests/test_v2_plan_apply.py"
     ],
     "services/nas_v2_platform_probe.py": [
       "tests/test_v2_accelerator.py"
-    ],
-
-    "services/nas_v2_portal.py": [
-      "tests/test_v2_portal.py"
     ],
     "services/nas_v2_python_prepare.py": [
       "tests/test_v2_python_prepare.py"
@@ -101,9 +99,7 @@
       "tests/test_v2_readiness.py"
     ],
     "services/nas_v2_session.py": [
-      "tests/test_v2_session.py"
-    ],
-    "services/nas_v2_session_projection.py": [
+      "tests/test_v2_session.py",
       "tests/test_v2_session_projection.py"
     ],
     "services/nas_v2_source_watch.py": [
@@ -128,11 +124,9 @@
       "tests/test_v2_podman_network.py",
       "tests/test_v2_session_projection.py"
     ],
-    "services/nas_v2_entry.py": [
-      "tests/test_v2_boundary.py"
-    ],
     "services/nas_v2_wake.py": [
       "tests/test_v2_wake.py"
     ]
-  }
+  },
+  "schemaVersion": 3
 }

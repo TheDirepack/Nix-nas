@@ -12,7 +12,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_network as network  # noqa: E402
-import nas_v2_session_projection as projection  # noqa: E402
+import nas_v2_session as projection  # noqa: E402
 from nas_v2_spec import compile_document, load_schema, parse_yaml_text  # noqa: E402
 
 

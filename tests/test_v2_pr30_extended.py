@@ -1023,7 +1023,7 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
             self.assertNotIn(name, text2)
 
     def test_portal_projection_is_sorted_and_visible_only(self):
-        import nas_v2_portal as portal  # noqa: E402
+        import nas_v2_caddy as portal  # noqa: E402
 
         eff = spec.compile_document(
             {

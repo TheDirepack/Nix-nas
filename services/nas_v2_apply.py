@@ -24,9 +24,8 @@ from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
 from nas_v2_network import augment_projection as augment_podman_networks
 from nas_v2_network import materialize_projection as materialize_firewalld_projection
 from nas_v2_plan import build_plan
-from nas_v2_portal import portal_bytes
-from nas_v2_session_projection import SessionProjectionError
-from nas_v2_session_projection import generate_projection as generate_systemd_projection
+from nas_v2_caddy import portal_bytes
+from nas_v2_session import SessionProjectionError, generate_projection as generate_systemd_projection
 from nas_v2_source_watch import (
     SourceWatchProjectionError,
     augment_projection,

@@ -91,7 +91,7 @@ class ContractTests(unittest.TestCase):
         proxy = text("modules/nas/config/reverse-proxy.nix")
         portal = text("web/portal/index.html")
         caddy = text("services/nas_v2_caddy.py")
-        projection = text("services/nas_v2_portal.py")
+        projection = text("services/nas_v2_caddy.py")
         self.assertIn("templates", proxy)
         self.assertIn("file_server", proxy)
         self.assertIn("nasPortalStatic", proxy)

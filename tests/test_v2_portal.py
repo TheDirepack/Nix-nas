@@ -9,7 +9,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-from nas_v2_portal import PortalProjectionError, compile_portal_projection  # noqa: E402
+from nas_v2_caddy import PortalProjectionError, compile_portal_projection  # noqa: E402
 
 
 class PortalProjectionTests(unittest.TestCase):
