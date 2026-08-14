@@ -461,16 +461,16 @@ function OperationsPage({data, mutate, busy}) {
         </CardHeader>
         <CardBody>
           <p className="nas-muted">
-            Remote backups use <code>restic + rclone</code>. Config-only includes boot system, Caddy,
-            Authentik DB dump, Keepass database, Syncthing config and firewall/identity substrate — the
-            minimum needed to restore the Authentik remote sign-in route. All also includes V2 app data
-            emitted via <code>storageResources</code>.
+            Remote backups use <code>restic + rclone</code>. Config-only includes boot system,
+            Caddy, Authentik DB dump, Keepass database, Syncthing config and firewall/identity
+            substrate — the minimum needed to restore the Authentik remote sign-in route. All also
+            includes V2 app data emitted via <code>storageResources</code>.
           </p>
           <Form>
             <FormGroup label="Provider">
               <select
                 value={remoteDraft.provider}
-                onChange={(event) => setRemoteDraft({ ...remoteDraft, provider: event.target.value })}
+                onChange={(event) => setRemoteDraft({...remoteDraft, provider: event.target.value})}
                 disabled={busy}
               >
                 <option value="local">local (ZFS restic-system)</option>
@@ -485,17 +485,19 @@ function OperationsPage({data, mutate, busy}) {
             <FormGroup label="Scope">
               <select
                 value={remoteDraft.scope}
-                onChange={(event) => setRemoteDraft({ ...remoteDraft, scope: event.target.value })}
+                onChange={(event) => setRemoteDraft({...remoteDraft, scope: event.target.value})}
                 disabled={busy}
               >
-                <option value="config-only">config-only (Caddy + Authentik + Keepass + system)</option>
+                <option value="config-only">
+                  config-only (Caddy + Authentik + Keepass + system)
+                </option>
                 <option value="all">all (also app data)</option>
               </select>
             </FormGroup>
             <FormGroup label="rclone remote (empty = auto from provider)">
               <TextInput
                 value={remoteDraft.rcloneRemote}
-                onChange={(_e, value) => setRemoteDraft({ ...remoteDraft, rcloneRemote: value })}
+                onChange={(_e, value) => setRemoteDraft({...remoteDraft, rcloneRemote: value})}
                 placeholder="gdrive:nas-backup / s3:bucket/prefix"
                 isDisabled={busy}
               />

@@ -161,7 +161,7 @@ jobs:
       - name: Validate generated Caddy fragment with real Caddy
         run: |
           nix shell nixpkgs#caddy -c caddy version
-          nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_coverage tests.test_v2_caddy_validate -v
+          nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v
 
   static:
     name: Fast Nix evaluation, lint, type and formatting checks

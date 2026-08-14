@@ -164,6 +164,12 @@ if git_checkout:
     selected = [pathlib.PurePosixPath(item.decode()) for item in payload.split(b"\0") if item]
     selection_policy = "git-tracked-clean"
 else:
+    # A non-git tree is authorized by the allowlist that ships inside a source
+    # archive. Building the allowlist from the current tree would let an injected
+    # file authorize itself, so a tree without a shipped manifest is refused.
+    shipped = root / "MANIFEST.sha256"
+    if not shipped.is_file():
+        raise SystemExit("non-git source tree has no shipped MANIFEST.sha256 allowlist authority")
     _manifest_tmp = tempfile.mkdtemp(prefix="nas-manifest-")
     _manifest_path = pathlib.Path(_manifest_tmp) / "MANIFEST.sha256"
     os.environ["MANIFEST_PATH"] = str(_manifest_path)
@@ -178,7 +184,9 @@ else:
             signal.signal(_sig, lambda s, f: (_cleanup_manifest_tmp(), os._exit(128 + s)))  # type: ignore[arg-type]
         except ValueError:
             pass
-    # Use shared deterministic helper to generate allowlist manifest in unique temp dir
+    # Refresh the per-run manifest with the shared helper so downstream
+    # verification is not bound to a stale copy; selection still binds to the
+    # shipped allowlist below.
     helper_lib = root / "scripts" / "lib"
     if helper_lib.is_dir():
         sys.path.insert(0, str(helper_lib))
@@ -189,12 +197,8 @@ else:
 
         generate_manifest(root, _manifest_path)
     except Exception as exc:  # noqa: BLE001
-        # Fallback: if helper unavailable, try reading committed manifest if present
-        candidate = root / "MANIFEST.sha256"
-        if candidate.is_file():
-            shutil.copy(candidate, _manifest_path)
-        else:
-            raise SystemExit(f"unable to generate manifest for non-git source: {exc}") from exc
+        raise SystemExit(f"unable to establish release manifest: {exc}") from exc
+    shutil.copy(shipped, _manifest_path)
     selected = []
     for line in _manifest_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():

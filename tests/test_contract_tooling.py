@@ -327,9 +327,34 @@ class ContractTests(unittest.TestCase):
                 shutil.copytree(
                     ROOT,
                     root,
-                    ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage", "state"),
+                    ignore=shutil.ignore_patterns(
+                        ".pytest_cache",
+                        ".ruff_cache",
+                        "__pycache__",
+                        ".coverage",
+                        ".coverage.*",
+                        "coverage.json",
+                        "node_modules",
+                        "state",
+                    ),
                 )
                 shutil.rmtree(root / ".git", ignore_errors=True)
+                if label == "ignored secret":
+                    # A non-git tree is authorized by the allowlist shipped inside a
+                    # source archive; seed it from the pristine copy so the injected
+                    # file is an unreviewed extra against that authority.
+                    subprocess.run(
+                        [
+                            "python3",
+                            str(root / "scripts" / "lib" / "manifest.py"),
+                            "--root",
+                            str(root),
+                            "--out",
+                            str(root / "MANIFEST.sha256"),
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
                 target = target_factory(root)
                 if label == "ignored secret":
                     target.parent.mkdir(parents=True)
