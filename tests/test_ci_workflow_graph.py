@@ -107,6 +107,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("bundle-handoff.sha256", build_text)
         self.assertIn("Restore verified source archive", build_text)
         self.assertIn("source-archive-${{ github.sha }}", build_text)
+        self.assertIn("vm_bundle_handoff.outputs.cache_complete != 'true'", build_text)
         self.assertIn("./scripts/vm-bundles.sh build", build_text)
         self.assertLess(
             build_text.index("./scripts/vm-bundles.sh build"),
