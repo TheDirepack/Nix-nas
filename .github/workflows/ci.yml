@@ -482,10 +482,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: nas-source-release
-      - name: Build testable systems
+      - name: Build testable systems and reusable VM bundle roots
         run: |
           nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
           nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
+          ./scripts/vm-bundles.sh build
       - name: Export missing Nix store bundles for downstream VMs
         if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         run: ./scripts/vm-bundles.sh save-missing "$RUNNER_TEMP/vm-bundles"

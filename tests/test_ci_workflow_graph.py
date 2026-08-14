@@ -98,6 +98,11 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("bundle-handoff.sha256", build_text)
         self.assertIn("Restore verified source archive", build_text)
         self.assertIn("source-archive-${{ github.sha }}", build_text)
+        self.assertIn("./scripts/vm-bundles.sh build", build_text)
+        self.assertLess(
+            build_text.index("./scripts/vm-bundles.sh build"),
+            build_text.index("Export missing Nix store bundles for downstream VMs"),
+        )
         for name in ("integration", "cache-vm-bundles"):
             text = self.serialized(self.jobs[name])
             if name == "integration":
