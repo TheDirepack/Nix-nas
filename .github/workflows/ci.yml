@@ -502,12 +502,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: nas-source-release
-      - name: Build testable systems and reusable VM bundle roots
+      - name: Build missing testable systems and reusable VM bundle roots
         if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         run: |
-          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
-          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
-          ./scripts/vm-bundles.sh build
+          bundle_args=()
+          [[ "${{ steps.vm_bundle_core.outputs.cache-hit }}" == true ]] || bundle_args+=(core)
+          [[ "${{ steps.vm_bundle_identity.outputs.cache-hit }}" == true ]] || bundle_args+=(identity)
+          [[ "${{ steps.vm_bundle_observability.outputs.cache-hit }}" == true ]] || bundle_args+=(observability)
+          [[ "${{ steps.vm_bundle_storage.outputs.cache-hit }}" == true ]] || bundle_args+=(storage)
+          [[ "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true ]] || bundle_args+=(ai)
+          [[ "${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}" == true ]] || bundle_args+=(vm-drivers)
+          if [[ "${{ steps.vm_bundle_handoff.outputs.package_cache_complete }}" != true ]]; then
+            nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
+            nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
+          fi
+          ((${#bundle_args[@]} > 0))
+          ./scripts/vm-bundles.sh build "${bundle_args[@]}"
       - name: Export missing Nix store bundles for downstream VMs
         if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         env:

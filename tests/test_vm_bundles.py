@@ -190,6 +190,20 @@ class VmBundleScriptTests(unittest.TestCase):
             ],
         )
 
+    def test_build_accepts_a_selected_bundle_root(self) -> None:
+        env, nix_log, _ = self._fake_environment()
+        result = self._run("build", "vm-drivers", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertEqual(
+            nix_log.read_text(encoding="utf-8").splitlines(),
+            [
+                "build --no-link "
+                ".#packages.x86_64-linux.vm-drivers "
+                ".#checks.x86_64-linux.nas-vm.driver "
+                ".#checks.x86_64-linux.nas-vm-encrypted.driver",
+            ],
+        )
+
     def test_save_batches_build_then_exports_core_app_deltas_and_driver_delta(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
         out_dir = self._root / "bundles"

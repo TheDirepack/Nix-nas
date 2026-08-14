@@ -58,7 +58,7 @@ test drivers.
   list                 print each bundle name, one per line (core first)
   keys [dir]           print key_<name>=<hash> lines (for GITHUB_OUTPUT) and,
                        when dir is given, write <dir>/<name>.key files
-  build                build every bundle root, including both VM test drivers
+  build [bundle ...]   build selected bundle roots, or every root when omitted
   save <dir>           build every bundle, export each as <dir>/<name>.nar.gz
   save-missing <dir>   build every bundle, export only archives absent in <dir>
   verify <dir>         verify the generated manifest has no closure duplicates
@@ -327,9 +327,18 @@ main() {
     list) list_bundles ;;
     keys) need "$NIX"; keys "${1:-}" ;;
     build)
-      [[ $# -eq 0 ]] || die "build does not accept arguments"
       need "$NIX"
-      build_bundles "${BUNDLES[@]}"
+      if (($# == 0)); then
+        build_bundles "${BUNDLES[@]}"
+      else
+        for name in "$@"; do
+          case "$name" in
+            core|identity|observability|storage|ai|vm-drivers) ;;
+            *) die "unknown bundle: $name" ;;
+          esac
+        done
+        build_bundles "$@"
+      fi
       ;;
     save)
       [[ $# -eq 1 ]] || die "save requires exactly one directory argument"

@@ -115,7 +115,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         )
         self.assertLess(
             build_block.index("Package and verify as an untrusted consumer"),
-            build_block.index("Build testable systems"),
+            build_block.index("Build missing testable systems"),
         )
         self.assertLess(build_pos, integration_pos)
         self.assertLess(integration_pos, installer_pos)
