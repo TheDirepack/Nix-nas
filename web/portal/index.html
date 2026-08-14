@@ -24,18 +24,18 @@
     <p>Signed in as <strong style="display:inline">{{placeholder "http.request.header.Remote-Name" | html}}</strong>.</p>
   </header>
   <main class="grid">
-    {{ $groups := split "," (placeholder "http.request.header.Remote-Groups") }}
+    {{ $groups := splitList "," (placeholder "http.request.header.Remote-Groups") }}
     {{ $portal := include "/run/nas-control/portal.json" | mustFromJson }}
     {{ range $entry := $portal.entries }}
       {{ $visible := false }}
       {{ $access := index $entry "access" }}
       {{ $mode := index $access "mode" }}
       {{ if eq $mode "public" }}{{ $visible = true }}{{ end }}
-      {{ if has $groups "nas_admin" }}{{ $visible = true }}{{ end }}
+      {{ if has "nas_admin" $groups }}{{ $visible = true }}{{ end }}
       {{ $allow := index $access "allow" }}
       {{ $groups_list := index $access "groups" }}
       {{ if $groups_list }}
-        {{ range $g := $groups_list }}{{ if has $groups $g }}{{ $visible = true }}{{ end }}{{ end }}
+        {{ range $g := $groups_list }}{{ if has $g $groups }}{{ $visible = true }}{{ end }}{{ end }}
       {{ end }}
       {{ $users_list := index $access "users" }}
       {{ if $users_list }}
@@ -48,7 +48,7 @@
       {{ end }}
     {{ end }}
     <a href="/settings/"><strong>Account settings</strong><small>Password, MFA, and profile settings in Authentik.</small></a>
-    {{if has $groups "nas_admin"}}
+    {{if has "nas_admin" $groups}}
     <a href="/shares/admin/copyparty-config/"><strong>CopyParty configuration</strong><small>Edit native volumes, ACLs, flags, and reload configuration.</small></a>
     {{end}}
   </main>
