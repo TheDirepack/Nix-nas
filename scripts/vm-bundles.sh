@@ -204,7 +204,11 @@ save() {
   # Submit only missing bundle roots together so Nix can schedule their shared
   # DAG once. Export order remains core-first and each archive keeps the same
   # delta shape.
-  build_bundles "${targets[@]}"
+  if [[ ${NAS_BUNDLE_SKIP_BUILD:-0} == 1 ]]; then
+    printf '%s: reusing bundle roots built by the preceding CI build step\n' "$PROG" >&2
+  else
+    build_bundles "${targets[@]}"
+  fi
   closure_cached core > "$core_file"
   : > "$application_file"
   while IFS= read -r name; do

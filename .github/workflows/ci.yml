@@ -489,6 +489,8 @@ jobs:
           ./scripts/vm-bundles.sh build
       - name: Export missing Nix store bundles for downstream VMs
         if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
+        env:
+          NAS_BUNDLE_SKIP_BUILD: "1"
         run: ./scripts/vm-bundles.sh save-missing "$RUNNER_TEMP/vm-bundles"
       - name: Publish the exact Nix bundles used by this run
         if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'

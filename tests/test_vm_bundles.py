@@ -360,6 +360,22 @@ class VmBundleScriptTests(unittest.TestCase):
         ]
         self.assertEqual(len(exports), len(EXPECTED_BUNDLES) - 1)
 
+    def test_save_missing_can_reuse_roots_built_by_an_earlier_step(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        env["NAS_BUNDLE_SKIP_BUILD"] = "1"
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        with gzip.open(out_dir / "core.nar.gz", "wb") as stream:
+            stream.write(b"existing-core\n")
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertNotIn("build --no-link", nix_log.read_text(encoding="utf-8"))
+        self.assertEqual(
+            len([line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]),
+            len(EXPECTED_BUNDLES) - 1,
+        )
+
     def test_save_missing_is_a_noop_when_every_archive_exists(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
         out_dir = self._root / "bundles"
