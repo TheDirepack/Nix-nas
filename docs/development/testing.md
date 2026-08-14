@@ -198,9 +198,11 @@ the exact base as needed.
 Pull requests run the deterministic source, contract, build, and handoff
 checks. Browser, native QEMU, reboot/installer, and generated fuzz tiers are
 qualification work: they run on the scheduled workflow, protected main/tag
-pushes, or an explicit `workflow_dispatch` full/installer tier. The summary
-still reports every release-critical job and calls out cache persistence
-failures as non-authoritative warnings.
+pushes, or an explicit `workflow_dispatch` full/installer tier. The `full`
+tier includes the official installer and installed-VM checks; `installer` is
+the narrower on-demand tier for rerunning that portion. The summary still
+reports every release-critical job and calls out cache persistence failures as
+non-authoritative warnings.
 
 The build job has an exact-reuse path. A commit-keyed, manifest-verified
 source archive skips the package/re-extract/reference-evaluation round-trip on

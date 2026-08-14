@@ -128,6 +128,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         installer_condition = str(self.jobs["installer"].get("if", ""))
         self.assertIn("needs.browser.result == 'success'", installer_condition)
         self.assertIn("needs.integration.result == 'success'", installer_condition)
+        self.assertIn("github.event.inputs.test-tier == 'full'", installer_condition)
 
     def test_actionlint_is_a_static_job_gate(self) -> None:
         static_run = self.run_text(self.jobs["static"])

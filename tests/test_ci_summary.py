@@ -58,13 +58,13 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
-    def test_full_and_installer_dispatch_require_their_selected_tiers(self) -> None:
+    def test_full_dispatch_includes_installer_and_installed_vm_checks(self) -> None:
         full = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "full")
         installer = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "installer")
         self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.QUALIFICATION_JOBS | ci_summary.SLOW_JOBS <= full)
-        self.assertNotIn("installer", full)
+        self.assertIn("installer", full)
+        self.assertTrue(ci_summary.INSTALLED_FUZZ_JOBS <= full)
         self.assertIn("installer", installer)
-        self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & full)
         self.assertTrue(ci_summary.INSTALLED_FUZZ_JOBS <= installer)
 
     def test_any_reported_failure_is_rejected_even_when_job_is_optional(self) -> None:

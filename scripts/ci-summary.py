@@ -43,7 +43,7 @@ def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> s
     )
     if qualification_run:
         expected.update(QUALIFICATION_JOBS)
-    if (event_name == "workflow_dispatch" and test_tier == "installer") or (
+    if (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
         event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
     ):
         expected.add("installer")

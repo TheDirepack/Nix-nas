@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       test-tier:
-        description: Test scope for on-demand runs
+        description: Test scope for on-demand runs; full includes installer and installed-VM checks
         type: choice
         required: false
         default: fast
@@ -689,7 +689,7 @@ jobs:
     if: >-
       always() && needs.build.result == 'success' &&
       needs.browser.result == 'success' && needs.integration.result == 'success' &&
-      ((github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') ||
+      ((github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')) ||
        (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [integration, browser, build]
     runs-on: ubuntu-24.04
