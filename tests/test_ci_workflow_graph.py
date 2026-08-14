@@ -105,6 +105,9 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("steps.vm_bundle_handoff.outputs.cache_complete != 'true'", build_text)
         self.assertIn("bundle-manifest.tsv", build_text)
         self.assertIn("bundle-handoff.sha256", build_text)
+        self.assertIn("Prepare missing-only Nix bundle handoff", build_text)
+        self.assertIn("bundle-handoff.partial.sha256", build_text)
+        self.assertIn("vm-bundle-handoff/*.nar.gz", build_text)
         self.assertIn("Restore verified source archive", build_text)
         self.assertIn("source-archive-${{ github.sha }}", build_text)
         self.assertIn("vm_bundle_handoff.outputs.cache_complete != 'true'", build_text)
@@ -118,14 +121,15 @@ class CiWorkflowGraphTests(unittest.TestCase):
         for name in ("integration", "cache-vm-bundles"):
             text = self.serialized(self.jobs[name])
             if name == "integration":
-                self.assertIn("bundle_cache_complete == 'true'", text)
+                self.assertIn("cache_core_hit == 'true'", text)
+                self.assertIn("cache_vm_drivers_hit == 'true'", text)
                 self.assertIn("vm-bundle-handoff", text)
                 self.assertIn("verify-handoff", text)
             else:
                 self.assertIn("actions/checkout", text)
                 self.assertIn("needs.build.outputs.bundle_cache_complete != 'true'", text)
                 self.assertIn("vm-bundle-handoff", text)
-                self.assertIn("verify-handoff", text)
+                self.assertIn("verify-partial-handoff", text)
         self.assertIn(
             "Report cache persistence status",
             "\n".join(str(step.get("name", "")) for step in self.jobs["cache-vm-bundles"]["steps"]),

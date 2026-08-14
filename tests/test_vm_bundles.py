@@ -224,6 +224,8 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertIn("identity\t/nix/store/aaaaaaaaaa-identity", manifest)
         self.assertNotIn("vm-drivers\t/nix/store/aaaaaaaaaa-identity", manifest)
         self.assertTrue((out_dir / "bundle-handoff.sha256").is_file())
+        for name in EXPECTED_BUNDLES:
+            self.assertTrue((out_dir / f"{name}.paths").is_file(), name)
         verified = self._run("verify-handoff", str(out_dir), env=env)
         self.assertEqual(verified.returncode, 0, verified.stderr)
 
@@ -299,6 +301,34 @@ class VmBundleScriptTests(unittest.TestCase):
         result = self._run("verify-handoff", str(out_dir), env=env)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("checksum validation failed", result.stderr)
+
+    def test_verify_partial_handoff_accepts_only_missing_archives(self) -> None:
+        env, _, _ = self._fake_environment()
+        out_dir = self._root / "partial-handoff"
+        out_dir.mkdir()
+        (out_dir / "vm-drivers.nar.gz").write_bytes(b"driver-archive\n")
+        (out_dir / "bundle-manifest.tsv").write_text("vm-drivers\t/nix/store/driver\n", encoding="utf-8")
+        checksums = subprocess.run(
+            ["sha256sum", "vm-drivers.nar.gz", "bundle-manifest.tsv"],
+            cwd=out_dir,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        (out_dir / "bundle-handoff.partial.sha256").write_text(checksums.stdout, encoding="utf-8")
+
+        result = self._run("verify-partial-handoff", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        (out_dir / "vm-drivers.nar.gz").write_bytes(b"corrupt\n")
+        result = self._run("verify-partial-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum validation failed", result.stderr)
+
+        (out_dir / "vm-drivers.nar.gz").unlink()
+        result = self._run("verify-partial-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("contains no archives", result.stderr)
 
     def test_import_restores_core_before_application_and_driver_deltas(self) -> None:
         env, _, nix_store_log = self._fake_environment()
@@ -390,6 +420,27 @@ class VmBundleScriptTests(unittest.TestCase):
                 [line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]
             ),
             len(EXPECTED_BUNDLES) - 1,
+        )
+
+    def test_save_missing_reuses_cached_closure_manifests_for_existing_archives(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        env["NAS_BUNDLE_SKIP_BUILD"] = "1"
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        for name in EXPECTED_BUNDLES[:-1]:
+            with gzip.open(out_dir / f"{name}.nar.gz", "wb") as stream:
+                stream.write(f"existing-{name}\n".encode())
+            (out_dir / f"{name}.paths").write_text(f"/nix/store/aaaaaaaaaa-{name}\n", encoding="utf-8")
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        path_info_calls = [
+            line for line in nix_log.read_text(encoding="utf-8").splitlines() if line.startswith("path-info -r ")
+        ]
+        self.assertEqual(len(path_info_calls), 1, path_info_calls)
+        self.assertTrue((out_dir / "vm-drivers.paths").is_file())
+        self.assertTrue(
+            any(line.startswith("--export") for line in nix_store_log.read_text(encoding="utf-8").splitlines())
         )
 
     def test_save_missing_is_a_noop_when_every_archive_exists(self) -> None:

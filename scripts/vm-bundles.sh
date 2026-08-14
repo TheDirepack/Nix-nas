@@ -48,7 +48,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1
 
 usage() {
   cat <<USAGE
-usage: $PROG <list|keys|save|save-missing|verify|verify-handoff|import> [dir]
+usage: $PROG <list|keys|save|save-missing|verify|verify-partial-handoff|verify-handoff|import> [dir]
 
 Build, cache, and restore reusable Nix store bundles for the QEMU integration
 VMs. The core bundle contains boot/unlock and common test packages; application
@@ -62,6 +62,8 @@ test drivers.
   save <dir>           build every bundle, export each as <dir>/<name>.nar.gz
   save-missing <dir>   build every bundle, export only archives absent in <dir>
   verify <dir>         verify the generated manifest has no closure duplicates
+  verify-partial-handoff <dir>
+                       verify a missing-only handoff artifact
   verify-handoff <dir> verify every archive checksum and the closure manifest
   import <dir>         restore core (or rebuild it) then import cached deltas
 
@@ -154,7 +156,16 @@ save() {
   closure_cached() {
     local cached_name=$1 cached_file="$SAVE_CLOSURE_CACHE/$1.paths"
     if [[ ! -f "$cached_file" ]]; then
-      closure "$cached_name" > "$cached_file"
+      if [[ -f "$dir/$cached_name.paths" ]]; then
+        printf '%s: reusing cached closure manifest for %s\n' "$PROG" "$cached_name" >&2
+        cp -- "$dir/$cached_name.paths" "$cached_file"
+        sort -u "$cached_file" -o "$cached_file"
+      else
+        printf '%s: enumerating closure for %s\n' "$PROG" "$cached_name" >&2
+        closure "$cached_name" > "$cached_file"
+        printf '%s: closure enumeration complete for %s (%s paths)\n' \
+          "$PROG" "$cached_name" "$(wc -l < "$cached_file")" >&2
+      fi
     fi
     cat "$cached_file"
   }
@@ -216,6 +227,10 @@ save() {
     closure_cached "$name"
   done < <(list_bundles) | sort -u > "$application_file"
   cat "$core_file" "$application_file" | sort -u > "$base_file"
+  closure_cached vm-drivers > /dev/null
+  while IFS= read -r name; do
+    cp -- "$SAVE_CLOSURE_CACHE/$name.paths" "$dir/$name.paths"
+  done < <(list_bundles)
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
     archive="$dir/core.nar.gz"
     tmp="$archive.tmp.$$"
@@ -302,6 +317,23 @@ verify_handoff() {
   verify_manifest "$dir"
 }
 
+verify_partial_handoff() {
+  local dir=$1 archive
+  [[ -f "$dir/bundle-manifest.tsv" ]] || die "bundle manifest is missing: $dir/bundle-manifest.tsv"
+  [[ -f "$dir/bundle-handoff.partial.sha256" ]] || die "partial bundle checksum is missing: $dir/bundle-handoff.partial.sha256"
+  archive=0
+  for path in "$dir"/*.nar.gz; do
+    [[ -f "$path" ]] || continue
+    archive=1
+  done
+  ((archive == 1)) || die "partial bundle handoff contains no archives: $dir"
+  (
+    cd -- "$dir"
+    sha256sum --check --strict --quiet bundle-handoff.partial.sha256
+  ) || die "partial bundle handoff checksum validation failed: $dir"
+  verify_manifest "$dir"
+}
+
 import() {
   local dir=$1 name
 
@@ -359,6 +391,11 @@ main() {
     verify)
       [[ $# -eq 1 ]] || die "verify requires exactly one directory argument"
       verify_manifest "$1"
+      ;;
+    verify-partial-handoff)
+      [[ $# -eq 1 ]] || die "verify-partial-handoff requires exactly one directory argument"
+      need sha256sum
+      verify_partial_handoff "$1"
       ;;
     verify-handoff)
       [[ $# -eq 1 ]] || die "verify-handoff requires exactly one directory argument"
