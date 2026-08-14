@@ -18,7 +18,7 @@ class CommonDriftCoverageTests(unittest.TestCase):
     def test_run_command_timeout_without_secret_reports_timeout(self) -> None:
         result = common.run_command(
             [sys.executable, "-c", "import time; print('before', flush=True); time.sleep(5)"],
-            timeout_seconds=0.05,
+            timeout_seconds=0.5,
         )
         self.assertEqual(result.returncode, 124)
         self.assertIn("before", result.stdout)
@@ -28,7 +28,7 @@ class CommonDriftCoverageTests(unittest.TestCase):
         result = common.run_command(
             [sys.executable, "-c", "import sys,time; print(sys.stdin.read(), flush=True); time.sleep(5)"],
             input_text="protected-value",
-            timeout_seconds=0.05,
+            timeout_seconds=0.5,
         )
         self.assertEqual(result.returncode, 124)
         self.assertEqual(result.stdout, "")

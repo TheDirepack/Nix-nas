@@ -509,4 +509,12 @@ def compile_portal_projection(effective: dict[str, Any]) -> dict[str, Any]:
 def portal_bytes(effective: dict[str, Any]) -> bytes:
     return (json.dumps(compile_portal_projection(effective), indent=2, sort_keys=True) + "\n").encode("utf-8")
 
-__all__ = ["CaddyProjectionError", "generate_caddyfile", "validate_caddyfile", "PortalProjectionError", "compile_portal_projection", "portal_bytes"]
+
+__all__ = [
+    "CaddyProjectionError",
+    "generate_caddyfile",
+    "validate_caddyfile",
+    "PortalProjectionError",
+    "compile_portal_projection",
+    "portal_bytes",
+]

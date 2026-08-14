@@ -411,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 
+
 class SessionProjectionError(RuntimeError):
     """Raised when a session definition cannot be represented safely."""
 

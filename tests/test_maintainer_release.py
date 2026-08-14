@@ -104,15 +104,12 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
             "NAS_PREFLIGHT_SKIP_TESTS=1",
             "NAS_PREFLIGHT_SKIP_FUZZ=1",
             "NAS_PREFLIGHT_SKIP_NIX=1",
-            "NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1",
             "bash",
             "scripts/preflight.sh",
             timeout=90,
         )
         # It is allowed to be partial when optional external tools are not installed,
-        # but every locally available mandatory stage must have completed. The
-        # production Cockpit bundle is validated separately after the qualified
-        # bundle build, not from a potentially stale checked-in dist directory.
+        # but every locally available mandatory stage must have completed.
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("Preflight partial: 0", result.stdout)
         self.assertIn("repository structure", result.stdout)

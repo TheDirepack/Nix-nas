@@ -207,9 +207,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         with (
             mock.patch.dict(sync.os.environ, {"NAS_AUTOMATION_ROLE_WAIT_SECONDS": "0"}),
             mock.patch.object(sync.time, "sleep"),
-            mock.patch.object(
-                sync, "authentik_list", side_effect=[[{"pk": 42, "username": sync.AUTOMATION_USER}], []]
-            ),
+            mock.patch.object(sync, "authentik_list", side_effect=[[{"pk": 42, "username": sync.AUTOMATION_USER}], []]),
         ):
             with self.assertRaisesRegex(sync.SyncError, "automation role is missing"):
                 sync.provision_runtime_token("token")

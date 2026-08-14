@@ -3,11 +3,9 @@ let
   inherit (args)
     authentikApiTokenFile
     authentikBootstrapTokenFile
-    authentikDataDir
     authentikPort
     aiStorageRoot
     cfg
-    copypartyDataDir
     copypartyUserConfigDir
     lib
     llamaCppPackage
@@ -17,15 +15,14 @@ let
     nasZfsCreateEncryptedDataset
     nasZfsMountCheck
     pkgs
-    postgresqlDataDir
     shareRoot
     syncthingConfigDir
-    syncthingDataDir
     systemStateVersion
     vaultwardenBackupDir
-    vaultwardenDataDir
-    vaultwardenStateDirectory
   ;
+  vaultwardenStateDirectory =
+    if lib.versionOlder systemStateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
+  vaultwardenDataDir = "/var/lib/${vaultwardenStateDirectory}";
 
   nasPythonApplication = pkgs.python3Packages.buildPythonApplication {
     pname = "nixos-nas-control";
@@ -79,7 +76,6 @@ let
       pkgs.coreutils
       pkgs.keepassxc
       pkgs.python3
-      pkgs.sudo
       pkgs.systemd
       pkgs.util-linux
       pkgs.zfs
@@ -91,6 +87,7 @@ let
       nasZfsMountCheck
     ];
     text = ''
+      export PATH=/run/wrappers/bin:$PATH
       export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
@@ -149,7 +146,7 @@ let
     })
     (mkPathAuthority {
       name = "copyparty";
-      source = copypartyDataDir;
+      source = "/var/lib/copyparty";
       sensitive = true;
       owner = "copyparty";
       group = "copyparty";
@@ -171,7 +168,7 @@ let
     })
     (mkPathAuthority {
       name = "authentik-media";
-      source = "${authentikDataDir}/data";
+      source = "/var/lib/authentik/data";
       sensitive = true;
       owner = "authentik";
       group = "authentik";
@@ -346,9 +343,9 @@ let
       export NAS_SETUP_STATE_ROOT=/var/lib/nas-setup
       export NAS_FIREWALL_STATE_ROOT=/var/lib/nas-firewall
       export NAS_NETWORKMANAGER_STATE_ROOT=/etc/NetworkManager/system-connections
-      export NAS_COPYPARTY_STATE_ROOT=${lib.escapeShellArg copypartyUserConfigDir}
+      export NAS_COPYPARTY_STATE_ROOT=/var/lib/copyparty/user.d
       export NAS_SYNCTHING_STATE_PATH=${lib.escapeShellArg (syncthingConfigDir + "/config.xml")}
-      export NAS_AUTHENTIK_STATE_ROOT=${lib.escapeShellArg (authentikDataDir + "/data")}
+      export NAS_AUTHENTIK_STATE_ROOT=/var/lib/authentik/data
       export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_STATE_REGISTRY_FILE=${stateRegistryFile}
       export NAS_STATE_REGISTRY_REQUIRED=1

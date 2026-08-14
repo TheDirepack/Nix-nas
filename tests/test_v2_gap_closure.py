@@ -1,4 +1,5 @@
 """Gap-closure tests for uncovered V2 functions — deterministic, <0.1s each."""
+
 from __future__ import annotations
 
 import hashlib
@@ -129,16 +130,46 @@ class SpecGapTests(unittest.TestCase):
         self.assertFalse(spec._under(pathlib.PurePosixPath("/a/b"), pathlib.PurePosixPath("/a/c")))
 
     def test_normalize_network_and_runtime(self):
-        doc = {"schemaVersion": 3, "services": {"s": {"name": "S", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "python", "entrypoint": {"module": "m"}}}}}
+        doc = {
+            "schemaVersion": 3,
+            "services": {
+                "s": {
+                    "name": "S",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "python", "entrypoint": {"module": "m"}},
+                }
+            },
+        }
         norm = spec.normalize(doc)
         self.assertEqual(norm["services"]["s"]["runtime"]["interpreter"], "/run/current-system/sw/bin/python3")
         # exec runtime
-        doc2 = {"schemaVersion": 3, "services": {"s": {"name": "S", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "exec", "command": ["/bin/sh"]}}}}
+        doc2 = {
+            "schemaVersion": 3,
+            "services": {
+                "s": {
+                    "name": "S",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "exec", "command": ["/bin/sh"]},
+                }
+            },
+        }
         spec.normalize(doc2)
 
     def test_validate_runtime_paths_and_dependency_graph(self):
         # valid
-        svc = {"name": "X", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "exec", "command": ["/bin/true"]}, "sandbox": {"mode": "inherit"}, "resources": {"accelerators": []}, "storage": [], "credentials": [], "routes": {}, "listeners": {}, "dependencies": [], "authorization": {"capabilities": []}}
+        svc = {
+            "name": "X",
+            "workload": {"kind": "daemon", "activation": "persistent"},
+            "runtime": {"type": "exec", "command": ["/bin/true"]},
+            "sandbox": {"mode": "inherit"},
+            "resources": {"accelerators": []},
+            "storage": [],
+            "credentials": [],
+            "routes": {},
+            "listeners": {},
+            "dependencies": [],
+            "authorization": {"capabilities": []},
+        }
         spec._validate_runtime_paths("x", {**svc, "runtime": {"type": "exec", "command": ["/bin/true"]}})
         with self.assertRaises(spec.ManagedServicesV2Error):
             spec._validate_runtime_paths("x", {**svc, "runtime": {"type": "exec", "command": ["relative"]}})
@@ -160,16 +191,46 @@ class SpecGapTests(unittest.TestCase):
 
     def test_semantic_validate_branches(self):
         # user scope requires template
-        doc = {"schemaVersion": 3, "storageResources": {"r": {"path": "/srv/r", "stateClass": "authoritative", "scope": "user", "backup": {"enabled": False, "consistency": "filesystem"}}}, "credentials": {}, "networkProfiles": {}, "services": {}}
+        doc = {
+            "schemaVersion": 3,
+            "storageResources": {
+                "r": {
+                    "path": "/srv/r",
+                    "stateClass": "authoritative",
+                    "scope": "user",
+                    "backup": {"enabled": False, "consistency": "filesystem"},
+                }
+            },
+            "credentials": {},
+            "networkProfiles": {},
+            "services": {},
+        }
         with self.assertRaises(spec.ManagedServicesV2Error):
             spec.semantic_validate(spec.normalize(doc))
         # vlan requires isolated
-        doc2 = spec.normalize({"schemaVersion": 3, "networkProfiles": {"p": {"mode": "host", "vlanId": 10, "vlanParent": "eth0"}}, "services": {}})
+        doc2 = spec.normalize(
+            {
+                "schemaVersion": 3,
+                "networkProfiles": {"p": {"mode": "host", "vlanId": 10, "vlanParent": "eth0"}},
+                "services": {},
+            }
+        )
         with self.assertRaises(spec.ManagedServicesV2Error):
             spec.semantic_validate(doc2)
 
     def test_build_effective_and_load_platform(self):
-        doc = spec.normalize({"schemaVersion": 3, "services": {"s": {"name": "S", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "s.service"}}}})
+        doc = spec.normalize(
+            {
+                "schemaVersion": 3,
+                "services": {
+                    "s": {
+                        "name": "S",
+                        "workload": {"kind": "daemon", "activation": "persistent"},
+                        "runtime": {"type": "systemd", "unit": "s.service"},
+                    }
+                },
+            }
+        )
         eff = spec.build_effective(doc)
         self.assertIn("derived", eff)
         with tempfile.TemporaryDirectory() as tmp:
@@ -230,30 +291,86 @@ class CaddyGapTests(unittest.TestCase):
             caddy._q("bad\x00")
 
     def test_render_wake_and_identity(self):
-        svc = {"name": "Demo", "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30}, "runtime": {"type": "systemd", "unit": "demo.service"}, "routes": {"w": {"target": {"type": "http", "port": 80}, "exposure": {"type": "path", "paths": ["/w"]}, "auth": {"mode": "public"}}}}
+        svc = {
+            "name": "Demo",
+            "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30},
+            "runtime": {"type": "systemd", "unit": "demo.service"},
+            "routes": {
+                "w": {
+                    "target": {"type": "http", "port": 80},
+                    "exposure": {"type": "path", "paths": ["/w"]},
+                    "auth": {"mode": "public"},
+                }
+            },
+        }
         eff = self._eff(svc)
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy.generate_caddyfile(eff, wake_socket=None)
         # upstream wake fails
-        svc2 = {"name": "Demo", "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30}, "runtime": {"type": "systemd", "unit": "demo.service"}, "routes": {"w": {"target": {"type": "http", "port": 80}, "exposure": {"type": "path", "paths": ["/w"]}, "auth": {"mode": "upstream"}}}}
+        svc2 = {
+            "name": "Demo",
+            "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30},
+            "runtime": {"type": "systemd", "unit": "demo.service"},
+            "routes": {
+                "w": {
+                    "target": {"type": "http", "port": 80},
+                    "exposure": {"type": "path", "paths": ["/w"]},
+                    "auth": {"mode": "upstream"},
+                }
+            },
+        }
         eff2 = self._eff(svc2)
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy.generate_caddyfile(eff2, wake_socket="/run/wake.sock")
 
     def test_generate_caddyfile_hostname_validation(self):
-        svc = {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}, "routes": {"w": {"target": {"type": "http", "port": 80}, "exposure": {"type": "path", "paths": ["/x"]}, "auth": {"mode": "public"}}}}
+        svc = {
+            "name": "D",
+            "workload": {"kind": "daemon", "activation": "persistent"},
+            "runtime": {"type": "systemd", "unit": "demo.service"},
+            "routes": {
+                "w": {
+                    "target": {"type": "http", "port": 80},
+                    "exposure": {"type": "path", "paths": ["/x"]},
+                    "auth": {"mode": "public"},
+                }
+            },
+        }
         eff = self._eff(svc)
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy.generate_caddyfile(eff, lan_host="bad host!")
         with self.assertRaises(caddy.CaddyProjectionError):
             # invalid hostname in route
-            svc_bad = {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}, "routes": {"w": {"target": {"type": "http", "port": 80}, "exposure": {"type": "hostname", "hostnames": ["bad host"]}, "auth": {"mode": "public"}}}}
+            svc_bad = {
+                "name": "D",
+                "workload": {"kind": "daemon", "activation": "persistent"},
+                "runtime": {"type": "systemd", "unit": "demo.service"},
+                "routes": {
+                    "w": {
+                        "target": {"type": "http", "port": 80},
+                        "exposure": {"type": "hostname", "hostnames": ["bad host"]},
+                        "auth": {"mode": "public"},
+                    }
+                },
+            }
             eff_bad = self._eff(svc_bad)
             caddy.generate_caddyfile(eff_bad)
 
     def test_portal_bytes_and_compile(self):
         # portal_bytes success + fail
-        svc = {"name": "Demo", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}, "routes": {"w": {"target": {"type": "http", "port": 80}, "exposure": {"type": "path", "paths": ["/x"]}, "auth": {"mode": "public"}, "portal": {"visible": True, "title": "Demo"}}}}
+        svc = {
+            "name": "Demo",
+            "workload": {"kind": "daemon", "activation": "persistent"},
+            "runtime": {"type": "systemd", "unit": "demo.service"},
+            "routes": {
+                "w": {
+                    "target": {"type": "http", "port": 80},
+                    "exposure": {"type": "path", "paths": ["/x"]},
+                    "auth": {"mode": "public"},
+                    "portal": {"visible": True, "title": "Demo"},
+                }
+            },
+        }
         eff = self._eff(svc)
         data = caddy.portal_bytes(eff)
         self.assertIn(b"Demo", data)
@@ -286,44 +403,148 @@ class SystemdGapTests(unittest.TestCase):
 
     def test_attachment_lines_variants(self):
         # storage read success, write requires existing identity
-        eff = spec.compile_document({"schemaVersion": 3, "storageResources": {"data": {"path": "/srv/data", "stateClass": "authoritative"}}, "services": {"demo": {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}, "storage": [{"resource": "data", "mountPath": "/data", "access": "read"}]}}}, self.schema)
+        eff = spec.compile_document(
+            {
+                "schemaVersion": 3,
+                "storageResources": {"data": {"path": "/srv/data", "stateClass": "authoritative"}},
+                "services": {
+                    "demo": {
+                        "name": "D",
+                        "workload": {"kind": "daemon", "activation": "persistent"},
+                        "runtime": {"type": "systemd", "unit": "demo.service"},
+                        "storage": [{"resource": "data", "mountPath": "/data", "access": "read"}],
+                    }
+                },
+            },
+            self.schema,
+        )
         svc = eff["services"]["demo"]
         lines = sysd.attachment_lines(eff, svc)
-        self.assertTrue(any("BindReadOnlyPaths" in l for l in lines))
+        self.assertTrue(any("BindReadOnlyPaths" in line for line in lines))
         # credential environment-file
-        eff2 = spec.compile_document({"schemaVersion": 3, "credentials": {"sec": {"path": "/run/nas-secrets/sec"}}, "services": {"demo": {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}, "credentials": [{"credential": "sec", "use": "environment-file"}]}}}, self.schema)
+        eff2 = spec.compile_document(
+            {
+                "schemaVersion": 3,
+                "credentials": {"sec": {"path": "/run/nas-secrets/sec"}},
+                "services": {
+                    "demo": {
+                        "name": "D",
+                        "workload": {"kind": "daemon", "activation": "persistent"},
+                        "runtime": {"type": "systemd", "unit": "demo.service"},
+                        "credentials": [{"credential": "sec", "use": "environment-file"}],
+                    }
+                },
+            },
+            self.schema,
+        )
         self.assertIn("EnvironmentFile", sysd.attachment_lines(eff2, eff2["services"]["demo"])[0])
         # duplicate mount rejected
-        eff_dup = spec.compile_document({"schemaVersion": 3, "credentials": {"a": {"path": "/run/nas-secrets/a"}, "b": {"path": "/run/nas-secrets/b"}}, "services": {"demo": {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}, "credentials": [{"credential": "a", "use": "file", "mountPath": "/same"}, {"credential": "b", "use": "file", "mountPath": "/same"}]}}}, self.schema)
+        eff_dup = spec.compile_document(
+            {
+                "schemaVersion": 3,
+                "credentials": {"a": {"path": "/run/nas-secrets/a"}, "b": {"path": "/run/nas-secrets/b"}},
+                "services": {
+                    "demo": {
+                        "name": "D",
+                        "workload": {"kind": "daemon", "activation": "persistent"},
+                        "runtime": {"type": "systemd", "unit": "demo.service"},
+                        "credentials": [
+                            {"credential": "a", "use": "file", "mountPath": "/same"},
+                            {"credential": "b", "use": "file", "mountPath": "/same"},
+                        ],
+                    }
+                },
+            },
+            self.schema,
+        )
         with self.assertRaises(sysd.SystemdAttachmentError):
             sysd.attachment_lines(eff_dup, eff_dup["services"]["demo"])
 
     def test_generate_projection_exec_and_systemd(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = pathlib.Path(tmp) / "out"
-            eff = spec.compile_document({"schemaVersion": 3, "services": {"demo": {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "exec", "command": ["/bin/true"]}}}}, self.schema)
+            eff = spec.compile_document(
+                {
+                    "schemaVersion": 3,
+                    "services": {
+                        "demo": {
+                            "name": "D",
+                            "workload": {"kind": "daemon", "activation": "persistent"},
+                            "runtime": {"type": "exec", "command": ["/bin/true"]},
+                        }
+                    },
+                },
+                self.schema,
+            )
             # ensure source_dir exists for exec runner reference
             src = pathlib.Path(tmp) / "src"
             src.mkdir()
             (src / "nas_v2_exec_runner.py").write_text("# stub", encoding="utf-8")
-            files, manifest = sysd.generate_projection(eff, output_dir=out, python_bin="/run/current-system/sw/bin/python3", source_dir=src, systemctl_bin="/bin/systemctl", uv_bin="/bin/uv")
+            files, manifest = sysd.generate_projection(
+                eff,
+                output_dir=out,
+                python_bin="/run/current-system/sw/bin/python3",
+                source_dir=src,
+                systemctl_bin="/bin/systemctl",
+                uv_bin="/bin/uv",
+            )
             self.assertIn("demo.service", str(files))
             # systemd runtime dropin
-            eff2 = spec.compile_document({"schemaVersion": 3, "services": {"demo": {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "systemd", "unit": "demo.service"}}}}, self.schema)
-            files2, _ = sysd.generate_projection(eff2, output_dir=out, python_bin="/bin/python3", source_dir=src, systemctl_bin="/bin/systemctl", uv_bin="/bin/uv")
+            eff2 = spec.compile_document(
+                {
+                    "schemaVersion": 3,
+                    "services": {
+                        "demo": {
+                            "name": "D",
+                            "workload": {"kind": "daemon", "activation": "persistent"},
+                            "runtime": {"type": "systemd", "unit": "demo.service"},
+                        }
+                    },
+                },
+                self.schema,
+            )
+            files2, _ = sysd.generate_projection(
+                eff2,
+                output_dir=out,
+                python_bin="/bin/python3",
+                source_dir=src,
+                systemctl_bin="/bin/systemctl",
+                uv_bin="/bin/uv",
+            )
             self.assertIn("manifest.json", str(list(files2.keys())[0]) if files2 else "")
 
     def test_generate_projection_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = pathlib.Path(tmp)
             # storage attachment with existing resource but colliding mount
-            eff = spec.compile_document({"schemaVersion": 3, "storageResources": {"data": {"path": "/srv/data", "stateClass": "authoritative"}}, "services": {"demo": {"name": "D", "workload": {"kind": "daemon", "activation": "persistent"}, "runtime": {"type": "exec", "command": ["/bin/true"]}, "storage": [{"resource": "data", "mountPath": "/data", "access": "write"}]}}}, self.schema)
+            eff = spec.compile_document(
+                {
+                    "schemaVersion": 3,
+                    "storageResources": {"data": {"path": "/srv/data", "stateClass": "authoritative"}},
+                    "services": {
+                        "demo": {
+                            "name": "D",
+                            "workload": {"kind": "daemon", "activation": "persistent"},
+                            "runtime": {"type": "exec", "command": ["/bin/true"]},
+                            "storage": [{"resource": "data", "mountPath": "/data", "access": "write"}],
+                        }
+                    },
+                },
+                self.schema,
+            )
             # force fail via dynamic user writable bind: patch runtime identity to dynamic
             eff["services"]["demo"]["runtime"]["identity"] = {"mode": "dynamic"}
             src = pathlib.Path(tmp) / "src"
             src.mkdir()
             with self.assertRaises(sysd.SystemdProjectionError):
-                sysd.generate_projection(eff, output_dir=out, python_bin="/bin/python3", source_dir=src, systemctl_bin="/bin/systemctl", uv_bin="/bin/uv")
+                sysd.generate_projection(
+                    eff,
+                    output_dir=out,
+                    python_bin="/bin/python3",
+                    source_dir=src,
+                    systemctl_bin="/bin/systemctl",
+                    uv_bin="/bin/uv",
+                )
 
     def test_quote_and_protect_conflicts(self):
         with self.assertRaises(sysd.SystemdAttachmentError):
@@ -353,18 +574,52 @@ class BackupGapTests(unittest.TestCase):
         doc = {
             "schemaVersion": 3,
             "storageResources": {
-                "src": {"path": "/srv/src", "stateClass": "authoritative", "scope": "system", "backup": {"enabled": True, "consistency": "native-dump"}},
-                "art": {"path": "/srv/art", "stateClass": "derived", "scope": "system", "backup": {"enabled": False, "consistency": "filesystem"}},
+                "src": {
+                    "path": "/srv/src",
+                    "stateClass": "authoritative",
+                    "scope": "system",
+                    "backup": {"enabled": True, "consistency": "native-dump"},
+                },
+                "art": {
+                    "path": "/srv/art",
+                    "stateClass": "derived",
+                    "scope": "system",
+                    "backup": {"enabled": False, "consistency": "filesystem"},
+                },
             },
             "services": {
-                "prep": {"name": "P", "workload": {"kind": "job"}, "runtime": {"type": "systemd", "unit": "prep.service"}, "storage": [{"resource": "src", "mountPath": "/in", "access": "read"}, {"resource": "art", "mountPath": "/out", "access": "write"}]},
+                "prep": {
+                    "name": "P",
+                    "workload": {"kind": "job"},
+                    "runtime": {"type": "systemd", "unit": "prep.service"},
+                    "storage": [
+                        {"resource": "src", "mountPath": "/in", "access": "read"},
+                        {"resource": "art", "mountPath": "/out", "access": "write"},
+                    ],
+                },
             },
         }
         eff = spec.compile_document(doc, self.schema)
         inv, paths = backup.compile_backup_projection(eff)
         self.assertIn(b"nativeDump", inv)
         # duplicate path fails
-        doc2 = {"schemaVersion": 3, "storageResources": {"a": {"path": "/same", "stateClass": "authoritative", "backup": {"enabled": True, "consistency": "filesystem"}}, "b": {"path": "/same", "stateClass": "authoritative", "backup": {"enabled": True, "consistency": "filesystem"}}}, "services": {}, "derived": {"backupResources": ["a", "b"]}}
+        doc2 = {
+            "schemaVersion": 3,
+            "storageResources": {
+                "a": {
+                    "path": "/same",
+                    "stateClass": "authoritative",
+                    "backup": {"enabled": True, "consistency": "filesystem"},
+                },
+                "b": {
+                    "path": "/same",
+                    "stateClass": "authoritative",
+                    "backup": {"enabled": True, "consistency": "filesystem"},
+                },
+            },
+            "services": {},
+            "derived": {"backupResources": ["a", "b"]},
+        }
         # manually inject derived
         eff2 = spec.normalize(doc2)
         eff2["derived"] = {"backupResources": ["a", "b"], "authorization": {}, "runtime": {}, "routes": []}
@@ -376,7 +631,15 @@ class BackupGapTests(unittest.TestCase):
         with self.assertRaises(backup.NativeDumpProjectionError):
             backup.resolve_native_dump({}, "missing")
         with self.assertRaises(backup.NativeDumpProjectionError):
-            backup.resolve_native_dump({"storageResources": {"x": {"path": "/x", "stateClass": "authoritative", "backup": {"enabled": False}}}, "services": {}}, "x")
+            backup.resolve_native_dump(
+                {
+                    "storageResources": {
+                        "x": {"path": "/x", "stateClass": "authoritative", "backup": {"enabled": False}}
+                    },
+                    "services": {},
+                },
+                "x",
+            )
 
     def test_prepare_cleanup_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -387,13 +650,20 @@ class BackupGapTests(unittest.TestCase):
             # empty inventory fails schema
             inv.write_text(json.dumps({"schemaVersion": 99, "resources": []}), encoding="utf-8")
             with self.assertRaises(backup.BackupRuntimeError):
-                backup.prepare(inventory_path=inv, paths_path=paths, state_path=state, zfs_bin="true", systemctl_bin="true")
+                backup.prepare(
+                    inventory_path=inv, paths_path=paths, state_path=state, zfs_bin="true", systemctl_bin="true"
+                )
             # cleanup with no state is ok
             state.unlink(missing_ok=True)
             res = backup.cleanup(state_path=state, paths_path=paths, zfs_bin="true")
             self.assertEqual(res["destroyed"], [])
             # verify helpers
-            inv.write_text(json.dumps({"schemaVersion": 1, "resources": [{"id": "r", "path": "/srv/r", "consistency": "filesystem"}]}), encoding="utf-8")
+            inv.write_text(
+                json.dumps(
+                    {"schemaVersion": 1, "resources": [{"id": "r", "path": "/srv/r", "consistency": "filesystem"}]}
+                ),
+                encoding="utf-8",
+            )
             root = t / "restore"
             # missing restore root fails
             with self.assertRaises(backup.BackupVerificationError):
@@ -428,16 +698,38 @@ class BackupGapTests(unittest.TestCase):
                 out_paths = t / "out_paths"
                 out_state = t / "out_state"
                 # empty resources should produce empty runtime paths
-                result = backup.prepare(inventory_path=inv2, paths_path=out_paths, state_path=out_state, zfs_bin="true", systemctl_bin="true")
+                result = backup.prepare(
+                    inventory_path=inv2,
+                    paths_path=out_paths,
+                    state_path=out_state,
+                    zfs_bin="true",
+                    systemctl_bin="true",
+                )
                 self.assertEqual(result["paths"], [])
 
 
 class NetworkGapTests(unittest.TestCase):
     def test_bridge_and_policy_names(self):
         self.assertTrue(net.bridge_interface_name("svc").startswith("nv2"))
-        for fn in (net.zone_name, net.host_policy_name, net.lan_policy_name, net.world_policy_name, net.route_policy_name, net.listener_policy_name):
+        for fn in (
+            net.zone_name,
+            net.host_policy_name,
+            net.lan_policy_name,
+            net.world_policy_name,
+            net.route_policy_name,
+            net.listener_policy_name,
+        ):
             self.assertTrue(fn("svc").startswith("nv2"))
-        self.assertEqual(net.network_policy({}, {}), {"mode": "host", "outboundDefault": "allow", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []})
+        self.assertEqual(
+            net.network_policy({}, {}),
+            {
+                "mode": "host",
+                "outboundDefault": "allow",
+                "lanAccess": False,
+                "allowedHostPorts": [],
+                "allowedEgress": [],
+            },
+        )
         self.assertIsNone(net.vlan_binding({}))
         with self.assertRaises(net.PodmanNetworkProjectionError):
             net.vlan_binding({"vlanId": 10})  # missing parent
@@ -467,7 +759,13 @@ class NetworkGapTests(unittest.TestCase):
             t = pathlib.Path(tmp)
             # missing manifest fails
             with self.assertRaises(net.FirewalldReconcileError):
-                net.reconcile(manifest_path=t / "missing.json", projection_root=t, system_config=t / "sys", firewall_cmd="true", firewall_offline_cmd="true")
+                net.reconcile(
+                    manifest_path=t / "missing.json",
+                    projection_root=t,
+                    system_config=t / "sys",
+                    firewall_cmd="true",
+                    firewall_offline_cmd="true",
+                )
             # safe target rejects outside namespace
             with self.assertRaises(net.FirewalldReconcileError):
                 net._safe_target("zones/bad.xml")
@@ -476,6 +774,7 @@ class NetworkGapTests(unittest.TestCase):
 class BootstrapGapTests(unittest.TestCase):
     def test_is_seed_stub_and_yaml_files(self):
         from ruamel.yaml.comments import CommentedMap
+
         stub = CommentedMap()
         stub["schemaVersion"] = 3
         stub["services"] = CommentedMap()
@@ -495,6 +794,7 @@ class BootstrapGapTests(unittest.TestCase):
             d = pathlib.Path(tmp)
             p = d / "svc.yaml"
             from ruamel.yaml.comments import CommentedMap
+
             cm = CommentedMap()
             cm["schemaVersion"] = 3
             cm["services"] = CommentedMap()
@@ -534,18 +834,28 @@ class ApplyGapTests(unittest.TestCase):
             self.assertTrue(apply_mod._is_intended_directory(d / "newdir"))
 
     def test_bind_platform_vlan_parent(self):
-        eff = {"services": {"s": {"managed": True, "enabled": True, "network": {"vlanId": 10}, "networkProfile": None}}, "networkProfiles": {}}
+        eff = {
+            "services": {"s": {"managed": True, "enabled": True, "network": {"vlanId": 10}, "networkProfile": None}},
+            "networkProfiles": {},
+        }
         # missing vlanParent env -> error
         with self.assertRaises(sysd.SystemdProjectionError):
             apply_mod._bind_platform_vlan_parent(eff, None)
         bound = apply_mod._bind_platform_vlan_parent(eff, "eth0")
         self.assertEqual(bound["services"]["s"]["network"]["vlanParent"], "eth0")
         # no vlan -> unchanged
-        eff2 = {"services": {"s": {"managed": True, "enabled": True, "network": {"mode": "host"}}}, "networkProfiles": {}}
+        eff2 = {
+            "services": {"s": {"managed": True, "enabled": True, "network": {"mode": "host"}}},
+            "networkProfiles": {},
+        }
         self.assertEqual(apply_mod._bind_platform_vlan_parent(eff2, "eth0"), eff2)
 
     def test_service_storage_dirs_and_ensure(self):
-        eff = {"services": {"demo": {"managed": True, "enabled": True, "runtime": {"type": "exec", "command": ["/bin/true"]}}}}
+        eff = {
+            "services": {
+                "demo": {"managed": True, "enabled": True, "runtime": {"type": "exec", "command": ["/bin/true"]}}
+            }
+        }
         dirs = apply_mod._service_storage_dirs(eff)
         self.assertTrue(any("demo" in str(d) for d in dirs))
         # ensure does not raise
@@ -599,12 +909,22 @@ class SessionGapTests(unittest.TestCase):
         self.assertTrue(is_cdi_selector("nvidia.com/gpu=0"))
 
     def test_accelerator_helpers(self):
-        inv = {"schemaVersion": 1, "devices": [], "cdi": {"nvidia.com/gpu": ["0"]}, "capabilities": {"accelerator:nvidia.com/gpu": True}}
+        inv = {
+            "schemaVersion": 1,
+            "devices": [],
+            "cdi": {"nvidia.com/gpu": ["0"]},
+            "capabilities": {"accelerator:nvidia.com/gpu": True},
+        }
         caps = enabled_capabilities(inv)
         self.assertIsInstance(caps, set)
         with tempfile.TemporaryDirectory() as tmp:
             p = pathlib.Path(tmp) / "inv.json"
-            p.write_text(json.dumps({"schemaVersion": 1, "devices": [{"path": "/dev/dri/card0"}], "capabilities": {"kvm": True}}), encoding="utf-8")
+            p.write_text(
+                json.dumps(
+                    {"schemaVersion": 1, "devices": [{"path": "/dev/dri/card0"}], "capabilities": {"kvm": True}}
+                ),
+                encoding="utf-8",
+            )
             inv2 = load_platform_inventory(p)
             self.assertIsInstance(inv2, dict)
 
