@@ -357,49 +357,37 @@ jobs:
         id: vm_bundle_core
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/core.nar.gz
-            ${{ runner.temp }}/vm-bundles/core.paths
+          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm_bundles.outputs.key_core }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: identity"
         id: vm_bundle_identity
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/identity.nar.gz
-            ${{ runner.temp }}/vm-bundles/identity.paths
+          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm_bundles.outputs.key_identity }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: observability"
         id: vm_bundle_observability
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/observability.nar.gz
-            ${{ runner.temp }}/vm-bundles/observability.paths
+          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm_bundles.outputs.key_observability }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: storage"
         id: vm_bundle_storage
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/storage.nar.gz
-            ${{ runner.temp }}/vm-bundles/storage.paths
+          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm_bundles.outputs.key_storage }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: ai"
         id: vm_bundle_ai
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/ai.nar.gz
-            ${{ runner.temp }}/vm-bundles/ai.paths
+          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm_bundles.outputs.key_ai }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: vm-drivers"
         id: vm_bundle_vm_drivers
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
-            ${{ runner.temp }}/vm-bundles/vm-drivers.paths
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm_bundles.outputs.key_vm_drivers }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: Determine whether the exact VM bundle set was restored
         id: vm_bundle_handoff
@@ -611,49 +599,37 @@ jobs:
         if: needs.build.outputs.cache_core_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/core.nar.gz
-            ${{ runner.temp }}/vm-bundles/core.paths
+          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: identity"
         if: needs.build.outputs.cache_identity_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/identity.nar.gz
-            ${{ runner.temp }}/vm-bundles/identity.paths
+          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: observability"
         if: needs.build.outputs.cache_observability_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/observability.nar.gz
-            ${{ runner.temp }}/vm-bundles/observability.paths
+          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: storage"
         if: needs.build.outputs.cache_storage_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/storage.nar.gz
-            ${{ runner.temp }}/vm-bundles/storage.paths
+          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: ai"
         if: needs.build.outputs.cache_ai_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/ai.nar.gz
-            ${{ runner.temp }}/vm-bundles/ai.paths
+          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: vm-drivers"
         if: needs.build.outputs.cache_vm_drivers_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
-            ${{ runner.temp }}/vm-bundles/vm-drivers.paths
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: Report cache persistence status
         if: always()
@@ -765,49 +741,37 @@ jobs:
         if: needs.build.outputs.cache_core_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/core.nar.gz
-            ${{ runner.temp }}/vm-bundles/core.paths
+          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: identity"
         if: needs.build.outputs.cache_identity_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/identity.nar.gz
-            ${{ runner.temp }}/vm-bundles/identity.paths
+          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: observability"
         if: needs.build.outputs.cache_observability_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/observability.nar.gz
-            ${{ runner.temp }}/vm-bundles/observability.paths
+          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: storage"
         if: needs.build.outputs.cache_storage_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/storage.nar.gz
-            ${{ runner.temp }}/vm-bundles/storage.paths
+          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: ai"
         if: needs.build.outputs.cache_ai_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/ai.nar.gz
-            ${{ runner.temp }}/vm-bundles/ai.paths
+          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: vm-drivers"
         if: needs.build.outputs.cache_vm_drivers_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: |
-            ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
-            ${{ runner.temp }}/vm-bundles/vm-drivers.paths
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: Download the exact Nix bundles used by the build
         if: needs.build.outputs.bundle_cache_complete != 'true'
