@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Cleanup handlers are registered by name and invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2317
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
