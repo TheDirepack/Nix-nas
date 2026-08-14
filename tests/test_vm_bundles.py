@@ -178,7 +178,7 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertEqual(
             nix_log.read_text(encoding="utf-8").splitlines(),
             [
-                "build --no-link "
+                "build --no-link -L "
                 ".#packages.x86_64-linux.core "
                 ".#packages.x86_64-linux.identity "
                 ".#packages.x86_64-linux.observability "
@@ -197,7 +197,7 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertEqual(
             nix_log.read_text(encoding="utf-8").splitlines(),
             [
-                "build --no-link "
+                "build --no-link -L "
                 ".#packages.x86_64-linux.vm-drivers "
                 ".#checks.x86_64-linux.nas-vm.driver "
                 ".#checks.x86_64-linux.nas-vm-encrypted.driver",
@@ -231,7 +231,7 @@ class VmBundleScriptTests(unittest.TestCase):
 
         nix_calls = nix_log.read_text(encoding="utf-8").splitlines()
         build_calls = [call for call in nix_calls if call.startswith("build --no-link ")]
-        expected_build = "build --no-link " + " ".join(
+        expected_build = "build --no-link -L " + " ".join(
             [f".#packages.x86_64-linux.{name}" for name in EXPECTED_BUNDLES]
             + [
                 ".#checks.x86_64-linux.nas-vm.driver",

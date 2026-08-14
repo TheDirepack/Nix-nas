@@ -513,8 +513,8 @@ jobs:
           [[ "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true ]] || bundle_args+=(ai)
           [[ "${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}" == true ]] || bundle_args+=(vm-drivers)
           if [[ "${{ steps.vm_bundle_handoff.outputs.package_cache_complete }}" != true ]]; then
-            nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
-            nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
+            nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace -L
+            nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace -L
           fi
           ((${#bundle_args[@]} > 0))
           ./scripts/vm-bundles.sh build "${bundle_args[@]}"

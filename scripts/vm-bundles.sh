@@ -123,7 +123,8 @@ build_bundles() {
       refs+=("$ref")
     done < <(bundle_refs "$name")
   done
-  "$NIX" build --no-link "${refs[@]}"
+  printf '%s: building bundle roots: %s\n' "$PROG" "${*}" >&2
+  "$NIX" build --no-link -L "${refs[@]}"
 }
 
 keys() {
@@ -231,12 +232,41 @@ save() {
   while IFS= read -r name; do
     cp -- "$SAVE_CLOSURE_CACHE/$name.paths" "$dir/$name.paths"
   done < <(list_bundles)
+
+  export_bundle() {
+    local export_name=$1 export_paths=$2 export_archive=$3 export_tmp=$4
+    local path_count
+    local heartbeat_pid
+    local -a export_status
+    path_count="$(wc -l < "$export_paths")"
+    printf '%s: exporting %s bundle (%s store paths)\n' \
+      "$PROG" "$export_name" "$path_count" >&2
+    # The heartbeat is a separate process group so its sleep child cannot
+    # keep the exporter pipe open after the export finishes.
+    # shellcheck disable=SC2016
+    setsid --wait bash -c '
+      while sleep 30; do
+        elapsed=$(( $(date +%s) - $4 ))
+        printf "%s: still exporting %s (%s store paths, %ss elapsed)\\n" "$1" "$2" "$3" "$elapsed" >&2
+      done
+    ' bundle-export-heartbeat "$PROG" "$export_name" "$path_count" "$(( $(date +%s) ))" &
+    heartbeat_pid=$!
+    set +e
+    xargs --no-run-if-empty "$NIX_STORE_CMD" --export < "$export_paths" | gzip > "$export_tmp"
+    export_status=("${PIPESTATUS[@]}")
+    set -e
+    kill -- "-$heartbeat_pid" 2>/dev/null || kill -KILL "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+    if (( export_status[0] != 0 || export_status[1] != 0 )); then
+      die "failed to export $export_name bundle (nix-store=${export_status[0]}, gzip=${export_status[1]})"
+    fi
+    mv -- "$export_tmp" "$export_archive"
+  }
+
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
     archive="$dir/core.nar.gz"
     tmp="$archive.tmp.$$"
-    printf '%s: exporting core bundle\n' "$PROG" >&2
-    xargs "$NIX_STORE_CMD" --export < "$core_file" | gzip > "$tmp"
-    mv -- "$tmp" "$archive"
+    export_bundle core "$core_file" "$archive" "$tmp"
   fi
 
   while IFS= read -r name; do
@@ -244,21 +274,18 @@ save() {
     [[ $only_missing == 1 && -f "$dir/$name.nar.gz" ]] && continue
     archive="$dir/$name.nar.gz"
     tmp="$archive.tmp.$$"
-    printf '%s: exporting %s bundle\n' "$PROG" "$name" >&2
     if [[ $name == vm-drivers ]]; then
-      comm -23 <(closure_cached "$name") "$base_file" \
-        | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
+      comm -23 <(closure_cached "$name") "$base_file" > "$dir/.export.paths"
     else
-      comm -23 <(closure_cached "$name") "$core_file" \
-        | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
+      comm -23 <(closure_cached "$name") "$core_file" > "$dir/.export.paths"
     fi
-    mv -- "$tmp" "$archive"
+    export_bundle "$name" "$dir/.export.paths" "$archive" "$tmp"
   done < <(list_bundles)
 
   write_manifest
   verify_manifest "$dir"
   write_handoff_checksum "$dir"
-  rm -f "$core_file" "$application_file" "$base_file"
+  rm -f "$core_file" "$application_file" "$base_file" "$dir/.export.paths"
   rm -rf -- "$closure_cache"
   SAVE_CLOSURE_CACHE=
   trap - EXIT

@@ -247,6 +247,27 @@ def wait_for_page_text(driver: webdriver.Chrome, wait: WebDriverWait, text: str,
         raise RuntimeError(f"{label} did not render {text!r}:\n{details}") from error
 
 
+def rendered_text(driver: webdriver.Chrome) -> str:
+    """Return visible text from the document and open custom-element roots."""
+    try:
+        return str(
+            driver.execute_script(
+                """
+                const collect = root => {
+                  let value = root.body?.innerText || root.innerText || root.textContent || '';
+                  for (const element of root.querySelectorAll('*')) {
+                    if (element.shadowRoot) value += '\\n' + collect(element.shadowRoot);
+                  }
+                  return value;
+                };
+                return collect(document);
+                """
+            )
+        )
+    except WebDriverException:
+        return driver.page_source
+
+
 def verify_cockpit_react_interactions(origin: str, username: str, password: str) -> None:
     driver = browser()
     try:
@@ -291,9 +312,20 @@ def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]
 
 def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
     driver.get(origin + "/identity/if/flow/nas-user-settings/")
-    WebDriverWait(driver, 60).until(lambda current: "Syncthing" in current.page_source)
-    if "nasSyncthingDevices" not in driver.page_source and "Syncthing devices" not in driver.page_source:
-        raise RuntimeError("Authentik NAS user-settings flow did not render the Syncthing field")
+    wait = WebDriverWait(driver, 60)
+    try:
+        wait.until(lambda current: "Syncthing" in rendered_text(current))
+        first(
+            driver,
+            [
+                'textarea[name="attributes.nasSyncthingDevices"]',
+                'textarea[aria-label*="Syncthing"]',
+                "textarea",
+            ],
+        )
+    except (NoSuchElementException, TimeoutException) as error:
+        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+        raise RuntimeError(f"Authentik NAS user-settings flow did not render the Syncthing field:\n{details}") from error
 
 
 def native_share_response(origin: str) -> dict[str, Any]:
