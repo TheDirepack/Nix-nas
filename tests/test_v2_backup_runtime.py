@@ -11,7 +11,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_backup_runtime as runtime  # noqa: E402
+import nas_v2_backup as runtime  # noqa: E402
 
 
 class V2BackupRuntimeTests(unittest.TestCase):

@@ -13,7 +13,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_compose as compose  # noqa: E402
-import nas_v2_podman_network as podman_network  # noqa: E402
+import nas_v2_network as podman_network  # noqa: E402
 import nas_v2_spec as spec  # noqa: E402
 
 

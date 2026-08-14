@@ -18,7 +18,7 @@ import nas_v2_accelerator as accelerator  # noqa: E402
 import nas_v2_caddy as caddy  # noqa: E402
 import nas_v2_compose as compose  # noqa: E402
 import nas_v2_libvirt as libvirt  # noqa: E402
-import nas_v2_podman_network as podnet  # noqa: E402
+import nas_v2_network as podnet  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
 import nas_v2_spec as spec  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
@@ -606,8 +606,8 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         self.assertEqual(10, binding["id"])
         ref = podnet.quadlet_network_reference(eff, "iso", eff["services"]["iso"])
         self.assertEqual("nas-v2-net-iso.network", ref)
-        # firewalld is exercised via systemd integration (compile via nas_v2_firewalld)
-        import nas_v2_firewalld as fw
+        # firewalld is exercised via systemd integration (compile via nas_v2_network)
+        import nas_v2_network as fw
 
         proj, _ = fw.compile_projection(eff, lan_zone="nas-lan")  # pyright: ignore[reportCallIssue]
         self.assertIn("iso", str(proj).lower() if isinstance(proj, (str, bytes)) else str(proj))

@@ -20,10 +20,10 @@ from typing import Any
 from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, resolve_effective
 from nas_v2_backup import compile_backup_projection
 from nas_v2_caddy import generate_caddyfile, validate_caddyfile
-from nas_v2_firewalld import materialize_projection as materialize_firewalld_projection
+from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
+from nas_v2_network import augment_projection as augment_podman_networks
+from nas_v2_network import materialize_projection as materialize_firewalld_projection
 from nas_v2_plan import build_plan
-from nas_v2_podman_network import PodmanNetworkProjectionError, requires_firewalld
-from nas_v2_podman_network import augment_projection as augment_podman_networks
 from nas_v2_portal import portal_bytes
 from nas_v2_session_projection import SessionProjectionError
 from nas_v2_session_projection import generate_projection as generate_systemd_projection

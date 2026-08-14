@@ -16,7 +16,7 @@ import pathlib
 from typing import Any
 
 from nas_v2_accelerator import is_cdi_selector
-from nas_v2_podman_network import (
+from nas_v2_network import (
     PodmanNetworkProjectionError,
     podman_network_name,
     quadlet_network_reference,

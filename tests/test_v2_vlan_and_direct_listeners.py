@@ -9,8 +9,8 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_firewalld as firewalld  # noqa: E402
-import nas_v2_podman_network as podman_network  # noqa: E402
+import nas_v2_network as firewalld  # noqa: E402
+import nas_v2_network as podman_network  # noqa: E402
 
 
 class V2VlanAndDirectListenerTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
         self.assertEqual(vlan["id"], 42)
         self.assertEqual(vlan["parent"], "eno1")
 
-        source = (ROOT / "services" / "nas_v2_podman_network.py").read_text(encoding="utf-8")
+        source = (ROOT / "services" / "nas_v2_network.py").read_text(encoding="utf-8")
         self.assertIn("lines.append(f\"Options=vrf={vlan['vrfInterface']}\"", source)
         self.assertNotIn("Options=vlan=", source)
 

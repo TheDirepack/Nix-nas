@@ -12,8 +12,8 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_apply as apply_mod  # noqa: E402
-import nas_v2_firewalld as firewalld  # noqa: E402
-from nas_v2_podman_network import requires_firewalld  # noqa: E402
+import nas_v2_network as firewalld  # noqa: E402
+from nas_v2_network import requires_firewalld  # noqa: E402
 from nas_v2_systemd import SystemdProjectionError  # noqa: E402
 
 

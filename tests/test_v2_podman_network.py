@@ -11,7 +11,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_podman_network as network  # noqa: E402
+import nas_v2_network as network  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
 import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 

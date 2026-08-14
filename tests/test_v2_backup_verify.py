@@ -13,7 +13,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_backup_verify as verifier  # noqa: E402
+import nas_v2_backup as verifier  # noqa: E402
 
 
 class V2BackupVerifyTests(unittest.TestCase):

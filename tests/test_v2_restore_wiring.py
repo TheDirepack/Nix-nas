@@ -28,7 +28,7 @@ class V2RestoreWiringTests(unittest.TestCase):
                 self.assertNotIn(application_specific_fragment, storage)
 
     def test_verifier_has_no_application_name_branches(self):
-        verifier = (ROOT / "services/nas_v2_backup_verify.py").read_text(encoding="utf-8")
+        verifier = (ROOT / "services/nas_v2_backup.py").read_text(encoding="utf-8")
         for application_name in ("authentik", "copyparty", "syncthing", "vaultwarden"):
             with self.subTest(application=application_name):
                 self.assertNotIn(application_name, verifier.lower())

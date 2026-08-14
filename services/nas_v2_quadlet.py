@@ -11,7 +11,7 @@ import tempfile
 from typing import Any
 
 from nas_v2_accelerator import is_cdi_selector
-from nas_v2_podman_network import PodmanNetworkProjectionError, network_policy, quadlet_network_reference
+from nas_v2_network import PodmanNetworkProjectionError, network_policy, quadlet_network_reference
 
 
 class QuadletProjectionError(RuntimeError):

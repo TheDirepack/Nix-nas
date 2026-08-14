@@ -9,7 +9,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_firewalld as firewalld  # noqa: E402
+import nas_v2_network as firewalld  # noqa: E402
 
 
 class V2ComposeFirewalldTests(unittest.TestCase):

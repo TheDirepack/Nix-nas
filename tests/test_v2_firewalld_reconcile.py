@@ -13,7 +13,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_firewalld_reconcile as reconcile  # noqa: E402
+import nas_v2_network as reconcile  # noqa: E402
 
 
 class V2FirewalldReconcileTests(unittest.TestCase):
