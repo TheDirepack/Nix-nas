@@ -9,6 +9,15 @@ nas_vm_timeout_value() {
   jq -er --arg key "$key" '.timeouts[$key] | numbers' "$(nas_vm_timeout_manifest_path)"
 }
 
+nas_vm_outer_value() {
+  local key=$1
+  jq -er --arg key "$key" '.outer[$key] | numbers' "$(nas_vm_timeout_manifest_path)"
+}
+
+nas_vm_kill_after_seconds() {
+  nas_vm_timeout_value killAfter
+}
+
 nas_vm_ordinary_wait_seconds() {
   jq -er '.ordinaryWaitSeconds | numbers' "$(nas_vm_timeout_manifest_path)"
 }
@@ -42,4 +51,43 @@ nas_vm_guest_watchdog_seconds() {
         | add
       ) + $manifest.slackSeconds
   ' "$(nas_vm_timeout_manifest_path)"
+}
+
+nas_vm_integration_timeout_seconds() {
+  printf '%s\n' "$((
+    $(nas_vm_guest_watchdog_seconds)
+    + $(nas_vm_timeout_value secretAdversarial)
+    + $(nas_vm_timeout_value installedSmoke)
+    + $(nas_vm_outer_value nativeBoot)
+    + $(nas_vm_outer_value nativeShutdown)
+    + $(nas_vm_outer_value slack)
+  ))"
+}
+
+nas_vm_encrypted_timeout_seconds() {
+  printf '%s\n' "$((
+    $(nas_vm_timeout_value encryptedGuest)
+    + $(nas_vm_outer_value nativeBoot)
+    + $(nas_vm_outer_value nativeShutdown)
+    + $(nas_vm_outer_value slack)
+  ))"
+}
+
+nas_vm_installer_timeout_seconds() {
+  printf '%s\n' "$((
+    $(nas_vm_guest_watchdog_seconds)
+    + $(nas_vm_timeout_value reconfigure)
+    + $(nas_vm_outer_value installerSetup)
+    + $(nas_vm_outer_value installerBoot)
+    + $(nas_vm_outer_value installerReboot)
+    + $(nas_vm_outer_value nativeShutdown)
+    + $(nas_vm_outer_value slack)
+  ))"
+}
+
+nas_vm_full_suite_timeout_seconds() {
+  printf '%s\n' "$((
+    $(nas_vm_outer_value fullSuiteSetup)
+    + $(nas_vm_integration_timeout_seconds)
+  ))"
 }

@@ -38,6 +38,7 @@ let
     ];
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
@@ -77,7 +78,10 @@ let
       python3
       systemd
     ];
-    text = builtins.readFile ../vm/reconfigure-system.sh;
+    text = ''
+      ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../vm/reconfigure-system.sh}
+    '';
   };
   encryptedGuestTest = pkgs.writeShellApplication {
     name = "nas-vm-encrypted-guest-test";
@@ -94,6 +98,7 @@ let
     ];
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}

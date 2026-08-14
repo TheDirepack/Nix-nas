@@ -21,16 +21,18 @@ trap on_error ERR
 
 wait_active() {
   local unit=$1
-  timeout "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"
 }
 
 wait_inactive() {
   local unit=$1
-  timeout "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"
 }
 
 run_as_admin() {
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" bash -lc "$1"
+  runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
@@ -41,7 +43,8 @@ run_as_admin_with_stdin() {
   local timeout_seconds=$1
   shift
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
+    runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
 }
 
 log "Verify encrypted fixture starts locked"
@@ -72,13 +75,14 @@ cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
 EOFSETUP
 chown admin:users /var/lib/nas-test/setup/encrypted-first-run.json
 chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
-run_as_admin "nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'"
+run_as_admin nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-plan_json="$(run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/encrypted-first-run.json")"
+plan_json="$(run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/encrypted-first-run.json)"
 plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
 stale_digest="$(printf '0%.0s' {1..64})"
-if run_as_admin "nas-setup first-run --config /var/lib/nas-test/setup/encrypted-first-run.json --confirm-plan-digest '$stale_digest'" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
+if run_as_admin nas-setup first-run --config /var/lib/nas-test/setup/encrypted-first-run.json \
+  --confirm-plan-digest "$stale_digest" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
   fail "first-run accepted a stale plan digest"
 fi
 if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
@@ -122,7 +126,7 @@ nas-setup status | jq -e '
 ' >/dev/null
 pass "nas-setup created and activated the encrypted storage stack"
 
-! run_as_admin "nas-zfs-create-encrypted-dataset" >/tmp/nas-zfs-create-existing.log 2>&1 || \
+! run_as_admin nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-existing.log 2>&1 || \
   fail "direct encrypted-dataset command recreated an existing encryption root"
 grep -q 'already exists' /tmp/nas-zfs-create-existing.log
 pass "direct encrypted-dataset command refuses to modify an existing encryption root"
@@ -131,7 +135,7 @@ log "Fault-inject every encrypted dataset bootstrap transition"
 # Keep the known-good encryption root out of the command's configured name while the
 # failure matrix repeatedly creates and tears down a brand-new tank/nas. Locking first
 # means the preserved dataset is unmounted and no protected consumer can write to it.
-run_as_admin "nas-zfs-lock"
+run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
 zfs rename tank/nas tank/nas-preserved
 [[ "$(zfs get -H -o value mounted tank/nas-preserved)" == "no" ]]
@@ -173,7 +177,7 @@ cmp -s /tmp/nas-zfs-recovery.key /run/nas-secrets/zfs/dataset-key
 pass "recovery-key export matches the staged KeePassXC key"
 
 log "Lock the dataset and prove reactivation restores it"
-run_as_admin "nas-zfs-lock"
+run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
 wait_inactive nas-zfs-mount-guard.service
 wait_inactive nas-zfs-unlock.service

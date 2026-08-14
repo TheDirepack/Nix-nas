@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 import pathlib
 import unittest
 from typing import Any
@@ -9,6 +11,7 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+TIMEOUT_MANIFEST = ROOT / "tests" / "vm" / "timeout-budget.json"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
@@ -18,6 +21,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         cls.jobs = cls.workflow["jobs"]
+        cls.timeout_manifest = json.loads(TIMEOUT_MANIFEST.read_text(encoding="utf-8"))
 
     @staticmethod
     def needs(job: dict[str, Any]) -> set[str]:
@@ -39,6 +43,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("pull_request", triggers)
         self.assertIn("workflow_dispatch", triggers)
         self.assertIn("schedule", triggers)
+        self.assertEqual(self.workflow["on"]["workflow_dispatch"]["inputs"]["force-cache-miss"]["type"], "boolean")
 
     def test_vm_matrix_runs_both_legs_without_fail_fast(self) -> None:
         integration = self.jobs["integration"]
@@ -108,6 +113,48 @@ class CiWorkflowGraphTests(unittest.TestCase):
             "Report cache persistence status",
             "\n".join(str(step.get("name", "")) for step in self.jobs["cache-vm-bundles"]["steps"]),
         )
+
+    def test_forced_cache_miss_uses_an_isolated_namespace_and_runs_persistence(self) -> None:
+        build = self.serialized(self.jobs["build"])
+        cache = self.serialized(self.jobs["cache-vm-bundles"])
+        self.assertIn("force-cache-miss", build)
+        self.assertIn("-forced-%s", build)
+        self.assertIn("bundle_cache_namespace", build)
+        self.assertIn("needs.build.outputs.bundle_cache_namespace", cache)
+        self.assertIn("bundle_cache_complete != 'true'", cache)
+
+    def test_ci_timeouts_equal_manifest_aggregates(self) -> None:
+        manifest = self.timeout_manifest
+        timeouts = manifest["timeouts"]
+        outer = manifest["outer"]
+        guest = (
+            sum(
+                phase["fixedSeconds"]
+                + phase["ordinaryWaits"] * manifest["ordinaryWaitSeconds"]
+                + sum(timeouts[key] for key in phase["timeoutKeys"])
+                for phase in manifest["phases"]
+            )
+            + manifest["slackSeconds"]
+        )
+        integration = (
+            guest
+            + timeouts["secretAdversarial"]
+            + timeouts["installedSmoke"]
+            + outer["nativeBoot"]
+            + outer["nativeShutdown"]
+            + outer["slack"]
+        )
+        installer = (
+            guest
+            + timeouts["reconfigure"]
+            + outer["installerSetup"]
+            + outer["installerBoot"]
+            + outer["installerReboot"]
+            + outer["nativeShutdown"]
+            + outer["slack"]
+        )
+        self.assertEqual(int(self.jobs["integration"]["timeout-minutes"]), math.ceil(integration / 60))
+        self.assertEqual(int(self.jobs["installer"]["timeout-minutes"]), math.ceil(installer / 60))
 
     def test_every_bundle_has_one_exact_cache_key_through_the_handoff(self) -> None:
         build = self.serialized(self.jobs["build"])

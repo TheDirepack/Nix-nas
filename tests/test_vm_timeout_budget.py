@@ -51,6 +51,71 @@ class VmTimeoutBudgetTests(unittest.TestCase):
         self.assertIn("nas_vm_guest_watchdog_seconds", qemu)
         self.assertIn("nas_vm_timeout_value", GUEST_TEST.read_text(encoding="utf-8"))
 
+    def test_outer_budgets_are_derived_from_guest_and_follow_on_phases(self) -> None:
+        helper_script = """
+source "$1"
+printf '%s\n' "$(nas_vm_integration_timeout_seconds)"
+printf '%s\n' "$(nas_vm_encrypted_timeout_seconds)"
+printf '%s\n' "$(nas_vm_installer_timeout_seconds)"
+printf '%s\n' "$(nas_vm_full_suite_timeout_seconds)"
+"""
+        result = subprocess.run(
+            ["bash", "-c", helper_script, "budget", str(TIMEOUT_HELPER)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "NAS_VM_TIMEOUT_BUDGET_FILE": str(MANIFEST)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        guest = int(
+            subprocess.run(
+                ["bash", "-c", 'source "$1"; nas_vm_guest_watchdog_seconds', "guest", str(TIMEOUT_HELPER)],
+                cwd=ROOT,
+                env={**os.environ, "NAS_VM_TIMEOUT_BUDGET_FILE": str(MANIFEST)},
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+        )
+        integration, encrypted, installer, full_suite = map(int, result.stdout.splitlines())
+        outer = self.manifest["outer"]
+        self.assertEqual(
+            integration,
+            guest
+            + self.manifest["timeouts"]["secretAdversarial"]
+            + self.manifest["timeouts"]["installedSmoke"]
+            + outer["nativeBoot"]
+            + outer["nativeShutdown"]
+            + outer["slack"],
+        )
+        self.assertEqual(
+            encrypted,
+            self.manifest["timeouts"]["encryptedGuest"]
+            + outer["nativeBoot"]
+            + outer["nativeShutdown"]
+            + outer["slack"],
+        )
+        self.assertEqual(
+            installer,
+            guest
+            + self.manifest["timeouts"]["reconfigure"]
+            + outer["installerSetup"]
+            + outer["installerBoot"]
+            + outer["installerReboot"]
+            + outer["nativeShutdown"]
+            + outer["slack"],
+        )
+        self.assertEqual(full_suite, outer["fullSuiteSetup"] + integration)
+
+    def test_manifest_phase_labels_match_the_guest_runner(self) -> None:
+        manifest_labels = [phase["label"] for phase in self.manifest["phases"]]
+        guest_labels = []
+        for line in GUEST_TEST.read_text(encoding="utf-8").splitlines():
+            if line.startswith('log "') and line.endswith('"'):
+                guest_labels.append(line[5:-1])
+        self.assertEqual(guest_labels, manifest_labels)
+
     def test_every_guest_phase_label_has_a_manifest_budget(self) -> None:
         manifest_labels = [phase["label"] for phase in self.manifest["phases"]]
         for label in manifest_labels:

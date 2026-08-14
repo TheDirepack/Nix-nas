@@ -15,6 +15,11 @@ on:
         required: false
         default: fast
         options: [fast, full, installer]
+      force-cache-miss:
+        description: Run the full cache-miss bundle handoff and persistence path in an isolated cache namespace
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -291,6 +296,7 @@ jobs:
       cache_ai_hit: ${{ steps.vm_bundle_ai.outputs.cache-hit }}
       cache_vm_drivers_hit: ${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}
       bundle_cache_complete: ${{ steps.vm_bundle_handoff.outputs.cache_complete }}
+      bundle_cache_namespace: ${{ steps.vm_bundle_namespace.outputs.suffix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -336,42 +342,53 @@ jobs:
       - name: Resolve Nix store bundle versions
         id: vm_bundles
         run: ./scripts/vm-bundles.sh keys >> "$GITHUB_OUTPUT"
+      - name: Select VM bundle cache namespace
+        id: vm_bundle_namespace
+        env:
+          FORCE_CACHE_MISS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force-cache-miss == 'true' }}
+        run: |
+          if [[ "$FORCE_CACHE_MISS" == true ]]; then
+            printf 'suffix=-forced-%s\n' "$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "Forced cache-miss qualification uses an isolated namespace."
+          else
+            printf 'suffix=\n' >> "$GITHUB_OUTPUT"
+          fi
       - name: "Restore/cache Nix store bundle: core"
         id: vm_bundle_core
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/core.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm_bundles.outputs.key_core }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm_bundles.outputs.key_core }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: identity"
         id: vm_bundle_identity
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm_bundles.outputs.key_identity }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm_bundles.outputs.key_identity }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: observability"
         id: vm_bundle_observability
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm_bundles.outputs.key_observability }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm_bundles.outputs.key_observability }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: storage"
         id: vm_bundle_storage
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm_bundles.outputs.key_storage }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm_bundles.outputs.key_storage }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: ai"
         id: vm_bundle_ai
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm_bundles.outputs.key_ai }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm_bundles.outputs.key_ai }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: "Restore/cache Nix store bundle: vm-drivers"
         id: vm_bundle_vm_drivers
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm_bundles.outputs.key_vm_drivers }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm_bundles.outputs.key_vm_drivers }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: Determine whether the exact VM bundle set was restored
         id: vm_bundle_handoff
         run: |
@@ -396,7 +413,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: nas-source-release
-          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: Package and verify as an untrusted consumer
         if: steps.source_archive_cache.outputs.cache-hit != 'true'
         run: |
@@ -457,7 +474,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: nas-source-release
-          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: steps.source_archive_cache.outputs.cache-hit != 'true'
         with:
@@ -506,37 +523,37 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/core.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: identity"
         if: needs.build.outputs.cache_identity_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: observability"
         if: needs.build.outputs.cache_observability_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: storage"
         if: needs.build.outputs.cache_storage_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: ai"
         if: needs.build.outputs.cache_ai_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Save reusable Nix store bundle: vm-drivers"
         if: needs.build.outputs.cache_vm_drivers_hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: Report cache persistence status
         if: always()
         env:
@@ -606,7 +623,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))
     needs: [build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 379
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -632,37 +649,37 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/core.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: identity"
         if: needs.build.outputs.bundle_cache_complete == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: observability"
         if: needs.build.outputs.bundle_cache_complete == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: storage"
         if: needs.build.outputs.bundle_cache_complete == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: ai"
         if: needs.build.outputs.bundle_cache_complete == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: "Restore exact cached Nix bundle: vm-drivers"
         if: needs.build.outputs.bundle_cache_complete == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}${{ needs.build.outputs.bundle_cache_namespace }}
       - name: Download the exact Nix bundles used by the build
         if: needs.build.outputs.bundle_cache_complete != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -693,7 +710,7 @@ jobs:
        (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [integration, browser, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 420
+    timeout-minutes: 489
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

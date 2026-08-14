@@ -91,6 +91,13 @@ CI does not cache qualification pass markers. Dependency downloads, immutable in
 
 After the fast gates pass, one `build` job uses one runner to materialize and verify Cockpit (compiling it on a cache miss), round-trip the source archive, and build the NixOS closures in sequence. Browser qualification and KVM/QEMU integration remain downstream jobs. This runner consolidation does not remove or pass-cache any qualification tier.
 
+To qualify the cold handoff path on demand, dispatch the GitHub `CI` workflow with
+`test-tier=full` and `force-cache-miss=true`. The run uses a unique cache
+namespace, so it must export every missing bundle, pass the signed handoff to
+the integration jobs, and report cache persistence without overwriting the
+normal reusable cache. A normal cache hit remains the default PR and scheduled
+path.
+
 ## 3. Static security and injection checks
 
 The project-specific scanner rejects high-risk NAS-owned sinks in Python, JavaScript, shell-generating Nix, and generated SQLite workflows. It covers Python `eval`/`exec`, `os.system`, `subprocess(..., shell=True)`, dynamically constructed SQL passed to execution methods, generated-shell `eval`, unsafe SQLite CLI meta-command construction, and raw DOM/JavaScript execution sinks.

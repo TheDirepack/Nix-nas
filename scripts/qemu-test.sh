@@ -406,7 +406,7 @@ rebuild_guest_source() {
   local -a ssh_args
   mapfile -t ssh_args < <(ssh_options "$ssh_key")
   log "Updating the installed NixOS generation from the refreshed worktree"
-  timeout --foreground "$timeout_seconds" \
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" \
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
@@ -485,6 +485,25 @@ run_installer() {
   install_marker="$STATE_DIR/os-install-complete"
   ssh_key="$STATE_DIR/installer-admin-ed25519"
   ssh_key_dir="$STATE_DIR/ssh-key"
+
+  cleanup_vm() {
+    local cleanup_pidfile="$STATE_DIR/qemu.pid"
+    if [[ -s "$cleanup_pidfile" ]] && qemu_pid_from_pidfile "$cleanup_pidfile"; then
+      local cleanup_pid="$QEMU_PID"
+      kill "$cleanup_pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do kill -0 "$cleanup_pid" 2>/dev/null || break; sleep 1; done
+      kill -KILL "$cleanup_pid" 2>/dev/null || true
+      rm -f "$cleanup_pidfile"
+    elif [[ -s "$cleanup_pidfile" ]]; then
+      qemu_pid_from_pidfile "$cleanup_pidfile" || {
+        local pid_status=$?
+        (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $cleanup_pidfile"
+        rm -f "$cleanup_pidfile"
+      }
+    fi
+  }
+  trap cleanup_vm EXIT INT TERM
+
   source_stage="$(stage_source_tree)"
   source_id="$(source_fingerprint "$source_stage")"
   marker_id="$(cat "$install_marker" 2>/dev/null || true)"
@@ -535,6 +554,7 @@ run_installer() {
       -virtfs "local,path=$ssh_key_dir,mount_tag=nas-ssh-key,security_model=none,readonly=on" \
       -device virtio-rng-pci \
       -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+      -pidfile "$pidfile" \
       -no-reboot -nographic 2>&1 | tee "$install_log"
     if [[ "$persistent_mode" == 1 ]]; then
       qemu-img snapshot -c "$BASELINE_SNAPSHOT" "$os_disk"
@@ -573,24 +593,6 @@ run_installer() {
       -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
   fi
 
-  cleanup_vm() {
-    local cleanup_pidfile="$STATE_DIR/qemu.pid"
-    if [[ -s "$cleanup_pidfile" ]] && qemu_pid_from_pidfile "$cleanup_pidfile"; then
-      local pid="$QEMU_PID"
-      kill "$pid" 2>/dev/null || true
-      for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-      kill -KILL "$pid" 2>/dev/null || true
-      rm -f "$cleanup_pidfile"
-    elif [[ -s "$cleanup_pidfile" ]]; then
-      qemu_pid_from_pidfile "$cleanup_pidfile" || {
-        local pid_status=$?
-        (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $cleanup_pidfile"
-        rm -f "$cleanup_pidfile"
-      }
-    fi
-  }
-  trap cleanup_vm EXIT INT TERM
-
   mapfile -t ssh_args < <(ssh_options "$ssh_key")
   if ! wait_for_ssh "$ssh_key"; then
     cat "$boot_log" >&2 || true
@@ -609,7 +611,8 @@ run_installer() {
     # stop/reset wrappers own its lifecycle and can remove it deliberately.
     if [[ "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test ]]; then
       log "Running the complete source and appliance suite inside the persistent VM"
-      timeout --foreground "${NAS_QEMU_SOURCE_SUITE_TIMEOUT:-14400}" \
+      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+        "${NAS_QEMU_SOURCE_SUITE_TIMEOUT:-$(nas_vm_full_suite_timeout_seconds)}" \
         ssh "${ssh_args[@]}" \
           -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
           -p "$SSH_PORT" admin@127.0.0.1 \
@@ -624,14 +627,16 @@ run_installer() {
     return 0
   fi
 
-  timeout --foreground "${NAS_QEMU_GUEST_TEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" \
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "${NAS_QEMU_GUEST_TEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" \
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
       "sudo -n env NAS_TEST_TIMEOUT=$(nas_vm_ordinary_wait_seconds) nas-vm-guest-test /dev/vdb"
 
   log "Exercising post-install activation, failed-candidate, and rollback paths"
-  timeout --foreground "${NAS_QEMU_RECONFIGURE_TIMEOUT:-$(nas_vm_timeout_value reconfigure)}" \
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "${NAS_QEMU_RECONFIGURE_TIMEOUT:-$(nas_vm_timeout_value reconfigure)}" \
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
@@ -687,15 +692,32 @@ run_installer() {
   log "Installed-VM test completed successfully"
 }
 
+run_installer_with_timeout() {
+  local mode=$1 timeout_seconds
+  case "$mode" in
+    persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(nas_vm_full_suite_timeout_seconds)}" ;;
+    *) timeout_seconds="${NAS_QEMU_INSTALLER_TIMEOUT:-$(nas_vm_installer_timeout_seconds)}" ;;
+  esac
+  if [[ "${NAS_QEMU_OUTER_TIMEOUT_ACTIVE:-0}" == 1 ]]; then
+    run_installer
+  else
+    NAS_QEMU_OUTER_TIMEOUT_ACTIVE=1 \
+      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+      "$timeout_seconds" "$0" "$mode"
+  fi
+}
+
 case "$MODE" in
   static) run_static ;;
   native) run_native ;;
-  installer) run_installer ;;
+  installer) run_installer_with_timeout installer ;;
   persistent-start)
-    NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=start NAS_QEMU_REUSE_INSTALLED=1 run_installer
+    export NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=start NAS_QEMU_REUSE_INSTALLED=1
+    run_installer_with_timeout persistent-start
     ;;
   persistent-test)
-    NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=test NAS_QEMU_REUSE_INSTALLED=1 run_installer
+    export NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=test NAS_QEMU_REUSE_INSTALLED=1
+    run_installer_with_timeout persistent-test
     ;;
   persistent-stop) validate_state_path; stop_persistent_vm ;;
   persistent-reset) reset_persistent_state ;;
@@ -704,7 +726,7 @@ case "$MODE" in
     validate_state_path
     stage_source_tree "${NAS_QEMU_SOURCE_ROOT:-$ROOT}"
     ;;
-  all) run_static; run_native; run_installer ;;
+  all) run_static; run_native; run_installer_with_timeout installer ;;
   clean)
     require_cache_marker
     validate_state_path

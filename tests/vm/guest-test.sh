@@ -16,13 +16,22 @@ pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 stop_authentik_vm_outpost() {
+  local cleanup_status=0
   if [[ -n "$AUTHENTIK_OUTPOST_PID" ]] && kill -0 "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1; then
-    kill "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
-    wait "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
+    if nas_vm_stop_process "$AUTHENTIK_OUTPOST_PID" "$(nas_vm_kill_after_seconds)"; then
+      :
+    else
+      cleanup_status=$?
+    fi
   fi
   AUTHENTIK_OUTPOST_PID=""
-  rm -f -- "$AUTHENTIK_OUTPOST_LOG"
-  return 0
+  if rm -f -- "$AUTHENTIK_OUTPOST_LOG"; then
+    :
+  else
+    local remove_status=$?
+    ((cleanup_status != 0)) || cleanup_status=$remove_status
+  fi
+  return "$cleanup_status"
 }
 
 on_error() {
@@ -46,7 +55,8 @@ require_commands() {
 
 wait_active() {
   local unit=$1
-  if ! timeout "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"; then
+  if ! timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"; then
     systemctl status "$unit" --no-pager >&2 || true
     fail "timed out waiting for $unit to become active"
   fi
@@ -54,7 +64,8 @@ wait_active() {
 
 wait_inactive() {
   local unit=$1
-  if ! timeout "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"; then
+  if ! timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"; then
     systemctl status "$unit" --no-pager >&2 || true
     fail "timed out waiting for $unit to become inactive"
   fi
@@ -63,7 +74,7 @@ wait_inactive() {
 wait_http() {
   local url=$1
   shift
-  timeout "$TEST_TIMEOUT" bash -c \
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$TEST_TIMEOUT" bash -c \
     'until curl --fail --silent --show-error --connect-timeout 2 --max-time 10 "$@" >/dev/null; do sleep 2; done' \
     bash "$@" "$url"
 }
@@ -108,7 +119,7 @@ assert_spoof_blocked() {
 }
 
 run_as_admin() {
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" bash -lc "$1"
+  runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
@@ -119,7 +130,8 @@ run_as_admin_with_stdin() {
   local timeout_seconds=$1
   shift
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
+    runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
 }
 
 authentik_api() {
@@ -296,13 +308,14 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
 EOFSETUP
 chown admin:users /var/lib/nas-test/setup/first-run.json
 chmod 0600 /var/lib/nas-test/setup/first-run.json
-run_as_admin "nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'"
+run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-plan_json="$(run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json")"
+plan_json="$(run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json)"
 plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
 stale_digest="$(printf '0%.0s' {1..64})"
-if run_as_admin "nas-setup first-run --config /var/lib/nas-test/setup/first-run.json --confirm-plan-digest '$stale_digest'" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
+if run_as_admin nas-setup first-run --config /var/lib/nas-test/setup/first-run.json \
+  --confirm-plan-digest "$stale_digest" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
   fail "first-run accepted a stale plan digest"
 fi
 if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
@@ -330,7 +343,7 @@ if ! jq -e '
   fail "nas-setup first-run report did not contain the expected storage, account, and administrator state"
 fi
 pass "nas-setup first-run created the expected storage and accounts"
-run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json" \
+run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json
 if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
   /tmp/nas-first-start-status.json >/dev/null; then
@@ -438,11 +451,12 @@ nas-identity-sync capabilities | jq -e '
   select(.id == "alice") |
   .capabilities.files.allowed == true and .capabilities.ai.allowed == false
 ' >/dev/null
-run_as_admin "printf '%s\n' 'alice-updated-password' | nas-setup account apply \
-  --username alice \
-  --password-stdin" >/tmp/nas-account-password-update.json
+printf '%s\n' 'alice-updated-password' |
+  run_as_admin nas-setup account apply --username alice --password-stdin \
+    >/tmp/nas-account-password-update.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
-run_as_admin "nas-setup account apply --username alice --name '<img src=x onerror=document.body.dataset.nasXss=1>'" \
+run_as_admin nas-setup account apply --username alice \
+  --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
   >/tmp/nas-account-xss-name.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
@@ -451,14 +465,15 @@ nas-identity-sync export-account alice | jq -e '
   (.groups | index("nas_allow_vault")) != null and
   (.groups | index("nas_allow_syncthing")) != null
 ' >/dev/null
-run_as_admin "printf '%s\n' 'temporary-password' | nas-setup account apply \
-  --username temporary \
-  --name 'Temporary User' \
-  --email temporary@nas.local \
-  --group nas_allow_files \
-  --password-stdin" >/tmp/nas-account-add.json
+printf '%s\n' 'temporary-password' |
+  run_as_admin nas-setup account apply \
+    --username temporary \
+    --name 'Temporary User' \
+    --email temporary@nas.local \
+    --group nas_allow_files \
+    --password-stdin >/tmp/nas-account-add.json
 jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
-run_as_admin "nas-setup account disable temporary" >/tmp/nas-account-disable.json
+run_as_admin nas-setup account disable temporary >/tmp/nas-account-disable.json
 jq -e '.updated == ["temporary"]' /tmp/nas-account-disable.json >/dev/null
 nas-identity-sync export-account temporary | jq -e '
   .active == false and
@@ -473,7 +488,7 @@ log "Anonymous read-only TFTP behavior"
 printf 'nixos-nas-qemu-tftp\n' >/tank/shares/tftp/qemu-tftp.txt
 chown copyparty:copyparty /tank/shares/tftp/qemu-tftp.txt
 chmod 0660 /tank/shares/tftp/qemu-tftp.txt
-timeout "$TEST_TIMEOUT" bash -c \
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$TEST_TIMEOUT" bash -c \
   "until ss -lun | grep -Eq '[:.]3969[[:space:]]'; do sleep 2; done"
 python3 - <<'PYTFTP'
 import socket
@@ -687,7 +702,8 @@ printf '%s\n' admin-vm-password > "$authz_secret_dir/admin"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
 chmod 0600 "$authz_secret_dir"/*
-timeout "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
   --origin "https://$PUBLIC_HOST" \
   --cockpit-password-file "$authz_secret_dir/admin" \
   --operator-password-file "$authz_secret_dir/operator" \
@@ -710,8 +726,8 @@ nas-feature-control status | jq -e '.schemaVersion == 2 and (.features | length 
 ! nas-feature-control set '../aiRuntime' always >/tmp/nas-feature-injection.log 2>&1 || fail "path-like feature identifier was accepted"
 ! nas-feature-control set 'aiRuntime;touch /tmp/pwned' always >>/tmp/nas-feature-injection.log 2>&1 || fail "shell-like feature identifier was accepted"
 [[ ! -e /tmp/pwned ]] || fail "feature identifier injection created an unexpected file"
-! run_as_admin "nas-setup account apply --username '../operator' --disabled" >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
-! run_as_admin "nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled" >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
+! run_as_admin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
+! run_as_admin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
 nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
@@ -820,7 +836,7 @@ find /run/current-system/sw/share/cockpit /nix/store -maxdepth 8 -path '*nas*doc
 pass "supporting services and Cockpit plugin assets are present"
 
 log "Secret stop/reactivation transaction"
-run_as_admin "nas-secrets stop"
+run_as_admin nas-secrets stop
 wait_inactive caddy.service
 wait_inactive copyparty.service
 wait_inactive authentik.service
@@ -833,7 +849,7 @@ wait_active caddy.service
 wait_active copyparty.service
 wait_active authentik.service
 
-! run_as_admin "printf '%s\\n' wrong-password | nas-secrets activate-stdin" \
+! printf '%s\n' wrong-password | run_as_admin nas-secrets activate-stdin \
   >/tmp/nas-secrets-wrong-active.log 2>&1 || fail "wrong password was accepted while active"
 systemctl is-active --quiet nas-protected-services.target
 [[ -f /run/nas-secrets/ready ]]

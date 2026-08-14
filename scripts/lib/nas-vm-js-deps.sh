@@ -3,14 +3,25 @@
 NAS_VM_JS_DEPS_PATH=""
 NAS_VM_JS_DEPS_OWNED=0
 
+nas_vm_js_deps_remove() {
+  rm -rf -- "$1"
+}
+
 nas_vm_js_deps_cleanup() {
-  local status=${1:-0}
+  local status=${1:-0} cleanup_status=0
   if ((NAS_VM_JS_DEPS_OWNED == 1)) && [[ -n "$NAS_VM_JS_DEPS_PATH" ]]; then
-    rm -rf -- "$NAS_VM_JS_DEPS_PATH"
+    if nas_vm_js_deps_remove "$NAS_VM_JS_DEPS_PATH"; then
+      :
+    else
+      cleanup_status=$?
+    fi
   fi
   NAS_VM_JS_DEPS_PATH=""
   NAS_VM_JS_DEPS_OWNED=0
-  return "$status"
+  if ((status != 0)); then
+    return "$status"
+  fi
+  return "$cleanup_status"
 }
 
 nas_vm_js_deps_prepare() {

@@ -10,7 +10,17 @@
     "secretAdversarial": 900,
     "installedSmoke": 300,
     "reconfigure": 5400,
-    "reconfigureBuild": 1800
+    "reconfigureBuild": 1800,
+    "killAfter": 30
+  },
+  "outer": {
+    "nativeBoot": 900,
+    "nativeShutdown": 120,
+    "installerSetup": 1800,
+    "installerBoot": 900,
+    "installerReboot": 600,
+    "fullSuiteSetup": 1800,
+    "slack": 900
   },
   "phases": [
     {"id": "locked-state", "label": "Locked-state and configuration checks", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": []},
@@ -27,7 +37,7 @@
     {"id": "ai", "label": "Open WebUI and llama-swap start/stop/on-demand lifecycle", "ordinaryWaits": 10, "fixedSeconds": 0, "timeoutKeys": []},
     {"id": "observability", "label": "Observability, notifications, Syncthing, Vaultwarden, and Cockpit assets", "ordinaryWaits": 13, "fixedSeconds": 0, "timeoutKeys": []},
     {"id": "notifications", "label": "Notification dependency failure and recovery", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": []},
-    {"id": "secrets", "label": "Secret stop/reactivation transaction", "ordinaryWaits": 8, "fixedSeconds": 0, "timeoutKeys": ["secretActivation", "secretActivation"]},
+    {"id": "secrets", "label": "Secret stop/reactivation transaction", "ordinaryWaits": 8, "fixedSeconds": 0, "timeoutKeys": ["secretActivation"]},
     {"id": "final", "label": "Final state", "ordinaryWaits": 0, "fixedSeconds": 30, "timeoutKeys": []}
   ]
 }

@@ -122,10 +122,13 @@ printf '\n==> Nix configuration and negative-fixture suite\n'
 ./scripts/nix-config-matrix.sh
 
 printf '\n==> Full-stack appliance suite\n'
-run_appliance timeout "${NAS_VM_FULL_SUITE_GUEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" nas-vm-guest-test /dev/vdb
-run_appliance timeout "${NAS_VM_FULL_SUITE_SECRET_TIMEOUT:-$(nas_vm_timeout_value secretAdversarial)}" nas-vm-secret-adversarial
+run_appliance timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "${NAS_VM_FULL_SUITE_GUEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" nas-vm-guest-test /dev/vdb
+run_appliance timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "${NAS_VM_FULL_SUITE_SECRET_TIMEOUT:-$(nas_vm_timeout_value secretAdversarial)}" nas-vm-secret-adversarial
 NAS_INSTALLED_FUZZ_SMOKE=1 \
-  run_appliance timeout "${NAS_VM_FULL_SUITE_INSTALLED_TIMEOUT:-$(nas_vm_timeout_value installedSmoke)}" \
+  run_appliance timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "${NAS_VM_FULL_SUITE_INSTALLED_TIMEOUT:-$(nas_vm_timeout_value installedSmoke)}" \
     python3 tests/vm/adversarial-installed.py >"$work/nas-installed-command-smoke.json"
 jq -e '.ok == true and .smoke == true and .commands > 0' \
   "$work/nas-installed-command-smoke.json" >/dev/null

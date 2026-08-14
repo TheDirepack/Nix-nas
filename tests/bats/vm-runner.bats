@@ -4,6 +4,7 @@ setup() {
   work="$BATS_TEST_TMPDIR/work"
   mkdir -p "$work"
   cleanup_lib="$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-cleanup.sh"
+  process_cleanup_lib="$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-process-cleanup.sh"
   deps_lib="$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-js-deps.sh"
   failure_injection="$BATS_TEST_DIRNAME/../vm/cleanup-failure-injection.sh"
   resource_injection="$BATS_TEST_DIRNAME/../vm/resource-failure-injection.sh"
@@ -109,6 +110,7 @@ cleanup() {
   rm -rf -- "\$work_dir"
   return "\$status"
 }
+
 trap cleanup EXIT
 exit 43
 SH
@@ -116,4 +118,34 @@ SH
   run "$work/run.sh"
   [ "$status" -eq 43 ]
   [ ! -e "$work/owned-work" ]
+}
+
+@test "process cleanup escalates from TERM to KILL within its grace period" {
+  run bash -c '
+    set -Eeuo pipefail
+    source "$1"
+    (trap "" TERM; sleep 60) &
+    pid=$!
+    nas_vm_stop_process "$pid" 1
+    ! kill -0 "$pid" 2>/dev/null
+  ' process-cleanup "$process_cleanup_lib"
+  [ "$status" -eq 0 ]
+}
+
+@test "JavaScript dependency cleanup reports removal failures after a successful test" {
+  run bash -c '
+    set -Eeuo pipefail
+    source "$1"
+    work=$(mktemp -d)
+    trap "rm -rf -- \"$work\"" EXIT
+    nas_vm_js_deps_remove() { return 91; }
+    mkdir -p "$work/tests/js-fuzz" "$work/fast-check"
+    nas_vm_js_deps_prepare "$work" "$work/fast-check"
+    set +e
+    nas_vm_js_deps_cleanup 0
+    rc=$?
+    set -e
+    [[ "$rc" -eq 91 ]]
+  ' js-deps "$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-js-deps.sh"
+  [ "$status" -eq 0 ]
 }
