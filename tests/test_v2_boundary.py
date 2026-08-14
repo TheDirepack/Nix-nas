@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT / "services") not in sys.path:
+    sys.path.insert(0, str(ROOT / "services"))
+
+import nas_v2_entry  # noqa: F401,E402 — import coverage for nas_v2_entry.py
 
 
 class ManagedServicesV2BoundaryTests(unittest.TestCase):
@@ -50,8 +55,9 @@ class ManagedServicesV2BoundaryTests(unittest.TestCase):
 
     def test_v2_runtime_is_compiler_driven_and_legacy_sources_are_absent(self):
         module = (ROOT / "modules" / "nas" / "config" / "managed-services.nix").read_text(encoding="utf-8")
-        self.assertIn("services.yaml", module)
-        self.assertIn("nas_v2_cli.py", module)
+        self.assertIn("services", module)
+        self.assertIn("nas_v2_entry.py", module)
+        self.assertNotIn("nas_v2_cli.py", module)
         self.assertIn("systemdReconcileArgs", module)
         self.assertIn("postStart", module)
         self.assertNotIn("services.json", module)

@@ -45,6 +45,13 @@ from nas_v2_spec import (
 from nas_v2_systemd import SystemdProjectionError
 from nas_v2_systemd import validate_projection as validate_systemd_projection
 
+# Base prefixes for per-service ZFS storage. On NixOS these are symlinks
+# from /var/lib/nas-control into ${zfsRoot}/nas-control (see
+# managed-services.nix and system.nix). Creating them under the
+# compatibility symlink still lands on ZFS.
+_SERVICE_APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
+_SERVICE_SERVICES_ROOT = pathlib.Path("/var/lib/nas-control/services")
+
 try:
     from nas_v2_editor import authority_lock
 except ImportError:  # pragma: no cover - fallback for minimal test harnesses
@@ -440,6 +447,81 @@ def _firewalld_files(
     )
 
 
+def _service_storage_dirs(effective: dict[str, Any]) -> list[pathlib.Path]:
+    """Return host paths that must exist for each V2 service's ZFS-backed storage."""
+    dirs: list[pathlib.Path] = []
+    for service_id, service in effective.get("services", {}).items():
+        if not isinstance(service_id, str) or not service_id:
+            continue
+        # Generic per-service app root — required for exec/python/quadlet/compose/vm/oci
+        # sources that must live beneath /var/lib/nas-control/apps/<id>/ per
+        # nas_v2_spec._validate_runtime_paths.
+        dirs.append(_SERVICE_APP_ROOT / service_id)
+        runtime = service.get("runtime") if isinstance(service, dict) else None
+        if isinstance(runtime, dict) and runtime.get("type") in {"quadlet", "compose", "vm"}:
+            source = runtime.get("source")
+            if isinstance(source, str) and source:
+                try:
+                    parent = pathlib.Path(source).parent
+                    # Only create parents that are beneath the app root to avoid
+                    # arbitrary host paths.
+                    if str(parent).startswith(str(_SERVICE_APP_ROOT)):
+                        dirs.append(parent)
+                except Exception:
+                    continue
+        if isinstance(runtime, dict) and runtime.get("type") == "python":
+            deps = runtime.get("dependencies", {})
+            req = deps.get("requirementsFile") if isinstance(deps, dict) else None
+            if isinstance(req, str) and req.startswith(str(_SERVICE_APP_ROOT)):
+                try:
+                    dirs.append(pathlib.Path(req).parent)
+                except Exception:
+                    continue
+            entry = runtime.get("entrypoint", {})
+            script = entry.get("script") if isinstance(entry, dict) else None
+            if isinstance(script, str) and script.startswith(str(_SERVICE_APP_ROOT)):
+                try:
+                    dirs.append(pathlib.Path(script).parent)
+                except Exception:
+                    continue
+        # Per-type container/vm staging for readability — best-effort, still
+        # under the shared app root so a single tmpfiles base covers containment.
+        rt = runtime.get("type") if isinstance(runtime, dict) else None
+        if rt in {"oci", "quadlet", "compose"}:
+            dirs.append(_SERVICE_APP_ROOT / service_id / "containers")
+        if rt == "vm":
+            dirs.append(_SERVICE_APP_ROOT / service_id / "vms")
+    # Deduplicate while preserving order
+    seen: set[pathlib.Path] = set()
+    uniq: list[pathlib.Path] = []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            uniq.append(d)
+    return uniq
+
+
+def _ensure_service_dirs(effective: dict[str, Any]) -> None:
+    for path in _service_storage_dirs(effective):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        try:
+            os.chmod(path, 0o750)
+        except OSError:
+            continue
+        # Best-effort ownership root:nas-operations mirrors the base tmpfiles rule.
+        # Fallback to current uid/gid when the group is unavailable in test envs.
+        try:
+            import grp
+
+            gid = grp.getgrnam("nas-operations").gr_gid
+            os.chown(path, 0, gid)
+        except Exception:
+            continue
+
+
 def apply(
     paths: ApplyPaths = ApplyPaths(),
     *,
@@ -451,6 +533,14 @@ def apply(
 ) -> dict[str, Any]:
     with authority_lock(paths.desired):
         effective, plan = _compile_paths_inner(paths)
+        # Auto-generate per-service ZFS folders before materializing projections.
+        # This runs inside the reconcile transaction which has ReadWritePaths on
+        # ${zfsRoot}/nas-control, so the compat symlink target is writable.
+        try:
+            _ensure_service_dirs(effective)
+        except Exception:
+            # Folder creation is best-effort; projection validation remains authoritative.
+            pass
         try:
             needs_firewalld = requires_firewalld(effective)
         except PodmanNetworkProjectionError as exc:

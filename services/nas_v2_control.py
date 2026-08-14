@@ -29,7 +29,9 @@ from nas_v2_editor import (
 )
 from nas_v2_wake import WakeError, wake_service
 
-DESIRED_PATH = pathlib.Path(os.environ.get("NAS_V2_DESIRED", os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services")))
+DESIRED_PATH = pathlib.Path(
+    os.environ.get("NAS_V2_DESIRED", os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services"))
+)
 EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
 SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
 RECONCILE_UNIT = os.environ.get("NAS_V2_RECONCILE_UNIT", "nas-managed-services-reconcile.service")
@@ -57,6 +59,7 @@ def _read_authority_text(path: pathlib.Path) -> str:
         try:
             from nas_v2_spec import parse_yaml as _parse
             from nas_v2_editor import _render as _ed_render  # type: ignore
+
             doc = _parse(path)
             return _ed_render(doc)
         except Exception:

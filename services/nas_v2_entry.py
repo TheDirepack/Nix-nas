@@ -21,7 +21,6 @@ from nas_v2_apply import (
     SystemdProjection,
     apply,
 )
-from nas_v2_spec import DEFAULT_PLATFORM_PATH, DEFAULT_SCHEMA_PATH, DEFAULT_SPEC_PATH
 
 
 def main() -> int:

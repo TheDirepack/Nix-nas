@@ -7,7 +7,7 @@
 | Options | `modules/nas/options/*.nix`, `modules/ai/options.nix` | Public appliance configuration contract. |
 | Validation | `modules/nas/config/validation.nix`, `modules/ai/validation-identities.nix` | Evaluation-time safety assertions. |
 | Core services | `modules/nas/config/systemd-services.nix`, `application-services.nix` | Native upstream applications and appliance units. |
-| Managed Services V2 | `modules/nas/config/managed-services.nix`, `managed-services-seed-v2.nix`, `managed-services-lifecycle.nix` | Single complete V3 seed (baseline + operations + backup + platform), seed-once bootstrap, finite reconciliation; no continuous regeneration. |
+| Managed Services V2 | `modules/nas/config/managed-services.nix`, `managed-services-seed-v2.nix`, `managed-services-helpers.nix`, `managed-services-lifecycle.nix` | Single complete V3 seed (baseline + operations + backup + platform), seed-once bootstrap, finite reconciliation; no continuous regeneration. Shared helpers (`daemon`, `job`, `portListener`, etc.) live once in `managed-services-helpers.nix`. |
 | Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary; app routes are data in `services.yaml`, not Caddy branches. |
 | Storage | `modules/nas/config/storage-monitoring.nix`, `internal/zfs-tools.nix` | ZFS, snapshots, restore verification, replication, and Restic integration. |
 | Observability | `modules/nas/config/observability.nix` | VictoriaMetrics, Telegraf, vmalert, NAS alert router, optional Grafana/ntfy. |
@@ -17,7 +17,7 @@
 
 `modules/nas/internal/default.nix` merges internal contexts with duplicate-name detection. New helpers should stay local unless multiple configuration modules consume them.
 
-Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-control/services.yaml` (revision = sha256 of exact bytes). `JSON Schema` at `/etc/nas-control/managed-services-v3.schema.json` is the structural/UI contract. Previous split seeds (`managed-services-native-services.nix` + `managed-services-operations.nix` + `managed-services-backup-resources.nix` + `managed-services-platform-routes.nix`) are now aggregated into `managed-services-seed-v2.nix`. `features.json` is gone.
+Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-control/services.yaml` (revision = sha256 of exact bytes). `JSON Schema` at `/etc/nas-control/managed-services-v3.schema.json` is the structural/UI contract. Previous split seeds (`managed-services-native-services.nix` + `managed-services-operations.nix` + `managed-services-backup-resources.nix` + `managed-services-platform-routes.nix`) are now aggregated into `managed-services-seed-v2.nix` with shared data/helper definitions in `managed-services-helpers.nix` (imported, not duplicated). `features.json` is gone.
 
 ## Python services
 

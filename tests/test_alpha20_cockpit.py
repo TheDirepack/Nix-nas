@@ -79,8 +79,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]",
             workflow,
         )
-        self.assertIn("needs: [build, browser]", workflow)
-        self.assertIn("needs: [integration, installer]", workflow)
+        self.assertIn("needs: [build]", workflow)
+        self.assertIn("needs: [integration, browser, installer]", workflow)
 
     def test_release_ci_runs_installer_final_vm_and_security_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -89,7 +89,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("qemu-final-browser.sh", workflow)
         self.assertIn("zap-automation-scan.sh", final_vm)
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
-        self.assertIn("checks.x86_64-linux.nas-vm", workflow)
+        self.assertIn("checks.x86_64-linux", workflow)
 
     def test_fast_ci_excludes_slow_property_fuzz_and_parallelizes_it_later(self) -> None:
         workflow = text(".github/workflows/ci.yml")

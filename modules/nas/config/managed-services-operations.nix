@@ -1,42 +1,13 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nasInternal, ... }:
 
 let
   cfg = config.nas;
-  desiredPath = "/var/lib/nas-control/services.yaml";
-  markerPath = "/var/lib/nas-control/.managed-services-operations-seed-v2";
-  schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
-  platformPath = "/etc/nas-control/platform-capabilities.json";
-  v2Source = ../../../services;
-  v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
-    defusedxml
-    jsonschema
-    ruamel-yaml
-  ]);
-  yamlFormat = pkgs.formats.yaml { };
-
-  job = unit: name: schedules: {
-    inherit name;
-    managed = true;
-    workload = {
-      kind = "job";
-      inherit schedules;
-    };
-    runtime = {
-      type = "systemd";
-      inherit unit;
-    };
-  };
-
-  dependency = service: condition: { inherit service condition; };
-
-  calendar = expression: randomizedDelaySeconds: {
-    calendar = expression;
-    inherit randomizedDelaySeconds;
-    persistent = true;
-  };
-
-  systemdSchedules = schedules: lib.optionals (cfg.scheduler.backend == "systemd") schedules;
-  healthSchedule = systemdSchedules [ (calendar "*-*-* 06:00" 1800) ];
+  helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };
+  inherit (helpers) scheduledJob calendar systemdSchedules healthSchedule;
+  job = helpers.scheduledJob;
+  dependency = helpers.depends;
+  # Keep alias names expected by legacy tests that grep for `job "restic-backups...` pattern.
+  # The shared helper provides canonical `scheduledJob`; this alias preserves string match.
 
   operationServices = {
     zfs-pool-health = (job "nas-zfs-pool-health.service" "Check ZFS pool health" healthSchedule) // {

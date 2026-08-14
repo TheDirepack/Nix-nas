@@ -2,21 +2,16 @@
 
 let
   cfg = config.nas;
-  inherit (nasInternal) copypartyDataDir failureAlert syncthingConfigDir vaultwardenBackupDir vaultwardenDataDir;
-  desiredPath = "/var/lib/nas-control/services.yaml";
-  markerPath = "/var/lib/nas-control/.managed-services-backup-resources-seed-v2";
-  schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
-  platformPath = "/etc/nas-control/platform-capabilities.json";
-  v2Source = ../../../services;
-  v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
-    defusedxml
-    jsonschema
-    ruamel-yaml
-  ]);
-  yamlFormat = pkgs.formats.yaml { };
-  backupStage = cfg.backup.stagingPath;
-  authentikArtifact = "${backupStage}/authentik";
-  copypartyArtifact = "${backupStage}/copyparty";
+  inherit (nasInternal) failureAlert syncthingConfigDir;
+  helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };
+  inherit (helpers)
+    copypartyDataDir
+    vaultwardenDataDir
+    vaultwardenBackupDir
+    backupStage
+    authentikArtifact
+    copypartyArtifact
+    ;
 
   authentikDump = pkgs.writeShellScript "nas-backup-authentik-dump" ''
     set -euo pipefail

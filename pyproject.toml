@@ -15,7 +15,6 @@ nas-cockpit-api = "nas_cockpit_api:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-doctor = "nas_doctor:main"
 nas-identity-sync = "nas_identity_sync:main"
-nas-managed-services = "nas_v2_cli:main"
 nas-managed-services-control = "nas_v2_control:main"
 nas-managed-session = "nas_v2_session:main"
 nas-operation-run = "nas_operation_lock:main"
@@ -52,10 +51,10 @@ py-modules = [
   "nas_v2_backup_verify",
   "nas_v2_bootstrap",
   "nas_v2_caddy",
-  "nas_v2_cli",
   "nas_v2_compose",
   "nas_v2_control",
   "nas_v2_editor",
+  "nas_v2_entry",
   "nas_v2_exec_runner",
   "nas_v2_firewalld",
   "nas_v2_firewalld_reconcile",

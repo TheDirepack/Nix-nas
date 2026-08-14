@@ -398,9 +398,26 @@ function OperationsPage({data, mutate, busy}) {
   ]);
   const [pending, setPending] = useState(null);
   const [lastResult, setLastResult] = useState(null);
+  const remote = data?.backupRemote || {};
+  const [remoteDraft, setRemoteDraft] = useState({
+    provider: remote.provider || "local",
+    scope: remote.scope || "config-only",
+    rcloneRemote: remote.rcloneRemote || "",
+  });
+  useEffect(() => {
+    setRemoteDraft({
+      provider: remote.provider || "local",
+      scope: remote.scope || "config-only",
+      rcloneRemote: remote.rcloneRemote || "",
+    });
+  }, [remote.provider, remote.scope, remote.rcloneRemote]);
   const run = async (id) => {
     const result = await mutate(() => api(["action", id]));
     setPending(null);
+    setLastResult(result);
+  };
+  const saveRemote = async () => {
+    const result = await mutate(() => apiInput(["backup-remote-set"], remoteDraft));
     setLastResult(result);
   };
   return (
@@ -438,6 +455,58 @@ function OperationsPage({data, mutate, busy}) {
           </CardBody>
         </Card>
       ) : null}
+      <Card>
+        <CardHeader>
+          <CardTitle>Backup — remote destination</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p className="nas-muted">
+            Remote backups use <code>restic + rclone</code>. Config-only includes boot system, Caddy,
+            Authentik DB dump, Keepass database, Syncthing config and firewall/identity substrate — the
+            minimum needed to restore the Authentik remote sign-in route. All also includes V2 app data
+            emitted via <code>storageResources</code>.
+          </p>
+          <Form>
+            <FormGroup label="Provider">
+              <select
+                value={remoteDraft.provider}
+                onChange={(event) => setRemoteDraft({ ...remoteDraft, provider: event.target.value })}
+                disabled={busy}
+              >
+                <option value="local">local (ZFS restic-system)</option>
+                <option value="gdrive">Google Drive (gdrive)</option>
+                <option value="icloud">iCloud (rclone)</option>
+                <option value="pcloud">pCloud (pcloud)</option>
+                <option value="s3">S3 (s3)</option>
+                <option value="b2">Backblaze B2 (b2)</option>
+                <option value="rclone">Custom rclone remote</option>
+              </select>
+            </FormGroup>
+            <FormGroup label="Scope">
+              <select
+                value={remoteDraft.scope}
+                onChange={(event) => setRemoteDraft({ ...remoteDraft, scope: event.target.value })}
+                disabled={busy}
+              >
+                <option value="config-only">config-only (Caddy + Authentik + Keepass + system)</option>
+                <option value="all">all (also app data)</option>
+              </select>
+            </FormGroup>
+            <FormGroup label="rclone remote (empty = auto from provider)">
+              <TextInput
+                value={remoteDraft.rcloneRemote}
+                onChange={(_e, value) => setRemoteDraft({ ...remoteDraft, rcloneRemote: value })}
+                placeholder="gdrive:nas-backup / s3:bucket/prefix"
+                isDisabled={busy}
+              />
+            </FormGroup>
+            <Button variant="secondary" onClick={saveRemote} isDisabled={busy}>
+              Save remote (stub — wire to V2 authority when backend lands)
+            </Button>
+          </Form>
+          <pre className="nas-pre">{pretty(remote)}</pre>
+        </CardBody>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Operation coordinator</CardTitle>

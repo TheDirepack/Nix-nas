@@ -1,15 +1,6 @@
 {
   "schemaVersion": 3,
   "executables": {
-    "nas-managed-services": {
-      "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_v2_cli.py",
-      "systemTest": "tests/vm/adversarial-installed.py",
-      "tests": [
-        "tests/test_v2_cli.py",
-        "tests/test_v2_plan_apply.py"
-      ]
-    },
     "nas-managed-services-control": {
       "fuzzStrategy": "feature-id",
       "source": "services/nas_v2_control.py",
@@ -36,7 +27,6 @@
     ],
     "services/nas_v2_apply.py": [
       "tests/test_v2_plan_apply.py",
-      "tests/test_v2_cli.py",
       "tests/test_v2_backup.py",
       "tests/test_v2_source_watch.py",
       "tests/test_v2_podman_network.py",
@@ -63,9 +53,6 @@
     "services/nas_v2_caddy.py": [
       "tests/test_v2_caddy.py",
       "tests/test_v2_caddy_validate.py"
-    ],
-    "services/nas_v2_cli.py": [
-      "tests/test_v2_cli.py"
     ],
     "services/nas_v2_compose.py": [
       "tests/test_v2_compose.py",
@@ -156,6 +143,9 @@
       "tests/test_v2_source_watch.py",
       "tests/test_v2_podman_network.py",
       "tests/test_v2_session_projection.py"
+    ],
+    "services/nas_v2_entry.py": [
+      "tests/test_v2_boundary.py"
     ],
     "services/nas_v2_wake.py": [
       "tests/test_v2_wake.py"

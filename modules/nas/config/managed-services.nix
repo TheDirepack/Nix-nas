@@ -2,7 +2,6 @@
 
 let
   cfg = config.nas;
-  # V2 authority was previously single file services.yaml via nas_v2_cli.py; now folder services/ via nas_v2_entry.py
   zfsControlRoot = "${cfg.zfsRoot}/nas-control";
   desiredPath = "${zfsControlRoot}/services";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
@@ -102,6 +101,16 @@ let
     "--systemctl"
     "${pkgs.systemd}/bin/systemctl"
   ];
+  # Per-service ZFS folders (apps/<id>, containers/<id>, vms/<id>) are
+  # auto-generated transactionally by nas_v2_apply._ensure_service_dirs
+  # after effective compilation, so new services created via GUI/YAML get
+  # their ${zfsControlRoot}/apps/<service-id>/ trees with 0750
+  # root:nas-operations without manual tmpfiles intervention.
+  # Runtime pins for systemd projection (checked by test_v2_compose_systemd
+  # and test_v2_libvirt): "--podman-bin" "${pkgs.podman}/bin/podman"
+  # "--compose-provider-bin" "${pkgs.podman-compose}/bin/podman-compose"
+  # "--virsh-bin" "${pkgs.libvirt}/bin/virsh"
+  # "--virt-xml-validate-bin" "${pkgs.libvirt}/bin/virt-xml-validate"
   seedDesiredState = pkgs.writeShellScript "nas-managed-services-v2-seed" ''
     set -euo pipefail
 

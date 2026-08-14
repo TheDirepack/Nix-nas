@@ -401,6 +401,19 @@ def normalize(document: dict[str, Any]) -> dict[str, Any]:
     result.setdefault("storageResources", {})
     result.setdefault("credentials", {})
     result.setdefault("networkProfiles", {})
+    # Backup remote descriptor — optional, defaults to local config-only.
+    # This drives the rclone provider/scope UI and Nix restic wiring; the
+    # compiler itself treats it as passthrough (no storage projection).
+    if "backup" not in result or not isinstance(result["backup"], dict):
+        result["backup"] = {}
+    backup = result["backup"]
+    backup.setdefault("remote", {})
+    remote = backup["remote"] if isinstance(backup["remote"], dict) else {}
+    backup["remote"] = remote
+    remote.setdefault("provider", "local")
+    remote.setdefault("scope", "config-only")
+    remote.setdefault("rcloneRemote", "")
+    remote.setdefault("rcloneConfigFile", "")
 
     for resource in result["storageResources"].values():
         resource.setdefault("scope", "system")
