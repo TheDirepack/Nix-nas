@@ -105,7 +105,7 @@ let
       }
 
       nas_vm_profile_cleanup() {
-        local rc=${1:-0} now=$SECONDS metadata phase_id phase_budget
+        local rc=''${1:-0} now=$SECONDS metadata phase_id phase_budget
         nas_vm_stop_first_run_timer
         if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
           metadata="$(nas_vm_phase_metadata "$NAS_VM_PHASE_NAME" 2>/dev/null || true)"
