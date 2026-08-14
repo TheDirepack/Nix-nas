@@ -58,6 +58,8 @@ printf '%s\n' "$(nas_vm_integration_timeout_seconds)"
 printf '%s\n' "$(nas_vm_encrypted_timeout_seconds)"
 printf '%s\n' "$(nas_vm_installer_timeout_seconds)"
 printf '%s\n' "$(nas_vm_full_suite_timeout_seconds)"
+printf '%s\n' "$(nas_vm_ci_integration_timeout_seconds)"
+printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
 """
         result = subprocess.run(
             ["bash", "-c", helper_script, "budget", str(TIMEOUT_HELPER)],
@@ -78,7 +80,9 @@ printf '%s\n' "$(nas_vm_full_suite_timeout_seconds)"
                 check=True,
             ).stdout.strip()
         )
-        integration, encrypted, installer, full_suite = map(int, result.stdout.splitlines())
+        integration, encrypted, installer, full_suite, ci_integration, ci_installer = map(
+            int, result.stdout.splitlines()
+        )
         outer = self.manifest["outer"]
         self.assertEqual(
             integration,
@@ -107,6 +111,8 @@ printf '%s\n' "$(nas_vm_full_suite_timeout_seconds)"
             + outer["slack"],
         )
         self.assertEqual(full_suite, outer["fullSuiteSetup"] + integration)
+        self.assertEqual(ci_integration, integration + outer["ciSetup"])
+        self.assertEqual(ci_installer, installer + outer["ciSetup"])
 
     def test_manifest_phase_labels_match_the_guest_runner(self) -> None:
         manifest_labels = [phase["label"] for phase in self.manifest["phases"]]

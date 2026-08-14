@@ -20,6 +20,7 @@
     "installerBoot": 900,
     "installerReboot": 600,
     "fullSuiteSetup": 1800,
+    "ciSetup": 1800,
     "slack": 900
   },
   "phases": [

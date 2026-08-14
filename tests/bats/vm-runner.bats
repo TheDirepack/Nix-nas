@@ -8,6 +8,13 @@ setup() {
   deps_lib="$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-js-deps.sh"
   failure_injection="$BATS_TEST_DIRNAME/../vm/cleanup-failure-injection.sh"
   resource_injection="$BATS_TEST_DIRNAME/../vm/resource-failure-injection.sh"
+  persistent_lifecycle="$BATS_TEST_DIRNAME/../vm/persistent-lifecycle.sh"
+}
+
+@test "persistent-start cleanup disarms only after a healthy QEMU startup" {
+  run "$persistent_lifecycle"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Persistent QEMU lifecycle contract passed"* ]]
 }
 
 @test "real VM cleanup contract survives phase failures, cancellation, and rerun" {

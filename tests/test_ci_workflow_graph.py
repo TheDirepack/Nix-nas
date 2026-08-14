@@ -144,7 +144,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("needs.build.outputs.bundle_cache_namespace", cache)
         self.assertIn("bundle_cache_complete != 'true'", cache)
 
-    def test_ci_timeouts_equal_manifest_aggregates(self) -> None:
+    def test_ci_timeouts_include_manifest_runtime_and_setup_margin(self) -> None:
         manifest = self.timeout_manifest
         timeouts = manifest["timeouts"]
         outer = manifest["outer"]
@@ -174,8 +174,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
             + outer["nativeShutdown"]
             + outer["slack"]
         )
-        self.assertEqual(int(self.jobs["integration"]["timeout-minutes"]), math.ceil(integration / 60))
-        self.assertEqual(int(self.jobs["installer"]["timeout-minutes"]), math.ceil(installer / 60))
+        setup_margin = outer["ciSetup"]
+        self.assertEqual(
+            int(self.jobs["integration"]["timeout-minutes"]),
+            math.ceil((integration + setup_margin) / 60),
+        )
+        self.assertEqual(
+            int(self.jobs["installer"]["timeout-minutes"]),
+            math.ceil((installer + setup_margin) / 60),
+        )
+        for name in ("installed-command-fuzz", "zap-fuzz"):
+            self.assertGreaterEqual(
+                int(self.jobs[name]["timeout-minutes"]),
+                math.ceil((installer + setup_margin) / 60),
+            )
 
     def test_every_bundle_has_one_exact_cache_key_through_the_handoff(self) -> None:
         build = self.serialized(self.jobs["build"])

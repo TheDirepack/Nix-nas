@@ -91,3 +91,15 @@ nas_vm_full_suite_timeout_seconds() {
     + $(nas_vm_integration_timeout_seconds)
   ))"
 }
+
+nas_vm_ci_setup_seconds() {
+  nas_vm_outer_value ciSetup
+}
+
+nas_vm_ci_integration_timeout_seconds() {
+  printf '%s\n' "$(( $(nas_vm_integration_timeout_seconds) + $(nas_vm_ci_setup_seconds) ))"
+}
+
+nas_vm_ci_installer_timeout_seconds() {
+  printf '%s\n' "$(( $(nas_vm_installer_timeout_seconds) + $(nas_vm_ci_setup_seconds) ))"
+}

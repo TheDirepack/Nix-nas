@@ -197,7 +197,7 @@ and Nix store paths. QEMU user networking provides this by default.
 | `NAS_QEMU_SSH_PORT` | `2222` | Loopback SSH forwarding port. |
 | `NAS_QEMU_KEEP_VM` | `0` | Legacy disposable-mode reuse switch; the persistent wrappers manage reuse and baseline restore explicitly. |
 | `NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT` | manifest `reconfigureBuild` | Guest `nixos-rebuild switch` deadline for the persistent wrapper. |
-| `NAS_QEMU_SOURCE_SUITE_TIMEOUT` | `14400` | Host-side deadline for the full source/appliance suite in the persistent VM. |
+| `NAS_QEMU_SOURCE_SUITE_TIMEOUT` | manifest-derived | Host-side deadline for the full source/appliance suite in the persistent VM. |
 | `NAS_QEMU_GUEST_TEST_TIMEOUT` | manifest-derived | Host-side limit for the installed guest suite; it is the sum of every declared guest phase plus slack. |
 
 The qualified build exports `bundle-manifest.tsv` beside the NAR archives. It

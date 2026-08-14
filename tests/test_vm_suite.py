@@ -62,7 +62,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn('BASELINE_SNAPSHOT="nas-test-clean"', qemu)
         self.assertIn("restore_persistent_baseline", qemu)
         self.assertIn("CACHE_MARKER_CONTENT=", qemu)
-        self.assertIn("qemu_pid_from_pidfile", qemu)
+        self.assertIn("nas_qemu_pid_from_pidfile", qemu)
         self.assertIn("QEMU source path is missing", qemu)
         self.assertIn("realpath", qemu)
         self.assertIn('qemu-img snapshot -c "$BASELINE_SNAPSHOT"', qemu)

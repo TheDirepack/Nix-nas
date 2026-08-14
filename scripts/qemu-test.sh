@@ -4,6 +4,8 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/tests/vm/timeout-budget.sh"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/nas-qemu-process.sh"
 export NAS_VM_TIMEOUT_BUDGET_FILE="${NAS_VM_TIMEOUT_BUDGET_FILE:-$ROOT/tests/vm/timeout-budget.json}"
 MODE="${1:-all}"
 DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu"
@@ -112,21 +114,6 @@ validate_state_path() {
   esac
   [[ "$state_resolved" != "$cache_resolved" ]] || die "QEMU state path must not equal the cache path"
   [[ ! -L "$STATE_DIR" ]] || die "NAS_QEMU_STATE_DIR must not be a symlink: $STATE_DIR"
-}
-
-qemu_pid_from_pidfile() {
-  local pidfile=$1 pid executable
-  QEMU_PID=""
-  [[ -s "$pidfile" ]] || return 1
-  pid="$(<"$pidfile")"
-  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-  [[ "${executable##*/}" == qemu-system-x86_64 ]] || {
-    printf 'error: refusing to signal pid %s from %s because it is not qemu-system-x86_64\n' "$pid" "$pidfile" >&2
-    return 2
-  }
-  QEMU_PID="$pid"
 }
 
 run_static() {
@@ -420,7 +407,7 @@ stop_persistent_vm() {
     log "Persistent VM is not running."
     return 0
   fi
-  if qemu_pid_from_pidfile "$pidfile"; then
+  if nas_qemu_pid_from_pidfile "$pidfile"; then
     pid="$QEMU_PID"
   else
     local status=$?
@@ -430,13 +417,11 @@ stop_persistent_vm() {
     return 0
   fi
   log "Stopping persistent VM (pid $pid)"
-  kill "$pid" 2>/dev/null || true
-  for _ in $(seq 1 30); do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 1
-  done
-  kill -KILL "$pid" 2>/dev/null || true
-  rm -f "$pidfile"
+  nas_qemu_stop_pidfile "$pidfile" 30 || {
+    local status=$?
+    (( status == 2 )) && die "refusing to stop a pidfile owned by a non-QEMU process"
+    return "$status"
+  }
 }
 
 has_snapshot() {
@@ -488,19 +473,11 @@ run_installer() {
 
   cleanup_vm() {
     local cleanup_pidfile="$STATE_DIR/qemu.pid"
-    if [[ -s "$cleanup_pidfile" ]] && qemu_pid_from_pidfile "$cleanup_pidfile"; then
-      local cleanup_pid="$QEMU_PID"
-      kill "$cleanup_pid" 2>/dev/null || true
-      for _ in $(seq 1 20); do kill -0 "$cleanup_pid" 2>/dev/null || break; sleep 1; done
-      kill -KILL "$cleanup_pid" 2>/dev/null || true
-      rm -f "$cleanup_pidfile"
-    elif [[ -s "$cleanup_pidfile" ]]; then
-      qemu_pid_from_pidfile "$cleanup_pidfile" || {
-        local pid_status=$?
-        (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $cleanup_pidfile"
-        rm -f "$cleanup_pidfile"
-      }
-    fi
+    nas_qemu_cleanup_pidfile "$cleanup_pidfile" 20 || {
+      local pid_status=$?
+      (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $cleanup_pidfile"
+      return "$pid_status"
+    }
   }
   trap cleanup_vm EXIT INT TERM
 
@@ -516,7 +493,7 @@ run_installer() {
 
   if [[ "$persistent_mode" != 1 || ! -s "$pidfile" ]]; then
     rm -f "$pidfile"
-  elif qemu_pid_from_pidfile "$pidfile"; then
+  elif nas_qemu_pid_from_pidfile "$pidfile"; then
     :
   else
     local pid_status=$?
@@ -573,7 +550,7 @@ run_installer() {
   mapfile -t accel < <(qemu_acceleration)
   if [[ ! -s "$pidfile" ]]; then
     log "Booting installed NAS in a disposable QEMU VM"
-  elif qemu_pid_from_pidfile "$pidfile"; then
+  elif nas_qemu_pid_from_pidfile "$pidfile"; then
     log "Persistent QEMU VM is already running (pid $(<"$pidfile"))"
   else
     local pid_status=$?
@@ -600,7 +577,9 @@ run_installer() {
   fi
 
   if [[ "$persistent_mode" == 1 ]]; then
-    trap - EXIT INT TERM
+    # Once SSH proves that the daemonized VM is healthy, persistent-start owns
+    # its lifecycle and must not let this process's EXIT trap stop it.
+    nas_qemu_disarm_cleanup
     full_suite_skip_fuzz="${NAS_QEMU_SKIP_FUZZ:-0}"
     sync_source_to_guest "$source_stage" "$ssh_key"
     if [[ "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test || "$marker_id" != "$source_id" ]]; then
@@ -645,7 +624,7 @@ run_installer() {
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
   if [[ -s "$pidfile" ]]; then
-    if qemu_pid_from_pidfile "$pidfile"; then
+    if nas_qemu_pid_from_pidfile "$pidfile"; then
       pid="$QEMU_PID"
       for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     else
@@ -679,7 +658,7 @@ run_installer() {
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
   if [[ -s "$pidfile" ]]; then
-    if qemu_pid_from_pidfile "$pidfile"; then
+    if nas_qemu_pid_from_pidfile "$pidfile"; then
       pid="$QEMU_PID"
       for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     else
