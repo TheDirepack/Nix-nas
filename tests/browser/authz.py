@@ -325,7 +325,9 @@ def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
         )
     except (NoSuchElementException, TimeoutException) as error:
         details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
-        raise RuntimeError(f"Authentik NAS user-settings flow did not render the Syncthing field:\n{details}") from error
+        raise RuntimeError(
+            f"Authentik NAS user-settings flow did not render the Syncthing field:\n{details}"
+        ) from error
 
 
 def native_share_response(origin: str) -> dict[str, Any]:
