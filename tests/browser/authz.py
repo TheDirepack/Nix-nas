@@ -186,7 +186,21 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
     )
     password_input.send_keys(password)
     first(driver, ['button[type="submit"]', 'input[type="submit"]']).click()
-    wait.until(lambda current: "/identity/if/flow/" not in current.current_url)
+    public_origin = origin.rstrip("/")
+
+    def authenticated_portal_loaded(current: webdriver.Chrome) -> bool:
+        url = current.current_url
+        if "/identity/if/flow/" in url or "/outpost.goauthentik.io/callback" in url:
+            return False
+        if url != public_origin and not url.startswith(public_origin + "/"):
+            return False
+        return current.execute_script("return document.readyState") in {"interactive", "complete"}
+
+    try:
+        wait.until(authenticated_portal_loaded)
+    except TimeoutException as error:
+        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+        raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
 
 
 def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
