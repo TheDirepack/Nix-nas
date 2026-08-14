@@ -355,8 +355,16 @@ services:
     network: ...
     routes: ...
     listeners: ...
-    backup: ...
-    portal: ...
+
+storageResources:
+  example-data:
+    path: /tank/example
+    stateClass: authoritative
+    backup:
+      enabled: true
+      consistency: filesystem
+    fileBrowser:
+      visible: true
 ```
 
 The GUI must be able to create/edit all meaningful fields without application-specific UI code.

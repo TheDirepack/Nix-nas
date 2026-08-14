@@ -3,7 +3,7 @@
 let
   cfg = config.nas;
   zfsControlRoot = "${cfg.zfsRoot}/nas-control";
-  desiredPath = "${zfsControlRoot}/services";
+  desiredPath = "/var/lib/nas-control/services.yaml";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
   platformBasePath = "/etc/nas-control/platform-capabilities.json";
   platformPath = "/run/nas-control/platform-capabilities.json";
@@ -137,27 +137,13 @@ let
     set -euo pipefail
 
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}
-    ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}/services
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}/apps
     ${pkgs.coreutils}/bin/install -d -m 0755 -o root -g root ${zfsControlRoot}/venvs
 
-    # Seed a minimal stub when the services directory is empty (fresh install).
-    if [ -d ${lib.escapeShellArg desiredPath} ]; then
-      if [ -z "$(${pkgs.coreutils}/bin/ls -A ${lib.escapeShellArg desiredPath} 2>/dev/null)" ]; then
-        tmp="$(${pkgs.coreutils}/bin/mktemp ${zfsControlRoot}/services/.00-default.yaml.XXXXXX)"
-        trap '${pkgs.coreutils}/bin/rm -f "$tmp"' EXIT
-        ${pkgs.coreutils}/bin/cat > "$tmp" <<'YAML'
-    schemaVersion: 3
-    services: {}
-    YAML
-        ${pkgs.coreutils}/bin/chown root:nas-operations "$tmp"
-        ${pkgs.coreutils}/bin/chmod 0640 "$tmp"
-        ${pkgs.coreutils}/bin/mv -n "$tmp" ${zfsControlRoot}/services/00-default.yaml
-        trap - EXIT
-      fi
-    elif [ ! -e ${lib.escapeShellArg desiredPath} ]; then
-      ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${lib.escapeShellArg desiredPath}
-      tmp="$(${pkgs.coreutils}/bin/mktemp ${lib.escapeShellArg desiredPath}/.00-default.yaml.XXXXXX)"
+    # Seed the canonical file authority when missing (fresh install).
+    if [ ! -e ${lib.escapeShellArg desiredPath} ]; then
+      ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations "$(dirname ${lib.escapeShellArg desiredPath})"
+      tmp="$(${pkgs.coreutils}/bin/mktemp "$(dirname ${lib.escapeShellArg desiredPath})/.services.yaml.XXXXXX")"
       trap '${pkgs.coreutils}/bin/rm -f "$tmp"' EXIT
       ${pkgs.coreutils}/bin/cat > "$tmp" <<'YAML'
     schemaVersion: 3
@@ -165,8 +151,17 @@ let
     YAML
       ${pkgs.coreutils}/bin/chown root:nas-operations "$tmp"
       ${pkgs.coreutils}/bin/chmod 0640 "$tmp"
-      ${pkgs.coreutils}/bin/mv -n "$tmp" ${lib.escapeShellArg desiredPath}/00-default.yaml
+      ${pkgs.coreutils}/bin/mv -n "$tmp" ${lib.escapeShellArg desiredPath}
       trap - EXIT
+    fi
+    # Remove stale directory authority if it exists (migration from services/ dir)
+    if [ -d ${lib.escapeShellArg desiredPath} ]; then
+      echo "warning: ${desiredPath} is a directory, expected file; leaving for manual migration" >&2
+    fi
+    if [ -d ${zfsControlRoot}/services ]; then
+      if [ -z "$(${pkgs.coreutils}/bin/ls -A ${zfsControlRoot}/services 2>/dev/null)" ]; then
+        ${pkgs.coreutils}/bin/rmdir ${zfsControlRoot}/services 2>/dev/null || true
+      fi
     fi
   '';
 in
@@ -175,7 +170,6 @@ in
     systemd.tmpfiles.rules = [
       "L+ /var/lib/nas-control - - - - ${zfsControlRoot}"
       "d ${zfsControlRoot} 0750 root nas-operations -"
-      "d ${zfsControlRoot}/services 0750 root nas-operations -"
       "d ${zfsControlRoot}/apps 0750 root nas-operations -"
       "d ${zfsControlRoot}/venvs 0755 root root -"
       "d /run/nas-control 0755 root root -"

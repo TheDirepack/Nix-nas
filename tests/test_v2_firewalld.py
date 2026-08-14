@@ -70,6 +70,8 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertIn('priority="-300"', remote)
         self.assertIn("V2 remote admin", remote)
         self.assertIn('port="22"', remote)
+        self.assertIn('port="9092"', remote)
+        self.assertNotIn('port="9090"', remote)
 
     def test_disabled_host_listener_projects_no_firewall_opening(self):
         effective = self.effective()

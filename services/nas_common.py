@@ -194,7 +194,7 @@ def split_groups(raw: str) -> set[str]:
             file=sys.stderr,
         )
         return set()
-    parts = [part.strip() for part in raw.replace(";", ",").replace("|", ",").split(",")]
+    parts = [part.strip() for part in raw.split(",")]
     names = [name for name in parts if name]
     if len(names) > MAX_GROUPS:
         print(

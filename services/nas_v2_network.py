@@ -499,7 +499,7 @@ def remote_admin_policy_name() -> str:
 
 
 _REMOTE_ADMIN_PRIORITY = "-300"
-_REMOTE_ADMIN_PORTS: list[tuple[str, str]] = [("22", "tcp"), ("9090", "tcp"), ("443", "tcp")]
+_REMOTE_ADMIN_PORTS: list[tuple[str, str]] = [("22", "tcp"), ("9092", "tcp"), ("443", "tcp")]
 
 # Deadman contract: default 60s acknowledgement window, native systemd timer.
 _DEFAULT_DEADMAN_WINDOW = 60

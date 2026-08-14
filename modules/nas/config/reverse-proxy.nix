@@ -70,33 +70,12 @@ in
         }
       }
 
-      # These are only URL-canonicalization redirects. The corresponding reverse
-      # proxies, authorization, readiness, and on-demand lifecycle are V2-owned.
-      ${lib.optionalString cfg.ai.enable ''
-      redir /ai/runtime /ai/runtime/
-      ${lib.optionalString cfg.ai.modelDownloader.enable ''
-      redir /ai/models /ai/models/
-      ''}
-      ''}
-      ${lib.optionalString (cfg.observability.enable && cfg.alerting.enable) ''
-      redir /alerts /alerts/
-      ''}
-      ${lib.optionalString cfg.observability.enable ''
-      redir /victoriametrics /victoriametrics/vmui
-      ${lib.optionalString cfg.observability.grafana.enable ''
-      redir /metrics /metrics/
-      ''}
-      ''}
-      ${lib.optionalString cfg.observability.ntfy.enable ''
-      redir /notifications /notifications/
-      ''}
-      ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''
-      redir /ups /ups/
-      ''}
+      # V2 owns all application routes; no app-specific Caddy redirects are needed.
+      # Trailing-slash canonicalization and route handling are defined in the V2
+      # seed (managed-services-seed-v2.nix) and applied via generic Caddy primitives.
 
-      # V2 now owns all application routes including Open WebUI, downloader
-      # compatibility, and Syncthing. Generic primitives cover prefix stripping,
-      # headers, and header constraints without app-specific Caddy branches.
+      # V2 application routes handle prefix stripping, headers, and lifecycle
+      # without app-specific Caddy branches.
       handle /settings/syncthing {
         route {
           ${caddyForwardAuth}

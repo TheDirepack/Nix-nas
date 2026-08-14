@@ -52,17 +52,8 @@ let
           firewall = true;
         };
       };
-      routes = {
-        admin = (pathRoute [ "/shares/admin" ] copypartyTarget (identity "admin")) // { portal.visible = false; };
-        dav = (pathRoute [ "/dav" ] copypartyTarget (identity "webdav")) // {
-          proxy.stripPrefix = "/dav";
-          portal.visible = false;
-        };
-        files = (pathRoute [ "/shares" ] copypartyTarget (identity "files")) // {
-          portal = portal "Files" "Files" "folder" 10;
-        };
-        share = (pathRoute [ "/share" ] copypartyTarget { mode = "upstream"; }) // { portal.visible = false; };
-      };
+      # V2 owns all externally reachable route ownership; native file contains no routes.
+      # The file-transfer ACLs and WebDAV policy remain CopyParty-native.
     };
   }
   // lib.optionalAttrs cfg.syncthing.enable {
@@ -80,10 +71,6 @@ let
         sync-quic = portListener "udp" 22000;
         local-discovery = portListener "udp" 21027;
       };
-      routes.web = (pathRoute [ "/syncthing" ] (httpTarget syncthingGuiPort) (identity "admin")) // {
-        proxy.stripPrefix = "/syncthing";
-        portal = portal "Syncthing" "Files" "sync" 20;
-      };
     };
     syncthing-sync = (scheduledJob "nas-syncthing-sync.service" "Reconcile Syncthing identity-backed configuration" syncSchedules) // {
       dependencies = [
@@ -100,13 +87,6 @@ let
         (capability "access" "Use Vaultwarden")
         (capability "admin" "Access Vaultwarden administration")
       ];
-      routes = {
-        admin = (pathRoute [ "/vault/admin" ] (httpTarget vaultwardenPort) (identity "admin")) // { portal.visible = false; };
-        oidc = (pathRoute [ "/vault/identity/connect/oidc" "/vault/identity/connect/oidc-signin" ] (httpTarget vaultwardenPort) (identity "access")) // { portal.visible = false; };
-        web = (pathRoute [ "/vault" ] (httpTarget vaultwardenPort) { mode = "upstream"; }) // {
-          portal = portal "Vaultwarden" "Home" "lock" 30;
-        };
-      };
     };
   }
   // lib.optionalAttrs cfg.ai.enable {
@@ -121,19 +101,6 @@ let
       authorization.capabilities = adminCapability "Administer the AI runtime";
       resources.accelerators = [ { kind = "gpu"; vendor = "any"; quantity = 1; required = false; mode = "shared"; } ];
       readiness.probes = [ { type = "tcp"; port = cfg.ai.llamaSwap.port; } ];
-      routes = {
-        api = (pathRoute [ "/ai/v1" ] (httpTarget cfg.ai.llamaSwap.port) { mode = "upstream"; }) // {
-          proxy.stripPrefix = "/ai";
-          portal.visible = false;
-        };
-        admin = (pathRoute [ "/ai/runtime" ] (httpTarget cfg.ai.llamaSwap.port) (identity "admin")) // {
-          proxy = {
-            stripPrefix = "/ai/runtime";
-            requestHeaders."X-Forwarded-Prefix" = "/ai/runtime";
-          };
-          portal = portal "AI Runtime" "AI" "cpu" 45;
-        };
-      };
     };
     ai-workspace = (onDemand "open-webui.service" "Open WebUI AI workspace" 600) // {
       dependencies = [ (depends "ai-runtime" "ready") ];
@@ -155,13 +122,6 @@ let
       dependencies = [ (depends "ai-storage" "completed") ];
       authorization.capabilities = adminCapability "Download and manage AI models";
       readiness.probes = [ { type = "tcp"; port = cfg.ai.modelDownloader.port; } ];
-      routes.web = (pathRoute [ "/ai/models" ] (httpTarget cfg.ai.modelDownloader.port) (identity "admin")) // {
-        proxy = {
-          stripPrefix = "/ai/models";
-          requestHeaders."X-Forwarded-Prefix" = "/ai/models";
-        };
-        portal = portal "AI Models" "AI" "download" 50;
-      };
     };
   }
   // lib.optionalAttrs cfg.virtualization.enable {
@@ -180,9 +140,6 @@ let
     victoriametrics = (daemon "victoriametrics.service" "VictoriaMetrics metrics database") // {
       authorization.capabilities = adminCapability "View VictoriaMetrics";
       readiness.probes = [ { type = "tcp"; port = cfg.observability.victoriaMetricsPort; } ];
-      routes.web = (pathRoute [ "/victoriametrics/" ] (httpTarget cfg.observability.victoriaMetricsPort) (identity "admin")) // {
-        portal = portal "VictoriaMetrics" "Monitoring" "chart" 60;
-      };
     };
     telegraf = (daemon "telegraf.service" "Telegraf metric collector") // {
       dependencies = [ (depends "victoriametrics" "started") ];
@@ -191,9 +148,6 @@ let
   // lib.optionalAttrs (cfg.observability.enable && cfg.alerting.enable) {
     alert-router = (daemon "nas-alert-router.service" "NAS alert router") // {
       authorization.capabilities = adminCapability "View alert routing";
-      routes.web = (pathRoute [ "/alerts/" ] (httpTarget cfg.observability.alertRouterPort) (identity "admin")) // {
-        portal = portal "Alerts" "Monitoring" "bell" 70;
-      };
     };
     vmalert = (daemon "vmalert-nas.service" "VictoriaMetrics alert evaluator") // {
       dependencies = [ (depends "victoriametrics" "started") (depends "alert-router" "started") ];
@@ -204,29 +158,10 @@ let
       dependencies = [ (depends "victoriametrics" "started") ];
       authorization.capabilities = adminCapability "Administer Grafana";
       readiness.probes = [ { type = "http"; url = "http://127.0.0.1:${toString cfg.observability.grafana.port}/api/health"; } ];
-      routes.web = (pathRoute [ "/metrics/" ] (httpTarget cfg.observability.grafana.port) (identity "admin")) // {
-        proxy = {
-          requestHeaders = {
-            "X-WEBAUTH-USER" = "{http.request.header.Remote-User}";
-            "X-WEBAUTH-NAME" = "{http.request.header.Remote-Name}";
-            "X-WEBAUTH-EMAIL" = "{http.request.header.Remote-Email}";
-            "X-WEBAUTH-ROLE" = "Admin";
-            "X-Forwarded-Proto" = "https";
-            "X-Forwarded-Prefix" = "/metrics";
-          };
-          responseHeaders."X-Frame-Options" = "SAMEORIGIN";
-        };
-        portal = portal "Grafana" "Monitoring" "dashboard" 65;
-      };
     };
   }
   // lib.optionalAttrs cfg.observability.ntfy.enable {
-    notifications = (daemon "ntfy-sh.service" "ntfy notification server") // {
-      routes.web = (pathRoute [ "/notifications/" ] (httpTarget cfg.observability.ntfy.port) { mode = "upstream"; }) // {
-        proxy.responseHeaders."X-Frame-Options" = "SAMEORIGIN";
-        portal = portal "Notifications" "Monitoring" "bell" 80;
-      };
-    };
+    notifications = (daemon "ntfy-sh.service" "ntfy notification server");
   }
   // lib.optionalAttrs (cfg.power.ups.enable && cfg.power.ups.mode == "netserver") {
     ups-server = platformService ((daemon "upsd.service" "NUT UPS network server") // {
@@ -237,10 +172,6 @@ let
     ups-web = (onDemand "podman-nut-webgui.service" "NUT web interface" 600) // {
       authorization.capabilities = adminCapability "Administer UPS monitoring";
       readiness.probes = [ { type = "tcp"; port = cfg.power.ups.web.port; } ];
-      routes.web = (pathRoute [ "/ups/" ] (httpTarget cfg.power.ups.web.port) (identity "admin")) // {
-        proxy.responseHeaders."X-Frame-Options" = "SAMEORIGIN";
-        portal = portal "UPS" "Monitoring" "battery" 90;
-      };
     };
   };
 

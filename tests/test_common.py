@@ -79,7 +79,7 @@ class CommonPolicyTests(unittest.TestCase):
 
     def test_split_groups_accepts_supported_delimiters_and_deduplicates(self) -> None:
         self.assertEqual(
-            common.split_groups("nas_users; application.demo.access | nas_users"),
+            common.split_groups("nas_users, application.demo.access, nas_users"),
             {"nas_users", "application.demo.access"},
         )
 
