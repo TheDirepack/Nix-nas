@@ -99,10 +99,9 @@
       # Reusable Nix store roots for the QEMU integration VMs. The full VM
       # system closure is thousands of store paths; fetching them one at a
       # time through the Magic Nix Cache trips GitHub's per-path cache rate
-      # limit. The core root therefore contains every package needed by the
-      # appliance and its deterministic VM tests. scripts/vm-bundles.sh
-      # exports that root once, then keeps only the configuration-sensitive VM
-      # driver delta separate.
+      # limit. The core root contains boot, recovery, unlock, primary access,
+      # and deterministic-test tooling. Optional applications remain separate
+      # roots so a change to one application does not invalidate the others.
       packages.x86_64-linux =
         let
           pkgs = mkPkgs "x86_64-linux";
@@ -122,6 +121,13 @@
             yarn-berry = pkgs.yarn-berry.override { nodejs = pkgs.nodejs_22; };
             buildPackages = cockpitZfsBuildPackages;
           };
+          # The integration VM enables TFTP, which adds partftpy to the
+          # CopyParty runtime. Keep the exported core root aligned with the
+          # package used by the VM service rather than exporting an incomplete
+          # unconfigured CopyParty closure.
+          copypartyBundle = pkgs.copyparty.overridePythonAttrs (old: {
+            dependencies = old.dependencies ++ [ pkgs.python3Packages.partftpy ];
+          });
           bundlePaths = with pkgs; {
             core = [
               bash
@@ -132,7 +138,6 @@
               curl
               diffutils
               findutils
-              grafana
               gawk
               git
               gnugrep
@@ -141,34 +146,46 @@
               jq
               keepassxc
               linuxPackages.kernel
-              llama-cpp
-              llama-swap
               nodejs
-              ntfy-sh
-              open-webui
               openssh
-              postgresql
               procps
               (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
-              restic
               sanoid
-              syncthing
+              smartmontools
+              pciutils
+              vim
+              skopeo
               systemd
               util-linux
-              vaultwardenBundle
               zfs
-              authentik
-              copyparty
+              copypartyBundle
               chromedriver
-              cockpit-files
-              cockpit-podman
-              cockpitZfsBundle
             ];
+            identity = [ authentik postgresql vaultwardenBundle syncthing ];
+            observability = [ grafana ntfy-sh ];
+            storage = [ restic cockpit-files cockpit-podman cockpitZfsBundle ];
+            ai = [ open-webui llama-swap llama-cpp ];
           };
         in {
           core = pkgs.buildEnv {
             name = "nas-vm-bundle-core";
             paths = bundlePaths.core;
+          };
+          identity = pkgs.buildEnv {
+            name = "nas-vm-bundle-identity";
+            paths = bundlePaths.identity;
+          };
+          observability = pkgs.buildEnv {
+            name = "nas-vm-bundle-observability";
+            paths = bundlePaths.observability;
+          };
+          storage = pkgs.buildEnv {
+            name = "nas-vm-bundle-storage";
+            paths = bundlePaths.storage;
+          };
+          ai = pkgs.buildEnv {
+            name = "nas-vm-bundle-ai";
+            paths = bundlePaths.ai;
           };
           vm-drivers = pkgs.buildEnv {
             name = "nas-vm-bundle-vm-drivers";

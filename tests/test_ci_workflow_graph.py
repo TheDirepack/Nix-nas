@@ -12,6 +12,8 @@ WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
+    BUNDLES = ("core", "identity", "observability", "storage", "ai", "vm-drivers")
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -106,6 +108,18 @@ class CiWorkflowGraphTests(unittest.TestCase):
             "Report cache persistence status",
             "\n".join(str(step.get("name", "")) for step in self.jobs["cache-vm-bundles"]["steps"]),
         )
+
+    def test_every_bundle_has_one_exact_cache_key_through_the_handoff(self) -> None:
+        build = self.serialized(self.jobs["build"])
+        cache = self.serialized(self.jobs["cache-vm-bundles"])
+        integration = self.serialized(self.jobs["integration"])
+        for name in self.BUNDLES:
+            step_id = name.replace("-", "_")
+            self.assertIn(f"key_{step_id}", build)
+            self.assertIn(f"vm_bundle_{step_id}", build)
+            self.assertIn(f"vm-bundle-{name}-", build)
+            self.assertIn(f"vm-bundle-{name}-", cache)
+            self.assertIn(f"vm-bundle-{name}-", integration)
 
     def test_optional_skipped_dependencies_do_not_suppress_downstream_tiers(self) -> None:
         for name in ("cache-vm-bundles", "browser", "integration", "installer"):

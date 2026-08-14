@@ -13,6 +13,10 @@ SCRIPT = ROOT / "scripts" / "vm-bundles.sh"
 
 EXPECTED_BUNDLES = [
     "core",
+    "identity",
+    "observability",
+    "storage",
+    "ai",
     "vm-drivers",
 ]
 
@@ -41,10 +45,18 @@ case "$1" in
     for path in "$@"; do
       printf '%s\\n' "$path"
       case "$path" in
-      */nas-vm-driver|*/nas-vm-encrypted-driver) printf '%s\\n' /nix/store/aaaaaaaaaa-copyparty ;;
-      */core) ;;
-      */vm-drivers) printf '%s\\n' /nix/store/aaaaaaaaaa-core ;;
-      *) printf '%s\\n' /nix/store/aaaaaaaaaa-core ;;
+      *-nas-vm-driver|*-nas-vm-encrypted-driver)
+        printf '%s\\n' /nix/store/aaaaaaaaaa-driver-shared
+        printf '%s\\n' /nix/store/aaaaaaaaaa-identity
+        ;;
+      *-core) ;;
+      *-vm-drivers)
+        printf '%s\\n' /nix/store/aaaaaaaaaa-core
+        printf '%s\\n' /nix/store/aaaaaaaaaa-identity
+        ;;
+      *)
+        printf '%s\\n' /nix/store/aaaaaaaaaa-core
+        ;;
       esac
     done
     ;;
@@ -101,7 +113,7 @@ class VmBundleScriptTests(unittest.TestCase):
         env["NAS_TEST_NIX_STORE_LOG"] = str(nix_store_log)
         return env, nix_log, nix_store_log
 
-    def test_list_lists_core_before_the_driver_delta(self) -> None:
+    def test_list_lists_core_before_applications_and_driver_delta(self) -> None:
         result = self._run("list")
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         self.assertEqual(result.stdout.splitlines(), EXPECTED_BUNDLES)
@@ -159,7 +171,7 @@ class VmBundleScriptTests(unittest.TestCase):
         )
         self.assertIn("key_vm_drivers=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
 
-    def test_save_batches_build_then_exports_core_and_driver_delta(self) -> None:
+    def test_save_batches_build_then_exports_core_app_deltas_and_driver_delta(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
         out_dir = self._root / "bundles"
         result = self._run("save", str(out_dir), env=env)
@@ -171,9 +183,13 @@ class VmBundleScriptTests(unittest.TestCase):
 
         with gzip.open(out_dir / "core.nar.gz", "rb") as stream:
             self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-core\n")
+        with gzip.open(out_dir / "identity.nar.gz", "rb") as stream:
+            self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-identity\n")
         self.assertTrue((out_dir / "vm-drivers.nar.gz").is_file())
         manifest = (out_dir / "bundle-manifest.tsv").read_text(encoding="utf-8")
         self.assertIn("vm-drivers\t/nix/store/aaaaaaaaaa-nas-vm-driver", manifest)
+        self.assertIn("identity\t/nix/store/aaaaaaaaaa-identity", manifest)
+        self.assertNotIn("vm-drivers\t/nix/store/aaaaaaaaaa-identity", manifest)
         self.assertTrue((out_dir / "bundle-handoff.sha256").is_file())
         verified = self._run("verify-handoff", str(out_dir), env=env)
         self.assertEqual(verified.returncode, 0, verified.stderr)
@@ -201,6 +217,7 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-driver", driver_export)
         self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver", driver_export)
         self.assertIn("/nix/store/aaaaaaaaaa-vm-drivers", driver_export)
+        self.assertNotIn("/nix/store/aaaaaaaaaa-identity", driver_export)
         self.assertNotIn("/nix/store/aaaaaaaaaa-core", driver_export)
 
     def test_verify_rejects_duplicate_manifest_paths(self) -> None:
@@ -245,11 +262,11 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("checksum validation failed", result.stderr)
 
-    def test_import_restores_core_first(self) -> None:
+    def test_import_restores_core_before_application_and_driver_deltas(self) -> None:
         env, _, nix_store_log = self._fake_environment()
         in_dir = self._root / "bundles"
         in_dir.mkdir()
-        for name in ("core", "vm-drivers"):
+        for name in EXPECTED_BUNDLES:
             with gzip.open(in_dir / f"{name}.nar.gz", "wb") as stream:
                 stream.write(f"NAR:/nix/store/aaaaaaaaaa-{name}\n".encode())
 
@@ -264,6 +281,10 @@ class VmBundleScriptTests(unittest.TestCase):
             imports,
             [
                 "NAR:/nix/store/aaaaaaaaaa-core",
+                "NAR:/nix/store/aaaaaaaaaa-identity",
+                "NAR:/nix/store/aaaaaaaaaa-observability",
+                "NAR:/nix/store/aaaaaaaaaa-storage",
+                "NAR:/nix/store/aaaaaaaaaa-ai",
                 "NAR:/nix/store/aaaaaaaaaa-vm-drivers",
             ],
         )
@@ -272,8 +293,8 @@ class VmBundleScriptTests(unittest.TestCase):
         env, nix_log, nix_store_log = self._fake_environment()
         in_dir = self._root / "bundles"
         in_dir.mkdir()
-        with gzip.open(in_dir / "vm-drivers.nar.gz", "wb") as stream:
-            stream.write(b"NAR:/nix/store/aaaaaaaaaa-vm-drivers\n")
+        with gzip.open(in_dir / "identity.nar.gz", "wb") as stream:
+            stream.write(b"NAR:/nix/store/aaaaaaaaaa-identity\n")
 
         result = self._run("import", str(in_dir), env=env)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
@@ -287,7 +308,7 @@ class VmBundleScriptTests(unittest.TestCase):
             for line in nix_store_log.read_text(encoding="utf-8").splitlines()
             if line.startswith("import:")
         ]
-        self.assertEqual(imports, ["NAR:/nix/store/aaaaaaaaaa-vm-drivers"])
+        self.assertEqual(imports, ["NAR:/nix/store/aaaaaaaaaa-identity"])
 
     def test_save_requires_a_directory_argument(self) -> None:
         result = self._run("save")
