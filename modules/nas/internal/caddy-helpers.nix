@@ -1,6 +1,6 @@
 args:
 let
-  inherit (args) authentikPort cfg vaultwardenPort;
+  inherit (args) authentikPort authentikOutpostPort authentikOutpostPath cfg vaultwardenPort;
   caddyForwardAuth = ''
     request_header -Remote-User
     request_header -Remote-Groups

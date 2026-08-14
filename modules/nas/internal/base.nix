@@ -30,6 +30,8 @@ let
   # service/route model; these values only configure the corresponding native
   # NixOS services and seed their V2 targets.
   authentikPort = 9000;
+  authentikOutpostPort = cfg.identity.authentikOutpostPort;
+  authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
   cockpitPort = 9092;
   syncthingGuiPort = 8384;
   vaultwardenPort = 8222;
@@ -132,6 +134,7 @@ in
     cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort vaultwardenPort
+    authentikOutpostPort authentikOutpostPath
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
