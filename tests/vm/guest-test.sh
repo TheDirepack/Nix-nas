@@ -170,7 +170,11 @@ ensure_authentik_proxy_fixture() {
   outpost_id="$(authentik_api GET 'outposts/instances/?page_size=100' | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk' | head -n1 || true)"
   [[ -n "$outpost_id" ]] || fail 'Authentik embedded outpost is missing'
   existing_providers="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --argjson provider "$provider_id" '([.providers[]?] + [$provider]) | unique')"
-  outpost_config="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c '.config + {authentik_host:"http://127.0.0.1:9000/identity/", authentik_host_browser:"https://nas-test.local/identity/"}')"
+  # The authorization code is issued by the public Caddy URL.  The standalone
+  # outpost must use that same issuer when redeeming it; using the loopback
+  # Authentik URL here creates a valid login followed by an endless callback
+  # redirect.  API provisioning above still uses the loopback listener.
+  outpost_config="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --arg host "https://$PUBLIC_HOST/identity/" '.config + {authentik_host:$host, authentik_host_browser:$host}')"
   payload="$(jq -cn --argjson providers "$existing_providers" --argjson config "$outpost_config" '{providers:$providers,config:$config}')"
   authentik_api PATCH "outposts/instances/$outpost_id/" "$payload" >/dev/null
 
@@ -179,7 +183,7 @@ ensure_authentik_proxy_fixture() {
   install -d -o authentik -g authentik -m 0750 /run/nas-authentik-vm-outpost
   install -o authentik -g authentik -m 0640 /dev/null "$AUTHENTIK_OUTPOST_LOG"
   runuser -u authentik -- env \
-    AUTHENTIK_HOST="http://127.0.0.1:9000/identity/" \
+    AUTHENTIK_HOST="https://$PUBLIC_HOST/identity/" \
     AUTHENTIK_HOST_BROWSER="https://$PUBLIC_HOST/identity/" \
     AUTHENTIK_TOKEN="$outpost_token" \
     AUTHENTIK_INSECURE=true \
