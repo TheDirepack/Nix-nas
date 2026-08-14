@@ -248,15 +248,23 @@ def wait_for_page_text(driver: webdriver.Chrome, wait: WebDriverWait, text: str,
 
 
 def rendered_text(driver: webdriver.Chrome) -> str:
-    """Return visible text from the document and open custom-element roots."""
+    """Return document text, including open shadow roots and same-origin frames."""
     try:
         return str(
             driver.execute_script(
                 """
                 const collect = root => {
-                  let value = root.body?.innerText || root.innerText || root.textContent || '';
+                  let value = root.body?.innerText || root.innerText || '';
+                  value += '\\n' + (root.body?.textContent || root.textContent || '');
                   for (const element of root.querySelectorAll('*')) {
                     if (element.shadowRoot) value += '\\n' + collect(element.shadowRoot);
+                    if (element.tagName === 'IFRAME') {
+                      try {
+                        if (element.contentDocument) value += '\\n' + collect(element.contentDocument);
+                      } catch (_error) {
+                        // Cross-origin frames are intentionally inaccessible.
+                      }
+                    }
                   }
                   return value;
                 };
@@ -365,8 +373,12 @@ def verify_no_identity_markup_injection(driver: webdriver.Chrome, username: str)
     if result["injectedImage"] or result["executionMarker"]:
         raise RuntimeError(f"portal executed identity-derived HTML: {result!r}")
     hostile_display_name = "<img src=x onerror=document.body.dataset.nasXss=1>"
-    if hostile_display_name not in rendered_text(driver):
-        raise RuntimeError("portal did not render the hostile identity display name as inert text")
+    text = rendered_text(driver)
+    if hostile_display_name not in text:
+        raise RuntimeError(
+            "portal did not render the hostile identity display name as inert text: "
+            f"url={driver.current_url!r} text={text[:2000]!r}"
+        )
 
 
 def run_account(
