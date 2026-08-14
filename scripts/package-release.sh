@@ -70,12 +70,15 @@ mkdir -p "$stage_root"
 python3 - "$repo_root" "$stage_root" <<'PY'
 from __future__ import annotations
 
+import atexit
 import os
 import pathlib
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
 
 root = pathlib.Path(sys.argv[1]).resolve()
 stage = pathlib.Path(sys.argv[2]).resolve()
@@ -83,7 +86,18 @@ known_generated = {
     ".coverage",
     "coverage.json",
 }
-ignored_parts = {".git", ".cache", ".pytest_cache", "__pycache__", "node_modules", ".direnv", ".venv"}
+ignored_parts = {
+    ".git",
+    ".cache",
+    ".pytest_cache",
+    "__pycache__",
+    "node_modules",
+    ".direnv",
+    ".venv",
+    ".hypothesis",
+    ".ruff_cache",
+    ".mypy_cache",
+}
 ignored_suffixes = {".pyc", ".zip", ".qcow2", ".iso", ".log"}
 ignored_release_suffixes = (".zip.sha256", ".provenance.json")
 
@@ -150,11 +164,39 @@ if git_checkout:
     selected = [pathlib.PurePosixPath(item.decode()) for item in payload.split(b"\0") if item]
     selection_policy = "git-tracked-clean"
 else:
-    manifest = root / "MANIFEST.sha256"
-    if not manifest.is_file():
-        raise SystemExit("source archive packaging requires the committed MANIFEST.sha256 allowlist")
+    _manifest_tmp = tempfile.mkdtemp(prefix="nas-manifest-")
+    _manifest_path = pathlib.Path(_manifest_tmp) / "MANIFEST.sha256"
+    os.environ["MANIFEST_PATH"] = str(_manifest_path)
+    os.environ["NAS_TEST_MANIFEST"] = str(_manifest_path)
+
+    def _cleanup_manifest_tmp() -> None:
+        shutil.rmtree(_manifest_tmp, ignore_errors=True)
+
+    atexit.register(_cleanup_manifest_tmp)
+    for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, lambda s, f: (_cleanup_manifest_tmp(), os._exit(128 + s)))  # type: ignore[arg-type]
+        except ValueError:
+            pass
+    # Use shared deterministic helper to generate allowlist manifest in unique temp dir
+    helper_lib = root / "scripts" / "lib"
+    if helper_lib.is_dir():
+        sys.path.insert(0, str(helper_lib))
+    else:
+        sys.path.insert(0, str(pathlib.Path(sys.argv[0]).parent / "scripts" / "lib") if len(sys.argv) > 0 else str(helper_lib))
+    try:
+        from manifest import generate_manifest  # type: ignore
+
+        generate_manifest(root, _manifest_path)
+    except Exception as exc:  # noqa: BLE001
+        # Fallback: if helper unavailable, try reading committed manifest if present
+        candidate = root / "MANIFEST.sha256"
+        if candidate.is_file():
+            shutil.copy(candidate, _manifest_path)
+        else:
+            raise SystemExit(f"unable to generate manifest for non-git source: {exc}") from exc
     selected = []
-    for line in manifest.read_text(encoding="utf-8").splitlines():
+    for line in _manifest_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         fields = line.split(maxsplit=1)
@@ -285,36 +327,7 @@ os.chmod(target, 0o755)
 PY
 fi
 
-python3 - "$stage_root" <<'PY'
-from __future__ import annotations
-
-import hashlib
-import os
-import pathlib
-import stat
-import sys
-
-root = pathlib.Path(sys.argv[1])
-rows = []
-for path in sorted(root.rglob("*")):
-    relative = path.relative_to(root)
-    if relative.as_posix() in {"MANIFEST.sha256", ".release-input-policy"}:
-        continue
-    mode = path.lstat().st_mode
-    if stat.S_ISDIR(mode):
-        continue
-    if not stat.S_ISREG(mode):
-        raise SystemExit(f"staged release contains unsupported object: {relative}")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    rows.append(f"{digest}  ./{relative.as_posix()}")
-manifest = root / "MANIFEST.sha256"
-manifest.write_text("\n".join(rows) + "\n", encoding="utf-8")
-fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-PY
+python3 "$repo_root/scripts/lib/manifest.py" --root "$stage_root" --out "$stage_root/MANIFEST.sha256"
 selection_policy="$(tr -d '\r\n' < "$stage_root/.release-input-policy")"
 case "$selection_policy" in
   git-tracked-clean|committed-manifest-allowlist) ;;

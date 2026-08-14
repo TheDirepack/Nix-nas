@@ -11,6 +11,7 @@ let
     backupStage
     authentikArtifact
     copypartyArtifact
+    vaultwardenArtifact
     ;
 
   authentikDump = pkgs.writeShellScript "nas-backup-authentik-dump" ''
@@ -114,7 +115,7 @@ PYSQLITEBACKUP
       };
     };
     vaultwarden-dump = {
-      path = vaultwardenBackupDir;
+      path = vaultwardenArtifact;
       scope = "system";
       stateClass = "derived";
       capabilities = [ "read" "write" ];
@@ -182,7 +183,7 @@ PYSQLITEBACKUP
         }
         {
           resource = "vaultwarden-dump";
-          mountPath = vaultwardenBackupDir;
+          mountPath = vaultwardenArtifact;
           access = "write";
         }
       ];

@@ -282,33 +282,6 @@ def reconcile(
         return {"stopped": [], "changed": [], "started": [], "noop": True}
 
     units_to_stop = (previous_owned - owned) | (previous_start - start) | stop
-    for unit in sorted(units_to_stop):
-        _run_systemctl(systemctl, "stop", unit, check=False)
-
-    for target_rel in sorted(stale_links):
-        target_path, _affected = _safe_target(systemd_runtime_dir, target_rel)
-        _unlink_owned(target_path, projection_root)
-        if target_path.parent != systemd_runtime_dir:
-            try:
-                target_path.parent.rmdir()
-            except OSError:
-                pass
-
-    for target_rel in sorted(stale_quadlet_links):
-        target_path, _affected = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-        _unlink_owned(target_path, projection_root)
-
-    for target_rel, source in links.items():
-        target_path, _affected = _safe_target(systemd_runtime_dir, target_rel)
-        _ensure_link(target_path, source, projection_root)
-
-    for target_rel, source in quadlet_links.items():
-        target_path, _affected = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-        _ensure_link(target_path, source, projection_root)
-
-    if topology_changed:
-        _run_systemctl(systemctl, "daemon-reload")
-
     changed_units: set[str] = set()
     for target_rel, digest in current_hashes.items():
         if previous_hashes.get(target_rel) != digest:
@@ -320,36 +293,138 @@ def reconcile(
         if previous_fingerprints.get(unit) != digest:
             changed_units.add(unit)
 
-    restarted: set[str] = set()
-    for unit in sorted(changed_units & owned):
-        if unit in start:
-            _run_systemctl(systemctl, "restart", unit)
-            restarted.add(unit)
-        else:
-            _run_systemctl(systemctl, "try-restart", unit, check=False)
+    def _rollback_projection() -> None:
+        for target_rel, source in links.items():
+            if target_rel not in previous_links_raw:
+                target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+                if target_path.is_symlink():
+                    _unlink_owned(target_path, projection_root)
+                    if target_path.parent != systemd_runtime_dir:
+                        try:
+                            target_path.parent.rmdir()
+                        except OSError:
+                            pass
+            else:
+                prev_source_str = previous_links_raw[target_rel]
+                prev_source = pathlib.Path(prev_source_str)
+                target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+                if not _link_matches(target_path, prev_source):
+                    if target_path.is_symlink() or not target_path.exists():
+                        _unlink_owned(target_path, projection_root)
+                    else:
+                        raise SystemdReconcileError(f"refusing to remove non-V2 generated file {target_path}")
+                    if prev_source.is_file():
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        target_path.symlink_to(prev_source)
+        for target_rel in sorted(stale_links):
+            prev_source_str = previous_links_raw[target_rel]
+            prev_source = pathlib.Path(prev_source_str)
+            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+            if not _link_matches(target_path, prev_source):
+                if prev_source.is_file():
+                    _ensure_link(target_path, prev_source, projection_root)
+                elif target_path.is_symlink():
+                    _unlink_owned(target_path, projection_root)
+        for target_rel, source in quadlet_links.items():
+            if target_rel not in previous_quadlet_links_raw:
+                target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+                if target_path.is_symlink():
+                    _unlink_owned(target_path, projection_root)
+            else:
+                prev_source_str = previous_quadlet_links_raw[target_rel]
+                prev_source = pathlib.Path(prev_source_str)
+                target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+                if not _link_matches(target_path, prev_source):
+                    if target_path.is_symlink() or not target_path.exists():
+                        _unlink_owned(target_path, projection_root)
+                    else:
+                        raise SystemdReconcileError(f"refusing to remove non-V2 generated file {target_path}")
+                    if prev_source.is_file():
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        target_path.symlink_to(prev_source)
+        for target_rel in sorted(stale_quadlet_links):
+            prev_source_str = previous_quadlet_links_raw[target_rel]
+            prev_source = pathlib.Path(prev_source_str)
+            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+            if not _link_matches(target_path, prev_source):
+                if prev_source.is_file():
+                    _ensure_link(target_path, prev_source, projection_root)
+                elif target_path.is_symlink():
+                    _unlink_owned(target_path, projection_root)
+        if topology_changed:
+            _run_systemctl(systemctl, "daemon-reload")
 
-    units_to_start = (start - previous_start) - restarted
-    for unit in sorted(units_to_start):
-        _run_systemctl(systemctl, "start", unit)
+    try:
+        for unit in sorted(units_to_stop):
+            _run_systemctl(systemctl, "stop", unit)
 
-    state = {
-        "schemaVersion": 1,
-        "links": current_links,
-        "linkHashes": current_hashes,
-        "quadletLinks": current_quadlet_links,
-        "quadletHashes": current_quadlet_hashes,
-        "ownedUnits": sorted(owned),
-        "startUnits": sorted(start),
-        "stopUnits": sorted(stop),
-        "fingerprints": fingerprints,
-    }
-    _atomic_json(state_path, state)
-    return {
-        "stopped": sorted(units_to_stop),
-        "changed": sorted(changed_units),
-        "started": sorted(units_to_start | restarted),
-        "noop": False,
-    }
+        for target_rel, source in links.items():
+            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+            _ensure_link(target_path, source, projection_root)
+
+        for target_rel, source in quadlet_links.items():
+            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+            _ensure_link(target_path, source, projection_root)
+
+        for target_rel in sorted(stale_links):
+            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+            _unlink_owned(target_path, projection_root)
+            if target_path.parent != systemd_runtime_dir:
+                try:
+                    target_path.parent.rmdir()
+                except OSError:
+                    pass
+
+        for target_rel in sorted(stale_quadlet_links):
+            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+            _unlink_owned(target_path, projection_root)
+
+        if topology_changed:
+            _run_systemctl(systemctl, "daemon-reload")
+
+        restarted: set[str] = set()
+        for unit in sorted(changed_units & owned):
+            if unit in start:
+                _run_systemctl(systemctl, "restart", unit)
+                restarted.add(unit)
+            else:
+                _run_systemctl(systemctl, "try-restart", unit, check=False)
+
+        units_to_start = (start - previous_start) - restarted
+        for unit in sorted(units_to_start):
+            _run_systemctl(systemctl, "start", unit)
+
+        state = {
+            "schemaVersion": 1,
+            "links": current_links,
+            "linkHashes": current_hashes,
+            "quadletLinks": current_quadlet_links,
+            "quadletHashes": current_quadlet_hashes,
+            "ownedUnits": sorted(owned),
+            "startUnits": sorted(start),
+            "stopUnits": sorted(stop),
+            "fingerprints": fingerprints,
+        }
+        _atomic_json(state_path, state)
+        return {
+            "stopped": sorted(units_to_stop),
+            "changed": sorted(changed_units),
+            "started": sorted(units_to_start | restarted),
+            "noop": False,
+        }
+    except Exception as exc:
+        rollback_error: Exception | None = None
+        try:
+            _rollback_projection()
+        except Exception as r_exc:  # noqa: BLE001
+            rollback_error = r_exc
+        if rollback_error is not None:
+            raise SystemdReconcileError(
+                f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
+            ) from exc
+        if isinstance(exc, SystemdReconcileError):
+            raise
+        raise SystemdReconcileError(str(exc)) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:

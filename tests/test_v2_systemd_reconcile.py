@@ -18,13 +18,17 @@ import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
 
 class V2SystemdReconcileTests(unittest.TestCase):
-    def make_systemctl(self, root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    def make_systemctl(
+        self, root: pathlib.Path, *, fail_on: set[str] | None = None
+    ) -> tuple[pathlib.Path, pathlib.Path]:
+        fail_on = fail_on or set()
         log = root / "systemctl.log"
         script = root / "systemctl"
-        script.write_text(
-            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\nexit 0\n',
-            encoding="utf-8",
-        )
+        body = '#!/bin/sh\nprintf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+        for frag in fail_on:
+            body += f'if echo "$*" | grep -q "{frag}"; then exit 1; fi\n'
+        body += "exit 0\n"
+        script.write_text(body, encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
         return script, log
 
@@ -376,6 +380,85 @@ class V2SystemdReconcileTests(unittest.TestCase):
                     systemctl=str(systemctl),
                 )
             self.assertEqual(quadlet_target.read_text(encoding="utf-8"), "do not replace")
+
+    def test_stop_failure_is_transactional_and_restores_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            source = units / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, source)
+            runtime = root / "systemd"
+            runtime.mkdir()
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+            self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=systemctl,
+                log=log,
+            )
+            before_state = state.read_text(encoding="utf-8")
+            before_target = (runtime / "nas-v2-demo.service").resolve()
+            self.write_manifest(manifest, None)
+            fail_ctl, fail_log = self.make_systemctl(root, fail_on={"stop nas-v2-demo.service"})
+            quadlet_runtime = runtime.parent / "quadlet"
+            quadlet_runtime.mkdir(parents=True, exist_ok=True)
+            with mock.patch.dict(os.environ, {"NAS_V2_SYSTEMCTL_LOG": str(fail_log)}):
+                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "stop nas-v2-demo.service"):
+                    reconcile.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        systemd_runtime_dir=runtime,
+                        quadlet_runtime_dir=quadlet_runtime,
+                        state_path=state,
+                        systemctl=str(fail_ctl),
+                    )
+            self.assertTrue((runtime / "nas-v2-demo.service").is_symlink())
+            self.assertEqual((runtime / "nas-v2-demo.service").resolve(), before_target)
+            self.assertEqual(state.read_text(encoding="utf-8"), before_state)
+
+    def test_rollback_failure_reports_manual_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            source = units / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, source)
+            runtime = root / "systemd"
+            runtime.mkdir()
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+            self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=systemctl,
+                log=log,
+            )
+            source.write_text("[Service]\nExecStart=/bin/false\n", encoding="utf-8")
+            fail_ctl, fail_log = self.make_systemctl(root, fail_on={"daemon-reload"})
+            quadlet_runtime = runtime.parent / "quadlet"
+            quadlet_runtime.mkdir(parents=True, exist_ok=True)
+            with mock.patch.dict(os.environ, {"NAS_V2_SYSTEMCTL_LOG": str(fail_log)}):
+                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "manual recovery"):
+                    reconcile.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        systemd_runtime_dir=runtime,
+                        quadlet_runtime_dir=quadlet_runtime,
+                        state_path=state,
+                        systemctl=str(fail_ctl),
+                    )
 
 
 if __name__ == "__main__":

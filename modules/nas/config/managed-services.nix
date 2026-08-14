@@ -18,6 +18,8 @@ let
   firewalldProjectionPath = "/run/nas-control/firewalld";
   firewalldManifestPath = "${firewalldProjectionPath}/manifest.json";
   firewalldSystemConfig = "/var/lib/nas-firewall/firewalld";
+  firewalldDeadmanStateDir = "/run/nas-firewall-deadman";
+  firewalldDeadmanWindow = 60;
   backupInventoryPath = "/run/nas-control/backup-resources.json";
   resticPathsPath = "/run/nas-control/restic-v2-paths";
   quadletRuntimePath = "/run/containers/systemd";
@@ -84,6 +86,26 @@ let
     "${firewalldPackage}/bin/firewall-cmd"
     "--firewall-offline-cmd"
     "${firewalldPackage}/bin/firewall-offline-cmd"
+    "--deadman-state-dir"
+    firewalldDeadmanStateDir
+    "--deadman-window"
+    (toString firewalldDeadmanWindow)
+    "--systemd-bin"
+    "${pkgs.systemd}/bin/systemctl"
+  ];
+  firewalldRollbackArgs = [
+    "${v2Source}/nas_v2_network.py"
+    "--deadman-rollback"
+    "--deadman-state-dir"
+    firewalldDeadmanStateDir
+    "--system-config"
+    firewalldSystemConfig
+    "--firewall-cmd"
+    "${firewalldPackage}/bin/firewall-cmd"
+    "--firewall-offline-cmd"
+    "${firewalldPackage}/bin/firewall-offline-cmd"
+    "--systemd-bin"
+    "${pkgs.systemd}/bin/systemctl"
   ];
   authentikReconcileArgs = [
     "${v2Source}/nas_v2_authentik.py"
@@ -159,6 +181,8 @@ in
       "d /run/nas-control 0755 root root -"
       "d /run/containers 0755 root root -"
       "d /run/containers/systemd 0755 root root -"
+    ] ++ lib.optionals firewalldEnabled [
+      "d ${firewalldDeadmanStateDir} 0700 root root -"
     ];
 
     environment.etc."nas-control/managed-services-v3.schema.json".source =
@@ -258,7 +282,7 @@ in
           "/run/nas-control"
           "/run/systemd/system"
           quadletRuntimePath
-        ] ++ lib.optional firewalldEnabled firewalldSystemConfig;
+        ] ++ lib.optionals firewalldEnabled [ firewalldSystemConfig firewalldDeadmanStateDir ];
       };
       environment.NAS_AUTHENTIK_OUTPOST_PORT = toString authentikOutpostPort;
     };
@@ -393,6 +417,28 @@ in
       pathConfig = {
         PathChanged = caddyManagedPath;
         Unit = "nas-managed-services-caddy-reload.service";
+      };
+    };
+
+    systemd.services.nas-v2-firewall-rollback = lib.mkIf firewalldEnabled {
+      description = "Rollback V2 firewalld policy if not acknowledged (deadman)";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${v2Python}/bin/python ${lib.escapeShellArgs firewalldRollbackArgs}";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ firewalldSystemConfig firewalldDeadmanStateDir ];
+      };
+    };
+
+    systemd.timers.nas-v2-firewall-rollback = lib.mkIf firewalldEnabled {
+      description = "Firewall deadman rollback timer (60s acknowledgement window)";
+      timerConfig = {
+        OnActiveSec = "${toString firewalldDeadmanWindow}s";
+        AccuracySec = "1s";
+        Unit = "nas-v2-firewall-rollback.service";
       };
     };
   };

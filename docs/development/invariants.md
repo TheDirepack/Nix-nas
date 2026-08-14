@@ -40,6 +40,7 @@ Cockpit and the local PAM administrator are the recovery plane. Authentik, Caddy
 - Dataset mount guards must verify the exact dataset and mountpoint before protected services start.
 - Snapshot restore creates a safety snapshot first.
 - Same-pool Restic is boot/appliance recovery, not independent whole-pool backup.
+- Native backup artifacts are confined to the dedicated staging root `/run/nas-control/backup-staging/<resource-id>` (derived from the resource identity). Artifact paths outside the staging root or that escape via symlink (`path.resolve`/`relative_to` check) are rejected. Stale artifacts are removed before each preparation, recorded in durable runtime state, and cleaned up on both normal and partial-prepare failure paths.
 
 ## Tests
 

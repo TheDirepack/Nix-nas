@@ -152,6 +152,7 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
             self.compile({"schemaVersion": 3, "services": {"one": one, "two": two}})
 
     def test_prefix_overlapping_route_paths_are_rejected(self):
+        # Parent/child paths are allowed only when longest-path-first ordering is guaranteed
         parent = minimal_service()
         parent["routes"] = {
             "api": {
@@ -168,9 +169,50 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
                 "auth": {"mode": "public"},
             }
         }
-        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "overlaps"):
-            self.compile({"schemaVersion": 3, "services": {"parent": parent, "child": child}})
+        # Allowed parent/child – renderer sorts longest first
+        self.compile({"schemaVersion": 3, "services": {"parent": parent, "child": child}})
 
+        # Exact duplicate paths must still fail closed
+        dup_a = minimal_service()
+        dup_a["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/api"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        dup_b = minimal_service()
+        dup_b["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8082},
+                "exposure": {"type": "path", "paths": ["/api"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route path"):
+            self.compile({"schemaVersion": 3, "services": {"a": dup_a, "b": dup_b}})
+
+        # Normalized duplicate (/api vs /api/) must also fail closed
+        slash_a = minimal_service()
+        slash_a["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/api/"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        slash_b = minimal_service()
+        slash_b["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8082},
+                "exposure": {"type": "path", "paths": ["/api"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route path"):
+            self.compile({"schemaVersion": 3, "services": {"a": slash_a, "b": slash_b}})
+
+        # Root "/" shadowing everything is ambiguous and must still fail closed
         root = minimal_service()
         root["routes"] = {
             "catchall": {
@@ -207,6 +249,77 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
             }
         }
         self.compile({"schemaVersion": 3, "services": {"one": sibling, "two": sibling2}})
+
+    def test_real_seed_overlapping_routes_compile(self):
+        # Real seed uses parent/child routes: /shares with /shares/admin,
+        # /vault with /vault/admin, and /ai/ with /ai/v1 and /ai/runtime.
+        # These must compile when longest-path-first ordering is guaranteed.
+        copyparty = minimal_service()
+        copyparty["authorization"] = {"capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]}
+        copyparty["routes"] = {
+            "files": {
+                "target": {"type": "http", "port": 8000},
+                "exposure": {"type": "path", "paths": ["/shares"]},
+                "auth": {"mode": "identity", "capability": "files"},
+            },
+            "admin": {
+                "target": {"type": "http", "port": 8000},
+                "exposure": {"type": "path", "paths": ["/shares/admin"]},
+                "auth": {"mode": "identity", "capability": "admin"},
+            },
+        }
+        vault = minimal_service()
+        vault["authorization"] = {"capabilities": [{"id": "access", "title": "Access"}, {"id": "admin", "title": "Admin"}]}
+        vault["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8001},
+                "exposure": {"type": "path", "paths": ["/vault"]},
+                "auth": {"mode": "upstream"},
+            },
+            "admin": {
+                "target": {"type": "http", "port": 8001},
+                "exposure": {"type": "path", "paths": ["/vault/admin"]},
+                "auth": {"mode": "identity", "capability": "admin"},
+            },
+        }
+        ai_runtime = minimal_service()
+        ai_runtime["routes"] = {
+            "admin": {
+                "target": {"type": "http", "port": 8002},
+                "exposure": {"type": "path", "paths": ["/ai/runtime"]},
+                "auth": {"mode": "identity", "capability": "access"},
+            },
+            "api": {
+                "target": {"type": "http", "port": 8002},
+                "exposure": {"type": "path", "paths": ["/ai/v1"]},
+                "auth": {"mode": "upstream"},
+            },
+        }
+        ai_workspace = minimal_service()
+        ai_workspace["routes"] = {
+            "main": {
+                "target": {"type": "http", "port": 8003},
+                "exposure": {"type": "path", "paths": ["/ai/"]},
+                "auth": {"mode": "identity", "capability": "access"},
+            },
+        }
+        doc = {
+            "schemaVersion": 3,
+            "services": {
+                "copyparty": copyparty,
+                "vaultwarden": vault,
+                "ai-runtime": ai_runtime,
+                "ai-workspace": ai_workspace,
+            },
+        }
+        effective = self.compile(doc)
+        # Verify derived routes contain all 7 paths
+        paths = set()
+        for route in effective["derived"]["routes"]:
+            for p in route["exposure"].get("paths", []):
+                paths.add(p)
+        for expected in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime"):
+            self.assertIn(expected, paths)
 
     def test_systemd_runtime_unit_must_be_a_safe_unit_name(self):
         good = minimal_service()

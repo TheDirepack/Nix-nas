@@ -515,7 +515,10 @@ def _routes_conflict(first: str, second: str) -> bool:
     Caddy matches a path route with ``path /x /x/*``; ``/api`` therefore
     matches every request that ``/api/users`` does. Treat '/' as the root
     that shadows every other path, compare by leading path segments, and
-    ignore redundant `/` characters within each candidate.
+    ignore redundant `/` characters within each candidate. Parent/child
+    conflicts are allowed only when the renderer guarantees
+    longest-path-first ordering; exact duplicates and ambiguous overlaps
+    must still fail closed.
     """
     first = first.rstrip("/") or "/"
     second = second.rstrip("/") or "/"
@@ -778,15 +781,35 @@ def semantic_validate(
             exposure = route["exposure"]
             if exposure["type"] == "path":
                 for route_path in exposure["paths"]:
-                    owner = route_paths.get(route_path)
-                    if owner is not None:
-                        raise ManagedServicesV2Error(
-                            f"Duplicate route path {route_path!r}; already used by {owner}",
-                            path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
-                            code="route-conflict",
-                        )
+                    # Exact duplicates (including normalized trailing-slash variants) must fail closed
+                    normalized = route_path.rstrip("/") or "/"
+                    for existing_path, existing_owner in route_paths.items():
+                        existing_norm = existing_path.rstrip("/") or "/"
+                        if normalized == existing_norm:
+                            raise ManagedServicesV2Error(
+                                f"Duplicate route path {route_path!r}; already used by {existing_owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
+                                code="route-conflict",
+                            )
+                    # Parent/child overlaps are allowed only when longest-path-first ordering is guaranteed.
+                    # The Caddy renderer sorts by longest path first, so /shares/admin is matched before /shares.
+                    # Root "/" shadowing everything and ambiguous non-parent overlaps must still fail closed.
                     for registered_path, registered_owner in route_paths.items():
                         if _routes_conflict(route_path, registered_path):
+                            registered_norm = registered_path.rstrip("/") or "/"
+                            if normalized == registered_norm:
+                                continue  # already handled as duplicate
+                            if normalized == "/" or registered_norm == "/":
+                                raise ManagedServicesV2Error(
+                                    f"Route path {route_path!r} overlaps {registered_path!r} already used by {registered_owner}",
+                                    path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
+                                    code="route-overlap",
+                                )
+                            first_parts = normalized.strip("/").split("/") if normalized != "/" else []
+                            second_parts = registered_norm.strip("/").split("/") if registered_norm != "/" else []
+                            is_parent = first_parts[: len(second_parts)] == second_parts or second_parts[: len(first_parts)] == first_parts
+                            if is_parent:
+                                continue
                             raise ManagedServicesV2Error(
                                 f"Route path {route_path!r} overlaps {registered_path!r} already used by {registered_owner}",
                                 path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",

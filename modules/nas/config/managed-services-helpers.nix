@@ -87,8 +87,10 @@ rec {
   operationHealthSchedule = healthSchedule;
 
   backupStage = cfg.backup.stagingPath;
-  authentikArtifact = "${backupStage}/authentik";
-  copypartyArtifact = "${backupStage}/copyparty";
+  nativeDumpStagingRoot = "/run/nas-control/backup-staging";
+  authentikArtifact = "${nativeDumpStagingRoot}/authentik-database";
+  copypartyArtifact = "${nativeDumpStagingRoot}/copyparty-databases";
+  vaultwardenArtifact = "${nativeDumpStagingRoot}/vaultwarden-data";
   vaultwardenDataDir = nasInternal.vaultwardenDataDir;
   vaultwardenBackupDir = nasInternal.vaultwardenBackupDir;
   copypartyDataDir = nasInternal.copypartyDataDir;

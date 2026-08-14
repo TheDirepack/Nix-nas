@@ -114,8 +114,13 @@ step "Authentik fixture" env PYTHONDONTWRITEBYTECODE=1 NAS_IDENTITY_LOCK="$ident
   python3 services/nas_identity_sync.py status-fixture tests/fixtures/authentik-identity.json
 
 if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
-  [[ -f MANIFEST.sha256 ]] || { printf 'preflight: MANIFEST.sha256 is required\n' >&2; exit 1; }
-  step "release manifest" sha256sum -c MANIFEST.sha256
+  manifest_tmp="$(mktemp -d "${TMPDIR:-/tmp}/nas-manifest-preflight.XXXXXX")"
+  manifest_path="$manifest_tmp/MANIFEST.sha256"
+  export MANIFEST_PATH="$manifest_path"
+  export NAS_TEST_MANIFEST="$manifest_path"
+  trap 'rm -f -- "$identity_fixture_lock"; rm -rf -- "${manifest_tmp:-}"' EXIT INT TERM HUP
+  python3 "$repo_root/scripts/lib/manifest.py" --root "$repo_root" --out "$manifest_path"
+  step "release manifest" sha256sum -c "$manifest_path"
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_TOOLING:-0}" == "1" ]]; then

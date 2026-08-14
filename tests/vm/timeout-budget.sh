@@ -53,11 +53,6 @@ nas_vm_guest_watchdog_seconds() {
   ' "$(nas_vm_timeout_manifest_path)"
 }
 
-nas_vm_outer_value() {
-  local key=$1
-  jq -er --arg key "$key" '.outer[$key] | numbers' "$(nas_vm_timeout_manifest_path)"
-}
-
 nas_vm_integration_timeout_seconds() {
   local guest
   guest=$(nas_vm_guest_watchdog_seconds)

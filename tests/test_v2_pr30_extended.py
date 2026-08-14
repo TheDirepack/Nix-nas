@@ -55,7 +55,7 @@ class V2SeedGenerationTests(unittest.TestCase):
         self.assertIn("schemaVersion = 3", seed)
 
     def test_actual_seed_would_compile_without_route_overlap(self):
-        # Simulate Nix seed: a small subset that mirrors real seed shape.
+        # Real seed uses overlapping parent/child routes; renderer must guarantee longest-path-first.
         doc = {
             "schemaVersion": 3,
             "services": {
@@ -63,18 +63,70 @@ class V2SeedGenerationTests(unittest.TestCase):
                     "name": "CopyParty",
                     "workload": {"kind": "daemon"},
                     "runtime": {"type": "systemd", "unit": "copyparty.service"},
-                    "authorization": {"capabilities": [{"id": "files", "title": "Files"}]},
+                    "authorization": {"capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]},
                     "routes": {
                         "files": {
                             "target": {"type": "http", "port": 8000},
                             "exposure": {"type": "path", "paths": ["/shares"]},
                             "auth": {"mode": "identity", "capability": "files"},
                         },
+                        "admin": {
+                            "target": {"type": "http", "port": 8000},
+                            "exposure": {"type": "path", "paths": ["/shares/admin"]},
+                            "auth": {"mode": "identity", "capability": "admin"},
+                        },
                         "dav": {
                             "target": {"type": "http", "port": 8000},
                             "exposure": {"type": "path", "paths": ["/dav"]},
                             "auth": {"mode": "identity", "capability": "files"},
                         },
+                    },
+                },
+                "vaultwarden": {
+                    "name": "Vaultwarden",
+                    "workload": {"kind": "daemon"},
+                    "runtime": {"type": "systemd", "unit": "vaultwarden.service"},
+                    "authorization": {"capabilities": [{"id": "admin", "title": "Admin"}]},
+                    "routes": {
+                        "web": {
+                            "target": {"type": "http", "port": 8001},
+                            "exposure": {"type": "path", "paths": ["/vault"]},
+                            "auth": {"mode": "public"},
+                        },
+                        "admin": {
+                            "target": {"type": "http", "port": 8001},
+                            "exposure": {"type": "path", "paths": ["/vault/admin"]},
+                            "auth": {"mode": "identity", "capability": "admin"},
+                        },
+                    },
+                },
+                "ai-runtime": {
+                    "name": "AI Runtime",
+                    "workload": {"kind": "daemon"},
+                    "runtime": {"type": "systemd", "unit": "ai-runtime.service"},
+                    "routes": {
+                        "admin": {
+                            "target": {"type": "http", "port": 8002},
+                            "exposure": {"type": "path", "paths": ["/ai/runtime"]},
+                            "auth": {"mode": "public"},
+                        },
+                        "api": {
+                            "target": {"type": "http", "port": 8002},
+                            "exposure": {"type": "path", "paths": ["/ai/v1"]},
+                            "auth": {"mode": "public"},
+                        },
+                    },
+                },
+                "ai-workspace": {
+                    "name": "Open WebUI",
+                    "workload": {"kind": "daemon"},
+                    "runtime": {"type": "systemd", "unit": "open-webui.service"},
+                    "routes": {
+                        "main": {
+                            "target": {"type": "http", "port": 8003},
+                            "exposure": {"type": "path", "paths": ["/ai/"]},
+                            "auth": {"mode": "public"},
+                        }
                     },
                 },
                 "cockpit": {
@@ -93,12 +145,18 @@ class V2SeedGenerationTests(unittest.TestCase):
             },
         }
         effective = spec.compile_document(doc, self.schema)
-        # Caddy must render without overlap error and include both routes
+        # Caddy must render without error and include all parent/child routes with longest-path-first ordering
         rendered = caddy.generate_caddyfile(effective)
-        self.assertIn("/shares", rendered)
-        self.assertIn("/console", rendered)
+        for p in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime", "/console"):
+            self.assertIn(p.rstrip("/") if p != "/ai/" else "/ai", rendered)
+        # Verify longest-path-first: children must appear before parents
+        self.assertLess(rendered.index("/shares/admin"), rendered.index('"/shares"'))
+        self.assertLess(rendered.index("/vault/admin"), rendered.index('"/vault"'))
+        self.assertLess(rendered.index("/ai/runtime"), rendered.index('path "/ai/"'))
+        self.assertLess(rendered.index("/ai/v1"), rendered.index('path "/ai/"'))
 
     def test_longest_prefix_overlap_is_rejected_by_spec(self):
+        # Parent/child is now allowed due to longest-path-first; only exact duplicates and ambiguous root must fail
         doc = {
             "schemaVersion": 3,
             "services": {
@@ -128,8 +186,43 @@ class V2SeedGenerationTests(unittest.TestCase):
                 },
             },
         }
-        with self.assertRaisesRegex(spec.ManagedServicesV2Error, "overlaps"):
-            spec.compile_document(doc, self.schema)
+        # Parent/child now compiles and renders longest first
+        effective = spec.compile_document(doc, self.schema)
+        rendered = caddy.generate_caddyfile(effective)
+        self.assertLess(rendered.index("/api/users"), rendered.index('"/api"'))
+
+        # Exact duplicate must still fail closed
+        dup_doc = {
+            "schemaVersion": 3,
+            "services": {
+                "a": {
+                    "name": "A",
+                    "workload": {"kind": "daemon"},
+                    "runtime": {"type": "systemd", "unit": "a.service"},
+                    "routes": {
+                        "api": {
+                            "target": {"type": "http", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/api"]},
+                            "auth": {"mode": "public"},
+                        }
+                    },
+                },
+                "b": {
+                    "name": "B",
+                    "workload": {"kind": "daemon"},
+                    "runtime": {"type": "systemd", "unit": "b.service"},
+                    "routes": {
+                        "dup": {
+                            "target": {"type": "http", "port": 8081},
+                            "exposure": {"type": "path", "paths": ["/api"]},
+                            "auth": {"mode": "public"},
+                        }
+                    },
+                },
+            },
+        }
+        with self.assertRaisesRegex(spec.ManagedServicesV2Error, "Duplicate"):
+            spec.compile_document(dup_doc, self.schema)
 
     def test_bootstrap_consumes_marker_only_on_fresh_stub(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -364,14 +457,18 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
     def test_prepare_is_atomic_and_cleans_stale_even_on_empty_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            artifact = root / "artifact"
-            artifact.mkdir()
+            staging = root / "staging"
+            artifact = staging / "db-artifact"
+            staging.mkdir(parents=True, exist_ok=True)
+            artifact.mkdir(parents=True, exist_ok=True)
             (artifact / "old.dump").write_bytes(b"old")
             inv = root / "inv.json"
             paths = root / "paths.txt"
             state = root / "state.json"
             inv.write_text(json.dumps(self.inventory(artifact)), encoding="utf-8")
             orig = backup._run
+            orig_root = backup.BACKUP_STAGING_ROOT
+            backup.BACKUP_STAGING_ROOT = staging
             backup._run = lambda _argv: ""  # type: ignore[assignment]
             try:
                 with self.assertRaisesRegex(backup.BackupRuntimeError, "without producing data"):
@@ -384,6 +481,7 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
                     )
             finally:
                 backup._run = orig  # type: ignore[assignment]
+                backup.BACKUP_STAGING_ROOT = orig_root
             self.assertEqual(list(artifact.iterdir()), [])
             self.assertFalse(paths.exists())
             self.assertFalse(state.exists())
@@ -596,13 +694,12 @@ class V2SystemdFaultInjectionTests(unittest.TestCase):
                     systemctl=str(systemctl),
                 )
 
-    def test_stop_is_best_effort_even_when_failed(self):
+    def test_stop_failure_is_transactional_and_restores_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             proj = root / "proj"
             proj.mkdir()
             manifest = proj / "manifest.json"
-            # first reconcile with a unit, then remove it but systemctl stop fails
             units = proj / "units"
             units.mkdir()
             src = units / "nas-v2-demo.service"
@@ -622,19 +719,34 @@ class V2SystemdFaultInjectionTests(unittest.TestCase):
                 state_path=state,
                 systemctl=str(ok_ctl),
             )
-            # now remove unit, but make stop fail
+            before_state = pathlib.Path(state).read_text(encoding="utf-8")
+            before_target = (runtime / "nas-v2-demo.service").resolve()
             self.write_manifest(manifest, None)
-            fail_ctl, log = self.make_systemctl(root, fail_on={"stop nas-v2-demo.service"})
-            # stop is called with check=False, so reconcile must succeed despite failure
-            result = sysrec.reconcile(
-                manifest_path=manifest,
-                projection_root=proj,
-                systemd_runtime_dir=runtime,
-                quadlet_runtime_dir=quad,
-                state_path=state,
-                systemctl=str(fail_ctl),
-            )
-            self.assertIn("nas-v2-demo.service", result["stopped"])
+            fail_ctl, _ = self.make_systemctl(root, fail_on={"stop nas-v2-demo.service"})
+            with self.assertRaisesRegex(sysrec.SystemdReconcileError, "stop nas-v2-demo.service"):
+                sysrec.reconcile(
+                    manifest_path=manifest,
+                    projection_root=proj,
+                    systemd_runtime_dir=runtime,
+                    quadlet_runtime_dir=quad,
+                    state_path=state,
+                    systemctl=str(fail_ctl),
+                )
+            self.assertTrue((runtime / "nas-v2-demo.service").is_symlink())
+            self.assertEqual((runtime / "nas-v2-demo.service").resolve(), before_target)
+            self.assertEqual(pathlib.Path(state).read_text(encoding="utf-8"), before_state)
+            src.write_text("[Service]\nExecStart=/bin/false\n", encoding="utf-8")
+            self.write_manifest(manifest, src)
+            fail_reload, _ = self.make_systemctl(root, fail_on={"daemon-reload"})
+            with self.assertRaisesRegex(sysrec.SystemdReconcileError, "manual recovery"):
+                sysrec.reconcile(
+                    manifest_path=manifest,
+                    projection_root=proj,
+                    systemd_runtime_dir=runtime,
+                    quadlet_runtime_dir=quad,
+                    state_path=state,
+                    systemctl=str(fail_reload),
+                )
 
     def test_unsafe_target_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

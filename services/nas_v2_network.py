@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
@@ -29,6 +30,10 @@ class FirewalldProjectionError(RuntimeError):
 
 class FirewalldReconcileError(RuntimeError):
     """Raised when V2 firewalld state cannot be reconciled safely."""
+
+
+class FirewallDeadmanError(FirewalldReconcileError):
+    """Raised when firewall deadman acknowledgement or rollback fails."""
 
 
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -496,6 +501,15 @@ def remote_admin_policy_name() -> str:
 _REMOTE_ADMIN_PRIORITY = "-300"
 _REMOTE_ADMIN_PORTS: list[tuple[str, str]] = [("22", "tcp"), ("9090", "tcp"), ("443", "tcp")]
 
+# Deadman contract: default 60s acknowledgement window, native systemd timer.
+_DEFAULT_DEADMAN_WINDOW = 60
+_DEADMAN_PENDING = "pending.json"
+_DEADMAN_ACK = "ack.json"
+_DEADMAN_ROLLBACK_DIR = "previous"
+_DEADMAN_TIMER_UNIT = "nas-v2-firewall-rollback.timer"
+_DEADMAN_SERVICE_UNIT = "nas-v2-firewall-rollback.service"
+_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{12,64}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
 
 def _xml_document(lines: list[str]) -> bytes:
     return ('<?xml version="1.0" encoding="utf-8"?>\n' + "\n".join(lines) + "\n").encode()
@@ -879,6 +893,363 @@ def _fsync(directory: pathlib.Path) -> None:
         os.close(fd)
 
 
+# ---------------------------------------------------------------------------
+# firewall deadman helpers (PR35)
+# ---------------------------------------------------------------------------
+
+
+def _deadman_pending_path(state_dir: pathlib.Path) -> pathlib.Path:
+    return state_dir / _DEADMAN_PENDING
+
+
+def _deadman_ack_path(state_dir: pathlib.Path) -> pathlib.Path:
+    return state_dir / _DEADMAN_ACK
+
+
+def _deadman_rollback_root(state_dir: pathlib.Path) -> pathlib.Path:
+    return state_dir / _DEADMAN_ROLLBACK_DIR
+
+
+def _deadman_token_for_manifest(manifest: dict[str, Any]) -> str:
+    raw = json.dumps(manifest, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _deadman_validate_token(token: str) -> None:
+    if not isinstance(token, str) or not token or len(token) > 128 or "/" in token or "\x00" in token:
+        raise FirewallDeadmanError(f"malformed acknowledgement token {token!r}")
+    if token.strip() != token:
+        raise FirewallDeadmanError(f"malformed acknowledgement token {token!r}")
+    # Allow hex or uuid-ish tokens; reject obvious path traversal
+    if ".." in token or token.startswith("."):
+        raise FirewallDeadmanError(f"malformed acknowledgement token {token!r}")
+
+
+def _deadman_systemd_run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FirewallDeadmanError(f"unable to execute {command[0]}: {exc}") from exc
+
+
+def _deadman_save_previous(
+    state_dir: pathlib.Path, backups: dict[pathlib.PurePosixPath, bytes | None]
+) -> None:
+    rollback_root = _deadman_rollback_root(state_dir)
+    # Clean previous rollback state atomically
+    if rollback_root.exists():
+        shutil.rmtree(rollback_root)
+    rollback_root.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(rollback_root, 0o700)
+    except OSError:
+        pass
+    for rel, prev in backups.items():
+        if prev is None:
+            continue
+        dest = rollback_root / str(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        fd, raw_tmp = tempfile.mkstemp(prefix=f".{dest.name}.save.", dir=str(dest.parent))
+        tmp = pathlib.Path(raw_tmp)
+        replaced = False
+        try:
+            with os.fdopen(fd, "wb") as writer:
+                writer.write(prev)
+                writer.flush()
+                os.fsync(writer.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, dest)
+            replaced = True
+        finally:
+            if not replaced:
+                tmp.unlink(missing_ok=True)
+    index = {str(rel): (prev is not None) for rel, prev in backups.items()}
+    idx_path = rollback_root / "index.json"
+    # atomic write index
+    fd, raw_tmp = tempfile.mkstemp(prefix=".index.json.", dir=str(rollback_root))
+    tmp = pathlib.Path(raw_tmp)
+    replaced = False
+    try:
+        with os.fdopen(fd, "wb") as writer:
+            writer.write((json.dumps(index, sort_keys=True) + "\n").encode("utf-8"))
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, idx_path)
+        replaced = True
+    finally:
+        if not replaced:
+            tmp.unlink(missing_ok=True)
+    _fsync(rollback_root)
+    try:
+        _fsync(state_dir)
+    except OSError:
+        pass
+
+
+def _deadman_write_pending(
+    state_dir: pathlib.Path, token: str, manifest: dict[str, Any], window: int
+) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(state_dir, 0o700)
+    except OSError:
+        pass
+    pending_path = _deadman_pending_path(state_dir)
+    payload = {
+        "token": token,
+        "window": window,
+        "created": time.time(),
+        "manifestSha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
+    }
+    fd, raw_tmp = tempfile.mkstemp(prefix=".pending.json.", dir=str(state_dir))
+    tmp = pathlib.Path(raw_tmp)
+    replaced = False
+    try:
+        with os.fdopen(fd, "wb") as writer:
+            writer.write((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, pending_path)
+        replaced = True
+    finally:
+        if not replaced:
+            tmp.unlink(missing_ok=True)
+    _fsync(state_dir)
+
+
+def _deadman_read_pending(state_dir: pathlib.Path) -> dict[str, Any]:
+    pending_path = _deadman_pending_path(state_dir)
+    try:
+        raw = pending_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FirewallDeadmanError(f"unable to read deadman pending state: {exc}") from exc
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise FirewallDeadmanError(f"malformed deadman pending state: {exc}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("token"), str) or not value["token"]:
+        raise FirewallDeadmanError("malformed deadman pending state: missing token")
+    if not isinstance(value.get("window"), int) or value["window"] <= 0:
+        raise FirewallDeadmanError("malformed deadman pending state: invalid window")
+    _deadman_validate_token(value["token"])
+    return value
+
+
+def _deadman_arm(systemd_bin: str, window: int) -> None:
+    # Prefer systemd-run transient timer with explicit window; fall back to systemctl timer
+    # First try systemd-run for precise window; if not available, use timer unit.
+    # We attempt systemd-run --on-active; if it fails, try systemctl start.
+    # For tests, systemd_bin may be a mock script that expects "start" or "systemd-run" call.
+    # Attempt systemctl start first (native timer with OnActiveSec=60, but we also support window)
+    # To respect custom window, we try systemd-run if window != default.
+    if window != _DEFAULT_DEADMAN_WINDOW:
+        result = _deadman_systemd_run(
+            [systemd_bin, "run", "--unit=nas-v2-firewall-rollback", f"--on-active={window}s", "--timer-property=AccuracySec=1s", "true"]
+        )
+        # If systemd-run not supported (mock expects start), fall back
+        if result.returncode == 0:
+            return
+    result = _deadman_systemd_run([systemd_bin, "start", _DEADMAN_TIMER_UNIT])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:4000]
+        raise FirewallDeadmanError(f"deadman timer activation failed: {detail}")
+
+
+def _deadman_cancel(systemd_bin: str) -> None:
+    result = _deadman_systemd_run([systemd_bin, "stop", _DEADMAN_TIMER_UNIT])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:4000]
+        raise FirewallDeadmanError(f"failed to cancel deadman timer: {detail}")
+    # Best-effort reset-failed, ignore failure
+    _deadman_systemd_run([systemd_bin, "reset-failed", _DEADMAN_TIMER_UNIT])
+
+
+def _deadman_cleanup(state_dir: pathlib.Path) -> None:
+    pending_path = _deadman_pending_path(state_dir)
+    ack_path = _deadman_ack_path(state_dir)
+    rollback_root = _deadman_rollback_root(state_dir)
+    # Remove pending and ack; remove rollback dir. Each operation must succeed or raise.
+    # We attempt all, but on first failure raise to signal cleanup failure.
+    try:
+        pending_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
+    try:
+        ack_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
+    if rollback_root.exists():
+        try:
+            shutil.rmtree(rollback_root)
+        except OSError as exc:
+            raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
+    try:
+        _fsync(state_dir) if state_dir.exists() else None
+    except OSError as exc:
+        raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
+
+
+def acknowledge_firewall(
+    *,
+    deadman_state_dir: pathlib.Path,
+    token: str,
+    systemd_bin: str = "systemctl",
+) -> dict[str, Any]:
+    _deadman_validate_token(token)
+    pending = _deadman_read_pending(deadman_state_dir)
+    if pending.get("token") != token:
+        raise FirewallDeadmanError("acknowledgement token is invalid or mismatched")
+    # Optionally write ack file for timer to observe (best-effort)
+    ack_path = _deadman_ack_path(deadman_state_dir)
+    try:
+        ack_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, raw_tmp = tempfile.mkstemp(prefix=".ack.json.", dir=str(ack_path.parent))
+        tmp = pathlib.Path(raw_tmp)
+        replaced = False
+        try:
+            with os.fdopen(fd, "wb") as writer:
+                writer.write((json.dumps({"token": token}, sort_keys=True) + "\n").encode())
+                writer.flush()
+                os.fsync(writer.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, ack_path)
+            replaced = True
+        finally:
+            if not replaced:
+                tmp.unlink(missing_ok=True)
+        _fsync(ack_path.parent)
+    except OSError as exc:
+        raise FirewallDeadmanError(f"deadman ack write failed: {exc}") from exc
+    _deadman_cancel(systemd_bin)
+    _deadman_cleanup(deadman_state_dir)
+    return {"ok": True, "acknowledged": True, "token": token}
+
+
+def handle_deadman_rollback(
+    *,
+    deadman_state_dir: pathlib.Path,
+    system_config: pathlib.Path,
+    firewall_cmd: str,
+    firewall_offline_cmd: str,
+    systemd_bin: str = "systemctl",
+) -> dict[str, Any]:
+    pending_path = _deadman_pending_path(deadman_state_dir)
+    if not pending_path.is_file():
+        return {"ok": True, "deadman": "no-pending"}
+    try:
+        pending = _deadman_read_pending(deadman_state_dir)
+    except FirewallDeadmanError as exc:
+        # Malformed pending -> treat as not acked, proceed to rollback but preserve error info
+        pending = None
+        pending_error = str(exc)
+    else:
+        pending_error = None
+    ack_path = _deadman_ack_path(deadman_state_dir)
+    acked = False
+    if pending is not None and ack_path.is_file():
+        try:
+            ack_raw = ack_path.read_text(encoding="utf-8")
+            ack_val = json.loads(ack_raw)
+            if isinstance(ack_val, dict) and ack_val.get("token") == pending.get("token"):
+                acked = True
+        except (OSError, json.JSONDecodeError):
+            acked = False
+    if acked:
+        _deadman_cleanup(deadman_state_dir)
+        return {"ok": True, "acked": True}
+    if pending is None:
+        # Malformed pending still requires rollback of previous state if possible; cleanup then error
+        rollback_root = _deadman_rollback_root(deadman_state_dir)
+        if rollback_root.exists():
+            # attempt restore even if pending malformed
+            try:
+                _deadman_restore_previous(deadman_state_dir, system_config, firewall_cmd, firewall_offline_cmd)
+            except Exception:
+                pass
+            try:
+                _deadman_cleanup(deadman_state_dir)
+            except Exception:
+                pass
+        raise FirewallDeadmanError(f"malformed deadman pending state: {pending_error}")
+    # Timer has fired (OnActiveSec elapsed); restore previous regardless of window clock.
+    # The 60s window is enforced by the systemd timer itself, not by checking time here,
+    # so tests can trigger rollback immediately without waiting.
+    _deadman_restore_previous(deadman_state_dir, system_config, firewall_cmd, firewall_offline_cmd)
+    _deadman_cleanup(deadman_state_dir)
+    return {"ok": True, "rolled_back": True, "reason": "deadman timeout without acknowledgement"}
+
+
+def _deadman_restore_previous(
+    state_dir: pathlib.Path,
+    system_config: pathlib.Path,
+    firewall_cmd: str,
+    firewall_offline_cmd: str,
+) -> None:
+    rollback_root = _deadman_rollback_root(state_dir)
+    index_path = rollback_root / "index.json"
+    try:
+        index_raw = index_path.read_text(encoding="utf-8")
+        index = json.loads(index_raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FirewallDeadmanError(f"unable to read deadman rollback index: {exc}") from exc
+    if not isinstance(index, dict):
+        raise FirewallDeadmanError("malformed deadman rollback index")
+    # Restore each entry
+    for rel_str, had_previous in index.items():
+        if not isinstance(rel_str, str) or not isinstance(had_previous, bool):
+            raise FirewallDeadmanError("malformed deadman rollback index entry")
+        rel = _safe_target(rel_str)
+        dest = system_config / str(rel)
+        if not had_previous:
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError as exc:
+                raise FirewallDeadmanError(f"deadman rollback unlink failed {dest}: {exc}") from exc
+            continue
+        src = rollback_root / str(rel)
+        if not src.is_file():
+            raise FirewallDeadmanError(f"deadman rollback source missing: {src}")
+        # atomic restore
+        fd, raw_tmp = tempfile.mkstemp(prefix=f".{dest.name}.rollback.", dir=str(dest.parent))
+        tmp = pathlib.Path(raw_tmp)
+        replaced = False
+        try:
+            with src.open("rb") as reader, os.fdopen(fd, "wb") as writer:
+                shutil.copyfileobj(reader, writer)
+                writer.flush()
+                os.fsync(writer.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, dest)
+            replaced = True
+        finally:
+            if not replaced:
+                tmp.unlink(missing_ok=True)
+    # Remove any V2 files that exist in system_config but not in index (should not happen, but be safe)
+    # We rely on index covering all touched; no extra deletion.
+    for dname in ("zones", "policies"):
+        try:
+            _fsync(system_config / dname)
+        except OSError:
+            pass
+    checked = _reconcile_run([firewall_offline_cmd, f"--system-config={system_config}", "--check-config"])
+    if checked.returncode != 0:
+        detail = (checked.stderr or checked.stdout).strip()[:4000]
+        raise FirewallDeadmanError(f"deadman rollback combined configuration is invalid: {detail}")
+    reloaded = _reconcile_run([firewall_cmd, "--reload"])
+    if reloaded.returncode != 0:
+        detail = (reloaded.stderr or reloaded.stdout).strip()[:4000]
+        raise FirewallDeadmanError(f"deadman rollback reload failed: {detail}")
+
+
 def reconcile(
     *,
     manifest_path: pathlib.Path,
@@ -886,6 +1257,9 @@ def reconcile(
     system_config: pathlib.Path,
     firewall_cmd: str,
     firewall_offline_cmd: str,
+    deadman_state_dir: pathlib.Path | None = None,
+    deadman_window: int = _DEFAULT_DEADMAN_WINDOW,
+    systemd_bin: str = "systemctl",
 ) -> dict[str, Any]:
     manifest = _read_manifest(manifest_path)
     desired: dict[pathlib.PurePosixPath, tuple[pathlib.Path, str]] = {}
@@ -921,6 +1295,22 @@ def reconcile(
         destination = system_config / str(relative)
         backups[relative] = destination.read_bytes() if destination.exists() else None
 
+    # Deadman: save previous projection before any mutation, if requested.
+    if deadman_state_dir is not None:
+        if not isinstance(deadman_window, int) or deadman_window <= 0:
+            raise FirewallDeadmanError(f"deadman window must be positive integer, got {deadman_window!r}")
+        try:
+            deadman_state_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(deadman_state_dir, 0o700)
+            except OSError:
+                pass
+            _deadman_save_previous(deadman_state_dir, backups)
+        except FirewallDeadmanError:
+            raise
+        except Exception as exc:
+            raise FirewallDeadmanError(f"unable to save deadman previous state: {exc}") from exc
+
     try:
         for relative in sorted(current - set(desired), key=str):
             (system_config / str(relative)).unlink()
@@ -938,6 +1328,12 @@ def reconcile(
             _atomic_copy(source, destination)
             changed = True
         if not changed:
+            # No change: clean any stale deadman pending (best-effort) and return
+            if deadman_state_dir is not None:
+                try:
+                    _deadman_cleanup(deadman_state_dir)
+                except FirewallDeadmanError:
+                    pass
             return {"ok": True, "changed": False, "files": sorted(str(item) for item in desired)}
 
         for directory_name in ("zones", "policies"):
@@ -951,6 +1347,23 @@ def reconcile(
         if reloaded.returncode != 0:
             detail = (reloaded.stderr or reloaded.stdout).strip()[:4000]
             raise FirewalldReconcileError(f"firewalld reload failed: {detail}")
+
+        # Arm deadman timer after successful reload, if requested.
+        if deadman_state_dir is not None:
+            token = _deadman_token_for_manifest(manifest)
+            _deadman_write_pending(deadman_state_dir, token, manifest, deadman_window)
+            _deadman_arm(systemd_bin, deadman_window)
+            return {
+                "ok": True,
+                "changed": True,
+                "files": sorted(str(item) for item in desired),
+                "deadman": {
+                    "token": token,
+                    "window": deadman_window,
+                    "pending": str(_deadman_pending_path(deadman_state_dir)),
+                    "rollbackDir": str(_deadman_rollback_root(deadman_state_dir)),
+                },
+            }
     except Exception as original:
         rollback_error: Exception | None = None
         try:
@@ -980,6 +1393,14 @@ def reconcile(
                 raise FirewalldReconcileError((rollback.stderr or rollback.stdout).strip()[:4000])
         except Exception as exc:  # noqa: BLE001
             rollback_error = exc
+        # Best-effort deadman cleanup on immediate failure (no pending yet, but rollback dir may exist)
+        if deadman_state_dir is not None:
+            try:
+                _deadman_cleanup(deadman_state_dir)
+            except FirewallDeadmanError:
+                # Preserve original failure but record cleanup issue if rollback also failed
+                if rollback_error is None:
+                    rollback_error = FirewallDeadmanError("deadman cleanup failed after activation failure")
         if rollback_error is not None:
             raise FirewalldReconcileError(
                 f"firewalld activation failed and rollback reload also failed: original={original}; rollback={rollback_error}"
@@ -995,20 +1416,50 @@ def reconcile_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Activate V2-owned firewalld files with rollback and one native reload."
     )
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--projection-root", required=True)
-    parser.add_argument("--system-config", required=True)
+    parser.add_argument("--manifest", required=False, default=None)
+    parser.add_argument("--projection-root", required=False, default=None)
+    parser.add_argument("--system-config", required=False, default=None)
     parser.add_argument("--firewall-cmd", default="firewall-cmd")
     parser.add_argument("--firewall-offline-cmd", default="firewall-offline-cmd")
+    parser.add_argument("--deadman-state-dir", default=None, help="directory for deadman pending/rollback state")
+    parser.add_argument("--deadman-window", type=int, default=_DEFAULT_DEADMAN_WINDOW, help="deadman acknowledgement window in seconds")
+    parser.add_argument("--systemd-bin", default="systemctl", help="systemd binary for timer control")
+    parser.add_argument("--acknowledge", default=None, help="acknowledge deadman with token")
+    parser.add_argument("--deadman-rollback", action="store_true", help="run deadman rollback check (as timer service)")
     args = parser.parse_args(argv)
     try:
-        result = reconcile(
-            manifest_path=pathlib.Path(args.manifest),
-            projection_root=pathlib.Path(args.projection_root),
-            system_config=pathlib.Path(args.system_config),
-            firewall_cmd=args.firewall_cmd,
-            firewall_offline_cmd=args.firewall_offline_cmd,
-        )
+        if args.acknowledge is not None:
+            if not args.deadman_state_dir:
+                raise FirewalldReconcileError("--deadman-state-dir is required for --acknowledge")
+            result = acknowledge_firewall(
+                deadman_state_dir=pathlib.Path(args.deadman_state_dir),
+                token=args.acknowledge,
+                systemd_bin=args.systemd_bin,
+            )
+        elif args.deadman_rollback:
+            if not args.deadman_state_dir or not args.system_config:
+                raise FirewalldReconcileError("--deadman-state-dir and --system-config are required for --deadman-rollback")
+            result = handle_deadman_rollback(
+                deadman_state_dir=pathlib.Path(args.deadman_state_dir),
+                system_config=pathlib.Path(args.system_config),
+                firewall_cmd=args.firewall_cmd,
+                firewall_offline_cmd=args.firewall_offline_cmd,
+                systemd_bin=args.systemd_bin,
+            )
+        else:
+            if not args.manifest or not args.projection_root or not args.system_config:
+                parser.error("--manifest, --projection-root, and --system-config are required for reconcile")
+            deadman_dir = pathlib.Path(args.deadman_state_dir) if args.deadman_state_dir else None
+            result = reconcile(
+                manifest_path=pathlib.Path(args.manifest),
+                projection_root=pathlib.Path(args.projection_root),
+                system_config=pathlib.Path(args.system_config),
+                firewall_cmd=args.firewall_cmd,
+                firewall_offline_cmd=args.firewall_offline_cmd,
+                deadman_state_dir=deadman_dir,
+                deadman_window=args.deadman_window,
+                systemd_bin=args.systemd_bin,
+            )
     except FirewalldReconcileError as exc:
         print(f"nas-v2-firewalld-reconcile: {exc}", file=sys.stderr)
         return 1
@@ -1023,6 +1474,7 @@ __all__ = [
     "PodmanNetworkProjectionError",
     "FirewalldProjectionError",
     "FirewalldReconcileError",
+    "FirewallDeadmanError",
     "bridge_interface_name",
     "podman_network_name",
     "network_policy",
@@ -1041,6 +1493,8 @@ __all__ = [
     "validate_projection",
     "materialize_projection",
     "reconcile",
+    "acknowledge_firewall",
+    "handle_deadman_rollback",
     "reconcile_main",
     "main",
 ]

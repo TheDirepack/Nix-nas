@@ -266,6 +266,151 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         with self.assertRaisesRegex(caddy.CaddyProjectionError, "requires identity"):
             caddy.generate_caddyfile(self.compile(service))
 
+    def test_parent_child_routes_render_longest_first(self):
+        # Real seed parent/child must be ordered longest first regardless of input order
+        def svc(sid: str, path: str) -> dict:
+            return {
+                "name": sid,
+                "workload": {"kind": "daemon"},
+                "runtime": {"type": "systemd", "unit": f"{sid}.service"},
+                "routes": {
+                    "web": {
+                        "target": {"type": "http", "port": 8080},
+                        "exposure": {"type": "path", "paths": [path]},
+                        "auth": {"mode": "public"},
+                    }
+                },
+            }
+
+        # Input order is parent first, but renderer must put child first
+        doc = v2.compile_document(
+            {
+                "schemaVersion": 3,
+                "services": {
+                    "a": svc("a", "/shares"),
+                    "b": svc("b", "/shares/admin"),
+                    "c": svc("c", "/vault"),
+                    "d": svc("d", "/vault/admin"),
+                    "e": svc("e", "/ai/"),
+                    "f": svc("f", "/ai/v1"),
+                    "g": svc("g", "/ai/runtime"),
+                },
+            },
+            self.schema,
+        )
+        rendered = caddy.generate_caddyfile(doc)
+        # Longest paths must appear before their parents
+        self.assertLess(rendered.index("/shares/admin"), rendered.index('"/shares"'))
+        # Ensure /shares/admin appears before /shares (check handle ordering)
+        # Vault
+        self.assertLess(rendered.index("/vault/admin"), rendered.index('"/vault"'))
+        # AI: /ai/runtime and /ai/v1 must appear before /ai/
+        # Extract positions of the path patterns
+        pos_runtime = rendered.index("/ai/runtime")
+        pos_v1 = rendered.index("/ai/v1")
+        pos_ai = rendered.index('path "/ai/"')
+        # Fallback to check "/ai/*" pattern for /ai/
+        if pos_ai == -1:
+            pos_ai = rendered.index('"/ai/*"')
+        self.assertLess(pos_runtime, pos_ai)
+        self.assertLess(pos_v1, pos_ai)
+
+    def test_real_seed_overlapping_routes_compile_and_render(self):
+        # Full real-seed set: /shares, /shares/admin, /vault, /vault/admin, /ai/, /ai/v1, /ai/runtime
+        copyparty_files = {
+            "name": "CopyParty",
+            "workload": {"kind": "daemon"},
+            "runtime": {"type": "systemd", "unit": "copyparty.service"},
+            "authorization": {"capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]},
+            "routes": {
+                "files": {
+                    "target": {"type": "http", "port": 8000},
+                    "exposure": {"type": "path", "paths": ["/shares"]},
+                    "auth": {"mode": "identity", "capability": "files"},
+                },
+                "admin": {
+                    "target": {"type": "http", "port": 8000},
+                    "exposure": {"type": "path", "paths": ["/shares/admin"]},
+                    "auth": {"mode": "identity", "capability": "admin"},
+                },
+            },
+        }
+        vault = {
+            "name": "Vaultwarden",
+            "workload": {"kind": "daemon"},
+            "runtime": {"type": "systemd", "unit": "vaultwarden.service"},
+            "authorization": {"capabilities": [{"id": "admin", "title": "Admin"}]},
+            "routes": {
+                "web": {
+                    "target": {"type": "http", "port": 8001},
+                    "exposure": {"type": "path", "paths": ["/vault"]},
+                    "auth": {"mode": "public"},
+                },
+                "admin": {
+                    "target": {"type": "http", "port": 8001},
+                    "exposure": {"type": "path", "paths": ["/vault/admin"]},
+                    "auth": {"mode": "identity", "capability": "admin"},
+                },
+            },
+        }
+        ai_runtime = {
+            "name": "AI Runtime",
+            "workload": {"kind": "daemon"},
+            "runtime": {"type": "systemd", "unit": "ai-runtime.service"},
+            "routes": {
+                "admin": {
+                    "target": {"type": "http", "port": 8002},
+                    "exposure": {"type": "path", "paths": ["/ai/runtime"]},
+                    "auth": {"mode": "public"},
+                },
+                "api": {
+                    "target": {"type": "http", "port": 8002},
+                    "exposure": {"type": "path", "paths": ["/ai/v1"]},
+                    "auth": {"mode": "public"},
+                },
+            },
+        }
+        ai_workspace = {
+            "name": "Open WebUI",
+            "workload": {"kind": "daemon"},
+            "runtime": {"type": "systemd", "unit": "open-webui.service"},
+            "routes": {
+                "main": {
+                    "target": {"type": "http", "port": 8003},
+                    "exposure": {"type": "path", "paths": ["/ai/"]},
+                    "auth": {"mode": "public"},
+                }
+            },
+        }
+        effective = v2.compile_document(
+            {"schemaVersion": 3, "services": {"copyparty": copyparty_files, "vaultwarden": vault, "ai-runtime": ai_runtime, "ai-workspace": ai_workspace}},
+            self.schema,
+        )
+        rendered = caddy.generate_caddyfile(effective)
+        for p in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime"):
+            self.assertIn(p.rstrip("/") if p != "/ai/" else "/ai", rendered)
+
+    def test_exact_duplicate_path_still_fails_closed(self):
+        one = self.base_service()
+        one["routes"] = {
+            "web": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/shared/"]}, "auth": {"mode": "public"}}
+        }
+        two = self.base_service()
+        two["routes"] = {
+            "web": {"target": {"type": "http", "port": 8081}, "exposure": {"type": "path", "paths": ["/shared/"]}, "auth": {"mode": "public"}}
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate"):
+            v2.compile_document({"schemaVersion": 3, "services": {"one": one, "two": two}}, self.schema)
+        # Normalized duplicate with trailing slash variant
+        one["routes"] = {
+            "web": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/api"]}, "auth": {"mode": "public"}}
+        }
+        two["routes"] = {
+            "web": {"target": {"type": "http", "port": 8081}, "exposure": {"type": "path", "paths": ["/api/"]}, "auth": {"mode": "public"}}
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate"):
+            v2.compile_document({"schemaVersion": 3, "services": {"one": one, "two": two}}, self.schema)
+
 
 if __name__ == "__main__":
     unittest.main()

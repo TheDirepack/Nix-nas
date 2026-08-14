@@ -67,11 +67,105 @@ def _absolute_source(value: Any, *, label: str) -> pathlib.PurePosixPath:
     return candidate
 
 
+BACKUP_STAGING_ROOT = pathlib.Path("/run/nas-control/backup-staging")
+
+
 def _runtime_safe_absolute_path(value: Any, *, label: str) -> str:
     try:
         return _safe_absolute_path(value, label=label)
     except BackupProjectionError:
         raise BackupRuntimeError(f"{label} is not a safe absolute path") from None
+
+
+def _validate_staged_artifact_path(
+    resource_id: str, artifact_path: str, artifact_resource: str
+) -> pathlib.Path:
+    candidate = pathlib.Path(artifact_path)
+    if candidate.is_symlink():
+        raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
+    try:
+        resolved = candidate.resolve(strict=False)
+        staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
+        resolved.relative_to(staging_resolved)
+    except ValueError as exc:
+        raise BackupRuntimeError(
+            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
+        ) from exc
+    # Must be derived from resource identity: staging_root/<resource-id> or staging_root/<artifactResource>
+    allowed_names = {resource_id, artifact_resource}
+    if candidate.name not in allowed_names:
+        raise BackupRuntimeError(
+            f"native-dump artifact path {artifact_path!r} must be {BACKUP_STAGING_ROOT}/<resource-id> derived from {resource_id!r}"
+        )
+    # Also ensure parent is exactly staging root (no deeper nesting)
+    try:
+        candidate.parent.resolve(strict=False).relative_to(staging_resolved)
+        if candidate.parent.resolve(strict=False) != staging_resolved:
+            raise BackupRuntimeError(
+                f"native-dump artifact path {artifact_path!r} must be directly under staging root {BACKUP_STAGING_ROOT}"
+            )
+    except ValueError as exc:
+        raise BackupRuntimeError(
+            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
+        ) from exc
+    return candidate
+
+
+def _remove_staged_artifact(artifact_path: str) -> None:
+    candidate = pathlib.Path(artifact_path)
+    # If symlink, unlink without following - do not resolve escapes
+    try:
+        if candidate.is_symlink():
+            # For symlink, we still ensure the link itself is inside staging root (not the target)
+            try:
+                # Use lstat parent check: the symlink path itself must be inside staging
+                # Check the symlink's own path (not resolved) is under staging via pure path containment
+                # Use resolve(strict=False) for parent but not following final symlink? Instead check PurePosix containment
+                # Simplest: ensure symlink location is within staging root via lexical check and that its parent resolves inside
+                parent_resolved = candidate.parent.resolve(strict=False)
+                staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
+                parent_resolved.relative_to(staging_resolved)
+                # Also ensure the symlink file itself is lexically under staging
+                if candidate.name not in {pathlib.Path(artifact_path).name}:
+                    pass
+            except ValueError as exc:
+                raise BackupRuntimeError(
+                    f"native-dump artifact symlink {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
+                ) from exc
+            candidate.unlink()
+            return
+    except OSError as exc:
+        raise BackupRuntimeError(f"unable to clean native-dump artifact symlink {candidate!r}: {exc}") from exc
+    # Reject paths outside staging root even on removal to avoid delete-escapes
+    try:
+        resolved = candidate.resolve(strict=False)
+        staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
+        resolved.relative_to(staging_resolved)
+    except ValueError as exc:
+        raise BackupRuntimeError(
+            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
+        ) from exc
+    # If not exists, idempotent success
+    if not candidate.exists():
+        return
+    # Ensure we do not follow symlink directory - is_symlink already handled, but also check resolve vs path
+    try:
+        if candidate.resolve(strict=False) != candidate.resolve():
+            # If resolve differs due to symlink components, treat as escape
+            if candidate.is_symlink() or not candidate.exists():
+                pass
+    except OSError:
+        pass
+    try:
+        if candidate.is_file():
+            candidate.unlink()
+        elif candidate.is_dir():
+            shutil.rmtree(candidate)
+        else:
+            # For other types, attempt unlink
+            candidate.unlink(missing_ok=True)
+    except OSError as exc:
+        raise BackupRuntimeError(f"unable to clean native-dump artifact {candidate!r}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -318,12 +412,52 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
         or ".." in pathlib.PurePosixPath(artifact_path).parts
     ):
         raise BackupRuntimeError(f"backup resource {resource_id!r} has an invalid compiled native-dump job mapping")
-    artifact = pathlib.Path(artifact_path)
+    # Enforce dedicated staging root derived from resource identity and reject symlink escapes
+    artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
+    # Ensure staging root itself is not a symlink escape
+    staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
+    try:
+        staging_resolved.relative_to(BACKUP_STAGING_ROOT.resolve(strict=False))
+    except ValueError:
+        raise BackupRuntimeError(f"staging root {BACKUP_STAGING_ROOT} escapes itself")
+    if BACKUP_STAGING_ROOT.is_symlink():
+        raise BackupRuntimeError(f"staging root {BACKUP_STAGING_ROOT} must not be a symlink")
+    # Ensure parent staging directory exists with safe mode
+    try:
+        BACKUP_STAGING_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(BACKUP_STAGING_ROOT, 0o700)
+    except OSError as exc:
+        raise BackupRuntimeError(f"unable to prepare staging root {BACKUP_STAGING_ROOT!r}: {exc}") from exc
+    # Resolve symlink check: artifact must not be symlink and must resolve inside staging root
+    if artifact.is_symlink():
+        raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
+    try:
+        resolved = artifact.resolve(strict=False)
+        staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
+        resolved.relative_to(staging_resolved)
+        if resolved != artifact.resolve():
+            # If resolve differs due to symlink components, already rejected above but double-check
+            if artifact.is_symlink():
+                raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
+    except ValueError as exc:
+        raise BackupRuntimeError(
+            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
+        ) from exc
     try:
         artifact.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(artifact, 0o700)
     except OSError as exc:
         raise BackupRuntimeError(f"unable to prepare native-dump artifact directory {artifact_path!r}: {exc}") from exc
+    # Re-validate after mkdir that we didn't create via symlink and that resulting dir is still inside staging
+    if artifact.is_symlink():
+        raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
+    try:
+        resolved_after = artifact.resolve()
+        resolved_after.relative_to(staging_resolved)
+    except ValueError as exc:
+        raise BackupRuntimeError(
+            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT} after creation"
+        ) from exc
     if not artifact.is_dir():
         raise BackupRuntimeError(f"native-dump artifact resource {artifact_resource!r} must resolve to a directory")
     try:
@@ -450,11 +584,20 @@ def prepare(
                 _run([zfs_bin, "destroy", f"{snapshot['dataset']}@{snapshot['name']}"])
             except BackupRuntimeError as destroy_exc:
                 failures.append(f"{snapshot['dataset']}@{snapshot['name']}: {destroy_exc}")
+        for entry in reversed(native_dumps):
+            try:
+                artifact_path = entry.get("artifactPath")
+                if isinstance(artifact_path, str):
+                    _remove_staged_artifact(artifact_path)
+            except BackupRuntimeError as artifact_exc:
+                failures.append(f"artifact {entry.get('artifactPath')!r}: {artifact_exc}")
+            except OSError as artifact_exc:  # pragma: no cover
+                failures.append(f"artifact {entry.get('artifactPath')!r}: {artifact_exc}")
         paths_path.unlink(missing_ok=True)
         state_path.unlink(missing_ok=True)
         if failures:
             raise BackupRuntimeError(
-                f"backup preparation failed ({exc}); failed to clean snapshot(s): {'; '.join(failures)}"
+                f"backup preparation failed ({exc}); failed to clean snapshot(s)/artifact(s): {'; '.join(failures)}"
             ) from exc
         raise
 
@@ -465,7 +608,8 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
         return {"destroyed": []}
     state = _load_json(state_path)
     snapshots = state.get("snapshots")
-    if state.get("schemaVersion") != 1 or not isinstance(snapshots, list):
+    native_dumps = state.get("nativeDumps", [])
+    if state.get("schemaVersion") != 1 or not isinstance(snapshots, list) or not isinstance(native_dumps, list):
         raise BackupRuntimeError("V2 backup runtime state has an unsupported schema")
     destroyed: list[str] = []
     failures: list[str] = []
@@ -483,8 +627,18 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
             destroyed.append(reference)
         except BackupRuntimeError as exc:
             failures.append(f"{reference}: {exc}")
+    # Clean native dump staged artifacts idempotently, rejecting escapes
+    for entry in reversed(native_dumps):
+        if not isinstance(entry, dict) or not isinstance(entry.get("artifactPath"), str):
+            failures.append("invalid native dump state entry")
+            continue
+        artifact_path = entry["artifactPath"]
+        try:
+            _remove_staged_artifact(artifact_path)
+        except BackupRuntimeError as exc:
+            failures.append(f"artifact {artifact_path!r}: {exc}")
     if failures:
-        raise BackupRuntimeError("failed to clean V2 backup snapshot(s): " + "; ".join(failures))
+        raise BackupRuntimeError("failed to clean V2 backup snapshot(s)/artifact(s): " + "; ".join(failures))
     state_path.unlink(missing_ok=True)
     paths_path.unlink(missing_ok=True)
     return {"destroyed": destroyed}

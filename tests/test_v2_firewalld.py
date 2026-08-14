@@ -68,7 +68,7 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertEqual(len(manifest["files"]), 5)
         remote = files[f"policies/{firewalld.remote_admin_policy_name()}.xml"].decode()
         self.assertIn('priority="-300"', remote)
-        self.assertIn('V2 remote admin', remote)
+        self.assertIn("V2 remote admin", remote)
         self.assertIn('port="22"', remote)
 
     def test_disabled_host_listener_projects_no_firewall_opening(self):
@@ -90,7 +90,10 @@ class V2FirewalldTests(unittest.TestCase):
         # Remote admin is global and remains even when no service requires firewalld
         self.assertEqual(set(files), {f"policies/{firewalld.remote_admin_policy_name()}.xml"})
         self.assertEqual(len(manifest["files"]), 1)
-        self.assertEqual(manifest["owners"], [{"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"}])
+        self.assertEqual(
+            manifest["owners"],
+            [{"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"}],
+        )
 
     def test_unmanaged_host_listener_still_projects_declared_network_policy(self):
         effective = {

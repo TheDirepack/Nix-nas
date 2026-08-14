@@ -19,6 +19,7 @@ INVENTORIES = (
 # installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/evaluate-reference-configurations.sh",
+    "scripts/lib/manifest.py",
     "scripts/lib/nas-vm-cleanup.sh",
     "scripts/lib/nas-vm-js-deps.sh",
     "scripts/lib/nas-vm-process-cleanup.sh",
