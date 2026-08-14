@@ -101,6 +101,8 @@ class ContractTests(unittest.TestCase):
         systemd = text("modules/nas/config/systemd-services.nix")
         portal = text("web/portal/index.html")
         self.assertIn("templates", proxy)
+        self.assertIn("templates {\n            # The portal template", proxy)
+        self.assertIn("root /", proxy)
         self.assertIn("file_server", proxy)
         self.assertIn("nasPortalStatic", proxy)
         self.assertIn("handle /share/*", proxy)
