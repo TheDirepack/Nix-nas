@@ -105,16 +105,6 @@ in
     systemd.services."cockpit-wsinstance-https@".environment.COCKPIT_SUPERUSER = "sudo";
 
     environment.etc."authentik/config.yml".source = authentikSettings;
-    services.postgresql = {
-      enable = true;
-      ensureDatabases = [ "authentik" ];
-      ensureUsers = [
-        {
-          name = "authentik";
-          ensureDBOwnership = true;
-        }
-      ];
-    };
     systemd.tmpfiles.rules = [
       "d ${authentikDataDir} 0750 authentik authentik -"
       "d ${authentikDataDir}/data 0750 authentik authentik -"
