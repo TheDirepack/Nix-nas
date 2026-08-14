@@ -88,6 +88,8 @@ FEATURE_MODES = {"off", "on-demand", "always"}
 ZFS_TOPOLOGIES = {"single", "stripe", "mirror", "raidz1", "raidz2", "raidz3"}
 COMMAND_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("NAS_SETUP_COMMAND_TIMEOUT_SECONDS", "900")))
 COMMAND_MAX_OUTPUT_BYTES = max(4096, int(os.environ.get("NAS_SETUP_COMMAND_MAX_OUTPUT_BYTES", str(256 * 1024))))
+FEATURE_STATUS_ATTEMPTS = max(1, int(os.environ.get("NAS_FEATURE_STATUS_ATTEMPTS", "20")))
+FEATURE_STATUS_RETRY_SECONDS = max(0.05, float(os.environ.get("NAS_FEATURE_STATUS_RETRY_SECONDS", "0.25")))
 
 
 def progress(message: str) -> None:
@@ -762,14 +764,20 @@ def preflight_ready(_result: Any = None) -> bool:
 
 
 def feature_policy_ready(features: Mapping[str, str]) -> bool:
-    completed = run_root_noninteractive(["nas-feature-control", "status"], check=False)
-    if completed.returncode != 0:
+    value: Any = None
+    for attempt in range(FEATURE_STATUS_ATTEMPTS):
+        completed = run_root_noninteractive(["nas-feature-control", "status"], check=False)
+        if completed.returncode == 0:
+            try:
+                value = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                return False
+            break
+        if attempt + 1 < FEATURE_STATUS_ATTEMPTS:
+            time.sleep(FEATURE_STATUS_RETRY_SECONDS)
+    if not isinstance(value, Mapping):
         return False
-    try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return False
-    rows = value.get("features", []) if isinstance(value, Mapping) else []
+    rows = value.get("features", [])
     by_id = {row.get("id"): row for row in rows if isinstance(row, Mapping)}
     return all(by_id.get(feature, {}).get("requestedMode") == mode for feature, mode in features.items())
 

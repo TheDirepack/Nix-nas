@@ -576,6 +576,25 @@ class SetupConfigTests(unittest.TestCase):
         source = pathlib.Path(command[4])
         self.assertFalse(source.exists())
 
+    def test_feature_policy_retries_transient_coordinator_contention(self):
+        busy = setup.Completed(
+            ("nas-feature-control", "status"),
+            "",
+            "Another feature operation is already running",
+            1,
+        )
+        ready = setup.Completed(
+            ("nas-feature-control", "status"),
+            json.dumps({"features": [{"id": "aiRuntime", "requestedMode": "on-demand"}]}),
+            "",
+        )
+        with (
+            mock.patch.object(setup, "run_root_noninteractive", side_effect=[busy, ready]),
+            mock.patch.object(setup.time, "sleep") as sleep,
+        ):
+            self.assertTrue(setup.feature_policy_ready({"aiRuntime": "on-demand"}))
+        sleep.assert_called_once_with(setup.FEATURE_STATUS_RETRY_SECONDS)
+
     def test_mutations_require_configured_admin_and_prime_sudo(self):
         with mock.patch.object(setup, "current_username", return_value="root"):
             with self.assertRaisesRegex(setup.SetupError, "configured local administrator"):
