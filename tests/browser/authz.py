@@ -359,13 +359,13 @@ def verify_no_identity_markup_injection(driver: webdriver.Chrome, username: str)
         return {
           injectedImage: Boolean(document.querySelector('img[src="x"]')),
           executionMarker: document.body?.dataset?.nasXss || null,
-          signedInText: document.body?.innerText?.includes('<img src=x onerror=document.body.dataset.nasXss=1>') || false,
         };
         """
     )
     if result["injectedImage"] or result["executionMarker"]:
         raise RuntimeError(f"portal executed identity-derived HTML: {result!r}")
-    if not result["signedInText"]:
+    hostile_display_name = "<img src=x onerror=document.body.dataset.nasXss=1>"
+    if hostile_display_name not in rendered_text(driver):
         raise RuntimeError("portal did not render the hostile identity display name as inert text")
 
 

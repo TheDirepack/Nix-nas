@@ -150,6 +150,19 @@ class BrowserAuthzInputTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "intercepted by Authentik"):
                 self.authz.verify_native_share_route(object(), "https://nas-test.local")
 
+    def test_hostile_identity_text_check_includes_open_shadow_roots(self) -> None:
+        driver = mock.Mock()
+        driver.execute_script.return_value = {
+            "injectedImage": False,
+            "executionMarker": None,
+        }
+        with mock.patch.object(
+            self.authz,
+            "rendered_text",
+            return_value="Account <img src=x onerror=document.body.dataset.nasXss=1>",
+        ):
+            self.authz.verify_no_identity_markup_injection(driver, "alice")
+
 
 if __name__ == "__main__":
     unittest.main()
