@@ -61,7 +61,16 @@ class V2GenericListenerTests(unittest.TestCase):
         self.assertIn('port="17322" protocol="udp"', policy)
         self.assertIn('port="17330-17339" protocol="udp"', policy)
         self.assertNotIn('port="17340"', policy)
-        self.assertEqual(manifest["owners"], [{"service": "custom-discovery", "target": target}])
+        self.assertEqual(
+            sorted(manifest["owners"], key=lambda x: x["target"]),
+            sorted(
+                [
+                    {"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"},
+                    {"service": "custom-discovery", "target": target},
+                ],
+                key=lambda x: x["target"],
+            ),
+        )
 
     def test_arbitrary_host_service_can_remap_privileged_listener(self):
         service = {

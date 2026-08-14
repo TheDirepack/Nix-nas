@@ -34,7 +34,7 @@ class FirewalldReconcileError(RuntimeError):
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 _NM_RUNTIME_DIR = pathlib.PurePosixPath("/run/NetworkManager/system-connections")
 _UUID_NAMESPACE = uuid.UUID("c3c4a6a8-fad7-4e36-8d65-1dc57bcae2ab")
-_OWNED_FILE = re.compile(r"^nv2[zhwlri][0-9a-f]{12}\.xml$")
+_OWNED_FILE = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}\.xml$")
 
 
 def bridge_interface_name(service_id: str) -> str:
@@ -489,6 +489,14 @@ def listener_policy_name(service_id: str) -> str:
     return f"nv2i{_digest(service_id)}"
 
 
+def remote_admin_policy_name() -> str:
+    return f"nv2m{_digest('remote-admin')}"
+
+
+_REMOTE_ADMIN_PRIORITY = "-300"
+_REMOTE_ADMIN_PORTS: list[tuple[str, str]] = [("22", "tcp"), ("9090", "tcp"), ("443", "tcp")]
+
+
 def _xml_document(lines: list[str]) -> bytes:
     return ('<?xml version="1.0" encoding="utf-8"?>\n' + "\n".join(lines) + "\n").encode()
 
@@ -678,11 +686,29 @@ def _allow_policy_xml(
     )
 
 
+def _remote_admin_policy_xml(lan_zone: str) -> bytes:
+    return _policy_xml(
+        "ACCEPT",
+        _REMOTE_ADMIN_PRIORITY,
+        lan_zone,
+        "HOST",
+        "V2 remote admin",
+        ports=_REMOTE_ADMIN_PORTS,
+    )
+
+
 def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dict[str, bytes], dict[str, Any]]:
     if not lan_zone or len(lan_zone) > 17 or not all(c.isalnum() or c in "_-" for c in lan_zone):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
     files: dict[str, bytes] = {}
     owners: list[dict[str, str]] = []
+    # Remote admin — maximum priority (-300) global allow for SSH/Cockpit/HTTPS.
+    # Lower numeric priority = higher precedence, applied before all V2 service
+    # policies (-100 to 0). Ensures remote configuration remains reachable even
+    # when per-service policies deny. See firewalld rich/policies priority docs.
+    remote_target = f"policies/{remote_admin_policy_name()}.xml"
+    files[remote_target] = _remote_admin_policy_xml(lan_zone)
+    owners.append({"service": "_remote-admin", "target": remote_target})
     services = effective.get("services")
     if not isinstance(services, dict):
         raise FirewalldProjectionError("compiled effective state is missing services")
@@ -1010,6 +1036,7 @@ __all__ = [
     "world_policy_name",
     "route_policy_name",
     "listener_policy_name",
+    "remote_admin_policy_name",
     "compile_projection",
     "validate_projection",
     "materialize_projection",

@@ -48,6 +48,7 @@ class V2FirewalldTests(unittest.TestCase):
             firewalld.host_policy_name("worker"),
             firewalld.lan_policy_name("worker"),
             firewalld.world_policy_name("worker"),
+            firewalld.remote_admin_policy_name(),
         }
         self.assertTrue(all(len(name) <= 17 for name in names))
         host = files[f"policies/{firewalld.host_policy_name('worker')}.xml"].decode()
@@ -63,7 +64,12 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertIn('port="443" protocol="tcp"', world)
         self.assertIn('port="443" protocol="udp"', world)
         self.assertIn('family="ipv6"', world)
-        self.assertEqual(len(manifest["files"]), 4)
+        # 4 service policies + 1 global remote admin (priority -300)
+        self.assertEqual(len(manifest["files"]), 5)
+        remote = files[f"policies/{firewalld.remote_admin_policy_name()}.xml"].decode()
+        self.assertIn('priority="-300"', remote)
+        self.assertIn('V2 remote admin', remote)
+        self.assertIn('port="22"', remote)
 
     def test_disabled_host_listener_projects_no_firewall_opening(self):
         effective = self.effective()
@@ -81,9 +87,10 @@ class V2FirewalldTests(unittest.TestCase):
         }
         files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
         self.assertFalse(requires_firewalld(effective))
-        self.assertEqual({}, files)
-        self.assertEqual([], manifest["files"])
-        self.assertEqual([], manifest["owners"])
+        # Remote admin is global and remains even when no service requires firewalld
+        self.assertEqual(set(files), {f"policies/{firewalld.remote_admin_policy_name()}.xml"})
+        self.assertEqual(len(manifest["files"]), 1)
+        self.assertEqual(manifest["owners"], [{"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"}])
 
     def test_unmanaged_host_listener_still_projects_declared_network_policy(self):
         effective = {
@@ -113,8 +120,14 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertIn('egress-zone name="HOST"', policy)
         self.assertIn('port="3493" protocol="tcp"', policy)
         self.assertEqual(
-            manifest["owners"],
-            [{"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}.xml"}],
+            sorted(manifest["owners"], key=lambda x: x["target"]),
+            sorted(
+                [
+                    {"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"},
+                    {"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}.xml"},
+                ],
+                key=lambda x: x["target"],
+            ),
         )
 
     def test_host_listener_can_forward_to_unprivileged_target_port(self):

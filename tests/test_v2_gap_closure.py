@@ -740,9 +740,9 @@ class NetworkGapTests(unittest.TestCase):
         self.assertEqual(net.quadlet_network_reference({"services": {}}, "s", {"network": {"mode": "none"}}), "none")
         with self.assertRaises(net.PodmanNetworkProjectionError):
             net.quadlet_network_reference({"services": {}}, "s", {"network": {"mode": "none"}, "listeners": {"x": {}}})
-        # compile_projection empty is no-op
+        # compile_projection empty still has remote admin (global, priority -300)
         files, manifest = net.compile_projection({"services": {}}, lan_zone="trusted")
-        self.assertEqual(files, {})
+        self.assertEqual(set(files), {f"policies/{net.remote_admin_policy_name()}.xml"})
         with self.assertRaises(net.FirewalldProjectionError):
             net.compile_projection({"services": {}}, lan_zone="bad zone!")
 

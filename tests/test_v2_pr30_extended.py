@@ -1010,8 +1010,9 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
             },
         }
         files, manifest = net.compile_projection(eff, lan_zone="trusted")
-        # only one policy because disabled service is ignored
-        self.assertEqual(len(files), 1)
+        # only one service policy + global remote admin (priority -300) because disabled service is ignored
+        self.assertEqual(len(files), 2)
+        self.assertIn(f"policies/{net.remote_admin_policy_name()}.xml", files)
 
     def test_backend_projection_has_no_application_names(self):
         text = (ROOT / "services/nas_v2_backup.py").read_text(encoding="utf-8").lower()
