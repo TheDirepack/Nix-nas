@@ -24,6 +24,7 @@ let
   resticPathsPath = "/run/nas-control/restic-v2-paths";
   quadletRuntimePath = "/run/containers/systemd";
   authentikApiTokenFile = nasInternal.authentikApiTokenFile;
+  authentikOutpostPort = nasInternal.authentikOutpostPort;
   authentikUrl = "http://127.0.0.1:${toString nasInternal.authentikPort}${cfg.identity.authentikPath}";
   v2Source = ../../../services;
   v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
