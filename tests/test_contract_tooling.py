@@ -630,10 +630,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("check: nas-vm-encrypted", workflow)
         self.assertNotIn("nixosConfigurations.nas.config.system.build.toplevel", workflow)
         bundle_import = workflow.index("Reassemble cached Nix store bundles before configuration builds")
-        config_cache = workflow.index("Enable incremental Nix cache for configuration outputs")
         system_build = workflow.index("Build testable systems")
-        self.assertLess(bundle_import, config_cache)
-        self.assertLess(config_cache, system_build)
+        bundle_publish = workflow.index("Publish the exact Nix bundles used by this run")
+        self.assertLess(bundle_import, system_build)
+        self.assertLess(system_build, bundle_publish)
+        integration_import = workflow.index("Reassemble Nix store from the build handoff")
+        integration_run = workflow.index("Run ${{ matrix.vm }} NixOS VM integration tests")
+        self.assertLess(integration_import, integration_run)
 
 
 if __name__ == "__main__":

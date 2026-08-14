@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.19 — 2026-08-13
+
+- Keep qualified VM builds on the exact reusable bundle handoff instead of blocking them on the global Nix cache post-hook.
+
 ## 2.2.0-alpha.18 — 2026-08-13
 
 - Make the unencrypted VM first-run checkpoints report the captured setup state when a qualification assertion fails.
