@@ -1,60 +1,61 @@
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import re
+import subprocess
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "tests" / "vm" / "timeout-budget.json"
+TIMEOUT_HELPER = ROOT / "tests" / "vm" / "timeout-budget.sh"
 INTEGRATION = ROOT / "tests" / "nixos" / "integration.nix"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
-
-
-def _seconds(pattern: str, text: str, description: str) -> int:
-    match = re.search(pattern, text)
-    if match is None:
-        raise AssertionError(f"could not find {description}")
-    return int(match.group(1))
+QEMU = ROOT / "scripts" / "qemu-test.sh"
 
 
 class VmTimeoutBudgetTests(unittest.TestCase):
-    def test_outer_guest_watchdog_covers_serial_bounded_stages(self) -> None:
+    def setUp(self) -> None:
+        self.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+    def test_manifest_derives_guest_watchdog_and_is_used_by_wrappers(self) -> None:
+        expected = (
+            sum(
+                phase["fixedSeconds"]
+                + phase["ordinaryWaits"] * self.manifest["ordinaryWaitSeconds"]
+                + sum(self.manifest["timeouts"][key] for key in phase["timeoutKeys"])
+                for phase in self.manifest["phases"]
+            )
+            + self.manifest["slackSeconds"]
+        )
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"source {TIMEOUT_HELPER!s}; nas_vm_guest_watchdog_seconds",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "NAS_VM_TIMEOUT_BUDGET_FILE": str(MANIFEST)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(int(result.stdout.strip()), expected)
         integration = INTEGRATION.read_text(encoding="utf-8")
+        qemu = QEMU.read_text(encoding="utf-8")
+        self.assertIn("timeoutBudget = builtins.fromJSON", integration)
+        self.assertIn("guestWatchdog", integration)
+        self.assertIn("nas_vm_guest_watchdog_seconds", qemu)
+        self.assertIn("nas_vm_timeout_value", GUEST_TEST.read_text(encoding="utf-8"))
+
+    def test_every_guest_phase_label_has_a_manifest_budget(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
-
-        outer = _seconds(
-            r"timeout --verbose --kill-after=30s (\d+)s nas-vm-guest-test",
-            integration,
-            "full-stack guest watchdog",
-        )
-        first_run = _seconds(
-            r"timeout (\d+) nas-setup first-run",
-            guest,
-            "first-run timeout",
-        )
-        secret_activation = _seconds(
-            r"timeout (\d+) nas-secrets activate-stdin",
-            guest,
-            "secret activation timeout",
-        )
-        browser = _seconds(
-            r"timeout (\d+) python3 .*tests/browser/authz\.py",
-            guest,
-            "browser authorization timeout",
-        )
-        ordinary_wait = _seconds(
-            r"NAS_TEST_TIMEOUT:-([0-9]+)",
-            guest,
-            "ordinary guest wait timeout",
-        )
-
-        # These stages are serialized in one guest-test invocation.  Reserve two
-        # ordinary service-wait windows in addition to the explicitly expensive
-        # stages so the outer watchdog cannot undercut its own child budgets.
-        minimum = first_run + secret_activation + browser + (2 * ordinary_wait)
-        self.assertGreaterEqual(outer, minimum)
-        self.assertNotIn("timeout 1800 nas-vm-guest-test", integration)
-        self.assertIn("timeout --verbose --kill-after=30s", integration)
+        labels = set(re.findall(r'^log "([^"]+)"$', guest, re.MULTILINE))
+        manifest_labels = {phase["label"] for phase in self.manifest["phases"]}
+        self.assertEqual(labels, manifest_labels)
 
 
 if __name__ == "__main__":

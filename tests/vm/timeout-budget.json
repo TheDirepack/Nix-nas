@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "ordinaryWaitSeconds": 300,
+  "slackSeconds": 600,
+  "timeouts": {
+    "secretActivation": 600,
+    "firstRun": 1200,
+    "browserAuthorization": 300,
+    "encryptedGuest": 1800,
+    "secretAdversarial": 900,
+    "installedSmoke": 300,
+    "reconfigure": 5400,
+    "reconfigureBuild": 1800
+  },
+  "phases": [
+    {"id": "locked-state", "label": "Locked-state and configuration checks", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": []},
+    {"id": "first-run", "label": "Run the complete first-time setup CLI", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": ["firstRun"]},
+    {"id": "adversarial", "label": "Adversarial command, SQL-like input, and HTTP validation", "ordinaryWaits": 1, "fixedSeconds": 0, "timeoutKeys": []},
+    {"id": "rollback", "label": "Cockpit ZFS rollback wrapper", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": []},
+    {"id": "protected-services", "label": "Verify first-run protected services and account population", "ordinaryWaits": 9, "fixedSeconds": 120, "timeoutKeys": []},
+    {"id": "tftp", "label": "Anonymous read-only TFTP behavior", "ordinaryWaits": 1, "fixedSeconds": 30, "timeoutKeys": []},
+    {"id": "authentik", "label": "Authentik API, identity policy, and proxy authorization", "ordinaryWaits": 1, "fixedSeconds": 180, "timeoutKeys": []},
+    {"id": "outage", "label": "Authentication dependency outage stays fail-closed", "ordinaryWaits": 5, "fixedSeconds": 60, "timeoutKeys": []},
+    {"id": "firewall", "label": "Firewall fail-closed behavior from an independent untrusted namespace", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": []},
+    {"id": "browser", "label": "Browser-level Authentik and capability authorization", "ordinaryWaits": 0, "fixedSeconds": 0, "timeoutKeys": ["browserAuthorization"]},
+    {"id": "commands", "label": "Custom command surfaces and generated configuration", "ordinaryWaits": 0, "fixedSeconds": 120, "timeoutKeys": []},
+    {"id": "ai", "label": "Open WebUI and llama-swap start/stop/on-demand lifecycle", "ordinaryWaits": 10, "fixedSeconds": 0, "timeoutKeys": []},
+    {"id": "observability", "label": "Observability, notifications, Syncthing, Vaultwarden, and Cockpit assets", "ordinaryWaits": 13, "fixedSeconds": 0, "timeoutKeys": []},
+    {"id": "notifications", "label": "Notification dependency failure and recovery", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": []},
+    {"id": "secrets", "label": "Secret stop/reactivation transaction", "ordinaryWaits": 8, "fixedSeconds": 0, "timeoutKeys": ["secretActivation", "secretActivation"]},
+    {"id": "final", "label": "Final state", "ordinaryWaits": 0, "fixedSeconds": 30, "timeoutKeys": []}
+  ]
+}

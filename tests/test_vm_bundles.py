@@ -49,6 +49,7 @@ case "$1" in
     for path in "$@"; do
       printf '%s\\n' "$path"
       case "$path" in
+        */nas-vm-driver|*/nas-vm-encrypted-driver) printf '%s\\n' /nix/store/aaaaaaaaaa-copyparty ;;
         */core) ;;
         *) printf '%s\\n' /nix/store/aaaaaaaaaa-core ;;
       esac
@@ -179,6 +180,9 @@ class VmBundleScriptTests(unittest.TestCase):
             self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-core\n")
         with gzip.open(out_dir / "copyparty.nar.gz", "rb") as stream:
             self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-copyparty\n")
+        manifest = (out_dir / "bundle-manifest.tsv").read_text(encoding="utf-8")
+        self.assertIn("vm-drivers\t/nix/store/aaaaaaaaaa-nas-vm-driver", manifest)
+        self.assertNotIn("vm-drivers\t/nix/store/aaaaaaaaaa-copyparty", manifest)
 
         nix_calls = nix_log.read_text(encoding="utf-8").splitlines()
         build_calls = [call for call in nix_calls if call.startswith("build --no-link ")]
@@ -203,7 +207,19 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-driver", driver_export)
         self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver", driver_export)
         self.assertIn("/nix/store/aaaaaaaaaa-vm-drivers", driver_export)
+        self.assertNotIn("/nix/store/aaaaaaaaaa-copyparty", driver_export)
         self.assertNotIn("/nix/store/aaaaaaaaaa-core", driver_export)
+
+    def test_verify_rejects_duplicate_manifest_paths(self) -> None:
+        env, _, _ = self._fake_environment()
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        (out_dir / "bundle-manifest.tsv").write_text(
+            "core\t/nix/store/shared\nvm-drivers\t/nix/store/shared\n", encoding="utf-8"
+        )
+        result = self._run("verify", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate", result.stderr)
 
     def test_import_restores_core_first(self) -> None:
         env, _, nix_store_log = self._fake_environment()
@@ -283,6 +299,10 @@ class VmBundleScriptTests(unittest.TestCase):
         for name in EXPECTED_BUNDLES:
             with gzip.open(out_dir / f"{name}.nar.gz", "wb") as stream:
                 stream.write(f"existing-{name}\n".encode())
+        (out_dir / "bundle-manifest.tsv").write_text(
+            "".join(f"{name}\t/nix/store/existing-{name}\n" for name in EXPECTED_BUNDLES),
+            encoding="utf-8",
+        )
 
         result = self._run("save-missing", str(out_dir), env=env)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)

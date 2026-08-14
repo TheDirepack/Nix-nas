@@ -43,6 +43,13 @@ node --test tests/js/*.test.mjs
 node cockpit/build.js --check-source
 ```
 
+Workflow syntax is checked with `actionlint` in the static CI job. It is also
+included in the `.#test` development shell for local validation:
+
+```bash
+nix develop .#test -c actionlint .github/workflows/ci.yml
+```
+
 `tests/custom-script-contracts.json` is the executable coverage authority. Every NAS-owned installed command and every executable repository-maintenance script must declare focused tests plus an adversarial/whole-process strategy. Installed commands must also declare an installed-system test. `scripts/validate-test-inventory.py` discovers the executable surfaces and fails closed when a command is added, removed, or assigned an unsupported strategy without updating the test architecture.
 
 The `qemu-test` development shell includes the host-side QEMU, SSH, archive,

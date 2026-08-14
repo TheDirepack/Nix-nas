@@ -48,7 +48,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("restore_persistent_baseline", qemu)
         self.assertIn("CACHE_MARKER_CONTENT=", qemu)
         self.assertIn("qemu_pid_from_pidfile", qemu)
-        self.assertIn("except FileNotFoundError:", qemu)
+        self.assertIn("QEMU source path is missing", qemu)
         self.assertIn("realpath", qemu)
         self.assertIn('qemu-img snapshot -c "$BASELINE_SNAPSHOT"', qemu)
         self.assertIn('qemu-img snapshot -a "$BASELINE_SNAPSHOT"', qemu)
@@ -105,6 +105,32 @@ class VmSuiteWrapperTests(unittest.TestCase):
             self.assertNotEqual(clean.returncode, 0)
             self.assertTrue(cache.exists())
             self.assertIn("unrecognized QEMU cache", clean.stderr)
+
+    def test_source_stage_fails_on_a_manifest_entry_missing_from_the_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / "source"
+            cache = pathlib.Path(tmp) / "cache"
+            state = cache / "state"
+            source.mkdir()
+            (source / "MANIFEST.sha256").write_text(
+                "0000000000000000000000000000000000000000000000000000000000000000  missing.txt\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["bash", str(QEMU), "stage-source"],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "NAS_QEMU_SOURCE_ROOT": str(source),
+                    "NAS_QEMU_CACHE_DIR": str(cache),
+                    "NAS_QEMU_STATE_DIR": str(state),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("QEMU source path is missing", result.stderr)
 
 
 if __name__ == "__main__":

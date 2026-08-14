@@ -5,22 +5,25 @@ ZFS_DEVICE="${1:-${NAS_TEST_ZFS_DEVICE:-/dev/vdb}}"
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
 PUBLIC_HOST="${NAS_TEST_PUBLIC_HOST:-nas-test.local}"
 CONFIG_DIR="${NAS_CONFIG_DIR:-/var/lib/nas-test/repo}"
-TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-300}"
+TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-$(nas_vm_ordinary_wait_seconds)}"
 AUTHENTIK_OUTPOST_PORT="${NAS_AUTHENTIK_OUTPOST_PORT:-9010}"
 AUTHENTIK_OUTPOST_PID=""
 AUTHENTIK_OUTPOST_LOG="/run/nas-authentik-vm-outpost.log"
+authz_secret_dir=""
 
 log() { printf '\n==> %s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 stop_authentik_vm_outpost() {
+  local status=${1:-0}
   if [[ -n "$AUTHENTIK_OUTPOST_PID" ]] && kill -0 "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1; then
     kill "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
     wait "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
   fi
   AUTHENTIK_OUTPOST_PID=""
   rm -f -- "$AUTHENTIK_OUTPOST_LOG"
+  return "$status"
 }
 
 on_error() {
@@ -32,7 +35,7 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
-trap stop_authentik_vm_outpost EXIT
+nas_vm_cleanup_add stop_authentik_vm_outpost
 
 require_commands() {
   local missing=() command
@@ -110,7 +113,13 @@ run_as_admin() {
 }
 
 activate_secrets() {
-  run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | timeout 600 nas-secrets activate-stdin"
+  run_as_admin_with_stdin "$(nas_vm_timeout_value secretActivation)" nas-secrets activate-stdin
+}
+
+run_as_admin_with_stdin() {
+  local timeout_seconds=$1
+  shift
+  printf '%s\n' "$KEEPASS_PASSWORD" | runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
 }
 
 authentik_api() {
@@ -304,12 +313,12 @@ if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
   fail "stale plan digest failure was not diagnostic"
 fi
 pass "first-run rejects a stale plan digest before mutation"
-run_as_admin "printf '%s\n' '$KEEPASS_PASSWORD' | timeout 1200 nas-setup first-run \
+run_as_admin_with_stdin "$(nas_vm_timeout_value firstRun)" nas-setup first-run \
   --config /var/lib/nas-test/setup/first-run.json \
   --keepass-password-stdin \
-  --confirm-plan-digest '$plan_digest' \
-  --confirm-storage-device '$ZFS_DEVICE' \
-  --allow-destructive-storage" >/tmp/nas-first-run.json
+  --confirm-plan-digest "$plan_digest" \
+  --confirm-storage-device "$ZFS_DEVICE" \
+  --allow-destructive-storage >/tmp/nas-first-run.json
 if ! jq -e '
   .storage.createdPool == true and
   .storage.createdDataset == true and
@@ -667,31 +676,34 @@ log "Browser-level Authentik and capability authorization"
 # deterministic after the installed OS is updated in place.
 printf '%s\n' 'admin:admin-vm-password' | chpasswd
 authz_secret_dir=$(mktemp -d /run/nas-authz-test.XXXXXX)
-cleanup_authz_secrets() { rm -rf -- "$authz_secret_dir"; }
-trap cleanup_authz_secrets EXIT
+cleanup_authz_secrets() {
+  [[ -n "$authz_secret_dir" ]] || return 0
+  rm -rf -- "$authz_secret_dir"
+}
+nas_vm_cleanup_add cleanup_authz_secrets
 chmod 0700 "$authz_secret_dir"
 printf '%s\n' operator-vm-password > "$authz_secret_dir/operator"
 printf '%s\n' admin-vm-password > "$authz_secret_dir/admin"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
 chmod 0600 "$authz_secret_dir"/*
-timeout 300 python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+timeout "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
   --origin "https://$PUBLIC_HOST" \
   --cockpit-password-file "$authz_secret_dir/admin" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
   --baseline-password-file "$authz_secret_dir/baseline"
 cleanup_authz_secrets
-trap - EXIT
+authz_secret_dir=""
 pass "Browser authorization and Authentik user-settings flow"
 
 log "Custom command surfaces and generated configuration"
 nas-secrets status | grep -q 'Runtime secrets: active'
-run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-secrets show-ai-api-key" | grep -Eq '^[0-9a-fA-F]{64}$'
-! run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-secrets check-authentik-token" \
+run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets show-ai-api-key | grep -Eq '^[0-9a-fA-F]{64}$'
+! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
   >/tmp/nas-token-warning.log 2>&1 || fail "bootstrap token reuse was not reported"
 grep -q 'bootstrap token' /tmp/nas-token-warning.log
-! run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-zfs-export-recovery-key /tmp/disabled-zfs-key" \
+! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-zfs-export-recovery-key /tmp/disabled-zfs-key \
   >/tmp/nas-zfs-export-disabled.log 2>&1 || fail "ZFS recovery key unexpectedly existed while encryption was disabled"
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
 nas-feature-control status | jq -e '.schemaVersion == 2 and (.features | length > 0)' >/dev/null

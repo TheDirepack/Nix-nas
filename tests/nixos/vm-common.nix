@@ -37,6 +37,8 @@ let
       authentikProxy
     ];
     text = ''
+      ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
+      ${builtins.readFile ../vm/timeout-budget.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
       # Cockpit production bundle, and Nix reference configurations before QEMU.
       # Keep nas-preflight exercised in the installed VM without recursively
@@ -78,10 +80,6 @@ let
         local command=$1 now phase_name
         case "$command" in
           log\ *)
-            # guest-test.sh temporarily owns EXIT while browser credentials
-            # exist. Re-arm profiling at every stable phase boundary after that
-            # temporary trap has been cleared.
-            trap nas_vm_profile_cleanup EXIT
             nas_vm_stop_first_run_timer
             now=$SECONDS
             if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
@@ -94,7 +92,7 @@ let
             NAS_VM_PHASE_STARTED=$now
             printf 'VM-PHASE-START: %s\n' "$NAS_VM_PHASE_NAME"
             ;;
-          run_as_admin*"timeout 1200 nas-setup first-run"*)
+          run_as_admin*"nas-setup first-run"*)
             printf 'VM-FIRST-RUN-START: %s\n' "$NAS_VM_PHASE_NAME"
             nas_vm_start_first_run_timer
             ;;
@@ -107,9 +105,14 @@ let
       }
 
       nas_vm_profile_cleanup() {
-        local rc=$? now=$SECONDS
+        local rc=${1:-0} now=$SECONDS metadata phase_id phase_budget
         nas_vm_stop_first_run_timer
         if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
+          metadata="$(nas_vm_phase_metadata "$NAS_VM_PHASE_NAME" 2>/dev/null || true)"
+          if [[ -n "$metadata" ]]; then
+            IFS=$'\t' read -r phase_id phase_budget <<<"$metadata"
+            printf 'VM-PHASE-BUDGET: %s: %ss\n' "$phase_id" "$phase_budget"
+          fi
           if [[ $rc -eq 0 ]]; then
             printf 'VM-PHASE-TIMING: %s: %ss (complete)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
           else
@@ -120,7 +123,8 @@ let
       }
 
       trap 'nas_vm_profile_command "$BASH_COMMAND"' DEBUG
-      trap nas_vm_profile_cleanup EXIT
+      nas_vm_cleanup_add nas_vm_profile_cleanup
+      trap nas_vm_cleanup_trap EXIT
 
       ${builtins.readFile ../vm/guest-test.sh}
     '';
@@ -155,13 +159,18 @@ let
       bash
       coreutils
       gnugrep
+      jq
       keepassxc
       procps
       systemd
       util-linux
       zfs
     ];
-    text = builtins.readFile ../vm/encrypted-guest-test.sh;
+    text = ''
+      ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
+      ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../vm/encrypted-guest-test.sh}
+    '';
   };
 in
 {

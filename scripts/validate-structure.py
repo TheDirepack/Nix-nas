@@ -150,6 +150,8 @@ REQUIRED_FILES = {
     "tests/vm/guest-test.sh",
     "tests/vm/encrypted-guest-test.sh",
     "tests/vm/full-suite.sh",
+    "tests/vm/timeout-budget.json",
+    "tests/vm/timeout-budget.sh",
     ".github/workflows/ci.yml",
 }
 

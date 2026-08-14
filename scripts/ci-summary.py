@@ -17,7 +17,10 @@ FAST_JOBS = {
 HEAVY_JOBS = {"build", "browser", "integration"}
 SLOW_JOBS = {"source-fuzz"}
 INSTALLED_FUZZ_JOBS = {"installed-command-fuzz", "zap-fuzz"}
-KNOWN_JOBS = frozenset(FAST_JOBS | HEAVY_JOBS | SLOW_JOBS | INSTALLED_FUZZ_JOBS | {"coverage-diff", "installer"})
+CACHE_JOBS = {"cache-vm-bundles"}
+KNOWN_JOBS = frozenset(
+    FAST_JOBS | HEAVY_JOBS | SLOW_JOBS | INSTALLED_FUZZ_JOBS | CACHE_JOBS | {"coverage-diff", "installer"}
+)
 
 
 def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> set[str]:
@@ -44,15 +47,20 @@ def summarize(needs: dict[str, Any], event_name: str, ref: str, base_ref: str, t
     expected = expected_jobs(event_name, ref, base_ref, test_tier)
     lines = ["## CI pipeline summary", "", "| Job | Result |", "| --- | --- |"]
     bad: list[str] = []
+    cache_warnings: list[str] = []
     for name, data in sorted(needs.items()):
         result = data.get("result", "skipped") if isinstance(data, dict) else "skipped"
         lines.append(f"| {name} | {result.upper()} |")
         if name in expected and result != "success":
             bad.append(f"{name}={result} (required)")
+        elif result in {"failure", "cancelled"} and name in CACHE_JOBS:
+            cache_warnings.append(f"{name}={result} (non-authoritative cache persistence warning)")
         elif result in {"failure", "cancelled"}:
             bad.append(f"{name}={result}")
     missing = sorted(expected - set(needs))
     bad.extend(f"{name}=missing (required)" for name in missing)
+    if cache_warnings:
+        lines.extend(["", "### Cache warnings", "", *[f"- {warning}" for warning in cache_warnings]])
     return "\n".join(lines) + "\n", bad
 
 

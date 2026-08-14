@@ -73,6 +73,15 @@ class CiSummaryTests(unittest.TestCase):
         _, bad = ci_summary.summarize(needs, "workflow_dispatch", "refs/heads/topic", "", "fast")
         self.assertIn("installer=failure", bad)
 
+    def test_cache_persistence_failure_is_reported_without_blocking_qualification(self) -> None:
+        expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
+        needs = self.results(expected)
+        needs["cache-vm-bundles"] = {"result": "failure"}
+        summary, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
+        self.assertEqual(bad, [])
+        self.assertIn("cache-vm-bundles=failure", summary)
+        self.assertIn("non-authoritative cache persistence warning", summary)
+
 
 if __name__ == "__main__":
     unittest.main()

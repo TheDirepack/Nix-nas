@@ -176,6 +176,8 @@ jobs:
         run: nix shell nixpkgs#bats -c bats tests/bats
       - name: ShellCheck
         run: nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
+      - name: actionlint
+        run: nix develop .#test -c actionlint .github/workflows/ci.yml
       - name: Python lint formatting and types
         run: |
           nix shell nixpkgs#ruff -c ruff check services tests scripts
@@ -455,7 +457,9 @@ jobs:
           name: vm-bundle-handoff
           if-no-files-found: error
           retention-days: 1
-          path: ${{ runner.temp }}/vm-bundles/*.nar.gz
+          path: |
+            ${{ runner.temp }}/vm-bundles/*.nar.gz
+            ${{ runner.temp }}/vm-bundles/bundle-manifest.tsv
 
   cache-vm-bundles:
     name: Persist reusable Nix VM bundles
@@ -585,7 +589,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
     needs: [build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -853,7 +857,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, browser, integration, installer, source-fuzz, installed-command-fuzz, zap-fuzz]
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, cache-vm-bundles, browser, integration, installer, source-fuzz, installed-command-fuzz, zap-fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

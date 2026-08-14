@@ -16,6 +16,8 @@ INVENTORY = ROOT / "tests" / "custom-script-contracts.json"
 # installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/evaluate-reference-configurations.sh",
+    "scripts/lib/nas-vm-cleanup.sh",
+    "scripts/lib/nas-vm-js-deps.sh",
     "scripts/qemu-final-browser.sh",
     "scripts/vm-bundles.sh",
     "scripts/vm-pytest.sh",

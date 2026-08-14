@@ -126,6 +126,11 @@ nix develop .#qemu-test -c ./scripts/qemu-test.sh all
 The full-stack paths share `tests/vm/guest-test.sh`. The native matrix also
 runs `tests/vm/encrypted-guest-test.sh`. Together they validate:
 
+The guest watchdog is derived from [`tests/vm/timeout-budget.json`](../../tests/vm/timeout-budget.json),
+which is consumed by the native NixOS test, the installed-QEMU wrapper, and the
+guest phase profiler. Add a phase or bounded wait there instead of changing one
+wrapper timeout independently.
+
 - locked boot: Cockpit remains reachable while Authentik, Caddy, CopyParty, and
   other protected services remain stopped;
 - a disposable `tank/nas` ZFS dataset mounted at `/tank`, including mount-source
@@ -191,9 +196,16 @@ and Nix store paths. QEMU user networking provides this by default.
 | `NAS_QEMU_DATA_DISK_GIB` | `8` | Disposable ZFS disk size. |
 | `NAS_QEMU_SSH_PORT` | `2222` | Loopback SSH forwarding port. |
 | `NAS_QEMU_KEEP_VM` | `0` | Legacy disposable-mode reuse switch; the persistent wrappers manage reuse and baseline restore explicitly. |
-| `NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT` | `3600` | Guest `nixos-rebuild switch` deadline for the persistent wrapper. |
+| `NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT` | manifest `reconfigureBuild` | Guest `nixos-rebuild switch` deadline for the persistent wrapper. |
 | `NAS_QEMU_SOURCE_SUITE_TIMEOUT` | `14400` | Host-side deadline for the full source/appliance suite in the persistent VM. |
-| `NAS_QEMU_GUEST_TEST_TIMEOUT` | `3600` | Host-side limit for the installed guest suite. |
+| `NAS_QEMU_GUEST_TEST_TIMEOUT` | manifest-derived | Host-side limit for the installed guest suite; it is the sum of every declared guest phase plus slack. |
+
+The qualified build exports `bundle-manifest.tsv` beside the NAR archives. It
+records the store paths owned by each archive and rejects overlap between the
+application closure set and the configuration-sensitive `vm-drivers` delta.
+The cache persistence job is intentionally non-authoritative: a cache upload
+warning is printed in the CI summary, while the exact bundle handoff remains
+the source of truth for the QEMU jobs.
 
 The installer harness creates an ephemeral Ed25519 key under the private VM
 state directory, injects only its public key, disables password and

@@ -19,12 +19,14 @@ set -Eeuo pipefail
 # only this config-sensitive bundle changes when the appliance configuration
 # changes.
 #
-# Every non-core archive is a delta against the `core` closure. Normally core
-# is restored and imported first. GitHub cache entries can be evicted or saved
-# independently, though, so a consumer may see a later delta without the core
-# archive. In that case import builds/fetches the exact current core root first
-# and only then imports the restored deltas; partial cache state must never be
-# allowed to feed nix-store --import with missing base paths.
+# Application archives are deltas against the `core` closure. The driver
+# archive is a delta against the union of core and every application closure so
+# configuration-sensitive test drivers do not duplicate package paths. Normally
+# core is restored and imported first. GitHub cache entries can be evicted or
+# saved independently, though, so a consumer may see a later delta without the
+# core archive. In that case import builds/fetches the exact current core root
+# first and only then imports the restored deltas; partial cache state must never
+# be allowed to feed nix-store --import with missing base paths.
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -54,6 +56,7 @@ the vm-drivers bundle additionally includes both NixOS VM test drivers.
                        when dir is given, write <dir>/<name>.key files
   save <dir>           build every bundle, export each as <dir>/<name>.nar.gz
   save-missing <dir>   build every bundle, export only archives absent in <dir>
+  verify <dir>         verify the generated manifest has no closure duplicates
   import <dir>         restore core (or rebuild it) then import cached deltas
 
 Environment overrides: NAS_BUNDLE_SYSTEM, NAS_BUNDLE_NIX, NAS_BUNDLE_NIX_STORE.
@@ -127,10 +130,29 @@ keys() {
 }
 
 save() {
-  local dir=$1 only_missing=${2:-0} name core_file archive tmp
+  local dir=$1 only_missing=${2:-0} name core_file application_file base_file manifest archive tmp
   local -a targets=()
   mkdir -p "$dir"
   core_file="$dir/.core.paths"
+  application_file="$dir/.application.paths"
+  base_file="$dir/.base.paths"
+  manifest="$dir/bundle-manifest.tsv"
+
+  write_manifest() {
+    local manifest_name manifest_path
+    : > "$manifest"
+    while IFS= read -r manifest_name; do
+      case "$manifest_name" in
+        core) closure core > "$dir/.manifest.paths" ;;
+        vm-drivers) comm -23 <(closure vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
+        *) comm -23 <(closure "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
+      esac
+      while IFS= read -r manifest_path; do
+        [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest"
+      done < "$dir/.manifest.paths"
+    done < <(list_bundles)
+    rm -f "$dir/.manifest.paths"
+  }
 
   if [[ $only_missing == 1 ]]; then
     while IFS= read -r name; do
@@ -141,13 +163,33 @@ save() {
   fi
   # A complete cache hit is already the exact handoff needed by downstream
   # VMs. Do not invoke Nix or rewrite archives when there is nothing missing.
-  ((${#targets[@]} > 0)) || return 0
+  if ((${#targets[@]} == 0)); then
+    [[ -f "$dir/bundle-manifest.tsv" ]] || {
+      closure core > "$core_file"
+      : > "$application_file"
+      while IFS= read -r name; do
+        [[ $name == core || $name == vm-drivers ]] && continue
+        closure "$name"
+      done < <(list_bundles) | sort -u > "$application_file"
+      cat "$core_file" "$application_file" | sort -u > "$base_file"
+      write_manifest
+      rm -f "$core_file" "$application_file" "$base_file"
+    }
+    verify_manifest "$dir"
+    return 0
+  fi
 
   # Submit only missing bundle roots together so Nix can schedule their shared
   # DAG once. Export order remains core-first and each archive keeps the same
   # delta shape.
   build_bundles "${targets[@]}"
   closure core > "$core_file"
+  : > "$application_file"
+  while IFS= read -r name; do
+    [[ $name == core || $name == vm-drivers ]] && continue
+    closure "$name"
+  done < <(list_bundles) | sort -u > "$application_file"
+  cat "$core_file" "$application_file" | sort -u > "$base_file"
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
     archive="$dir/core.nar.gz"
     tmp="$archive.tmp.$$"
@@ -160,12 +202,39 @@ save() {
     [[ $only_missing == 1 && -f "$dir/$name.nar.gz" ]] && continue
     archive="$dir/$name.nar.gz"
     tmp="$archive.tmp.$$"
-    comm -23 <(closure "$name") "$core_file" \
-      | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
+    if [[ $name == vm-drivers ]]; then
+      comm -23 <(closure "$name") "$base_file" \
+        | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
+    else
+      comm -23 <(closure "$name") "$core_file" \
+        | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
+    fi
     mv -- "$tmp" "$archive"
   done < <(list_bundles)
 
-  rm -f "$core_file"
+  write_manifest
+  verify_manifest "$dir"
+  rm -f "$core_file" "$application_file" "$base_file"
+}
+
+verify_manifest() {
+  local dir=$1 manifest
+  manifest="$dir/bundle-manifest.tsv"
+  [[ -f "$manifest" ]] || die "bundle manifest is missing: $manifest"
+  awk -F '\t' '
+    NF != 2 || $1 == "" || $2 == "" { bad = 1; next }
+    seen[$2]++
+    owners[$2] = owners[$2] " " $1
+    END {
+      for (path in seen) if (seen[path] != 1) {
+        if (owners[path] ~ /(^| )vm-drivers( |$)/) {
+          printf "duplicate driver bundle closure path: %s (%s)\n", path, owners[path] > "/dev/stderr"
+          bad = 1
+        }
+      }
+      exit bad
+    }
+  ' "$manifest" || die "bundle manifest contains duplicate or malformed closure paths"
 }
 
 import() {
@@ -205,6 +274,10 @@ main() {
       need "$NIX_STORE_CMD"
       need xargs
       save "$1" 1
+      ;;
+    verify)
+      [[ $# -eq 1 ]] || die "verify requires exactly one directory argument"
+      verify_manifest "$1"
       ;;
     import)
       [[ $# -eq 1 ]] || die "import requires exactly one directory argument"

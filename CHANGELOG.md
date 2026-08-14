@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.20 — 2026-08-14
+
+- Compose VM cleanup handlers, derive QEMU watchdog budgets from one phase manifest, validate bundle closure ownership, and harden CI/source staging failure paths.
+
 ## 2.2.0-alpha.19 — 2026-08-13
 
 - Keep qualified VM builds on the exact reusable bundle handoff instead of blocking them on the global Nix cache post-hook.

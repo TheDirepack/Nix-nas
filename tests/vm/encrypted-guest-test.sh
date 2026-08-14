@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ZFS_DEVICE="${1:-${NAS_TEST_ZFS_DEVICE:-/dev/vdb}}"
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
-TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-600}"
+TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-$(nas_vm_ordinary_wait_seconds)}"
 
 log() { printf '\n==> %s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
@@ -34,7 +34,13 @@ run_as_admin() {
 }
 
 activate_secrets() {
-  run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | timeout 600 nas-secrets activate-stdin"
+  run_as_admin_with_stdin "$(nas_vm_timeout_value secretActivation)" nas-secrets activate-stdin
+}
+
+run_as_admin_with_stdin() {
+  local timeout_seconds=$1
+  shift
+  printf '%s\n' "$KEEPASS_PASSWORD" | runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
 }
 
 log "Verify encrypted fixture starts locked"
@@ -82,13 +88,13 @@ if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
   fail "stale plan digest failure was not diagnostic"
 fi
 pass "first-run rejects a stale plan digest before mutation"
-run_as_admin "printf '%s\n' '$KEEPASS_PASSWORD' | timeout 1200 nas-setup first-run \
+run_as_admin_with_stdin "$(nas_vm_timeout_value firstRun)" nas-setup first-run \
   --config /var/lib/nas-test/setup/encrypted-first-run.json \
   --keepass-password-stdin \
-  --confirm-plan-digest '$plan_digest' \
-  --confirm-storage-device '$ZFS_DEVICE' \
+  --confirm-plan-digest "$plan_digest" \
+  --confirm-storage-device "$ZFS_DEVICE" \
   --allow-destructive-storage \
-  --skip-preflight" >/tmp/nas-encrypted-first-run.json
+  --skip-preflight >/tmp/nas-encrypted-first-run.json
 jq -e '
   .database.result == "created" and
   .storage.createdPool == true and
@@ -130,7 +136,9 @@ zfs rename tank/nas tank/nas-preserved
 [[ "$(zfs get -H -o value mounted tank/nas-preserved)" == "no" ]]
 for step in create keylocation fingerprint canmount unmount unload-key; do
   rm -f "/tmp/nas-zfs-fault-$step.out" "/tmp/nas-zfs-fault-$step.err"
-  if run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | env NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER='$step' nas-zfs-create-encrypted-dataset" \
+  if printf '%s\n' "$KEEPASS_PASSWORD" | runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+    NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER="$step" \
+    nas-zfs-create-encrypted-dataset \
     >"/tmp/nas-zfs-fault-$step.out" 2>"/tmp/nas-zfs-fault-$step.err"; then
     fail "ZFS bootstrap fault injection unexpectedly succeeded after $step"
   fi
@@ -158,7 +166,7 @@ pass "encrypted bootstrap fault matrix preserves and recovers the original datas
 
 log "Export and verify the offline recovery key"
 rm -f /tmp/nas-zfs-recovery.key
-run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key"
+run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key
 [[ "$(stat -c '%a:%U:%G' /tmp/nas-zfs-recovery.key)" == "400:root:root" ]]
 cmp -s /tmp/nas-zfs-recovery.key /run/nas-secrets/zfs/dataset-key
 pass "recovery-key export matches the staged KeePassXC key"

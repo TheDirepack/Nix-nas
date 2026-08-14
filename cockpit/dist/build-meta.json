@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "sourceSha256": "5e605c4f05bdb70a292fa370a90722ae298c41e989c03935176560e06c3864f8",
+  "sourceSha256": "e9a67f61a2c488cf500a6985bb86bf82516e90c70f7347b24ca10cd4eee8a1a5",
   "inputs": [
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2",
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2",

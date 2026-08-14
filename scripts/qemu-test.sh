@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/tests/vm/timeout-budget.sh"
+export NAS_VM_TIMEOUT_BUDGET_FILE="${NAS_VM_TIMEOUT_BUDGET_FILE:-$ROOT/tests/vm/timeout-budget.json}"
 MODE="${1:-all}"
 DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu"
 CACHE_DIR="${NAS_QEMU_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
@@ -55,7 +57,7 @@ USAGE
 
 ensure_host_tools() {
   local cmd
-  for cmd in curl sha256sum realpath readlink qemu-system-x86_64 qemu-img expect bsdtar ssh ssh-keygen timeout python3 tar; do
+  for cmd in curl sha256sum realpath readlink qemu-system-x86_64 qemu-img expect bsdtar ssh ssh-keygen timeout python3 tar jq; do
     need "$cmd"
   done
 }
@@ -217,7 +219,7 @@ stage_source_tree() {
   local temporary="$STATE_DIR/.reviewed-source.$$"
   rm -rf "$temporary"
   mkdir -p "$temporary"
-  python3 - "$ROOT" "$temporary" <<'PYSTAGE'
+  python3 - "${1:-${NAS_QEMU_SOURCE_ROOT:-$ROOT}}" "$temporary" <<'PYSTAGE'
 from __future__ import annotations
 
 import json
@@ -301,8 +303,8 @@ for relative in sorted(selected, key=lambda value: value.as_posix()):
     source = root.joinpath(*relative.parts)
     try:
         mode = source.lstat().st_mode
-    except FileNotFoundError:
-        continue
+    except FileNotFoundError as error:
+        raise SystemExit(f"QEMU source path is missing: {relative}") from error
     if not stat.S_ISREG(mode):
         raise SystemExit(f"QEMU source path is not a regular file: {relative}")
     resolved = source.resolve(strict=True)
@@ -393,7 +395,7 @@ sync_source_to_guest() {
 }
 
 rebuild_guest_source() {
-  local ssh_key=$1 timeout_seconds="${NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT:-3600}"
+  local ssh_key=$1 timeout_seconds="${NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT:-$(nas_vm_timeout_value reconfigureBuild)}"
   local -a ssh_args
   mapfile -t ssh_args < <(ssh_options "$ssh_key")
   log "Updating the installed NixOS generation from the refreshed worktree"
@@ -615,18 +617,18 @@ run_installer() {
     return 0
   fi
 
-  timeout --foreground "${NAS_QEMU_GUEST_TEST_TIMEOUT:-3600}" \
+  timeout --foreground "${NAS_QEMU_GUEST_TEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" \
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
-      "sudo -n env NAS_TEST_TIMEOUT=600 nas-vm-guest-test /dev/vdb"
+      "sudo -n env NAS_TEST_TIMEOUT=$(nas_vm_ordinary_wait_seconds) nas-vm-guest-test /dev/vdb"
 
   log "Exercising post-install activation, failed-candidate, and rollback paths"
-  timeout --foreground "${NAS_QEMU_RECONFIGURE_TIMEOUT:-5400}" \
+  timeout --foreground "${NAS_QEMU_RECONFIGURE_TIMEOUT:-$(nas_vm_timeout_value reconfigure)}" \
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
-      'sudo -n env NAS_TEST_REBUILD_TIMEOUT=1800 nas-vm-reconfigure-test'
+      "sudo -n env NAS_TEST_REBUILD_TIMEOUT=$(nas_vm_timeout_value reconfigureBuild) nas-vm-reconfigure-test"
 
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
@@ -690,6 +692,11 @@ case "$MODE" in
     ;;
   persistent-stop) validate_state_path; stop_persistent_vm ;;
   persistent-reset) reset_persistent_state ;;
+  stage-source)
+    ensure_cache_dir
+    validate_state_path
+    stage_source_tree "${NAS_QEMU_SOURCE_ROOT:-$ROOT}"
+    ;;
   all) run_static; run_native; run_installer ;;
   clean)
     require_cache_marker

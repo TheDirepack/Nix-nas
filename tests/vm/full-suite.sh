@@ -8,14 +8,21 @@ repo="${NAS_FULL_SUITE_REPO:-/var/lib/nas-test/repo}"
 }
 cd -- "$repo"
 
+# This helper owns the run-created node_modules tree even when dependency
+# installation fails halfway through. A failed run must not poison its rerun.
+# shellcheck disable=SC1091
+source "$repo/scripts/lib/nas-vm-js-deps.sh"
+# shellcheck disable=SC1091
+source "$repo/tests/vm/timeout-budget.sh"
+export NAS_VM_TIMEOUT_BUDGET_FILE="$repo/tests/vm/timeout-budget.json"
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/nas-full-suite.XXXXXX")"
-js_node_modules_created=0
 
 cleanup() {
-  if (( js_node_modules_created == 1 )); then
-    rm -rf -- "$repo/tests/js-fuzz/node_modules"
-  fi
+  local status=$?
+  nas_vm_js_deps_cleanup "$status"
   rm -rf -- "$work"
+  return "$status"
 }
 
 trap cleanup EXIT
@@ -96,21 +103,10 @@ else
   if [[ -n "${NAS_FAST_CHECK_PATH:-}" ]]; then
     # The native NixOS test can provide the exact pinned fast-check package as a
     # store path. Keep the generated dependency link out of structure validation.
-    if [[ -e tests/js-fuzz/node_modules ]]; then
-      printf 'full VM suite: tests/js-fuzz/node_modules already exists\n' >&2
-      exit 1
-    fi
-    mkdir -p tests/js-fuzz/node_modules
-    js_node_modules_created=1
-    ln -s -- "$NAS_FAST_CHECK_PATH" tests/js-fuzz/node_modules/fast-check
+    nas_vm_js_deps_prepare "$repo" "$NAS_FAST_CHECK_PATH"
   else
     printf '\n==> Installing the lockfile-pinned JavaScript fuzz dependency in the VM\n'
-    if [[ -e tests/js-fuzz/node_modules ]]; then
-      printf 'full VM suite: tests/js-fuzz/node_modules already exists\n' >&2
-      exit 1
-    fi
-    npm --prefix tests/js-fuzz ci --no-audit --no-fund
-    js_node_modules_created=1
+    nas_vm_js_deps_prepare "$repo"
   fi
 
   printf '\n==> Property, fuzz, executable-contract, and JavaScript suite\n'
@@ -124,10 +120,10 @@ printf '\n==> Nix configuration and negative-fixture suite\n'
 ./scripts/nix-config-matrix.sh
 
 printf '\n==> Full-stack appliance suite\n'
-run_appliance timeout "${NAS_VM_FULL_SUITE_GUEST_TIMEOUT:-3600}" nas-vm-guest-test /dev/vdb
-run_appliance timeout "${NAS_VM_FULL_SUITE_SECRET_TIMEOUT:-900}" nas-vm-secret-adversarial
+run_appliance timeout "${NAS_VM_FULL_SUITE_GUEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" nas-vm-guest-test /dev/vdb
+run_appliance timeout "${NAS_VM_FULL_SUITE_SECRET_TIMEOUT:-$(nas_vm_timeout_value secretAdversarial)}" nas-vm-secret-adversarial
 NAS_INSTALLED_FUZZ_SMOKE=1 \
-  run_appliance timeout "${NAS_VM_FULL_SUITE_INSTALLED_TIMEOUT:-300}" \
+  run_appliance timeout "${NAS_VM_FULL_SUITE_INSTALLED_TIMEOUT:-$(nas_vm_timeout_value installedSmoke)}" \
     python3 tests/vm/adversarial-installed.py >"$work/nas-installed-command-smoke.json"
 jq -e '.ok == true and .smoke == true and .commands > 0' \
   "$work/nas-installed-command-smoke.json" >/dev/null
