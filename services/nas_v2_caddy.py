@@ -303,6 +303,7 @@ def generate_caddyfile(
                 hostname_routes.append((route, hostname, route_path))
         else:  # pragma: no cover
             raise CaddyProjectionError(f"Unsupported route exposure type {exposure['type']!r}")
+
     # Guarantee longest-path-first ordering so parent/child routes are unambiguous.
     # More specific paths must be matched before their parents; see invariants.
     def _path_sort_key(item: tuple[dict[str, Any], str]) -> tuple[int, int, str, str, str]:
@@ -314,7 +315,7 @@ def generate_caddyfile(
             seg_count = len(norm.strip("/").split("/"))
         return (-seg_count, -len(norm), path, route["service"], route["route"])
 
-    def _hostname_sort_key(item: tuple[dict[str, Any], str, str]) -> tuple[int, str, int, int, str, str]:
+    def _hostname_sort_key(item: tuple[dict[str, Any], str, str]) -> tuple[str, int, int, str, str, str]:
         route, hostname, path = item
         norm = path.rstrip("/") or "/"
         if norm == "/":
