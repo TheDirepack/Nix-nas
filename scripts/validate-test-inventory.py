@@ -20,6 +20,7 @@ NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/lib/nas-vm-js-deps.sh",
     "scripts/lib/nas-vm-process-cleanup.sh",
     "scripts/lib/nas-vm-profile.sh",
+    "scripts/lib/nas-qemu-process.sh",
     "scripts/lib/nas-vm-secret-input.sh",
     "scripts/qemu-final-browser.sh",
     "scripts/vm-bundles.sh",
