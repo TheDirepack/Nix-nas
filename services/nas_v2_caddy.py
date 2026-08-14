@@ -417,6 +417,58 @@ def compile_portal_projection(effective: dict[str, Any]) -> dict[str, Any]:
     services = effective.get("services")
     if not isinstance(services, dict):
         raise PortalProjectionError("effective state is missing services")
+    # Prefer the already-compiled derived routes (single source of truth for Caddy)
+    # to avoid re-traversing services and re-deriving capabilities. Fall back to
+    # services for unit tests that provide a minimal effective without derived.
+    derived = effective.get("derived")
+    if isinstance(derived, dict) and isinstance(derived.get("routes"), list):
+        entries: list[dict[str, Any]] = []
+        for route in derived["routes"]:
+            if not isinstance(route, dict):
+                continue
+            service_id = route.get("service")
+            route_id = route.get("route")
+            if not isinstance(service_id, str) or not isinstance(route_id, str):
+                continue
+            service = services.get(service_id)
+            if not isinstance(service, dict) or service.get("enabled", True) is False:
+                continue
+            portal = route.get("portal", {})
+            if not isinstance(portal, dict) or portal.get("visible") is not True:
+                continue
+            exposure = route.get("exposure")
+            if not isinstance(exposure, dict):
+                raise PortalProjectionError(f"visible route {service_id}.{route_id} has invalid exposure")
+            auth_mode = route.get("authMode")
+            if auth_mode == "identity" and isinstance(route.get("requiredCapability"), str):
+                access = {
+                    "mode": "groups",
+                    "allow": "groups",
+                    "groups": [route["requiredCapability"], ADMIN_GROUP],
+                    "users": [],
+                }
+            elif auth_mode == "public":
+                access = {"mode": "public", "allow": "any", "groups": [], "users": []}
+            elif auth_mode == "upstream":
+                access = {"mode": "upstream", "allow": "any", "groups": [], "users": []}
+            else:
+                access = _access(service_id, route)
+            entries.append(
+                {
+                    "id": f"{service_id}.{route_id}",
+                    "service": service_id,
+                    "route": route_id,
+                    "label": portal.get("title") or service.get("name") or service_id,
+                    "description": portal.get("description") or service.get("description", ""),
+                    "category": portal.get("category") or "Other",
+                    "icon": portal.get("icon") or "box",
+                    "order": portal.get("order", 0),
+                    "url": _route_url(exposure, portal),
+                    "access": access,
+                }
+            )
+        entries.sort(key=lambda item: (item["order"], item["category"], item["label"], item["id"]))
+        return {"schemaVersion": 2, "source": "managed-services-v2", "entries": entries}
 
     entries: list[dict[str, Any]] = []
     for service_id in sorted(services):
