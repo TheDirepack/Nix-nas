@@ -96,14 +96,13 @@
           };
         };
 
-      # Per-application Nix store bundles for the QEMU integration VMs. The full
-      # VM system closure is thousands of store paths; fetching them one at a
+      # Reusable Nix store roots for the QEMU integration VMs. The full VM
+      # system closure is thousands of store paths; fetching them one at a
       # time through the Magic Nix Cache trips GitHub's per-path cache rate
-      # limit. Each root here is exported as one archived NAR stream by
-      # scripts/vm-bundles.sh, cached as a single GitHub Actions entry, and
-      # re-imported before the VM tests build the small configuration delta.
-      # Bundles overlap by design; imported paths are content-addressed, so a
-      # duplicate import is a no-op. vm-bundles.sh list must stay in sync here.
+      # limit. The core root therefore contains every package needed by the
+      # appliance and its deterministic VM tests. scripts/vm-bundles.sh
+      # exports that root once, then keeps only the configuration-sensitive VM
+      # driver delta separate.
       packages.x86_64-linux =
         let
           pkgs = mkPkgs "x86_64-linux";
@@ -127,64 +126,49 @@
             core = [
               bash
               cacert
+              caddy
+              chromium
               coreutils
               curl
               diffutils
               findutils
+              grafana
               gawk
               git
               gnugrep
               gnused
               iproute2
               jq
+              keepassxc
               linuxPackages.kernel
+              llama-cpp
+              llama-swap
+              nodejs
+              ntfy-sh
+              open-webui
               openssh
+              postgresql
               procps
+              (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
+              restic
+              sanoid
+              syncthing
               systemd
               util-linux
+              vaultwardenBundle
               zfs
-            ];
-            identity = [ authentik postgresql vaultwardenBundle syncthing ];
-            observability = [ grafana ntfy-sh ];
-            storage = [ sanoid restic cockpit-files cockpit-podman cockpitZfsBundle ];
-            ai = [ open-webui llama-swap llama-cpp ];
-            test-browser = [ chromium chromedriver ];
-            test-tools = [
-              keepassxc
-              nodejs
-              (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
+              authentik
+              copyparty
+              chromedriver
+              cockpit-files
+              cockpit-podman
+              cockpitZfsBundle
             ];
           };
         in {
           core = pkgs.buildEnv {
             name = "nas-vm-bundle-core";
             paths = bundlePaths.core;
-          };
-          copyparty = pkgs.copyparty;
-          caddy = pkgs.caddy;
-          identity = pkgs.buildEnv {
-            name = "nas-vm-bundle-identity";
-            paths = bundlePaths.identity;
-          };
-          observability = pkgs.buildEnv {
-            name = "nas-vm-bundle-observability";
-            paths = bundlePaths.observability;
-          };
-          storage = pkgs.buildEnv {
-            name = "nas-vm-bundle-storage";
-            paths = bundlePaths.storage;
-          };
-          ai = pkgs.buildEnv {
-            name = "nas-vm-bundle-ai";
-            paths = bundlePaths.ai;
-          };
-          test-browser = pkgs.buildEnv {
-            name = "nas-vm-bundle-test-browser";
-            paths = bundlePaths.test-browser;
-          };
-          test-tools = pkgs.buildEnv {
-            name = "nas-vm-bundle-test-tools";
-            paths = bundlePaths.test-tools;
           };
           vm-drivers = pkgs.buildEnv {
             name = "nas-vm-bundle-vm-drivers";

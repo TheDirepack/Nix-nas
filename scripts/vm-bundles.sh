@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Per-application Nix store bundles for the QEMU integration VMs.
+# Reusable Nix store bundles for the QEMU integration VMs.
 #
 # The full VM system closure is thousands of store paths. Fetching them one at
 # a time through the Magic Nix Cache trips GitHub's per-path cache rate limit
 # and can force a from-source build of the entire system. Instead the CI build
-# job exports the base NixOS core and each top-level application as one
-# archived NAR stream, caches each bundle as a single GitHub Actions entry, and
-# the integration job re-imports them before the VM tests build only the small
-# system-configuration delta.
+# job exports the complete reusable package base as one archived NAR stream,
+# caches it as a single GitHub Actions entry, and the integration job
+# re-imports it before the VM tests build only the small system-configuration
+# delta.
 #
 # Each bundle is keyed by the content-address hash of every root it contains,
 # so an unchanged bundle reuses its previous archive without a rebuild or
-# re-upload. Most bundles have one packages.<system> root. `vm-drivers` carries
-# the exact unencrypted and encrypted NixOS test-driver roots. Their generated
-# driver configurations reference each VM's system.build.vm start script, so
-# only this config-sensitive bundle changes when the appliance configuration
-# changes.
+# re-upload. `core` contains the package roots used by the appliance and all
+# deterministic VM tests. `vm-drivers` carries the exact unencrypted and
+# encrypted NixOS test-driver roots. Their generated driver configurations
+# reference each VM's system.build.vm start script, so only this
+# config-sensitive bundle changes when the appliance configuration changes.
 #
-# Application archives are deltas against the `core` closure. The driver
-# archive is a delta against the union of core and every application closure so
-# configuration-sensitive test drivers do not duplicate package paths. Normally
-# core is restored and imported first. GitHub cache entries can be evicted or
-# saved independently, though, so a consumer may see a later delta without the
-# core archive. In that case import builds/fetches the exact current core root
-# first and only then imports the restored deltas; partial cache state must never
-# be allowed to feed nix-store --import with missing base paths.
+# The driver archive is a delta against the complete `core` closure, so
+# configuration-sensitive test drivers do not duplicate package paths.
+# Normally core is restored and imported first. GitHub cache entries can be
+# evicted or saved independently, though, so a consumer may see the driver
+# delta without the core archive. In that case import builds/fetches the exact
+# current core root first and only then imports the restored delta; partial
+# cache state must never be allowed to feed nix-store --import with missing base
+# paths.
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -35,8 +35,8 @@ SYSTEM="${NAS_BUNDLE_SYSTEM:-x86_64-linux}"
 NIX="${NAS_BUNDLE_NIX:-nix}"
 NIX_STORE_CMD="${NAS_BUNDLE_NIX_STORE:-nix-store}"
 
-# Keep in sync with the `packages.x86_64-linux` attribute set in flake.nix.
-BUNDLES=(core copyparty caddy identity observability storage ai test-browser test-tools vm-drivers)
+# Keep in sync with the reusable roots in `packages.x86_64-linux` in flake.nix.
+BUNDLES=(core vm-drivers)
 
 PROG="${0##*/}"
 
@@ -47,8 +47,8 @@ usage() {
   cat <<USAGE
 usage: $PROG <list|keys|save|save-missing|verify|verify-handoff|import> [dir]
 
-Build, cache, and restore per-application Nix store bundles for the QEMU
-integration VMs. Bundle names mirror the packages.x86_64-linux flake output;
+Build, cache, and restore reusable Nix store bundles for the QEMU integration
+VMs. The core bundle contains all appliance and deterministic-test packages;
 the vm-drivers bundle additionally includes both NixOS VM test drivers.
 
   list                 print each bundle name, one per line (core first)
@@ -131,11 +131,10 @@ keys() {
 }
 
 save() {
-  local dir=$1 only_missing=${2:-0} name core_file application_file base_file manifest archive tmp
+  local dir=$1 only_missing=${2:-0} name core_file base_file manifest archive tmp
   local -a targets=()
   mkdir -p "$dir"
   core_file="$dir/.core.paths"
-  application_file="$dir/.application.paths"
   base_file="$dir/.base.paths"
   manifest="$dir/bundle-manifest.tsv"
 
@@ -146,7 +145,7 @@ save() {
       case "$manifest_name" in
         core) closure core > "$dir/.manifest.paths" ;;
         vm-drivers) comm -23 <(closure vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
-        *) comm -23 <(closure "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
+        *) die "unknown bundle in manifest: $manifest_name" ;;
       esac
       while IFS= read -r manifest_path; do
         [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest"
@@ -167,14 +166,9 @@ save() {
   if ((${#targets[@]} == 0)); then
     [[ -f "$dir/bundle-manifest.tsv" ]] || {
       closure core > "$core_file"
-      : > "$application_file"
-      while IFS= read -r name; do
-        [[ $name == core || $name == vm-drivers ]] && continue
-        closure "$name"
-      done < <(list_bundles) | sort -u > "$application_file"
-      cat "$core_file" "$application_file" | sort -u > "$base_file"
+      cp "$core_file" "$base_file"
       write_manifest
-      rm -f "$core_file" "$application_file" "$base_file"
+      rm -f "$core_file" "$base_file"
     }
     verify_manifest "$dir"
     write_handoff_checksum "$dir"
@@ -186,12 +180,7 @@ save() {
   # delta shape.
   build_bundles "${targets[@]}"
   closure core > "$core_file"
-  : > "$application_file"
-  while IFS= read -r name; do
-    [[ $name == core || $name == vm-drivers ]] && continue
-    closure "$name"
-  done < <(list_bundles) | sort -u > "$application_file"
-  cat "$core_file" "$application_file" | sort -u > "$base_file"
+  cp "$core_file" "$base_file"
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
     archive="$dir/core.nar.gz"
     tmp="$archive.tmp.$$"
@@ -199,25 +188,19 @@ save() {
     mv -- "$tmp" "$archive"
   fi
 
-  while IFS= read -r name; do
-    [[ $name == core ]] && continue
-    [[ $only_missing == 1 && -f "$dir/$name.nar.gz" ]] && continue
+  name=vm-drivers
+  if [[ $only_missing != 1 || ! -f "$dir/$name.nar.gz" ]]; then
     archive="$dir/$name.nar.gz"
     tmp="$archive.tmp.$$"
-    if [[ $name == vm-drivers ]]; then
-      comm -23 <(closure "$name") "$base_file" \
-        | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
-    else
-      comm -23 <(closure "$name") "$core_file" \
-        | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
-    fi
+    comm -23 <(closure "$name") "$base_file" \
+      | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
     mv -- "$tmp" "$archive"
-  done < <(list_bundles)
+  fi
 
   write_manifest
   verify_manifest "$dir"
   write_handoff_checksum "$dir"
-  rm -f "$core_file" "$application_file" "$base_file"
+  rm -f "$core_file" "$base_file"
 }
 
 verify_manifest() {
@@ -230,10 +213,8 @@ verify_manifest() {
     owners[$2] = owners[$2] " " $1
     END {
       for (path in seen) if (seen[path] != 1) {
-        if (owners[path] ~ /(^| )vm-drivers( |$)/) {
-          printf "duplicate driver bundle closure path: %s (%s)\n", path, owners[path] > "/dev/stderr"
-          bad = 1
-        }
+        printf "duplicate bundle closure path: %s (%s)\n", path, owners[path] > "/dev/stderr"
+        bad = 1
       }
       exit bad
     }

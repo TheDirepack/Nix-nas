@@ -107,6 +107,14 @@ class CiWorkflowGraphTests(unittest.TestCase):
             "\n".join(str(step.get("name", "")) for step in self.jobs["cache-vm-bundles"]["steps"]),
         )
 
+    def test_optional_skipped_dependencies_do_not_suppress_downstream_tiers(self) -> None:
+        for name in ("cache-vm-bundles", "browser", "integration", "installer"):
+            condition = str(self.jobs[name].get("if", ""))
+            self.assertIn("always()", condition)
+        installer_condition = str(self.jobs["installer"].get("if", ""))
+        self.assertIn("needs.browser.result == 'success'", installer_condition)
+        self.assertIn("needs.integration.result == 'success'", installer_condition)
+
     def test_actionlint_is_a_static_job_gate(self) -> None:
         static_run = self.run_text(self.jobs["static"])
         self.assertIn("actionlint", static_run)

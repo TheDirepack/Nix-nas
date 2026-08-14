@@ -204,11 +204,13 @@ failures as non-authoritative warnings.
 
 The build job has an exact-reuse path. A commit-keyed, manifest-verified
 source archive skips the package/re-extract/reference-evaluation round-trip on
-reruns. When all ten VM bundle keys are exact cache hits, the build imports
-those archives, skips `save-missing`, skips the large handoff upload, and the
+reruns. When both VM bundle keys are exact cache hits, the build imports those
+archives, skips `save-missing`, skips the large handoff upload, and the
 integration matrix restores the same cache keys directly. A cache miss exports
 only the missing bundle and keeps the short-lived handoff path for the current
-run; this avoids repeatedly moving a multi-gigabyte driver archive.
+run. The core bundle contains the complete appliance and deterministic-test
+package closure; `vm-drivers` contains only the small configuration-sensitive
+driver delta.
 
 Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testing.md).
 

@@ -52,24 +52,21 @@ Nix derivation and virtual machine outputs use Nix content addressing and the in
 
 ## Nix store bundles
 
-The full QEMU VM system closure contains thousands of store paths; fetching them individually through the Magic Nix Cache trips GitHub's per-path cache rate limit and can force a from-source build of the entire system. The `build` job resolves bundle keys and restores the base NixOS core plus each top-level application before importing those archives (`scripts/vm-bundles.sh import`). It starts Magic Nix Cache only after that import, so the incremental cache tracks the configuration-specific outputs without rescanning or re-uploading the large bundle contents. The ordinary NixOS closure builds then assemble the small configuration delta from the imported package roots.
+The full QEMU VM system closure contains thousands of store paths; fetching them individually through the Magic Nix Cache trips GitHub's per-path cache rate limit and can force a from-source build of the entire system. The `build` job resolves bundle keys and restores the complete reusable package base plus the configuration-sensitive VM-driver delta before importing those archives (`scripts/vm-bundles.sh import`). It starts Magic Nix Cache only after that import, so the incremental cache tracks the configuration-specific outputs without rescanning or re-uploading the large bundle contents. The ordinary NixOS closure builds then assemble the small configuration delta from the imported package roots.
 
 The producer restores only archives already in the cache and exports only the
-missing archives once (`scripts/vm-bundles.sh save-missing`). If all ten exact
-keys hit, it skips that export and the large `vm-bundle-handoff` upload. Each
-integration VM restores the same exact cache keys directly. If any key misses,
-the producer uploads the complete verified handoff for the current run and the
-matrix downloads that handoff; it never re-exports or rebuilds a bundle for its
-matrix entry. A separate cache-persistence job saves only the archives that
-were cache misses, so the next workflow run can restore them without delaying
-the current VM matrix. Each non-core key also includes the exact core-root hash
-because application archives are stored as deltas against that base. The
-versioned package bundles are separate from the `vm-drivers` bundle, whose
-roots contain the config-sensitive NixOS test drivers. This means a config-only
-change can reuse the package archives and regenerate only the small
-system/driver delta. Bundles are immutable store closures only. They never
-stand in for a qualification pass, and the integration job always builds and
-runs both VM checks.
+missing archives once (`scripts/vm-bundles.sh save-missing`). If both exact keys
+hit, it skips that export and the large `vm-bundle-handoff` upload. Each
+integration VM restores the same exact cache keys directly. If either key
+misses, the producer uploads the complete verified handoff for the current run
+and the matrix downloads that handoff; it never re-exports or rebuilds a bundle
+for its matrix entry. A separate cache-persistence job saves only the archives
+that were cache misses, so the next workflow run can restore them without
+delaying the current VM matrix. The core archive contains the complete
+appliance and deterministic-test package closure; `vm-drivers` contains only
+the configuration-sensitive test-driver delta. Bundles are immutable store
+closures only. They never stand in for a qualification pass, and the
+integration job always builds and runs both VM checks.
 
 ## Pipeline ordering
 

@@ -201,8 +201,8 @@ and Nix store paths. QEMU user networking provides this by default.
 | `NAS_QEMU_GUEST_TEST_TIMEOUT` | manifest-derived | Host-side limit for the installed guest suite; it is the sum of every declared guest phase plus slack. |
 
 The qualified build exports `bundle-manifest.tsv` beside the NAR archives. It
-records the store paths owned by each archive and rejects overlap between the
-application closure set and the configuration-sensitive `vm-drivers` delta.
+records the store paths owned by the complete reusable package archive and the
+configuration-sensitive `vm-drivers` delta, rejecting overlap between them.
 The cache persistence job is intentionally non-authoritative: a cache upload
 warning is printed in the CI summary, while the exact bundle handoff remains
 the source of truth for the QEMU jobs.
