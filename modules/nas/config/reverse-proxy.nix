@@ -95,7 +95,11 @@ in
           ${caddyForwardAuth}
           root * ${nasPortalStatic}/share/nas-portal
           rewrite * /index.html
-          templates
+          templates {
+            # The portal template is immutable, but its service links are a
+            # runtime projection owned by nas-managed-service.
+            root /
+          }
           file_server
         }
       }

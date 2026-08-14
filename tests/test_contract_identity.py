@@ -93,6 +93,8 @@ class ContractTests(unittest.TestCase):
         caddy = text("services/nas_v2_caddy.py")
         projection = text("services/nas_v2_caddy.py")
         self.assertIn("templates", proxy)
+        self.assertIn("templates {\n            # The portal template", proxy)
+        self.assertIn("root /", proxy)
         self.assertIn("file_server", proxy)
         self.assertIn("nasPortalStatic", proxy)
         self.assertIn('include "/run/nas-control/portal.json"', portal)
