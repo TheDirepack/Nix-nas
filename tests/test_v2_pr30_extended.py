@@ -63,7 +63,9 @@ class V2SeedGenerationTests(unittest.TestCase):
                     "name": "CopyParty",
                     "workload": {"kind": "daemon"},
                     "runtime": {"type": "systemd", "unit": "copyparty.service"},
-                    "authorization": {"capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]},
+                    "authorization": {
+                        "capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]
+                    },
                     "routes": {
                         "files": {
                             "target": {"type": "http", "port": 8000},

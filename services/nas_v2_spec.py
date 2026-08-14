@@ -807,7 +807,10 @@ def semantic_validate(
                                 )
                             first_parts = normalized.strip("/").split("/") if normalized != "/" else []
                             second_parts = registered_norm.strip("/").split("/") if registered_norm != "/" else []
-                            is_parent = first_parts[: len(second_parts)] == second_parts or second_parts[: len(first_parts)] == first_parts
+                            is_parent = (
+                                first_parts[: len(second_parts)] == second_parts
+                                or second_parts[: len(first_parts)] == first_parts
+                            )
                             if is_parent:
                                 continue
                             raise ManagedServicesV2Error(

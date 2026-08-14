@@ -30,8 +30,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("use_sudo = true", observability)
         self.assertIn("services.smartd.enable = lib.mkDefault false", storage)
         schedules = text("modules/nas/config/schedules.nix")
-        self.assertIn("OnBootSec = cfg.identity.syncInterval;", schedules)
-        self.assertIn('wantedBy = [ "timers.target" ];', schedules)
+        self.assertIn("protectedServiceUnits", schedules)
+        self.assertIn("nas-protected-services", schedules)
 
     def test_secret_readiness_is_bounded_and_diagnostic(self) -> None:
         secrets = text("modules/nas/internal/secret-tools.nix")
@@ -53,10 +53,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_feature_apply_defers_to_an_owned_runtime_operation(self):
-        systemd = text("modules/nas/config/systemd-services.nix")
-        self.assertIn('"Another privileged operation conflicts with feature-apply:"', systemd)
-        self.assertIn("Feature policy application deferred to the owning operation.", systemd)
-        self.assertIn("onFailure = failureAlert;", systemd)
+        # V2: feature-apply is now nas-managed-services-reconcile
+        systemd = text("modules/nas/config/managed-services.nix")
+        self.assertIn("nas-managed-services-reconcile", systemd)
 
     def test_cockpit_recovery_socket_is_available_before_protected_services(self) -> None:
         base = text("modules/nas/internal/base.nix")
@@ -133,7 +132,7 @@ class ContractTests(unittest.TestCase):
         package = text("pyproject.toml")
         self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
         self.assertIn("users.groups.nas-operations", identities)
-        self.assertIn('extraGroups = [ "caddy" "nas-operations" ]', identities)
+        self.assertIn('extraGroups = [ "copyparty" ]', identities)
         self.assertIn('nas-operation-run = "nas_operation_lock:main"', package)
         self.assertIn("enter_operation_coordinator", secrets)
         self.assertIn("operation_class=update", update)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import sys
 import tempfile
@@ -17,7 +16,13 @@ import nas_v2_backup as runtime  # noqa: E402
 
 
 class V2BackupRuntimeTests(unittest.TestCase):
-    def inventory(self, artifact_path: pathlib.Path, *, resource_id: str = "database", artifact_resource: str = "database-artifact") -> dict:
+    def inventory(
+        self,
+        artifact_path: pathlib.Path,
+        *,
+        resource_id: str = "database",
+        artifact_resource: str = "database-artifact",
+    ) -> dict:
         return {
             "schemaVersion": 1,
             "resources": [
@@ -292,7 +297,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
 
             runtime._run = fake_run
             try:
-                result = runtime.prepare(
+                runtime.prepare(
                     inventory_path=inventory_path,
                     paths_path=paths_path,
                     state_path=state_path,
@@ -309,6 +314,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             # remove artifact and replace with symlink
             # cleanup should handle symlink case
             import shutil
+
             shutil.rmtree(artifact)
             artifact.symlink_to(outside)
             # Now cleanup should remove symlink without following
@@ -317,7 +323,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_run = runtime._run
             runtime._run = lambda _argv: ""
             try:
-                result2 = runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
+                runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             finally:
                 runtime._run = original_run
                 runtime.BACKUP_STAGING_ROOT = original_root
@@ -403,7 +409,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             runtime._run = lambda _argv: ""
             try:
-                result = runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
+                runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             finally:
                 runtime._run = original_run
                 runtime.BACKUP_STAGING_ROOT = original_root
@@ -442,7 +448,9 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime._run = lambda _argv: ""
             # Make rmtree fail via mock
             with mock.patch("nas_v2_backup.shutil.rmtree", side_effect=OSError("permission denied")):
-                with self.assertRaisesRegex(runtime.BackupRuntimeError, "unable to clean native-dump artifact|failed to clean"):
+                with self.assertRaisesRegex(
+                    runtime.BackupRuntimeError, "unable to clean native-dump artifact|failed to clean"
+                ):
                     runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             # state should still exist for retry
             self.assertTrue(state_path.exists())

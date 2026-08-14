@@ -77,9 +77,7 @@ def _runtime_safe_absolute_path(value: Any, *, label: str) -> str:
         raise BackupRuntimeError(f"{label} is not a safe absolute path") from None
 
 
-def _validate_staged_artifact_path(
-    resource_id: str, artifact_path: str, artifact_resource: str
-) -> pathlib.Path:
+def _validate_staged_artifact_path(resource_id: str, artifact_path: str, artifact_resource: str) -> pathlib.Path:
     candidate = pathlib.Path(artifact_path)
     if candidate.is_symlink():
         raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")

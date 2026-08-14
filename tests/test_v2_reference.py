@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import pathlib
-import re
 import sys
 import unittest
 
@@ -23,7 +22,11 @@ class V2ReferenceTests(unittest.TestCase):
         self.assertTrue(SPEC_SCHEMA.exists(), "spec/managed-services/managed-services-v3.schema.json missing")
         h1 = hashlib.sha256(SCHEMA.read_bytes()).hexdigest()
         h2 = hashlib.sha256(SPEC_SCHEMA.read_bytes()).hexdigest()
-        self.assertEqual(h1, h2, "schemas/managed-services-v3.schema.json and spec/managed-services/managed-services-v3.schema.json must be identical")
+        self.assertEqual(
+            h1,
+            h2,
+            "schemas/managed-services-v3.schema.json and spec/managed-services/managed-services-v3.schema.json must be identical",
+        )
 
     def test_readme_example_compiles(self):
         # The README example at spec/managed-services/README.md:1257 should compile
@@ -32,8 +35,17 @@ class V2ReferenceTests(unittest.TestCase):
         example = {
             "schemaVersion": 3,
             "services": {
-                "ai-storage": {"name": "AI storage", "workload": {"kind": "job"}, "runtime": {"type": "systemd", "unit": "nas-ai-storage.service"}},
-                "ai-config": {"name": "AI config", "workload": {"kind": "job"}, "runtime": {"type": "systemd", "unit": "nas-ai-config-init.service"}, "dependencies": [{"service": "ai-storage", "condition": "completed"}]},
+                "ai-storage": {
+                    "name": "AI storage",
+                    "workload": {"kind": "job"},
+                    "runtime": {"type": "systemd", "unit": "nas-ai-storage.service"},
+                },
+                "ai-config": {
+                    "name": "AI config",
+                    "workload": {"kind": "job"},
+                    "runtime": {"type": "systemd", "unit": "nas-ai-config-init.service"},
+                    "dependencies": [{"service": "ai-storage", "condition": "completed"}],
+                },
                 "ai-runtime": {
                     "name": "llama-swap",
                     "workload": {"kind": "daemon", "activation": "persistent"},
@@ -42,8 +54,17 @@ class V2ReferenceTests(unittest.TestCase):
                     "authorization": {"capabilities": [{"id": "models", "title": "Manage models"}]},
                     "readiness": {"probes": [{"type": "tcp", "port": 8080}]},
                     "routes": {
-                        "ui": {"target": {"type": "http", "host": "127.0.0.1", "port": 8080}, "exposure": {"type": "path", "paths": ["/ai/runtime/"]}, "auth": {"mode": "identity", "capability": "access"}, "portal": {"visible": True, "category": "AI"}},
-                        "api": {"target": {"type": "http", "host": "127.0.0.1", "port": 8080}, "exposure": {"type": "path", "paths": ["/ai/v1/"]}, "auth": {"mode": "upstream"}},
+                        "ui": {
+                            "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/ai/runtime/"]},
+                            "auth": {"mode": "identity", "capability": "access"},
+                            "portal": {"visible": True, "category": "AI"},
+                        },
+                        "api": {
+                            "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/ai/v1/"]},
+                            "auth": {"mode": "upstream"},
+                        },
                     },
                 },
                 "ai-workspace": {
@@ -52,7 +73,12 @@ class V2ReferenceTests(unittest.TestCase):
                     "runtime": {"type": "systemd", "unit": "open-webui.service"},
                     "dependencies": [{"service": "ai-runtime", "condition": "ready"}],
                     "routes": {
-                        "main": {"target": {"type": "http", "host": "127.0.0.1", "port": 3000}, "exposure": {"type": "path", "paths": ["/ai/"]}, "auth": {"mode": "identity", "capability": "access"}, "portal": {"visible": True, "category": "AI"}},
+                        "main": {
+                            "target": {"type": "http", "host": "127.0.0.1", "port": 3000},
+                            "exposure": {"type": "path", "paths": ["/ai/"]},
+                            "auth": {"mode": "identity", "capability": "access"},
+                            "portal": {"visible": True, "category": "AI"},
+                        },
                     },
                 },
             },
@@ -96,10 +122,20 @@ class V2ReferenceTests(unittest.TestCase):
                     "name": "CopyParty",
                     "workload": {"kind": "daemon"},
                     "runtime": {"type": "systemd", "unit": "copyparty.service"},
-                    "authorization": {"capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]},
+                    "authorization": {
+                        "capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]
+                    },
                     "routes": {
-                        "files": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/shares"]}, "auth": {"mode": "identity", "capability": "files"}},
-                        "admin": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/shares/admin"]}, "auth": {"mode": "identity", "capability": "admin"}},
+                        "files": {
+                            "target": {"type": "http", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/shares"]},
+                            "auth": {"mode": "identity", "capability": "files"},
+                        },
+                        "admin": {
+                            "target": {"type": "http", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/shares/admin"]},
+                            "auth": {"mode": "identity", "capability": "admin"},
+                        },
                     },
                 },
                 "vaultwarden": {
@@ -108,8 +144,16 @@ class V2ReferenceTests(unittest.TestCase):
                     "runtime": {"type": "systemd", "unit": "vaultwarden.service"},
                     "authorization": {"capabilities": [{"id": "admin", "title": "Admin"}]},
                     "routes": {
-                        "web": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/vault"]}, "auth": {"mode": "public"}},
-                        "admin": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/vault/admin"]}, "auth": {"mode": "identity", "capability": "admin"}},
+                        "web": {
+                            "target": {"type": "http", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/vault"]},
+                            "auth": {"mode": "public"},
+                        },
+                        "admin": {
+                            "target": {"type": "http", "port": 8080},
+                            "exposure": {"type": "path", "paths": ["/vault/admin"]},
+                            "auth": {"mode": "identity", "capability": "admin"},
+                        },
                     },
                 },
             },
@@ -143,11 +187,11 @@ class V2ReferenceTests(unittest.TestCase):
 
     def test_no_duplicate_route_catalogs(self):
         native = (ROOT / "modules/nas/config/managed-services-native-services.nix").read_text(encoding="utf-8")
-        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
         # Native should have no routes for duplicated paths
         for path in ["/ai/", "/ai/v1", "/ai/runtime", "/vault", "/shares"]:
             # Count occurrences of pathRoute with that path in native
-            count_native = native.count(f'"{path}"')
+            native.count(f'"{path}"')
             # Should be 0 in native, or at least not in routes
             # Check that native does not have "routes = {" with those paths
             # Simpler: ensure native does not contain pathRoute for those

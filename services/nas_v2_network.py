@@ -939,9 +939,7 @@ def _deadman_systemd_run(command: list[str]) -> subprocess.CompletedProcess[str]
         raise FirewallDeadmanError(f"unable to execute {command[0]}: {exc}") from exc
 
 
-def _deadman_save_previous(
-    state_dir: pathlib.Path, backups: dict[pathlib.PurePosixPath, bytes | None]
-) -> None:
+def _deadman_save_previous(state_dir: pathlib.Path, backups: dict[pathlib.PurePosixPath, bytes | None]) -> None:
     rollback_root = _deadman_rollback_root(state_dir)
     # Clean previous rollback state atomically
     if rollback_root.exists():
@@ -994,9 +992,7 @@ def _deadman_save_previous(
         pass
 
 
-def _deadman_write_pending(
-    state_dir: pathlib.Path, token: str, manifest: dict[str, Any], window: int
-) -> None:
+def _deadman_write_pending(state_dir: pathlib.Path, token: str, manifest: dict[str, Any], window: int) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(state_dir, 0o700)
@@ -1053,7 +1049,14 @@ def _deadman_arm(systemd_bin: str, window: int) -> None:
     # To respect custom window, we try systemd-run if window != default.
     if window != _DEFAULT_DEADMAN_WINDOW:
         result = _deadman_systemd_run(
-            [systemd_bin, "run", "--unit=nas-v2-firewall-rollback", f"--on-active={window}s", "--timer-property=AccuracySec=1s", "true"]
+            [
+                systemd_bin,
+                "run",
+                "--unit=nas-v2-firewall-rollback",
+                f"--on-active={window}s",
+                "--timer-property=AccuracySec=1s",
+                "true",
+            ]
         )
         # If systemd-run not supported (mock expects start), fall back
         if result.returncode == 0:
@@ -1422,7 +1425,9 @@ def reconcile_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--firewall-cmd", default="firewall-cmd")
     parser.add_argument("--firewall-offline-cmd", default="firewall-offline-cmd")
     parser.add_argument("--deadman-state-dir", default=None, help="directory for deadman pending/rollback state")
-    parser.add_argument("--deadman-window", type=int, default=_DEFAULT_DEADMAN_WINDOW, help="deadman acknowledgement window in seconds")
+    parser.add_argument(
+        "--deadman-window", type=int, default=_DEFAULT_DEADMAN_WINDOW, help="deadman acknowledgement window in seconds"
+    )
     parser.add_argument("--systemd-bin", default="systemctl", help="systemd binary for timer control")
     parser.add_argument("--acknowledge", default=None, help="acknowledge deadman with token")
     parser.add_argument("--deadman-rollback", action="store_true", help="run deadman rollback check (as timer service)")
@@ -1438,7 +1443,9 @@ def reconcile_main(argv: list[str] | None = None) -> int:
             )
         elif args.deadman_rollback:
             if not args.deadman_state_dir or not args.system_config:
-                raise FirewalldReconcileError("--deadman-state-dir and --system-config are required for --deadman-rollback")
+                raise FirewalldReconcileError(
+                    "--deadman-state-dir and --system-config are required for --deadman-rollback"
+                )
             result = handle_deadman_rollback(
                 deadman_state_dir=pathlib.Path(args.deadman_state_dir),
                 system_config=pathlib.Path(args.system_config),

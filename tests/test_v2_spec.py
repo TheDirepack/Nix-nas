@@ -255,7 +255,9 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         # /vault with /vault/admin, and /ai/ with /ai/v1 and /ai/runtime.
         # These must compile when longest-path-first ordering is guaranteed.
         copyparty = minimal_service()
-        copyparty["authorization"] = {"capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]}
+        copyparty["authorization"] = {
+            "capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]
+        }
         copyparty["routes"] = {
             "files": {
                 "target": {"type": "http", "port": 8000},
@@ -269,7 +271,9 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
             },
         }
         vault = minimal_service()
-        vault["authorization"] = {"capabilities": [{"id": "access", "title": "Access"}, {"id": "admin", "title": "Admin"}]}
+        vault["authorization"] = {
+            "capabilities": [{"id": "access", "title": "Access"}, {"id": "admin", "title": "Admin"}]
+        }
         vault["routes"] = {
             "web": {
                 "target": {"type": "http", "port": 8001},

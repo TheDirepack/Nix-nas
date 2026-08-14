@@ -383,7 +383,15 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
             },
         }
         effective = v2.compile_document(
-            {"schemaVersion": 3, "services": {"copyparty": copyparty_files, "vaultwarden": vault, "ai-runtime": ai_runtime, "ai-workspace": ai_workspace}},
+            {
+                "schemaVersion": 3,
+                "services": {
+                    "copyparty": copyparty_files,
+                    "vaultwarden": vault,
+                    "ai-runtime": ai_runtime,
+                    "ai-workspace": ai_workspace,
+                },
+            },
             self.schema,
         )
         rendered = caddy.generate_caddyfile(effective)
@@ -393,20 +401,36 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
     def test_exact_duplicate_path_still_fails_closed(self):
         one = self.base_service()
         one["routes"] = {
-            "web": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/shared/"]}, "auth": {"mode": "public"}}
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/shared/"]},
+                "auth": {"mode": "public"},
+            }
         }
         two = self.base_service()
         two["routes"] = {
-            "web": {"target": {"type": "http", "port": 8081}, "exposure": {"type": "path", "paths": ["/shared/"]}, "auth": {"mode": "public"}}
+            "web": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/shared/"]},
+                "auth": {"mode": "public"},
+            }
         }
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate"):
             v2.compile_document({"schemaVersion": 3, "services": {"one": one, "two": two}}, self.schema)
         # Normalized duplicate with trailing slash variant
         one["routes"] = {
-            "web": {"target": {"type": "http", "port": 8080}, "exposure": {"type": "path", "paths": ["/api"]}, "auth": {"mode": "public"}}
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/api"]},
+                "auth": {"mode": "public"},
+            }
         }
         two["routes"] = {
-            "web": {"target": {"type": "http", "port": 8081}, "exposure": {"type": "path", "paths": ["/api/"]}, "auth": {"mode": "public"}}
+            "web": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "path", "paths": ["/api/"]},
+                "auth": {"mode": "public"},
+            }
         }
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate"):
             v2.compile_document({"schemaVersion": 3, "services": {"one": one, "two": two}}, self.schema)
