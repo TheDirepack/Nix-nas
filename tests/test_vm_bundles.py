@@ -183,6 +183,9 @@ class VmBundleScriptTests(unittest.TestCase):
         manifest = (out_dir / "bundle-manifest.tsv").read_text(encoding="utf-8")
         self.assertIn("vm-drivers\t/nix/store/aaaaaaaaaa-nas-vm-driver", manifest)
         self.assertNotIn("vm-drivers\t/nix/store/aaaaaaaaaa-copyparty", manifest)
+        self.assertTrue((out_dir / "bundle-handoff.sha256").is_file())
+        verified = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
 
         nix_calls = nix_log.read_text(encoding="utf-8").splitlines()
         build_calls = [call for call in nix_calls if call.startswith("build --no-link ")]
@@ -220,6 +223,37 @@ class VmBundleScriptTests(unittest.TestCase):
         result = self._run("verify", str(out_dir), env=env)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("duplicate", result.stderr)
+
+    def test_verify_handoff_rejects_missing_and_corrupt_archives(self) -> None:
+        env, _, _ = self._fake_environment()
+        out_dir = self._root / "handoff"
+        out_dir.mkdir()
+        for name in EXPECTED_BUNDLES:
+            (out_dir / f"{name}.nar.gz").write_bytes(f"archive-{name}\n".encode())
+        (out_dir / "bundle-manifest.tsv").write_text(
+            "".join(f"{name}\t/nix/store/{name}\n" for name in EXPECTED_BUNDLES), encoding="utf-8"
+        )
+        files = [out_dir / f"{name}.nar.gz" for name in EXPECTED_BUNDLES] + [out_dir / "bundle-manifest.tsv"]
+        checksums = subprocess.run(
+            ["sha256sum", *(str(path.name) for path in files)],
+            cwd=out_dir,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        (out_dir / "bundle-handoff.sha256").write_text(checksums.stdout, encoding="utf-8")
+        result = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        (out_dir / "copyparty.nar.gz").unlink()
+        result = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("archive is missing", result.stderr)
+
+        (out_dir / "copyparty.nar.gz").write_bytes(b"restored-but-corrupt\n")
+        result = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum validation failed", result.stderr)
 
     def test_import_restores_core_first(self) -> None:
         env, _, nix_store_log = self._fake_environment()

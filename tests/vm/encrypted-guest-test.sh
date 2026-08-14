@@ -40,7 +40,8 @@ activate_secrets() {
 run_as_admin_with_stdin() {
   local timeout_seconds=$1
   shift
-  printf '%s\n' "$KEEPASS_PASSWORD" | runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
+  nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
+    runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
 }
 
 log "Verify encrypted fixture starts locked"
@@ -136,7 +137,7 @@ zfs rename tank/nas tank/nas-preserved
 [[ "$(zfs get -H -o value mounted tank/nas-preserved)" == "no" ]]
 for step in create keylocation fingerprint canmount unmount unload-key; do
   rm -f "/tmp/nas-zfs-fault-$step.out" "/tmp/nas-zfs-fault-$step.err"
-  if printf '%s\n' "$KEEPASS_PASSWORD" | runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+  if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
     NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER="$step" \
     nas-zfs-create-encrypted-dataset \
     >"/tmp/nas-zfs-fault-$step.out" 2>"/tmp/nas-zfs-fault-$step.err"; then

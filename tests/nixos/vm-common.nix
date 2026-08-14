@@ -39,6 +39,7 @@ let
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
       ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
       # Cockpit production bundle, and Nix reference configurations before QEMU.
       # Keep nas-preflight exercised in the installed VM without recursively
@@ -48,83 +49,8 @@ let
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
 
-      # guest-test.sh has stable top-level log() boundaries. Emit a phase start
-      # immediately, then report the previous phase when the next boundary is
-      # reached. For the known long first-run command, emit a heartbeat every
-      # minute so a timeout still leaves useful elapsed-time evidence instead of
-      # losing the active phase's duration entirely.
-      NAS_VM_PHASE_STARTED=$SECONDS
-      NAS_VM_PHASE_NAME=""
-      NAS_VM_FIRST_RUN_TIMER_PID=""
-
-      nas_vm_stop_first_run_timer() {
-        if [[ -n "$NAS_VM_FIRST_RUN_TIMER_PID" ]]; then
-          kill "$NAS_VM_FIRST_RUN_TIMER_PID" >/dev/null 2>&1 || true
-          wait "$NAS_VM_FIRST_RUN_TIMER_PID" 2>/dev/null || true
-          NAS_VM_FIRST_RUN_TIMER_PID=""
-        fi
-      }
-
-      nas_vm_start_first_run_timer() {
-        nas_vm_stop_first_run_timer
-        (
-          started=$SECONDS
-          while sleep 60; do
-            printf 'VM-FIRST-RUN-TIMING: %ss elapsed\n' "$((SECONDS - started))"
-          done
-        ) &
-        NAS_VM_FIRST_RUN_TIMER_PID=$!
-      }
-
-      nas_vm_profile_command() {
-        local command=$1 now phase_name
-        case "$command" in
-          log\ *)
-            nas_vm_stop_first_run_timer
-            now=$SECONDS
-            if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
-              printf 'VM-PHASE-TIMING: %s: %ss (complete)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
-            fi
-            phase_name="''${command#log }"
-            phase_name="''${phase_name#\"}"
-            phase_name="''${phase_name%\"}"
-            NAS_VM_PHASE_NAME=$phase_name
-            NAS_VM_PHASE_STARTED=$now
-            printf 'VM-PHASE-START: %s\n' "$NAS_VM_PHASE_NAME"
-            ;;
-          run_as_admin*"nas-setup first-run"*)
-            printf 'VM-FIRST-RUN-START: %s\n' "$NAS_VM_PHASE_NAME"
-            nas_vm_start_first_run_timer
-            ;;
-          jq\ -e*)
-            # The first jq assertion immediately following first-run marks the
-            # end of that long command. Other jq calls harmlessly see no timer.
-            nas_vm_stop_first_run_timer
-            ;;
-        esac
-      }
-
-      nas_vm_profile_cleanup() {
-        local rc=''${1:-0} now=$SECONDS metadata phase_id phase_budget
-        nas_vm_stop_first_run_timer
-        if [[ -n "$NAS_VM_PHASE_NAME" ]]; then
-          metadata="$(nas_vm_phase_metadata "$NAS_VM_PHASE_NAME" 2>/dev/null || true)"
-          if [[ -n "$metadata" ]]; then
-            IFS=$'\t' read -r phase_id phase_budget <<<"$metadata"
-            printf 'VM-PHASE-BUDGET: %s: %ss\n' "$phase_id" "$phase_budget"
-          fi
-          if [[ $rc -eq 0 ]]; then
-            printf 'VM-PHASE-TIMING: %s: %ss (complete)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))"
-          else
-            printf 'VM-PHASE-TIMING: %s: %ss (failed)\n' "$NAS_VM_PHASE_NAME" "$((now - NAS_VM_PHASE_STARTED))" >&2
-          fi
-        fi
-        return "$rc"
-      }
-
-      trap 'nas_vm_profile_command "$BASH_COMMAND"' DEBUG
-      nas_vm_cleanup_add nas_vm_profile_cleanup
-      trap nas_vm_cleanup_trap EXIT
+      ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
+      nas_vm_profile_install
 
       ${builtins.readFile ../vm/guest-test.sh}
     '';
@@ -169,6 +95,9 @@ let
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
       ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
+      nas_vm_profile_install
       ${builtins.readFile ../vm/encrypted-guest-test.sh}
     '';
   };

@@ -5,6 +5,20 @@ setup() {
   mkdir -p "$work"
   cleanup_lib="$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-cleanup.sh"
   deps_lib="$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-js-deps.sh"
+  failure_injection="$BATS_TEST_DIRNAME/../vm/cleanup-failure-injection.sh"
+  resource_injection="$BATS_TEST_DIRNAME/../vm/resource-failure-injection.sh"
+}
+
+@test "real VM cleanup contract survives phase failures, cancellation, and rerun" {
+  run "$failure_injection"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VM cleanup/profile failure-injection contract passed"* ]]
+}
+
+@test "resource failures retain phase and cleanup observability" {
+  run "$resource_injection"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"VM resource failure-injection contract passed"* ]]
 }
 
 @test "one EXIT trap runs every VM cleanup handler in reverse order" {
@@ -43,7 +57,7 @@ SH
   run "$work/run.sh"
   [ "$status" -eq 17 ]
   [ "$(cat "$work/cleanup.log")" = $'broken:17\nsurvivor:17' ]
-  [[ "$output" == *"handler broken failed with status 91"* ]]
+  [[ "$output" == *"VM-CLEANUP-HANDLER-FAILURE: broken=91"* ]]
 }
 
 @test "failed JavaScript dependency setup removes its run-owned partial directory" {

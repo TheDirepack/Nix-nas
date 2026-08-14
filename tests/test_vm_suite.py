@@ -14,6 +14,21 @@ GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def _stage(self, source: pathlib.Path, cache: pathlib.Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(QEMU), "stage-source"],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "NAS_QEMU_SOURCE_ROOT": str(source),
+                "NAS_QEMU_CACHE_DIR": str(cache),
+                "NAS_QEMU_STATE_DIR": str(cache / "state"),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
     def test_help_is_safe_and_describes_the_persistent_vm_contract(self) -> None:
         result = subprocess.run(
             ["bash", str(WRAPPER), "--help"],
@@ -131,6 +146,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("QEMU source path is missing", result.stderr)
+            self.assertFalse(list((state).glob(".reviewed-source.*")))
 
     def test_source_stage_does_not_skip_a_missing_ignored_manifest_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,6 +172,59 @@ class VmSuiteWrapperTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("QEMU source path is missing", result.stderr)
+
+    def test_source_stage_rejects_traversal_and_incomplete_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            traversal = root / "traversal"
+            traversal.mkdir()
+            (traversal / "MANIFEST.sha256").write_text("0" * 64 + "  ../outside.txt\n", encoding="utf-8")
+            result = self._stage(traversal, root / "traversal-cache")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid QEMU source path", result.stderr)
+
+            incomplete = root / "incomplete"
+            incomplete.mkdir()
+            result = self._stage(incomplete, root / "incomplete-cache")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires MANIFEST.sha256", result.stderr)
+
+    def test_source_stage_rejects_broken_symlinks_and_special_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            broken = root / "broken"
+            broken.mkdir()
+            (broken / "MANIFEST.sha256").write_text("0" * 64 + "  broken\n", encoding="utf-8")
+            (broken / "broken").symlink_to("missing-target")
+            result = self._stage(broken, root / "broken-cache")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("contains a symlink", result.stderr)
+
+            special = root / "special"
+            special.mkdir()
+            (special / "MANIFEST.sha256").write_text("0" * 64 + "  fifo\n", encoding="utf-8")
+            os.mkfifo(special / "fifo")
+            result = self._stage(special, root / "special-cache")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("non-regular object", result.stderr)
+
+    def test_source_stage_includes_untracked_worktree_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / "source"
+            cache = pathlib.Path(tmp) / "cache"
+            source.mkdir()
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "VM test"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "vm-test@example.invalid"], check=True)
+            (source / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-qm", "tracked"], check=True)
+            (source / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+            result = self._stage(source, cache)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            staged = cache / "state" / "reviewed-source"
+            self.assertEqual((staged / "tracked.txt").read_text(encoding="utf-8"), "tracked\n")
+            self.assertEqual((staged / "untracked.txt").read_text(encoding="utf-8"), "untracked\n")
 
 
 if __name__ == "__main__":

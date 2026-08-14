@@ -29,17 +29,18 @@ class CiSummaryTests(unittest.TestCase):
         self.assertNotIn(".ci-cache/", workflow)
 
     def test_heavy_jobs_match_the_consolidated_build_graph(self) -> None:
-        self.assertEqual({"build", "browser", "integration"}, ci_summary.HEAVY_JOBS)
+        self.assertEqual({"build"}, ci_summary.HEAVY_JOBS)
+        self.assertEqual({"browser", "integration"}, ci_summary.QUALIFICATION_JOBS)
 
-    def test_pull_request_requires_every_qualification_except_installer(self) -> None:
+    def test_pull_request_requires_fast_build_but_not_destructive_qualification(self) -> None:
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
         needs = self.results(expected)
         _, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
         self.assertEqual(bad, [])
 
-        needs["integration"]["result"] = "skipped"
-        _, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
-        self.assertIn("integration=skipped (required)", bad)
+        self.assertNotIn("browser", expected)
+        self.assertNotIn("integration", expected)
+        self.assertNotIn("source-fuzz", expected)
 
     def test_non_main_pull_request_does_not_require_main_coverage_baseline(self) -> None:
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "release", "fast")
@@ -60,7 +61,7 @@ class CiSummaryTests(unittest.TestCase):
     def test_full_and_installer_dispatch_require_their_selected_tiers(self) -> None:
         full = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "full")
         installer = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "installer")
-        self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.SLOW_JOBS <= full)
+        self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.QUALIFICATION_JOBS | ci_summary.SLOW_JOBS <= full)
         self.assertNotIn("installer", full)
         self.assertIn("installer", installer)
         self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & full)

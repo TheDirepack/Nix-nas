@@ -16,14 +16,13 @@ pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 stop_authentik_vm_outpost() {
-  local status=${1:-0}
   if [[ -n "$AUTHENTIK_OUTPOST_PID" ]] && kill -0 "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1; then
     kill "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
     wait "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1 || true
   fi
   AUTHENTIK_OUTPOST_PID=""
   rm -f -- "$AUTHENTIK_OUTPOST_LOG"
-  return "$status"
+  return 0
 }
 
 on_error() {
@@ -119,7 +118,8 @@ activate_secrets() {
 run_as_admin_with_stdin() {
   local timeout_seconds=$1
   shift
-  printf '%s\n' "$KEEPASS_PASSWORD" | runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
+  nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
+    runuser -u admin -- env HOME=/home/admin PATH="$PATH" timeout "$timeout_seconds" "$@"
 }
 
 authentik_api() {

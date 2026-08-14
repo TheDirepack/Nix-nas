@@ -45,7 +45,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1
 
 usage() {
   cat <<USAGE
-usage: $PROG <list|keys|save|save-missing|import> [dir]
+usage: $PROG <list|keys|save|save-missing|verify|verify-handoff|import> [dir]
 
 Build, cache, and restore per-application Nix store bundles for the QEMU
 integration VMs. Bundle names mirror the packages.x86_64-linux flake output;
@@ -57,6 +57,7 @@ the vm-drivers bundle additionally includes both NixOS VM test drivers.
   save <dir>           build every bundle, export each as <dir>/<name>.nar.gz
   save-missing <dir>   build every bundle, export only archives absent in <dir>
   verify <dir>         verify the generated manifest has no closure duplicates
+  verify-handoff <dir> verify every archive checksum and the closure manifest
   import <dir>         restore core (or rebuild it) then import cached deltas
 
 Environment overrides: NAS_BUNDLE_SYSTEM, NAS_BUNDLE_NIX, NAS_BUNDLE_NIX_STORE.
@@ -176,6 +177,7 @@ save() {
       rm -f "$core_file" "$application_file" "$base_file"
     }
     verify_manifest "$dir"
+    write_handoff_checksum "$dir"
     return 0
   fi
 
@@ -214,6 +216,7 @@ save() {
 
   write_manifest
   verify_manifest "$dir"
+  write_handoff_checksum "$dir"
   rm -f "$core_file" "$application_file" "$base_file"
 }
 
@@ -235,6 +238,36 @@ verify_manifest() {
       exit bad
     }
   ' "$manifest" || die "bundle manifest contains duplicate or malformed closure paths"
+}
+
+write_handoff_checksum() {
+  local dir=$1 name
+  local -a files=()
+  for name in "${BUNDLES[@]}"; do
+    files+=("$name.nar.gz")
+  done
+  (
+    cd -- "$dir"
+    sha256sum "${files[@]}" bundle-manifest.tsv > bundle-handoff.sha256
+  ) || die "could not write bundle handoff checksum: $dir"
+}
+
+verify_handoff() {
+  local dir=$1 name
+  local -a files=()
+  for name in "${BUNDLES[@]}"; do
+    files+=("$dir/$name.nar.gz")
+  done
+  [[ -f "$dir/bundle-manifest.tsv" ]] || die "bundle manifest is missing: $dir/bundle-manifest.tsv"
+  [[ -f "$dir/bundle-handoff.sha256" ]] || die "bundle handoff checksum is missing: $dir/bundle-handoff.sha256"
+  for name in "${files[@]}"; do
+    [[ -f "$name" ]] || die "bundle archive is missing: $name"
+  done
+  (
+    cd -- "$dir"
+    sha256sum --check --strict --quiet bundle-handoff.sha256
+  ) || die "bundle handoff checksum validation failed: $dir"
+  verify_manifest "$dir"
 }
 
 import() {
@@ -266,6 +299,7 @@ main() {
       need "$NIX"
       need "$NIX_STORE_CMD"
       need xargs
+      need sha256sum
       save "$1"
       ;;
     save-missing)
@@ -273,11 +307,17 @@ main() {
       need "$NIX"
       need "$NIX_STORE_CMD"
       need xargs
+      need sha256sum
       save "$1" 1
       ;;
     verify)
       [[ $# -eq 1 ]] || die "verify requires exactly one directory argument"
       verify_manifest "$1"
+      ;;
+    verify-handoff)
+      [[ $# -eq 1 ]] || die "verify-handoff requires exactly one directory argument"
+      need sha256sum
+      verify_handoff "$1"
       ;;
     import)
       [[ $# -eq 1 ]] || die "import requires exactly one directory argument"

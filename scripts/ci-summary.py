@@ -14,12 +14,19 @@ FAST_JOBS = {
     "static",
     "dependency-audit",
 }
-HEAVY_JOBS = {"build", "browser", "integration"}
+HEAVY_JOBS = {"build"}
+QUALIFICATION_JOBS = {"browser", "integration"}
 SLOW_JOBS = {"source-fuzz"}
 INSTALLED_FUZZ_JOBS = {"installed-command-fuzz", "zap-fuzz"}
 CACHE_JOBS = {"cache-vm-bundles"}
 KNOWN_JOBS = frozenset(
-    FAST_JOBS | HEAVY_JOBS | SLOW_JOBS | INSTALLED_FUZZ_JOBS | CACHE_JOBS | {"coverage-diff", "installer"}
+    FAST_JOBS
+    | HEAVY_JOBS
+    | QUALIFICATION_JOBS
+    | SLOW_JOBS
+    | INSTALLED_FUZZ_JOBS
+    | CACHE_JOBS
+    | {"coverage-diff", "installer"}
 )
 
 
@@ -29,14 +36,21 @@ def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> s
         expected.add("coverage-diff")
     if event_name != "workflow_dispatch" or test_tier != "fast":
         expected.update(HEAVY_JOBS)
+    qualification_run = (
+        event_name == "schedule"
+        or (event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))
+        or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
+    )
+    if qualification_run:
+        expected.update(QUALIFICATION_JOBS)
     if (event_name == "workflow_dispatch" and test_tier == "installer") or (
         event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
     ):
         expected.add("installer")
         expected.update(INSTALLED_FUZZ_JOBS)
     if (
-        event_name == "pull_request"
-        or (event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))
+        event_name == "schedule"
+        or (event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))
         or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
     ):
         expected.update(SLOW_JOBS)

@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
 source "$ROOT/tests/vm/timeout-budget.sh"
 export NAS_VM_TIMEOUT_BUDGET_FILE="${NAS_VM_TIMEOUT_BUDGET_FILE:-$ROOT/tests/vm/timeout-budget.json}"
 MODE="${1:-all}"
@@ -219,7 +220,7 @@ stage_source_tree() {
   local temporary="$STATE_DIR/.reviewed-source.$$"
   rm -rf "$temporary"
   mkdir -p "$temporary"
-  python3 - "${1:-${NAS_QEMU_SOURCE_ROOT:-$ROOT}}" "$temporary" <<'PYSTAGE'
+  if ! python3 - "${1:-${NAS_QEMU_SOURCE_ROOT:-$ROOT}}" "$temporary" <<'PYSTAGE'
 from __future__ import annotations
 
 import json
@@ -322,6 +323,10 @@ for relative in sorted(selected, key=lambda value: value.as_posix()):
     encoding="utf-8",
 )
 PYSTAGE
+  then
+    rm -rf -- "$temporary"
+    return 1
+  fi
   rm -rf "$destination"
   mv "$temporary" "$destination"
   printf '%s\n' "$destination"

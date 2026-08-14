@@ -163,6 +163,45 @@ The guest suite deliberately checks states that must never occur: protected serv
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
 
+### VM failure and handoff contracts
+
+The fast PR contract includes executable process-level failure injection, not
+only source-text assertions:
+
+```bash
+tests/vm/cleanup-failure-injection.sh
+tests/vm/resource-failure-injection.sh
+```
+
+These cases run the shared VM cleanup/profile libraries through every declared
+guest phase, inject ordinary and signal failures, and verify phase timing,
+last-command, artifact-path, profiler, cleanup, temporary-secret,
+run-owned-dependency, VM-state, and outpost evidence. They also rerun against
+the same paths to catch stale processes, secrets, symlinks, and partial
+`node_modules` trees. Resource cases cover missing commands, failed Nix and
+QEMU starts, unavailable network, disk-full, and hung systemd simulations.
+
+`tests/vm/timeout-budget.json` is the single phase manifest. The timeout
+contract executes the real `timeout-budget.sh` functions with slow fake
+commands, checks the phase-specific failure label, and verifies that the outer
+watchdog is derived from all phase budgets. Bundle consumers must run:
+
+```bash
+./scripts/vm-bundles.sh verify-handoff <bundle-directory>
+```
+
+This checks every archive checksum, the complete manifest, and the
+`vm-drivers` closure-deduplication rule. Missing or corrupt handoffs fail
+closed; a missing reusable cache remains a functional cache miss and rebuilds
+the exact base as needed.
+
+Pull requests run the deterministic source, contract, build, and handoff
+checks. Browser, native QEMU, reboot/installer, and generated fuzz tiers are
+qualification work: they run on the scheduled workflow, protected main/tag
+pushes, or an explicit `workflow_dispatch` full/installer tier. The summary
+still reports every release-critical job and calls out cache persistence
+failures as non-authoritative warnings.
+
 Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testing.md).
 
 ## 8. Dynamic web security

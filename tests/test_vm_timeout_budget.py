@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -52,10 +52,110 @@ class VmTimeoutBudgetTests(unittest.TestCase):
         self.assertIn("nas_vm_timeout_value", GUEST_TEST.read_text(encoding="utf-8"))
 
     def test_every_guest_phase_label_has_a_manifest_budget(self) -> None:
-        guest = GUEST_TEST.read_text(encoding="utf-8")
-        labels = set(re.findall(r'^log "([^"]+)"$', guest, re.MULTILINE))
-        manifest_labels = {phase["label"] for phase in self.manifest["phases"]}
-        self.assertEqual(labels, manifest_labels)
+        manifest_labels = [phase["label"] for phase in self.manifest["phases"]]
+        for label in manifest_labels:
+            with self.subTest(label=label):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'source "$1"; nas_vm_phase_metadata "$2"',
+                        "phase-metadata",
+                        str(TIMEOUT_HELPER),
+                        label,
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env={**os.environ, "NAS_VM_TIMEOUT_BUDGET_FILE": str(MANIFEST)},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                phase_id, budget = result.stdout.strip().split("\t")
+                self.assertEqual(
+                    phase_id, next(phase["id"] for phase in self.manifest["phases"] if phase["label"] == label)
+                )
+                self.assertGreater(int(budget), 0)
+
+    def test_real_phase_timeout_reports_the_failed_phase_and_outer_budget(self) -> None:
+        scaled = json.loads(json.dumps(self.manifest))
+        scaled["ordinaryWaitSeconds"] = 1
+        scaled["slackSeconds"] = 2
+        for phase in scaled["phases"]:
+            phase["fixedSeconds"] = 1
+            phase["ordinaryWaits"] = 0
+            phase["timeoutKeys"] = []
+
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = pathlib.Path(temporary) / "timeout-budget.json"
+            manifest.write_text(json.dumps(scaled), encoding="utf-8")
+            env = {**os.environ, "NAS_VM_TIMEOUT_BUDGET_FILE": str(manifest)}
+            label = scaled["phases"][3]["label"]
+            phase_script = r"""
+set -Eeuo pipefail
+source "$1"
+metadata="$(nas_vm_phase_metadata "$2")"
+IFS=$'\t' read -r phase_id budget <<<"$metadata"
+printf 'VM-PHASE-START: %s\n' "$phase_id"
+if timeout --foreground "$budget" bash -c 'sleep "$1"' phase "$3"; then
+  printf 'VM-PHASE-COMPLETE: %s\n' "$phase_id"
+else
+  status=$?
+  printf 'VM-PHASE-FAILED: %s: %s\n' "$phase_id" "$status"
+  exit "$status"
+fi
+"""
+            slow = subprocess.run(
+                ["bash", "-c", phase_script, "phase", str(TIMEOUT_HELPER), label, "2"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(slow.returncode, 124, slow.stderr + slow.stdout)
+            self.assertIn(f"VM-PHASE-FAILED: {scaled['phases'][3]['id']}: 124", slow.stdout)
+
+            watchdog = int(
+                subprocess.run(
+                    ["bash", "-c", 'source "$1"; nas_vm_guest_watchdog_seconds', "watchdog", str(TIMEOUT_HELPER)],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+            )
+            self.assertEqual(watchdog, len(scaled["phases"]) + scaled["slackSeconds"])
+            outer_script = r"""
+set -Eeuo pipefail
+source "$1"
+while IFS= read -r label; do
+  metadata="$(nas_vm_phase_metadata "$label")"
+  IFS=$'\t' read -r phase_id budget <<<"$metadata"
+  timeout --foreground "$budget" bash -c 'sleep "$1"' phase 0.05
+  printf 'VM-PHASE-COMPLETE: %s\n' "$phase_id"
+done < <(jq -er '.phases[].label' "$NAS_VM_TIMEOUT_BUDGET_FILE")
+"""
+            complete = subprocess.run(
+                [
+                    "timeout",
+                    "--foreground",
+                    str(watchdog),
+                    "bash",
+                    "-c",
+                    outer_script,
+                    "outer",
+                    str(TIMEOUT_HELPER),
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(complete.returncode, 0, complete.stderr + complete.stdout)
+            self.assertEqual(complete.stdout.count("VM-PHASE-COMPLETE:"), len(scaled["phases"]))
 
 
 if __name__ == "__main__":

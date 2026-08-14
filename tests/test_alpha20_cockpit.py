@@ -170,7 +170,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         fuzz_block = workflow.split("  source-fuzz:\n", 1)[1].split("  installed-command-fuzz:\n", 1)[0]
         self.assertIn("needs: [integration, browser, installer]", fuzz_block)
         self.assertIn("needs.browser.result == 'success'", fuzz_block)
-        self.assertIn("github.event_name == 'pull_request'", fuzz_block)
+        self.assertIn("github.event_name == 'schedule'", fuzz_block)
+        self.assertNotIn("github.event_name == 'pull_request'", fuzz_block)
         self.assertIn("source-fuzz-${{ matrix.shard }}-evidence", fuzz_block)
         self.assertIn('./scripts/run-fuzz.py --suite "${{ matrix.shard }}" --jobs 1', fuzz_block)
         self.assertNotIn("browser-fuzz:", workflow)
