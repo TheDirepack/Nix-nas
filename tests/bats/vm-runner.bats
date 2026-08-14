@@ -80,3 +80,26 @@ SH
   [ "$status" -eq 0 ]
   [ ! -e "$repo/tests/js-fuzz/node_modules" ]
 }
+
+@test "full-suite cleanup removes its work directory after a failed run" {
+  cat >"$work/run.sh" <<SH
+#!/usr/bin/env bash
+set -Eeuo pipefail
+source "$deps_lib"
+work_dir="$work/owned-work"
+mkdir -p "\$work_dir"
+printf '%s\n' "\$work_dir" >"$work/work-path"
+cleanup() {
+  local status=\$?
+  nas_vm_js_deps_cleanup "\$status" || :
+  rm -rf -- "\$work_dir"
+  return "\$status"
+}
+trap cleanup EXIT
+exit 43
+SH
+  chmod +x "$work/run.sh"
+  run "$work/run.sh"
+  [ "$status" -eq 43 ]
+  [ ! -e "$work/owned-work" ]
+}

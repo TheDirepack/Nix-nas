@@ -294,7 +294,9 @@ else:
 
 seen: set[str] = set()
 for relative in sorted(selected, key=lambda value: value.as_posix()):
-    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts) or ignored(relative):
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise SystemExit(f"invalid QEMU source path: {relative}")
+    if policy == "git-tracked-and-worktree" and ignored(relative):
         continue
     name = relative.as_posix()
     if name in seen:

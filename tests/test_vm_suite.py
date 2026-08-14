@@ -132,6 +132,31 @@ class VmSuiteWrapperTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("QEMU source path is missing", result.stderr)
 
+    def test_source_stage_does_not_skip_a_missing_ignored_manifest_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / "source"
+            cache = pathlib.Path(tmp) / "cache"
+            source.mkdir()
+            (source / "MANIFEST.sha256").write_text(
+                "0000000000000000000000000000000000000000000000000000000000000000  node_modules/missing.js\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["bash", str(QEMU), "stage-source"],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "NAS_QEMU_SOURCE_ROOT": str(source),
+                    "NAS_QEMU_CACHE_DIR": str(cache),
+                    "NAS_QEMU_STATE_DIR": str(cache / "state"),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("QEMU source path is missing", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

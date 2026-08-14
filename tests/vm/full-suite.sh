@@ -20,7 +20,9 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/nas-full-suite.XXXXXX")"
 
 cleanup() {
   local status=$?
-  nas_vm_js_deps_cleanup "$status"
+  # Preserve the suite result while allowing every run-owned temporary path
+  # to be removed before the EXIT trap returns it.
+  nas_vm_js_deps_cleanup "$status" || :
   rm -rf -- "$work"
   return "$status"
 }
