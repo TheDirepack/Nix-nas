@@ -372,7 +372,9 @@ class VmBundleScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         self.assertNotIn("build --no-link", nix_log.read_text(encoding="utf-8"))
         self.assertEqual(
-            len([line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]),
+            len(
+                [line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]
+            ),
             len(EXPECTED_BUNDLES) - 1,
         )
 
