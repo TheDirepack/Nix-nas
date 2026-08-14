@@ -406,6 +406,18 @@ jobs:
             printf 'cache_complete=false\n' >> "$GITHUB_OUTPUT"
             echo "At least one exact VM bundle cache is missing; only missing bundles will be exported."
           fi
+          if [[ \
+            "${{ steps.vm_bundle_core.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_identity.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_observability.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_storage.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true
+          ]]; then
+            printf 'package_cache_complete=true\n' >> "$GITHUB_OUTPUT"
+            echo "Core and all application bundles were restored; source packaging is unnecessary."
+          else
+            printf 'package_cache_complete=false\n' >> "$GITHUB_OUTPUT"
+          fi
       - name: Reassemble cached Nix store bundles before configuration builds
         run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Restore verified source archive
@@ -416,7 +428,7 @@ jobs:
           key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: Package and verify as an untrusted consumer
         if: >-
-          steps.vm_bundle_handoff.outputs.cache_complete != 'true' &&
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
           steps.source_archive_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
@@ -455,7 +467,7 @@ jobs:
           trap - EXIT
       - name: Verify restored source archive
         if: >-
-          steps.vm_bundle_handoff.outputs.cache_complete != 'true' &&
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
           steps.source_archive_cache.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
@@ -475,7 +487,7 @@ jobs:
           echo "Reused the verified source archive for commit $GITHUB_SHA."
       - name: Save verified source archive
         if: >-
-          steps.vm_bundle_handoff.outputs.cache_complete != 'true' &&
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
           steps.source_archive_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -483,7 +495,7 @@ jobs:
           key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: >-
-          steps.vm_bundle_handoff.outputs.cache_complete != 'true' &&
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
           steps.source_archive_cache.outputs.cache-hit != 'true'
         with:
           name: source-archive-evidence
