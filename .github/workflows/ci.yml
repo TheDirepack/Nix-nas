@@ -298,6 +298,7 @@ jobs:
       cache_test_browser_hit: ${{ steps.vm_bundle_test_browser.outputs.cache-hit }}
       cache_test_tools_hit: ${{ steps.vm_bundle_test_tools.outputs.cache-hit }}
       cache_vm_drivers_hit: ${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}
+      bundle_cache_complete: ${{ steps.vm_bundle_handoff.outputs.cache_complete }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -403,9 +404,37 @@ jobs:
         with:
           path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
           key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm_bundles.outputs.key_vm_drivers }}
+      - name: Determine whether the exact VM bundle set was restored
+        id: vm_bundle_handoff
+        run: |
+          if [[ \
+            "${{ steps.vm_bundle_core.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_copyparty.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_caddy.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_identity.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_observability.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_storage.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_test_browser.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_test_tools.outputs.cache-hit }}" == true && \
+            "${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}" == true
+          ]]; then
+            printf 'cache_complete=true\n' >> "$GITHUB_OUTPUT"
+            echo "All exact VM bundle caches were restored; export and publish are unnecessary."
+          else
+            printf 'cache_complete=false\n' >> "$GITHUB_OUTPUT"
+            echo "At least one exact VM bundle cache is missing; only missing bundles will be exported."
+          fi
       - name: Reassemble cached Nix store bundles before configuration builds
         run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+      - name: Restore verified source archive
+        id: source_archive_cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: nas-source-release
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}
       - name: Package and verify as an untrusted consumer
+        if: steps.source_archive_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           node cockpit/build.js --check
@@ -441,7 +470,32 @@ jobs:
           ./scripts/evaluate-reference-configurations.sh
           restore_dependencies
           trap - EXIT
+      - name: Verify restored source archive
+        if: steps.source_archive_cache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          archive=$(find nas-source-release -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit)
+          test -n "$archive"
+          unzip -tq "$archive"
+          extract="$RUNNER_TEMP/extracted-source-cache"
+          mkdir -p "$extract"
+          unzip -q "$archive" -d "$extract"
+          root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$root"
+          test -x "$root/scripts/preflight.sh"
+          test -x "$root/scripts/package-release.sh"
+          test -x "$root/scripts/qemu-test.sh"
+          test -x "$root/cockpit/build.js"
+          (cd "$root" && sha256sum -c MANIFEST.sha256)
+          echo "Reused the verified source archive for commit $GITHUB_SHA."
+      - name: Save verified source archive
+        if: steps.source_archive_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: nas-source-release
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.source_archive_cache.outputs.cache-hit != 'true'
         with:
           name: source-archive-evidence
           if-no-files-found: error
@@ -451,9 +505,11 @@ jobs:
         run: |
           nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
           nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
-      - name: Build and export missing Nix store bundles for downstream VMs
+      - name: Export missing Nix store bundles for downstream VMs
+        if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         run: ./scripts/vm-bundles.sh save-missing "$RUNNER_TEMP/vm-bundles"
       - name: Publish the exact Nix bundles used by this run
+        if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vm-bundle-handoff
@@ -466,11 +522,12 @@ jobs:
 
   cache-vm-bundles:
     name: Persist reusable Nix VM bundles
-    if: needs.build.result == 'success'
+    if: needs.build.result == 'success' && needs.build.outputs.bundle_cache_complete != 'true'
     needs: [build]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download the exact bundles produced by the build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -626,13 +683,82 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           enable_kvm: true
+      - name: "Restore exact cached Nix bundle: core"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}
+      - name: "Restore exact cached Nix bundle: copyparty"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/copyparty.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-copyparty-${{ needs.build.outputs.key_copyparty }}
+      - name: "Restore exact cached Nix bundle: caddy"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/caddy.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-caddy-${{ needs.build.outputs.key_caddy }}
+      - name: "Restore exact cached Nix bundle: identity"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}
+      - name: "Restore exact cached Nix bundle: observability"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}
+      - name: "Restore exact cached Nix bundle: storage"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}
+      - name: "Restore exact cached Nix bundle: ai"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}
+      - name: "Restore exact cached Nix bundle: test-browser"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/test-browser.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-browser-${{ needs.build.outputs.key_test_browser }}
+      - name: "Restore exact cached Nix bundle: test-tools"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/test-tools.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ needs.build.outputs.key_test_tools }}
+      - name: "Restore exact cached Nix bundle: vm-drivers"
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}
       - name: Download the exact Nix bundles used by the build
+        if: needs.build.outputs.bundle_cache_complete != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: vm-bundle-handoff
           path: ${{ runner.temp }}/vm-bundles
       - name: Verify exact bundle handoff before import
+        if: needs.build.outputs.bundle_cache_complete != 'true'
         run: ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+      - name: Verify restored cached bundle archives
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        run: |
+          set -euo pipefail
+          for archive in "$RUNNER_TEMP"/vm-bundles/*.nar.gz; do
+            gzip -t "$archive"
+          done
       - name: Reassemble Nix store from the build handoff
         run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Run ${{ matrix.vm }} NixOS VM integration tests

@@ -83,12 +83,25 @@ class CiWorkflowGraphTests(unittest.TestCase):
 
     def test_handoff_is_verified_by_each_consumer_and_checksum_is_published(self) -> None:
         build_text = self.serialized(self.jobs["build"])
+        self.assertIn("bundle_cache_complete", build_text)
+        self.assertIn("Determine whether the exact VM bundle set was restored", build_text)
+        self.assertIn("Export missing Nix store bundles for downstream VMs", build_text)
+        self.assertIn("steps.vm_bundle_handoff.outputs.cache_complete != 'true'", build_text)
         self.assertIn("bundle-manifest.tsv", build_text)
         self.assertIn("bundle-handoff.sha256", build_text)
+        self.assertIn("Restore verified source archive", build_text)
+        self.assertIn("source-archive-${{ github.sha }}", build_text)
         for name in ("integration", "cache-vm-bundles"):
             text = self.serialized(self.jobs[name])
-            self.assertIn("vm-bundle-handoff", text)
-            self.assertIn("verify-handoff", text)
+            if name == "integration":
+                self.assertIn("bundle_cache_complete == 'true'", text)
+                self.assertIn("vm-bundle-handoff", text)
+                self.assertIn("verify-handoff", text)
+            else:
+                self.assertIn("actions/checkout", text)
+                self.assertIn("needs.build.outputs.bundle_cache_complete != 'true'", text)
+                self.assertIn("vm-bundle-handoff", text)
+                self.assertIn("verify-handoff", text)
         self.assertIn(
             "Report cache persistence status",
             "\n".join(str(step.get("name", "")) for step in self.jobs["cache-vm-bundles"]["steps"]),
