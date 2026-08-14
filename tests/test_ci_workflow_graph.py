@@ -109,7 +109,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("source-archive-${{ github.sha }}", build_text)
         self.assertIn("vm_bundle_handoff.outputs.cache_complete != 'true'", build_text)
         self.assertIn("vm_bundle_handoff.outputs.package_cache_complete != 'true'", build_text)
-        self.assertIn("./scripts/vm-bundles.sh build \"${bundle_args[@]}\"", build_text)
+        self.assertIn('./scripts/vm-bundles.sh build "${bundle_args[@]}"', build_text)
         self.assertIn("bundle_args+=(vm-drivers)", build_text)
         self.assertLess(
             build_text.index("./scripts/vm-bundles.sh build"),
