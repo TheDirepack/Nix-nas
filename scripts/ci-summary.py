@@ -36,6 +36,8 @@ def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> s
         expected.add("coverage-diff")
     if event_name != "workflow_dispatch" or test_tier != "fast":
         expected.update(HEAVY_JOBS)
+    if event_name == "workflow_dispatch" and test_tier == "fast":
+        expected.add("browser")
     qualification_run = (
         event_name == "schedule"
         or (event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))

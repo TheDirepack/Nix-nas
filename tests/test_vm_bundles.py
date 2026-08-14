@@ -229,6 +229,11 @@ class VmBundleScriptTests(unittest.TestCase):
             "/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver",
             nix_calls,
         )
+        self.assertEqual(
+            len([call for call in nix_calls if call.startswith("path-info -r ")]),
+            len(EXPECTED_BUNDLES),
+            "each bundle closure should be enumerated once per export",
+        )
 
         store_calls = nix_store_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len([c for c in store_calls if c.startswith("--export")]), len(EXPECTED_BUNDLES))

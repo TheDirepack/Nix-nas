@@ -53,7 +53,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual({leg["check"] for leg in legs}, {"nas-vm", "nas-vm-encrypted"})
 
     def test_qualification_dependencies_are_explicit_and_complete(self) -> None:
-        self.assertEqual(self.needs(self.jobs["browser"]), {"build"})
+        self.assertEqual(self.needs(self.jobs["browser"]), {"build", "test"})
         self.assertEqual(self.needs(self.jobs["integration"]), {"build"})
         self.assertEqual(self.needs(self.jobs["cache-vm-bundles"]), {"build"})
         self.assertTrue({"build", "browser", "integration"} <= self.needs(self.jobs["installer"]))
@@ -61,11 +61,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(self.needs(self.jobs["installed-command-fuzz"]), {"installer"})
         self.assertEqual(self.needs(self.jobs["zap-fuzz"]), {"installer"})
 
+    def test_fast_dispatch_runs_post_build_deterministic_browser_checks(self) -> None:
+        browser = self.jobs["browser"]
+        condition = str(browser.get("if", ""))
+        browser_text = self.serialized(browser)
+        self.assertIn("test-tier == 'fast'", condition)
+        self.assertIn("Build production bundle for fast tier", browser_text)
+        self.assertIn("Deterministic common XSS", browser_text)
+
     def test_destructive_jobs_are_not_on_pull_requests_and_are_scheduled(self) -> None:
         for name in ("browser", "integration", "source-fuzz"):
             condition = str(self.jobs[name].get("if", ""))
             self.assertNotIn("pull_request", condition)
-            self.assertIn("schedule", condition)
+        for name in ("integration", "source-fuzz"):
+            self.assertIn("schedule", str(self.jobs[name].get("if", "")))
 
     def test_summary_depends_on_every_release_critical_job_including_cache(self) -> None:
         summary_needs = self.needs(self.jobs["summary"])

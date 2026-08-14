@@ -99,7 +99,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         )
         browser_block = workflow.split("  browser:\n", 1)[1].split("  integration:\n", 1)[0]
         integration_block = workflow.split("  integration:\n", 1)[1].split("  installer:\n", 1)[0]
-        self.assertIn("needs: [build]", browser_block)
+        self.assertIn("needs: [build, test]", browser_block)
         self.assertIn("needs: [build]", integration_block)
         self.assertIn("needs: [integration, browser, build]", workflow)
         self.assertIn("needs: [integration, browser, installer]", workflow)

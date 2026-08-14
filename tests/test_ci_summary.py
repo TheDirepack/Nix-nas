@@ -46,9 +46,9 @@ class CiSummaryTests(unittest.TestCase):
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "release", "fast")
         self.assertNotIn("coverage-diff", expected)
 
-    def test_fast_dispatch_allows_only_intentionally_skipped_heavy_jobs(self) -> None:
+    def test_fast_dispatch_runs_deterministic_browser_checks_but_skips_heavy_jobs(self) -> None:
         expected = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "fast")
-        self.assertEqual(expected, ci_summary.FAST_JOBS)
+        self.assertEqual(expected, ci_summary.FAST_JOBS | {"browser"})
         _, bad = ci_summary.summarize(
             self.results(expected),
             "workflow_dispatch",

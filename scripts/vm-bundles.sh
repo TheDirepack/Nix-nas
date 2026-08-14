@@ -137,21 +137,36 @@ keys() {
 
 save() {
   local dir=$1 only_missing=${2:-0} name core_file application_file base_file manifest archive tmp
+  local closure_cache
   local -a targets=()
   mkdir -p "$dir"
+  closure_cache="$(mktemp -d "$dir/.closure-cache.XXXXXX")"
+  # Closure enumeration is expensive and is needed by the delta exporter and
+  # the manifest writer. Keep one result per bundle for the duration of this
+  # handoff, then remove the run-owned cache even if export fails.
+  SAVE_CLOSURE_CACHE=$closure_cache
+  trap 'if [[ -n ${SAVE_CLOSURE_CACHE:-} ]]; then rm -rf -- "$SAVE_CLOSURE_CACHE"; fi' EXIT
   core_file="$dir/.core.paths"
   application_file="$dir/.application.paths"
   base_file="$dir/.base.paths"
   manifest="$dir/bundle-manifest.tsv"
+
+  closure_cached() {
+    local cached_name=$1 cached_file="$SAVE_CLOSURE_CACHE/$1.paths"
+    if [[ ! -f "$cached_file" ]]; then
+      closure "$cached_name" > "$cached_file"
+    fi
+    cat "$cached_file"
+  }
 
   write_manifest() {
     local manifest_name manifest_path
     : > "$manifest"
     while IFS= read -r manifest_name; do
       case "$manifest_name" in
-        core) closure core > "$dir/.manifest.paths" ;;
-        vm-drivers) comm -23 <(closure vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
-        *) comm -23 <(closure "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
+        core) closure_cached core > "$dir/.manifest.paths" ;;
+        vm-drivers) comm -23 <(closure_cached vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
+        *) comm -23 <(closure_cached "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
       esac
       while IFS= read -r manifest_path; do
         [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest"
@@ -171,11 +186,11 @@ save() {
   # VMs. Do not invoke Nix or rewrite archives when there is nothing missing.
   if ((${#targets[@]} == 0)); then
     [[ -f "$dir/bundle-manifest.tsv" ]] || {
-      closure core > "$core_file"
+      closure_cached core > "$core_file"
       : > "$application_file"
       while IFS= read -r name; do
         [[ $name == core || $name == vm-drivers ]] && continue
-        closure "$name"
+        closure_cached "$name"
       done < <(list_bundles) | sort -u > "$application_file"
       cat "$core_file" "$application_file" | sort -u > "$base_file"
       write_manifest
@@ -190,16 +205,17 @@ save() {
   # DAG once. Export order remains core-first and each archive keeps the same
   # delta shape.
   build_bundles "${targets[@]}"
-  closure core > "$core_file"
+  closure_cached core > "$core_file"
   : > "$application_file"
   while IFS= read -r name; do
     [[ $name == core || $name == vm-drivers ]] && continue
-    closure "$name"
+    closure_cached "$name"
   done < <(list_bundles) | sort -u > "$application_file"
   cat "$core_file" "$application_file" | sort -u > "$base_file"
   if [[ $only_missing != 1 || ! -f "$dir/core.nar.gz" ]]; then
     archive="$dir/core.nar.gz"
     tmp="$archive.tmp.$$"
+    printf '%s: exporting core bundle\n' "$PROG" >&2
     xargs "$NIX_STORE_CMD" --export < "$core_file" | gzip > "$tmp"
     mv -- "$tmp" "$archive"
   fi
@@ -209,11 +225,12 @@ save() {
     [[ $only_missing == 1 && -f "$dir/$name.nar.gz" ]] && continue
     archive="$dir/$name.nar.gz"
     tmp="$archive.tmp.$$"
+    printf '%s: exporting %s bundle\n' "$PROG" "$name" >&2
     if [[ $name == vm-drivers ]]; then
-      comm -23 <(closure "$name") "$base_file" \
+      comm -23 <(closure_cached "$name") "$base_file" \
         | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
     else
-      comm -23 <(closure "$name") "$core_file" \
+      comm -23 <(closure_cached "$name") "$core_file" \
         | xargs --no-run-if-empty "$NIX_STORE_CMD" --export | gzip > "$tmp"
     fi
     mv -- "$tmp" "$archive"
@@ -223,6 +240,9 @@ save() {
   verify_manifest "$dir"
   write_handoff_checksum "$dir"
   rm -f "$core_file" "$application_file" "$base_file"
+  rm -rf -- "$closure_cache"
+  SAVE_CLOSURE_CACHE=
+  trap - EXIT
 }
 
 verify_manifest() {
