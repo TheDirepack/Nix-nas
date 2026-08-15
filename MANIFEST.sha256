@@ -6,12 +6,12 @@ e5f42e5bbd9a4ffa2a77ff1514c6988a98cc85686e89d878530c9f9db8e0ffbb  ./.bandit
 590886e4ddddc96b7db471fcbf3900e4d578494b008d707bfd978c93496630ce  ./.gitignore
 2e6f7c21f6ce1112f974e840f976a5c6b3d19e4ae94fb369b9945480f611192c  ./.semgrep.yml
 e05b21ff3f3e91190fd5895e2ab60e5d8c08c71c87fb505c0b6faece51e2a10e  ./AGENTS.md
-f1fd7917aeac1a5b2dfb14c17e340adffddd9a120f3b34a763e416c34bb99da4  ./CHANGELOG.md
+c057fa4eeff7575af252277ee9414e236f5d5e6ea36e554262a719617f8118c5  ./CHANGELOG.md
 e4c61c8986433964595a72c1ba1b484e7167cdee730ac08fab7af5ad60058a11  ./CONTRIBUTING.md
 8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./LICENSE
-a8771e6c64a00146f1df847750cbc2df23d9bc7bf0298b02e4aa403bd6bb0d2c  ./README.md
+c1d429dd6ae6fb2aa419d53fbd6ce4a552774cb87ce61b2b1ac6892895319e84  ./README.md
 cf82a3d11da08703796b4fae34ab054ad90ceaca5da84794ff3c7f89845ee38c  ./SECURITY.md
-35ce14423dde1bf8b4b6b6b3eacfcaab5fe39a02012f7672c48a624ea137eb5e  ./VERSION
+f883ac0138635b1913d821c8447224d49d515522dbc4451d190f7bf84029ce8f  ./VERSION
 b6e241e1b034d7665efa2dbaf209e96ecc2b2d45b3284b5fc826a5e26abda687  ./authentik/blueprints/nas-user-settings.yaml
 80ce081d59f67cc934ce0f589e895db57512f8e359859d0375676d528b3618bb  ./cockpit/Makefile
 4ab8d58fe6e9ed0852a60071c225ed972a7575c83bb0faef4182571af5ed5a3d  ./cockpit/README.md
@@ -24,7 +24,7 @@ b6e241e1b034d7665efa2dbaf209e96ecc2b2d45b3284b5fc826a5e26abda687  ./authentik/bl
 3aa1c6902c45ea513b3b15e9564733f2b0d56a64460eea753705aa9d1202245a  ./cockpit/dist/assets/RedHatTextVF-Italic-BQAR6ZIH.woff2
 f419ad7a4477f36ce73c74a23dce784150ca38fa5075a8e06109709cbb716903  ./cockpit/dist/assets/fa-solid-900-VBWCXSSH.woff2
 322295638da2105dffff0eb18ee10ccffcac38888778b7b1b4624772d513e65d  ./cockpit/dist/assets/pf-v6-pficon-Q2JC5CDH.woff2
-0757e4e90d44f8da5ef4b0f90a86a74acb642efbd81fadadbce22039e0ce5e15  ./cockpit/dist/build-meta.json
+90084dd73136f2d52464a3374de964a24a2d3991da08f598c9804443642acd1a  ./cockpit/dist/build-meta.json
 5ef8db4238292749c1701d7f8ab0eefd231258036eaa613f3e386964dcfb2edb  ./cockpit/dist/index.css
 2bf29db5f00d4f499b165025a7a00363abe24e06820a1e96a31a660ffbcb7fe2  ./cockpit/dist/index.html
 2b340f679838ba0c3d2ac8751f9039b927d15c4fccca378614a14f49cf68926f  ./cockpit/dist/index.js
@@ -34,8 +34,8 @@ f419ad7a4477f36ce73c74a23dce784150ca38fa5075a8e06109709cbb716903  ./cockpit/dist
 d58043a83341a59c6778019d0a30a1c2450e39be489277e38abf37613cd92d8c  ./cockpit/e2e/final-vm.spec.mjs
 544900e271a7701b60f6aa27ad1901ae1ae1ba8d1d939b772786876447ffba3b  ./cockpit/e2e/playwright.config.mjs
 93b3c7d1d5c23cd1e85274ab7302d586cbbbe2f0a1681a957389ab1cc5fd2df9  ./cockpit/e2e/ui-security.spec.mjs
-882a61d32ca911486e4037ac6dc33b064bb74b0b10267ab6c9f30daa720bf822  ./cockpit/package-lock.json
-e6fd1071a7e272a6e2e32b1fdfef4d133da054096c20262f1f2febb4c38786c2  ./cockpit/package.json
+a79a0dabf63610dbd3ea417475a89c547f3fa1932b74a2fcf47714e99c7e1056  ./cockpit/package-lock.json
+b55325fe1eea54420f3eeed5d41f65f24d90c04b592698c361220fd04488c5c5  ./cockpit/package.json
 bcf9e1301716edbb7f5cae02db9e55cfea5b41c496596c821545b225d6fbc8b0  ./cockpit/src/api.js
 6ec8c63efdf46109c59d7bf4542abd191e193d9949769e9cacfa6271ee3801e5  ./cockpit/src/app.jsx
 7d41856998bee69a6b32c0a93c7d9247c25802c362bd94c9082db62542f89f2c  ./cockpit/src/app.scss
@@ -51,7 +51,7 @@ c19372f0d7ce66e982afadc2a81efc325ede03cb09144133a50dd778c7cb3f08  ./docs/develop
 790a4951a83126c813d172485a86adb6a94deac29ea827b0510076e3a2f4c7a8  ./docs/development/alpha3-remediation.md
 de7b2f115def14485c84f3ddcbc907a4a9f7ddad47a2f4bd1224018abe4801de  ./docs/development/alpha4-memory-reliability-work.md
 a3ca3ddb36be3ab29dac990d6a050bc128632f3135f94e1064e7fba7141b36e1  ./docs/development/architecture.md
-ea8cfd9e88955ffc91e566c125c23a17453946cd688f7b7c9968cda9ad0ddc63  ./docs/development/artifact-naming.md
+b16937d296d9c8bc57a5f374c661b3400f05cc52cac4781675e6033cc27bbe47  ./docs/development/artifact-naming.md
 433754ee79d2feac4d7195c286f8d758a5a2bf881e272d1572b174615f4792ae  ./docs/development/code-map.md
 57dd6d4f93ad6d0c2c7696c0577a501214da781655fe8529ff5d9a4e5bcf5317  ./docs/development/combined-review-remediation.md
 d702226bf512fa31d76c32e96252ef4b909a69ea0917a58bf0daf373072db55f  ./docs/development/dependencies.md
@@ -64,7 +64,7 @@ ee6e3ee5d8701bf153ee5650b53b84761d03dfc2b9520f1727381f95c592cd34  ./docs/develop
 ea32aad65d56b30f613d98df60d5a5910eba9a3b7b9ba037b7212148dd48cd19  ./docs/development/root-service-audit.md
 07473f9d0c72bb7ca6fc1bf12d0ce7adb0d953fd4334878589c56e2b207a218a  ./docs/development/testing.md
 99c3134257ffc776409144bc7fad326288b93b38663990186f781072922e16cd  ./docs/development/unified-managed-services-plan-v2.md
-8abbe00090a54d149229200bae32542444c7a62723e2058bf6acc0c488285e16  ./docs/development/unified-managed-services-status.md
+beba37dc4259edc35d8d49ba30b0a285e096152652e93f4dbd4ac945032c6872  ./docs/development/unified-managed-services-status.md
 2fa60df010c1b056c53122b003c566f578b277a5e65aab6a2030b127180fc1de  ./docs/development/vm-testing.md
 afbff20685cc1c9f177f15bcf9b008654d4dab60bba30c31881da6cbe1f0aa87  ./docs/operator/operations.md
 3c7374f04e95cb1ce306bb22c72312e0b704e42434319a4e81ae99a7bf15a476  ./docs/operator/recovery.md
@@ -96,7 +96,7 @@ e66b56761ef418cf343239b4055647d424c52fbdd21656e9216709b80f068507  ./docs/src/ref
 ea0ad3c5b1983243e96f431e2d957a5f2ed8d85879f39f088ce3a65ef1170ad7  ./docs/src/users/coding-agent.md
 705cffd206c3d69bbdb2fb9bb6bea0c48a6f3c424a2e27d8c734d4c1760eb2de  ./docs/src/users/settings.md
 b331667ad0e7f35d0b9e2d22a744966016c599a0da54f5501f1183ff2e2cfe6b  ./flake.lock
-4d0a4f2c354ff78d9d758819b7c638e5e5bafca8b6e379c95eaaaa30684850ed  ./flake.nix
+a751145557fd66ba3757a14bbaf6b33b8d79daddad4f8d8e3878e27470f89b7b  ./flake.nix
 a1806a174a6891c63632980eedb846b0f45084c4af6f485f698b385d70fff7c7  ./hardware-configuration.nix
 9fe56f184faab454c3024fd5b1e03ecd992340cd351bc58b899df4279997df52  ./hfdownloader-image.nix
 c691457783f612c9a0896a53783b53b376e2e2d18281ce8ecd992601be70d01d  ./installation/disko-fresh-pool-example.nix
@@ -216,7 +216,7 @@ f226a0d3bc4052fd73fed24c79c193d1a616be4d81492363e57f346a0d3d6250  ./scripts/zap-
 66ef1b2ea457d30560413805a6a76f37eba799c59178e53f02d107af44d66684  ./services/nas_coding_agent.py
 ddf42b7152a962e09b53e49ce9c571ea809a967b4a6b2b3d4b2e81aa88dc7609  ./services/nas_common.py
 405350c69cccf392b31f9a49edfe3ad38d9d5bf3e0326f1c213c2729129ef592  ./services/nas_doctor.py
-8c9737b7ea0772b9f21dc0caf783b804ed318987741f5229aacca27fde414b7f  ./services/nas_feature_control.py
+d9b2942faae6d64d1a0bc72871854cb915aa1d5de3e0640cca7552da1655e855  ./services/nas_feature_control.py
 2764cd53fada00010a24760afbf1e62c0af0705803ead6ed32640bf91627fa92  ./services/nas_feature_model.py
 4aecae9243d9c21e08f972633e998ea10a19ca185aa600e7dd677a258b217e78  ./services/nas_identity_model.py
 24f9eb41cce520853dea7123692970c81659be6d22cde96f983360ee88a22b6b  ./services/nas_identity_sync.py
@@ -301,7 +301,7 @@ c1f09a7f84709ad3a207595fd1f08035a7a9a35d3e2e02ac63cc943f9baf9937  ./tests/test_c
 43339a10b03c682c2962871dccea517c91d920946c7c81dd0d5d31ae035e7784  ./tests/test_contract_tooling.py
 58479089e135d04778a5b93ef459c1b5160c3a1fa4e55c1a03a534ec4a1c93d1  ./tests/test_disabled_service_caddy.py
 8bbafd065a76f61014f034f7a496a184563741ee1bb1e3c4bc24bf3f777f02d7  ./tests/test_doctor_migrations.py
-6eb6a119b9e99610772293f6db42bb5fd65918dd89a2a8c89518f321b2c5ffd6  ./tests/test_feature_control.py
+9ee5d9f129981ff87ec515ef60e4093e5de59dc340321295fbf2a39ceedc7247  ./tests/test_feature_control.py
 6775787cc1fe9b92bd51ff50e0629248affd84371c0e53398c351b18d7aa1cd9  ./tests/test_fuzz_architecture.py
 4372810182ad516f40e446071bfe4bd7c70268a3d8786971631756ba765d8efa  ./tests/test_fuzz_boundaries.py
 612c42f6777fb95c9d44008937ec7cd50573e80dbd56782a896553425b58a292  ./tests/test_fuzz_custom_inputs.py

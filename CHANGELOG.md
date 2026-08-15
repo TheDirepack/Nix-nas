@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.31 — 2026-08-15
+
+- Release feature-operation locks before collecting slow status probes so concurrent lifecycle changes are not rejected by post-operation reporting.
+
 ## 2.2.0-alpha.30 — 2026-08-15
 
 - Wait for Authentik's asynchronous NAS automation blueprint during first-run provisioning and queue manual account mutations behind the identity reconciliation lock.

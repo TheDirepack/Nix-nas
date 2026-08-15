@@ -1,6 +1,6 @@
 {
   "name": "nixos-nas-cockpit",
-  "version": "2.2.0-alpha.30",
+  "version": "2.2.0-alpha.31",
   "description": "React and PatternFly Cockpit interface for NixOS NAS",
   "private": true,
   "type": "module",

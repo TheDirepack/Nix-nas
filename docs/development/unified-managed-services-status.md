@@ -1,4 +1,4 @@
-# Unified Managed Services — Current Implementation Status (as of 2.2.0-alpha.30)
+# Unified Managed Services — Current Implementation Status (as of 2.2.0-alpha.31)
 
 This document is the **truthful status** of the managed-services implementation in this branch. It replaces the aspirational table with behavior that is covered by the repository and VM contracts. The managed-services system is now the **only system** for defining and exposing services — all 13 built-ins have been migrated to the v2 registry and the runtime adapters are present.
 
