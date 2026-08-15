@@ -33,6 +33,7 @@ let
     [/shares]
       ${copypartyMountRoot}
       accs:
+        r: @application.copyparty.files
         A: @nas_admin
 
     [/shares/users/''${u%+application.copyparty.files}]
