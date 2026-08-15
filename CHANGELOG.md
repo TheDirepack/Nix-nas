@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.22 — 2026-08-15
+
+- Allow files-capable users to read the CopyParty share root while retaining administrator-only write and configuration access.
+
 ## 2.2.0-alpha.21 — 2026-08-14
 
 - Expose the persistent QEMU VM through configurable host-local service ports, expand hostile-input coverage across custom service and Cockpit code, and keep sustained local fuzz workers isolated and reproducible.
