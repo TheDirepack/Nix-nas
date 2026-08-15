@@ -54,11 +54,14 @@ test("hostile structured values never become Cockpit command arguments", async (
     id: "'\";$(touch /tmp/nas-api-pwned);\\\n",
     url: "javascript:alert(1)",
     models: ["<img src=x onerror=alert(1)>", "$(id)"],
-    filters: {setParams: {"__proto__": "polluted"}},
+    filters: {setParams: {__proto__: "polluted"}},
   };
   await apiInput(["ai-provider-set"], payload, spawn);
   assert.deepEqual(calls[0].command, ["nas-cockpit-api", "ai-provider-set"]);
-  assert.equal(calls[0].command.some((value) => value.includes("pwned")), false);
+  assert.equal(
+    calls[0].command.some((value) => value.includes("pwned")),
+    false,
+  );
   assert.equal(calls[1].value, JSON.stringify(payload));
   assert.equal({}.polluted, undefined);
 });
@@ -144,8 +147,14 @@ test("secret transports preserve hostile single-line values only on stdin", asyn
   await startFirstRun(password, {planDigest: "b".repeat(64)}, spawn);
   activateSecrets(password, spawn);
   assert.deepEqual(inputs, [
-    {command: ["nas-cockpit-api", "first-run", "--plan-digest", "b".repeat(64)], value: `${password}\n`},
+    {
+      command: ["nas-cockpit-api", "first-run", "--plan-digest", "b".repeat(64)],
+      value: `${password}\n`,
+    },
     {command: ["nas-secrets", "activate-stdin"], value: `${password}\n`},
   ]);
-  assert.equal(inputs.some(({command}) => command.includes(password)), false);
+  assert.equal(
+    inputs.some(({command}) => command.includes(password)),
+    false,
+  );
 });
