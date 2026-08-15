@@ -19,24 +19,37 @@ let
     forward_auth 127.0.0.1:${toString authentikOutpostPort} {
       uri ${authentikOutpostPath}
       header_down Location "^http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}(.*)$" "https://${lanHost}${cfg.identity.authentikPath}$1"
-      copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements X-Authentik-Name X-Authentik-Email X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
+      copy_headers {
+        X-Authentik-Username
+        X-Authentik-Groups
+        X-Authentik-Entitlements
+        X-Authentik-Name
+        X-Authentik-Email
+        X-Authentik-Uid
+        X-Authentik-Jwt
+        X-Authentik-Meta-Jwks
+        X-Authentik-Meta-Outpost
+        X-Authentik-Meta-Provider
+        X-Authentik-Meta-App
+        X-Authentik-Meta-Version
+        X-Authentik-Username>Remote-User
+        X-Authentik-Groups>Remote-Groups
+        X-Authentik-Name>Remote-Name
+        X-Authentik-Email>Remote-Email
+        X-Authentik-Uid>Remote-UID
+      }
     }
     @missingAuthentikIdentity not header X-Authentik-Username *
     respond @missingAuthentikIdentity 403
-    request_header Remote-User {http.request.header.X-Authentik-Username}
-    request_header Remote-Groups {http.request.header.X-Authentik-Groups}
-    request_header Remote-Name {http.request.header.X-Authentik-Name}
-    request_header Remote-Email {http.request.header.X-Authentik-Email}
-    request_header Remote-UID {http.request.header.X-Authentik-Uid}
   '';
   caddyOnDemandAuth = feature: scope: ''
     forward_auth unix/${onDemandGateSocket} {
       uri /authorize?feature=${feature}&scope=${scope}
-      header_up Remote-User {http.request.header.X-Authentik-Username}
-      header_up Remote-Groups {http.request.header.X-Authentik-Groups}
-      header_up Remote-Name {http.request.header.X-Authentik-Name}
-      header_up Remote-Email {http.request.header.X-Authentik-Email}
-      header_up Remote-UID {http.request.header.X-Authentik-Uid}
+      header_up Remote-User {http.request.header.Remote-User}
+      header_up Remote-Groups {http.request.header.Remote-Groups}
+      header_up Remote-Name {http.request.header.Remote-Name}
+      header_up Remote-Email {http.request.header.Remote-Email}
+      header_up Remote-UID {http.request.header.Remote-UID}
       header_up Authorization {http.request.header.Authorization}
       header_up X-API-Key {http.request.header.X-API-Key}
     }
@@ -49,11 +62,11 @@ let
     in ''
     forward_auth unix/${onDemandGateSocket} {
       uri /authorize?scope=${entry.id}
-      header_up Remote-User {http.request.header.X-Authentik-Username}
-      header_up Remote-Groups {http.request.header.X-Authentik-Groups}
-      header_up Remote-Name {http.request.header.X-Authentik-Name}
-      header_up Remote-Email {http.request.header.X-Authentik-Email}
-      header_up Remote-UID {http.request.header.X-Authentik-Uid}
+      header_up Remote-User {http.request.header.Remote-User}
+      header_up Remote-Groups {http.request.header.Remote-Groups}
+      header_up Remote-Name {http.request.header.Remote-Name}
+      header_up Remote-Email {http.request.header.Remote-Email}
+      header_up Remote-UID {http.request.header.Remote-UID}
     }
   '';
   caddyOnDemandTransport = ''

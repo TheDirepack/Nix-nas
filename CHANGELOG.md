@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.28 — 2026-08-15
+
+- Pass the trusted Authentik identity to capability gates through explicit renamed forward-auth headers.
+
 ## 2.2.0-alpha.27 — 2026-08-15
 
 - Preserve the trusted Authentik identity when Caddy forwards capability checks to the on-demand authorization gate.
