@@ -57,4 +57,4 @@ Nix OS NAS 2.2.6 source.provenance.json
 - **Every code change requires a new version number.** Any change to executable code, Nix configuration/module logic, scripts, service definitions, UI code, tests that alter executable qualification behavior, release tooling, generated-runtime configuration, or other non-documentation source must bump `VERSION` before it is published.
 - A packaging-script change is a code change and therefore requires a version bump; only rerunning the unchanged packaging code does not.
 
-For the alpha line, increment the alpha revision (`2.2.0-alpha.20` -> `2.2.0-alpha.21`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.
+For the alpha line, increment the alpha revision (`2.2.0-alpha.21` -> `2.2.0-alpha.22`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.
