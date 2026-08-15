@@ -17,7 +17,7 @@
 
 `modules/nas/internal/default.nix` merges internal contexts with duplicate-name detection. New helpers should stay local unless multiple configuration modules consume them.
 
-Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-control/services.yaml` (revision = sha256 of exact bytes). `JSON Schema` at `/etc/nas-control/managed-services-v3.schema.json` is the structural/UI contract. The split seeds (`managed-services-native-services.nix` + `managed-services-platform-routes.nix`) and the operation/backup declarations are aggregated into `managed-services-seed-v2.nix` with shared data/helper definitions in `managed-services-helpers.nix` (imported, not duplicated); the restic timer override and native-dump services live beside the Restic service in `storage-monitoring.nix`. `features.json` is gone.
+Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-control/services.yaml` (revision = sha256 of exact bytes). `JSON Schema` at `/etc/nas-control/managed-services-v3.schema.json` is the structural/UI contract. The baseline, operation, backup, and platform declarations are all aggregated into `managed-services-seed-v2.nix` with shared data/helper definitions in `managed-services-helpers.nix` (imported, not duplicated); the restic timer override and native-dump services live beside the Restic service in `storage-monitoring.nix`. `features.json` is gone.
 
 ## Python services
 

@@ -49,7 +49,12 @@ in
         message = "nas.tftp.internalPort must be unprivileged because CopyParty does not run as root.";
       }
       {
-        assertion = !cfg.tftp.enable || !(lib.elem cfg.tftp.internalPort ([ 443 5353 ] ++ lib.optionals cfg.syncthing.enable [ 21027 22000 ]));
+        assertion =
+          let
+            helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };
+          in
+          !cfg.tftp.enable
+          || !(lib.elem cfg.tftp.internalPort ([ 443 5353 ] ++ lib.optionals cfg.syncthing.enable [ helpers.syncthingDiscoveryPort helpers.syncthingSyncPort ]));
         message = "nas.tftp.internalPort conflicts with HTTPS/HTTP3, mDNS, or an enabled Syncthing UDP port.";
       }
       {

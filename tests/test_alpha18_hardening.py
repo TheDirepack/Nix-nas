@@ -21,8 +21,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("compile_document", spec)
         for module in (
             "managed-services.nix",
-            "managed-services-native-services.nix",
-            "managed-services-platform-routes.nix",
+            "managed-services-seed-v2.nix",
         ):
             self.assertIn(module, default_module)
         self.assertNotIn("managed-services-v2.nix", default_module)

@@ -499,7 +499,21 @@ def remote_admin_policy_name() -> str:
 
 
 _REMOTE_ADMIN_PRIORITY = "-300"
-_REMOTE_ADMIN_PORTS: list[tuple[str, str]] = [("22", "tcp"), ("9092", "tcp"), ("443", "tcp")]
+
+
+def _remote_admin_ports() -> list[tuple[str, str]]:
+    cockpit_port = os.environ.get("NAS_V2_COCKPIT_PORT", "9092")
+    try:
+        port_int = int(cockpit_port)
+        if not 1 <= port_int <= 65535:
+            raise ValueError
+        cockpit_port = str(port_int)
+    except (ValueError, TypeError):
+        cockpit_port = "9092"
+    return [("22", "tcp"), (cockpit_port, "tcp"), ("443", "tcp")]
+
+
+_REMOTE_ADMIN_PORTS: list[tuple[str, str]] = _remote_admin_ports()
 
 # Deadman contract: default 60s acknowledgement window, native systemd timer.
 _DEFAULT_DEADMAN_WINDOW = 60

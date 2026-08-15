@@ -26,15 +26,20 @@ let
   vaultwardenDataDir = "${cfg.zfsRoot}/${vaultwardenStateDirectory}";
   vaultwardenBackupDir = "${cfg.zfsRoot}/vaultwarden/backup";
 
-  # Native application integration constants. Managed Services V2 owns the
-  # service/route model; these values only configure the corresponding native
-  # NixOS services and seed their V2 targets.
+  # Core appliance integration constants. Managed Services V2 owns the
+  # service/route model; Authentik and Cockpit are platform substrate.
   authentikPort = 9000;
   authentikOutpostPort = cfg.identity.authentikOutpostPort;
   authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
   cockpitPort = 9092;
-  syncthingGuiPort = 8384;
-  vaultwardenPort = 8222;
+
+  v2Helpers = import ../config/managed-services-helpers.nix {
+    inherit lib config;
+    nasInternal = {
+      inherit cockpitPort vaultwardenDataDir vaultwardenBackupDir copypartyDataDir;
+    };
+  };
+  inherit (v2Helpers) syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort;
 
   vaultwardenSecretDir = "${secretRoot}/vaultwarden";
   zfsSecretDir = "${secretRoot}/zfs";
@@ -133,7 +138,7 @@ in
   inherit
     cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
-    authentikPort cockpitPort syncthingGuiPort vaultwardenPort
+    authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
     authentikOutpostPort authentikOutpostPath
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir

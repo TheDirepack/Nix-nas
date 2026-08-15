@@ -11,7 +11,7 @@ in
         # The canonical V2 spec permits Nix-provided application defaults to seed
         # services.yaml only when no V2 authority existed before this oneshot ran.
         # The base seed ExecStart creates a minimal stub when absent; this marker
-        # carries the pre-ExecStart fact into the native-services postStart helper.
+        # carries the pre-ExecStart fact into the seed bootstrap postStart helper.
         # Once created it must survive a failed initial seed attempt so the next
         # oneshot invocation can retry. The bootstrap helper clears it after a
         # successful seed or after detecting a concurrent real authority writer.

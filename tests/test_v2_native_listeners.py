@@ -8,14 +8,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class ManagedServicesV2NativeListenerTests(unittest.TestCase):
     def test_direct_application_ingress_lives_in_v2_seed(self) -> None:
-        seed = (ROOT / "modules" / "nas" / "config" / "managed-services-native-services.nix").read_text(
+        seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(
             encoding="utf-8"
         )
-        self.assertIn('sync-tcp = portListener "tcp" 22000;', seed)
-        self.assertIn('sync-quic = portListener "udp" 22000;', seed)
-        self.assertIn('local-discovery = portListener "udp" 21027;', seed)
+        self.assertIn('sync-tcp = portListener "tcp" syncthingSyncPort;', seed)
+        self.assertIn('sync-quic = portListener "udp" syncthingSyncPort;', seed)
+        self.assertIn('local-discovery = portListener "udp" syncthingDiscoveryPort;', seed)
         self.assertIn('daemon "upsd.service" "NUT UPS network server"', seed)
-        self.assertIn('listeners.nut = portListener "tcp" 3493;', seed)
+        self.assertIn('listeners.nut = portListener "tcp" nutUpsdPort;', seed)
         self.assertIn('platformService ((daemon "upsd.service"', seed)
         self.assertIn("listeners = lib.optionalAttrs cfg.tftp.enable", seed)
         self.assertIn('tftp-request = (portListener "udp" cfg.tftp.port)', seed)

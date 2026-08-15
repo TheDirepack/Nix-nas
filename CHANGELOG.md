@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.0-alpha.22 — 2026-08-15
+
+- Make Managed Services V2 the single port authority: define syncthing/vaultwarden/NUT listeners in `managed-services-helpers.nix` and consume them in `managed-services-seed-v2.nix` (no literals in `base.nix`/`validation.nix`/`host-platform.nix`); delete the split no-op catalogs (`managed-services-native-services.nix`, `managed-services-platform-routes.nix`).
+- Derive Python capability and URL literals from `V2 effective.json` (`nas_common`, `nas_identity_model`, `nas_identity_sync`, `nas_state` quiesce, `nas_v2_systemd` libvirtd, `nas_v2_network` cockpit port).
+
 ## 2.2.0-alpha.21 — 2026-08-15
 
 - Fold Managed Services V2 operation and backup declarations into `managed-services-seed-v2.nix`; move the restic timer override and native-dump/override services beside the Restic service in `storage-monitoring.nix`, and remove the now-empty split-seed modules.

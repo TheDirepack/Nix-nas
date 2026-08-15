@@ -72,7 +72,26 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
     os.environ.get("NAS_ACCOUNT_JOURNAL", "/var/lib/nas-identity-sync/account-plan-journal.json")
 )
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
-SYNCTHING_URL = os.environ.get("NAS_SYNCTHING_URL", "http://127.0.0.1:8384").rstrip("/")
+
+
+def _resolve_syncthing_url() -> str:
+    explicit = os.environ.get("NAS_SYNCTHING_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    try:
+        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        port = (
+            data.get("services", {}).get("syncthing", {}).get("routes", {}).get("web", {}).get("target", {}).get("port")
+        )
+        if isinstance(port, int) and 1 <= port <= 65535:
+            return f"http://127.0.0.1:{port}"
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return "http://127.0.0.1:8384"
+
+
+SYNCTHING_URL = _resolve_syncthing_url()
 SYNCTHING_CONFIG_DIR = pathlib.Path(os.environ.get("NAS_SYNCTHING_CONFIG_DIR", "/var/lib/syncthing/.config/syncthing"))
 
 

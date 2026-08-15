@@ -5,6 +5,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+import json
+import os
+import pathlib
+
 from nas_common import (
     ADMIN_GROUP,
     DISABLED_GROUP,
@@ -13,6 +17,23 @@ from nas_common import (
     application_capability_allowed,
 )
 from nas_syncthing_devices import DeviceError, normalize_devices, validate_username
+
+_SYNCTHING_SERVICE = os.environ.get("NAS_V2_SYNCTHING_SERVICE", "syncthing")
+_SYNCTHING_CAPABILITY = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", "access")
+
+
+def _resolve_syncthing_capability() -> tuple[str, str]:
+    service = os.environ.get("NAS_V2_SYNCTHING_SERVICE", _SYNCTHING_SERVICE)
+    capability = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", _SYNCTHING_CAPABILITY)
+    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    try:
+        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        caps = data.get("derived", {}).get("authorization", {}).get(service, {}).get("capabilities", {})
+        if capability in caps:
+            return service, capability
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return service, capability
 
 RESERVED_GROUPS = (
     ADMIN_GROUP,
@@ -41,7 +62,8 @@ class User:
 
     @property
     def personal_sync(self) -> bool:
-        return application_capability_allowed(set(self.groups), "syncthing", "access")
+        service, capability = _resolve_syncthing_capability()
+        return application_capability_allowed(set(self.groups), service, capability)
 
 
 @dataclass(frozen=True)

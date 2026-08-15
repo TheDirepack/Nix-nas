@@ -20,13 +20,12 @@ class V2SeedOnceContractTests(unittest.TestCase):
         self.assertIn('markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";', seed)
         self.assertIn("${v2Source}/nas_v2_bootstrap.py", seed)
         self.assertIn("--marker ${lib.escapeShellArg markerPath}", seed)
-        # Old split seeds must no longer declare their own bootstrap seeds.
+        # Old split seed modules are gone; managed-services-seed-v2.nix is the sole authority.
         for path in (
             "modules/nas/config/managed-services-native-services.nix",
             "modules/nas/config/managed-services-platform-routes.nix",
         ):
-            content = (ROOT / path).read_text(encoding="utf-8")
-            self.assertNotIn('yamlFormat.generate "managed-services-', content)
+            self.assertFalse((ROOT / path).exists(), f"split seed {path} must stay deleted")
 
     def test_seed_aggregation_contains_all_built_in_categories(self) -> None:
         seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")

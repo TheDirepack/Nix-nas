@@ -175,7 +175,7 @@ let
       printf 'Generated from the exact release source. These pages are reference-only; edit the repository and rebuild rather than changing generated documentation.\n'
       append_source "Operator configuration template" ${../../../local.nix} local.nix nix
       append_source "Managed Services V2 integration" ${../../../modules/nas/config/managed-services.nix} modules/nas/config/managed-services.nix nix
-      append_source "Managed Services V2 native service catalog" ${../../../modules/nas/config/managed-services-native-services.nix} modules/nas/config/managed-services-native-services.nix nix
+      append_source "Managed Services V2 seed catalog" ${../../../modules/nas/config/managed-services-seed-v2.nix} modules/nas/config/managed-services-seed-v2.nix nix
       append_source "Managed Services V2 schema" ${../../../schemas/managed-services-v3.schema.json} schemas/managed-services-v3.schema.json json
       append_source "Reverse proxy bootstrap routes" ${../../../modules/nas/config/reverse-proxy.nix} modules/nas/config/reverse-proxy.nix nix
       append_source "Application service definitions" ${../../../modules/nas/config/application-services.nix} modules/nas/config/application-services.nix nix

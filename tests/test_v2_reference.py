@@ -186,18 +186,21 @@ class V2ReferenceTests(unittest.TestCase):
         # This is now consistent: both use comma only
 
     def test_no_duplicate_route_catalogs(self):
-        native = (ROOT / "modules/nas/config/managed-services-native-services.nix").read_text(encoding="utf-8")
-        (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
-        # Native should have no routes for duplicated paths
-        for path in ["/ai/", "/ai/v1", "/ai/runtime", "/vault", "/shares"]:
-            # Count occurrences of pathRoute with that path in native
-            native.count(f'"{path}"')
-            # Should be 0 in native, or at least not in routes
-            # Check that native does not have "routes = {" with those paths
-            # Simpler: ensure native does not contain pathRoute for those
-            if path in ["/ai/", "/vault"]:
-                # These are in seed's ai-workspace and vaultwarden
-                self.assertNotIn(f'pathRoute [ "{path}"', native, f"native should not have duplicate {path}")
+        # The deleted native/platform split seed modules cannot be re-introduced.
+        for stale in (
+            "modules/nas/config/managed-services-native-services.nix",
+            "modules/nas/config/managed-services-platform-routes.nix",
+        ):
+            self.assertFalse((ROOT / stale).exists(), f"split seed {stale} must stay deleted")
+        # Route ownership is exclusive to managed-services-seed-v2.nix (and the
+        # pathRoute helper); no other module may declare a path route.
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        helpers = (ROOT / "modules/nas/config/managed-services-helpers.nix").read_text(encoding="utf-8")
+        for module in (ROOT / "modules/nas/config").glob("*.nix"):
+            source = module.read_text(encoding="utf-8")
+            if module.name in {"managed-services-seed-v2.nix", "managed-services-helpers.nix"}:
+                continue
+            self.assertNotIn("pathRoute [", source, f"route catalog must stay in seed, not {module.name}")
 
 
 if __name__ == "__main__":

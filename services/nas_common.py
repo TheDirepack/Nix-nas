@@ -252,8 +252,31 @@ def application_capability_allowed(
     return application_capability_group(service_id, capability) in groups
 
 
+_COPYPARTY_SERVICE = os.environ.get("NAS_V2_COPYPARTY_SERVICE", "copyparty")
+_COPYPARTY_CAPABILITY = os.environ.get("NAS_V2_COPYPARTY_CAPABILITY", "files")
+
+
+def _resolve_v2_service_capability(
+    service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
+) -> tuple[str, str]:
+    service = os.environ.get(service_env, fallback_service)
+    capability = os.environ.get(capability_env, fallback_capability)
+    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    try:
+        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        caps = data.get("derived", {}).get("authorization", {}).get(service, {}).get("capabilities", {})
+        if capability in caps:
+            return service, capability
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return service, capability
+
+
 def account_has_personal_share(groups: set[str]) -> bool:
-    return GUEST_GROUP not in groups and application_capability_allowed(groups, "copyparty", "files")
+    service, capability = _resolve_v2_service_capability(
+        "NAS_V2_COPYPARTY_SERVICE", "NAS_V2_COPYPARTY_CAPABILITY", _COPYPARTY_SERVICE, _COPYPARTY_CAPABILITY
+    )
+    return GUEST_GROUP not in groups and application_capability_allowed(groups, service, capability)
 
 
 def read_json_object(

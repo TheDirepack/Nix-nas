@@ -606,12 +606,23 @@ def _vm_unit(
     source_dir: pathlib.Path,
     descriptor_path: pathlib.Path,
 ) -> str:
+    # libvirtd is platform substrate when virtualization is enabled; derive the
+    # unit name from the V2 virtualization service when present, otherwise use
+    # the well-known platform unit as fallback for pre-V2 callers.
+    libvirt_unit = "libvirtd.service"
+    try:
+        virt = effective.get("services", {}).get("virtualization", {})
+        candidate = virt.get("runtime", {}).get("unit") if isinstance(virt.get("runtime"), dict) else None
+        if isinstance(candidate, str) and candidate.endswith(".service"):
+            libvirt_unit = candidate
+    except (AttributeError, TypeError):
+        pass
     return "\n".join(
         [
             "[Unit]",
             "Description=" + _single_line(service["name"], field="service name"),
-            "Requires=libvirtd.service",
-            "After=libvirtd.service",
+            f"Requires={libvirt_unit}",
+            f"After={libvirt_unit}",
             *_lifecycle_unit_lines(service),
             *_dependency_lines(effective, service),
             "",

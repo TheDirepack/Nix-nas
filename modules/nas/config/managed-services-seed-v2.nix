@@ -2,7 +2,7 @@
 
 let
   cfg = config.nas;
-  inherit (nasInternal) syncthingGuiPort vaultwardenPort cockpitPort;
+  inherit (nasInternal) cockpitPort;
   desiredPath = "/var/lib/nas-control/services.yaml";
   markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
@@ -33,6 +33,11 @@ let
     adminCapability
     portal
     portListener
+    syncthingGuiPort
+    syncthingSyncPort
+    syncthingDiscoveryPort
+    vaultwardenPort
+    nutUpsdPort
     ;
   # Operation aliases are canonicalized in helpers; reuse single definitions.
   operationJob = helpers.scheduledJob;
@@ -94,9 +99,9 @@ let
         (capability "admin" "Administer Syncthing")
       ];
       listeners = {
-        sync-tcp = portListener "tcp" 22000;
-        sync-quic = portListener "udp" 22000;
-        local-discovery = portListener "udp" 21027;
+        sync-tcp = portListener "tcp" syncthingSyncPort;
+        sync-quic = portListener "udp" syncthingSyncPort;
+        local-discovery = portListener "udp" syncthingDiscoveryPort;
       };
       routes.web = (pathRoute [ "/syncthing" ] (httpTarget syncthingGuiPort) (identity "admin")) // {
         proxy.stripPrefix = "/syncthing";
@@ -256,7 +261,7 @@ let
   }
   // lib.optionalAttrs (cfg.power.ups.enable && cfg.power.ups.mode == "netserver") {
     ups-server = platformService ((daemon "upsd.service" "NUT UPS network server") // {
-      listeners.nut = portListener "tcp" 3493;
+      listeners.nut = portListener "tcp" nutUpsdPort;
     });
   }
   // lib.optionalAttrs (cfg.power.ups.enable && cfg.power.ups.web.enable) {
@@ -463,7 +468,7 @@ let
     };
   };
 
-  # --- helpers from managed-services-platform-routes.nix ---
+  # --- platform services (Cockpit route) ---
   platformServices = {
     cockpit = {
       name = "Cockpit system administration";

@@ -1,9 +1,16 @@
 { lib, config, nasInternal }:
 let
   cfg = config.nas;
-  inherit (nasInternal) syncthingGuiPort vaultwardenPort cockpitPort;
+  inherit (nasInternal) cockpitPort;
 in
 rec {
+  # Managed Services V2 application catalog integration ports
+  syncthingGuiPort = 8384;
+  syncthingSyncPort = 22000;
+  syncthingDiscoveryPort = 21027;
+  vaultwardenPort = 8222;
+  nutUpsdPort = cfg.power.ups.web.upsdPort;
+
   durationSeconds = value:
     let
       matched = builtins.match "^([0-9]+)(s|sec|min|m|h|d|w)$" value;
