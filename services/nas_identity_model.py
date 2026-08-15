@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Mapping
-
-import json
-import os
-import pathlib
 
 from nas_common import (
     ADMIN_GROUP,
@@ -22,18 +20,24 @@ _SYNCTHING_SERVICE = os.environ.get("NAS_V2_SYNCTHING_SERVICE", "syncthing")
 _SYNCTHING_CAPABILITY = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", "access")
 
 
-def _resolve_syncthing_capability() -> tuple[str, str]:
+def _resolve_syncthing_capability() -> tuple[str, str] | None:
     service = os.environ.get("NAS_V2_SYNCTHING_SERVICE", _SYNCTHING_SERVICE)
     capability = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", _SYNCTHING_CAPABILITY)
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     try:
         data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        caps = data.get("derived", {}).get("authorization", {}).get(service, {}).get("capabilities", {})
-        if capability in caps:
+        derived = data.get("derived", {}).get("authorization", {})
+        if not isinstance(derived, dict):
+            raise ValueError("derived.authorization is not a dict")
+        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
+        if isinstance(caps, dict) and capability in caps:
             return service, capability
+        if isinstance(derived, dict) and derived:
+            return None
     except (OSError, ValueError, json.JSONDecodeError):
         pass
     return service, capability
+
 
 RESERVED_GROUPS = (
     ADMIN_GROUP,
@@ -62,7 +66,10 @@ class User:
 
     @property
     def personal_sync(self) -> bool:
-        service, capability = _resolve_syncthing_capability()
+        resolved = _resolve_syncthing_capability()
+        if resolved is None:
+            return False
+        service, capability = resolved
         return application_capability_allowed(set(self.groups), service, capability)
 
 

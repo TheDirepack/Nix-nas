@@ -258,24 +258,34 @@ _COPYPARTY_CAPABILITY = os.environ.get("NAS_V2_COPYPARTY_CAPABILITY", "files")
 
 def _resolve_v2_service_capability(
     service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
-) -> tuple[str, str]:
+) -> tuple[str, str] | None:
     service = os.environ.get(service_env, fallback_service)
     capability = os.environ.get(capability_env, fallback_capability)
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     try:
         data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        caps = data.get("derived", {}).get("authorization", {}).get(service, {}).get("capabilities", {})
-        if capability in caps:
+        derived = data.get("derived", {}).get("authorization", {})
+        if not isinstance(derived, dict):
+            raise ValueError("derived.authorization is not a dict")
+        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
+        if isinstance(caps, dict) and capability in caps:
             return service, capability
+        # V2 is authoritative and does not define this service/capability -> fail closed.
+        # Distinguish from "V2 not available" (file missing/parse error) which falls back.
+        if isinstance(derived, dict) and derived:
+            return None
     except (OSError, ValueError, json.JSONDecodeError):
         pass
     return service, capability
 
 
 def account_has_personal_share(groups: set[str]) -> bool:
-    service, capability = _resolve_v2_service_capability(
+    resolved = _resolve_v2_service_capability(
         "NAS_V2_COPYPARTY_SERVICE", "NAS_V2_COPYPARTY_CAPABILITY", _COPYPARTY_SERVICE, _COPYPARTY_CAPABILITY
     )
+    if resolved is None:
+        return False
+    service, capability = resolved
     return GUEST_GROUP not in groups and application_capability_allowed(groups, service, capability)
 
 

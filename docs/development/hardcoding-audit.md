@@ -1,8 +1,8 @@
 # Hardcoding Audit — V2 Seed Authority
 
-Date: 2026-05-13
-Scope: `modules/nas/**/*.nix` + `services/nas_*.py` / `services/nas_v2_*.py`
-Exempt core: Authentik, Cockpit, Caddy (platform substrate — may remain hardcoded)
+Date: 2026-05-15
+Scope: `modules/nas/**/*.nix` + `modules/ai/**/*.nix` + `services/nas_*.py` / `services/nas_v2_*.py` + `cockpit/src/**/*`
+Exempt core: Authentik, Cockpit, Caddy platform substrate (may remain hardcoded), but Caddy still contains a Syncthing-specific branch at `reverse-proxy.nix:79` which is not exempt and should be V2-driven.
 
 ## Where V2 YAMLs live
 
@@ -28,24 +28,36 @@ Fix: `managed-services-helpers.nix` now defines the V2 application catalog ports
 
 Fix: deleted both modules and their imports; `code-map.md` and `validate-structure.py` updated; tests re-pointed to `seed-v2.nix` (`test_v2_native_listeners`, `test_v2_platform_runtime_ownership`, `test_v2_vlan_and_direct_listeners`, `test_v2_reference.test_no_duplicate_route_catalogs` now asserts no `pathRoute [` outside `seed-v2.nix`/`helpers.nix`).
 
-### 3. Python service/capability literals
+### 3. Python service/capability literals — fail-closed from V2
 
-`nas_common:256` (`"copyparty","files"`) and `nas_identity_model:44` (`"syncthing","access"`) embedded V2 app ids.
+`nas_common:256` (`"copyparty","files"`) and `nas_identity_model:44` (`"syncthing","access"`) embedded V2 app ids and fell back to legacy groups when V2 was authoritative but did not define the service. Repro: effective with no `syncthing` service still authorized `application.syncthing.access`.
 
-Fix: both now resolve `service`/`capability` from `NAS_V2_*` env (injected by Nix) and validate against `V2 effective.json` `derived.authorization[service].capabilities` before falling back to the historic literals.
+Fix: both now resolve `service`/`capability` from `NAS_V2_*` env and validate against `V2 effective.json` `derived.authorization`. When V2 is readable and non-empty but does not contain the requested service/capability, they return `None` and the caller denies (`return False`) — fail closed. Only when V2 is unreadable (pre-V2 caller, file missing) do they fall back to the historic literals.
 
-### 4. Dynamic unit lists and VM dependency
+### 4. Dynamic unit lists and VM dependency — V2-first
 
-`nas_state:624` quiesce tuple (`copyparty/syncthing/vaultwarden` + core), `nas_cockpit_api:1020` overview units, `nas_v2_systemd:613` `Requires=libvirtd.service`.
+`nas_state:614` `export_quiesce_units()` previously checked `NAS_STATE_QUIESCE_UNITS_JSON` first (always set by `account-tools.nix:353`) and only fell back to V2 `derived.runtime` with an incorrect `if any(legacy in units)` gate that re-introduced all three legacy app units for a `demo.service` effective.
 
-Fix: `export_quiesce_units()` now tries `NAS_STATE_QUIESCE_UNITS_JSON` → `V2 effective.json` `derived.runtime` managed owner units plus core platform units, falling back to the static tuple; `nas_v2_systemd._vm_unit` derives `libvirt_unit` from `effective.services.virtualization.runtime.unit` with `libvirtd.service` fallback.
+Fix: `export_quiesce_units()` now checks `V2 effective.json` first (`caddy`/`authentik` core + `derived.runtime` managed `ownerUnit`s), then `NAS_STATE_QUIESCE_UNITS_JSON`, then static tuple. The legacy-unit gate is removed. `account-tools.nix` still exports the var for non-V2 callers, but V2 now takes precedence. `nas_v2_systemd._vm_unit:613` derives `libvirt_unit` from `effective.services.virtualization.runtime.unit` with `libvirtd.service` fallback.
 
 ### 5. Remaining Python path/state-root literals
 
 `nas_state` authorities, `nas_ai_config`, `nas_cockpit_api`, `nas_identity_sync` config dir defaults already honor `NAS_*` env with hardcoded fallbacks matching the Nix `zfsRoot`-derived paths. With the V2-effective fallbacks above plus env injection at the owning systemd units, the fallbacks are no longer authority. Caddy/secret substrate paths remain exempt.
 
+### 6. Known remaining non-compliance (not yet moved to V2)
+
+- AI control plane (`nas_ai_config.py:22`, `nas_cockpit_api.py:804`, `cockpit/src` AI editor) still owns llama-swap config outside V2; V2 only controls `ai-runtime`/`ai-workspace` lifecycle.
+- Coding agent (`coding-agent.nix:113`, `nas_coding_agent.py:70`) still owns netns/veth/NAT/socat/heartbeat outside V2 session.
+- Backup/state paths duplicated in `storage-monitoring.nix:168` (Restic) and `account-tools.nix:132` (state registry) vs `managed-services-seed-v2.nix` `storageResources`; AI paths are in Restic/state but not in V2 `storageResources`.
+- Caddy `reverse-proxy.nix:79` still has a Syncthing-specific `application.syncthing.admin` branch and `caddy-helpers.nix:34` retains CopyParty/Vaultwarden helpers though V2 generates routes generically.
+- Identity sync (`nas_identity_model:229`, `nas_identity_sync:575`) still hard-codes Syncthing policy, CopyParty share layout, and Syncthing API reconciliation beyond bare plumbing.
+- Alert router `nas_alert_router.py:1` is a full custom daemon.
+- Application ports remain centralized in `managed-services-helpers.nix:7` (single Nix authority) rather than in the mutable V2 object itself — the helpers are now the Nix-side catalog, not yet fully in `services.yaml`.
+
 ## Verification
 
-- `PYTHONPATH=tests:services python -m unittest tests.test_v2_native_listeners tests.test_v2_vlan_and_direct_listeners tests.test_v2_platform_runtime_ownership tests.test_v2_reference tests.test_v2_seed_once_contract tests.test_contract_operations tests.test_alpha18_hardening` — 49 OK
-- `test_v2*` suite (partial above, 43 files) — all PASS
-- `scripts/validate-structure.py` — `REQUIRED_FILES` no longer lists the deleted split seeds
+- `test_v2_reference.test_cockpit_port_consistency` now validates `_remote_admin_ports` derivation via `NAS_V2_COCKPIT_PORT` (not a literal) and `base.nix:cockpitPort`.
+- `nas_state.export_quiesce_units` with `effective={demo.service}` now returns `[authentik, auth-worker, caddy, demo.service]` (not legacy copyparty/syncthing/vaultwarden).
+- `nas_common.account_has_personal_share` / `nas_identity_model.personal_sync` with `effective={}` or missing service now correctly deny.
+- Full suite: 723 passing, 6 skipped, 1 stale-port test now fixed; 3 socket sandbox failures pass with socket permission.
+- `scripts/validate-structure.py` — `REQUIRED_FILES` no longer lists the deleted split seeds; `cockpit/dist` rebuilt and `VERSION`/`README`/`flake` metadata synced.

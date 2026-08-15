@@ -163,9 +163,11 @@ class V2ReferenceTests(unittest.TestCase):
         self.assertIn("derived", effective)
 
     def test_cockpit_port_consistency(self):
-        # Remote admin firewall should use 9092, not 9090
+        # Remote admin firewall should use 9092 by default, derived from V2 cockpit port
         network = (ROOT / "services/nas_v2_network.py").read_text(encoding="utf-8")
-        self.assertIn('("9092", "tcp")', network)
+        self.assertIn("NAS_V2_COCKPIT_PORT", network)
+        self.assertIn("_remote_admin_ports", network)
+        self.assertIn('"9092"', network)
         self.assertNotIn('("9090", "tcp")', network)
         # Check base.nix and interfaces.md
         base = (ROOT / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
@@ -194,8 +196,12 @@ class V2ReferenceTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"split seed {stale} must stay deleted")
         # Route ownership is exclusive to managed-services-seed-v2.nix (and the
         # pathRoute helper); no other module may declare a path route.
-        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
-        helpers = (ROOT / "modules/nas/config/managed-services-helpers.nix").read_text(encoding="utf-8")
+        self.assertIn(
+            "pathRoute", (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "pathRoute", (ROOT / "modules/nas/config/managed-services-helpers.nix").read_text(encoding="utf-8")
+        )
         for module in (ROOT / "modules/nas/config").glob("*.nix"):
             source = module.read_text(encoding="utf-8")
             if module.name in {"managed-services-seed-v2.nix", "managed-services-helpers.nix"}:

@@ -26,6 +26,8 @@ class V2ReadinessTests(unittest.TestCase):
         false_bin = shutil.which("false")
         self.assertIsNotNone(true_bin)
         self.assertIsNotNone(false_bin)
+        assert true_bin is not None
+        assert false_bin is not None
         self.assertTrue(
             readiness.probe_ready(
                 {"type": "systemd", "unit": "demo.service"},

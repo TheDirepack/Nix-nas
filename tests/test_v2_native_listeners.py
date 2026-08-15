@@ -8,9 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class ManagedServicesV2NativeListenerTests(unittest.TestCase):
     def test_direct_application_ingress_lives_in_v2_seed(self) -> None:
-        seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(
-            encoding="utf-8"
-        )
+        seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(encoding="utf-8")
         self.assertIn('sync-tcp = portListener "tcp" syncthingSyncPort;', seed)
         self.assertIn('sync-quic = portListener "udp" syncthingSyncPort;', seed)
         self.assertIn('local-discovery = portListener "udp" syncthingDiscoveryPort;', seed)

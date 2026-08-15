@@ -104,9 +104,7 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
 
     def test_application_listener_rules_are_not_hard_coded_in_host_firewall_baseline(self) -> None:
         firewall_module = (ROOT / "modules" / "nas" / "config" / "network-firewall.nix").read_text(encoding="utf-8")
-        native_seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(
-            encoding="utf-8"
-        )
+        native_seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(encoding="utf-8")
 
         self.assertNotIn("cfg.tftp", firewall_module)
         self.assertNotIn('port = "22000"', firewall_module)

@@ -612,6 +612,24 @@ def _safe_tar_info(info: tarfile.TarInfo) -> tarfile.TarInfo:
 
 
 def export_quiesce_units() -> tuple[str, ...]:
+    # V2 effective is the authority when available; otherwise fall back to env or static.
+    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    try:
+        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        services = data.get("services", {}) if isinstance(data, dict) else {}
+        derived_runtime = data.get("derived", {}).get("runtime", {}) if isinstance(data, dict) else {}
+        units: list[str] = []
+        for unit in ("authentik.service", "authentik-worker.service", "nas-identity-sync.timer", "caddy.service"):
+            units.append(unit)
+        for service_id, runtime in derived_runtime.items():
+            owner = runtime.get("ownerUnit") if isinstance(runtime, dict) else None
+            svc = services.get(service_id, {}) if isinstance(services, dict) else {}
+            if isinstance(owner, str) and owner and svc.get("managed") is True:
+                units.append(owner)
+        if units:
+            return tuple(dict.fromkeys(units))
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
     raw = os.environ.get("NAS_STATE_QUIESCE_UNITS_JSON")
     if raw:
         try:
@@ -621,27 +639,6 @@ def export_quiesce_units() -> tuple[str, ...]:
         if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
             raise StateError("NAS_STATE_QUIESCE_UNITS_JSON must be an array of unit names")
         return tuple(dict.fromkeys(value))
-    # Derive from V2 effective when available so app units are not a second hardcoded list.
-    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
-    try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        services = data.get("services", {}) if isinstance(data, dict) else {}
-        derived_runtime = data.get("derived", {}).get("runtime", {}) if isinstance(data, dict) else {}
-        units: list[str] = []
-        # Core platform units always quiesced; app units come from V2 derived runtime.
-        for unit in ("authentik.service", "authentik-worker.service", "nas-identity-sync.timer", "caddy.service"):
-            units.append(unit)
-        for service_id, runtime in derived_runtime.items():
-            owner = runtime.get("ownerUnit") if isinstance(runtime, dict) else None
-            svc = services.get(service_id, {}) if isinstance(services, dict) else {}
-            if isinstance(owner, str) and owner and svc.get("managed") is True:
-                # Only include daemon/job app units that are part of the V2 managed set.
-                units.append(owner)
-        # Fallback to static app list only if effective has no managed app units.
-        if any(u in units for u in ("copyparty.service", "syncthing.service", "vaultwarden.service")):
-            return tuple(dict.fromkeys(units))
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
     return (
         "authentik.service",
         "authentik-worker.service",
