@@ -1238,6 +1238,8 @@ def authorize_service_scope(scope: str, headers: Any) -> bool:
     endpoint = effective.get("endpoints", {}).get(key)
     if not isinstance(endpoint, dict):
         return False
+    if endpoint.get("available") is not True:
+        return False
     auth = endpoint.get("auth") or {}
     mode = auth.get("mode", endpoint.get("access", "admin"))
     if mode == "public":

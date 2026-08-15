@@ -249,6 +249,42 @@ class BrowserAuthzInputTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '"status": 503'):
                 self.authz.verify_routes(object(), [self.authz.RouteExpectation("/ai/", True)])
 
+    def test_authenticated_portal_retries_transient_forward_auth_403(self) -> None:
+        class Driver:
+            def __init__(self) -> None:
+                self.probes = 0
+
+            def get(self, _url: str) -> None:
+                self.probes += 1
+
+            def execute_script(self, script: str) -> str:
+                if "readyState" in script:
+                    return "complete"
+                return "HTTP ERROR 403" if self.probes == 1 else "NAS"
+
+            def get_log(self, _log_type: str) -> list[object]:
+                return []
+
+        driver = Driver()
+        with mock.patch.object(self.authz.time, "sleep"):
+            self.authz.wait_for_authenticated_portal(driver, "https://nas-test.local")
+        self.assertEqual(driver.probes, 2)
+
+    def test_authenticated_portal_timeout_reports_persistent_403(self) -> None:
+        class Driver:
+            def get(self, _url: str) -> None:
+                pass
+
+            def execute_script(self, script: str) -> str:
+                return "complete" if "readyState" in script else "HTTP ERROR 403"
+
+            def get_log(self, _log_type: str) -> list[object]:
+                return []
+
+        with mock.patch.object(self.authz.time, "sleep"):
+            with self.assertRaisesRegex(Exception, "did not become reachable"):
+                self.authz.wait_for_authenticated_portal(Driver(), "https://nas-test.local")
+
 
 if __name__ == "__main__":
     unittest.main()

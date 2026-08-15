@@ -35,7 +35,9 @@ let
             visible = linkKey != null;
             category = portalCategory;
             icon = portalIcon;
-          };
+          } // (if linkKey != null then { inherit linkKey; } else {});
+          inherit linkKey;
+          available = enabled;
         };
       };
     } // (if description != null then { description = description; } else {});

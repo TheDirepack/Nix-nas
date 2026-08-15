@@ -152,6 +152,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('caddyCapabilityAuth "syncthing"', proxy)
         self.assertIn('caddyCapabilityAuth "vault"', proxy)
 
+    def test_vault_fallback_is_authenticated_and_capability_gated(self):
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        vault = proxy.split("handle /vault/* {", 1)[1].split("# Native share links", 1)[0]
+        fallback = vault.rsplit("handle {", 1)[1]
+        self.assertIn("caddyForwardAuth", fallback)
+        self.assertIn('caddyCapabilityAuth "vault"', fallback)
+
 
 if __name__ == "__main__":
     unittest.main()

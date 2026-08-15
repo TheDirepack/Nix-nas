@@ -320,6 +320,8 @@ in
             ${vaultwardenProxy}
           }
           handle {
+            ${caddyForwardAuth}
+            ${caddyCapabilityAuth "vault"}
             ${vaultwardenProxy}
           }
         }

@@ -20,18 +20,6 @@ let
       uri ${authentikOutpostPath}
       header_down Location "^http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}(.*)$" "https://${lanHost}${cfg.identity.authentikPath}$1"
       copy_headers {
-        X-Authentik-Username
-        X-Authentik-Groups
-        X-Authentik-Entitlements
-        X-Authentik-Name
-        X-Authentik-Email
-        X-Authentik-Uid
-        X-Authentik-Jwt
-        X-Authentik-Meta-Jwks
-        X-Authentik-Meta-Outpost
-        X-Authentik-Meta-Provider
-        X-Authentik-Meta-App
-        X-Authentik-Meta-Version
         X-Authentik-Username>Remote-User
         X-Authentik-Groups>Remote-Groups
         X-Authentik-Name>Remote-Name
@@ -39,7 +27,7 @@ let
         X-Authentik-Uid>Remote-UID
       }
     }
-    @missingAuthentikIdentity not header X-Authentik-Username *
+    @missingAuthentikIdentity not header Remote-User *
     respond @missingAuthentikIdentity 403
   '';
   caddyOnDemandAuth = feature: scope: ''

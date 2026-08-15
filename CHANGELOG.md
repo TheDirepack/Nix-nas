@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.0-alpha.29 — 2026-08-15
+
+- Make Authentik forward-auth identity handoff canonical and retry only transient portal authorization races in the VM browser qualification.
+- Normalize the generated service-registry v2 shape for all consumers and complete managed-service adapter validation and firewall cleanup coverage.
+
 ## 2.2.0-alpha.28 — 2026-08-15
 
 - Pass the trusted Authentik identity to capability gates through explicit renamed forward-auth headers.

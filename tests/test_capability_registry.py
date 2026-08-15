@@ -21,10 +21,14 @@ class CapabilityRegistryTests(unittest.TestCase):
     def test_generated_registry_is_exported_and_schema_backed(self) -> None:
         internal = text("modules/nas/internal/default.nix")
         system = text("modules/nas/config/system.nix")
+        registry = text("modules/nas/internal/service-registry.nix")
         validator = text("scripts/validate-repository-data.py")
         self.assertIn("common // core_registry", internal)
         self.assertIn('"nas-control/capabilities.json"', system)
         self.assertIn('"nas-control/capability-registry.schema.json"', system)
+        self.assertIn('"nas-control/endpoints.json".text = builtins.toJSON nasInternal.serviceRegistryV2', system)
+        self.assertIn("serviceRegistryV2 =", registry)
+        self.assertIn("services = registry", registry)
         self.assertIn('"schemas/capability-registry.schema.json"', validator)
 
     def test_caddy_capabilities_fail_closed(self) -> None:
@@ -48,6 +52,8 @@ class CapabilityRegistryTests(unittest.TestCase):
             "header_up Remote-UID {http.request.header.Remote-UID}",
         ):
             self.assertIn(expected, caddy)
+        self.assertIn("not header Remote-User *", caddy)
+        self.assertNotIn("not header X-Authentik-Username *", caddy)
         self.assertNotIn(
             "header_up Remote-Groups {http.request.header.X-Authentik-Groups}",
             caddy,

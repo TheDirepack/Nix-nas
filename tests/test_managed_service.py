@@ -254,6 +254,28 @@ class ManagedServiceTests(unittest.TestCase):
         firewall = nas_service_firewall.plan_firewall("x", secured)
         self.assertEqual([action["type"] for action in firewall["actions"]], ["deny-lan", "allow-egress"])
 
+        firewall_service = service_template()
+        firewall_service["endpoints"] = {
+            "web": {
+                "transport": "tcp",
+                "targetPort": 8080,
+                "exposure": {"type": "port", "value": 8080},
+                "auth": {"mode": "public"},
+            }
+        }
+        firewall_service["network"] = {
+            "lanAccess": False,
+            "allowedEgress": [{"cidr": "10.0.0.0/8", "ports": [443]}],
+        }
+        with mock.patch.object(nas_service_firewall.subprocess, "run") as run:
+            applied = nas_service_firewall.apply_firewall("x", firewall_service)
+            removed = nas_service_firewall.remove_firewall("x", firewall_service)
+        self.assertEqual(applied["actions"][-1]["protocol"], "tcp")
+        self.assertEqual(len(removed["removed"]), 3)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertTrue(any("--add-port=8080/tcp" in command for command in commands))
+        self.assertTrue(any("--remove-port=8080/tcp" in command for command in commands))
+
     def test_no_sqlite_dependency(self):
         self.assertNotIn("sqlite3", (SERVICES / "nas_managed_service.py").read_text(encoding="utf-8"))
 
@@ -281,6 +303,44 @@ class ManagedServiceTests(unittest.TestCase):
             service["enabled"] = False
             msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {"x": service}}, store)
             self.assertFalse(msvc.effective_registry(builtin, store)["endpoints"]["x:web"]["available"])
+
+    def test_v2_builtin_registry_is_flattened_for_all_consumers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            builtin = root / "builtin.json"
+            store = root / "services.json"
+            builtin.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "generation": 1,
+                        "services": {
+                            "vaultwarden": {
+                                "label": "Vaultwarden",
+                                "enabled": False,
+                                "endpoints": {
+                                    "main": {
+                                        "transport": "http",
+                                        "targetPort": 8222,
+                                        "exposure": {"type": "path", "value": "/vault/", "prefix": True},
+                                        "auth": {"mode": "forward-auth", "allow": "groups", "groups": ["vault"]},
+                                        "portal": {"visible": True, "linkKey": "vaultwarden"},
+                                        "linkKey": "vaultwarden",
+                                    }
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {}}, store)
+            effective = msvc.effective_registry(builtin, store)
+            endpoint = effective["endpoints"]["vaultwarden:main"]
+            self.assertFalse(endpoint["available"])
+            self.assertEqual(endpoint["publicPath"], "/vault/")
+            self.assertEqual(endpoint["linkKey"], "vaultwarden")
+            self.assertEqual(msvc.portal_projection(effective)["entries"][0]["url"], "/vault/")
 
     def test_write_effective_and_portal_are_atomic_and_cover_projection_types(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -387,7 +447,7 @@ class ManagedServiceTests(unittest.TestCase):
             msvc.atomic_write_store({"schemaVersion": 2, "generation": 1, "services": {}}, store)
             self.assertNotIn("x", msvc.effective_registry(builtin, store)["services"])
 
-    def test_cli_reconcile_validate_show_and_unimplemented_paths(self):
+    def test_cli_reconcile_validate_show_and_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             store = root / "services.json"
@@ -436,10 +496,10 @@ class ManagedServiceTests(unittest.TestCase):
                 self.assertTrue((root / "caddy-managed.conf").is_file())
                 self.assertEqual(json.loads(effective.read_text(encoding="utf-8"))["services"], {})
 
-                errors = io.StringIO()
-                with contextlib.redirect_stderr(errors):
-                    self.assertEqual(msvc.main(["plan"]), 2)
-                self.assertIn("not yet implemented", errors.getvalue())
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(msvc.main(["plan"]), 0)
+                self.assertEqual(json.loads(output.getvalue()), {})
 
                 store.write_text("{bad", encoding="utf-8")
                 errors = io.StringIO()
