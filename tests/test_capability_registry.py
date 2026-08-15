@@ -35,22 +35,14 @@ class CapabilityRegistryTests(unittest.TestCase):
 
     def test_caddy_gate_uses_trusted_authentik_identity(self) -> None:
         caddy = text("modules/nas/internal/caddy-helpers.nix")
-        for header in (
-            "Username",
-            "Groups",
-            "Name",
-            "Email",
-            "Uid",
+        for expected in (
+            "header_up Remote-User {http.request.header.X-Authentik-Username}",
+            "header_up Remote-Groups {http.request.header.X-Authentik-Groups}",
+            "header_up Remote-Name {http.request.header.X-Authentik-Name}",
+            "header_up Remote-Email {http.request.header.X-Authentik-Email}",
+            "header_up Remote-UID {http.request.header.X-Authentik-Uid}",
         ):
-            remote_header = {
-                "Username": "User",
-                "Uid": "UID",
-            }.get(header, header)
-            self.assertIn(
-                "header_up Remote-" + remote_header
-                + " {http.request.header.X-Authentik-" + header + "}",
-                caddy,
-            )
+            self.assertIn(expected, caddy)
         self.assertNotIn(
             "header_up Remote-Groups {http.request.header.Remote-Groups}",
             caddy,
