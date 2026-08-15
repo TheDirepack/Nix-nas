@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.23 — 2026-08-15
+
+- Make multi-feature VM transitions atomic so browser and lifecycle qualification cannot race the runtime operation lock.
+
 ## 2.2.0-alpha.22 — 2026-08-15
 
 - Allow files-capable users to read the CopyParty share root while retaining administrator-only write and configuration access.

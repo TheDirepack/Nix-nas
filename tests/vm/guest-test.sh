@@ -79,6 +79,11 @@ wait_http() {
     bash "$@" "$url"
 }
 
+set_feature_modes() {
+  local modes=$1
+  printf '%s\n' "$modes" | nas-feature-control set-many - | jq -e '.ok == true' >/dev/null
+}
+
 http_code() {
   curl --silent --show-error --insecure --output /dev/null --write-out '%{http_code}' \
     --connect-timeout 3 --max-time 20 "$@"
@@ -693,8 +698,7 @@ log "Browser-level Authentik and capability authorization"
 # The browser matrix verifies that an allowed administrator can reach the
 # enabled AI route. Keep the optional stack resident for this phase; the
 # feature lifecycle phase below exercises its off/on-demand transitions.
-nas-feature-control set aiRuntime always | jq -e '.ok == true' >/dev/null
-nas-feature-control set aiWorkspace always | jq -e '.ok == true' >/dev/null
+set_feature_modes '{"aiRuntime":"always","aiWorkspace":"always"}'
 wait_active nas-llama-swap.service
 wait_active open-webui.service
 wait_http http://127.0.0.1:9380/health
@@ -723,8 +727,7 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   --baseline-password-file "$authz_secret_dir/baseline"
 cleanup_authz_secrets
 authz_secret_dir=""
-nas-feature-control set aiWorkspace off | jq -e '.ok == true' >/dev/null
-nas-feature-control set aiRuntime off | jq -e '.ok == true' >/dev/null
+set_feature_modes '{"aiRuntime":"off","aiWorkspace":"off"}'
 wait_inactive open-webui.service
 wait_inactive nas-llama-swap.service
 pass "Browser authorization and Authentik user-settings flow"
@@ -776,14 +779,12 @@ wait_inactive open-webui.service
 nas-feature-control set aiRuntime off | jq -e '.ok == true' >/dev/null
 wait_inactive nas-llama-swap.service
 
-nas-feature-control set aiRuntime on-demand | jq -e '.ok == true' >/dev/null
-nas-feature-control set aiWorkspace on-demand | jq -e '.ok == true' >/dev/null
+set_feature_modes '{"aiRuntime":"on-demand","aiWorkspace":"on-demand"}'
 nas-feature-control wake aiWorkspace | jq -e '.ok == true' >/dev/null
 wait_active nas-llama-swap.service
 wait_active open-webui.service
 wait_http http://127.0.0.1:9380/health
-nas-feature-control set aiWorkspace off >/dev/null
-nas-feature-control set aiRuntime off >/dev/null
+set_feature_modes '{"aiRuntime":"off","aiWorkspace":"off"}'
 wait_inactive open-webui.service
 wait_inactive nas-llama-swap.service
 pass "Open WebUI and llama-swap start, stop, and wake correctly"
