@@ -32,11 +32,11 @@ let
   caddyOnDemandAuth = feature: scope: ''
     forward_auth unix/${onDemandGateSocket} {
       uri /authorize?feature=${feature}&scope=${scope}
-      header_up Remote-User {http.request.header.Remote-User}
-      header_up Remote-Groups {http.request.header.Remote-Groups}
-      header_up Remote-Name {http.request.header.Remote-Name}
-      header_up Remote-Email {http.request.header.Remote-Email}
-      header_up Remote-UID {http.request.header.Remote-UID}
+      header_up Remote-User {http.request.header.X-Authentik-Username}
+      header_up Remote-Groups {http.request.header.X-Authentik-Groups}
+      header_up Remote-Name {http.request.header.X-Authentik-Name}
+      header_up Remote-Email {http.request.header.X-Authentik-Email}
+      header_up Remote-UID {http.request.header.X-Authentik-Uid}
       header_up Authorization {http.request.header.Authorization}
       header_up X-API-Key {http.request.header.X-API-Key}
     }
@@ -49,11 +49,11 @@ let
     in ''
     forward_auth unix/${onDemandGateSocket} {
       uri /authorize?scope=${entry.id}
-      header_up Remote-User {http.request.header.Remote-User}
-      header_up Remote-Groups {http.request.header.Remote-Groups}
-      header_up Remote-Name {http.request.header.Remote-Name}
-      header_up Remote-Email {http.request.header.Remote-Email}
-      header_up Remote-UID {http.request.header.Remote-UID}
+      header_up Remote-User {http.request.header.X-Authentik-Username}
+      header_up Remote-Groups {http.request.header.X-Authentik-Groups}
+      header_up Remote-Name {http.request.header.X-Authentik-Name}
+      header_up Remote-Email {http.request.header.X-Authentik-Email}
+      header_up Remote-UID {http.request.header.X-Authentik-Uid}
     }
   '';
   caddyOnDemandTransport = ''

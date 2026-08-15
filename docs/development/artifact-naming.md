@@ -13,8 +13,8 @@ Nix OS NAS <display-version> source.zip
 For the current prerelease version:
 
 ```text
-VERSION:                         2.2.0-alpha.26
-source archive filename:        Nix OS NAS 2.2.26 source.zip
+VERSION:                         2.2.0-alpha.27
+source archive filename:        Nix OS NAS 2.2.27 source.zip
 ```
 
 For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.MINOR.N`. This keeps development archives short and readable without changing `VERSION` or creating a new software release merely to repackage the same source.
@@ -22,7 +22,7 @@ For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.
 The ZIP keeps a canonical internal root directory containing the full repository version and qualification state, for example:
 
 ```text
-nixos-nas-2.2.0-alpha.26-source-only-unverified/
+nixos-nas-2.2.0-alpha.27-source-only-unverified/
 ```
 
 That internal name, `VERSION`, `README.md`, `CHANGELOG.md`, and the provenance JSON remain authoritative when exact release identity matters.
@@ -57,4 +57,4 @@ Nix OS NAS 2.2.6 source.provenance.json
 - **Every code change requires a new version number.** Any change to executable code, Nix configuration/module logic, scripts, service definitions, UI code, tests that alter executable qualification behavior, release tooling, generated-runtime configuration, or other non-documentation source must bump `VERSION` before it is published.
 - A packaging-script change is a code change and therefore requires a version bump; only rerunning the unchanged packaging code does not.
 
-For the alpha line, increment the alpha revision (`2.2.0-alpha.25` -> `2.2.0-alpha.26`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.
+For the alpha line, increment the alpha revision (`2.2.0-alpha.26` -> `2.2.0-alpha.27`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.27 — 2026-08-15
+
+- Preserve the trusted Authentik identity when Caddy forwards capability checks to the on-demand authorization gate.
+
 ## 2.2.0-alpha.26 — 2026-08-15
 
 - Base bundle-cache decisions on validated archives so restored VM bundles skip redundant source packaging and missing exports remain minimal.
