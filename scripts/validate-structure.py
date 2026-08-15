@@ -28,8 +28,6 @@ REQUIRED_FILES = {
     "modules/nas/config/managed-services.nix",
     "modules/nas/config/managed-services-native-services.nix",
     "modules/nas/config/managed-services-platform-routes.nix",
-    "modules/nas/config/managed-services-operations.nix",
-    "modules/nas/config/managed-services-backup-resources.nix",
     "modules/profiles/core-storage.nix",
     "modules/profiles/identity-sharing.nix",
     "modules/profiles/observability.nix",

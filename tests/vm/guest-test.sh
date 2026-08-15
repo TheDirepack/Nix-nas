@@ -687,7 +687,7 @@ ip netns del nas-untrusted-test
 ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
-log "Browser-level Authentik and capability authorization"
+log "Browser-level authorization and deterministic bundle probes"
 # The persistent wrapper keeps mutable local users across generations. Seed
 # the disposable fixture's PAM credential so direct Cockpit recovery remains
 # deterministic after the installed OS is updated in place.
@@ -714,6 +714,16 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
 cleanup_authz_secrets
 authz_secret_dir=""
 pass "Browser authorization and Authentik user-settings flow"
+
+# Deterministic bundle probes serve the built distribution over loopback with a
+# stub base1/cockpit.js so the React app mounts without the Cockpit shell, then
+# replay hostile backend strings and viewport/text-scale combinations. The VM
+# owns the committed distribution copy at /var/lib/nas-test/repo/cockpit/dist.
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value deterministicBundle)" python3 /var/lib/nas-test/repo/tests/browser/deterministic.py \
+  --dist /var/lib/nas-test/repo/cockpit/dist \
+  --evidence /tmp/nas-deterministic-bundle.json
+pass "Deterministic bundle XSS, layout, and console-error probes"
 
 log "Custom command surfaces and generated configuration"
 nas-secrets status | grep -q 'Runtime secrets: active'

@@ -5,10 +5,15 @@ let
     aiStorageRoot
     authentikDataDir
     cfg
+    copypartyDataDir
     copypartyUserConfigDir
+    failureAlert
     sanoidPolicy
   ;
   backupStage = cfg.backup.stagingPath;
+  helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };
+  authentikArtifact = helpers.authentikArtifact;
+  copypartyArtifact = helpers.copypartyArtifact;
   v2Source = ../../../services;
   v2BackupInventory = "/run/nas-control/backup-resources.json";
   v2BackupRuntimePaths = "/run/nas-control/restic-v2-runtime-paths";
@@ -47,6 +52,48 @@ let
     else [ "--repo" effectiveRepository ];
   resticCommand = "${pkgs.restic}/bin/restic ${lib.escapeShellArgs resticRepositoryArgs}";
   restoreVerifyPath = cfg.backup.restoreVerification.targetPath;
+
+  authentikDump = pkgs.writeShellScript "nas-backup-authentik-dump" ''
+    set -euo pipefail
+    artifact=${lib.escapeShellArg authentikArtifact}
+    install -d -m 0700 "$artifact"
+    temporary="$artifact/.database.pgdump.$$"
+    trap 'rm -f "$temporary"' EXIT
+    ${pkgs.util-linux}/bin/runuser -u postgres -- \
+      ${config.services.postgresql.package}/bin/pg_dump --format=custom authentik \
+      > "$temporary"
+    chmod 0600 "$temporary"
+    mv -f "$temporary" "$artifact/database.pgdump"
+    trap - EXIT
+  '';
+
+  copypartyDump = pkgs.writeShellScript "nas-backup-copyparty-dump" ''
+    set -euo pipefail
+    source_root=${lib.escapeShellArg "${copypartyDataDir}/copyparty"}
+    artifact=${lib.escapeShellArg copypartyArtifact}
+    install -d -m 0700 "$artifact"
+    ${pkgs.findutils}/bin/find "$artifact" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    ${pkgs.python3}/bin/python3 - "$source_root" "$artifact" <<'PYSQLITEBACKUP'
+import pathlib
+import sqlite3
+import sys
+
+source_root = pathlib.Path(sys.argv[1])
+artifact = pathlib.Path(sys.argv[2])
+for name in ("shares.db", "sessions.db"):
+    source = source_root / name
+    if not source.is_file():
+        continue
+    destination = artifact / name
+    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as source_db:
+        with sqlite3.connect(destination) as destination_db:
+            source_db.backup(destination_db)
+    destination.chmod(0o600)
+(artifact / ".complete").write_text("Managed Services V2 CopyParty database dump\n", encoding="utf-8")
+(artifact / ".complete").chmod(0o600)
+PYSQLITEBACKUP
+  '';
+
   syncoidArgs =
     lib.optional cfg.zfsReplication.recursive "--recursive"
     ++ lib.optional cfg.zfsReplication.useExistingSnapshots "--no-sync-snap"
@@ -203,11 +250,9 @@ in
             --zfs ${pkgs.zfs}/bin/zfs
           rm -rf ${lib.escapeShellArg backupStage}
         '';
-        timerConfig = if cfg.scheduler.backend == "systemd" then {
-          OnCalendar = "daily";
-          RandomizedDelaySec = "2h";
-          Persistent = true;
-        } else null;
+        # The existing Restic service stays the backup implementation. V2 owns its
+        # schedule, so the NixOS Restic module must not create a parallel timer.
+        timerConfig = null;
         pruneOpts = [
           "--keep-daily 14"
           "--keep-weekly 8"
@@ -237,6 +282,40 @@ in
           RCLONE_CONFIG = cfg.backup.remote.rcloneConfigFile;
         }
       );
+    };
+
+    systemd.services.nas-backup-authentik-dump = {
+      description = "Create a native PostgreSQL dump for Managed Services V2 backup";
+      onFailure = failureAlert;
+      requires = [ "postgresql.service" ];
+      after = [ "postgresql.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = authentikDump;
+        UMask = "0077";
+      };
+    };
+
+    systemd.services.nas-backup-copyparty-dump = {
+      description = "Create native SQLite dumps for Managed Services V2 backup";
+      onFailure = failureAlert;
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = copypartyDump;
+        UMask = "0077";
+      };
+    };
+
+    # nixpkgs supplies the correct SQLite-native Vaultwarden backup service.
+    # V2 invokes it synchronously from the Restic preparation transaction, so
+    # its independent boot/timer triggers are removed to avoid duplicate backup
+    # scheduling and a second policy authority. Priority 90 is enough to beat
+    # the module's normal-priority wantedBy without expanding the mkForce policy.
+    systemd.services.backup-vaultwarden = lib.mkIf cfg.vaultwarden.enable {
+      wantedBy = lib.mkOverride 90 [ ];
+    };
+    systemd.timers.backup-vaultwarden = lib.mkIf cfg.vaultwarden.enable {
+      wantedBy = lib.mkOverride 90 [ ];
     };
 
     systemd.services.nas-backup-restore-verify = lib.mkIf (

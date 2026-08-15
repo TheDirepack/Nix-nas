@@ -247,8 +247,10 @@ if HAS_HYPOTHESIS:
             is_cdi = accelerator.is_cdi_selector(raw)
             event("cdi:accepted" if is_cdi else "cdi:rejected")
             if is_cdi:
-                self.assertNotIn("/", raw.split("=")[0] if "=" in raw else raw)
-                self.assertIn("/", raw)
+                left, _, qualifier = raw.partition("=")
+                self.assertNotRegex(left, r"^/")  # never a leading-slash device path
+                self.assertEqual(1, left.count("/"))  # single vendor/class separator
+                self.assertNotIn("/", qualifier)  # CDI qualifier grammar forbids slash
                 self.assertIn("=", raw)
 
         @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])

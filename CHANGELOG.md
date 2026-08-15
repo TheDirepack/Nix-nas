@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.0-alpha.21 — 2026-08-15
+
+- Fold Managed Services V2 operation and backup declarations into `managed-services-seed-v2.nix`; move the restic timer override and native-dump/override services beside the Restic service in `storage-monitoring.nix`, and remove the now-empty split-seed modules.
+- Correct the CDI selector boundary contract so device paths are never misclassified as CDI annotations while the vendor/class prefix keeps its single separator.
+
 ## 2.2.0-alpha.20 — 2026-08-14
 
 - Compose VM cleanup handlers, derive QEMU watchdog budgets from one phase manifest, validate bundle closure ownership, and harden CI/source staging failure paths.

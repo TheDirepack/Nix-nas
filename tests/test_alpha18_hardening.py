@@ -23,8 +23,6 @@ class Alpha18HardeningContracts(unittest.TestCase):
             "managed-services.nix",
             "managed-services-native-services.nix",
             "managed-services-platform-routes.nix",
-            "managed-services-operations.nix",
-            "managed-services-backup-resources.nix",
         ):
             self.assertIn(module, default_module)
         self.assertNotIn("managed-services-v2.nix", default_module)

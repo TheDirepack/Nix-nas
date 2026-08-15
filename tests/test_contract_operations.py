@@ -9,15 +9,15 @@ class ContractTests(unittest.TestCase):
     def test_zfs_replication_and_boot_recovery_roles_are_separate(self) -> None:
         options = text("modules/nas/options/storage.nix") + text("modules/nas/options/operations.nix")
         storage = text("modules/nas/config/storage-monitoring.nix")
-        backup_resources = text("modules/nas/config/managed-services-backup-resources.nix")
+        seed = text("modules/nas/config/managed-services-seed-v2.nix")
         self.assertIn("zfsReplication", options)
         self.assertIn("syncoid", storage)
         self.assertIn("nas-boot-system", storage)
         self.assertIn("nas_v2_backup.py prepare", storage)
         self.assertIn("backupStage = cfg.backup.stagingPath", storage)
         self.assertNotIn("/run/nas-backup-stage", storage)
-        self.assertIn("source_db.backup(destination_db)", backup_resources)
-        self.assertIn("native-dump", backup_resources)
+        self.assertIn("source_db.backup(destination_db)", storage)
+        self.assertIn("native-dump", seed)
 
     def test_native_ntfy_and_telegraf_smart_collection_are_authoritative(self) -> None:
         observability = text("modules/nas/config/observability.nix")

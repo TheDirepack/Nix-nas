@@ -171,23 +171,23 @@ class V2BackupTests(unittest.TestCase):
     def test_nix_keeps_restic_native_and_preparation_application_agnostic(self):
         default_module = (ROOT / "modules/nas/default.nix").read_text(encoding="utf-8")
         storage = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
-        operations = (ROOT / "modules/nas/config/managed-services-operations.nix").read_text(encoding="utf-8")
-        resources = (ROOT / "modules/nas/config/managed-services-backup-resources.nix").read_text(encoding="utf-8")
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
 
-        self.assertIn("./config/managed-services-backup-resources.nix", default_module)
+        self.assertNotIn("./config/managed-services-backup-resources.nix", default_module)
+        self.assertNotIn("./config/managed-services-operations.nix", default_module)
         self.assertIn("services.restic.backups", storage)
         self.assertIn("dynamicFilesFrom", storage)
         self.assertIn("nas_v2_backup.py prepare", storage)
         self.assertNotIn("nas_v2_backup_runtime.py", storage)
         self.assertIn("--systemctl ${pkgs.systemd}/bin/systemctl", storage)
-        self.assertNotIn("pg_dump --format=custom authentik", storage)
-        self.assertNotIn("PYSQLITEBACKUP", storage)
+        self.assertIn("pg_dump --format=custom authentik", storage)
+        self.assertIn("PYSQLITEBACKUP", storage)
         self.assertNotIn("systemctl start backup-vaultwarden.service", storage)
-        self.assertIn('job "restic-backups-nas-boot-system.service"', operations)
-        self.assertIn("nas-boot-system.timerConfig = lib.mkForce null", operations)
-        self.assertIn('consistency = "native-dump";', resources)
-        self.assertIn('unit = "backup-vaultwarden.service";', resources)
-        self.assertNotIn("restic backup", operations)
+        self.assertIn("timerConfig = null", storage)
+        self.assertIn('operationJob "restic-backups-nas-boot-system.service"', seed)
+        self.assertIn('consistency = "native-dump";', seed)
+        self.assertIn('unit = "backup-vaultwarden.service";', seed)
+        self.assertNotIn("restic backup", seed)
 
 
 if __name__ == "__main__":

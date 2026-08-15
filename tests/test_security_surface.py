@@ -171,9 +171,7 @@ class SecuritySurfaceTests(unittest.TestCase):
         self.assertEqual({"shell-format-string", "insecure-temporary-file"}, rules)
 
     def test_copyparty_backup_uses_sqlite_backup_api_not_meta_commands(self):
-        source = (ROOT / "modules" / "nas" / "config" / "managed-services-backup-resources.nix").read_text(
-            encoding="utf-8"
-        )
+        source = (ROOT / "modules" / "nas" / "config" / "storage-monitoring.nix").read_text(encoding="utf-8")
         self.assertIn("source_db.backup(destination_db)", source)
         self.assertIn('sqlite3.connect(f"file:{source}?mode=ro", uri=True)', source)
         self.assertNotIn(".backup '$destination'", source)

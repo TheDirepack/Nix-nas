@@ -23,8 +23,6 @@ class V2SeedOnceContractTests(unittest.TestCase):
         # Old split seeds must no longer declare their own bootstrap seeds.
         for path in (
             "modules/nas/config/managed-services-native-services.nix",
-            "modules/nas/config/managed-services-operations.nix",
-            "modules/nas/config/managed-services-backup-resources.nix",
             "modules/nas/config/managed-services-platform-routes.nix",
         ):
             content = (ROOT / path).read_text(encoding="utf-8")
