@@ -52,6 +52,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("GENERATED_CONFIG", identity)
         self.assertIn('copypartyUserSeed = pkgs.writeText "00-local-overrides.conf"', system)
         self.assertIn("[/shares/admin/copyparty-config]", system)
+        self.assertIn("r: @nas_allow_files", system)
         self.assertIn("[/shares/users/''${u%+nas_allow_files}]", system)
         self.assertIn("rwmd.: ''${u}", system)
         self.assertNotIn("A: ''${u}, @nas_admin", system)
