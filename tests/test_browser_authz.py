@@ -227,6 +227,16 @@ class BrowserAuthzInputTests(unittest.TestCase):
             self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
         self.assertEqual(fetch.call_count, 2)
 
+    def test_allowed_route_waits_for_slow_copy_party_first_user_reload(self) -> None:
+        responses = [{"status": 403, "url": "https://nas-test.local/shares/"}] * 14
+        responses.append({"status": 200, "url": "https://nas-test.local/shares/"})
+        with (
+            mock.patch.object(self.authz, "fetch_status", side_effect=responses) as fetch,
+            mock.patch.object(self.authz.time, "sleep"),
+        ):
+            self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+        self.assertEqual(fetch.call_count, self.authz.ALLOWED_ROUTE_RETRY_ATTEMPTS)
+
     def test_allowed_route_rejects_service_unavailable(self) -> None:
         with (
             mock.patch.object(
