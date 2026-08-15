@@ -228,7 +228,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 2)
 
     def test_allowed_route_waits_for_slow_copy_party_first_user_reload(self) -> None:
-        responses = [{"status": 403, "url": "https://nas-test.local/shares/"}] * 14
+        responses = [{"status": 403, "url": "https://nas-test.local/shares/"}] * 29
         responses.append({"status": 200, "url": "https://nas-test.local/shares/"})
         with (
             mock.patch.object(self.authz, "fetch_status", side_effect=responses) as fetch,

@@ -98,7 +98,7 @@ def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
 
 
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
-ALLOWED_ROUTE_RETRY_ATTEMPTS = 15
+ALLOWED_ROUTE_RETRY_ATTEMPTS = 30
 
 
 def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
