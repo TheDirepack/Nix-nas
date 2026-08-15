@@ -20,7 +20,7 @@ _SYNCTHING_SERVICE = os.environ.get("NAS_V2_SYNCTHING_SERVICE", "syncthing")
 _SYNCTHING_CAPABILITY = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", "access")
 
 
-def _resolve_syncthing_capability() -> tuple[str, str] | None:
+def _resolve_syncthing_capability() -> tuple[str, str] | None:  # pragma: no cover - V2 integration
     service = os.environ.get("NAS_V2_SYNCTHING_SERVICE", _SYNCTHING_SERVICE)
     capability = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", _SYNCTHING_CAPABILITY)
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")

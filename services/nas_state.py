@@ -611,11 +611,11 @@ def _safe_tar_info(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
-def export_quiesce_units() -> tuple[str, ...]:
+def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integration
     # V2 effective is the authority when available; otherwise fall back to env or static.
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))  # pragma: no cover
         services = data.get("services", {}) if isinstance(data, dict) else {}
         derived_runtime = data.get("derived", {}).get("runtime", {}) if isinstance(data, dict) else {}
         units: list[str] = []

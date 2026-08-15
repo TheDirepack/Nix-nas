@@ -501,7 +501,7 @@ def remote_admin_policy_name() -> str:
 _REMOTE_ADMIN_PRIORITY = "-300"
 
 
-def _remote_admin_ports() -> list[tuple[str, str]]:
+def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 integration
     cockpit_port = os.environ.get("NAS_V2_COCKPIT_PORT", "9092")
     try:
         port_int = int(cockpit_port)

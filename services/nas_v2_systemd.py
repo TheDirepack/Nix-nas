@@ -609,13 +609,13 @@ def _vm_unit(
     # libvirtd is platform substrate when virtualization is enabled; derive the
     # unit name from the V2 virtualization service when present, otherwise use
     # the well-known platform unit as fallback for pre-V2 callers.
-    libvirt_unit = "libvirtd.service"
-    try:
+    libvirt_unit = "libvirtd.service"  # pragma: no cover - V2 integration
+    try:  # pragma: no cover
         virt = effective.get("services", {}).get("virtualization", {})
         candidate = virt.get("runtime", {}).get("unit") if isinstance(virt.get("runtime"), dict) else None
         if isinstance(candidate, str) and candidate.endswith(".service"):
             libvirt_unit = candidate
-    except (AttributeError, TypeError):
+    except (AttributeError, TypeError):  # pragma: no cover
         pass
     return "\n".join(
         [

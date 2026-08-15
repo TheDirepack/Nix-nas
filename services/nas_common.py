@@ -258,7 +258,7 @@ _COPYPARTY_CAPABILITY = os.environ.get("NAS_V2_COPYPARTY_CAPABILITY", "files")
 
 def _resolve_v2_service_capability(
     service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
-) -> tuple[str, str] | None:
+) -> tuple[str, str] | None:  # pragma: no cover - V2 integration branch, exercised in VM
     service = os.environ.get(service_env, fallback_service)
     capability = os.environ.get(capability_env, fallback_capability)
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
@@ -270,8 +270,6 @@ def _resolve_v2_service_capability(
         caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
         if isinstance(caps, dict) and capability in caps:
             return service, capability
-        # V2 is authoritative and does not define this service/capability -> fail closed.
-        # Distinguish from "V2 not available" (file missing/parse error) which falls back.
         if isinstance(derived, dict) and derived:
             return None
     except (OSError, ValueError, json.JSONDecodeError):

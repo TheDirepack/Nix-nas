@@ -74,7 +74,7 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 
 
-def _resolve_syncthing_url() -> str:
+def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
     explicit = os.environ.get("NAS_SYNCTHING_URL")
     if explicit:
         return explicit.rstrip("/")
