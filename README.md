@@ -1,4 +1,4 @@
-# NixOS NAS 2.2.0-alpha.21
+# NixOS NAS 2.2.0-alpha.22
 
 A NixOS-based NAS appliance that keeps storage, identity, secrets, applications, and recovery paths explicit and independently understandable.
 
