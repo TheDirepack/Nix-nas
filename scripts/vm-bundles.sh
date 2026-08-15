@@ -252,7 +252,10 @@ save() {
     ' bundle-export-heartbeat "$PROG" "$export_name" "$path_count" "$(( $(date +%s) ))" &
     heartbeat_pid=$!
     set +e
-    xargs --no-run-if-empty "$NIX_STORE_CMD" --export < "$export_paths" | gzip > "$export_tmp"
+    # These archives are disposable cache transport, not release artifacts.
+    # Fast deterministic compression keeps a cold handoff from spending most
+    # of its time compressing data that Nix will checksum and cache again.
+    xargs --no-run-if-empty "$NIX_STORE_CMD" --export < "$export_paths" | gzip -1 -n > "$export_tmp"
     export_status=("${PIPESTATUS[@]}")
     set -e
     kill -- "-$heartbeat_pid" 2>/dev/null || kill -KILL "$heartbeat_pid" 2>/dev/null || true
