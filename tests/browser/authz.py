@@ -8,6 +8,7 @@ import shutil
 import ssl
 import stat
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +25,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 class RouteExpectation:
     path: str
     allowed: bool
+    allowed_redirect_prefix: str | None = None
 
 
 def browser() -> webdriver.Chrome:
@@ -355,11 +357,36 @@ def fetch_status(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
 
 
 def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]) -> None:
+    def matches(expectation: RouteExpectation, result: dict[str, Any]) -> bool:
+        status = int(result.get("status", 0))
+        url = str(result.get("url", ""))
+        url_path = urllib.parse.urlsplit(url).path
+        identity_flow = "/identity/if/flow/" in url_path
+        if expectation.allowed:
+            return (
+                200 <= status < 400
+                and (not identity_flow or expectation.allowed_redirect_prefix is not None)
+                and (
+                    expectation.allowed_redirect_prefix is None
+                    or url_path.startswith(expectation.allowed_redirect_prefix)
+                )
+            )
+        return status in {401, 403} or identity_flow
+
     failures: list[dict[str, Any]] = []
     for expectation in expectations:
         result = fetch_status(driver, expectation.path)
-        denied = result["status"] in {401, 403} or "/identity/if/flow/" in result["url"]
-        if denied == expectation.allowed:
+        for _ in range(5):
+            if matches(expectation, result):
+                break
+            # CopyParty creates the first IdP user lazily. Its first request
+            # can race the configuration reload, so retry only transient
+            # failures for routes that should be reachable.
+            if not expectation.allowed or result.get("status") not in {401, 403, 502, 503}:
+                break
+            time.sleep(1)
+            result = fetch_status(driver, expectation.path)
+        if not matches(expectation, result):
             failures.append({"path": expectation.path, "expectedAllowed": expectation.allowed, **result})
     if failures:
         raise RuntimeError(json.dumps(failures, indent=2, sort_keys=True))
@@ -508,7 +535,11 @@ def main() -> int:
         common_allowed
         + [
             RouteExpectation(capability_routes["webdav"], True),
-            RouteExpectation(capability_routes["syncthing"], True),
+            RouteExpectation(
+                capability_routes["syncthing"],
+                True,
+                "/identity/if/flow/nas-user-settings/",
+            ),
             RouteExpectation("/syncthing/", True),
             RouteExpectation(capability_routes["ai"], True),
             RouteExpectation("/alerts/", True),
@@ -523,7 +554,11 @@ def main() -> int:
         common_allowed
         + [
             RouteExpectation(capability_routes["webdav"], False),
-            RouteExpectation(capability_routes["syncthing"], True),
+            RouteExpectation(
+                capability_routes["syncthing"],
+                True,
+                "/identity/if/flow/nas-user-settings/",
+            ),
             RouteExpectation("/syncthing/", False),
             RouteExpectation(capability_routes["ai"], False),
             RouteExpectation("/alerts/", False),

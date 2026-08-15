@@ -690,6 +690,14 @@ ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
 log "Browser-level Authentik and capability authorization"
+# The browser matrix verifies that an allowed administrator can reach the
+# enabled AI route. Keep the optional stack resident for this phase; the
+# feature lifecycle phase below exercises its off/on-demand transitions.
+nas-feature-control set aiRuntime always | jq -e '.ok == true' >/dev/null
+nas-feature-control set aiWorkspace always | jq -e '.ok == true' >/dev/null
+wait_active nas-llama-swap.service
+wait_active open-webui.service
+wait_http http://127.0.0.1:9380/health
 # The persistent wrapper keeps mutable local users across generations. Seed
 # the disposable fixture's PAM credential so direct Cockpit recovery remains
 # deterministic after the installed OS is updated in place.
@@ -715,6 +723,10 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   --baseline-password-file "$authz_secret_dir/baseline"
 cleanup_authz_secrets
 authz_secret_dir=""
+nas-feature-control set aiWorkspace off | jq -e '.ok == true' >/dev/null
+nas-feature-control set aiRuntime off | jq -e '.ok == true' >/dev/null
+wait_inactive open-webui.service
+wait_inactive nas-llama-swap.service
 pass "Browser authorization and Authentik user-settings flow"
 
 log "Custom command surfaces and generated configuration"

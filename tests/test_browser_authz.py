@@ -191,6 +191,54 @@ class BrowserAuthzInputTests(unittest.TestCase):
             "https://nas.example/console/",
         )
 
+    def test_allowed_settings_route_accepts_its_authentik_flow_redirect(self) -> None:
+        expectation = self.authz.RouteExpectation("/settings/syncthing", True, "/identity/if/flow/nas-user-settings/")
+        with mock.patch.object(
+            self.authz,
+            "fetch_status",
+            return_value={
+                "status": 200,
+                "url": "https://nas-test.local/identity/if/flow/nas-user-settings/",
+            },
+        ):
+            self.authz.verify_routes(object(), [expectation])
+
+    def test_allowed_route_rejects_unexpected_authentik_redirect(self) -> None:
+        with mock.patch.object(
+            self.authz,
+            "fetch_status",
+            return_value={"status": 200, "url": "https://nas-test.local/identity/if/flow/login/"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "expectedAllowed"):
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+
+    def test_allowed_route_retries_copy_party_first_user_reload(self) -> None:
+        with (
+            mock.patch.object(
+                self.authz,
+                "fetch_status",
+                side_effect=[
+                    {"status": 403, "url": "https://nas-test.local/shares/"},
+                    {"status": 200, "url": "https://nas-test.local/shares/"},
+                ],
+            ) as fetch,
+            mock.patch.object(self.authz.time, "sleep"),
+        ):
+            self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_allowed_route_rejects_service_unavailable(self) -> None:
+        with (
+            mock.patch.object(
+                self.authz,
+                "fetch_status",
+                return_value={"status": 503, "url": "https://nas-test.local/ai/"},
+            ),
+            mock.patch.object(self.authz.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, '"status": 503'):
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/ai/", True)])
+
 
 if __name__ == "__main__":
     unittest.main()
