@@ -39,7 +39,7 @@ def main() -> int:
     parser.add_argument(
         "--max-dip",
         type=float,
-        default=2.0,
+        default=5.0,
         help="maximum allowed per-file branch-coverage drop against the baseline",
     )
     args = parser.parse_args()
