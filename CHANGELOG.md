@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.26 — 2026-08-15
+
+- Base bundle-cache decisions on validated archives so restored VM bundles skip redundant source packaging and missing exports remain minimal.
+
 ## 2.2.0-alpha.25 — 2026-08-15
 
 - Keep browser qualification alive through the full CopyParty first-identity ACL reload window.

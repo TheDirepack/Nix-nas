@@ -289,12 +289,12 @@ jobs:
       key_storage: ${{ steps.vm_bundles.outputs.key_storage }}
       key_ai: ${{ steps.vm_bundles.outputs.key_ai }}
       key_vm_drivers: ${{ steps.vm_bundles.outputs.key_vm_drivers }}
-      cache_core_hit: ${{ steps.vm_bundle_core.outputs.cache-hit }}
-      cache_identity_hit: ${{ steps.vm_bundle_identity.outputs.cache-hit }}
-      cache_observability_hit: ${{ steps.vm_bundle_observability.outputs.cache-hit }}
-      cache_storage_hit: ${{ steps.vm_bundle_storage.outputs.cache-hit }}
-      cache_ai_hit: ${{ steps.vm_bundle_ai.outputs.cache-hit }}
-      cache_vm_drivers_hit: ${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}
+      cache_core_hit: ${{ steps.vm_bundle_handoff.outputs.restored_core }}
+      cache_identity_hit: ${{ steps.vm_bundle_handoff.outputs.restored_identity }}
+      cache_observability_hit: ${{ steps.vm_bundle_handoff.outputs.restored_observability }}
+      cache_storage_hit: ${{ steps.vm_bundle_handoff.outputs.restored_storage }}
+      cache_ai_hit: ${{ steps.vm_bundle_handoff.outputs.restored_ai }}
+      cache_vm_drivers_hit: ${{ steps.vm_bundle_handoff.outputs.restored_vm_drivers }}
       bundle_cache_complete: ${{ steps.vm_bundle_handoff.outputs.cache_complete }}
       bundle_cache_namespace: ${{ steps.vm_bundle_namespace.outputs.suffix }}
     steps:
@@ -392,29 +392,37 @@ jobs:
       - name: Determine whether the exact VM bundle set was restored
         id: vm_bundle_handoff
         run: |
-          if [[ \
-            "${{ steps.vm_bundle_core.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_identity.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_observability.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_storage.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}" == true
-          ]]; then
+          set -euo pipefail
+          bundle_dir="$RUNNER_TEMP/vm-bundles"
+          missing=()
+          for name in core identity observability storage ai vm-drivers; do
+            archive="$bundle_dir/$name.nar.gz"
+            # The cache action can complete successfully on a miss. The archive
+            # on disk is the authoritative handoff state used by every later job.
+            if [[ -s "$archive" ]] && gzip -t "$archive"; then
+              printf 'restored_%s=true\n' "${name//-/_}" >> "$GITHUB_OUTPUT"
+            else
+              [[ ! -e "$archive" ]] || rm -f -- "$archive"
+              printf 'restored_%s=false\n' "${name//-/_}" >> "$GITHUB_OUTPUT"
+              missing+=("$name")
+            fi
+          done
+          if ((${#missing[@]} == 0)); then
             printf 'cache_complete=true\n' >> "$GITHUB_OUTPUT"
-            echo "All exact VM bundle caches were restored; export and publish are unnecessary."
+            echo "All exact VM bundle archives were restored and validated; export and publish are unnecessary."
           else
             printf 'cache_complete=false\n' >> "$GITHUB_OUTPUT"
-            echo "At least one exact VM bundle cache is missing; only missing bundles will be exported."
+            printf 'Missing or corrupt VM bundle archives: %s\n' "${missing[*]}"
+            echo "Only missing bundles will be exported."
           fi
-          if [[ \
-            "${{ steps.vm_bundle_core.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_identity.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_observability.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_storage.outputs.cache-hit }}" == true && \
-            "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true
+          if [[ -s "$bundle_dir/core.nar.gz" && \
+            -s "$bundle_dir/identity.nar.gz" && \
+            -s "$bundle_dir/observability.nar.gz" && \
+            -s "$bundle_dir/storage.nar.gz" && \
+            -s "$bundle_dir/ai.nar.gz"
           ]]; then
             printf 'package_cache_complete=true\n' >> "$GITHUB_OUTPUT"
-            echo "Core and all application bundles were restored; source packaging is unnecessary."
+            echo "Core and all application bundle archives were restored; source packaging is unnecessary."
           else
             printf 'package_cache_complete=false\n' >> "$GITHUB_OUTPUT"
           fi
@@ -506,12 +514,12 @@ jobs:
         if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         run: |
           bundle_args=()
-          [[ "${{ steps.vm_bundle_core.outputs.cache-hit }}" == true ]] || bundle_args+=(core)
-          [[ "${{ steps.vm_bundle_identity.outputs.cache-hit }}" == true ]] || bundle_args+=(identity)
-          [[ "${{ steps.vm_bundle_observability.outputs.cache-hit }}" == true ]] || bundle_args+=(observability)
-          [[ "${{ steps.vm_bundle_storage.outputs.cache-hit }}" == true ]] || bundle_args+=(storage)
-          [[ "${{ steps.vm_bundle_ai.outputs.cache-hit }}" == true ]] || bundle_args+=(ai)
-          [[ "${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}" == true ]] || bundle_args+=(vm-drivers)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_core }}" == true ]] || bundle_args+=(core)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_identity }}" == true ]] || bundle_args+=(identity)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_observability }}" == true ]] || bundle_args+=(observability)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_storage }}" == true ]] || bundle_args+=(storage)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_ai }}" == true ]] || bundle_args+=(ai)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_vm_drivers }}" == true ]] || bundle_args+=(vm-drivers)
           if [[ "${{ steps.vm_bundle_handoff.outputs.package_cache_complete }}" != true ]]; then
             nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace -L
             nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace -L
@@ -537,12 +545,12 @@ jobs:
           for archive in "${all_archives[@]}"; do
             name=${archive%.nar.gz}
             case "$name" in
-              core) cache_hit="${{ steps.vm_bundle_core.outputs.cache-hit }}" ;;
-              identity) cache_hit="${{ steps.vm_bundle_identity.outputs.cache-hit }}" ;;
-              observability) cache_hit="${{ steps.vm_bundle_observability.outputs.cache-hit }}" ;;
-              storage) cache_hit="${{ steps.vm_bundle_storage.outputs.cache-hit }}" ;;
-              ai) cache_hit="${{ steps.vm_bundle_ai.outputs.cache-hit }}" ;;
-              vm-drivers) cache_hit="${{ steps.vm_bundle_vm_drivers.outputs.cache-hit }}" ;;
+              core) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_core }}" ;;
+              identity) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_identity }}" ;;
+              observability) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_observability }}" ;;
+              storage) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_storage }}" ;;
+              ai) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_ai }}" ;;
+              vm-drivers) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_vm_drivers }}" ;;
               *) exit 1 ;;
             esac
             if [[ "$cache_hit" != true ]]; then
