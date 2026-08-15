@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -21,16 +22,20 @@ class V2ReadinessTests(unittest.TestCase):
             self.assertTrue(readiness.probe_ready({"type": "path", "path": str(path)}, systemctl="/bin/false"))
 
     def test_systemd_probe_uses_fixed_argv(self):
+        true_bin = shutil.which("true")
+        false_bin = shutil.which("false")
+        self.assertIsNotNone(true_bin)
+        self.assertIsNotNone(false_bin)
         self.assertTrue(
             readiness.probe_ready(
                 {"type": "systemd", "unit": "demo.service"},
-                systemctl="/bin/true",
+                systemctl=true_bin,
             )
         )
         self.assertFalse(
             readiness.probe_ready(
                 {"type": "systemd", "unit": "demo.service"},
-                systemctl="/bin/false",
+                systemctl=false_bin,
             )
         )
 
