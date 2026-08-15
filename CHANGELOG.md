@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.25 — 2026-08-15
+
+- Keep browser qualification alive through the full CopyParty first-identity ACL reload window.
+
 ## 2.2.0-alpha.24 — 2026-08-15
 
 - Give the browser qualification suite enough bounded time for CopyParty's lazy first-identity ACL reload to complete.
