@@ -33,13 +33,8 @@ let
   authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
   cockpitPort = 9092;
 
-  v2Helpers = import ../config/managed-services-helpers.nix {
-    inherit lib config;
-    nasInternal = {
-      inherit cockpitPort vaultwardenDataDir vaultwardenBackupDir copypartyDataDir;
-    };
-  };
-  inherit (v2Helpers) syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort;
+  v2Ports = import ./v2-ports.nix { inherit lib config; };
+  inherit (v2Ports) syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort;
 
   vaultwardenSecretDir = "${secretRoot}/vaultwarden";
   zfsSecretDir = "${secretRoot}/zfs";

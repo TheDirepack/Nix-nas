@@ -2,14 +2,10 @@
 let
   cfg = config.nas;
   inherit (nasInternal) cockpitPort;
+  v2Ports = import ../internal/v2-ports.nix { inherit lib config; };
 in
 rec {
-  # Managed Services V2 application catalog integration ports
-  syncthingGuiPort = 8384;
-  syncthingSyncPort = 22000;
-  syncthingDiscoveryPort = 21027;
-  vaultwardenPort = 8222;
-  nutUpsdPort = cfg.power.ups.web.upsdPort;
+  inherit (v2Ports) syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort;
 
   durationSeconds = value:
     let
