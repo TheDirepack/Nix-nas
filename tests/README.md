@@ -86,8 +86,9 @@ highly structured inputs that Hypothesis can generate directly.
 ## Matrix harness
 
 Use `./scripts/test-matrix.py list` to see which verification tiers are available
-on the current machine. `./scripts/test-matrix.py fast` runs source, security, and
-fuzz tiers with bounded subprocesses. `all --require-all` additionally requires
+on the current machine. `./scripts/test-matrix.py fast` runs source and security
+tiers with bounded subprocesses; run `./scripts/test-matrix.py fuzz` explicitly
+for generated smart-fuzz qualification. `all --require-all` additionally requires
 Nix configuration, browser, native-QEMU, and installer tiers. JSON evidence can
 be retained with `--report`.
 

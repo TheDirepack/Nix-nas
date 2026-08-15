@@ -7,10 +7,12 @@ import os
 import shutil
 import ssl
 import stat
+import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
@@ -236,6 +238,11 @@ def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password
     )
 
 
+def safe_browser_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
 def browser_diagnostics(driver: webdriver.Chrome) -> dict[str, Any]:
     try:
         body_text = driver.find_element(By.TAG_NAME, "body").text
@@ -246,11 +253,26 @@ def browser_diagnostics(driver: webdriver.Chrome) -> dict[str, Any]:
     except (WebDriverException, ValueError):
         console = []
     return {
-        "url": driver.current_url,
+        "url": safe_browser_url(driver.current_url),
         "title": driver.title,
         "body": body_text[:5000],
         "console": console,
     }
+
+
+def browser_step(driver: webdriver.Chrome, label: str, operation: Callable[[], None]) -> None:
+    print(f"VM-BROWSER-STAGE-START: {label}", file=sys.stderr, flush=True)
+    try:
+        operation()
+    except Exception as error:
+        diagnostics = json.dumps(browser_diagnostics(driver), default=str, indent=2, sort_keys=True)
+        print(
+            f"VM-BROWSER-STAGE-FAIL: {label}: {type(error).__name__}: {error}\nVM-BROWSER-DIAGNOSTICS: {diagnostics}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
+    print(f"VM-BROWSER-STAGE-DONE: {label}", file=sys.stderr, flush=True)
 
 
 def wait_for_page_text(driver: webdriver.Chrome, wait: WebDriverWait, text: str, label: str) -> None:
@@ -293,18 +315,29 @@ def rendered_text(driver: webdriver.Chrome) -> str:
 def verify_cockpit_react_interactions(origin: str, username: str, password: str) -> None:
     driver = browser()
     try:
-        cockpit_login(driver, origin, username, password)
-        driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
-        wait = WebDriverWait(driver, 90)
-        wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
-        wait_for_page_text(driver, wait, "Maintenance actions", "Cockpit NAS page")
-        wait.until(lambda current: button_with_text(current, "Refresh")).click()
-        wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
-        wait.until(lambda current: "Confirm maintenance action" in current.page_source)
-        cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
-        cancel.click()
-        wait.until(lambda current: "Confirm maintenance action" not in current.page_source)
-        verify_rendering_quality(driver, "Cockpit NAS page")
+        browser_step(driver, f"Cockpit login ({username})", lambda: cockpit_login(driver, origin, username, password))
+
+        def verify_page() -> None:
+            driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
+            wait = WebDriverWait(driver, 90)
+            wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
+            wait_for_page_text(driver, wait, "Maintenance actions", "Cockpit NAS page")
+
+        browser_step(driver, "Cockpit NAS page", verify_page)
+
+        def verify_actions() -> None:
+            wait = WebDriverWait(driver, 90)
+            wait.until(lambda current: button_with_text(current, "Refresh")).click()
+            wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
+            wait.until(lambda current: "Confirm maintenance action" in current.page_source)
+            cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
+            cancel.click()
+            wait.until(lambda current: "Confirm maintenance action" not in current.page_source)
+
+        browser_step(driver, "Cockpit maintenance actions", verify_actions)
+        browser_step(
+            driver, "Cockpit rendering and console", lambda: verify_rendering_quality(driver, "Cockpit NAS page")
+        )
     finally:
         driver.quit()
 
@@ -391,7 +424,7 @@ def verify_no_identity_markup_injection(driver: webdriver.Chrome, username: str)
     if hostile_display_name not in text:
         raise RuntimeError(
             "portal did not render the hostile identity display name as inert text: "
-            f"url={driver.current_url!r} text={text[:2000]!r}"
+            f"url={safe_browser_url(driver.current_url)!r} text={text[:2000]!r}"
         )
 
 
@@ -400,13 +433,21 @@ def run_account(
 ) -> None:
     driver = browser()
     try:
-        login(driver, origin, username, password)
-        verify_rendering_quality(driver, f"portal for {username}")
-        verify_no_identity_markup_injection(driver, username)
-        verify_routes(driver, expectations)
-        verify_native_share_route(driver, origin)
+        browser_step(driver, f"Portal login ({username})", lambda: login(driver, origin, username, password))
+        browser_step(
+            driver,
+            f"Portal rendering and console ({username})",
+            lambda: verify_rendering_quality(driver, f"portal for {username}"),
+        )
+        browser_step(
+            driver, f"Portal identity text ({username})", lambda: verify_no_identity_markup_injection(driver, username)
+        )
+        browser_step(driver, f"Portal capability routes ({username})", lambda: verify_routes(driver, expectations))
+        browser_step(
+            driver, f"Portal native share route ({username})", lambda: verify_native_share_route(driver, origin)
+        )
         if settings:
-            verify_settings_form(driver, origin)
+            browser_step(driver, f"Portal settings form ({username})", lambda: verify_settings_form(driver, origin))
     finally:
         driver.quit()
 

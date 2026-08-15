@@ -11,6 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
+FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
@@ -45,6 +46,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
     def test_wrapper_uses_the_existing_official_iso_lifecycle(self) -> None:
         wrapper = WRAPPER.read_text(encoding="utf-8")
         qemu = QEMU.read_text(encoding="utf-8")
+        final_browser = FINAL_BROWSER.read_text(encoding="utf-8")
         installer = (ROOT / "tests" / "vm" / "install-system.sh").read_text(encoding="utf-8")
         install_expect = (ROOT / "tests" / "vm" / "install.expect").read_text(encoding="utf-8")
         guest_suite = GUEST_SUITE.read_text(encoding="utf-8")
@@ -74,7 +76,14 @@ class VmSuiteWrapperTests(unittest.TestCase):
             (ROOT / "tests" / "nixos" / "qemu-installed.nix").read_text(encoding="utf-8"),
         )
         self.assertNotIn('send -- "root\\r"', install_expect)
-        self.assertIn("-netdev user,id=net0", qemu)
+        self.assertIn('"user,id=net0,hostfwd=', qemu)
+        self.assertIn('HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"', qemu)
+        self.assertIn("qemu_network_args", qemu)
+        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTP_PORT-:80", qemu)
+        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", qemu)
+        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", qemu)
+        self.assertIn('HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"', final_browser)
+        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
         self.assertNotIn("-netdev tap", qemu)
         self.assertNotIn("bridge=", qemu)
         self.assertIn("sync_source_to_guest", qemu)
