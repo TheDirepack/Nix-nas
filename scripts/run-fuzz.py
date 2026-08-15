@@ -16,6 +16,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 
@@ -73,7 +74,7 @@ def run_suite(suite: Suite, duration_seconds: float) -> tuple[str, int, str]:
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.setdefault(
         "HYPOTHESIS_STORAGE_DIRECTORY",
-        f"/tmp/nix-nas-hypothesis-{suite.name}",
+        str(pathlib.Path(tempfile.gettempdir()) / f"nix-nas-hypothesis-{suite.name}"),
     )
     deadline = time.monotonic() + duration_seconds if duration_seconds else None
     runs = 0

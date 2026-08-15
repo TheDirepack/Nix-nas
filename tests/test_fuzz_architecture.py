@@ -100,7 +100,7 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
 
     def test_long_fuzz_defaults_hypothesis_state_outside_the_worktree(self) -> None:
         source = (ROOT / "scripts/run-fuzz.py").read_text(encoding="utf-8")
-        self.assertIn('f"/tmp/nix-nas-hypothesis-{suite.name}"', source)
+        self.assertIn('pathlib.Path(tempfile.gettempdir()) / f"nix-nas-hypothesis-{suite.name}"', source)
         self.assertIn("DEFAULT_FUZZ_WORKERS = 6", source)
         self.assertIn("subprocess.TimeoutExpired", source)
 
