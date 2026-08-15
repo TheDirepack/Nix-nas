@@ -3,6 +3,25 @@ import AxeBuilder from "@axe-core/playwright";
 
 const xss = '<img src=x onerror="globalThis.__nas_xss=(globalThis.__nas_xss||0)+1">';
 const longToken = `long-${"W".repeat(2048)}`;
+const hostileDisplayCorpus = [
+  ["img-onerror", xss],
+  ["script-tag", "<script>globalThis.__nas_xss=2</script>"],
+  ["svg-onload", "<svg/onload=globalThis.__nas_xss=3>"],
+  ["javascript-url", "javascript:globalThis.__nas_xss=4"],
+  ["attribute-breakout", "\"><img src=x onerror=globalThis.__nas_xss=5>"],
+  ["details-ontoggle", '<details open ontoggle="globalThis.__nas_xss=6">x</details>'],
+  ["body-onload", '<body onload="globalThis.__nas_xss=7">'],
+  ["iframe-srcdoc", '<iframe srcdoc="<script>parent.__nas_xss=8<\\/script>"></iframe>'],
+  ["data-html-url", "data:text/html,<script>parent.__nas_xss=9</script>"],
+  ["single-quote-breakout", "'><svg onload=globalThis.__nas_xss=10>"],
+  ["encoded-script", "&lt;script&gt;globalThis.__nas_xss=11&lt;/script&gt;"],
+  ["mixed-case-script", "<ScRiPt>globalThis.__nas_xss=12</ScRiPt>"],
+  ["nullish-tag", "<img src=x onerror=globalThis.__nas_xss=13\u0000>"],
+  ["template-ish", "${globalThis.__nas_xss=14}<img src=x onerror=globalThis.__nas_xss=15>"],
+  ["css-url", 'url("javascript:globalThis.__nas_xss=16")'],
+  ["event-newline", '<img src=x\nonerror="globalThis.__nas_xss=17">'],
+  ["bidi-long-text", "\u202e" + "W".repeat(1024)],
+];
 
 function overview() {
   return {
@@ -108,8 +127,70 @@ function overview() {
   };
 }
 
-async function installCockpitMock(page, behavior = {}) {
+function hostileOverview(value) {
   const data = overview();
+  data.setup.firstStart.message = value;
+  data.setup.firstStart.configPath = value;
+  data.setup.firstStart.planDigest = value;
+  data.update.revision = value;
+  data.update.branch = value;
+  data.update.upstream = value;
+  data.featureControl.features[0].label = value;
+  data.featureControl.features[0].description = value;
+  data.featureControl.features[0].parent = value;
+  data.featureControl.features[0].availabilityReason = value;
+  data.featureControl.features[0].heldBy = [value];
+  data.featureControl.memory.components[0].label = value;
+  data.featureControl.memory.components[0].mode = value;
+  data.featureControl.memory.components[0].notes = value;
+  data.capabilities.users[0].displayName = value;
+  data.capabilities.users[0].capabilities.files.source = value;
+  data.aiConfig = {
+    ok: true,
+    localModels: [
+      {
+        id: "local-model",
+        path: value,
+        context: 32768,
+        ttl: 300,
+        tools: true,
+        extraArgs: [value],
+        managed: true,
+      },
+    ],
+    providers: [
+      {
+        id: "provider",
+        url: value,
+        models: [value],
+        credentialConfigured: false,
+        timeouts: {connect: 30, keepalive: 30, responseHeader: 60, tlsHandshake: 10, idleConn: 90},
+        filters: {stripParams: value, setParams: {[value]: value}},
+      },
+    ],
+    availableTargets: [value],
+    codingRoles: {"coding/default": {targets: [value], strategy: "warm", spillover: 1}},
+    advanced: {
+      healthCheckTimeout: 300,
+      globalTTL: 300,
+      unloadTimeout: 10,
+      logLevel: value,
+      captureBuffer: 0,
+      metricsMaxInMemory: 250,
+    },
+  };
+  data.operationState.active = [{action: value, startedAt: 0}];
+  data.failedUnits = [value, longToken];
+  data.timers = [value];
+  data.services = [{unit: value, active: value, enabled: value, sub: value, load: value}];
+  data.zpool.text = value;
+  data.zfs.text = value;
+  for (const key of Object.keys(data.links)) data.links[key] = value;
+  return data;
+}
+
+async function installCockpitMock(page, behavior = {}) {
+  const data = behavior.payload || overview();
   await page.addInitScript(
     ({payload, configuredBehavior}) => {
       globalThis.__nas_xss = 0;
@@ -185,6 +266,31 @@ test("renders hostile backend text as text, never executable markup", async ({pa
   await expect(page.getByRole("link", {name: "Host files"})).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
+
+for (const [name, payload] of hostileDisplayCorpus) {
+  test(`every custom UI display surface stays inert: ${name}`, async ({page}) => {
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    await openApp(page, {payload: hostileOverview(payload)});
+    await expect(page.getByText(payload, {exact: true}).first()).toBeVisible();
+    expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
+    const unsafeNodes = await page
+      .locator("script, iframe, svg, img, object, embed")
+      .evaluateAll((nodes) =>
+        nodes.filter((node) => {
+          const tag = node.tagName.toLowerCase();
+          const html = node.outerHTML;
+          if (tag === "svg") {
+            return /onerror\s*=|onload\s*=|javascript:|srcdoc\s*=|__nas_xss/i.test(html);
+          }
+          return /__nas_xss|javascript:|onerror\s*=|onload\s*=|srcdoc\s*=|<script[^>]*>[^<]/i.test(html);
+        })
+        .map((node) => node.outerHTML));
+    expect(unsafeNodes).toEqual([]);
+    expect(await page.locator('[href^="javascript:"], [href^="//"]').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+}
 
 test("stays within the viewport and keeps controls usable", async ({page}) => {
   await openApp(page);

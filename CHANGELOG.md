@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.21 — 2026-08-14
+
+- Expose the persistent QEMU VM through configurable host-local service ports, expand hostile-input coverage across custom service and Cockpit code, and keep sustained local fuzz workers isolated and reproducible.
+
 ## 2.2.0-alpha.20 — 2026-08-14
 
 - Compose VM cleanup handlers, derive QEMU watchdog budgets from one phase manifest, validate bundle closure ownership, and harden CI/source staging failure paths.

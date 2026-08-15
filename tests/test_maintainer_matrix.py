@@ -42,6 +42,7 @@ class MaintainerMatrixTests(MaintainerScriptMixin, unittest.TestCase):
             matrix_source = matrix_path.read_text(encoding="utf-8")
             self.assertIn("start_new_session=True", matrix_source)
             self.assertIn("os.killpg", matrix_source)
+            self.assertIn('selected = ("source", "security")', matrix_source)
         finally:
             sys.modules.pop(spec.name, None)
 
@@ -53,7 +54,15 @@ class MaintainerMatrixTests(MaintainerScriptMixin, unittest.TestCase):
         orchestrator = self.run_clean(sys.executable, "scripts/run-fuzz.py", "--help")
         self.assertEqual(orchestrator.returncode, 0, orchestrator.stdout + orchestrator.stderr)
         help_text = orchestrator.stdout + orchestrator.stderr
-        for suite in ("boundaries", "properties", "stateful", "security", "javascript", "executable-contracts"):
+        for suite in (
+            "boundaries",
+            "custom-inputs",
+            "properties",
+            "stateful",
+            "security",
+            "javascript",
+            "executable-contracts",
+        ):
             self.assertIn(suite, help_text)
         self.assertNotIn("--cases", help_text)
         self.assertNotIn("--seed", help_text)

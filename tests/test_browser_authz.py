@@ -6,6 +6,8 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -162,6 +164,34 @@ class BrowserAuthzInputTests(unittest.TestCase):
             return_value="Account <img src=x onerror=document.body.dataset.nasXss=1>",
         ):
             self.authz.verify_no_identity_markup_injection(driver, "alice")
+
+    def test_browser_stage_reports_the_failed_stage_and_diagnostics(self) -> None:
+        output = StringIO()
+
+        def fail_browser() -> None:
+            raise RuntimeError("browser failure")
+
+        with (
+            mock.patch.object(
+                self.authz,
+                "browser_diagnostics",
+                return_value={"url": "https://nas-test.local/", "body": "failure page"},
+            ),
+            redirect_stderr(output),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "browser failure"):
+                self.authz.browser_step(mock.Mock(), "Portal capability routes (alice)", fail_browser)
+        self.assertIn("VM-BROWSER-STAGE-START: Portal capability routes (alice)", output.getvalue())
+        self.assertIn("VM-BROWSER-STAGE-FAIL: Portal capability routes (alice)", output.getvalue())
+        self.assertIn("VM-BROWSER-DIAGNOSTICS:", output.getvalue())
+
+    def test_browser_diagnostics_redact_url_query_and_fragment(self) -> None:
+        self.assertEqual(
+            self.authz.safe_browser_url(
+                "https://nas.example/console/?token=secret#auth-code"
+            ),
+            "https://nas.example/console/",
+        )
 
 
 if __name__ == "__main__":

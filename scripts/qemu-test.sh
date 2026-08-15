@@ -20,6 +20,7 @@ SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
 HTTP_PORT="${NAS_QEMU_HTTP_PORT:-8088}"
 HTTPS_PORT="${NAS_QEMU_HTTPS_PORT:-8443}"
 COCKPIT_PORT="${NAS_QEMU_COCKPIT_PORT:-9094}"
+HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"
 MEMORY_MIB="${NAS_QEMU_MEMORY_MIB:-8192}"
 CPUS="${NAS_QEMU_CPUS:-2}"
 OS_DISK_GIB="${NAS_QEMU_OS_DISK_GIB:-64}"
@@ -30,6 +31,29 @@ KEEP_VM="${NAS_QEMU_KEEP_VM:-0}"
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
+
+validate_host_bind_address() {
+  local first second third fourth extra octet
+  IFS=. read -r first second third fourth extra <<<"$HOST_BIND_ADDRESS"
+  [[ -n "$first" && -n "$second" && -n "$third" && -n "$fourth" && -z "$extra" ]] ||
+    die "NAS_QEMU_HOST_BIND_ADDRESS must be an IPv4 address: $HOST_BIND_ADDRESS"
+  for octet in "$first" "$second" "$third" "$fourth"; do
+    if ! [[ "$octet" =~ ^[0-9]{1,3}$ ]] || ! ((10#$octet <= 255)); then
+      die "NAS_QEMU_HOST_BIND_ADDRESS must be an IPv4 address: $HOST_BIND_ADDRESS"
+    fi
+  done
+}
+
+qemu_network_args() {
+  validate_host_bind_address
+  printf '%s\n' \
+    -netdev \
+    "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTP_PORT-:80,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443,hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092" \
+    -device \
+    virtio-net-pci,netdev=net0
+}
+
+validate_host_bind_address
 
 usage() {
   cat <<'USAGE'
@@ -461,7 +485,7 @@ run_installer() {
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
   local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
   local ssh_key ssh_key_dir full_suite_skip_fuzz
-  local -a accel ssh_args
+  local -a accel network_args ssh_args
   os_disk="$STATE_DIR/nixos-nas-os.qcow2"
   data_disk="$STATE_DIR/nixos-nas-zfs.qcow2"
   install_log="$STATE_DIR/installer-console.log"
@@ -517,6 +541,7 @@ run_installer() {
     qemu-img create -q -f qcow2 "$data_disk" "${DATA_DISK_GIB}G"
 
     mapfile -t accel < <(qemu_acceleration)
+    mapfile -t network_args < <(qemu_network_args)
     options="$(cat "$boot_dir/options") console=ttyS0,115200n8 systemd.show_status=1"
     log "Installing NixOS NAS into a fresh QEMU disk"
     expect "$ROOT/tests/vm/install.expect" \
@@ -530,7 +555,7 @@ run_installer() {
       -virtfs "local,path=$source_stage,mount_tag=nas-source,security_model=none,readonly=on" \
       -virtfs "local,path=$ssh_key_dir,mount_tag=nas-ssh-key,security_model=none,readonly=on" \
       -device virtio-rng-pci \
-      -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+      "${network_args[@]}" \
       -pidfile "$pidfile" \
       -no-reboot -nographic 2>&1 | tee "$install_log"
     if [[ "$persistent_mode" == 1 ]]; then
@@ -548,6 +573,7 @@ run_installer() {
   fi
 
   mapfile -t accel < <(qemu_acceleration)
+  mapfile -t network_args < <(qemu_network_args)
   if [[ ! -s "$pidfile" ]]; then
     log "Booting installed NAS in a disposable QEMU VM"
   elif nas_qemu_pid_from_pidfile "$pidfile"; then
@@ -565,8 +591,7 @@ run_installer() {
       -drive "file=$os_disk,format=qcow2,if=virtio" \
       -drive "file=$data_disk,format=qcow2,if=virtio" \
       -device virtio-rng-pci \
-      -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443,hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092" \
-      -device virtio-net-pci,netdev=net0 \
+      "${network_args[@]}" \
       -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
   fi
 
@@ -643,8 +668,7 @@ run_installer() {
     -drive "file=$os_disk,format=qcow2,if=virtio" \
     -drive "file=$data_disk,format=qcow2,if=virtio" \
     -device virtio-rng-pci \
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443,hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092" \
-    -device virtio-net-pci,netdev=net0 \
+    "${network_args[@]}" \
     -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
   trap cleanup_vm EXIT INT TERM
   if ! wait_for_ssh "$ssh_key"; then

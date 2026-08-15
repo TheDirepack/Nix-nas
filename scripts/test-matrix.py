@@ -192,7 +192,7 @@ def main() -> int:
             print(f"{name:10} {availability}")
         return 0
     if args.mode == "fast":
-        selected = ("source", "security", "fuzz")
+        selected = ("source", "security")
     elif args.mode == "all":
         selected = tuple(catalog)
     else:

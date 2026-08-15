@@ -163,7 +163,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("max-parallel: 6", workflow)
         self.assertIn("fail-fast: false", workflow)
-        self.assertIn("shard: [boundaries, properties, stateful, security, javascript, executable-contracts]", workflow)
+        self.assertIn(
+            "shard: [boundaries, custom-inputs, properties, stateful, security, javascript, executable-contracts]",
+            workflow,
+        )
         self.assertIn("timeout-minutes: 240", workflow)
         self.assertIn("test-tier == 'full'", workflow)
         self.assertIn("test-tier == 'installer'", workflow)

@@ -15,6 +15,7 @@ SMART_FUZZ_FILES = (
     "scripts/run-fuzz.py",
     "tests/fuzz_strategies.py",
     "tests/test_fuzz_boundaries.py",
+    "tests/test_fuzz_custom_inputs.py",
     "tests/test_property_invariants.py",
     "tests/test_secret_security_fuzz.py",
     "tests/slow_managed_service_stateful.py",
@@ -45,6 +46,12 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         self.assertNotIn("random.Random", source)
         self.assertNotIn("NAS_FUZZ_CASES", source)
         self.assertNotIn("for _ in range(", source)
+
+    def test_custom_input_fuzzer_covers_every_python_service_module(self) -> None:
+        source = (ROOT / "tests/test_fuzz_custom_inputs.py").read_text(encoding="utf-8")
+        for module in sorted(path.stem for path in (ROOT / "services").glob("nas_*.py")):
+            with self.subTest(module=module):
+                self.assertIn(f'"{module}"', source)
 
     def test_executable_layer_is_a_contract_check_not_payload_fuzzer(self) -> None:
         source = (ROOT / "scripts/fuzz-executables.py").read_text(encoding="utf-8")
@@ -81,6 +88,7 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         help_text = completed.stdout + completed.stderr
         for suite in (
             "boundaries",
+            "custom-inputs",
             "properties",
             "stateful",
             "security",
@@ -89,6 +97,13 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         ):
             with self.subTest(suite=suite):
                 self.assertIn(suite, help_text)
+        self.assertIn("duration-seconds", help_text)
+
+    def test_long_fuzz_defaults_hypothesis_state_outside_the_worktree(self) -> None:
+        source = (ROOT / "scripts/run-fuzz.py").read_text(encoding="utf-8")
+        self.assertIn('f"/tmp/nix-nas-hypothesis-{suite.name}"', source)
+        self.assertIn("DEFAULT_FUZZ_WORKERS = 6", source)
+        self.assertIn("subprocess.TimeoutExpired", source)
 
     def test_vm_http_adversarial_contracts_use_curl(self) -> None:
         harness = (ROOT / "scripts/qemu-final-browser.sh").read_text(encoding="utf-8")

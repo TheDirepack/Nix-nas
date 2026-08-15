@@ -94,6 +94,7 @@ REQUIRED_FILES = {
     "tests/test_cli_surfaces.py",
     "tests/test_fuzz_architecture.py",
     "tests/test_fuzz_boundaries.py",
+    "tests/test_fuzz_custom_inputs.py",
     "tests/test_maintainer_scripts.py",
     "tests/test_script_inventory.py",
     "tests/test_security_surface.py",

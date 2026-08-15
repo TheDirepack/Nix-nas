@@ -14,7 +14,17 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 ./scripts/test-matrix.py all --require-all --report test-evidence/full.json
 ```
 
-The local matrix `fast` command includes its smart-fuzz tier. GitHub's fast workflow dispatch is narrower and may omit heavyweight generated testing. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
+The local matrix `fast` command runs source and security checks only. The
+generated smart-fuzz tier is explicit (`test-matrix.py fuzz`) and should be run
+locally during pre-merge qualification. GitHub's fast workflow dispatch is
+narrower and may omit heavyweight generated testing. `all` additionally runs
+the smart-fuzz, Nix configuration/negative-fixture matrix, built-browser,
+native NixOS VM, and official-ISO installer tiers. Each stage has an outer
+deadline; missing heavyweight tools or reviewed frontend artifacts are reported
+as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the
+source stage also forces complete preflight, so missing Ruff, Pyright,
+ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial
+source pass.
 
 The CI pipeline summary applies event- and dispatch-tier requirements. A job required for that run must succeed; a skipped required job fails pipeline qualification rather than being accepted as an intentional skip.
 
@@ -62,6 +72,7 @@ The project does not maintain a project-local RNG mutator. **Hypothesis** is the
 `scripts/run-fuzz.py` is an orchestrator, not a fuzzer. Its independent source classes can run in parallel:
 
 - `boundaries` — parser, identifier, path, normalization, and decoder properties from `tests/test_fuzz_boundaries.py`.
+- `custom-inputs` — pure input-boundary and service-adapter properties for every `services/nas_*.py` module from `tests/test_fuzz_custom_inputs.py`.
 - `properties` — cross-object, round-trip, metamorphic, and validation properties from `tests/test_property_invariants.py`.
 - `stateful` — `RuleBasedStateMachine` lifecycle sequences and differential projection checks from `tests/slow_managed_service_stateful.py`.
 - `security` — generated secret/logging/transaction properties from `tests/test_secret_security_fuzz.py`.
@@ -76,6 +87,24 @@ Reusable Python generators live in `tests/fuzz_strategies.py`. They must not gro
 ./scripts/run-fuzz.py --suite stateful --suite security --jobs 2
 ./scripts/run-fuzz.py --suite javascript --suite executable-contracts --jobs 2
 ```
+
+The ordinary commands are bounded one-pass qualification and are suitable for
+the fast source tier. Immediately before merging a security-sensitive change,
+run the same selected suites locally for a sustained search window; each
+worker repeats its own suite independently and stops after the requested
+duration:
+
+```bash
+./scripts/run-fuzz.py --duration-seconds 3600 --jobs 6
+```
+
+This long-duration mode is intentionally local-only. It is not enabled by
+ordinary pull-request CI; the merge decision should attach the resulting
+logs/evidence from the local run. The runner places each suite's Hypothesis
+example database under its own `/tmp/nix-nas-hypothesis-*` directory by
+default. Set `HYPOTHESIS_STORAGE_DIRECTORY` when reproducing a specific shared
+corpus. Keep the generated `node_modules`, reports, and other runtime output
+outside the worktree or remove them before commit.
 
 `scripts/fuzz.py` remains only as a stable compatibility entry point for the Hypothesis boundary suite. `scripts/fuzz-executables.py` is retained as a compatibility filename for the executable contract layer; despite the old name it does not perform mutation fuzzing or repeat generic payload lists.
 

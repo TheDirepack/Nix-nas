@@ -9,6 +9,7 @@ SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
 HTTP_PORT="${NAS_QEMU_HTTP_PORT:-8088}"
 HTTPS_PORT="${NAS_QEMU_HTTPS_PORT:-8443}"
 COCKPIT_PORT="${NAS_QEMU_COCKPIT_PORT:-9094}"
+HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"
 MEMORY_MIB="${NAS_QEMU_MEMORY_MIB:-10240}"
 CPUS="${NAS_QEMU_CPUS:-4}"
 TEST_USER="${NAS_VM_TEST_USER:-nas-browser-test}"
@@ -24,6 +25,20 @@ BOOT_LOG="$STATE_DIR/browser-console.log"
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command is missing: $1"; }
+
+validate_host_bind_address() {
+  local first second third fourth extra octet
+  IFS=. read -r first second third fourth extra <<<"$HOST_BIND_ADDRESS"
+  [[ -n "$first" && -n "$second" && -n "$third" && -n "$fourth" && -z "$extra" ]] ||
+    die "NAS_QEMU_HOST_BIND_ADDRESS must be an IPv4 address: $HOST_BIND_ADDRESS"
+  for octet in "$first" "$second" "$third" "$fourth"; do
+    if ! [[ "$octet" =~ ^[0-9]{1,3}$ ]] || ! ((10#$octet <= 255)); then
+      die "NAS_QEMU_HOST_BIND_ADDRESS must be an IPv4 address: $HOST_BIND_ADDRESS"
+    fi
+  done
+}
+
+validate_host_bind_address
 
 for cmd in qemu-system-x86_64 qemu-img ssh curl python3 realpath readlink; do need "$cmd"; done
 validate_state_path() {
@@ -96,7 +111,7 @@ qemu-system-x86_64 \
   -drive "file=$OVERLAY,format=qcow2,if=virtio" \
   -drive "file=$DATA_DISK,format=qcow2,if=virtio" \
   -device virtio-rng-pci \
-  -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$HTTPS_PORT-:443,hostfwd=tcp:127.0.0.1:$COCKPIT_PORT-:9092" \
+  -netdev "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTP_PORT-:80,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443,hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092" \
   -device virtio-net-pci,netdev=net0 \
   -display none -serial "file:$BOOT_LOG" -daemonize -pidfile "$PIDFILE"
 

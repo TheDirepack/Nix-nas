@@ -16,11 +16,14 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 JS_FUZZ_ROOT = ROOT / "tests/js-fuzz"
-HYPOTHESIS_SUITES = {"boundaries", "properties", "stateful", "security"}
+FUZZ_RUN_GRACE_SECONDS = 1800
+DEFAULT_FUZZ_WORKERS = 6
+HYPOTHESIS_SUITES = {"boundaries", "custom-inputs", "properties", "stateful", "security"}
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,7 @@ def unittest_suite(name: str, module: str) -> Suite:
 
 SUITES = {
     "boundaries": unittest_suite("boundaries", "tests.test_fuzz_boundaries"),
+    "custom-inputs": unittest_suite("custom-inputs", "tests.test_fuzz_custom_inputs"),
     "properties": unittest_suite("properties", "tests.test_property_invariants"),
     "stateful": unittest_suite("stateful", "tests.slow_managed_service_stateful"),
     "security": unittest_suite("security", "tests.test_secret_security_fuzz"),
@@ -64,27 +68,60 @@ def prepare_javascript_suite() -> tuple[int, str]:
     return completed.returncode, completed.stdout
 
 
-def run_suite(suite: Suite) -> tuple[str, int, str]:
+def run_suite(suite: Suite, duration_seconds: float) -> tuple[str, int, str]:
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    prefix = ""
-    if suite.name == "javascript":
-        prepare_status, prefix = prepare_javascript_suite()
-        if prepare_status:
-            return suite.name, prepare_status, prefix
-    completed = subprocess.run(
-        suite.command,
-        cwd=ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
+    env.setdefault(
+        "HYPOTHESIS_STORAGE_DIRECTORY",
+        f"/tmp/nix-nas-hypothesis-{suite.name}",
     )
-    return suite.name, completed.returncode, prefix + completed.stdout
+    deadline = time.monotonic() + duration_seconds if duration_seconds else None
+    runs = 0
+    last_output = ""
+    while True:
+        prefix = ""
+        if suite.name == "javascript":
+            prepare_status, prefix = prepare_javascript_suite()
+            if prepare_status:
+                return suite.name, prepare_status, prefix
+        # Allow a valid long-running property pass to finish after the window,
+        # but bound a worker that never returns.
+        timeout = None if deadline is None else max(1.0, deadline - time.monotonic()) + FUZZ_RUN_GRACE_SECONDS
+        try:
+            completed = subprocess.run(
+                suite.command,
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            partial = error.output or ""
+            if isinstance(partial, bytes):
+                partial = partial.decode(errors="replace")
+            return (
+                suite.name,
+                124,
+                prefix
+                + partial
+                + f"smart fuzz: {suite.name} exceeded the requested {duration_seconds:.0f}s worker window\n",
+            )
+        runs += 1
+        last_output = prefix + completed.stdout
+        if completed.returncode:
+            return suite.name, completed.returncode, last_output
+        if deadline is None or time.monotonic() >= deadline:
+            if duration_seconds:
+                last_output += (
+                    f"smart fuzz: {suite.name} completed {runs} run(s) in the requested {duration_seconds:.0f}s\n"
+                )
+            return suite.name, 0, last_output
 
 
-def resolve_suites(selected_names: list[str], jobs: int) -> list[Suite]:
+def resolve_suites(selected_names: list[str], jobs: int, duration_seconds: float) -> list[Suite]:
     """Resolve one Nix worker group for Hypothesis when needed."""
 
     selected_hypothesis = [name for name in selected_names if name in HYPOTHESIS_SUITES]
@@ -104,6 +141,8 @@ def resolve_suites(selected_names: list[str], jobs: int) -> list[Suite]:
     for name in selected_hypothesis:
         command.extend(["--suite", name])
     command.extend(["--jobs", str(min(jobs, len(selected_hypothesis)))])
+    if duration_seconds:
+        command.extend(["--duration-seconds", str(duration_seconds)])
     resolved.append(Suite("hypothesis", tuple(command)))
     return resolved
 
@@ -116,21 +155,34 @@ def main() -> int:
         choices=sorted(SUITES),
         help="suite to run; repeat to select several (default: all)",
     )
-    parser.add_argument("--jobs", type=int, default=len(SUITES), help="maximum parallel workers")
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=min(DEFAULT_FUZZ_WORKERS, len(SUITES)),
+        help="maximum parallel workers",
+    )
+    parser.add_argument(
+        "--duration-seconds",
+        type=float,
+        default=0,
+        help="repeat each selected suite until this many seconds have elapsed (local qualification only)",
+    )
     args = parser.parse_args()
     if not 1 <= args.jobs <= len(SUITES):
         parser.error(f"--jobs must be from 1 through {len(SUITES)}")
+    if args.duration_seconds < 0:
+        parser.error("--duration-seconds must be zero or greater")
 
     selected_names = list(dict.fromkeys(args.suite or SUITES.keys()))
     try:
-        selected = resolve_suites(selected_names, args.jobs)
+        selected = resolve_suites(selected_names, args.jobs, args.duration_seconds)
     except RuntimeError as exc:
         print(f"smart fuzz setup failed: {exc}", file=sys.stderr)
         return 2
 
     failures = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.jobs, len(selected))) as executor:
-        futures = [executor.submit(run_suite, suite) for suite in selected]
+        futures = [executor.submit(run_suite, suite, args.duration_seconds) for suite in selected]
         for future in concurrent.futures.as_completed(futures):
             name, returncode, output = future.result()
             if output:
