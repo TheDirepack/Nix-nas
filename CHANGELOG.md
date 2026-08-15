@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.24 — 2026-08-15
+
+- Give the browser qualification suite enough bounded time for CopyParty's lazy first-identity ACL reload to complete.
+
 ## 2.2.0-alpha.23 — 2026-08-15
 
 - Make multi-feature VM transitions atomic so browser and lifecycle qualification cannot race the runtime operation lock.

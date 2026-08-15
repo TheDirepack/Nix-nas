@@ -98,6 +98,7 @@ def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
 
 
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
+ALLOWED_ROUTE_RETRY_ATTEMPTS = 15
 
 
 def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
@@ -376,12 +377,14 @@ def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]
     failures: list[dict[str, Any]] = []
     for expectation in expectations:
         result = fetch_status(driver, expectation.path)
-        for _ in range(5):
+        for _ in range(ALLOWED_ROUTE_RETRY_ATTEMPTS):
             if matches(expectation, result):
                 break
             # CopyParty creates the first IdP user lazily. Its first request
             # can race the configuration reload, so retry only transient
-            # failures for routes that should be reachable.
+            # failures for routes that should be reachable. The reload can
+            # involve Authentik and indexing, so keep this bounded but longer
+            # than the usual one-second proxy retry window.
             if not expectation.allowed or result.get("status") not in {401, 403, 502, 503}:
                 break
             time.sleep(1)
