@@ -101,10 +101,11 @@ duration:
 This long-duration mode is intentionally local-only. It is not enabled by
 ordinary pull-request CI; the merge decision should attach the resulting
 logs/evidence from the local run. The runner places each suite's Hypothesis
-example database under its own `/tmp/nix-nas-hypothesis-*` directory by
-default. Set `HYPOTHESIS_STORAGE_DIRECTORY` when reproducing a specific shared
-corpus. Keep the generated `node_modules`, reports, and other runtime output
-outside the worktree or remove them before commit.
+example database under its own system temporary-directory
+`nix-nas-hypothesis-*` directory by default. Set
+`HYPOTHESIS_STORAGE_DIRECTORY` when reproducing a specific shared corpus. Keep
+the generated `node_modules`, reports, and other runtime output outside the
+worktree or remove them before commit.
 
 `scripts/fuzz.py` remains only as a stable compatibility entry point for the Hypothesis boundary suite. `scripts/fuzz-executables.py` is retained as a compatibility filename for the executable contract layer; despite the old name it does not perform mutation fuzzing or repeat generic payload lists.
 
