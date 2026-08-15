@@ -187,9 +187,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
 
     def test_browser_diagnostics_redact_url_query_and_fragment(self) -> None:
         self.assertEqual(
-            self.authz.safe_browser_url(
-                "https://nas.example/console/?token=secret#auth-code"
-            ),
+            self.authz.safe_browser_url("https://nas.example/console/?token=secret#auth-code"),
             "https://nas.example/console/",
         )
 

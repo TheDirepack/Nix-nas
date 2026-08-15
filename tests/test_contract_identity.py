@@ -113,7 +113,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('placeholder "http.request.header.Remote-Groups"', portal)
         self.assertIn('splitList ","', portal)
         self.assertIn('has "nas_admin" $groups', portal)
-        self.assertNotIn('has $groups', portal)
+        self.assertNotIn("has $groups", portal)
         self.assertIn('placeholder "http.request.header.Remote-User"', portal)
         share_route = proxy.split("handle /share/* {", 1)[1].split("@shares path", 1)[0]
         self.assertIn("${copypartySsoProxy}", share_route)
