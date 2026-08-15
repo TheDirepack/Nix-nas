@@ -507,6 +507,185 @@ class ManagedServiceTests(unittest.TestCase):
                     self.assertEqual(msvc.main(["validate"]), 1)
                 self.assertIn("Invalid JSON", errors.getvalue())
 
+    def test_builtin_registry_and_systemd_edge_cases(self):
+        self.assertEqual(
+            msvc._builtin_endpoints({"schemaVersion": 1, "endpoints": {"ok": {"publicPath": "/ok"}, "bad": "ignored"}}),
+            {"ok": {"publicPath": "/ok"}},
+        )
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "Unsupported built-in"):
+            msvc._builtin_endpoints({"schemaVersion": 99})
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "services must be an object"):
+            msvc._builtin_endpoints({"schemaVersion": 2, "services": []})
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "endpoints must be an object"):
+            msvc._builtin_endpoints({"schemaVersion": 2, "services": {"x": {"endpoints": []}}})
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "must be an object"):
+            msvc._builtin_endpoints({"schemaVersion": 2, "services": {"x": "bad"}})
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "endpoint x:web"):
+            msvc._builtin_endpoints({"schemaVersion": 2, "services": {"x": {"endpoints": {"web": []}}}})
+
+        with mock.patch.object(msvc.subprocess, "run", return_value=mock.Mock(returncode=0)):
+            self.assertTrue(msvc._systemd_unit_is_active("caddy"))
+        with mock.patch.object(msvc.subprocess, "run", return_value=mock.Mock(returncode=1)):
+            self.assertFalse(msvc._systemd_unit_is_active("caddy"))
+        with mock.patch.object(msvc.subprocess, "run", side_effect=OSError("missing systemctl")):
+            self.assertFalse(msvc._systemd_unit_is_active("caddy"))
+        with mock.patch.object(msvc.subprocess, "run", side_effect=msvc.subprocess.TimeoutExpired("systemctl", 5)):
+            self.assertFalse(msvc._systemd_unit_is_active("caddy"))
+
+    def test_adapter_dispatchers_cover_all_runtime_types(self):
+        runtimes = (
+            ("compose", nas_service_runtime_compose, "plan_compose", "apply_compose", "remove_compose"),
+            ("quadlet", nas_service_runtime_podman, "plan_podman", "apply_podman", "remove_podman"),
+            ("vm", nas_service_runtime_libvirt, "plan_libvirt", "apply_libvirt", "remove_libvirt"),
+        )
+        for runtime_type, module, plan_name, apply_name, remove_name in runtimes:
+            service = service_template(runtime_type)
+            with (
+                mock.patch.object(module, plan_name, return_value={"planned": runtime_type}),
+                mock.patch.object(nas_service_authentik, "plan_authentik", return_value={"actions": []}),
+                mock.patch.object(nas_service_firewall, "plan_firewall", return_value={"actions": []}),
+            ):
+                self.assertEqual(msvc._adapter_plan("x", service)["runtime"], {"planned": runtime_type})
+            with (
+                mock.patch.object(module, apply_name, return_value={"applied": runtime_type}) as apply,
+                mock.patch.object(nas_service_authentik, "apply_authentik", return_value={"actions": []}),
+                mock.patch.object(nas_service_firewall, "apply_firewall", return_value={"actions": []}),
+            ):
+                result = msvc._apply_adapters("x", service, dry_run=True)
+                self.assertEqual(result["runtime"], {"applied": runtime_type})
+                apply.assert_called_once_with("x", service, dry_run=True)
+            with (
+                mock.patch.object(module, remove_name) as remove,
+                mock.patch.object(nas_service_authentik, "remove_authentik"),
+                mock.patch.object(nas_service_firewall, "remove_firewall"),
+            ):
+                msvc._remove_adapters("x", service, dry_run=True)
+                if runtime_type == "compose":
+                    remove.assert_called_once_with("x", service, dry_run=True)
+                else:
+                    remove.assert_called_once_with("x", dry_run=True)
+
+        for runtime_type in ("external", "native"):
+            service = service_template(runtime_type)
+            with (
+                mock.patch.object(nas_service_authentik, "plan_authentik", return_value={"actions": []}),
+                mock.patch.object(nas_service_firewall, "plan_firewall", return_value={"actions": []}),
+            ):
+                planned = msvc._adapter_plan("x", service)
+            self.assertEqual(planned["runtime"]["runtime"], runtime_type)
+            with (
+                mock.patch.object(nas_service_authentik, "apply_authentik", return_value={"actions": []}),
+                mock.patch.object(nas_service_firewall, "apply_firewall", return_value={"actions": []}),
+            ):
+                self.assertEqual(msvc._apply_adapters("x", service)["runtime"]["runtime"], runtime_type)
+            with (
+                mock.patch.object(nas_service_authentik, "remove_authentik"),
+                mock.patch.object(nas_service_firewall, "remove_firewall"),
+            ):
+                msvc._remove_adapters("x", service)
+
+        unsupported = service_template()
+        unsupported["runtime"]["type"] = "bad"
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "Unsupported runtime"):
+            msvc._adapter_plan("x", unsupported)
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "Unsupported runtime"):
+            msvc._apply_adapters("x", unsupported)
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "Unsupported runtime"):
+            msvc._remove_adapters("x", unsupported)
+
+    def test_service_input_and_mutation_failures_are_transactional(self):
+        service = service_template()
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(service))):
+            self.assertEqual(msvc._read_json_input(None), service)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "service.json"
+            path.write_text(json.dumps(service), encoding="utf-8")
+            self.assertEqual(msvc._read_json_input(path), service)
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "Unable to read"):
+                msvc._read_json_input(path / "missing")
+        with mock.patch.object(sys, "stdin", io.StringIO("not-json")):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "not valid JSON"):
+                msvc._read_json_input(None)
+        with mock.patch.object(sys, "stdin", io.StringIO("[]")):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "must be an object"):
+                msvc._read_json_input(None)
+
+        self.assertEqual(msvc._service_from_input("x", {"service": service}), ("x", service))
+        self.assertEqual(msvc._service_from_input(None, {"services": {"x": service}}), ("x", service))
+        self.assertEqual(msvc._service_from_input(None, {"serviceId": "x", "service": service}), ("x", service))
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "must contain an object"):
+            msvc._service_from_input("x", {"service": []})
+        with self.assertRaisesRegex(msvc.ManagedServiceError, "must include serviceId"):
+            msvc._service_from_input(None, {})
+
+        store = {"schemaVersion": 2, "generation": 1, "services": {}}
+        with (
+            mock.patch.object(msvc, "load_store", return_value=store),
+            mock.patch.object(msvc, "_adapter_plan", return_value={"planned": True}),
+        ):
+            self.assertEqual(msvc._mutate_service("create", "x", service, dry_run=True), {"planned": True})
+        with mock.patch.object(msvc, "load_store", return_value={**store, "services": {"x": service}}):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "already exists"):
+                msvc._mutate_service("create", "x", service, dry_run=True)
+        with mock.patch.object(msvc, "load_store", return_value=store):
+            with self.assertRaisesRegex(msvc.ManagedServiceError, "does not exist"):
+                msvc._mutate_service("update", "x", service, dry_run=True)
+
+        with (
+            mock.patch.object(msvc, "load_store", return_value=store),
+            mock.patch.object(msvc, "atomic_write_store"),
+            mock.patch.object(msvc, "_apply_adapters", return_value={"applied": True}),
+            mock.patch.object(msvc, "_reconcile_runtime", return_value={"projection": True}),
+        ):
+            result = msvc._mutate_service("create", "x", service, dry_run=False)
+            self.assertEqual(result["projection"], {"projection": True})
+
+        for previous, expected in ((None, "Unable to apply"), (service, "adapter rejected")):
+            current = {"schemaVersion": 2, "generation": 1, "services": {} if previous is None else {"x": previous}}
+            error = (
+                RuntimeError("adapter rejected") if previous is None else msvc.ManagedServiceError("adapter rejected")
+            )
+            with (
+                mock.patch.object(msvc, "load_store", return_value=current),
+                mock.patch.object(msvc, "atomic_write_store"),
+                mock.patch.object(msvc, "_apply_adapters", side_effect=error),
+                mock.patch.object(msvc, "_reconcile_runtime", side_effect=RuntimeError("projection failed")),
+            ):
+                with self.assertRaisesRegex(msvc.ManagedServiceError, expected):
+                    msvc._mutate_service("create" if previous is None else "update", "x", service, dry_run=False)
+
+    def test_cli_lifecycle_commands_dispatch_without_shelling_out(self):
+        service = service_template()
+        store = {"schemaVersion": 2, "generation": 1, "services": {"x": service}}
+        with (
+            mock.patch.object(msvc, "load_store", return_value=store),
+            mock.patch.object(msvc, "_read_json_input", return_value=service),
+            mock.patch.object(msvc, "_mutate_service", return_value={"mutated": True}),
+            mock.patch.object(msvc, "_adapter_plan", return_value={"planned": True}),
+            mock.patch.object(msvc, "_apply_adapters", return_value={"applied": True}),
+            mock.patch.object(msvc, "_remove_adapters"),
+            mock.patch.object(msvc, "atomic_write_store"),
+            mock.patch.object(msvc, "_reconcile_runtime", return_value={"projection": True}),
+        ):
+            self.assertEqual(msvc.main(["plan", "x"]), 0)
+            self.assertEqual(msvc.main(["plan", "x", "--input", "-"]), 0)
+            self.assertEqual(msvc.main(["create", "x", "--input", "-"]), 0)
+            self.assertEqual(msvc.main(["update", "x", "--input", "-"]), 0)
+            self.assertEqual(msvc.main(["adopt", "new", "--input", "-"]), 0)
+            self.assertEqual(msvc.main(["import", "x", "--input", "-"]), 0)
+            self.assertEqual(msvc.main(["delete", "x", "--dry-run"]), 0)
+            self.assertEqual(msvc.main(["delete", "x"]), 0)
+            for command in ("start", "stop", "restart"):
+                self.assertEqual(msvc.main([command, "x", "--dry-run"]), 0)
+            self.assertEqual(msvc.main(["export", "x"]), 0)
+            self.assertEqual(msvc.main(["show"]), 0)
+
+        with mock.patch.object(msvc, "load_store", side_effect=OSError("store unavailable")):
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                self.assertEqual(msvc.main(["validate"]), 1)
+            self.assertIn("store unavailable", errors.getvalue())
+
     def test_caddy_collision_detection(self):
         effective = {
             "schemaVersion": 2,
