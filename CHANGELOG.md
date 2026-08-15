@@ -1,5 +1,41 @@
 # Changelog
 
+<<<<<<< HEAD
+=======
+## 2.2.0-alpha.30 — 2026-08-15
+
+- Wait for Authentik's asynchronous NAS automation blueprint during first-run provisioning and queue manual account mutations behind the identity reconciliation lock.
+
+## 2.2.0-alpha.29 — 2026-08-15
+
+- Make Authentik forward-auth identity handoff canonical and retry only transient portal authorization races in the VM browser qualification.
+- Normalize the generated service-registry v2 shape for all consumers and complete managed-service adapter validation and firewall cleanup coverage.
+
+## 2.2.0-alpha.28 — 2026-08-15
+
+- Pass the trusted Authentik identity to capability gates through explicit renamed forward-auth headers.
+
+## 2.2.0-alpha.27 — 2026-08-15
+
+- Preserve the trusted Authentik identity when Caddy forwards capability checks to the on-demand authorization gate.
+
+## 2.2.0-alpha.26 — 2026-08-15
+
+- Base bundle-cache decisions on validated archives so restored VM bundles skip redundant source packaging and missing exports remain minimal.
+
+## 2.2.0-alpha.25 — 2026-08-15
+
+- Keep browser qualification alive through the full CopyParty first-identity ACL reload window.
+
+## 2.2.0-alpha.24 — 2026-08-15
+
+- Give the browser qualification suite enough bounded time for CopyParty's lazy first-identity ACL reload to complete.
+
+## 2.2.0-alpha.23 — 2026-08-15
+
+- Make multi-feature VM transitions atomic so browser and lifecycle qualification cannot race the runtime operation lock.
+
+>>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
 ## 2.2.0-alpha.22 — 2026-08-15
 
 - Allow files-capable users to read the CopyParty share root while retaining administrator-only write and configuration access.

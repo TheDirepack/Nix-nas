@@ -1469,10 +1469,10 @@ def main() -> int:
         elif args.command == "account" and args.account_command == "apply":
             if args.password_stdin and args.set_password:
                 raise SetupError("Choose only one of --set-password or --password-stdin")
-            with acquire_operation("account-apply", ("identity", "runtime")):
+            with acquire_operation("account-apply", ("identity", "runtime"), blocking=True):
                 result = one_account(args)
         elif args.command == "account" and args.account_command == "disable":
-            with acquire_operation("account-disable", ("identity", "runtime")):
+            with acquire_operation("account-disable", ("identity", "runtime"), blocking=True):
                 result = disable_account(args)
         else:
             result = status_report()

@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 2.2.0-alpha.22
+=======
+2.2.0-alpha.30
+>>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
