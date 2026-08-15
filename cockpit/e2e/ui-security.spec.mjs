@@ -8,7 +8,7 @@ const hostileDisplayCorpus = [
   ["script-tag", "<script>globalThis.__nas_xss=2</script>"],
   ["svg-onload", "<svg/onload=globalThis.__nas_xss=3>"],
   ["javascript-url", "javascript:globalThis.__nas_xss=4"],
-  ["attribute-breakout", "\"><img src=x onerror=globalThis.__nas_xss=5>"],
+  ["attribute-breakout", '"><img src=x onerror=globalThis.__nas_xss=5>'],
   ["details-ontoggle", '<details open ontoggle="globalThis.__nas_xss=6">x</details>'],
   ["body-onload", '<body onload="globalThis.__nas_xss=7">'],
   ["iframe-srcdoc", '<iframe srcdoc="<script>parent.__nas_xss=8<\\/script>"></iframe>'],
@@ -277,15 +277,19 @@ for (const [name, payload] of hostileDisplayCorpus) {
     const unsafeNodes = await page
       .locator("script, iframe, svg, img, object, embed")
       .evaluateAll((nodes) =>
-        nodes.filter((node) => {
-          const tag = node.tagName.toLowerCase();
-          const html = node.outerHTML;
-          if (tag === "svg") {
-            return /onerror\s*=|onload\s*=|javascript:|srcdoc\s*=|__nas_xss/i.test(html);
-          }
-          return /__nas_xss|javascript:|onerror\s*=|onload\s*=|srcdoc\s*=|<script[^>]*>[^<]/i.test(html);
-        })
-        .map((node) => node.outerHTML));
+        nodes
+          .filter((node) => {
+            const tag = node.tagName.toLowerCase();
+            const html = node.outerHTML;
+            if (tag === "svg") {
+              return /onerror\s*=|onload\s*=|javascript:|srcdoc\s*=|__nas_xss/i.test(html);
+            }
+            return /__nas_xss|javascript:|onerror\s*=|onload\s*=|srcdoc\s*=|<script[^>]*>[^<]/i.test(
+              html,
+            );
+          })
+          .map((node) => node.outerHTML),
+      );
     expect(unsafeNodes).toEqual([]);
     expect(await page.locator('[href^="javascript:"], [href^="//"]').count()).toBe(0);
     expect(pageErrors).toEqual([]);
