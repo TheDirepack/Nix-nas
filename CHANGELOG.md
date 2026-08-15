@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.30 — 2026-08-15
+
+- Wait for Authentik's asynchronous NAS automation blueprint during first-run provisioning and queue manual account mutations behind the identity reconciliation lock.
+
 ## 2.2.0-alpha.29 — 2026-08-15
 
 - Make Authentik forward-auth identity handoff canonical and retry only transient portal authorization races in the VM browser qualification.

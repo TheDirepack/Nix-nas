@@ -350,6 +350,7 @@ def ensure_groups(token: str) -> dict[str, Any]:
 AUTOMATION_ROLE = "NAS automation"
 AUTOMATION_USER = "nas-automation"
 AUTOMATION_TOKEN_IDENTIFIER = "nas-automation-api"
+DEFAULT_AUTOMATION_ROLE_WAIT_SECONDS = 600.0
 
 
 def provision_runtime_token(token: str) -> dict[str, Any]:
@@ -373,7 +374,15 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
         raise SyncError("Authentik automation service account has no numeric primary key")
 
     role: Mapping[str, Any] | None = None
-    role_wait = max(float(os.environ.get("NAS_AUTOMATION_ROLE_WAIT_SECONDS", "60")), 0.0)
+    role_wait = max(
+        float(
+            os.environ.get(
+                "NAS_AUTOMATION_ROLE_WAIT_SECONDS",
+                str(DEFAULT_AUTOMATION_ROLE_WAIT_SECONDS),
+            )
+        ),
+        0.0,
+    )
     deadline = time.monotonic() + role_wait
     attempt = 0
     while role is None:

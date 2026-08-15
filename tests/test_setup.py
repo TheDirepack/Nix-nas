@@ -731,6 +731,23 @@ class SetupConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(setup.SetupError, "Do not combine"):
             invoke(["nas_allow_vault"])
 
+    def test_runtime_account_commands_wait_for_identity_reconciliation(self):
+        with (
+            mock.patch.object(setup, "acquire_operation", return_value=setup.contextlib.nullcontext()) as acquire,
+            mock.patch.object(setup, "one_account", return_value={}),
+            mock.patch.object(setup.sys, "argv", ["nas-setup", "account", "apply", "--username", "alice"]),
+        ):
+            setup.main()
+        acquire.assert_called_once_with("account-apply", ("identity", "runtime"), blocking=True)
+
+        with (
+            mock.patch.object(setup, "acquire_operation", return_value=setup.contextlib.nullcontext()) as acquire,
+            mock.patch.object(setup, "disable_account", return_value={}),
+            mock.patch.object(setup.sys, "argv", ["nas-setup", "account", "disable", "alice"]),
+        ):
+            setup.main()
+        acquire.assert_called_once_with("account-disable", ("identity", "runtime"), blocking=True)
+
     def test_inactive_accounts_drop_active_reserved_groups(self):
         raw = self.base()
         raw["accounts"][0]["active"] = False

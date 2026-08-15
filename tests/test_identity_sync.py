@@ -299,6 +299,32 @@ class IdentitySyncTests(unittest.TestCase):
             result = sync.provision_runtime_token("bootstrap")
         self.assertEqual(result["role"], sync.AUTOMATION_ROLE)
 
+    def test_bootstrap_runtime_token_default_wait_covers_slow_blueprint_discovery(self):
+        roles = [[], [], [{"pk": "role-pk", "name": sync.AUTOMATION_ROLE}]]
+
+        def listing(_token, path):
+            if path.startswith("core/users/"):
+                return [{"pk": 42, "username": sync.AUTOMATION_USER}]
+            if path.startswith("rbac/roles/"):
+                return roles.pop(0)
+            if path.startswith("core/tokens/"):
+                return []
+            raise AssertionError(path)
+
+        with (
+            mock.patch.dict(sync.os.environ, {}, clear=False),
+            mock.patch.object(sync, "authentik_list", side_effect=listing),
+            mock.patch.object(sync, "authentik_request", return_value={}),
+            mock.patch.object(sync, "_retry_delay", return_value=0.0),
+            mock.patch.object(sync.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 120.0, 120.0]),
+            mock.patch.object(sync.time, "sleep"),
+            mock.patch.object(sync.secrets, "token_urlsafe", return_value="scoped-runtime-token-value"),
+        ):
+            sync.os.environ.pop("NAS_AUTOMATION_ROLE_WAIT_SECONDS", None)
+            result = sync.provision_runtime_token("bootstrap")
+
+        self.assertEqual(result["role"], sync.AUTOMATION_ROLE)
+
     def test_disabled_syncthing_returns_reconciliation_shape(self):
         with mock.patch.object(sync, "SYNCTHING_ENABLED", False):
             result = sync.reconcile_syncthing(self.model())
