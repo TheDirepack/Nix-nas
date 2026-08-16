@@ -1,7 +1,7 @@
 """Hypothesis coverage for every repository-owned Python input boundary.
 
 The targets in this file are deliberately side-effect free.  They cover the
-normalizers, validators, protocol decoders, and service-plan renderers that
+normalizers, validators, protocol decoders, and V2 service-plan renderers that
 turn operator or remote input into control-plane data.  Whole-system mutation
 and destructive lifecycle checks remain separate VM qualifications.
 """
@@ -9,6 +9,7 @@ and destructive lifecycle checks remain separate VM qualifications.
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import pathlib
 import sys
@@ -33,25 +34,22 @@ else:
     import nas_coding_agent as coding_agent
     import nas_common as common
     import nas_doctor as doctor
-    import nas_feature_control as feature_control
-    import nas_feature_model as feature_model
     import nas_identity_model as identity_model
     import nas_identity_sync as identity_sync
     import nas_logging
-    import nas_managed_service as managed_service
-    import nas_migrate_state as migrate_state
     import nas_operation_journal as operation_journal
     import nas_operation_lock as operation_lock
-    import nas_service_authentik as service_authentik
-    import nas_service_caddy as service_caddy
-    import nas_service_firewall as service_firewall
-    import nas_service_runtime_compose as runtime_compose
-    import nas_service_runtime_libvirt as runtime_libvirt
-    import nas_service_runtime_podman as runtime_podman
     import nas_setup as setup
     import nas_setup_config as setup_config
     import nas_state as state
     import nas_syncthing_devices as syncthing
+    import nas_v2_accelerator as accelerator
+    import nas_v2_authentik as authentik
+    import nas_v2_caddy as caddy
+    import nas_v2_compose as compose
+    import nas_v2_network as network
+    import nas_v2_quadlet as quadlet
+    import nas_v2_spec as v2_spec
 
 
 SERVICE_INPUT_MODULES = frozenset(
@@ -62,27 +60,65 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_coding_agent",
         "nas_common",
         "nas_doctor",
-        "nas_feature_control",
-        "nas_feature_model",
         "nas_identity_model",
         "nas_identity_sync",
         "nas_logging",
-        "nas_managed_service",
-        "nas_migrate_state",
         "nas_operation_journal",
         "nas_operation_lock",
-        "nas_service_authentik",
-        "nas_service_caddy",
-        "nas_service_firewall",
-        "nas_service_runtime_compose",
-        "nas_service_runtime_libvirt",
-        "nas_service_runtime_podman",
         "nas_setup",
         "nas_setup_config",
         "nas_state",
         "nas_syncthing_devices",
+        "nas_v2_accelerator",
+        "nas_v2_apply",
+        "nas_v2_authentik",
+        "nas_v2_backup",
+        "nas_v2_bootstrap",
+        "nas_v2_caddy",
+        "nas_v2_compose",
+        "nas_v2_control",
+        "nas_v2_editor",
+        "nas_v2_entry",
+        "nas_v2_exec_runner",
+        "nas_v2_libvirt",
+        "nas_v2_network",
+        "nas_v2_plan",
+        "nas_v2_platform_probe",
+        "nas_v2_python_prepare",
+        "nas_v2_quadlet",
+        "nas_v2_readiness",
+        "nas_v2_session",
+        "nas_v2_source_watch",
+        "nas_v2_spec",
+        "nas_v2_systemd",
+        "nas_v2_systemd_reconcile",
+        "nas_v2_wake",
     }
 )
+
+
+BASE_V2_DOCUMENT = {
+    "schemaVersion": 3,
+    "services": {
+        "demo": {
+            "name": "Demo",
+            "workload": {"kind": "daemon"},
+            "runtime": {"type": "systemd", "unit": "demo.service"},
+            "routes": {
+                "web": {
+                    "target": {"type": "http", "port": 8080},
+                    "exposure": {"type": "path", "paths": ["/demo/"]},
+                    "auth": {"mode": "public"},
+                    "portal": {"visible": False},
+                }
+            },
+        }
+    },
+}
+
+
+def _compiled_v2_schema() -> dict[str, object]:
+    return v2_spec.load_schema(ROOT / "schemas" / "managed-services-v3.schema.json")
 
 
 if HAS_HYPOTHESIS:
@@ -103,31 +139,6 @@ if HAS_HYPOTHESIS:
             return None
 
     class CustomInputSurfaceFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
-        def test_feature_catalog_rejects_unhashable_scalars(self) -> None:
-            contract = feature_control.catalog_contract()
-            catalogs = [
-                {"schemaVersion": [], "features": {"demo": {}}},
-                {"schemaVersion": 1, "features": {"demo": {"parent": []}}},
-                {
-                    "schemaVersion": 1,
-                    "features": {"demo": {"availabilityProbe": {"type": []}}},
-                },
-                {
-                    "schemaVersion": 1,
-                    "features": {
-                        "demo": {
-                            "allowedModes": ["off", "on-demand"],
-                            "idleSeconds": [],
-                        }
-                    },
-                },
-                {"schemaVersion": 1, "features": {"demo": {"activePorts": [[]]}}},
-                {"schemaVersion": 1, "features": {"demo": {}}, "memoryComponents": [{"feature": []}]},
-            ]
-            for catalog in catalogs:
-                with self.assertRaises(feature_model.FeatureError):
-                    feature_model.normalize_catalog(catalog, contract)
-
         @settings(max_examples=350, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(HOSTILE_TEXT)
         def test_text_protocol_and_shell_boundaries(self, value: str) -> None:
@@ -149,32 +160,42 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(operation_lock._validate_class, value)
             expected_boundary_error(setup_config.normalize_secret_line, value, "fuzz-secret")
             expected_boundary_error(state.safe_member_name, value)
-            expected_boundary_error(service_firewall._validate_cidr, value)
-            feature_model.valid_loopback_http_url(value)
-            feature_control._is_valid_service_scope(value)
-            expected_boundary_error(
-                service_caddy._validate_exposure,
-                {"type": "path", "value": value},
-            )
+            expected_boundary_error(caddy._header_name, value)
+            expected_boundary_error(caddy._path_patterns, value)
+            expected_boundary_error(caddy._safe_posix, value, "fuzz path")
+            expected_boundary_error(quadlet._reject_control, value, "fuzz field")
+            expected_boundary_error(quadlet._single_line, value, field="fuzz field")
+            expected_boundary_error(quadlet._safe_path, value, field="fuzz field")
+            expected_boundary_error(authentik._api_root, value)
+            expected_boundary_error(authentik.desired_capabilities, {"services": {}})
+            expected_boundary_error(network.bridge_interface_name, value)
+            expected_boundary_error(network.podman_network_name, value, {})
+            expected_boundary_error(network.vlan_binding, {"vlanId": value, "vlanParent": value})
+            v2_spec.SERVICE_ID_RE.fullmatch(value)
+            v2_spec.CAPABILITY_ID_RE.fullmatch(value)
+            v2_spec.SYSTEMD_UNIT_RE.fullmatch(value)
+            authentik.CAPABILITY_RE.fullmatch(value)
+            accelerator.is_cdi_selector(value)
+
+        @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(HOSTILE_TEXT)
+        def test_v2_document_compilation_rejects_hostile_service_fields(self, value: str) -> None:
+            document = copy.deepcopy(BASE_V2_DOCUMENT)
+            document["services"]["demo"]["name"] = value
+            schema = _compiled_v2_schema()
+            expected_boundary_error(v2_spec.compile_document, document, schema)
 
         @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(JSON_VALUE)
         def test_structured_control_plane_boundaries(self, value: object) -> None:
             nas_logging.sanitize(value)
             operation_journal._journal_value(value)
-            expected_boundary_error(migrate_state._schema, value if isinstance(value, dict) else {})
             doctor._human(value if isinstance(value, dict) else {})
             expected_boundary_error(cockpit_api._json_string, value if isinstance(value, dict) else {}, "value")
             expected_boundary_error(
                 cockpit_api._json_string_list,
                 value if isinstance(value, dict) else {},
                 "values",
-            )
-            expected_boundary_error(feature_control.normalize_catalog, value if isinstance(value, dict) else {})
-            expected_boundary_error(
-                feature_model.normalize_catalog,
-                value if isinstance(value, dict) else {},
-                feature_control.catalog_contract(),
             )
             expected_boundary_error(setup_config.normalize_config, value if isinstance(value, dict) else {})
             expected_boundary_error(
@@ -193,35 +214,25 @@ if HAS_HYPOTHESIS:
                 },
             )
             expected_boundary_error(identity_sync.sanitize_error_payload, str(value).encode("utf-8"))
+            document = copy.deepcopy(BASE_V2_DOCUMENT)
+            if isinstance(value, dict):
+                document["services"]["demo"]["name"] = str(value)[:512]
+            schema = _compiled_v2_schema()
+            expected_boundary_error(v2_spec.compile_document, document, schema)
 
         @settings(max_examples=250, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(service_id=SAFE_SERVICE_ID, hostile=HOSTILE_TEXT)
-        def test_managed_service_adapters_render_or_reject_hostile_fields(self, service_id: str, hostile: str) -> None:
-            endpoint = {
-                "transport": "http",
-                "targetPort": 8080,
-                "exposure": {"type": "path", "value": "/" + hostile.replace("/", "")[:32]},
-                "auth": {"mode": "public"},
-            }
-            service = {
-                "label": hostile,
-                "enabled": True,
-                "runtime": {
-                    "type": "compose",
-                    "source": f"/var/lib/nas-control/apps/{service_id}/app.yaml",
-                    "startPolicy": "boot",
-                },
-                "endpoints": {"web": endpoint},
-                "network": {"allowedEgress": []},
-                "resources": {"cpus": 2, "memoryBytes": 2 * 1024 * 1024 * 1024},
-            }
-            expected_boundary_error(managed_service.validate_service, service_id, service)
-            expected_boundary_error(service_authentik.plan_authentik, service_id, service)
-            expected_boundary_error(service_caddy.generate_caddy_fragment, service)
-            expected_boundary_error(service_firewall.plan_firewall, service_id, service)
-            expected_boundary_error(runtime_compose.plan_compose, service_id, service)
-            expected_boundary_error(runtime_libvirt.plan_libvirt, service_id, service)
-            expected_boundary_error(runtime_podman.plan_podman, service_id, service)
+        def test_v2_plan_renderers_reject_or_build_hostile_fields(self, service_id: str, hostile: str) -> None:
+            expected_boundary_error(network.bridge_interface_name, service_id + hostile)
+            expected_boundary_error(
+                network.podman_network_name, service_id + hostile, {"workload": {"kind": "session"}}
+            )
+            expected_boundary_error(network.network_policy, {"networkProfiles": {}}, {"networkProfile": service_id})
+            expected_boundary_error(compose._is_host_volume_source, hostile)
+            expected_boundary_error(compose._volume_target, hostile)
+            expected_boundary_error(
+                caddy.generate_caddyfile, {"services": {}, "derived": {"routes": []}}, lan_host=hostile
+            )
 
         @settings(max_examples=180, deadline=None)
         @given(HOSTILE_TEXT)
@@ -233,7 +244,7 @@ if HAS_HYPOTHESIS:
                     "annotations": {"summary": value, "description": value},
                 },
             )
-            expected_boundary_error(setup.validate_feature_request, {value: "on-demand"})
+            expected_boundary_error(setup.validate_service_request, {value: "on-demand"})
             expected_boundary_error(
                 setup.validate_storage_request,
                 {"createPool": True, "devices": [value]},

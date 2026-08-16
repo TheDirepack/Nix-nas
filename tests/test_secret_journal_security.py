@@ -13,7 +13,9 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-SPEC = importlib.util.spec_from_file_location("nas_operation_journal", SERVICES / "nas_operation_journal.py")
+SPEC = importlib.util.spec_from_file_location(
+    "nas_operation_journal_secret_test", SERVICES / "nas_operation_journal.py"
+)
 assert SPEC and SPEC.loader
 journal_module = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = journal_module

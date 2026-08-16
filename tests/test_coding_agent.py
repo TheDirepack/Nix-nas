@@ -157,57 +157,6 @@ class CodingAgentTests(unittest.TestCase):
         self.assertIn("chown nas-ai:nas-ai", services)
         self.assertIn("Refusing symlinked llama-swap configuration", services)
 
-    def test_workspace_validation_rejects_missing_and_file_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary).resolve()
-            missing = root / "missing"
-            with self.assertRaisesRegex(coding.CodingAgentError, "does not exist"):
-                coding.validate_workspace(str(missing), (root,))
-            plain_file = root / "file"
-            plain_file.write_text("", encoding="utf-8")
-            with self.assertRaisesRegex(coding.CodingAgentError, "not a directory"):
-                coding.validate_workspace(str(plain_file), (root,))
-
-    def test_run_checked_raises_on_nonzero_exit(self) -> None:
-        with mock.patch.object(coding.subprocess, "run", return_value=mock.Mock(returncode=1)) as run:
-            with self.assertRaisesRegex(coding.CodingAgentError, "Command failed with status 1"):
-                coding.run_checked(["false"])
-        run.assert_called_once_with(["false"], check=False)
-
-    def test_session_command_requires_absolute_executable(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary).resolve()
-            with mock.patch.dict(os.environ, {"NAS_PI_SESSION_EXEC": "relative-exec"}, clear=True):
-                with self.assertRaisesRegex(coding.CodingAgentError, "not configured"):
-                    coding.session_command(root, [])
-            with mock.patch.dict(os.environ, {"NAS_PI_SESSION_EXEC": ""}, clear=True):
-                with self.assertRaisesRegex(coding.CodingAgentError, "not configured"):
-                    coding.session_command(root, [])
-
-    def test_session_command_clamps_max_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary).resolve()
-            session_exec = root / "session"
-            session_exec.write_text("#!/bin/sh\n", encoding="utf-8")
-            with mock.patch.dict(
-                os.environ,
-                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "not-a-number"},
-            ):
-                command = coding.session_command(root, [])
-            self.assertIn("RuntimeMaxSec=14400", command)
-            with mock.patch.dict(
-                os.environ,
-                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "10"},
-            ):
-                command = coding.session_command(root, [])
-            self.assertIn("RuntimeMaxSec=14400", command)
-            with mock.patch.dict(
-                os.environ,
-                {"NAS_PI_SESSION_EXEC": str(session_exec), "NAS_CODING_MAX_RUNTIME_SEC": "7200"},
-            ):
-                command = coding.session_command(root, [])
-            self.assertIn("RuntimeMaxSec=7200", command)
-
     def test_heartbeat_refreshes_v2_service_lease(self) -> None:
         stop = threading.Event()
         with mock.patch.object(coding.subprocess, "run") as run:

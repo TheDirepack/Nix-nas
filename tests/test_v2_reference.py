@@ -183,7 +183,7 @@ class V2ReferenceTests(unittest.TestCase):
         # Check that both use commas only (or both handle pipe/semicolon)
         # After fix, nas_common should only split on commas, and portal should only split on commas
         self.assertIn('raw.split(",")', common)
-        self.assertIn('split ","', portal)
+        self.assertIn('splitList ","', portal)
         # Ensure portal does not handle pipe/semicolon if common doesn't
         # This is now consistent: both use comma only
 

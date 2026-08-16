@@ -102,7 +102,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('placeholder "http.request.header.Remote-User"', portal)
         self.assertIn('splitList ","', portal)
         self.assertIn('has "nas_admin" $groups', portal)
-        self.assertNotIn('has $groups', portal)
+        self.assertNotIn("has $groups", portal)
         self.assertIn("generate_caddyfile", caddy)
         self.assertIn("project", projection)
         self.assertFalse((ROOT / "modules/nas/config/managed-services-migration.nix").exists())

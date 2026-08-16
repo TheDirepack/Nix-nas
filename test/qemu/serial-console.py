@@ -23,10 +23,8 @@ DSL (one directive per line, '#' starts a comment):
 """
 
 import argparse
-import os
 import re
 import socket
-import sys
 import time
 
 

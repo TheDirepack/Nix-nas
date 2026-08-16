@@ -232,15 +232,16 @@ test("secret transports preserve hostile single-line values only on stdin", asyn
   const password = "'\"\\$`;&|<> password";
   await startFirstRun(password, {planDigest: "b".repeat(64)}, spawn);
   activateSecrets(password, spawn);
-  assert.deepEqual(inputs, [
-    {
-      command: ["nas-cockpit-api", "first-run", "--plan-digest", "b".repeat(64)],
-      value: `${password}\n`,
-    },
-    {command: ["nas-secrets", "activate-stdin"], value: `${password}\n`},
+  assert.deepEqual(inputs.map(({command}) => command), [
+    ["nas-cockpit-api", "first-run"],
+    ["nas-secrets", "activate-stdin"],
   ]);
+  const request = JSON.parse(inputs[0].value);
+  assert.equal(request.password, password);
+  assert.equal(request.planDigest, "b".repeat(64));
+  assert.equal(inputs[1].value, `${password}\n`);
   assert.equal(
-    inputs.some(({command}) => command.includes(password)),
+    inputs.some(({command}) => [].concat(command).some((arg) => arg.includes(password))),
     false,
   );
 });

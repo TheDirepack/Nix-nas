@@ -96,8 +96,8 @@ in
           root * ${nasPortalStatic}/share/nas-portal
           rewrite * /index.html
           templates {
-            # The portal template is immutable, but its service links are a
-            # runtime projection owned by nas-managed-service.
+            # The portal template renders the runtime projection written to
+            # /run/nas-control/portal.json by the control plane.
             root /
           }
           file_server
