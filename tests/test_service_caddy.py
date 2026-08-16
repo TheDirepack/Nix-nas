@@ -240,6 +240,15 @@ class GenerateFragmentTests(unittest.TestCase):
         caddyfile = caddy.generate_caddyfile(effective)
         self.assertIn("forward_auth", caddyfile)
         self.assertIn("app:web", caddyfile)
+        self.assertIn(
+            "request_header Remote-Groups {http.request.header.X-Authentik-Groups}",
+            caddyfile,
+        )
+        self.assertIn(
+            "header_up Remote-Groups {http.request.header.X-Authentik-Groups}",
+            caddyfile,
+        )
+        self.assertNotIn("X-Authentik-Groups>Remote-Groups", caddyfile)
 
     def test_public_has_no_forward_auth(self):
         effective = {

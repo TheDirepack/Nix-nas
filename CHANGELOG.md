@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.32 — 2026-08-15
+
+- Preserve the Authentik identity headers used by Caddy capability gates across static and managed-service routes.
+
 ## 2.2.0-alpha.31 — 2026-08-15
 
 - Release feature-operation locks before collecting slow status probes so concurrent lifecycle changes are not rejected by post-operation reporting.
