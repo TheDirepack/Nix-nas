@@ -849,6 +849,28 @@ def validate_projection(files: dict[str, bytes], *, firewall_offline_cmd: str) -
             dst = root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(content)
+        # firewall-offline-cmd expects a full firewalld config; provide minimal
+        # firewalld.conf and ensure referenced zones exist for offline validation.
+        firewalld_conf = root / "firewalld.conf"
+        if not firewalld_conf.exists():
+            try:
+                src = pathlib.Path("/etc/firewalld/firewalld.conf")
+                if src.is_file():
+                    firewalld_conf.write_bytes(src.read_bytes())
+                else:
+                    firewalld_conf.write_text("[firewalld]\nDefaultZone=public\n", encoding="utf-8")
+            except OSError:
+                firewalld_conf.write_text("[firewalld]\nDefaultZone=public\n", encoding="utf-8")
+        zones_dir = root / "zones"
+        zones_dir.mkdir(parents=True, exist_ok=True)
+        for zone_name in ("nas-lan", "trusted", "public", "drop"):
+            src = pathlib.Path(f"/etc/firewalld/zones/{zone_name}.xml")
+            dst = zones_dir / f"{zone_name}.xml"
+            if not dst.exists() and src.is_file():
+                try:
+                    dst.write_bytes(src.read_bytes())
+                except OSError:
+                    pass
         try:
             result = subprocess.run(
                 [firewall_offline_cmd, f"--system-config={root}", "--check-config"],
