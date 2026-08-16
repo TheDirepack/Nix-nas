@@ -8,6 +8,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
+FULL_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 PROFILE = ROOT / "scripts" / "lib" / "nas-vm-profile.sh"
 FAILURE_INJECTION = ROOT / "tests" / "vm" / "cleanup-failure-injection.sh"
 
@@ -50,6 +51,14 @@ class VmPreflightScopeTests(unittest.TestCase):
         self.assertIn('log "Final state"', guest_test)
         result = subprocess.run([str(FAILURE_INJECTION)], cwd=ROOT, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_full_suite_surfaces_run_owned_cleanup_failures(self) -> None:
+        full_suite = FULL_SUITE.read_text(encoding="utf-8")
+        self.assertIn('source "$repo/scripts/lib/nas-vm-cleanup.sh"', full_suite)
+        self.assertIn("nas_vm_cleanup_add cleanup_work", full_suite)
+        self.assertIn("nas_vm_cleanup_add nas_vm_js_deps_cleanup", full_suite)
+        self.assertIn("trap nas_vm_cleanup_trap EXIT", full_suite)
+        self.assertNotIn('nas_vm_js_deps_cleanup "$status" || :', full_suite)
 
 
 if __name__ == "__main__":

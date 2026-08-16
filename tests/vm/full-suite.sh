@@ -13,21 +13,20 @@ cd -- "$repo"
 # shellcheck disable=SC1091
 source "$repo/scripts/lib/nas-vm-js-deps.sh"
 # shellcheck disable=SC1091
+source "$repo/scripts/lib/nas-vm-cleanup.sh"
+# shellcheck disable=SC1091
 source "$repo/tests/vm/timeout-budget.sh"
 export NAS_VM_TIMEOUT_BUDGET_FILE="$repo/tests/vm/timeout-budget.json"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/nas-full-suite.XXXXXX")"
 
-cleanup() {
-  local status=$?
-  # Preserve the suite result while allowing every run-owned temporary path
-  # to be removed before the EXIT trap returns it.
-  nas_vm_js_deps_cleanup "$status" || :
+cleanup_work() {
   rm -rf -- "$work"
-  return "$status"
 }
 
-trap cleanup EXIT
+nas_vm_cleanup_add cleanup_work
+nas_vm_cleanup_add nas_vm_js_deps_cleanup
+trap nas_vm_cleanup_trap EXIT
 mkdir -p "$work/"{home,tmp,secrets/ai,llama-swap}
 printf 'models: {}\npeers: {}\nselectors: {}\n' >"$work/llama-swap/config.yaml"
 touch "$work/secrets/ready"

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.33 — 2026-08-15
+
+- Surface run-owned JavaScript dependency cleanup failures from the full VM suite instead of masking them after an otherwise successful test run.
+
 ## 2.2.0-alpha.32 — 2026-08-15
 
 - Preserve the Authentik identity headers used by Caddy capability gates across static and managed-service routes.

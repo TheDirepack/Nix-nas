@@ -40,6 +40,7 @@ run_case() {
 
     export NAS_VM_TIMEOUT_BUDGET_FILE="$ROOT/tests/vm/timeout-budget.json"
     export NAS_VM_PROFILE_OUTPUT="$case_dir/profile.log"
+    # shellcheck disable=SC2030
     export NAS_VM_CLEANUP_OUTPUT="$case_dir/cleanup.log"
     export NAS_VM_ARTIFACT_PATH="$case_dir/evidence/profile.json"
     mkdir -p "$case_dir/evidence" "$case_dir/repo/tests/js-fuzz" "$case_dir/fast-check"
@@ -210,5 +211,31 @@ for stage in package-install secret-activation browser-tests fuzzing artifact-up
   kill -0 "$(<"$case_dir/workload.pid.observed")" 2>/dev/null && exit 1
   kill -0 "$(<"$case_dir/outpost.pid.observed")" 2>/dev/null && exit 1
 done
+
+cleanup_failure_dir="$WORK/cleanup-failure"
+if (
+  set -Eeuo pipefail
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/lib/nas-vm-cleanup.sh"
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/lib/nas-vm-js-deps.sh"
+  mkdir -p "$cleanup_failure_dir/node_modules"
+  NAS_VM_JS_DEPS_PATH="$cleanup_failure_dir/node_modules"
+  NAS_VM_JS_DEPS_OWNED=1
+  # shellcheck disable=SC2329
+  nas_vm_js_deps_remove() { return 91; }
+  nas_vm_cleanup_add nas_vm_js_deps_cleanup
+  trap nas_vm_cleanup_trap EXIT
+  exit 0
+); then
+  printf 'cleanup contract: dependency removal failure unexpectedly passed\n' >&2
+  exit 1
+else
+  status=$?
+fi
+[[ $status -eq 91 ]] || {
+  printf 'cleanup contract: dependency removal failure returned %s, expected 91\n' "$status" >&2
+  exit 1
+}
 
 printf 'VM cleanup/profile failure-injection contract passed\n'
