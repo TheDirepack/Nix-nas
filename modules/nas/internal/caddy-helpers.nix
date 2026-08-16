@@ -19,20 +19,7 @@ let
     forward_auth 127.0.0.1:${toString authentikOutpostPort} {
       uri ${authentikOutpostPath}
       header_down Location "^http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}(.*)$" "https://${lanHost}${cfg.identity.authentikPath}$1"
-      copy_headers {
-        X-Authentik-Username
-        X-Authentik-Groups
-        X-Authentik-Entitlements
-        X-Authentik-Name
-        X-Authentik-Email
-        X-Authentik-Uid
-        X-Authentik-Jwt
-        X-Authentik-Meta-Jwks
-        X-Authentik-Meta-Outpost
-        X-Authentik-Meta-Provider
-        X-Authentik-Meta-App
-        X-Authentik-Meta-Version
-      }
+      copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements X-Authentik-Name X-Authentik-Email X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
     }
     @missingAuthentikIdentity not header X-Authentik-Username *
     respond @missingAuthentikIdentity 403

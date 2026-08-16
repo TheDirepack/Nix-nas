@@ -45,15 +45,15 @@ def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> s
     )
     if qualification_run:
         expected.update(QUALIFICATION_JOBS)
-    if (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
+    installer_run = (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
         event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
-    ):
+    )
+    if installer_run:
         expected.add("installer")
+    if event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")):
         expected.update(INSTALLED_FUZZ_JOBS)
-    if (
-        event_name == "schedule"
-        or (event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))
-        or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
+    if event_name == "schedule" or (
+        event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
     ):
         expected.update(SLOW_JOBS)
     return expected

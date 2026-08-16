@@ -892,8 +892,7 @@ jobs:
       always() && needs.integration.result == 'success' && needs.browser.result == 'success' &&
       (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
       (github.event_name == 'schedule' ||
-       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
-       (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
+       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [integration, browser, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -933,6 +932,10 @@ jobs:
 
   installed-command-fuzz:
     name: Final installed-command and HTTP adversarial checks
+    if: >-
+      always() && needs.installer.result == 'success' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
     # This job invokes the 489-minute installer wrapper; retain the same setup margin.
@@ -987,6 +990,10 @@ jobs:
 
   zap-fuzz:
     name: Final installed-VM active ZAP fuzz
+    if: >-
+      always() && needs.installer.result == 'success' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
     # This job invokes the 489-minute installer wrapper; retain the same setup margin.

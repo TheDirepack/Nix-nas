@@ -115,7 +115,7 @@ Known attack strings belong in deterministic regression tests or Hypothesis `@ex
 
 For a genuinely byte-oriented, fast in-process parser where code-coverage feedback can guide mutations, prefer a maintained coverage-guided engine such as Atheris/libFuzzer rather than adding another local RNG loop. Do not wrap subprocess, systemd, QEMU, or browser workflows in byte mutation merely to increase a case counter. If the project later exposes a machine-readable OpenAPI or GraphQL surface, use a schema-aware engine such as Schemathesis rather than generic HTTP request spraying.
 
-CI currently sequences the generated source-property shards after deterministic QEMU integration. That is an orchestration choice, not a limitation of Hypothesis or fast-check. The important boundary is tool selection: use the cheapest layer that proves the invariant while preserving higher-fidelity VM or browser checks where those semantics matter.
+GitHub CI runs deterministic checks through the QEMU and installer tiers; it does not run long fuzz searches. Run the generated source-property shards locally only after deterministic qualification succeeds, one suite at a time for the requested sustained search window. The important boundary is tool selection: use the cheapest layer that proves the invariant while preserving higher-fidelity VM or browser checks where those semantics matter.
 
 CI does not cache qualification pass markers. Dependency downloads, immutable installer media, and incremental Nix build outputs may be cached because they accelerate execution without replacing test evidence.
 
@@ -233,12 +233,13 @@ closed; a missing reusable cache remains a functional cache miss and rebuilds
 the exact base as needed.
 
 Pull requests run the deterministic source, contract, build, and handoff
-checks. Browser, native QEMU, reboot/installer, and generated fuzz tiers are
-qualification work: they run on the scheduled workflow, protected main/tag
-pushes, or an explicit `workflow_dispatch` full/installer tier. The `full`
-tier includes the official installer and installed-VM checks; `installer` is
-the narrower on-demand tier for rerunning that portion. The summary still
-reports every release-critical job and calls out cache persistence failures as
+checks. Browser, native QEMU, and reboot/installer tiers are qualification
+work: they run on the scheduled workflow, protected main/tag pushes, or an
+explicit `workflow_dispatch` full/installer tier. The `full` tier includes the
+official installer and installed-VM checks; `installer` is the narrower
+on-demand tier for rerunning that portion. Long fuzzing remains a local,
+one-suite-at-a-time pre-merge qualification step. The summary still reports
+every release-critical job and calls out cache persistence failures as
 non-authoritative warnings.
 
 The build job has an exact-reuse path. A commit-keyed, manifest-verified

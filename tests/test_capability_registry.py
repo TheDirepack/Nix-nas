@@ -53,6 +53,10 @@ class CapabilityRegistryTests(unittest.TestCase):
         ):
             self.assertIn(expected, caddy)
         self.assertIn("not header X-Authentik-Username *", caddy)
+        self.assertIn(
+            "copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements",
+            caddy,
+        )
         self.assertNotIn("not header Remote-User *", caddy)
         self.assertNotIn("X-Authentik-Groups>Remote-Groups", caddy)
 

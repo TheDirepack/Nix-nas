@@ -1,17 +1,17 @@
 e5f42e5bbd9a4ffa2a77ff1514c6988a98cc85686e89d878530c9f9db8e0ffbb  ./.bandit
 4b3b5ef40a5ccf446e66b4546c421fa91c4a3fd465aa75bc83b16a046d4fb2d5  ./.coveragerc
 8e1c9a78d4dedcde12bb3cd6279ce83942819d1cd178f1d9d731ef3a62606ac7  ./.editorconfig
-9e0932838d2073c82a46637fad5313fc3440a73cba616fccaf37259a26b65d65  ./.github/CI_CACHE_POLICY.md
-761e27248fd2a89c91252f7e6176527b48d228ee821cc676e288a759e1c1cdc1  ./.github/workflows/ci.yml
+a11262c2b894290575508abfb7592425e671d249a535a2988a118b67df38cccb  ./.github/CI_CACHE_POLICY.md
+b6f90e7ae573be7cbe5f071239e714fbdc81e29be6ecc8c8944bd69c2d1826a5  ./.github/workflows/ci.yml
 590886e4ddddc96b7db471fcbf3900e4d578494b008d707bfd978c93496630ce  ./.gitignore
 2e6f7c21f6ce1112f974e840f976a5c6b3d19e4ae94fb369b9945480f611192c  ./.semgrep.yml
 e05b21ff3f3e91190fd5895e2ab60e5d8c08c71c87fb505c0b6faece51e2a10e  ./AGENTS.md
-d2f69031361303f7acd475c48043b2575cf511940773c15a99ef30876af17316  ./CHANGELOG.md
+51fc0667c548e21c18ca2072ac19367171d4315ebced413d58118d6d0e3a066c  ./CHANGELOG.md
 e4c61c8986433964595a72c1ba1b484e7167cdee730ac08fab7af5ad60058a11  ./CONTRIBUTING.md
 8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./LICENSE
-d090605a04fefb7302f9d045f581b3c6adfcf3e989f2ad997ff2fac8000502ee  ./README.md
+775e096e020fb7d986ea888cf9add5d256b5807d13e03f5d1c0c6b42bf52d6b4  ./README.md
 cf82a3d11da08703796b4fae34ab054ad90ceaca5da84794ff3c7f89845ee38c  ./SECURITY.md
-dd686ee7bcb17d1648c38425995f5fad308ce2996f92f2ded53c65bd6d835dfe  ./VERSION
+e0d840f4198636ddbe1c855b9e2d07b7a65fdf3ba29f79703ab9dce758c74ee4  ./VERSION
 b6e241e1b034d7665efa2dbaf209e96ecc2b2d45b3284b5fc826a5e26abda687  ./authentik/blueprints/nas-user-settings.yaml
 80ce081d59f67cc934ce0f589e895db57512f8e359859d0375676d528b3618bb  ./cockpit/Makefile
 4ab8d58fe6e9ed0852a60071c225ed972a7575c83bb0faef4182571af5ed5a3d  ./cockpit/README.md
@@ -24,7 +24,7 @@ b6e241e1b034d7665efa2dbaf209e96ecc2b2d45b3284b5fc826a5e26abda687  ./authentik/bl
 3aa1c6902c45ea513b3b15e9564733f2b0d56a64460eea753705aa9d1202245a  ./cockpit/dist/assets/RedHatTextVF-Italic-BQAR6ZIH.woff2
 f419ad7a4477f36ce73c74a23dce784150ca38fa5075a8e06109709cbb716903  ./cockpit/dist/assets/fa-solid-900-VBWCXSSH.woff2
 322295638da2105dffff0eb18ee10ccffcac38888778b7b1b4624772d513e65d  ./cockpit/dist/assets/pf-v6-pficon-Q2JC5CDH.woff2
-1ce2310031a9ce0924568b516d1ef42914e42b3cc154045d9b2ca3ffca3fc841  ./cockpit/dist/build-meta.json
+b89ddce5b21b002adcda16dbcf602172746f8fac0eb1937bf0496f9afebdd525  ./cockpit/dist/build-meta.json
 5ef8db4238292749c1701d7f8ab0eefd231258036eaa613f3e386964dcfb2edb  ./cockpit/dist/index.css
 2bf29db5f00d4f499b165025a7a00363abe24e06820a1e96a31a660ffbcb7fe2  ./cockpit/dist/index.html
 2b340f679838ba0c3d2ac8751f9039b927d15c4fccca378614a14f49cf68926f  ./cockpit/dist/index.js
@@ -34,8 +34,8 @@ f419ad7a4477f36ce73c74a23dce784150ca38fa5075a8e06109709cbb716903  ./cockpit/dist
 d58043a83341a59c6778019d0a30a1c2450e39be489277e38abf37613cd92d8c  ./cockpit/e2e/final-vm.spec.mjs
 544900e271a7701b60f6aa27ad1901ae1ae1ba8d1d939b772786876447ffba3b  ./cockpit/e2e/playwright.config.mjs
 93b3c7d1d5c23cd1e85274ab7302d586cbbbe2f0a1681a957389ab1cc5fd2df9  ./cockpit/e2e/ui-security.spec.mjs
-248d8c1e6013aa510be465a1a2d16aacafb63498df31658d9f9f7057ed107104  ./cockpit/package-lock.json
-6a1de52f13af1c348eec825bb0251536442565ee5e8449401a5f1e5f5640ad3f  ./cockpit/package.json
+ac16ef49ccd08fb66ddc1003bffe45b591d29c6fa12eb80e9ea3d39e63fb02e0  ./cockpit/package-lock.json
+92716fbd68273e019223c807f26534faa35694bb6bb4c1adae84cc163f23f84c  ./cockpit/package.json
 bcf9e1301716edbb7f5cae02db9e55cfea5b41c496596c821545b225d6fbc8b0  ./cockpit/src/api.js
 6ec8c63efdf46109c59d7bf4542abd191e193d9949769e9cacfa6271ee3801e5  ./cockpit/src/app.jsx
 7d41856998bee69a6b32c0a93c7d9247c25802c362bd94c9082db62542f89f2c  ./cockpit/src/app.scss
@@ -51,7 +51,7 @@ c19372f0d7ce66e982afadc2a81efc325ede03cb09144133a50dd778c7cb3f08  ./docs/develop
 790a4951a83126c813d172485a86adb6a94deac29ea827b0510076e3a2f4c7a8  ./docs/development/alpha3-remediation.md
 de7b2f115def14485c84f3ddcbc907a4a9f7ddad47a2f4bd1224018abe4801de  ./docs/development/alpha4-memory-reliability-work.md
 a3ca3ddb36be3ab29dac990d6a050bc128632f3135f94e1064e7fba7141b36e1  ./docs/development/architecture.md
-5eb6802f2b304b3674ee2cdef92e539f8264886c7197154aa7d3be0c93670fd8  ./docs/development/artifact-naming.md
+4c52095c724eaa6bfac3482b71ded22ff2d1a9757b175370175b78667abfcdfb  ./docs/development/artifact-naming.md
 433754ee79d2feac4d7195c286f8d758a5a2bf881e272d1572b174615f4792ae  ./docs/development/code-map.md
 57dd6d4f93ad6d0c2c7696c0577a501214da781655fe8529ff5d9a4e5bcf5317  ./docs/development/combined-review-remediation.md
 d702226bf512fa31d76c32e96252ef4b909a69ea0917a58bf0daf373072db55f  ./docs/development/dependencies.md
@@ -62,7 +62,7 @@ d702226bf512fa31d76c32e96252ef4b909a69ea0917a58bf0daf373072db55f  ./docs/develop
 36462c18dcebea043f16dd9a354561b88992f7feb88b660c4036b22c11bba9c0  ./docs/development/pi-coding-agent-architecture.md
 ee6e3ee5d8701bf153ee5650b53b84761d03dfc2b9520f1727381f95c592cd34  ./docs/development/release-checklist.md
 ea32aad65d56b30f613d98df60d5a5910eba9a3b7b9ba037b7212148dd48cd19  ./docs/development/root-service-audit.md
-07473f9d0c72bb7ca6fc1bf12d0ce7adb0d953fd4334878589c56e2b207a218a  ./docs/development/testing.md
+125f948b18c474ecfddff682df46ceeec133c131e73ec2fc94cb5f8fb7869454  ./docs/development/testing.md
 99c3134257ffc776409144bc7fad326288b93b38663990186f781072922e16cd  ./docs/development/unified-managed-services-plan-v2.md
 beba37dc4259edc35d8d49ba30b0a285e096152652e93f4dbd4ac945032c6872  ./docs/development/unified-managed-services-status.md
 2fa60df010c1b056c53122b003c566f578b277a5e65aab6a2030b127180fc1de  ./docs/development/vm-testing.md
@@ -96,7 +96,7 @@ e66b56761ef418cf343239b4055647d424c52fbdd21656e9216709b80f068507  ./docs/src/ref
 ea0ad3c5b1983243e96f431e2d957a5f2ed8d85879f39f088ce3a65ef1170ad7  ./docs/src/users/coding-agent.md
 705cffd206c3d69bbdb2fb9bb6bea0c48a6f3c424a2e27d8c734d4c1760eb2de  ./docs/src/users/settings.md
 b331667ad0e7f35d0b9e2d22a744966016c599a0da54f5501f1183ff2e2cfe6b  ./flake.lock
-eba155f60206f74627f612b16a392ab5937dea7f58035ad3555bbb152717f8e9  ./flake.nix
+ada6551f99b6a5cb5b3556fa02e9071f51614afb797292debbeb04f6262f985c  ./flake.nix
 a1806a174a6891c63632980eedb846b0f45084c4af6f485f698b385d70fff7c7  ./hardware-configuration.nix
 9fe56f184faab454c3024fd5b1e03ecd992340cd351bc58b899df4279997df52  ./hfdownloader-image.nix
 c691457783f612c9a0896a53783b53b376e2e2d18281ce8ecd992601be70d01d  ./installation/disko-fresh-pool-example.nix
@@ -129,7 +129,7 @@ edf8925fa105d812a7b067f65ed214d6791cc1592f26c80080d940f78d64482b  ./modules/nas/
 3aba84b97d5fe4d888679d93c1b1e1c95ee35c821bd2ff8d16868c0d16197389  ./modules/nas/default.nix
 6ce5df4f9d01009b0b7e2905aae996219a603b63b8b5ea12cd4a8e475673a934  ./modules/nas/internal/account-tools.nix
 fc78cd569509f3170cfd82172909d09135f43caf8f6010a2aa21e5e21632dc6c  ./modules/nas/internal/base.nix
-311632ee80c82f69173b8c988fd864cfcb465efc5ba0772cd631a1a5f1970911  ./modules/nas/internal/caddy-helpers.nix
+3e1c5933145948c4b9913b41c9dffa8308e4e5ffa444e1108212520ae03236dd  ./modules/nas/internal/caddy-helpers.nix
 39d94113cc0de8ac073553bf6f9e669fe84d757027387502a4772fd6851d11e4  ./modules/nas/internal/capability-registry.nix
 7ada10783e98a75a66be3dc564ffc0dc4a5f52b9359f83afd3b4b6d246bc688b  ./modules/nas/internal/default.nix
 e59c3658830b89111ffab1dce3c38ac96aa736f1360bcae818f1092c27ec37eb  ./modules/nas/internal/documentation-tools.nix
@@ -168,7 +168,7 @@ bf195c86694c28f38226187572bcfbaca1331a21e759a06c7ecf4958d9dd1f07  ./schemas/stat
 36ac576aabde7667dd8c587be273b14f22eced1f4ce7111a75e53caac51cd8ea  ./scripts/check-coverage.py
 c2017318f82f1fee87df28369422c4a936eb3ab156c25f2fc7a47fe2db74df2c  ./scripts/check-mkforce.py
 07dfd25584e0a6858d234211fd1c63cef02d7b498e4b3b107802e0059efbceec  ./scripts/check-version.py
-747dae47b15dedf6b738e92de12d8dbb8fc00e88c3581eb7e02a386414a216e1  ./scripts/ci-summary.py
+1d7959902c9dc2cf94dc2cdd3d4064f7488b1b5e6cec56cf1c1268b6c9b77f80  ./scripts/ci-summary.py
 ed2073ea1e9f309fec09b65ee59c8861d341ac707925c4b08f7deeb4985bdea4  ./scripts/evaluate-reference-configurations.sh
 900fdbb5a972fcee82852b4eab5e6081c1ca7a52e5d0fb2887f0624bf1b6f9ff  ./scripts/fuzz-executables.py
 00e3fc9f5014d99b2432e5f6fcfdd6d7ea4e0f31039b4e7cc72d83756d83cfb3  ./scripts/fuzz.py
@@ -226,7 +226,7 @@ e324474f1d2925bb40a401de17a935e35f8f6ddfd437e525511821414f183e6f  ./services/nas
 0cb90df5de856eb5be65fb9b5629eef78616d0d9e2b2de834995633ee3ce4234  ./services/nas_operation_journal.py
 13ef5676fd15248d1c634a074221b82131e6870629d3b7e9a49c46c853da58c1  ./services/nas_operation_lock.py
 c514a93d2f956945eee6b9657f499e174d79017ebc6384c2ed435b4ffaf6d711  ./services/nas_service_authentik.py
-a055cfdcef2d1069a413eef0528ca630d70bf714291a592b848df70ccdb8549c  ./services/nas_service_caddy.py
+1da40688657eb0f7f40a139f16b501b77ca795c46754abe930b3350e55aa6305  ./services/nas_service_caddy.py
 0e1a05cb3d81f37e430842b1832cd4ecbb5854a5d03d4ca8aef7e23bf25abf60  ./services/nas_service_firewall.py
 3043aed39681d897114e38818d74066d6360ab9ce78b67c4f171a8887a44de40  ./services/nas_service_runtime_compose.py
 d9e50c189867e88c11a104f62937273a08fe7c768e8c40dd9b134f8c82b694de  ./services/nas_service_runtime_libvirt.py
@@ -287,8 +287,8 @@ a25bc6421d7b814242307e3629f92c2045adfc81f5c2912abfe654063d12cc57  ./tests/test_a
 fe3c403ba4e84803e1bfcc89d80ed53ada1e8435ecf86aeded95b50c5f08c313  ./tests/test_alpha20_cockpit.py
 4135e8b9c2a964bac9ec9d5b9919efcffdf5d8d730841ec31985db4958a56c55  ./tests/test_backlog_completion.py
 71fe661f89780662da1b72c7dcc7ac6b19df4c232dc424ba12b8eda05c7602b2  ./tests/test_browser_authz.py
-a9d583fb5d40d209f0ccbeee8ca96f0b6ba21519a197be19b90ff791ff26a4a7  ./tests/test_capability_registry.py
-ef2268a0b0b9ee33e5b1335982684b2d53978cc2173fd959b155b150acdacd85  ./tests/test_ci_summary.py
+a0925141758a6cc45ac6b057f78b184e1092cf3d004e87b439557f17805a5728  ./tests/test_capability_registry.py
+6b314e5ec0ea9eaf264b68ba455cd38839fac7aea93e853d89178856960acf64  ./tests/test_ci_summary.py
 9215f64c3c6137256d9fefe0f1f3415eadf59672466d777a8bd0ff2d93422483  ./tests/test_ci_workflow_graph.py
 902e829fe1002b87125164fa2df9456a6731b6a21f3f4ab2766e63dc518d1c47  ./tests/test_cli_surfaces.py
 758ac27b0f80314c58d9ff85a94168c76d68a52938cb2c0ba965bc3ff5d03e3d  ./tests/test_cockpit_api.py
@@ -330,7 +330,7 @@ c15a927f79fb1eb973ff88f038b5ea04e5e1f717701f7863b75314ccb1d5fb56  ./tests/test_s
 1984f26a81dc1fce7e2437691e294c039ff608348a12fa42fe166d23c5923710  ./tests/test_secret_subprocess_redaction.py
 01be1eb7e571f5b00f47c466acf62dbc27a01cfe44fbffde0a5277e88bb5f053  ./tests/test_secret_transaction.py
 737f539287f20bc0b0246f2c13f95a6ed880e424d5918ad57387a74f0eacb98f  ./tests/test_security_surface.py
-da2ae43400d2dc55faaff8d5e5116e58f449bc4432512de89aaf8092a1f7c064  ./tests/test_service_caddy.py
+55e0cbf4e9bb3a02d45efbb309149c516df12ba06d6eaed4864e8c5b83e8a070  ./tests/test_service_caddy.py
 c210438df6129806db9be450013780bfbe2eb65d29b50fa367ce0d05bca603db  ./tests/test_service_caddy_coverage.py
 1c085eec4a572fbfed9a90513355df0167b11bb03de41b82a73add83b0c1b5d6  ./tests/test_service_caddy_validate.py
 29be67daddc14610acad84a40b4903ec6e1dc6a673da9e1082a922d463c30f85  ./tests/test_service_runtime_compose.py

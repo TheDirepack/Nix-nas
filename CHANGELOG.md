@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.34 — 2026-08-15
+
+- Use Caddy's supported inline Authentik header-copy form so static and managed-service capability gates receive the authenticated groups from forward authentication.
+
 ## 2.2.0-alpha.33 — 2026-08-15
 
 - Surface run-owned JavaScript dependency cleanup failures from the full VM suite instead of masking them after an otherwise successful test run.
