@@ -32,13 +32,13 @@ class CiSummaryTests(unittest.TestCase):
         self.assertEqual({"build"}, ci_summary.HEAVY_JOBS)
         self.assertEqual({"browser", "integration"}, ci_summary.QUALIFICATION_JOBS)
 
-    def test_pull_request_requires_fast_build_but_not_destructive_qualification(self) -> None:
+    def test_pull_request_requires_fast_build_and_browser_but_not_destructive_qualification(self) -> None:
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
         needs = self.results(expected)
         _, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
         self.assertEqual(bad, [])
 
-        self.assertNotIn("browser", expected)
+        self.assertIn("browser", expected)
         self.assertNotIn("integration", expected)
         self.assertNotIn("source-fuzz", expected)
 

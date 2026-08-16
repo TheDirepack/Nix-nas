@@ -1,26 +1,10 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
 # NixOS NAS 2.2.0-alpha.22
-=======
-# NixOS NAS 2.2.0-alpha.30
->>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
-=======
-# NixOS NAS 2.2.0-alpha.33
->>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
 
 A NixOS-based NAS appliance that keeps storage, identity, secrets, applications, and recovery paths explicit and independently understandable.
 
 The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secrets, with optional Syncthing, Vaultwarden, virtualization, local AI, and a lightweight VictoriaMetrics/Telegraf observability stack.
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 > **Release status:** 2.2.0-alpha.22 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
-=======
-> **Release status:** 2.2.0-alpha.30 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
->>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
-=======
-> **Release status:** 2.2.0-alpha.33 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
->>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
 
 ## First installation
 

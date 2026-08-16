@@ -1,13 +1,5 @@
 {
-<<<<<<< HEAD
-<<<<<<< HEAD
   description = "NixOS NAS 2.2.0-alpha.22 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
-=======
-  description = "NixOS NAS 2.2.0-alpha.30 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
->>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
-=======
-  description = "NixOS NAS 2.2.0-alpha.33 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
->>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";

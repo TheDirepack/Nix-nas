@@ -1,59 +1,7 @@
 # Changelog
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
-## 2.2.0-alpha.33 — 2026-08-15
-
-- Surface run-owned JavaScript dependency cleanup failures from the full VM suite instead of masking them after an otherwise successful test run.
-
-## 2.2.0-alpha.32 — 2026-08-15
-
-- Preserve the Authentik identity headers used by Caddy capability gates across static and managed-service routes.
-
-## 2.2.0-alpha.31 — 2026-08-15
-
-- Release feature-operation locks before collecting slow status probes so concurrent lifecycle changes are not rejected by post-operation reporting.
-
->>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
-## 2.2.0-alpha.30 — 2026-08-15
-
-- Wait for Authentik's asynchronous NAS automation blueprint during first-run provisioning and queue manual account mutations behind the identity reconciliation lock.
-
-## 2.2.0-alpha.29 — 2026-08-15
-
-- Make Authentik forward-auth identity handoff canonical and retry only transient portal authorization races in the VM browser qualification.
-- Normalize the generated service-registry v2 shape for all consumers and complete managed-service adapter validation and firewall cleanup coverage.
-
-## 2.2.0-alpha.28 — 2026-08-15
-
-- Pass the trusted Authentik identity to capability gates through explicit renamed forward-auth headers.
-
-## 2.2.0-alpha.27 — 2026-08-15
-
-- Preserve the trusted Authentik identity when Caddy forwards capability checks to the on-demand authorization gate.
-
-## 2.2.0-alpha.26 — 2026-08-15
-
-- Base bundle-cache decisions on validated archives so restored VM bundles skip redundant source packaging and missing exports remain minimal.
-
-## 2.2.0-alpha.25 — 2026-08-15
-
-- Keep browser qualification alive through the full CopyParty first-identity ACL reload window.
-
-## 2.2.0-alpha.24 — 2026-08-15
-
-- Give the browser qualification suite enough bounded time for CopyParty's lazy first-identity ACL reload to complete.
-
-## 2.2.0-alpha.23 — 2026-08-15
-
-- Make multi-feature VM transitions atomic so browser and lifecycle qualification cannot race the runtime operation lock.
-
->>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
 ## 2.2.0-alpha.22 — 2026-08-15
 
-- Allow files-capable users to read the CopyParty share root while retaining administrator-only write and configuration access.
 - Make Managed Services V2 the single port authority: define syncthing/vaultwarden/NUT listeners in `managed-services-helpers.nix` and consume them in `managed-services-seed-v2.nix` (no literals in `base.nix`/`validation.nix`/`host-platform.nix`); delete the split no-op catalogs (`managed-services-native-services.nix`, `managed-services-platform-routes.nix`).
 - Derive Python capability and URL literals from `V2 effective.json` (`nas_common`, `nas_identity_model`, `nas_identity_sync`, `nas_state` quiesce, `nas_v2_systemd` libvirtd, `nas_v2_network` cockpit port).
 

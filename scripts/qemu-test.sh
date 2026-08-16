@@ -235,6 +235,7 @@ stage_source_tree() {
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
 import shutil
@@ -293,13 +294,22 @@ else:
     if not manifest.is_file():
         raise SystemExit("QEMU source archive requires MANIFEST.sha256")
     selected = []
+    manifest_hashes = {}
     for line in manifest.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         fields = line.split(maxsplit=1)
         if len(fields) != 2:
             raise SystemExit("malformed MANIFEST.sha256")
-        name = fields[1].lstrip("*").removeprefix("./")
+        digest, raw_name = fields
+        if len(digest) != 64 or any(character not in "0123456789abcdefABCDEF" for character in digest):
+            raise SystemExit(f"malformed MANIFEST.sha256 digest: {digest}")
+        name = raw_name.lstrip("*").removeprefix("./")
+        if name == "MANIFEST.sha256":
+            continue
+        if name in manifest_hashes:
+            raise SystemExit(f"duplicate MANIFEST.sha256 path: {name}")
+        manifest_hashes[name] = digest.lower()
         selected.append(pathlib.PurePosixPath(name))
     selected.append(pathlib.PurePosixPath("MANIFEST.sha256"))
     policy = "committed-manifest-allowlist"
@@ -324,6 +334,12 @@ for relative in sorted(selected, key=lambda value: value.as_posix()):
     resolved = source.resolve(strict=True)
     if root not in resolved.parents:
         raise SystemExit(f"QEMU source path escapes repository: {relative}")
+    if policy == "committed-manifest-allowlist":
+        expected_digest = manifest_hashes.get(name)
+        if expected_digest is not None:
+            actual_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            if actual_digest != expected_digest:
+                raise SystemExit(f"QEMU source manifest digest mismatch: {relative}")
     target = stage.joinpath(*relative.parts)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target, follow_symlinks=False)

@@ -1,14 +1,6 @@
 {
   "schemaVersion": 2,
-<<<<<<< HEAD
-<<<<<<< HEAD
   "sourceSha256": "9bb48c5c330d2a3fde769a4f5b3cf6ae7ca7bc68c762356e47f73c72f0595663",
-=======
-  "sourceSha256": "fafb08bc244f9a237c2320a8c7114cddaa2922a663586d96a5e36e1afec045bf",
->>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
-=======
-  "sourceSha256": "0387ff15644b15b9d0b302af37a74c3919a4c2122bbbb0fb85d061372b4e6285",
->>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
   "inputs": [
     "cockpit/node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2",
     "cockpit/node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2",

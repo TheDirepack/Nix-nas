@@ -157,6 +157,19 @@ class VmSuiteWrapperTests(unittest.TestCase):
             self.assertIn("QEMU source path is missing", result.stderr)
             self.assertFalse(list((state).glob(".reviewed-source.*")))
 
+    def test_source_stage_fails_on_a_manifest_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / "source"
+            source.mkdir()
+            (source / "payload.txt").write_text("actual\n", encoding="utf-8")
+            (source / "MANIFEST.sha256").write_text(
+                "0" * 64 + "  payload.txt\n",
+                encoding="utf-8",
+            )
+            result = self._stage(source, pathlib.Path(tmp) / "cache")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("manifest digest mismatch", result.stderr)
+
     def test_source_stage_does_not_skip_a_missing_ignored_manifest_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = pathlib.Path(tmp) / "source"

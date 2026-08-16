@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 # Unified Managed Services — Current Implementation Status (as of 2.2.0-alpha.7, fix/unified-registry-v2)
-=======
-# Unified Managed Services — Current Implementation Status (as of 2.2.0-alpha.30)
->>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
 
 This document is the **truthful status** of the plan at `/home/max/Downloads/nixos-nas-unified-managed-services-implementation-plan.md`. It replaces the aspirational table with what is actually in `main` after the hardening in this PR. The managed-services system is now the **only system** for defining and exposing services — all 12 built-ins have been migrated to the v2 registry and the runtime adapters are present.
 
