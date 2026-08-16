@@ -24,6 +24,8 @@ nix develop .#qemu-test -c ./scripts/qemu-test.sh all
 
 The QEMU command requires Linux, Nix, QEMU/KVM, and network access for the installer image.
 
+> **Host Nix note (2026-08-15):** The host Nix store (`/nix/store`) is not writable/available on this developer host — `nix develop` and `nix eval` fail with `Permission denied` / `No such file`. Do not retry host Nix. Use the VM wrapper from PR33 (`scripts/qemu-test.sh` / `scripts/vm-start.sh` + `persistent-test`) which runs evaluation and the full suite inside the NixOS VM where Nix is correctly provisioned. CI also runs the same `qemu-test` path.
+
 ## Change rules
 
 - Preserve the authority boundaries in `docs/development/invariants.md`.
