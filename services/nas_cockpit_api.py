@@ -497,7 +497,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     job_id = secrets.token_hex(12)
     try:
         reservation = reserve_operation(
-            "first-start-job",
+            "first-start-v2",
             FIRST_START_CONFLICTS,
             ttl_seconds=3600,
         )
