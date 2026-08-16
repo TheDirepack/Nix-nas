@@ -83,11 +83,10 @@ in
             not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)application\.syncthing\.admin([[:space:]]*[|,]|$)
           }
           respond @missingSyncthingSettingsAccess 403
-          redir ${cfg.identity.authentikPath}if/flow/nas-user-settings/
+          redir * ${cfg.identity.authentikPath}if/flow/nas-user-settings/
         }
       }
-      redir /settings ${cfg.identity.authentikPath}if/user/
-      redir /settings/ ${cfg.identity.authentikPath}if/user/
+      redir /settings* ${cfg.identity.authentikPath}if/user/
 
       # V2 application routes are imported before this bootstrap/fallback block.
       handle {
