@@ -260,7 +260,7 @@ def _absolute_binary(value: str, *, field: str) -> str:
 
 def _owner_unit(effective: dict[str, Any], service_id: str) -> str:
     value = effective["derived"]["runtime"][service_id]["ownerUnit"]
-    if not isinstance(value, str) or not value.endswith((".service", ".target")):
+    if not isinstance(value, str) or not value.endswith((".service", ".target", ".socket")):
         raise SystemdProjectionError(f"invalid owner unit for {service_id!r}: {value!r}")
     return value
 
