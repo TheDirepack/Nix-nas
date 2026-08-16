@@ -158,8 +158,22 @@ if git_checkout:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    if status:
-        raise SystemExit(f"release checkout is dirty or has untracked files; review and commit inputs first:\n{status}")
+    # Staged cockpit/dist and package-lock.json from the build job's `git add -f`
+    # are expected and not considered dirty for packaging.
+    filtered = "\n".join(
+        line
+        for line in status.splitlines()
+        if not (
+            line.startswith("M  cockpit/dist/")
+            or line.startswith("A  cockpit/dist/")
+            or line.startswith("M  cockpit/package-lock.json")
+            or line.startswith("A  cockpit/package-lock.json")
+            or line.startswith("M  cockpit/dist")
+            or line.startswith("A  cockpit/dist")
+        )
+    ).strip()
+    if filtered:
+        raise SystemExit(f"release checkout is dirty or has untracked files; review and commit inputs first:\n{filtered}")
     payload = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
     selected = [pathlib.PurePosixPath(item.decode()) for item in payload.split(b"\0") if item]
     selection_policy = "git-tracked-clean"
