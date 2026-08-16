@@ -14,12 +14,17 @@ For the current prerelease version:
 
 ```text
 <<<<<<< HEAD
+<<<<<<< HEAD
 VERSION:                         2.2.0-alpha.22
 source archive filename:        Nix OS NAS 2.2.22 source.zip
 =======
 VERSION:                         2.2.0-alpha.30
 source archive filename:        Nix OS NAS 2.2.30 source.zip
 >>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
+=======
+VERSION:                         2.2.0-alpha.33
+source archive filename:        Nix OS NAS 2.2.33 source.zip
+>>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
 ```
 
 For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.MINOR.N`. This keeps development archives short and readable without changing `VERSION` or creating a new software release merely to repackage the same source.
@@ -28,10 +33,14 @@ The ZIP keeps a canonical internal root directory containing the full repository
 
 ```text
 <<<<<<< HEAD
+<<<<<<< HEAD
 nixos-nas-2.2.0-alpha.22-source-only-unverified/
 =======
 nixos-nas-2.2.0-alpha.30-source-only-unverified/
 >>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
+=======
+nixos-nas-2.2.0-alpha.33-source-only-unverified/
+>>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
 ```
 
 That internal name, `VERSION`, `README.md`, `CHANGELOG.md`, and the provenance JSON remain authoritative when exact release identity matters.
@@ -67,7 +76,11 @@ Nix OS NAS 2.2.6 source.provenance.json
 - A packaging-script change is a code change and therefore requires a version bump; only rerunning the unchanged packaging code does not.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 For the alpha line, increment the alpha revision (`2.2.0-alpha.21` -> `2.2.0-alpha.22`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.
 =======
 For the alpha line, increment the alpha revision (`2.2.0-alpha.29` -> `2.2.0-alpha.30`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.
 >>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
+=======
+For the alpha line, increment the alpha revision (`2.2.0-alpha.32` -> `2.2.0-alpha.33`) for the next code-bearing revision. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`.
+>>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)

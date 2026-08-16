@@ -1,7 +1,22 @@
 # Changelog
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+## 2.2.0-alpha.33 — 2026-08-15
+
+- Surface run-owned JavaScript dependency cleanup failures from the full VM suite instead of masking them after an otherwise successful test run.
+
+## 2.2.0-alpha.32 — 2026-08-15
+
+- Preserve the Authentik identity headers used by Caddy capability gates across static and managed-service routes.
+
+## 2.2.0-alpha.31 — 2026-08-15
+
+- Release feature-operation locks before collecting slow status probes so concurrent lifecycle changes are not rejected by post-operation reporting.
+
+>>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
 ## 2.2.0-alpha.30 — 2026-08-15
 
 - Wait for Authentik's asynchronous NAS automation blueprint during first-run provisioning and queue manual account mutations behind the identity reconciliation lock.

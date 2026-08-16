@@ -1,10 +1,14 @@
 {
   "name": "nixos-nas-cockpit",
 <<<<<<< HEAD
+<<<<<<< HEAD
   "version": "2.2.0-alpha.22",
 =======
   "version": "2.2.0-alpha.30",
 >>>>>>> e2ae00e (fix(vm): tolerate identity bootstrap races)
+=======
+  "version": "2.2.0-alpha.33",
+>>>>>>> 678e340 (fix(vm): surface full-suite cleanup failures)
   "description": "React and PatternFly Cockpit interface for NixOS NAS",
   "private": true,
   "type": "module",
