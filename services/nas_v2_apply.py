@@ -620,6 +620,22 @@ def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str
                 old_gid = 0
                 old_desired = None
                 old_files = _yaml_files(paths.desired)
+            # Snapshot every non-target YAML file atomically before any mutation,
+            # so rollback can restore the complete directory authority.
+            old_snapshots: dict[pathlib.Path, tuple[bytes, int, int, int]] = {}
+            for snap_path in old_files:
+                if snap_path == target:
+                    continue
+                try:
+                    st = snap_path.stat()
+                    old_snapshots[snap_path] = (
+                        snap_path.read_bytes(),
+                        st.st_mode & 0o777,
+                        st.st_uid,
+                        st.st_gid,
+                    )
+                except FileNotFoundError:
+                    continue
 
             desired_temp = _prepare_temp(target, yaml_text.encode("utf-8"), old_mode)
             if os.geteuid() == 0 and old_desired is not None:
@@ -630,8 +646,8 @@ def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str
             try:
                 os.replace(desired_temp, target)
                 _fsync_directory(target.parent)
-                for f in old_files:
-                    if f != target and f.exists():
+                for f in list(old_snapshots.keys()):
+                    if f.exists():
                         try:
                             f.unlink()
                         except OSError:
@@ -658,6 +674,18 @@ def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str
                             except OSError:
                                 pass
                         os.replace(rollback, target)
+                    for snap_path, (snap_bytes, snap_mode, snap_uid, snap_gid) in old_snapshots.items():
+                        try:
+                            tmp = _prepare_temp(snap_path, snap_bytes, snap_mode)
+                            if os.geteuid() == 0:
+                                try:
+                                    os.chown(tmp, snap_uid, snap_gid)
+                                except OSError:
+                                    pass
+                            os.replace(tmp, snap_path)
+                            _fsync_directory(snap_path.parent)
+                        except OSError:
+                            pass
                     _fsync_directory(target.parent)
                     raise
             finally:

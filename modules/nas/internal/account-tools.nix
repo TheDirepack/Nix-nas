@@ -306,7 +306,7 @@ let
   stateQuiesceUnits = [
     "authentik.service"
     "authentik-worker.service"
-    "nas-identity-sync.timer"
+    "nas-v2-timer-identity-sync-0.timer"
     "copyparty.service"
     "caddy.service"
   ]
@@ -322,7 +322,7 @@ let
 
   stateRestoreUnits = [
     "nas-protected-services.target"
-    "nas-identity-sync.timer"
+    "nas-v2-timer-identity-sync-0.timer"
   ]
   ++ lib.optional cfg.networking.enable "NetworkManager.service"
   ++ lib.optional (cfg.networking.enable && cfg.networking.firewall.enable) "firewalld.service";

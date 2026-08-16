@@ -146,6 +146,7 @@ in
         authentikApiTokenFile
         authentikBootstrapTokenFile
         "/var/lib/nas-setup/state.json"
+        "/run/nas-control/effective.json"
       ];
       serviceConfig = {
         Type = "oneshot";

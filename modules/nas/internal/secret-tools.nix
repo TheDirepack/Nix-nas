@@ -584,7 +584,7 @@ NTFY_ENV
         [[ -f "$secret_root/ready" ]] && echo "Runtime secrets: active" || echo "Runtime secrets: inactive"
         [[ -f "$database" ]] && echo "KeePassXC database: configured" || echo "KeePassXC database: missing"
         systemctl is-active authentik.service 2>/dev/null || true
-        systemctl is-active nas-identity-sync.timer 2>/dev/null || true
+        systemctl is-active nas-v2-timer-identity-sync-0.timer 2>/dev/null || true
         if [[ -f "$secret_root/authentik-token-warning" ]]; then
           echo "Authentik API token: WARNING — bootstrap token still in use"
         else

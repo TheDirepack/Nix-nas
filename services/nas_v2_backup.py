@@ -380,12 +380,24 @@ def _write_atomic(path: pathlib.Path, data: bytes, mode: int) -> None:
             os.fsync(handle.fileno())
         os.chmod(tmp, mode)
         os.replace(tmp, path)
+        # fsync parent directory to ensure rename durability.
+        try:
+            d_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(d_fd)
+            finally:
+                os.close(d_fd)
+        except OSError:
+            pass
     finally:
         tmp.unlink(missing_ok=True)
 
 
-def _run(argv: list[str]) -> str:
-    result = subprocess.run(argv, check=False, capture_output=True, text=True)
+def _run(argv: list[str], timeout: int = 60) -> str:
+    try:
+        result = subprocess.run(argv, check=False, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise BackupRuntimeError(f"native backup command timed out after {timeout}s: {' '.join(argv)}") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
         raise BackupRuntimeError(f"native backup command failed: {detail}")

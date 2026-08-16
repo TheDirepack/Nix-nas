@@ -160,7 +160,13 @@ def hash_authority(path: pathlib.Path) -> str:
                     f"Unable to read Managed Services V2 desired state {f}: {exc}",
                     code="io-read",
                 ) from exc
+            # Include filename and length delimiters to avoid concatenation ambiguity.
+            h.update(f.name.encode("utf-8"))
+            h.update(b"\x00")
+            h.update(str(len(data)).encode("utf-8"))
+            h.update(b"\x00")
             h.update(data)
+            h.update(b"\x00")
         return h.hexdigest()
     try:
         data = p.read_bytes()

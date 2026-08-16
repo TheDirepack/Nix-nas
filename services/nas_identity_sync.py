@@ -78,20 +78,29 @@ def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
     explicit = os.environ.get("NAS_SYNCTHING_URL")
     if explicit:
         return explicit.rstrip("/")
-    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        from nas_common import load_effective_authority
+
+        data = load_effective_authority()
         port = (
             data.get("services", {}).get("syncthing", {}).get("routes", {}).get("web", {}).get("target", {}).get("port")
         )
         if isinstance(port, int) and 1 <= port <= 65535:
             return f"http://127.0.0.1:{port}"
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-    return "http://127.0.0.1:8384"
+        raise RuntimeError("syncthing web target port missing in effective state")
+    except FileNotFoundError:
+        # Effective state not yet present (early boot/test). Fall back to legacy default
+        # but systemd ConditionPathExists will gate real VM execution until effective exists.
+        return "http://127.0.0.1:8384"
+    except Exception as exc:
+        raise RuntimeError(f"unable to resolve syncthing URL from effective state: {exc}") from exc
 
 
-SYNCTHING_URL = _resolve_syncthing_url()
+try:
+    SYNCTHING_URL = _resolve_syncthing_url()
+except RuntimeError:
+    # Defer failure to call site; keep module importable in test harnesses.
+    SYNCTHING_URL = "http://127.0.0.1:8384"
 SYNCTHING_CONFIG_DIR = pathlib.Path(os.environ.get("NAS_SYNCTHING_CONFIG_DIR", "/var/lib/syncthing/.config/syncthing"))
 
 

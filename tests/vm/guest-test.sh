@@ -441,7 +441,7 @@ for unit in \
   nas-on-demand-gate.service caddy.service; do
   wait_active "$unit"
 done
-wait_active nas-identity-sync.timer
+wait_active nas-v2-timer-identity-sync-0.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 ensure_authentik_proxy_fixture

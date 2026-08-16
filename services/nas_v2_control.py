@@ -80,9 +80,15 @@ def _revision_for_path(path: pathlib.Path) -> str:
         h = hashlib.sha256()
         for f in files:
             try:
-                h.update(f.read_bytes())
+                data = f.read_bytes()
             except OSError:
                 continue
+            h.update(f.name.encode("utf-8"))
+            h.update(b"\x00")
+            h.update(str(len(data)).encode("utf-8"))
+            h.update(b"\x00")
+            h.update(data)
+            h.update(b"\x00")
         return h.hexdigest()
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()

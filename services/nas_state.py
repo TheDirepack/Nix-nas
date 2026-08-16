@@ -615,11 +615,25 @@ def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integrat
     # V2 effective is the authority when available; otherwise fall back to env or static.
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))  # pragma: no cover
-        services = data.get("services", {}) if isinstance(data, dict) else {}
-        derived_runtime = data.get("derived", {}).get("runtime", {}) if isinstance(data, dict) else {}
+        raw = pathlib.Path(effective_path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("effective top-level must be object")
+        if not isinstance(data.get("services"), dict):
+            raise ValueError("effective missing services")
+        if not isinstance(data.get("derived"), dict):
+            raise ValueError("effective missing derived")
+        services = data["services"]
+        derived_runtime = data["derived"].get("runtime", {})
+        if not isinstance(derived_runtime, dict):
+            raise ValueError("derived.runtime must be object")
         units: list[str] = []
-        for unit in ("authentik.service", "authentik-worker.service", "nas-identity-sync.timer", "caddy.service"):
+        for unit in (
+            "authentik.service",
+            "authentik-worker.service",
+            "nas-v2-timer-identity-sync-0.timer",
+            "caddy.service",
+        ):
             units.append(unit)
         for service_id, runtime in derived_runtime.items():
             owner = runtime.get("ownerUnit") if isinstance(runtime, dict) else None
@@ -642,7 +656,7 @@ def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integrat
     return (
         "authentik.service",
         "authentik-worker.service",
-        "nas-identity-sync.timer",
+        "nas-v2-timer-identity-sync-0.timer",
         "copyparty.service",
         "syncthing.service",
         "vaultwarden.service",
@@ -1221,7 +1235,7 @@ def restore_units() -> tuple[str, ...]:
         return tuple(dict.fromkeys(value))
     return (
         "nas-protected-services.target",
-        "nas-identity-sync.timer",
+        "nas-v2-timer-identity-sync-0.timer",
         "NetworkManager.service",
         "firewalld.service",
     )

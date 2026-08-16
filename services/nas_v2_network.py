@@ -725,18 +725,31 @@ def _remote_admin_policy_xml(lan_zone: str) -> bytes:
     )
 
 
-def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dict[str, bytes], dict[str, Any]]:
+def _validate_lan_zone(lan_zone: str) -> None:
     if not lan_zone or len(lan_zone) > 17 or not all(c.isalnum() or c in "_-" for c in lan_zone):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
+
+
+def compile_remote_admin_projection(*, lan_zone: str) -> tuple[dict[str, bytes], dict[str, Any]]:
+    """Compile only the remote-admin baseline. Never depends on application policies."""
+    _validate_lan_zone(lan_zone)
+    target = f"policies/{remote_admin_policy_name()}.xml"
+    files = {target: _remote_admin_policy_xml(lan_zone)}
+    manifest = {
+        "schemaVersion": 1,
+        "files": [{"target": target, "sha256": hashlib.sha256(files[target]).hexdigest()}],
+        "owners": [{"service": "_remote-admin", "target": target}],
+    }
+    return files, manifest
+
+
+def compile_application_projection(
+    effective: dict[str, Any], *, lan_zone: str
+) -> tuple[dict[str, bytes], dict[str, Any]]:
+    """Compile only application policies, without the remote-admin baseline."""
+    _validate_lan_zone(lan_zone)
     files: dict[str, bytes] = {}
     owners: list[dict[str, str]] = []
-    # Remote admin — maximum priority (-300) global allow for SSH/Cockpit/HTTPS.
-    # Lower numeric priority = higher precedence, applied before all V2 service
-    # policies (-100 to 0). Ensures remote configuration remains reachable even
-    # when per-service policies deny. See firewalld rich/policies priority docs.
-    remote_target = f"policies/{remote_admin_policy_name()}.xml"
-    files[remote_target] = _remote_admin_policy_xml(lan_zone)
-    owners.append({"service": "_remote-admin", "target": remote_target})
     services = effective.get("services")
     if not isinstance(services, dict):
         raise FirewalldProjectionError("compiled effective state is missing services")
@@ -792,11 +805,38 @@ def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dic
                 raise FirewalldProjectionError(f"duplicate generated firewalld target {tgt!r}")
             files[tgt] = content
             owners.append({"service": sid, "target": tgt})
-    manifest = {
+    manifest: dict[str, Any] = {
         "schemaVersion": 1,
         "files": [{"target": t, "sha256": hashlib.sha256(files[t]).hexdigest()} for t in sorted(files)],
         "owners": sorted(owners, key=lambda i: (i["service"], i["target"])),
     }
+    return files, manifest
+
+
+def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dict[str, bytes], dict[str, Any]]:
+    _validate_lan_zone(lan_zone)
+    remote_files, remote_manifest = compile_remote_admin_projection(lan_zone=lan_zone)
+    try:
+        app_files, app_manifest = compile_application_projection(effective, lan_zone=lan_zone)
+    except FirewalldProjectionError:
+        # Remote-admin baseline is valid even when one application policy is malformed.
+        # Callers that need isolation should use compile_remote_admin_projection
+        # and compile_application_projection separately.
+        raise
+    files = {**remote_files, **app_files}
+    # Merge manifests — remote admin first, then sorted app owners/files.
+    combined_files = remote_manifest["files"] + app_manifest["files"]
+    combined_owners = remote_manifest["owners"] + app_manifest["owners"]
+    manifest: dict[str, Any] = {
+        "schemaVersion": 1,
+        "files": sorted(combined_files, key=lambda e: e["target"]),
+        "owners": sorted(combined_owners, key=lambda i: (i["service"], i["target"])),
+    }
+    # Validate no duplicate targets (remote vs app should never collide by construction).
+    if len({e["target"] for e in combined_files}) != len(combined_files):
+        raise FirewalldProjectionError(
+            "duplicate generated firewalld target across remote-admin and application policies"
+        )
     return files, manifest
 
 
@@ -1055,6 +1095,14 @@ def _deadman_read_pending(state_dir: pathlib.Path) -> dict[str, Any]:
 
 
 def _deadman_arm(systemd_bin: str, window: int) -> None:
+    # Ensure a second unacknowledged change resets the deadline: explicitly stop
+    # before start so OnActiveSec restarts from now.
+    try:
+        # Best-effort stop to reset any active timer; ignore failure if not running.
+        _deadman_systemd_run([systemd_bin, "stop", _DEADMAN_TIMER_UNIT])
+        _deadman_systemd_run([systemd_bin, "reset-failed", _DEADMAN_TIMER_UNIT])
+    except Exception:
+        pass
     # Prefer systemd-run transient timer with explicit window; fall back to systemctl timer
     # First try systemd-run for precise window; if not available, use timer unit.
     # We attempt systemd-run --on-active; if it fails, try systemctl start.

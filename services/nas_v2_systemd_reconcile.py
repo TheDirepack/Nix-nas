@@ -293,6 +293,46 @@ def reconcile(
         if previous_fingerprints.get(unit) != digest:
             changed_units.add(unit)
 
+    def _is_active(unit: str) -> bool | None:
+        try:
+            result = _run_systemctl(systemctl, "is-active", unit, check=False)
+            return result.stdout.strip() == "active"
+        except Exception:
+            return None
+
+    # Snapshot active state for every unit that may be mutated, so rollback
+    # can restore the previous running state, not just files.
+    all_units = (
+        set(previous_owned)
+        | set(owned)
+        | set(previous_start)
+        | set(start)
+        | set(stop)
+        | set(units_to_stop)
+        | set(changed_units)
+    )
+    active_snapshot: dict[str, bool | None] = {}
+    for unit in sorted(all_units):
+        active_snapshot[unit] = _is_active(unit)
+
+    def _rollback_active_state() -> None:
+        for unit, was_active in active_snapshot.items():
+            if was_active is None:
+                continue
+            try:
+                is_active = _is_active(unit)
+            except Exception:
+                continue
+            if is_active is None or is_active == was_active:
+                continue
+            try:
+                if was_active:
+                    _run_systemctl(systemctl, "start", unit)
+                else:
+                    _run_systemctl(systemctl, "stop", unit)
+            except Exception:
+                continue
+
     def _rollback_projection() -> None:
         for target_rel, source in links.items():
             if target_rel not in previous_links_raw:
@@ -416,6 +456,7 @@ def reconcile(
         rollback_error: Exception | None = None
         try:
             _rollback_projection()
+            _rollback_active_state()
         except Exception as r_exc:  # noqa: BLE001
             rollback_error = r_exc
         if rollback_error is not None:

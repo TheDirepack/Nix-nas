@@ -256,6 +256,41 @@ _COPYPARTY_SERVICE = os.environ.get("NAS_V2_COPYPARTY_SERVICE", "copyparty")
 _COPYPARTY_CAPABILITY = os.environ.get("NAS_V2_COPYPARTY_CAPABILITY", "files")
 
 
+def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]:
+    """Strictly load and validate V2 effective state. Fail closed on any malformed input."""
+    effective_path = (
+        pathlib.Path(path)
+        if path is not None
+        else pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
+    )
+    raw = effective_path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError(f"effective state top-level must be object, got {type(data).__name__}")
+    if isinstance(data, list):
+        raise ValueError("effective state top-level must be object, not list")
+    schema_version = data.get("schemaVersion")
+    if schema_version not in {2, 3}:
+        raise ValueError(f"effective state has unsupported schemaVersion {schema_version!r}")
+    derived = data.get("derived")
+    if not isinstance(derived, dict):
+        raise ValueError("effective state missing derived object")
+    authz = derived.get("authorization")
+    if not isinstance(authz, dict):
+        raise ValueError("effective state missing derived.authorization object")
+    services = data.get("services")
+    if not isinstance(services, dict):
+        raise ValueError("effective state missing services object")
+    # Validate each authorization entry has capabilities shape.
+    for svc_id, entry in authz.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"authorization entry {svc_id!r} must be object")
+        caps = entry.get("capabilities")
+        if caps is not None and not isinstance(caps, dict):
+            raise ValueError(f"authorization capabilities for {svc_id!r} must be object")
+    return data
+
+
 def _resolve_v2_service_capability(
     service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
 ) -> tuple[str, str] | None:  # pragma: no cover - V2 integration branch, exercised in VM
