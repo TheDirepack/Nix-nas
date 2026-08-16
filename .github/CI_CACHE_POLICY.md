@@ -76,6 +76,6 @@ checks.
 2. On one runner, the `build` job sequentially materializes and verifies Cockpit (compiling it on a cache miss), reuses or round-trips the source archive, builds the NixOS closures, and exports only missing VM bundles.
 3. Downstream browser and KVM/QEMU integration jobs test the built artifacts; the independent cache-persistence job stores any newly created bundle archives for future runs. Complete bundle-cache hits use the caches directly and skip the handoff upload.
 4. Install/reboot the official ISO and run final-system deterministic browser/security checks.
-5. Only after deterministic qualification passes, run slow source/property/browser and live ZAP fuzzing.
+5. Only after deterministic qualification passes, run slow source/property/browser and live ZAP fuzzing locally, one suite at a time, and retain the resulting evidence with the merge qualification.
 
 Slow browser qualification repeats the deterministic XSS/layout/formatting/accessibility corpus before hostile-input fuzzing. Final-VM fuzzing runs the full deterministic authenticated and unauthenticated Playwright suite before ZAP.
