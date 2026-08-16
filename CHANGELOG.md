@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.0-alpha.35 — 2026-08-15
+
+- Require browser qualification on pull requests, verify staged source files against their manifest digests, and validate each preflight run against a fresh temporary manifest.
+
 ## 2.2.0-alpha.34 — 2026-08-15
 
 - Use Caddy's supported inline Authentik header-copy form so static and managed-service capability gates receive the authenticated groups from forward authentication.

@@ -2,16 +2,16 @@ e5f42e5bbd9a4ffa2a77ff1514c6988a98cc85686e89d878530c9f9db8e0ffbb  ./.bandit
 4b3b5ef40a5ccf446e66b4546c421fa91c4a3fd465aa75bc83b16a046d4fb2d5  ./.coveragerc
 8e1c9a78d4dedcde12bb3cd6279ce83942819d1cd178f1d9d731ef3a62606ac7  ./.editorconfig
 a11262c2b894290575508abfb7592425e671d249a535a2988a118b67df38cccb  ./.github/CI_CACHE_POLICY.md
-b6f90e7ae573be7cbe5f071239e714fbdc81e29be6ecc8c8944bd69c2d1826a5  ./.github/workflows/ci.yml
+5a4b98fb3c1eac7d24e98a16a7b130483ffdb9a610820b32c563a487f7960268  ./.github/workflows/ci.yml
 590886e4ddddc96b7db471fcbf3900e4d578494b008d707bfd978c93496630ce  ./.gitignore
 2e6f7c21f6ce1112f974e840f976a5c6b3d19e4ae94fb369b9945480f611192c  ./.semgrep.yml
 e05b21ff3f3e91190fd5895e2ab60e5d8c08c71c87fb505c0b6faece51e2a10e  ./AGENTS.md
-51fc0667c548e21c18ca2072ac19367171d4315ebced413d58118d6d0e3a066c  ./CHANGELOG.md
+d731b19304b93590d6f1bdfcba520478ab469304f188f57b1a641e9989904bd0  ./CHANGELOG.md
 e4c61c8986433964595a72c1ba1b484e7167cdee730ac08fab7af5ad60058a11  ./CONTRIBUTING.md
 8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  ./LICENSE
-775e096e020fb7d986ea888cf9add5d256b5807d13e03f5d1c0c6b42bf52d6b4  ./README.md
+b3fdac5b759a317cb433d3b22192a0f8ad2c086354e509f2b834454ffb1e0e14  ./README.md
 cf82a3d11da08703796b4fae34ab054ad90ceaca5da84794ff3c7f89845ee38c  ./SECURITY.md
-e0d840f4198636ddbe1c855b9e2d07b7a65fdf3ba29f79703ab9dce758c74ee4  ./VERSION
+5372d3955e3b42dfe29bf25cea0a883982ed0104aa3b3ecd9cc605610f3dbb47  ./VERSION
 b6e241e1b034d7665efa2dbaf209e96ecc2b2d45b3284b5fc826a5e26abda687  ./authentik/blueprints/nas-user-settings.yaml
 80ce081d59f67cc934ce0f589e895db57512f8e359859d0375676d528b3618bb  ./cockpit/Makefile
 4ab8d58fe6e9ed0852a60071c225ed972a7575c83bb0faef4182571af5ed5a3d  ./cockpit/README.md
@@ -24,7 +24,7 @@ b6e241e1b034d7665efa2dbaf209e96ecc2b2d45b3284b5fc826a5e26abda687  ./authentik/bl
 3aa1c6902c45ea513b3b15e9564733f2b0d56a64460eea753705aa9d1202245a  ./cockpit/dist/assets/RedHatTextVF-Italic-BQAR6ZIH.woff2
 f419ad7a4477f36ce73c74a23dce784150ca38fa5075a8e06109709cbb716903  ./cockpit/dist/assets/fa-solid-900-VBWCXSSH.woff2
 322295638da2105dffff0eb18ee10ccffcac38888778b7b1b4624772d513e65d  ./cockpit/dist/assets/pf-v6-pficon-Q2JC5CDH.woff2
-b89ddce5b21b002adcda16dbcf602172746f8fac0eb1937bf0496f9afebdd525  ./cockpit/dist/build-meta.json
+bee34659a49d6636e8067dab5240a3920667fe0236b1c1bfd742fe92fad4d644  ./cockpit/dist/build-meta.json
 5ef8db4238292749c1701d7f8ab0eefd231258036eaa613f3e386964dcfb2edb  ./cockpit/dist/index.css
 2bf29db5f00d4f499b165025a7a00363abe24e06820a1e96a31a660ffbcb7fe2  ./cockpit/dist/index.html
 2b340f679838ba0c3d2ac8751f9039b927d15c4fccca378614a14f49cf68926f  ./cockpit/dist/index.js
@@ -34,8 +34,8 @@ b89ddce5b21b002adcda16dbcf602172746f8fac0eb1937bf0496f9afebdd525  ./cockpit/dist
 d58043a83341a59c6778019d0a30a1c2450e39be489277e38abf37613cd92d8c  ./cockpit/e2e/final-vm.spec.mjs
 544900e271a7701b60f6aa27ad1901ae1ae1ba8d1d939b772786876447ffba3b  ./cockpit/e2e/playwright.config.mjs
 93b3c7d1d5c23cd1e85274ab7302d586cbbbe2f0a1681a957389ab1cc5fd2df9  ./cockpit/e2e/ui-security.spec.mjs
-ac16ef49ccd08fb66ddc1003bffe45b591d29c6fa12eb80e9ea3d39e63fb02e0  ./cockpit/package-lock.json
-92716fbd68273e019223c807f26534faa35694bb6bb4c1adae84cc163f23f84c  ./cockpit/package.json
+1d72070b89f0e0fed6e0b1e25efebfb03a531de76dfcb1f523f1b2c7bb5c8785  ./cockpit/package-lock.json
+2ce433cbc1333ed192cdb57da1061480208ac69501f9a8ad314d9d524bae535d  ./cockpit/package.json
 bcf9e1301716edbb7f5cae02db9e55cfea5b41c496596c821545b225d6fbc8b0  ./cockpit/src/api.js
 6ec8c63efdf46109c59d7bf4542abd191e193d9949769e9cacfa6271ee3801e5  ./cockpit/src/app.jsx
 7d41856998bee69a6b32c0a93c7d9247c25802c362bd94c9082db62542f89f2c  ./cockpit/src/app.scss
@@ -51,7 +51,7 @@ c19372f0d7ce66e982afadc2a81efc325ede03cb09144133a50dd778c7cb3f08  ./docs/develop
 790a4951a83126c813d172485a86adb6a94deac29ea827b0510076e3a2f4c7a8  ./docs/development/alpha3-remediation.md
 de7b2f115def14485c84f3ddcbc907a4a9f7ddad47a2f4bd1224018abe4801de  ./docs/development/alpha4-memory-reliability-work.md
 a3ca3ddb36be3ab29dac990d6a050bc128632f3135f94e1064e7fba7141b36e1  ./docs/development/architecture.md
-4c52095c724eaa6bfac3482b71ded22ff2d1a9757b175370175b78667abfcdfb  ./docs/development/artifact-naming.md
+b167ae78d9526779c13fffc7d863d6964bfbcf5967ab221a521dff1685b0339f  ./docs/development/artifact-naming.md
 433754ee79d2feac4d7195c286f8d758a5a2bf881e272d1572b174615f4792ae  ./docs/development/code-map.md
 57dd6d4f93ad6d0c2c7696c0577a501214da781655fe8529ff5d9a4e5bcf5317  ./docs/development/combined-review-remediation.md
 d702226bf512fa31d76c32e96252ef4b909a69ea0917a58bf0daf373072db55f  ./docs/development/dependencies.md
@@ -96,7 +96,7 @@ e66b56761ef418cf343239b4055647d424c52fbdd21656e9216709b80f068507  ./docs/src/ref
 ea0ad3c5b1983243e96f431e2d957a5f2ed8d85879f39f088ce3a65ef1170ad7  ./docs/src/users/coding-agent.md
 705cffd206c3d69bbdb2fb9bb6bea0c48a6f3c424a2e27d8c734d4c1760eb2de  ./docs/src/users/settings.md
 b331667ad0e7f35d0b9e2d22a744966016c599a0da54f5501f1183ff2e2cfe6b  ./flake.lock
-ada6551f99b6a5cb5b3556fa02e9071f51614afb797292debbeb04f6262f985c  ./flake.nix
+7a60e0b99f3e9f8a1388079dc5d5ce38558cf6dc24b7c98f7d3fd9f1893c2723  ./flake.nix
 a1806a174a6891c63632980eedb846b0f45084c4af6f485f698b385d70fff7c7  ./hardware-configuration.nix
 9fe56f184faab454c3024fd5b1e03ecd992340cd351bc58b899df4279997df52  ./hfdownloader-image.nix
 c691457783f612c9a0896a53783b53b376e2e2d18281ce8ecd992601be70d01d  ./installation/disko-fresh-pool-example.nix
@@ -168,7 +168,7 @@ bf195c86694c28f38226187572bcfbaca1331a21e759a06c7ecf4958d9dd1f07  ./schemas/stat
 36ac576aabde7667dd8c587be273b14f22eced1f4ce7111a75e53caac51cd8ea  ./scripts/check-coverage.py
 c2017318f82f1fee87df28369422c4a936eb3ab156c25f2fc7a47fe2db74df2c  ./scripts/check-mkforce.py
 07dfd25584e0a6858d234211fd1c63cef02d7b498e4b3b107802e0059efbceec  ./scripts/check-version.py
-1d7959902c9dc2cf94dc2cdd3d4064f7488b1b5e6cec56cf1c1268b6c9b77f80  ./scripts/ci-summary.py
+e621a0f75848d5a4d98cd890166a51ad45b2263c4026e5d91db6ad02c4f5bdd8  ./scripts/ci-summary.py
 ed2073ea1e9f309fec09b65ee59c8861d341ac707925c4b08f7deeb4985bdea4  ./scripts/evaluate-reference-configurations.sh
 900fdbb5a972fcee82852b4eab5e6081c1ca7a52e5d0fb2887f0624bf1b6f9ff  ./scripts/fuzz-executables.py
 00e3fc9f5014d99b2432e5f6fcfdd6d7ea4e0f31039b4e7cc72d83756d83cfb3  ./scripts/fuzz.py
@@ -184,10 +184,10 @@ a62a19ae8de8295fe82ee60325b7073bfecaf6e5ec70fe147b35ec79be780a00  ./scripts/lib/
 555b885706f5d7dd9f0ed9093e6de1f43b76881788eaba5dcda71bf3c58be907  ./scripts/nix-config-matrix.sh
 ee13f14380bf9cd3b77f267f65cb660f8e8363e01ccfa16164d77c4c6921f95f  ./scripts/nix-negative-tests.sh
 41b04eb6d147b6230dcf5d82caca3219525629196c1dda978bf52ecf5abdcdd0  ./scripts/package-release.sh
-96985fbd02dd2c7b85cd104edf4107b3a0dd5527e218475ae4e7e734a23cec53  ./scripts/preflight.sh
+a7c69ae2ce159ef465a62606353394fdcfb602432b36f63c8f513da6bec8b893  ./scripts/preflight.sh
 c820a2fe12b557d065d8554361fae3aa28c00542c3d665c0aebdf5d2add17ec3  ./scripts/prepare-coverage-baseline.py
 b82dc6856c91962bef3eec3d73e5416365d104dafbd8c7d437937d8d45eb64ed  ./scripts/qemu-final-browser.sh
-6051c622dd43cdf1ac5ce676860b1a6f41aee305549de0d5e423cef67f29faf5  ./scripts/qemu-test.sh
+179efdd837b2f5a73dfec769c41bda6fbb8147d6289ab1950bc9cd610697651a  ./scripts/qemu-test.sh
 b8cba9d755c65a19fc01374643c9c78bf36bd582c9a6d5b52c52ccd47f7fbb30  ./scripts/run-fuzz.py
 4777bf469e3faead9f6ed8599eb7978214ef0a6bd6e775d788c64cb4949e4839  ./scripts/run-matrix-fuzz.py
 0af419bf06084488c8d1f49e9e8140785915c739fe057284bd5a7749ea9219b9  ./scripts/run-security-tests.py
@@ -288,7 +288,7 @@ fe3c403ba4e84803e1bfcc89d80ed53ada1e8435ecf86aeded95b50c5f08c313  ./tests/test_a
 4135e8b9c2a964bac9ec9d5b9919efcffdf5d8d730841ec31985db4958a56c55  ./tests/test_backlog_completion.py
 71fe661f89780662da1b72c7dcc7ac6b19df4c232dc424ba12b8eda05c7602b2  ./tests/test_browser_authz.py
 a0925141758a6cc45ac6b057f78b184e1092cf3d004e87b439557f17805a5728  ./tests/test_capability_registry.py
-6b314e5ec0ea9eaf264b68ba455cd38839fac7aea93e853d89178856960acf64  ./tests/test_ci_summary.py
+405615e2ec3e4a758d20bd0cd027704b3350af6836b7ce27d5af3adeb1477603  ./tests/test_ci_summary.py
 9215f64c3c6137256d9fefe0f1f3415eadf59672466d777a8bd0ff2d93422483  ./tests/test_ci_workflow_graph.py
 902e829fe1002b87125164fa2df9456a6731b6a21f3f4ab2766e63dc518d1c47  ./tests/test_cli_surfaces.py
 758ac27b0f80314c58d9ff85a94168c76d68a52938cb2c0ba965bc3ff5d03e3d  ./tests/test_cockpit_api.py
@@ -310,7 +310,7 @@ f3847ea7e00d175bb7f52ecbb006cf0b298d40274147d8990ed836c27a9e61d5  ./tests/test_k
 cb60c81c6626ab16e14df619cc38a633da6f7ca0867c5cd2365c3e1c60bd3dac  ./tests/test_logging.py
 b6a5835b4fae78999820f67a1e590a939638e888aa18874aaa47fda2fb81ddc0  ./tests/test_maintainer_core.py
 4b82cb97d6dbbd7e8495163e61e0ef0f1feb83ef5301ca4b9f9150efd3dfa5ad  ./tests/test_maintainer_matrix.py
-33c44969b1405381d94fb719eec27073465ec4abd3738eea8418911159e6ff3a  ./tests/test_maintainer_release.py
+9f54fcc5471a28c0b16d41bd99c0e44229ea067086b734595006cfb96725a00c  ./tests/test_maintainer_release.py
 923c7b07acff792f7cc05a2b4c0fb3a39cfbca2264125f3570aba385f965b7bc  ./tests/test_maintainer_scripts.py
 caae082496998183cd0d47b507c54bbea2341898e3775e0dbb498804a282feea  ./tests/test_managed_service.py
 29d22871bbd80a8d68f89e1b906b4bef8e008c872eacac7e853d9e29458c2ca0  ./tests/test_managed_service_hardening.py
@@ -341,7 +341,7 @@ f8f3fb0619ba22c179116434a14df785e8534fd1991321a692eec438d5de2432  ./tests/test_s
 4b43268a937aa6b8aa56a659bd8810beed647722f606940edf0c424218828600  ./tests/test_vm_bundles.py
 cfd9db0c0f8c08e81125add5f9f52d93b6f9270f1c1b054f4dd6001e4e3859cd  ./tests/test_vm_preflight_scope.py
 6fe90bf03bfbe0c9f1b1a211e0bdb241ad5c2bc07298c5a58f4538feceb88384  ./tests/test_vm_secrets.py
-02423dd9b1262f5ffc5afe52ddcc2ce6358ab9177977b409e8ca90bae3ac8858  ./tests/test_vm_suite.py
+8e9f23a836838c5dd11f0c5e59c66fa3ef91a66f3996715a07e31e3af17e1424  ./tests/test_vm_suite.py
 554ed8876d555cc8f8fbae017035b9655f49ef06ebca4ea4dc2d76b9d89c7b02  ./tests/test_vm_timeout_budget.py
 461100034bad0ff7f8a5d74b2c84eff0af64b3aa44eeab880f015740e6136df2  ./tests/vm/adversarial-installed.py
 8ecdcad21c332d4def11672b5864cfde6bbbe2c095281a6a9583d963e187639e  ./tests/vm/cleanup-failure-injection.sh

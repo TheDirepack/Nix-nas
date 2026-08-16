@@ -98,20 +98,31 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
                 self.assertIn("usage", (result.stdout + result.stderr).lower())
 
     def test_preflight_wrapper_runs_its_safe_local_tier(self) -> None:
-        result = self.run_clean(
-            "env",
-            "NAS_PREFLIGHT_REQUIRE_COMPLETE=0",
-            "NAS_PREFLIGHT_SKIP_TESTS=1",
-            "NAS_PREFLIGHT_SKIP_FUZZ=1",
-            "NAS_PREFLIGHT_SKIP_NIX=1",
-            "bash",
-            "scripts/preflight.sh",
-            timeout=90,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = pathlib.Path(tmp)
+            result = subprocess.run(
+                ["bash", "scripts/preflight.sh"],
+                cwd=self.clean_root,
+                env={
+                    **os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "TMPDIR": tmp,
+                    "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
+                    "NAS_PREFLIGHT_SKIP_TESTS": "1",
+                    "NAS_PREFLIGHT_SKIP_FUZZ": "1",
+                    "NAS_PREFLIGHT_SKIP_NIX": "1",
+                },
+                text=True,
+                capture_output=True,
+                timeout=90,
+                check=False,
+            )
         # It is allowed to be partial when optional external tools are not installed,
         # but every locally available mandatory stage must have completed.
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("Preflight partial: 0", result.stdout)
         self.assertIn("repository structure", result.stdout)
         self.assertIn("static security boundaries", result.stdout)
-        self.assertFalse((self.clean_root / ".ruff_cache").exists())
+        self.assertIn("fresh manifest generation", result.stdout)
+        self.assertEqual(list(temp_root.glob("nas-preflight-manifest.*")), [])
+        self.assertEqual(list(temp_root.glob("nas-identity-sync-preflight.*")), [])

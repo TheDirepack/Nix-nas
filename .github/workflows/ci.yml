@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       test-tier:
-        description: Test scope for on-demand runs; full includes installer and installed-VM checks
+        description: Test scope for on-demand runs; full includes installer and deterministic installed-VM checks; fuzzing is local-only
         type: choice
         required: false
         default: fast

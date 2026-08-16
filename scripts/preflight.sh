@@ -6,11 +6,21 @@ status_file="${NAS_PREFLIGHT_STATUS_FILE:-}"
 require_complete="${NAS_PREFLIGHT_REQUIRE_COMPLETE:-0}"
 incomplete=()
 identity_fixture_lock="${NAS_IDENTITY_LOCK:-}"
+fresh_manifest=""
+
+cleanup_preflight() {
+  local status=$?
+  [[ -z "$fresh_manifest" ]] || rm -f -- "$fresh_manifest"
+  if [[ -z "${NAS_IDENTITY_LOCK:-}" && -n "$identity_fixture_lock" ]]; then
+    rm -f -- "$identity_fixture_lock"
+  fi
+  exit "$status"
+}
 
 if [[ -z "$identity_fixture_lock" ]]; then
   identity_fixture_lock="$(mktemp "${TMPDIR:-/tmp}/nas-identity-sync-preflight.XXXXXX")"
-  trap 'rm -f -- "$identity_fixture_lock"' EXIT
 fi
+trap cleanup_preflight EXIT
 
 [[ -d "$repo_root" ]] || { printf 'preflight: missing repository: %s\n' "$repo_root" >&2; exit 1; }
 cd -- "$repo_root"
@@ -48,6 +58,38 @@ step "documentation links" ./scripts/validate-doc-links.py
 step "custom executable test inventory" ./scripts/validate-test-inventory.py
 step "static security boundaries" ./scripts/security-static-scan.py
 step "Python syntax" ./scripts/validate-python-syntax.py
+
+fresh_manifest="$(mktemp "${TMPDIR:-/tmp}/nas-preflight-manifest.XXXXXX")"
+step "fresh manifest generation" python3 - "$repo_root" "$fresh_manifest" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import pathlib
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+output = pathlib.Path(sys.argv[2])
+ignored_parts = {".git", ".cache", ".hypothesis", ".pytest_cache", "__pycache__", "node_modules", ".direnv", ".venv"}
+ignored_names = {".coverage", "coverage.json", "MANIFEST.sha256"}
+ignored_suffixes = {".pyc", ".zip", ".qcow2", ".iso", ".log"}
+
+rows = []
+for path in sorted(root.rglob("*")):
+    relative = path.relative_to(root)
+    if any(part in ignored_parts or part.endswith(".egg-info") for part in relative.parts):
+        continue
+    if relative.name in ignored_names or relative.suffix in ignored_suffixes:
+        continue
+    mode = path.lstat().st_mode
+    if stat.S_ISDIR(mode):
+        continue
+    if not stat.S_ISREG(mode):
+        raise SystemExit(f"fresh manifest encountered non-regular object: {relative}")
+    rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  ./{relative.as_posix()}")
+output.write_text("\n".join(rows) + "\n", encoding="utf-8")
+PY
+step "fresh manifest verification" sha256sum --check --status "$fresh_manifest"
 
 # Generated fuzz/property work is deliberately opt-in during preflight. The
 # canonical runner owns parallelization and Hypothesis owns input generation;
