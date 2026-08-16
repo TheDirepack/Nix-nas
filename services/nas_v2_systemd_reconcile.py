@@ -19,7 +19,7 @@ class SystemdReconcileError(RuntimeError):
     """Raised when staged V2 systemd state cannot be reconciled safely."""
 
 
-_UNIT = re.compile(r"^[A-Za-z0-9_.@:-]+\.(?:service|timer|target|path)$")
+_UNIT = re.compile(r"^[A-Za-z0-9_.@:-]+\.(?:service|timer|target|path|socket)$")
 _DROPIN = re.compile(r"^([A-Za-z0-9_.@:-]+\.(?:service|timer|target))\.d/50-nas-v2\.conf$")
 _QUADLET_CONTAINER = re.compile(r"^nas-v2-([a-z][a-z0-9-]{0,63})\.container$")
 _QUADLET_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.network$")
