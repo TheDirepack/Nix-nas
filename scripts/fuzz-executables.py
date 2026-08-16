@@ -96,7 +96,11 @@ def execute(name: str, strategy: str, temporary: pathlib.Path) -> None:
     elif strategy == "preflight-local":
         result = run(
             base,
-            env={"NAS_PREFLIGHT_SKIP_TESTS": "1", "NAS_PREFLIGHT_SKIP_FUZZ": "1"},
+            env={
+                "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
+                "NAS_PREFLIGHT_SKIP_TESTS": "1",
+                "NAS_PREFLIGHT_SKIP_FUZZ": "1",
+            },
             timeout=90,
         )
         if result.returncode != 0:

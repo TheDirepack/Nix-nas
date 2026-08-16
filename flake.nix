@@ -1,5 +1,5 @@
 {
-  description = "NixOS NAS 2.2.0-alpha.7 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
+  description = "NixOS NAS 2.2.0-alpha.35 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -96,14 +96,12 @@
           };
         };
 
-      # Per-application Nix store bundles for the QEMU integration VMs. The full
-      # VM system closure is thousands of store paths; fetching them one at a
+      # Reusable Nix store roots for the QEMU integration VMs. The full VM
+      # system closure is thousands of store paths; fetching them one at a
       # time through the Magic Nix Cache trips GitHub's per-path cache rate
-      # limit. Each root here is exported as one archived NAR stream by
-      # scripts/vm-bundles.sh, cached as a single GitHub Actions entry, and
-      # re-imported before the VM tests build the small configuration delta.
-      # Bundles overlap by design; imported paths are content-addressed, so a
-      # duplicate import is a no-op. vm-bundles.sh list must stay in sync here.
+      # limit. The core root contains boot, recovery, unlock, primary access,
+      # and deterministic-test tooling. Optional applications remain separate
+      # roots so a change to one application does not invalidate the others.
       packages.x86_64-linux =
         let
           pkgs = mkPkgs "x86_64-linux";
@@ -123,10 +121,19 @@
             yarn-berry = pkgs.yarn-berry.override { nodejs = pkgs.nodejs_22; };
             buildPackages = cockpitZfsBuildPackages;
           };
+          # The integration VM enables TFTP, which adds partftpy to the
+          # CopyParty runtime. Keep the exported core root aligned with the
+          # package used by the VM service rather than exporting an incomplete
+          # unconfigured CopyParty closure.
+          copypartyBundle = pkgs.copyparty.overridePythonAttrs (old: {
+            dependencies = old.dependencies ++ [ pkgs.python3Packages.partftpy ];
+          });
           bundlePaths = with pkgs; {
             core = [
               bash
               cacert
+              caddy
+              chromium
               coreutils
               curl
               diffutils
@@ -137,31 +144,33 @@
               gnused
               iproute2
               jq
+              keepassxc
               linuxPackages.kernel
+              nodejs
               openssh
               procps
+              (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
+              sanoid
+              smartmontools
+              pciutils
+              vim
+              skopeo
               systemd
               util-linux
               zfs
+              copypartyBundle
+              chromedriver
             ];
             identity = [ authentik postgresql vaultwardenBundle syncthing ];
             observability = [ grafana ntfy-sh ];
-            storage = [ sanoid restic cockpit-files cockpit-podman cockpitZfsBundle ];
+            storage = [ restic cockpit-files cockpit-podman cockpitZfsBundle ];
             ai = [ open-webui llama-swap llama-cpp ];
-            test-browser = [ chromium chromedriver ];
-            test-tools = [
-              keepassxc
-              nodejs
-              (python3.withPackages (pythonPackages: [ pythonPackages.hypothesis pythonPackages.selenium ]))
-            ];
           };
         in {
           core = pkgs.buildEnv {
             name = "nas-vm-bundle-core";
             paths = bundlePaths.core;
           };
-          copyparty = pkgs.copyparty;
-          caddy = pkgs.caddy;
           identity = pkgs.buildEnv {
             name = "nas-vm-bundle-identity";
             paths = bundlePaths.identity;
@@ -178,13 +187,9 @@
             name = "nas-vm-bundle-ai";
             paths = bundlePaths.ai;
           };
-          test-browser = pkgs.buildEnv {
-            name = "nas-vm-bundle-test-browser";
-            paths = bundlePaths.test-browser;
-          };
-          test-tools = pkgs.buildEnv {
-            name = "nas-vm-bundle-test-tools";
-            paths = bundlePaths.test-tools;
+          vm-drivers = pkgs.buildEnv {
+            name = "nas-vm-bundle-vm-drivers";
+            paths = [ ];
           };
         };
 
@@ -196,9 +201,14 @@
               bandit
               coverage
               hypothesis
+              selenium
             ]))
             pkgs.semgrep
             pkgs.shellcheck
+            pkgs.actionlint
+            pkgs.nodejs
+            pkgs.pyright
+            pkgs.ruff
           ];
           shellHook = ''
             echo "NixOS NAS security, property, and fuzz test tools are available." >&2
@@ -210,11 +220,15 @@
         in pkgs.mkShell {
           packages = with pkgs; [
             bats
+            coreutils
             curl
             expect
+            git
+            gnutar
             jq
             libarchive
             openssh
+            python3
             qemu
           ];
           shellHook = ''

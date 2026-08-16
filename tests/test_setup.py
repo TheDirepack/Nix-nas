@@ -560,6 +560,41 @@ class SetupConfigTests(unittest.TestCase):
                 setup.run_root(["must-not-run"])
         run_mock.assert_called_once_with(["sudo", "-n", "-v"], check=False)
 
+    def test_feature_policy_uses_a_private_nonsecret_document(self):
+        completed = setup.Completed(("nas-feature-control",), "", "")
+        with (
+            mock.patch.object(
+                setup,
+                "coordinated_child",
+                side_effect=lambda command: ["env", "TOKEN=coord", *command],
+            ),
+            mock.patch.object(setup, "run_root", return_value=completed) as run_root,
+        ):
+            self.assertEqual(setup.apply_features({"observability": "always"}), {"observability": "always"})
+        command = run_root.call_args.args[0]
+        self.assertEqual(command[:4], ["env", "TOKEN=coord", "nas-feature-control", "set-many"])
+        source = pathlib.Path(command[4])
+        self.assertFalse(source.exists())
+
+    def test_feature_policy_retries_transient_coordinator_contention(self):
+        busy = setup.Completed(
+            ("nas-feature-control", "status"),
+            "",
+            "Another feature operation is already running",
+            1,
+        )
+        ready = setup.Completed(
+            ("nas-feature-control", "status"),
+            json.dumps({"features": [{"id": "aiRuntime", "requestedMode": "on-demand"}]}),
+            "",
+        )
+        with (
+            mock.patch.object(setup, "run_root_noninteractive", side_effect=[busy, ready]),
+            mock.patch.object(setup.time, "sleep") as sleep,
+        ):
+            self.assertTrue(setup.feature_policy_ready({"aiRuntime": "on-demand"}))
+        sleep.assert_called_once_with(setup.FEATURE_STATUS_RETRY_SECONDS)
+
     def test_mutations_require_configured_admin_and_prime_sudo(self):
         with mock.patch.object(setup, "current_username", return_value="root"):
             with self.assertRaisesRegex(setup.SetupError, "configured local administrator"):
@@ -696,6 +731,23 @@ class SetupConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(setup.SetupError, "Do not combine"):
             invoke(["nas_allow_vault"])
 
+    def test_runtime_account_commands_wait_for_identity_reconciliation(self):
+        with (
+            mock.patch.object(setup, "acquire_operation", return_value=setup.contextlib.nullcontext()) as acquire,
+            mock.patch.object(setup, "one_account", return_value={}),
+            mock.patch.object(setup.sys, "argv", ["nas-setup", "account", "apply", "--username", "alice"]),
+        ):
+            setup.main()
+        acquire.assert_called_once_with("account-apply", ("identity", "runtime"), blocking=True)
+
+        with (
+            mock.patch.object(setup, "acquire_operation", return_value=setup.contextlib.nullcontext()) as acquire,
+            mock.patch.object(setup, "disable_account", return_value={}),
+            mock.patch.object(setup.sys, "argv", ["nas-setup", "account", "disable", "alice"]),
+        ):
+            setup.main()
+        acquire.assert_called_once_with("account-disable", ("identity", "runtime"), blocking=True)
+
     def test_inactive_accounts_drop_active_reserved_groups(self):
         raw = self.base()
         raw["accounts"][0]["active"] = False
@@ -722,6 +774,10 @@ class SetupConfigTests(unittest.TestCase):
         self.assertEqual(len(staged_payloads), 1)
         self.assertNotIn("must-not-survive", staged_payloads[0])
         self.assertNotIn('"password"', staged_payloads[0])
+        self.assertIn(
+            ["install", "-d", "-m", "0770", "-o", "root", "-g", "wheel", str(pathlib.Path(tmp))],
+            calls,
+        )
 
     def test_prepare_first_start_publishes_missing_configuration_without_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

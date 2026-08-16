@@ -29,25 +29,26 @@ class CiSummaryTests(unittest.TestCase):
         self.assertNotIn(".ci-cache/", workflow)
 
     def test_heavy_jobs_match_the_consolidated_build_graph(self) -> None:
-        self.assertEqual({"build", "browser", "integration"}, ci_summary.HEAVY_JOBS)
+        self.assertEqual({"build"}, ci_summary.HEAVY_JOBS)
+        self.assertEqual({"browser", "integration"}, ci_summary.QUALIFICATION_JOBS)
 
-    def test_pull_request_requires_every_qualification_except_installer(self) -> None:
+    def test_pull_request_requires_fast_build_and_browser_but_not_destructive_qualification(self) -> None:
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
         needs = self.results(expected)
         _, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
         self.assertEqual(bad, [])
 
-        needs["integration"]["result"] = "skipped"
-        _, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
-        self.assertIn("integration=skipped (required)", bad)
+        self.assertIn("browser", expected)
+        self.assertNotIn("integration", expected)
+        self.assertNotIn("source-fuzz", expected)
 
     def test_non_main_pull_request_does_not_require_main_coverage_baseline(self) -> None:
         expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "release", "fast")
         self.assertNotIn("coverage-diff", expected)
 
-    def test_fast_dispatch_allows_only_intentionally_skipped_heavy_jobs(self) -> None:
+    def test_fast_dispatch_runs_deterministic_browser_checks_but_skips_heavy_jobs(self) -> None:
         expected = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "fast")
-        self.assertEqual(expected, ci_summary.FAST_JOBS)
+        self.assertEqual(expected, ci_summary.FAST_JOBS | {"browser"})
         _, bad = ci_summary.summarize(
             self.results(expected),
             "workflow_dispatch",
@@ -57,14 +58,16 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
-    def test_full_and_installer_dispatch_require_their_selected_tiers(self) -> None:
+    def test_full_dispatch_includes_installer_but_reserves_fuzzing_for_release_qualification(self) -> None:
         full = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "full")
         installer = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "installer")
-        self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.SLOW_JOBS <= full)
-        self.assertNotIn("installer", full)
+        self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.QUALIFICATION_JOBS <= full)
+        self.assertIn("installer", full)
         self.assertIn("installer", installer)
+        self.assertFalse(ci_summary.SLOW_JOBS & full)
         self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & full)
-        self.assertTrue(ci_summary.INSTALLED_FUZZ_JOBS <= installer)
+        self.assertFalse(ci_summary.SLOW_JOBS & installer)
+        self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & installer)
 
     def test_any_reported_failure_is_rejected_even_when_job_is_optional(self) -> None:
         expected = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/topic", "", "fast")
@@ -72,6 +75,15 @@ class CiSummaryTests(unittest.TestCase):
         needs["installer"]["result"] = "failure"
         _, bad = ci_summary.summarize(needs, "workflow_dispatch", "refs/heads/topic", "", "fast")
         self.assertIn("installer=failure", bad)
+
+    def test_cache_persistence_failure_is_reported_without_blocking_qualification(self) -> None:
+        expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
+        needs = self.results(expected)
+        needs["cache-vm-bundles"] = {"result": "failure"}
+        summary, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
+        self.assertEqual(bad, [])
+        self.assertIn("cache-vm-bundles=failure", summary)
+        self.assertIn("non-authoritative cache persistence warning", summary)
 
 
 if __name__ == "__main__":

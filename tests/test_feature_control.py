@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from email.message import Message
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -572,6 +573,51 @@ class FeatureControlTests(unittest.TestCase):
             with self.assertRaisesRegex(features.FeatureError, "not installed"):
                 features.set_modes(catalog, state, {"parent": "always", "missing": "always"})
         commit.assert_not_called()
+
+    def test_mutation_locks_are_released_before_slow_status_report(self):
+        catalog = self.catalog()
+        state = features.default_state(catalog)
+        events: list[str] = []
+
+        class Marker:
+            def __enter__(self):
+                events.append("enter")
+                return self
+
+            def __exit__(self, *_args):
+                events.append("exit")
+
+        class Parser:
+            def add_subparsers(self, **_kwargs):
+                return self
+
+            def add_parser(self, *_args, **_kwargs):
+                return self
+
+            def add_argument(self, *_args, **_kwargs):
+                return None
+
+            def parse_args(self):
+                return SimpleNamespace(command="set-many", source="-")
+
+        with (
+            mock.patch.object(features.argparse, "ArgumentParser", return_value=Parser()),
+            mock.patch.object(features, "mutation_operation", return_value=Marker()),
+            mock.patch.object(features, "acquire_lock", return_value=Marker()),
+            mock.patch.object(features, "load_catalog", return_value=catalog),
+            mock.patch.object(features, "load_state", return_value=state),
+            mock.patch.object(features, "read_mode_document", return_value={"parent": "always"}),
+            mock.patch.object(features, "set_modes", return_value={"ok": True}),
+            mock.patch.object(
+                features,
+                "status",
+                side_effect=lambda *_args: events.append("status") or {"features": []},
+            ),
+            mock.patch("builtins.print"),
+        ):
+            self.assertEqual(features.main(), 0)
+
+        self.assertEqual(events, ["enter", "enter", "exit", "exit", "status"])
 
     def test_exact_runtime_snapshot_restores_on_demand_activity(self):
         catalog = self.catalog()

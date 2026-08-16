@@ -1,5 +1,121 @@
 # Changelog
 
+## 2.2.0-alpha.35 — 2026-08-15
+
+- Require browser qualification on pull requests, verify staged source files against their manifest digests, and validate each preflight run against a fresh temporary manifest.
+
+## 2.2.0-alpha.34 — 2026-08-15
+
+- Use Caddy's supported inline Authentik header-copy form so static and managed-service capability gates receive the authenticated groups from forward authentication.
+
+## 2.2.0-alpha.33 — 2026-08-15
+
+- Surface run-owned JavaScript dependency cleanup failures from the full VM suite instead of masking them after an otherwise successful test run.
+
+## 2.2.0-alpha.32 — 2026-08-15
+
+- Preserve the Authentik identity headers used by Caddy capability gates across static and managed-service routes.
+
+## 2.2.0-alpha.31 — 2026-08-15
+
+- Release feature-operation locks before collecting slow status probes so concurrent lifecycle changes are not rejected by post-operation reporting.
+
+## 2.2.0-alpha.30 — 2026-08-15
+
+- Wait for Authentik's asynchronous NAS automation blueprint during first-run provisioning and queue manual account mutations behind the identity reconciliation lock.
+
+## 2.2.0-alpha.29 — 2026-08-15
+
+- Make Authentik forward-auth identity handoff canonical and retry only transient portal authorization races in the VM browser qualification.
+- Normalize the generated service-registry v2 shape for all consumers and complete managed-service adapter validation and firewall cleanup coverage.
+
+## 2.2.0-alpha.28 — 2026-08-15
+
+- Pass the trusted Authentik identity to capability gates through explicit renamed forward-auth headers.
+
+## 2.2.0-alpha.27 — 2026-08-15
+
+- Preserve the trusted Authentik identity when Caddy forwards capability checks to the on-demand authorization gate.
+
+## 2.2.0-alpha.26 — 2026-08-15
+
+- Base bundle-cache decisions on validated archives so restored VM bundles skip redundant source packaging and missing exports remain minimal.
+
+## 2.2.0-alpha.25 — 2026-08-15
+
+- Keep browser qualification alive through the full CopyParty first-identity ACL reload window.
+
+## 2.2.0-alpha.24 — 2026-08-15
+
+- Give the browser qualification suite enough bounded time for CopyParty's lazy first-identity ACL reload to complete.
+
+## 2.2.0-alpha.23 — 2026-08-15
+
+- Make multi-feature VM transitions atomic so browser and lifecycle qualification cannot race the runtime operation lock.
+
+## 2.2.0-alpha.22 — 2026-08-15
+
+- Allow files-capable users to read the CopyParty share root while retaining administrator-only write and configuration access.
+
+## 2.2.0-alpha.21 — 2026-08-14
+
+- Expose the persistent QEMU VM through configurable host-local service ports, expand hostile-input coverage across custom service and Cockpit code, and keep sustained local fuzz workers isolated and reproducible.
+
+## 2.2.0-alpha.20 — 2026-08-14
+
+- Compose VM cleanup handlers, derive QEMU watchdog budgets from one phase manifest, validate bundle closure ownership, and harden CI/source staging failure paths.
+
+## 2.2.0-alpha.19 — 2026-08-13
+
+- Keep qualified VM builds on the exact reusable bundle handoff instead of blocking them on the global Nix cache post-hook.
+
+## 2.2.0-alpha.18 — 2026-08-13
+
+- Make the unencrypted VM first-run checkpoints report the captured setup state when a qualification assertion fails.
+
+## 2.2.0-alpha.17 — 2026-08-13
+
+- Harden the QEMU wrapper lifecycle, align managed-service schema/runtime validation, and make CI-provided VM dependencies explicit.
+
+## 2.2.0-alpha.16 — 2026-08-13
+
+- Restore exact Nix VM bundle caches before configuration builds, export only missing bundle archives, and isolate config-sensitive VM test drivers so unchanged package versions are reused across configuration-only changes.
+
+## 2.2.0-alpha.15 — 2026-08-13
+
+- Preserve the exact byte content of the staged ZFS encryption key when exporting an offline recovery copy, allowing encrypted VM qualification to verify the recovery artifact byte-for-byte.
+
+## 2.2.0-alpha.14 — 2026-08-13
+
+- Rewrite Authentik outpost redirects inside Caddy’s response interception path so internal loopback URLs cannot reach the browser.
+
+## 2.2.0-alpha.13 — 2026-08-13
+
+- Make the isolated QEMU browser fixture resolve its public Authentik hostname locally, without depending on host DNS or a physical network interface.
+
+## 2.2.0-alpha.12 — 2026-08-13
+
+- Apply Authentik outpost redirect rewriting as a deferred Caddy response-header operation so loopback authentication origins cannot escape to browsers.
+
+## 2.2.0-alpha.11 — 2026-08-13
+
+- Rewrite internal Authentik outpost redirect origins at Caddy’s public boundary so browser authentication never receives the VM’s loopback URL.
+
+## 2.2.0-alpha.10 — 2026-08-13
+
+- Add the persistent, user-mode-networked QEMU wrapper with a 64 GiB OS disk, one-time NixOS installation, worktree refresh, and explicit start/stop/reset controls.
+- Qualify the complete non-fuzz VM path through the installed appliance, including an isolated Caddy-owned Authentik outpost fixture and resilient browser authorization checks.
+
+## 2.2.0-alpha.9 — 2026-08-12
+
+- Add optional persistent-VM start, stop, reset, and test wrappers that install the standard NixOS ISO once, refresh the current worktree inside the guest on every run, and leave existing CI invocation modes and check ownership untouched.
+- Synchronize `VERSION`, `README`, `flake.nix`, Cockpit package metadata, and the artifact-naming reference to `2.2.0-alpha.9` per `docs/development/artifact-naming.md`.
+
+## 2.2.0-alpha.8 — 2026-08-11
+
+- Make secret transaction directory validation observe the privileged filesystem so activation paths under root-owned `0700` directories validate identically whether or not a caller first drops privileges, and add a regression test covering both the elevated and unprivileged call paths.
+- Synchronize `VERSION`, `README`, `flake.nix`, `cockpit/package.json`, and the artifact-naming reference to `2.2.0-alpha.8` per `docs/development/artifact-naming.md`.
+
 ## 2.2.0-alpha.7 — 2026-08-08
 
 - Fix Pi network namespace construction (remove `mount --bind /proc/self/ns/net` that overwrote `/run/netns/pi`), provide DNS inside the namespace via `/etc/netns/pi/resolv.conf` pointing at `10.200.1.1` and `systemd-resolved` `DNSStubListenerExtra`, and clean up teardown without `umount` of the ip-managed namespace.

@@ -1,5 +1,16 @@
 { pkgs, self, copyparty }:
 
+let
+  timeoutBudget = builtins.fromJSON (builtins.readFile ../vm/timeout-budget.json);
+  outerKillAfter = timeoutBudget.timeouts.killAfter;
+  phaseBudget = phase:
+    phase.fixedSeconds
+    + phase.ordinaryWaits * timeoutBudget.ordinaryWaitSeconds
+    + pkgs.lib.foldl' (total: key: total + (builtins.getAttr key timeoutBudget.timeouts)) 0 phase.timeoutKeys;
+  guestWatchdog = pkgs.lib.foldl' (total: phase: total + phaseBudget phase) 0 timeoutBudget.phases
+    + timeoutBudget.slackSeconds;
+in
+
 pkgs.testers.runNixOSTest {
   name = "nixos-nas-full-stack";
 
@@ -33,9 +44,9 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
-    machine.succeed("timeout 1800 nas-vm-guest-test /dev/vdb")
-    machine.succeed("timeout 900 nas-vm-secret-adversarial")
-    machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout 300 python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
+    machine.succeed("timeout --verbose --signal=TERM --kill-after=${toString outerKillAfter}s ${toString guestWatchdog}s nas-vm-guest-test /dev/vdb")
+    machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.secretAdversarial}s nas-vm-secret-adversarial")
+    machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.installedSmoke}s python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
     machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")
   '';
 }

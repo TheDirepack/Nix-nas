@@ -6,6 +6,8 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -45,6 +47,7 @@ def load_authz():
     setattr(webdriver, "Chrome", DummyChrome)
     setattr(webdriver, "ChromeOptions", DummyChromeOptions)
     setattr(exceptions, "NoSuchElementException", DummySeleniumError)
+    setattr(exceptions, "TimeoutException", DummySeleniumError)
     setattr(exceptions, "WebDriverException", DummySeleniumError)
     setattr(by, "By", DummyBy)
     setattr(support_ui, "WebDriverWait", DummyWait)
@@ -99,6 +102,8 @@ class BrowserAuthzInputTests(unittest.TestCase):
                     "argv",
                     [
                         "authz.py",
+                        "--cockpit-password-file",
+                        str(operator),
                         "--operator-password-file",
                         str(operator),
                         "--alice-password-file",
@@ -115,7 +120,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "first-browser-operation"):
                     self.authz.main()
-            first_browser.assert_called_once_with("https://127.0.0.1:9092", "operator", "operator-secret")
+            first_browser.assert_called_once_with("https://localhost:9092", "admin", "operator-secret")
 
     def test_secret_reader_rejects_symlink_and_permissive_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -128,6 +133,157 @@ class BrowserAuthzInputTests(unittest.TestCase):
             secure.chmod(0o644)
             with self.assertRaisesRegex(ValueError, "group/world accessible"):
                 self.authz.read_secret(str(secure))
+
+    def test_native_share_route_checks_response_without_executing_error_page(self) -> None:
+        with mock.patch.object(
+            self.authz,
+            "native_share_response",
+            return_value={"status": 403, "url": "https://nas-test.local/share/not-a-real-token"},
+        ) as fetch:
+            self.authz.verify_native_share_route(object(), "https://nas-test.local")
+        fetch.assert_called_once_with("https://nas-test.local")
+
+    def test_native_share_route_rejects_authentik_redirect(self) -> None:
+        with mock.patch.object(
+            self.authz,
+            "native_share_response",
+            return_value={"status": 302, "url": "https://nas-test.local/identity/if/flow/login/"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "intercepted by Authentik"):
+                self.authz.verify_native_share_route(object(), "https://nas-test.local")
+
+    def test_hostile_identity_text_check_includes_open_shadow_roots(self) -> None:
+        driver = mock.Mock()
+        driver.execute_script.return_value = {
+            "injectedImage": False,
+            "executionMarker": None,
+        }
+        with mock.patch.object(
+            self.authz,
+            "rendered_text",
+            return_value="Account <img src=x onerror=document.body.dataset.nasXss=1>",
+        ):
+            self.authz.verify_no_identity_markup_injection(driver, "alice")
+
+    def test_browser_stage_reports_the_failed_stage_and_diagnostics(self) -> None:
+        output = StringIO()
+
+        def fail_browser() -> None:
+            raise RuntimeError("browser failure")
+
+        with (
+            mock.patch.object(
+                self.authz,
+                "browser_diagnostics",
+                return_value={"url": "https://nas-test.local/", "body": "failure page"},
+            ),
+            redirect_stderr(output),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "browser failure"):
+                self.authz.browser_step(mock.Mock(), "Portal capability routes (alice)", fail_browser)
+        self.assertIn("VM-BROWSER-STAGE-START: Portal capability routes (alice)", output.getvalue())
+        self.assertIn("VM-BROWSER-STAGE-FAIL: Portal capability routes (alice)", output.getvalue())
+        self.assertIn("VM-BROWSER-DIAGNOSTICS:", output.getvalue())
+
+    def test_browser_diagnostics_redact_url_query_and_fragment(self) -> None:
+        self.assertEqual(
+            self.authz.safe_browser_url("https://nas.example/console/?token=secret#auth-code"),
+            "https://nas.example/console/",
+        )
+
+    def test_allowed_settings_route_accepts_its_authentik_flow_redirect(self) -> None:
+        expectation = self.authz.RouteExpectation("/settings/syncthing", True, "/identity/if/flow/nas-user-settings/")
+        with mock.patch.object(
+            self.authz,
+            "fetch_status",
+            return_value={
+                "status": 200,
+                "url": "https://nas-test.local/identity/if/flow/nas-user-settings/",
+            },
+        ):
+            self.authz.verify_routes(object(), [expectation])
+
+    def test_allowed_route_rejects_unexpected_authentik_redirect(self) -> None:
+        with mock.patch.object(
+            self.authz,
+            "fetch_status",
+            return_value={"status": 200, "url": "https://nas-test.local/identity/if/flow/login/"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "expectedAllowed"):
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+
+    def test_allowed_route_retries_copy_party_first_user_reload(self) -> None:
+        with (
+            mock.patch.object(
+                self.authz,
+                "fetch_status",
+                side_effect=[
+                    {"status": 403, "url": "https://nas-test.local/shares/"},
+                    {"status": 200, "url": "https://nas-test.local/shares/"},
+                ],
+            ) as fetch,
+            mock.patch.object(self.authz.time, "sleep"),
+        ):
+            self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_allowed_route_waits_for_slow_copy_party_first_user_reload(self) -> None:
+        responses = [{"status": 403, "url": "https://nas-test.local/shares/"}] * 29
+        responses.append({"status": 200, "url": "https://nas-test.local/shares/"})
+        with (
+            mock.patch.object(self.authz, "fetch_status", side_effect=responses) as fetch,
+            mock.patch.object(self.authz.time, "sleep"),
+        ):
+            self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+        self.assertEqual(fetch.call_count, self.authz.ALLOWED_ROUTE_RETRY_ATTEMPTS)
+
+    def test_allowed_route_rejects_service_unavailable(self) -> None:
+        with (
+            mock.patch.object(
+                self.authz,
+                "fetch_status",
+                return_value={"status": 503, "url": "https://nas-test.local/ai/"},
+            ),
+            mock.patch.object(self.authz.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, '"status": 503'):
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/ai/", True)])
+
+    def test_authenticated_portal_retries_transient_forward_auth_403(self) -> None:
+        class Driver:
+            def __init__(self) -> None:
+                self.probes = 0
+
+            def get(self, _url: str) -> None:
+                self.probes += 1
+
+            def execute_script(self, script: str) -> str:
+                if "readyState" in script:
+                    return "complete"
+                return "HTTP ERROR 403" if self.probes == 1 else "NAS"
+
+            def get_log(self, _log_type: str) -> list[object]:
+                return []
+
+        driver = Driver()
+        with mock.patch.object(self.authz.time, "sleep"):
+            self.authz.wait_for_authenticated_portal(driver, "https://nas-test.local")
+        self.assertEqual(driver.probes, 2)
+
+    def test_authenticated_portal_timeout_reports_persistent_403(self) -> None:
+        class Driver:
+            def get(self, _url: str) -> None:
+                pass
+
+            def execute_script(self, script: str) -> str:
+                return "complete" if "readyState" in script else "HTTP ERROR 403"
+
+            def get_log(self, _log_type: str) -> list[object]:
+                return []
+
+        with mock.patch.object(self.authz.time, "sleep"):
+            with self.assertRaisesRegex(Exception, "did not become reachable"):
+                self.authz.wait_for_authenticated_portal(Driver(), "https://nas-test.local")
 
 
 if __name__ == "__main__":

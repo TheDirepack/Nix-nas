@@ -36,11 +36,17 @@ class ContractTests(unittest.TestCase):
         observability = text("modules/nas/config/observability.nix")
         storage = text("modules/nas/config/storage-monitoring.nix")
         self.assertIn("services.ntfy-sh", observability)
+        self.assertIn('base-url = "https://${lanHost}";', observability)
+        self.assertIn('web-root = "/notifications";', observability)
         self.assertIn("services.telegraf", observability)
         self.assertIn('path_smartctl = "${smartctlReadOnly}";', observability)
         self.assertIn('command = "${smartctlReadOnly}";', observability)
+        self.assertIn("processors.converter = [", observability)
         self.assertIn("use_sudo = true", observability)
         self.assertIn("services.smartd.enable = lib.mkDefault false", storage)
+        schedules = text("modules/nas/config/schedules.nix")
+        self.assertIn("OnBootSec = cfg.identity.syncInterval;", schedules)
+        self.assertIn('wantedBy = [ "timers.target" ];', schedules)
 
     def test_secret_readiness_is_bounded_and_diagnostic(self):
         secrets = text("modules/nas/internal/secret-tools.nix")
@@ -51,6 +57,22 @@ class ContractTests(unittest.TestCase):
         self.assertIn("exit 73", secrets)
         self.assertNotIn("seq 1 90", secrets)
         self.assertIn("/bin/timeout 90s", authentik)
+        self.assertIn('blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";', authentik)
+        blueprints = text("modules/nas/internal/account-tools.nix")
+        self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)
+
+    def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
+        zfs_tools = text("modules/nas/internal/zfs-tools.nix")
+        encrypted_guest = text("tests/vm/encrypted-guest-test.sh")
+        self.assertIn("if [[ -t 0 ]]; then", zfs_tools)
+        self.assertIn("show-zfs-key-stdin", zfs_tools)
+        self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
+
+    def test_feature_apply_defers_to_an_owned_runtime_operation(self):
+        systemd = text("modules/nas/config/systemd-services.nix")
+        self.assertIn('"Another privileged operation conflicts with feature-apply:"', systemd)
+        self.assertIn("Feature policy application deferred to the owning operation.", systemd)
+        self.assertIn("onFailure = failureAlert;", systemd)
 
     def test_cockpit_remains_available_for_locked_state_stdin_unlock(self):
         base = text("modules/nas/internal/base.nix")
@@ -140,12 +162,31 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("optionalString (!cfg.power.ups.enable)", power)
         self.assertIn("pkgs.nodejs_22", zfs)
         self.assertIn("pkgs.buildPackages.nodejs_22", zfs)
+        self.assertIn("zfs_retry unload-key unload-key -r", zfs)
+        self.assertIn("Timed out waiting to $label", zfs)
         self.assertIn("serviceGid = lib.mkOption", management)
         self.assertIn("cfg.observability.serviceGid", validation)
         self.assertIn("obs.serviceGid", observability)
         self.assertNotIn("serviceUid (also used as the service GID)", validation)
         self.assertIn('${if cfg.tftp.writable then "rw" else "r"}: *', text("modules/nas/config/system.nix"))
         self.assertIn('lib.escapeShellArg (shareRoot + "/tftp")', text("modules/nas/config/systemd-services.nix"))
+        application_services = text("modules/nas/config/application-services.nix")
+        self.assertIn("overridePythonAttrs", application_services)
+        self.assertIn("pkgs.python3Packages.partftpy", application_services)
+        self.assertIn('"tftp-i" = "127.0.0.1";', application_services)
+        self.assertIn('"xff-src" = "127.8.0.0/16";', application_services)
+        self.assertIn(
+            'BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];', text("modules/nas/config/systemd-services.nix")
+        )
+        self.assertIn(
+            'requires = [ "nas-managed-services-reconcile.service" ];',
+            text("modules/nas/config/systemd-services.nix"),
+        )
+        managed = text("modules/nas/config/managed-services.nix")
+        self.assertIn('"d /run/nas-control 0750 nas-feature-gate caddy -"', managed)
+        self.assertNotIn(
+            'RuntimeDirectory = [ "nas-on-demand" "nas-control" ];', text("modules/nas/config/systemd-services.nix")
+        )
         self.assertNotIn("world-writable filesystem permissions", validation)
         mount_guard = (
             "nas-zfs-mount-guard = {\n"
@@ -172,6 +213,7 @@ class ContractTests(unittest.TestCase):
         package = text("pyproject.toml")
         self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
         self.assertIn("users.groups.nas-operations", identities)
+        self.assertIn('extraGroups = [ "caddy" "nas-operations" ]', identities)
         self.assertIn('nas-operation-run = "nas_operation_lock:main"', package)
         self.assertIn("enter_operation_coordinator", secrets)
         self.assertIn("--class secrets --class runtime", secrets)

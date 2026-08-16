@@ -52,6 +52,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("GENERATED_CONFIG", identity)
         self.assertIn('copypartyUserSeed = pkgs.writeText "00-local-overrides.conf"', system)
         self.assertIn("[/shares/admin/copyparty-config]", system)
+        self.assertIn("r: @nas_allow_files", system)
         self.assertIn("[/shares/users/''${u%+nas_allow_files}]", system)
         self.assertIn("rwmd.: ''${u}", system)
         self.assertNotIn("A: ''${u}, @nas_admin", system)
@@ -101,6 +102,8 @@ class ContractTests(unittest.TestCase):
         systemd = text("modules/nas/config/systemd-services.nix")
         portal = text("web/portal/index.html")
         self.assertIn("templates", proxy)
+        self.assertIn("templates {\n            # The portal template", proxy)
+        self.assertIn("root /", proxy)
         self.assertIn("file_server", proxy)
         self.assertIn("nasPortalStatic", proxy)
         self.assertIn("handle /share/*", proxy)
@@ -109,6 +112,9 @@ class ContractTests(unittest.TestCase):
         # hard-coded /shares/users path.
         self.assertIn('include "/run/nas-control/portal.json"', portal)
         self.assertIn('placeholder "http.request.header.Remote-Groups"', portal)
+        self.assertIn('splitList ","', portal)
+        self.assertIn('has "nas_admin" $groups', portal)
+        self.assertNotIn("has $groups", portal)
         self.assertIn('placeholder "http.request.header.Remote-User"', portal)
         share_route = proxy.split("handle /share/* {", 1)[1].split("@shares path", 1)[0]
         self.assertIn("${copypartySsoProxy}", share_route)
@@ -145,6 +151,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('caddyCapabilityAuth "webdav"', proxy)
         self.assertIn('caddyCapabilityAuth "syncthing"', proxy)
         self.assertIn('caddyCapabilityAuth "vault"', proxy)
+
+    def test_vault_fallback_is_authenticated_and_capability_gated(self):
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        vault = proxy.split("handle /vault/* {", 1)[1].split("# Native share links", 1)[0]
+        fallback = vault.rsplit("handle {", 1)[1]
+        self.assertIn("caddyForwardAuth", fallback)
+        self.assertIn('caddyCapabilityAuth "vault"', fallback)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@
             "additionalProperties": false,
             "properties": {
               "memoryBytes": {"type": "integer", "minimum": 67108864, "maximum": 68719476736},
-              "cpus": {"type": "number", "minimum": 0.1, "maximum": 64},
+              "cpus": {"type": "integer", "minimum": 1, "maximum": 64},
               "gpus": {"type": "array", "items": {"type": "string"}}
             }
           },
@@ -80,7 +80,12 @@
                   "required": ["type"],
                   "properties": {
                     "type": {"enum": ["none", "path", "hostname", "dns", "port"]},
-                    "value": {"type": "string", "minLength": 1, "maxLength": 253}
+                    "value": {
+                      "oneOf": [
+                        {"type": "string", "minLength": 1, "maxLength": 253},
+                        {"type": "integer", "minimum": 1, "maximum": 65535}
+                      ]
+                    }
                   }
                 },
                 "auth": {

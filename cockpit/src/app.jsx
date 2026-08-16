@@ -1148,6 +1148,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                         <GridItem sm={4}>
                           <FormGroup label="Context tokens">
                             <TextInput
+                              aria-label="Context tokens"
                               type="number"
                               min={1024}
                               max={1048576}
@@ -1159,6 +1160,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                         <GridItem sm={4}>
                           <FormGroup label="Idle TTL (seconds)">
                             <TextInput
+                              aria-label="Idle TTL (seconds)"
                               type="number"
                               min={-1}
                               max={604800}
@@ -1345,6 +1347,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                           <GridItem key={label} sm={6} lg={4}>
                             <FormGroup label={`${label} timeout (s)`}>
                               <TextInput
+                                aria-label={`${label} timeout (seconds)`}
                                 type="number"
                                 min={0}
                                 max={3600}
@@ -1427,6 +1430,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                                 <GridItem sm={7}>
                                   <FormGroup label="Routing strategy">
                                     <FormSelect
+                                      aria-label={`${role} routing strategy`}
                                       value={current.strategy}
                                       onChange={(_e, value) =>
                                         setRoles((old) => ({
@@ -1445,6 +1449,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                                   <GridItem sm={5}>
                                     <FormGroup label="Requests/target">
                                       <TextInput
+                                        aria-label={`${role} requests per target`}
                                         type="number"
                                         min={1}
                                         max={128}
@@ -1491,6 +1496,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                     <Form onSubmit={saveAdvanced}>
                       <FormGroup label="Health check timeout (s)">
                         <TextInput
+                          aria-label="Health check timeout (seconds)"
                           type="number"
                           min={15}
                           max={3600}
@@ -1502,6 +1508,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                       </FormGroup>
                       <FormGroup label="Default model idle TTL (s)">
                         <TextInput
+                          aria-label="Default model idle TTL (seconds)"
                           type="number"
                           min={0}
                           max={604800}
@@ -1513,6 +1520,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                       </FormGroup>
                       <FormGroup label="Model unload grace timeout (s)">
                         <TextInput
+                          aria-label="Model unload grace timeout (seconds)"
                           type="number"
                           min={0}
                           max={3600}
@@ -1524,6 +1532,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                       </FormGroup>
                       <FormGroup label="Log level">
                         <FormSelect
+                          aria-label="Log level"
                           value={advanced.logLevel}
                           onChange={(_e, value) =>
                             setAdvanced((old) => ({...old, logLevel: value}))
@@ -1536,6 +1545,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                       </FormGroup>
                       <FormGroup label="Capture buffer (MiB)">
                         <TextInput
+                          aria-label="Capture buffer (MiB)"
                           type="number"
                           min={0}
                           max={1024}
@@ -1547,6 +1557,7 @@ function AIConfiguration({data, onRefresh, setNotice}) {
                       </FormGroup>
                       <FormGroup label="Metrics retained in memory">
                         <TextInput
+                          aria-label="Metrics retained in memory"
                           type="number"
                           min={0}
                           max={1000000}

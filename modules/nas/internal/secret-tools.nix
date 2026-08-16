@@ -751,6 +751,16 @@ NTFY_ENV
         echo
       }
 
+      command_show_zfs_key_stdin() {
+        password_from_stdin=true
+        prompt_unlock
+        if IFS= read -r _; then
+          echo "Unexpected extra input while showing the ZFS dataset key." >&2
+          exit 1
+        fi
+        get_secret zfs-dataset-key
+      }
+
       command_show_authentik_bootstrap() {
         prompt_unlock
         printf 'Username: akadmin\nPassword: %s\n' "$(get_secret authentik-bootstrap-password)"
@@ -796,9 +806,10 @@ NTFY_ENV
         show-ai-api-key) command_show_ai_api_key ;;
         show-ntfy-password) command_show_ntfy_password ;;
         show-zfs-key) command_show_zfs_key ;;
+        show-zfs-key-stdin) command_show_zfs_key_stdin ;;
         show-authentik-bootstrap) command_show_authentik_bootstrap ;;
         *)
-          echo "Usage: nas-secrets {init|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-authentik-bootstrap}" >&2
+          echo "Usage: nas-secrets {init|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
           exit 2
           ;;
       esac

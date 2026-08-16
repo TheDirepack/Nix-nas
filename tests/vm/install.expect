@@ -12,19 +12,13 @@ spawn -noecho {*}$argv
 set shell_ready 0
 while {!$shell_ready} {
   expect {
-    -re {nixos login:} {
-      send -- "root\r"
-    }
-    -re {login:} {
-      send -- "root\r"
-    }
     -re {Password:} {
       send -- "\r"
     }
-    -re {nixos@[^\r\n]*[$] $} {
+    -re {nixos@[^\r\n]*\]\$} {
       send -- "sudo -i\r"
     }
-    -re {root@[^\r\n]*# $} {
+    -re {root@[^\r\n]*\]#} {
       set shell_ready 1
     }
     -re {bash-[^#]*# $} {

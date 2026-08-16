@@ -177,8 +177,9 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn(
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
         )
-        self.assertIn("needs: [build, browser]", workflow)
-        self.assertIn("needs: [integration, installer]", workflow)
+        self.assertGreaterEqual(workflow.count("needs: [build]"), 2)
+        self.assertIn("needs: [integration, browser, build]", workflow)
+        self.assertIn("needs: [integration, browser, installer]", workflow)
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
         pyproject = text("pyproject.toml")

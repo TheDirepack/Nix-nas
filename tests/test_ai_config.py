@@ -455,6 +455,13 @@ class AiConfigTests(unittest.TestCase):
                 unknown_flag = mock.Mock(returncode=2, stderr=b"unknown flag: --validate", stdout=b"")
                 with mock.patch.object(ai.subprocess, "run", return_value=unknown_flag):
                     self.assertIsNone(ai._validate_with_llama_swap(candidate))
+                removed_flag = mock.Mock(
+                    returncode=2,
+                    stderr=b"flag provided but not defined: -validate",
+                    stdout=b"",
+                )
+                with mock.patch.object(ai.subprocess, "run", return_value=removed_flag):
+                    self.assertIsNone(ai._validate_with_llama_swap(candidate))
                 rejected = mock.Mock(returncode=1, stderr=b"models: yaml error", stdout=b"")
                 with mock.patch.object(ai.subprocess, "run", return_value=rejected):
                     with self.assertRaisesRegex(ai.AiConfigError, "llama-swap rejected"):

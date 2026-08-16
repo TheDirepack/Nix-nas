@@ -45,6 +45,7 @@ py-modules = [
   "nas_operation_lock",
   "nas_setup",
   "nas_setup_config",
+  "nas_service_caddy",
   "nas_state",
   "nas_syncthing_devices"
 ]

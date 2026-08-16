@@ -5,11 +5,34 @@ ZFS_DEVICE="${1:-${NAS_TEST_ZFS_DEVICE:-/dev/vdb}}"
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
 PUBLIC_HOST="${NAS_TEST_PUBLIC_HOST:-nas-test.local}"
 CONFIG_DIR="${NAS_CONFIG_DIR:-/var/lib/nas-test/repo}"
-TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-300}"
+TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-$(nas_vm_ordinary_wait_seconds)}"
+AUTHENTIK_OUTPOST_PORT="${NAS_AUTHENTIK_OUTPOST_PORT:-9010}"
+AUTHENTIK_OUTPOST_PID=""
+AUTHENTIK_OUTPOST_LOG="/run/nas-authentik-vm-outpost.log"
+authz_secret_dir=""
 
 log() { printf '\n==> %s\n' "$*"; }
 pass() { printf 'PASS: %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+stop_authentik_vm_outpost() {
+  local cleanup_status=0
+  if [[ -n "$AUTHENTIK_OUTPOST_PID" ]] && kill -0 "$AUTHENTIK_OUTPOST_PID" >/dev/null 2>&1; then
+    if nas_vm_stop_process "$AUTHENTIK_OUTPOST_PID" "$(nas_vm_kill_after_seconds)"; then
+      :
+    else
+      cleanup_status=$?
+    fi
+  fi
+  AUTHENTIK_OUTPOST_PID=""
+  if rm -f -- "$AUTHENTIK_OUTPOST_LOG"; then
+    :
+  else
+    local remove_status=$?
+    ((cleanup_status != 0)) || cleanup_status=$remove_status
+  fi
+  return "$cleanup_status"
+}
 
 on_error() {
   local rc=$?
@@ -20,6 +43,7 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
+nas_vm_cleanup_add stop_authentik_vm_outpost
 
 require_commands() {
   local missing=() command
@@ -31,7 +55,8 @@ require_commands() {
 
 wait_active() {
   local unit=$1
-  if ! timeout "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"; then
+  if ! timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c "until systemctl is-active --quiet '$unit'; do sleep 2; done"; then
     systemctl status "$unit" --no-pager >&2 || true
     fail "timed out waiting for $unit to become active"
   fi
@@ -39,7 +64,8 @@ wait_active() {
 
 wait_inactive() {
   local unit=$1
-  if ! timeout "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"; then
+  if ! timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"; then
     systemctl status "$unit" --no-pager >&2 || true
     fail "timed out waiting for $unit to become inactive"
   fi
@@ -48,9 +74,14 @@ wait_inactive() {
 wait_http() {
   local url=$1
   shift
-  timeout "$TEST_TIMEOUT" bash -c \
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$TEST_TIMEOUT" bash -c \
     'until curl --fail --silent --show-error --connect-timeout 2 --max-time 10 "$@" >/dev/null; do sleep 2; done' \
     bash "$@" "$url"
+}
+
+set_feature_modes() {
+  local modes=$1
+  printf '%s\n' "$modes" | nas-feature-control set-many - | jq -e '.ok == true' >/dev/null
 }
 
 http_code() {
@@ -75,7 +106,7 @@ assert_blocked() {
   local path=$1 code
   code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST$path")"
   case "$code" in
-    301|302|303|307|308|401|403) pass "unauthenticated $path is blocked or redirected ($code)" ;;
+    301|302|303|307|308|401|403|404) pass "unauthenticated $path is blocked, hidden, or redirected ($code)" ;;
     *) fail "unauthenticated $path returned unexpected HTTP $code" ;;
   esac
 }
@@ -87,24 +118,104 @@ assert_spoof_blocked() {
     -H 'X-authentik-username: akadmin' -H 'X-authentik-groups: nas_admin' \
     "https://$PUBLIC_HOST$path")"
   case "$code" in
-    301|302|303|307|308|401|403) pass "spoofed identity headers do not bypass $path ($code)" ;;
+    301|302|303|307|308|401|403|404) pass "spoofed identity headers do not bypass $path ($code)" ;;
     *) fail "spoofed identity headers bypassed or unexpectedly reached $path (HTTP $code)" ;;
   esac
 }
 
 run_as_admin() {
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" bash -lc "$1"
+  runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
-  run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | timeout 600 nas-secrets activate-stdin"
+  run_as_admin_with_stdin "$(nas_vm_timeout_value secretActivation)" nas-secrets activate-stdin
+}
+
+run_as_admin_with_stdin() {
+  local timeout_seconds=$1
+  shift
+  nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
+    runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
+}
+
+authentik_api() {
+  local method=$1 path=$2 body=${3:-}
+  if [[ -n "$body" ]]; then
+    curl --fail --silent --show-error --max-time 30 -X "$method" -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' --data-binary "$body" "http://127.0.0.1:9000/identity/api/v3/$path"
+  else
+    curl --fail --silent --show-error --max-time 30 -X "$method" -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" "http://127.0.0.1:9000/identity/api/v3/$path"
+  fi
+}
+
+ensure_authentik_proxy_fixture() {
+  # The VM owns a disposable Authentik database, so create the provider and
+  # application through the same API used by an operator. This keeps the
+  # browser test independent of an external Authentik export and makes the
+  # provider assignment survive an Authentik restart.
+  local auth_flow authorization_flow invalidation_flow provider_id outpost_id existing_providers outpost_config payload
+  AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-secrets/authentik/bootstrap-token)"
+  auth_flow="$(authentik_api GET 'flows/instances/?slug=default-authentication-flow' | jq -er '.results[0].pk')"
+  authorization_flow="$(authentik_api GET 'flows/instances/?slug=default-provider-authorization-implicit-consent' | jq -er '.results[0].pk')"
+  invalidation_flow="$(authentik_api GET 'flows/instances/?slug=default-invalidation-flow' | jq -er '.results[0].pk')"
+
+  provider_id="$(authentik_api GET 'providers/proxy/?page_size=100' | jq -er '.results[] | select(.name == "NAS VM Test Proxy") | .pk' | head -n1 || true)"
+  payload="$(jq -cn --arg name 'NAS VM Test Proxy' --arg authentication "$auth_flow" --arg authorization "$authorization_flow" --arg invalidation "$invalidation_flow" '{name:$name, authentication_flow:$authentication, authorization_flow:$authorization, invalidation_flow:$invalidation, mode:"forward_single", external_host:"https://nas-test.local", internal_host:"http://127.0.0.1:8080", internal_host_ssl_validation:false}')"
+  if [[ -z "$provider_id" ]]; then
+    provider_id="$(authentik_api POST 'providers/proxy/' "$payload" | jq -er '.pk')"
+  else
+    authentik_api PATCH "providers/proxy/$provider_id/" "$payload" >/dev/null
+  fi
+
+  if ! authentik_api GET 'core/applications/?page_size=100' | jq -e '.results[] | select(.slug == "nas-vm-portal") | .pk' >/dev/null; then
+    payload="$(jq -cn --arg name 'NAS VM Portal' --arg slug 'nas-vm-portal' --argjson provider "$provider_id" '{name:$name, slug:$slug, provider:$provider, meta_launch_url:"https://nas-test.local"}')"
+    authentik_api POST 'core/applications/' "$payload" >/dev/null
+  fi
+
+  outpost_id="$(authentik_api GET 'outposts/instances/?page_size=100' | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk' | head -n1 || true)"
+  [[ -n "$outpost_id" ]] || fail 'Authentik embedded outpost is missing'
+  existing_providers="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --argjson provider "$provider_id" '([.providers[]?] + [$provider]) | unique')"
+  # The authorization code is issued by the public Caddy URL.  The standalone
+  # outpost must use that same issuer when redeeming it; using the loopback
+  # Authentik URL here creates a valid login followed by an endless callback
+  # redirect.  API provisioning above still uses the loopback listener.
+  outpost_config="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --arg host "https://$PUBLIC_HOST/identity/" '.config + {authentik_host:$host, authentik_host_browser:$host}')"
+  payload="$(jq -cn --argjson providers "$existing_providers" --argjson config "$outpost_config" '{providers:$providers,config:$config}')"
+  authentik_api PATCH "outposts/instances/$outpost_id/" "$payload" >/dev/null
+
+  local outpost_token
+  outpost_token="$(authentik_api GET "core/tokens/ak-outpost-${outpost_id}-api/view_key/" | jq -er '.key')"
+  install -d -o authentik -g authentik -m 0750 /run/nas-authentik-vm-outpost
+  install -o authentik -g authentik -m 0640 /dev/null "$AUTHENTIK_OUTPOST_LOG"
+  runuser -u authentik -- env \
+    AUTHENTIK_HOST="https://$PUBLIC_HOST/identity/" \
+    AUTHENTIK_HOST_BROWSER="https://$PUBLIC_HOST/identity/" \
+    AUTHENTIK_TOKEN="$outpost_token" \
+    AUTHENTIK_INSECURE=true \
+    AUTHENTIK_LISTEN__HTTP="127.0.0.1:$AUTHENTIK_OUTPOST_PORT" \
+    AUTHENTIK_LISTEN__HTTPS="127.0.0.1:9011" \
+    AUTHENTIK_LISTEN__METRICS="127.0.0.1:9310" \
+    proxy >>"$AUTHENTIK_OUTPOST_LOG" 2>&1 &
+  AUTHENTIK_OUTPOST_PID=$!
+
+  local code=''
+  for _ in $(seq 1 60); do
+    code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
+    [[ "$code" == 204 ]] && break
+    sleep 2
+  done
+  [[ "$code" == 204 ]] || {
+    tail -80 "$AUTHENTIK_OUTPOST_LOG" >&2 || true
+    fail "Authentik VM proxy outpost did not become reachable (HTTP ${code:-none})"
+  }
+  pass 'Authentik VM proxy provider, application, and Caddy outpost backend are ready'
 }
 
 require_commands \
   curl findmnt firewall-cmd git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-feature-control \
   nas-identity-sync nas-managed-service nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
-  nas-zfs-mount-check nas-zfs-unlock python3 ss systemctl zfs zpool
+  nas-zfs-mount-check nas-zfs-unlock proxy python3 ss systemctl zfs zpool
 
 nas-managed-service validate >/dev/null
 pass "nas-managed-service store is valid (file-based, accept-list, no SQLite)"
@@ -206,13 +317,14 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
 EOFSETUP
 chown admin:users /var/lib/nas-test/setup/first-run.json
 chmod 0600 /var/lib/nas-test/setup/first-run.json
-run_as_admin "nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'"
+run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-plan_json="$(run_as_admin "nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json")"
+plan_json="$(run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json)"
 plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
 stale_digest="$(printf '0%.0s' {1..64})"
-if run_as_admin "nas-setup first-run --config /var/lib/nas-test/setup/first-run.json --confirm-plan-digest '$stale_digest'" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
+if run_as_admin nas-setup first-run --config /var/lib/nas-test/setup/first-run.json \
+  --confirm-plan-digest "$stale_digest" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
   fail "first-run accepted a stale plan digest"
 fi
 if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
@@ -223,26 +335,48 @@ if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
   fail "stale plan digest failure was not diagnostic"
 fi
 pass "first-run rejects a stale plan digest before mutation"
-run_as_admin "printf '%s\n' '$KEEPASS_PASSWORD' | timeout 1200 nas-setup first-run \
+run_as_admin_with_stdin "$(nas_vm_timeout_value firstRun)" nas-setup first-run \
   --config /var/lib/nas-test/setup/first-run.json \
   --keepass-password-stdin \
-  --confirm-plan-digest '$plan_digest' \
-  --confirm-storage-device '$ZFS_DEVICE' \
-  --allow-destructive-storage" >/tmp/nas-first-run.json
-jq -e '
+  --confirm-plan-digest "$plan_digest" \
+  --confirm-storage-device "$ZFS_DEVICE" \
+  --allow-destructive-storage >/tmp/nas-first-run.json
+if ! jq -e '
   .storage.createdPool == true and
   .storage.createdDataset == true and
   (.accounts.created | sort) == ["alice", "baseline", "guest", "operator"] and
   (.identity.administrators | index("operator")) != null
-' /tmp/nas-first-run.json >/dev/null
-nas-setup status | jq -e '
+' /tmp/nas-first-run.json >/dev/null; then
+  printf '%s\n' '--- first-run report ---' >&2
+  jq . /tmp/nas-first-run.json >&2 || cat /tmp/nas-first-run.json >&2
+  fail "nas-setup first-run report did not contain the expected storage, account, and administrator state"
+fi
+pass "nas-setup first-run created the expected storage and accounts"
+run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
+  >/tmp/nas-first-start-status.json
+if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
+  /tmp/nas-first-start-status.json >/dev/null; then
+  printf '%s\n' '--- first-start status ---' >&2
+  jq . /tmp/nas-first-start-status.json >&2 || cat /tmp/nas-first-start-status.json >&2
+  fail "first-start status did not report complete for the configured plan"
+fi
+if ! nas-setup status | jq -e '
   .runtimeSecretsActive == true and
   .poolPresent == true and
   .datasetPresent == true and
   .setupState
-' >/dev/null
-[[ -d /tank/shares/users/alice && -d /tank/shares/users/operator ]]
-[[ "$(stat -c '%a:%U:%G' /tank/shares/users/alice)" == "2770:copyparty:copyparty" ]]
+' >/dev/null; then
+  nas-setup status >&2 || true
+  fail "nas-setup status did not report an active completed setup"
+fi
+if [[ ! -d /tank/shares/users/alice || ! -d /tank/shares/users/operator ]]; then
+  find /tank/shares/users -maxdepth 1 -mindepth 1 -printf '%M %u:%g %p\n' >&2 || true
+  fail "first-run did not create both expected personal share directories"
+fi
+if [[ "$(stat -c '%a:%U:%G' /tank/shares/users/alice)" != "2770:copyparty:copyparty" ]]; then
+  stat -c '%a:%U:%G %n' /tank/shares/users/alice >&2 || true
+  fail "Alice's personal share directory has unexpected ownership or mode"
+fi
 findmnt -n -o FSTYPE,SOURCE,TARGET /tank | grep -q '^zfs tank/nas /tank$'
 pass "nas-setup created storage, KeePass secrets, accounts, shares, and activated the stack"
 
@@ -306,12 +440,14 @@ log "Verify first-run protected services and account population"
 [[ -f /run/nas-secrets/ready ]] || fail "first-run setup did not commit runtime secrets"
 for unit in \
   nas-protected-services.target postgresql.service authentik-worker.service \
-  authentik.service nas-identity-sync.service copyparty.service \
+  authentik.service copyparty.service \
   nas-on-demand-gate.service caddy.service; do
   wait_active "$unit"
 done
+wait_active nas-identity-sync.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
+ensure_authentik_proxy_fixture
 curl --fail --silent --show-error --max-time 20 \
   --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
 nas-identity-sync status | jq -e '
@@ -324,11 +460,12 @@ nas-identity-sync capabilities | jq -e '
   select(.id == "alice") |
   .capabilities.files.allowed == true and .capabilities.ai.allowed == false
 ' >/dev/null
-run_as_admin "printf '%s\n' 'alice-updated-password' | nas-setup account apply \
-  --username alice \
-  --password-stdin" >/tmp/nas-account-password-update.json
+printf '%s\n' 'alice-updated-password' |
+  run_as_admin nas-setup account apply --username alice --password-stdin \
+    >/tmp/nas-account-password-update.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
-run_as_admin "nas-setup account apply --username alice --name '<img src=x onerror=document.body.dataset.nasXss=1>'" \
+run_as_admin nas-setup account apply --username alice \
+  --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
   >/tmp/nas-account-xss-name.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
@@ -337,14 +474,15 @@ nas-identity-sync export-account alice | jq -e '
   (.groups | index("nas_allow_vault")) != null and
   (.groups | index("nas_allow_syncthing")) != null
 ' >/dev/null
-run_as_admin "printf '%s\n' 'temporary-password' | nas-setup account apply \
-  --username temporary \
-  --name 'Temporary User' \
-  --email temporary@nas.local \
-  --group nas_allow_files \
-  --password-stdin" >/tmp/nas-account-add.json
+printf '%s\n' 'temporary-password' |
+  run_as_admin nas-setup account apply \
+    --username temporary \
+    --name 'Temporary User' \
+    --email temporary@nas.local \
+    --group nas_allow_files \
+    --password-stdin >/tmp/nas-account-add.json
 jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
-run_as_admin "nas-setup account disable temporary" >/tmp/nas-account-disable.json
+run_as_admin nas-setup account disable temporary >/tmp/nas-account-disable.json
 jq -e '.updated == ["temporary"]' /tmp/nas-account-disable.json >/dev/null
 nas-identity-sync export-account temporary | jq -e '
   .active == false and
@@ -359,7 +497,7 @@ log "Anonymous read-only TFTP behavior"
 printf 'nixos-nas-qemu-tftp\n' >/tank/shares/tftp/qemu-tftp.txt
 chown copyparty:copyparty /tank/shares/tftp/qemu-tftp.txt
 chmod 0660 /tank/shares/tftp/qemu-tftp.txt
-timeout "$TEST_TIMEOUT" bash -c \
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$TEST_TIMEOUT" bash -c \
   "until ss -lun | grep -Eq '[:.]3969[[:space:]]'; do sleep 2; done"
 python3 - <<'PYTFTP'
 import socket
@@ -403,11 +541,20 @@ if bytes(received) != EXPECTED:
     raise SystemExit(f"TFTP payload mismatch: {bytes(received)!r}")
 
 upload = "tftp/qemu-upload-must-fail.txt"
-sock.sendto(packet(2, upload), SERVER)
-response, _peer = sock.recvfrom(65535)
-opcode = struct.unpack("!H", response[:2])[0]
-if opcode != 5:
-    raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
+write_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+write_sock.settimeout(3)
+write_sock.sendto(packet(2, upload), SERVER)
+try:
+    response, _peer = write_sock.recvfrom(65535)
+except TimeoutError:
+    # CopyParty's anonymous read-only TFTP mode rejects writes by withholding
+    # a transfer response; the absence of a created file is the authority.
+    pass
+else:
+    opcode = struct.unpack("!H", response[:2])[0]
+    if opcode != 5:
+        raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
+write_sock.close()
 if Path("/tank/shares/tftp/qemu-upload-must-fail.txt").exists():
     raise SystemExit("read-only TFTP created the rejected upload")
 PYTFTP
@@ -461,7 +608,7 @@ while True:
 sock.close()
 first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
 parts = first.split()
-if len(parts) < 2 or parts[1] not in {"400", "401", "403"}:
+if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
     raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
 PYHOSTILEGATE
 pass "malformed trusted identity headers remain fail-closed inside the installed gate"
@@ -505,7 +652,10 @@ case "$auth_down_code" in
 esac
 systemctl start authentik.service
 wait_active authentik.service
-wait_http http://127.0.0.1:9000/-/health/live/
+systemctl start nas-protected-services.target
+wait_active nas-protected-services.target
+wait_active caddy.service
+wait_http http://127.0.0.1:9000/identity/-/health/live/
 pass "protected proxy routes fail closed and recover after Authentik outage"
 proxy_headers="$(curl --silent --show-error --insecure --dump-header - --output /dev/null \
   --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/")"
@@ -524,15 +674,15 @@ for service in ssh http https mdns; do
 done
 
 ip netns del nas-untrusted-test >/dev/null 2>&1 || true
-ip link del nas-untrusted-host >/dev/null 2>&1 || true
+ip link del nust-host >/dev/null 2>&1 || true
 ip netns add nas-untrusted-test
-ip link add nas-untrusted-host type veth peer name nas-untrusted-client
-ip link set nas-untrusted-client netns nas-untrusted-test
-ip addr add 198.18.0.1/30 dev nas-untrusted-host
-ip link set nas-untrusted-host up
+ip link add nust-host type veth peer name nust-peer
+ip link set nust-peer netns nas-untrusted-test
+ip addr add 198.18.0.1/30 dev nust-host
+ip link set nust-host up
 ip netns exec nas-untrusted-test ip link set lo up
-ip netns exec nas-untrusted-test ip addr add 198.18.0.2/30 dev nas-untrusted-client
-ip netns exec nas-untrusted-test ip link set nas-untrusted-client up
+ip netns exec nas-untrusted-test ip addr add 198.18.0.2/30 dev nust-peer
+ip netns exec nas-untrusted-test ip link set nust-peer up
 for port in 22 80 443 9092 22000; do
   if ip netns exec nas-untrusted-test python3 -c \
     'import socket,sys; s=socket.socket(); s.settimeout(1.0); raise SystemExit(0 if s.connect_ex(("198.18.0.1", int(sys.argv[1]))) == 0 else 1)' \
@@ -541,42 +691,62 @@ for port in 22 80 443 9092 22000; do
   fi
 done
 ip netns del nas-untrusted-test
-ip link del nas-untrusted-host >/dev/null 2>&1 || true
+ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
 log "Browser-level Authentik and capability authorization"
+# The browser matrix verifies that an allowed administrator can reach the
+# enabled AI route. Keep the optional stack resident for this phase; the
+# feature lifecycle phase below exercises its off/on-demand transitions.
+set_feature_modes '{"aiRuntime":"always","aiWorkspace":"always"}'
+wait_active nas-llama-swap.service
+wait_active open-webui.service
+wait_http http://127.0.0.1:9380/health
+# The persistent wrapper keeps mutable local users across generations. Seed
+# the disposable fixture's PAM credential so direct Cockpit recovery remains
+# deterministic after the installed OS is updated in place.
+printf '%s\n' 'admin:admin-vm-password' | chpasswd
 authz_secret_dir=$(mktemp -d /run/nas-authz-test.XXXXXX)
-cleanup_authz_secrets() { rm -rf -- "$authz_secret_dir"; }
-trap cleanup_authz_secrets EXIT
+cleanup_authz_secrets() {
+  [[ -n "$authz_secret_dir" ]] || return 0
+  rm -rf -- "$authz_secret_dir"
+}
+nas_vm_cleanup_add cleanup_authz_secrets
 chmod 0700 "$authz_secret_dir"
 printf '%s\n' operator-vm-password > "$authz_secret_dir/operator"
+printf '%s\n' admin-vm-password > "$authz_secret_dir/admin"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
 chmod 0600 "$authz_secret_dir"/*
-timeout 300 python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
   --origin "https://$PUBLIC_HOST" \
+  --cockpit-password-file "$authz_secret_dir/admin" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
   --baseline-password-file "$authz_secret_dir/baseline"
 cleanup_authz_secrets
-trap - EXIT
+authz_secret_dir=""
+set_feature_modes '{"aiRuntime":"off","aiWorkspace":"off"}'
+wait_inactive open-webui.service
+wait_inactive nas-llama-swap.service
 pass "Browser authorization and Authentik user-settings flow"
 
 log "Custom command surfaces and generated configuration"
 nas-secrets status | grep -q 'Runtime secrets: active'
-run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-secrets show-ai-api-key" | grep -Eq '^[0-9a-fA-F]{64}$'
-! run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-secrets check-authentik-token" \
+run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets show-ai-api-key | grep -Eq '^[0-9a-fA-F]{64}$'
+! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
   >/tmp/nas-token-warning.log 2>&1 || fail "bootstrap token reuse was not reported"
 grep -q 'bootstrap token' /tmp/nas-token-warning.log
-! run_as_admin "printf '%s\\n' '$KEEPASS_PASSWORD' | nas-zfs-export-recovery-key /tmp/disabled-zfs-key" \
+! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-zfs-export-recovery-key /tmp/disabled-zfs-key \
   >/tmp/nas-zfs-export-disabled.log 2>&1 || fail "ZFS recovery key unexpectedly existed while encryption was disabled"
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
 nas-feature-control status | jq -e '.schemaVersion == 2 and (.features | length > 0)' >/dev/null
 ! nas-feature-control set '../aiRuntime' always >/tmp/nas-feature-injection.log 2>&1 || fail "path-like feature identifier was accepted"
 ! nas-feature-control set 'aiRuntime;touch /tmp/pwned' always >>/tmp/nas-feature-injection.log 2>&1 || fail "shell-like feature identifier was accepted"
 [[ ! -e /tmp/pwned ]] || fail "feature identifier injection created an unexpected file"
-! run_as_admin "nas-setup account apply --username '../operator' --disabled" >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
-! run_as_admin "nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled" >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
+! run_as_admin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
+! run_as_admin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
 nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
@@ -609,14 +779,12 @@ wait_inactive open-webui.service
 nas-feature-control set aiRuntime off | jq -e '.ok == true' >/dev/null
 wait_inactive nas-llama-swap.service
 
-nas-feature-control set aiRuntime on-demand | jq -e '.ok == true' >/dev/null
-nas-feature-control set aiWorkspace on-demand | jq -e '.ok == true' >/dev/null
+set_feature_modes '{"aiRuntime":"on-demand","aiWorkspace":"on-demand"}'
 nas-feature-control wake aiWorkspace | jq -e '.ok == true' >/dev/null
 wait_active nas-llama-swap.service
 wait_active open-webui.service
 wait_http http://127.0.0.1:9380/health
-nas-feature-control set aiWorkspace off >/dev/null
-nas-feature-control set aiRuntime off >/dev/null
+set_feature_modes '{"aiRuntime":"off","aiWorkspace":"off"}'
 wait_inactive open-webui.service
 wait_inactive nas-llama-swap.service
 pass "Open WebUI and llama-swap start, stop, and wake correctly"
@@ -685,7 +853,7 @@ find /run/current-system/sw/share/cockpit /nix/store -maxdepth 8 -path '*nas*doc
 pass "supporting services and Cockpit plugin assets are present"
 
 log "Secret stop/reactivation transaction"
-run_as_admin "nas-secrets stop"
+run_as_admin nas-secrets stop
 wait_inactive caddy.service
 wait_inactive copyparty.service
 wait_inactive authentik.service
@@ -698,7 +866,7 @@ wait_active caddy.service
 wait_active copyparty.service
 wait_active authentik.service
 
-! run_as_admin "printf '%s\\n' wrong-password | nas-secrets activate-stdin" \
+! printf '%s\n' wrong-password | run_as_admin nas-secrets activate-stdin \
   >/tmp/nas-secrets-wrong-active.log 2>&1 || fail "wrong password was accepted while active"
 systemctl is-active --quiet nas-protected-services.target
 [[ -f /run/nas-secrets/ready ]]

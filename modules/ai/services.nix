@@ -70,10 +70,14 @@ in
           StateDirectoryMode = "0750";
           UMask = "0007";
         };
+        path = [ pkgs.coreutils pkgs.diffutils ];
         script = ''
           set -euo pipefail
           install -d -m 0750 -o nas-ai -g nas-ai ${lib.escapeShellArg stateDir}
-          if [[ ! -e ${lib.escapeShellArg "${stateDir}/config.yaml"} ]]; then
+          if [[ -L ${lib.escapeShellArg "${stateDir}/config.yaml"} ]]; then
+            echo "Refusing symlinked llama-swap configuration" >&2
+            exit 1
+          elif [[ ! -e ${lib.escapeShellArg "${stateDir}/config.yaml"} ]]; then
             if [[ -e ${lib.escapeShellArg "${legacyStateDir}/llama-swap.json"} ]]; then
               install -m 0640 -o nas-ai -g nas-ai \
                 ${lib.escapeShellArg "${legacyStateDir}/llama-swap.json"} \
@@ -82,7 +86,16 @@ in
               install -m 0640 -o nas-ai -g nas-ai \
                 ${defaultConfig} ${lib.escapeShellArg "${stateDir}/config.yaml"}
             fi
-          elif cmp -s ${legacyDefaultConfig} ${lib.escapeShellArg "${stateDir}/config.yaml"}; then
+          elif [[ ! -f ${lib.escapeShellArg "${stateDir}/config.yaml"} ]]; then
+            echo "Refusing non-regular llama-swap configuration" >&2
+            exit 1
+          else
+            # The service must be able to read an existing administrator-edited
+            # file after a restore or an older generation created it as root.
+            chown nas-ai:nas-ai ${lib.escapeShellArg "${stateDir}/config.yaml"}
+            chmod 0640 ${lib.escapeShellArg "${stateDir}/config.yaml"}
+          fi
+          if cmp -s ${legacyDefaultConfig} ${lib.escapeShellArg "${stateDir}/config.yaml"}; then
             # Migrate only the untouched prior default; never rewrite administrator-owned
             # llama-swap configuration just to add the coding-agent client credential.
             install -m 0640 -o nas-ai -g nas-ai \

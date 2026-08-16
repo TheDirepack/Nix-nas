@@ -421,8 +421,13 @@ def build_report(*, deep: bool = False) -> dict[str, Any]:
 
 def _human(payload: Mapping[str, Any]) -> str:
     summary = payload.get("summary", {})
+    if not isinstance(summary, Mapping):
+        summary = {}
+    checks = payload.get("checks", [])
+    if not isinstance(checks, list):
+        checks = []
     lines = [
-        f"NAS doctor: {payload['status']}",
+        f"NAS doctor: {payload.get('status', 'unknown')}",
         (
             "Checks: "
             f"{summary.get('ok', 0)} ok, "
@@ -431,8 +436,13 @@ def _human(payload: Mapping[str, Any]) -> str:
             f"{summary.get('info', 0)} info"
         ),
     ]
-    for check in payload["checks"]:
-        line = f"[{str(check['status']).upper():13}] {check['id']}: {check['summary']}"
+    for check in checks:
+        if not isinstance(check, Mapping):
+            continue
+        line = (
+            f"[{str(check.get('status', 'unknown')).upper():13}] "
+            f"{check.get('id', 'unknown')}: {check.get('summary', '')}"
+        )
         if check.get("detail"):
             line += f" — {check['detail']}"
         lines.append(line)

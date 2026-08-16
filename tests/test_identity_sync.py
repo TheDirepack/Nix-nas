@@ -262,16 +262,68 @@ class IdentitySyncTests(unittest.TestCase):
         )
 
     def test_bootstrap_runtime_token_requires_deployed_role(self):
-        with mock.patch.object(
-            sync,
-            "authentik_list",
-            side_effect=[
-                [{"pk": 42, "username": sync.AUTOMATION_USER}],
-                [],
-            ],
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_AUTOMATION_ROLE_WAIT_SECONDS": "0"}),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=[
+                    [{"pk": 42, "username": sync.AUTOMATION_USER}],
+                    [],
+                ],
+            ),
         ):
             with self.assertRaisesRegex(sync.SyncError, "automation role is missing"):
                 sync.provision_runtime_token("bootstrap")
+
+    def test_bootstrap_runtime_token_waits_for_async_blueprint_role(self):
+        roles = [[], [{"pk": "role-pk", "name": sync.AUTOMATION_ROLE}]]
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_AUTOMATION_ROLE_WAIT_SECONDS": "1"}),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=lambda _token, path: (
+                    [{"pk": 42, "username": sync.AUTOMATION_USER}]
+                    if path.startswith("core/users/")
+                    else roles.pop(0)
+                    if path.startswith("rbac/roles/")
+                    else []
+                ),
+            ),
+            mock.patch.object(sync, "authentik_request", return_value={}),
+            mock.patch.object(sync, "_retry_delay", return_value=0.01),
+            mock.patch.object(sync.time, "sleep"),
+            mock.patch.object(sync.secrets, "token_urlsafe", return_value="scoped-runtime-token-value"),
+        ):
+            result = sync.provision_runtime_token("bootstrap")
+        self.assertEqual(result["role"], sync.AUTOMATION_ROLE)
+
+    def test_bootstrap_runtime_token_default_wait_covers_slow_blueprint_discovery(self):
+        roles = [[], [], [{"pk": "role-pk", "name": sync.AUTOMATION_ROLE}]]
+
+        def listing(_token, path):
+            if path.startswith("core/users/"):
+                return [{"pk": 42, "username": sync.AUTOMATION_USER}]
+            if path.startswith("rbac/roles/"):
+                return roles.pop(0)
+            if path.startswith("core/tokens/"):
+                return []
+            raise AssertionError(path)
+
+        with (
+            mock.patch.dict(sync.os.environ, {}, clear=False),
+            mock.patch.object(sync, "authentik_list", side_effect=listing),
+            mock.patch.object(sync, "authentik_request", return_value={}),
+            mock.patch.object(sync, "_retry_delay", return_value=0.0),
+            mock.patch.object(sync.time, "monotonic", side_effect=[0.0, 0.0, 0.0, 120.0, 120.0]),
+            mock.patch.object(sync.time, "sleep"),
+            mock.patch.object(sync.secrets, "token_urlsafe", return_value="scoped-runtime-token-value"),
+        ):
+            sync.os.environ.pop("NAS_AUTOMATION_ROLE_WAIT_SECONDS", None)
+            result = sync.provision_runtime_token("bootstrap")
+
+        self.assertEqual(result["role"], sync.AUTOMATION_ROLE)
 
     def test_disabled_syncthing_returns_reconciliation_shape(self):
         with mock.patch.object(sync, "SYNCTHING_ENABLED", False):
@@ -823,6 +875,16 @@ class IdentitySyncTests(unittest.TestCase):
             self.assertEqual(sync.main(), 0)
         token.assert_called_once_with()
         self.assertEqual(apply.call_args.args[0], "runtime-token")
+
+    def test_read_only_status_cli_does_not_wait_for_mutation_lock(self):
+        with (
+            mock.patch.object(sync.sys, "argv", ["nas-identity-sync", "status"]),
+            mock.patch.object(sync, "authentik_token", return_value="runtime-token"),
+            mock.patch.object(sync, "load_model", return_value=mock.sentinel.model),
+            mock.patch.object(sync, "model_status", return_value={"ok": True}),
+            mock.patch.object(sync, "acquire_lock", side_effect=AssertionError("read-only status locked")),
+        ):
+            self.assertEqual(sync.main(), 0)
 
 
 if __name__ == "__main__":

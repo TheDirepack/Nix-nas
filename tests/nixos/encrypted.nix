@@ -1,5 +1,10 @@
 { pkgs, self, copyparty }:
 
+let
+  timeoutBudget = builtins.fromJSON (builtins.readFile ../vm/timeout-budget.json);
+  outerKillAfter = timeoutBudget.timeouts.killAfter;
+in
+
 pkgs.testers.runNixOSTest {
   name = "nixos-nas-encrypted-zfs";
 
@@ -33,6 +38,6 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
-    machine.succeed("timeout 1800 nas-vm-encrypted-guest-test /dev/vdb")
+    machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.encryptedGuest}s nas-vm-encrypted-guest-test /dev/vdb")
   '';
 }

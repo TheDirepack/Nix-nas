@@ -19,6 +19,15 @@ Playwright operating-system packages installed by `playwright install-deps` are 
 
 `cockpit/dist` is keyed by the package lock, package metadata, build script, Cockpit source files, runner operating system, Node major, and `CI_CACHE_SCHEMA`. A hit can skip compilation, but it cannot skip qualification. The workflow always verifies `cockpit/dist` with `node cockpit/build.js --check` before uploading the artifact.
 
+## Verified source archive reuse
+
+The build caches the source-only archive by the exact commit SHA after the
+untrusted package round-trip, manifest verification, and reference evaluation
+have passed. A later run for the same SHA still checks the ZIP and extracted
+`MANIFEST.sha256`, but skips re-running the package producer and reference
+evaluation. This is an immutable input cache, not a pass marker: a different
+commit always misses and must execute the full producer path.
+
 ## Main coverage baseline data
 
 Pull-request coverage comparison checks out the exact main-branch revision. Before measuring an uncached baseline, `scripts/prepare-coverage-baseline.py` targets exactly four known stale assertions or values in test-only fixtures. It alters no production source and ignores no test failures. The full fast baseline test run must pass before CI compares coverage.
@@ -43,16 +52,30 @@ Nix derivation and virtual machine outputs use Nix content addressing and the in
 
 ## Nix store bundles
 
-The full QEMU VM system closure contains thousands of store paths; fetching them individually through the Magic Nix Cache trips GitHub's per-path cache rate limit and can force a from-source build of the entire system. The `build` job therefore exports the base NixOS core plus each top-level application as one archived NAR stream per bundle (`scripts/vm-bundles.sh save`), and each bundle is cached as a single GitHub Actions entry keyed by its application name, flake output hash, and `CI_CACHE_SCHEMA`.
+The full QEMU VM system closure contains thousands of store paths; fetching them individually through the Magic Nix Cache trips GitHub's per-path cache rate limit and can force a from-source build of the entire system. The `build` job resolves the six bundle keys and restores the core plus optional application bundles and the configuration-sensitive VM-driver delta before importing those archives (`scripts/vm-bundles.sh import`). It starts Magic Nix Cache only after that import, so the incremental cache tracks the configuration-specific outputs without rescanning or re-uploading the large bundle contents. The ordinary NixOS closure builds then assemble the small configuration delta from the imported package roots.
 
-The `integration` job restores the same bundles and re-imports them (`scripts/vm-bundles.sh import`) before running the VM tests, so only the small system-configuration delta is fetched or built. An unchanged application keeps its exact cache key and reuses the previous bundle; only changed applications produce new entries. Bundles are immutable store closures only. They never stand in for a qualification pass, and the integration job always builds and runs both VM checks.
+The producer restores only archives already in the cache and exports only the
+missing archives once (`scripts/vm-bundles.sh save-missing`). If all six exact
+keys hit, it skips that export and the large `vm-bundle-handoff` upload. Each
+integration VM restores the same exact cache keys directly. If any key misses,
+the producer uploads the complete verified handoff for the current run and the
+matrix downloads that handoff; it never re-exports or rebuilds a bundle for its
+matrix entry. A separate cache-persistence job saves only the archives that
+were cache misses, so the next workflow run can restore them without delaying
+the current VM matrix. The core archive contains boot, recovery, unlock,
+primary-access, and deterministic-test packages. Identity, observability,
+storage add-ons, and AI remain separate application archives, while
+`vm-drivers` contains only the configuration-sensitive test-driver delta.
+Bundles are immutable store closures only. They never stand in for a
+qualification pass, and the integration job always builds and runs both VM
+checks.
 
 ## Pipeline ordering
 
 1. Pre-build source/static/security/Caddy/dependency/coverage qualification.
-2. On one runner, the `build` job sequentially materializes and verifies Cockpit (compiling it on a cache miss), round-trips the source archive, and builds the NixOS closures.
-3. Downstream browser and KVM/QEMU integration jobs test the built artifacts.
+2. On one runner, the `build` job sequentially materializes and verifies Cockpit (compiling it on a cache miss), reuses or round-trips the source archive, builds the NixOS closures, and exports only missing VM bundles.
+3. Downstream browser and KVM/QEMU integration jobs test the built artifacts; the independent cache-persistence job stores any newly created bundle archives for future runs. Complete bundle-cache hits use the caches directly and skip the handoff upload.
 4. Install/reboot the official ISO and run final-system deterministic browser/security checks.
-5. Only after deterministic qualification passes, run slow source/property/browser and live ZAP fuzzing.
+5. Only after deterministic qualification passes, run slow source/property/browser and live ZAP fuzzing locally, one suite at a time, and retain the resulting evidence with the merge qualification.
 
 Slow browser qualification repeats the deterministic XSS/layout/formatting/accessibility corpus before hostile-input fuzzing. Final-VM fuzzing runs the full deterministic authenticated and unauthenticated Playwright suite before ZAP.

@@ -5,10 +5,17 @@ import fc from "fast-check";
 import {
   enabledLinkKeys,
   featureMap,
+  featureOperationsBusy,
+  featureRuntimeText,
+  featureUnitState,
   inactiveServiceCount,
   mib,
+  operationBusy,
+  operationConflicts,
   revisionModel,
   safeInternalPath,
+  setupModel,
+  visibleOperations,
 } from "../../cockpit/src/view-model.js";
 
 const jsonScalar = fc.oneof(
@@ -41,6 +48,7 @@ test("safeInternalPath accepts only same-origin root-relative control-free strin
         assert.equal(typeof accepted, "string");
         assert.ok(accepted.startsWith("/"));
         assert.ok(!accepted.startsWith("//"));
+        assert.ok(!accepted.includes("\\"));
         assert.ok(
           ![...accepted].some((character) => {
             const code = character.charCodeAt(0);
@@ -51,7 +59,7 @@ test("safeInternalPath accepts only same-origin root-relative control-free strin
     ),
     {
       numRuns: 1500,
-      examples: [["//example.invalid/path"], ["/safe/path"], ["/bad\npath"], ["javascript:alert(1)"]],
+      examples: [["//example.invalid/path"], ["/safe/path"], ["/\\evil.example/path"], ["/bad\npath"], ["javascript:alert(1)"]],
     },
   );
 });
@@ -129,5 +137,28 @@ test("mib never throws and only emits strings for arbitrary numbers", () => {
       assert.equal(typeof mib(value), "string");
     }),
     {numRuns: 1000},
+  );
+});
+
+test("all backend view-model helpers remain total for hostile JSON", () => {
+  fc.assert(
+    fc.property(
+      shallowJson,
+      fc.string({maxLength: 64}),
+      (value, actionId) => {
+        assert.doesNotThrow(() => featureMap(value));
+        assert.doesNotThrow(() => setupModel(value));
+        assert.doesNotThrow(() => featureUnitState(value));
+        assert.doesNotThrow(() => featureRuntimeText(value));
+        assert.doesNotThrow(() => operationConflicts(value, actionId));
+        assert.doesNotThrow(() => operationBusy(value, actionId));
+        assert.doesNotThrow(() => featureOperationsBusy(value));
+        assert.doesNotThrow(() => visibleOperations(value));
+        assert.doesNotThrow(() => enabledLinkKeys(value));
+        assert.doesNotThrow(() => inactiveServiceCount(value));
+        assert.doesNotThrow(() => revisionModel(value));
+      },
+    ),
+    {numRuns: 1200},
   );
 });

@@ -3,6 +3,7 @@
 let
   inherit (nasInternal)
     authentikPort
+    authentikOutpostPort
     caddyForwardAuth
     caddyCapabilityAuth
     caddyOnDemandAuth
@@ -59,11 +60,12 @@ in
 
       @authentikOutpost path /outpost.goauthentik.io/*
       handle @authentikOutpost {
-        uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
-        reverse_proxy 127.0.0.1:${toString authentikPort} {
+        reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+          ${lib.optionalString (authentikOutpostPort == authentikPort) ''uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io''}
           header_up Host {http.request.host}
           header_up X-Forwarded-Proto https
           header_up X-Forwarded-For {remote_host}
+          header_down Location "^http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}(.*)$" "https://${lanHost}${cfg.identity.authentikPath}$1"
         }
       }
       redir ${authentikPathNoSlash} ${cfg.identity.authentikPath}
@@ -283,7 +285,7 @@ in
         route {
           ${caddyForwardAuth}
           ${caddyCapabilityAuth "syncthing"}
-          redir ${cfg.identity.authentikPath}if/flow/nas-user-settings/
+          redir * ${cfg.identity.authentikPath}if/flow/nas-user-settings/
         }
       }
       redir /settings ${cfg.identity.authentikPath}if/user/
@@ -318,6 +320,8 @@ in
             ${vaultwardenProxy}
           }
           handle {
+            ${caddyForwardAuth}
+            ${caddyCapabilityAuth "vault"}
             ${vaultwardenProxy}
           }
         }
@@ -350,7 +354,11 @@ in
           ${caddyForwardAuth}
           root * ${nasPortalStatic}/share/nas-portal
           rewrite * /index.html
-          templates
+          templates {
+            # The portal template is immutable, but its service links are a
+            # runtime projection owned by nas-managed-service.
+            root /
+          }
           file_server
         }
       }

@@ -97,9 +97,12 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn(
             "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]", workflow
         )
-        self.assertIn("needs: [build, browser]", workflow)
-        self.assertIn("needs: [integration, build]", workflow)
-        self.assertIn("needs: [integration, installer]", workflow)
+        browser_block = workflow.split("  browser:\n", 1)[1].split("  integration:\n", 1)[0]
+        integration_block = workflow.split("  integration:\n", 1)[1].split("  installer:\n", 1)[0]
+        self.assertIn("needs: [build, test]", browser_block)
+        self.assertIn("needs: [build]", integration_block)
+        self.assertIn("needs: [integration, browser, build]", workflow)
+        self.assertIn("needs: [integration, browser, installer]", workflow)
 
         build_pos = workflow.index("  build:\n")
         build_block = workflow.split("  build:\n", 1)[1].split("  browser:\n", 1)[0]
@@ -112,11 +115,26 @@ class Alpha20CockpitContracts(unittest.TestCase):
         )
         self.assertLess(
             build_block.index("Package and verify as an untrusted consumer"),
-            build_block.index("Build testable systems"),
+            build_block.index("Build missing testable systems"),
         )
         self.assertLess(build_pos, integration_pos)
         self.assertLess(integration_pos, installer_pos)
         self.assertLess(installer_pos, fuzz_pos)
+
+    def test_ci_parallelizes_independent_qemu_qualifications(self) -> None:
+        workflow = text(".github/workflows/ci.yml")
+        integration = workflow.split("  integration:\n", 1)[1].split("  installer:\n", 1)[0]
+        self.assertIn("name: Post-build full-stack QEMU integration (${{ matrix.vm }})", integration)
+        self.assertIn("needs: [build]", integration)
+        self.assertIn("fail-fast: false", integration)
+        self.assertIn("max-parallel: 2", integration)
+        self.assertIn("vm: unencrypted", integration)
+        self.assertIn("check: nas-vm", integration)
+        self.assertIn("vm: encrypted", integration)
+        self.assertIn("check: nas-vm-encrypted", integration)
+        self.assertIn('nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L', integration)
+        self.assertNotIn("Run unencrypted NixOS VM integration tests", integration)
+        self.assertNotIn("Run encrypted NixOS VM integration tests", integration)
 
     def test_release_ci_runs_official_installer_and_final_vm_security(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -131,7 +149,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
         self.assertIn("Final VM deterministic layout/accessibility/security checks", workflow)
         self.assertIn("Retain active ZAP evidence", workflow)
-        self.assertIn("checks.x86_64-linux.nas-vm", workflow)
+        self.assertIn("check: nas-vm", workflow)
+        self.assertIn("check: nas-vm-encrypted", workflow)
 
     def test_fast_ci_excludes_generated_fuzz_and_slow_ci_parallelizes_it(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -144,13 +163,18 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("max-parallel: 6", workflow)
         self.assertIn("fail-fast: false", workflow)
-        self.assertIn("shard: [boundaries, properties, stateful, security, javascript, executable-contracts]", workflow)
+        self.assertIn(
+            "shard: [boundaries, custom-inputs, properties, stateful, security, javascript, executable-contracts]",
+            workflow,
+        )
         self.assertIn("timeout-minutes: 240", workflow)
         self.assertIn("test-tier == 'full'", workflow)
         self.assertIn("test-tier == 'installer'", workflow)
         fuzz_block = workflow.split("  source-fuzz:\n", 1)[1].split("  installed-command-fuzz:\n", 1)[0]
-        self.assertIn("needs: [integration, installer]", fuzz_block)
-        self.assertIn("github.event_name == 'pull_request'", fuzz_block)
+        self.assertIn("needs: [integration, browser, installer]", fuzz_block)
+        self.assertIn("needs.browser.result == 'success'", fuzz_block)
+        self.assertIn("github.event_name == 'schedule'", fuzz_block)
+        self.assertNotIn("github.event_name == 'pull_request'", fuzz_block)
         self.assertIn("source-fuzz-${{ matrix.shard }}-evidence", fuzz_block)
         self.assertIn('./scripts/run-fuzz.py --suite "${{ matrix.shard }}" --jobs 1', fuzz_block)
         self.assertNotIn("browser-fuzz:", workflow)
@@ -185,6 +209,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("~/.cache/nixos-nas-qemu/*.iso", workflow)
         self.assertIn("prepare-coverage-baseline.py .", workflow)
         self.assertIn("hashFiles('scripts/prepare-coverage-baseline.py')", workflow)
+        coverage_block = workflow.split("  coverage-diff:\n", 1)[1].split("  build:\n", 1)[0]
+        self.assertNotIn("magic-nix-cache-action", coverage_block)
         for phrase in (
             "Dependency caches",
             "Cockpit distribution cache",

@@ -350,6 +350,7 @@ def ensure_groups(token: str) -> dict[str, Any]:
 AUTOMATION_ROLE = "NAS automation"
 AUTOMATION_USER = "nas-automation"
 AUTOMATION_TOKEN_IDENTIFIER = "nas-automation-api"
+DEFAULT_AUTOMATION_ROLE_WAIT_SECONDS = 600.0
 
 
 def provision_runtime_token(token: str) -> dict[str, Any]:
@@ -372,8 +373,28 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
     if not isinstance(user_pk, int):
         raise SyncError("Authentik automation service account has no numeric primary key")
 
-    roles = authentik_list(token, f"rbac/roles/?name={urllib.parse.quote(AUTOMATION_ROLE)}")
-    role = next((item for item in roles if item.get("name") == AUTOMATION_ROLE), None)
+    role: Mapping[str, Any] | None = None
+    role_wait = max(
+        float(
+            os.environ.get(
+                "NAS_AUTOMATION_ROLE_WAIT_SECONDS",
+                str(DEFAULT_AUTOMATION_ROLE_WAIT_SECONDS),
+            )
+        ),
+        0.0,
+    )
+    deadline = time.monotonic() + role_wait
+    attempt = 0
+    while role is None:
+        attempt += 1
+        roles = authentik_list(token, f"rbac/roles/?name={urllib.parse.quote(AUTOMATION_ROLE)}")
+        candidate = next((item for item in roles if item.get("name") == AUTOMATION_ROLE), None)
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("pk"), str):
+            role = candidate
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(min(_retry_delay(attempt), max(deadline - time.monotonic(), 0.0)))
     if not isinstance(role, Mapping) or not isinstance(role.get("pk"), str):
         raise SyncError("Authentik NAS automation role is missing; verify blueprint deployment")
     authentik_request(token, f"rbac/roles/{role['pk']}/add_user/", method="POST", body={"pk": user_pk})
@@ -1060,6 +1081,27 @@ def identity_mutation_operation(action: str):
         raise SyncError(str(exc)) from exc
 
 
+READ_ONLY_COMMANDS = frozenset(
+    {
+        "capabilities",
+        "export-account",
+        "plan-accounts",
+        "status",
+        "status-fixture",
+        "verify-token",
+    }
+)
+
+
+@contextlib.contextmanager
+def identity_command_lock(command: str):
+    if command in READ_ONLY_COMMANDS:
+        yield
+        return
+    with acquire_lock():
+        yield
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1092,7 +1134,7 @@ def main() -> int:
             if args.command in mutating
             else contextlib.nullcontext()
         )
-        with operation, acquire_lock():
+        with operation, identity_command_lock(args.command):
             if args.command == "bootstrap":
                 result = ensure_groups(authentik_token(bootstrap=True))
             elif args.command == "bootstrap-runtime-token":

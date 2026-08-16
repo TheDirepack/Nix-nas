@@ -94,6 +94,7 @@ REQUIRED_FILES = {
     "tests/test_cli_surfaces.py",
     "tests/test_fuzz_architecture.py",
     "tests/test_fuzz_boundaries.py",
+    "tests/test_fuzz_custom_inputs.py",
     "tests/test_maintainer_scripts.py",
     "tests/test_script_inventory.py",
     "tests/test_security_surface.py",
@@ -105,6 +106,10 @@ REQUIRED_FILES = {
     "tests/js-fuzz/package-lock.json",
     "tests/js-fuzz/frontend-properties.test.mjs",
     "scripts/qemu-test.sh",
+    "scripts/vm-pytest.sh",
+    "scripts/vm-start.sh",
+    "scripts/vm-stop.sh",
+    "scripts/vm-reset.sh",
     "scripts/validate-repository-data.py",
     "scripts/validate-doc-links.py",
     "scripts/validate-python-syntax.py",
@@ -145,6 +150,9 @@ REQUIRED_FILES = {
     "tests/nixos/encrypted.nix",
     "tests/vm/guest-test.sh",
     "tests/vm/encrypted-guest-test.sh",
+    "tests/vm/full-suite.sh",
+    "tests/vm/timeout-budget.json",
+    "tests/vm/timeout-budget.sh",
     ".github/workflows/ci.yml",
 }
 

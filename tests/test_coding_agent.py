@@ -150,7 +150,10 @@ class CodingAgentTests(unittest.TestCase):
         internal = (ROOT / "modules" / "ai" / "internal.nix").read_text(encoding="utf-8")
         services = (ROOT / "modules" / "ai" / "services.nix").read_text(encoding="utf-8")
         self.assertIn("globalTTL: ${toString cfg.llamaSwap.globalTtl}", internal)
-        self.assertIn("elif cmp -s ${legacyDefaultConfig}", services)
+        self.assertIn("if cmp -s ${legacyDefaultConfig}", services)
+        self.assertIn("path = [ pkgs.coreutils pkgs.diffutils ];", services)
+        self.assertIn("chown nas-ai:nas-ai", services)
+        self.assertIn("Refusing symlinked llama-swap configuration", services)
 
     def test_workspace_validation_rejects_missing_and_file_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

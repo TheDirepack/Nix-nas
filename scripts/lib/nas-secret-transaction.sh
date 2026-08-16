@@ -25,7 +25,10 @@ nas_secret_tx_parent_is_physical() {
   local value=$1 parent lexical physical
   parent="$(dirname -- "$value")" || return 1
   lexical="$(realpath -m -s -- "$parent")" || return 1
-  physical="$(realpath -e -- "$parent")" || return 1
+  # The physical resolution must observe the same filesystem the privileged swap
+  # will operate on. Transaction and runtime trees live under root-owned 0700
+  # directories, so an unprivileged caller cannot traverse them to resolve the path.
+  physical="$(nas_secret_tx_privileged realpath -e -- "$parent")" || return 1
   [[ "$lexical" == "$physical" ]]
 }
 
@@ -83,11 +86,11 @@ nas_secret_tx_validate_paths() {
       printf 'nas-secret-transaction: refusing filesystem root as transaction directory\n' >&2
       return 1
     }
-    [[ -d "$directory" && ! -L "$directory" ]] || {
+    if ! nas_secret_tx_privileged test -d "$directory" || nas_secret_tx_privileged test -L "$directory"; then
       printf 'nas-secret-transaction: transaction directory must be a real directory: %s\n' "$directory" >&2
       return 1
-    }
-    physical_directory="$(realpath -e -- "$directory")" || {
+    fi
+    physical_directory="$(nas_secret_tx_privileged realpath -e -- "$directory")" || {
       printf 'nas-secret-transaction: transaction directory cannot be resolved safely: %s\n' "$directory" >&2
       return 1
     }

@@ -11,6 +11,7 @@ let
         || lib.hasSuffix ".pyc" name
       );
   };
+  authentikProxy = pkgs.authentik-outposts.proxy;
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
     runtimeInputs = with pkgs; [
@@ -33,8 +34,13 @@ let
       systemd
       util-linux
       zfs
+      authentikProxy
     ];
     text = ''
+      ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
+      ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
       # Cockpit production bundle, and Nix reference configurations before QEMU.
       # Keep nas-preflight exercised in the installed VM without recursively
@@ -43,6 +49,10 @@ let
       export NAS_PREFLIGHT_SKIP_TOOLING=1
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
+
+      ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
+      nas_vm_profile_install
+
       ${builtins.readFile ../vm/guest-test.sh}
     '';
   };
@@ -68,7 +78,10 @@ let
       python3
       systemd
     ];
-    text = builtins.readFile ../vm/reconfigure-system.sh;
+    text = ''
+      ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../vm/reconfigure-system.sh}
+    '';
   };
   encryptedGuestTest = pkgs.writeShellApplication {
     name = "nas-vm-encrypted-guest-test";
@@ -76,20 +89,38 @@ let
       bash
       coreutils
       gnugrep
+      jq
       keepassxc
       procps
       systemd
       util-linux
       zfs
     ];
-    text = builtins.readFile ../vm/encrypted-guest-test.sh;
+    text = ''
+      ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
+      ${builtins.readFile ../vm/timeout-budget.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
+      ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
+      nas_vm_profile_install
+      ${builtins.readFile ../vm/encrypted-guest-test.sh}
+    '';
   };
 in
 {
   networking.hostName = lib.mkForce "nas-test";
   networking.hostId = lib.mkForce "c1a05eed";
   networking.useDHCP = lib.mkDefault true;
+  # Browser checks use the same public hostname as the Authentik provider. Keep
+  # that name resolvable inside the isolated guest without depending on a host
+  # DNS service or a physical NIC.
+  networking.extraHosts = "127.0.0.1 nas-test.local";
   boot.supportedFilesystems = [ "zfs" ];
+
+  # The NixOS test kernel does not expose the per-service cgroup pressure file
+  # that systemd 260 otherwise tries to bind into copyparty's private mount
+  # namespace. The production service keeps its normal host accounting policy.
+  systemd.services.copyparty.serviceConfig.MemoryPressureWatch = lib.mkForce "off";
 
   users.users.admin.extraGroups = lib.mkAfter [ "wheel" ];
   security.sudo.wheelNeedsPassword = lib.mkForce false;
@@ -102,9 +133,16 @@ in
 
   nas = {
     installationReady = lib.mkForce true;
+    identity.authentikOutpostPort = lib.mkForce 9010;
     testing.installationReadyFixture = true;
     configurationDir = lib.mkForce "/var/lib/nas-test/repo";
-    adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "!"));
+    # The guest suite creates its first-run plan here; keep the installed
+    # Cockpit status source aligned with the plan used by the test.
+    firstStart.configFile = "/var/lib/nas-test/setup/first-run.json";
+    # The browser qualification logs into Cockpit through its direct PAM
+    # recovery listener. Keep this credential scoped to the disposable VM
+    # fixture; production configurations must provide their own root-only hash.
+    adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$Hsg1F2Cw2J25Jj9ZMzgEC8uiPgOS.DP/A8Pi28n.oXWw.CuB529luz/tBoCaxVXkuP6NqDmqUUUf5scB1/7jU1"));
     zfsImportAtBoot = lib.mkForce false;
     zfsEncryption.enable = lib.mkDefault false;
     autoUpdate.enable = lib.mkForce false;

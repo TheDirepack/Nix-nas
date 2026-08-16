@@ -26,9 +26,10 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/nix-config-matrix.sh
 
-Evaluate flake metadata, exported NixOS modules, every supported reference
-configuration, and the intentionally invalid assertion fixtures. This command
-instantiates derivations for evaluation but does not build their closures.
+Evaluate flake metadata and exported NixOS modules, verify the operator hardware
+placeholder remains intentionally non-bootable, and run the intentionally invalid
+assertion fixtures. Complete supported reference configurations and VM check
+outputs are evaluated once by scripts/evaluate-reference-configurations.sh.
 USAGE
 }
 
@@ -56,6 +57,15 @@ evaluate_flake_surface() {
   printf 'Nix flake metadata and module exports evaluated successfully\n'
 }
 
+verify_reference_evaluator_ownership() {
+  local configuration evaluator="$ROOT/scripts/evaluate-reference-configurations.sh"
+  for configuration in "${CONFIGURATIONS[@]}"; do
+    grep -Fq -- "$configuration" "$evaluator" || \
+      die "reference evaluator does not own supported configuration: $configuration"
+  done
+  printf 'Reference configuration evaluation is delegated to the dedicated evaluator\n'
+}
+
 verify_placeholder_is_not_bootable() {
   local log=$1 expected
 
@@ -72,17 +82,6 @@ verify_placeholder_is_not_bootable() {
   done
 
   printf 'Nix operator hardware placeholder remains intentionally non-bootable\n'
-}
-
-evaluate_configuration() {
-  local configuration=$1 drv_path
-
-  drv_path="$(nix eval --raw --no-write-lock-file \
-    "$FLAKE_REF#nixosConfigurations.$configuration.config.system.build.toplevel.drvPath")"
-  [[ $drv_path == /nix/store/*.drv ]] || {
-    die "configuration $configuration returned an invalid derivation path: $drv_path"
-  }
-  printf 'Nix configuration evaluation ok: %s (%s)\n' "$configuration" "$drv_path"
 }
 
 main() {
@@ -103,13 +102,8 @@ main() {
   trap cleanup EXIT
 
   evaluate_flake_surface
+  verify_reference_evaluator_ownership
   verify_placeholder_is_not_bootable "$TEMPORARY_DIRECTORY/operator-placeholder.log"
-
-  local configuration
-  for configuration in "${CONFIGURATIONS[@]}"; do
-    evaluate_configuration "$configuration"
-  done
-
   "$ROOT/scripts/nix-negative-tests.sh"
 }
 

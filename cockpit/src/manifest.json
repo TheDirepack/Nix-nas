@@ -8,12 +8,9 @@
       "label": "NAS Overview",
       "order": 20,
       "keywords": [
-        "NAS",
-        "ZFS",
-        "accounts",
-        "AI",
-        "backup",
-        "updates"
+        {
+          "matches": ["nas", "zfs", "accounts", "ai", "backup", "updates"]
+        }
       ]
     },
     "documentation": {
@@ -21,12 +18,9 @@
       "order": 21,
       "path": "docs/index.html",
       "keywords": [
-        "documentation",
-        "help",
-        "configuration",
-        "copyparty",
-        "syncthing",
-        "recovery"
+        {
+          "matches": ["documentation", "help", "configuration", "copyparty", "syncthing", "recovery"]
+        }
       ]
     }
   },

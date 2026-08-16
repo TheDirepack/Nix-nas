@@ -207,11 +207,27 @@ let
         exit 1
       fi
       sudo systemctl stop nas-protected-services.target
+      zfs_retry() {
+        local label=$1
+        shift
+        local attempt output
+        for attempt in $(seq 1 120); do
+          if output="$(sudo ${pkgs.zfs}/bin/zfs "$@" 2>&1)"; then
+            return 0
+          fi
+          if [[ "$attempt" -eq 120 ]]; then
+            printf '%s\n' "$output" >&2
+            echo "Timed out waiting to $label for $dataset after protected services stopped." >&2
+            return 1
+          fi
+          sleep 1
+        done
+      }
       if [[ "$(${pkgs.zfs}/bin/zfs get -H -o value mounted "$dataset")" == "yes" ]]; then
-        sudo ${pkgs.zfs}/bin/zfs unmount "$dataset"
+        zfs_retry unmount unmount "$dataset"
       fi
       if [[ "$(${pkgs.zfs}/bin/zfs get -H -o value keystatus "$dataset")" == "available" ]]; then
-        sudo ${pkgs.zfs}/bin/zfs unload-key -r "$dataset"
+        zfs_retry unload-key unload-key -r "$dataset"
       fi
       sudo rm -f -- ${lib.escapeShellArg zfsKeyPath}
       echo "ZFS dataset unmounted and key unloaded. Run nas-secrets activate to unlock it again."
@@ -252,7 +268,7 @@ let
         exit 1
       fi
 
-      key="$($secret_reader show-zfs-key)" || {
+      key="$($secret_reader show-zfs-key-stdin)" || {
         echo "The KeePassXC ZFS key is missing. Run nas-secrets init first." >&2
         exit 1
       }
@@ -349,7 +365,11 @@ let
         echo "Run this as ${cfg.adminUser}; the KeePassXC database password will be requested interactively." >&2
         exit 1
       }
-      key="$(${nasSecrets}/bin/nas-secrets show-zfs-key)" || {
+      if [[ -t 0 ]]; then
+        key="$(${nasSecrets}/bin/nas-secrets show-zfs-key)"
+      else
+        key="$(${nasSecrets}/bin/nas-secrets show-zfs-key-stdin)"
+      fi || {
         echo "The KeePassXC ZFS key is missing." >&2
         exit 1
       }
@@ -357,7 +377,7 @@ let
       tmp="$(mktemp)"
       trap 'rm -f -- "$tmp"; unset key' EXIT
       chmod 0600 "$tmp"
-      printf '%s\n' "$key" > "$tmp"
+      printf '%s' "$key" > "$tmp"
       sudo install -m 0400 -o root -g root "$tmp" "$output"
       echo "Wrote a root-only recovery key to $output. Store it offline and test it before relying on encryption."
     '';

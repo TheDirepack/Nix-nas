@@ -13,19 +13,20 @@ SCRIPT = ROOT / "scripts" / "vm-bundles.sh"
 
 EXPECTED_BUNDLES = [
     "core",
-    "copyparty",
-    "caddy",
     "identity",
     "observability",
     "storage",
     "ai",
-    "test-browser",
-    "test-tools",
+    "vm-drivers",
 ]
 
 FAKE_NIX = """\
 #!/usr/bin/env bash
 set -eu
+if [[ ${NIX_STORE:-} == nix-store ]]; then
+  echo "NIX_STORE was overwritten by the bundle helper" >&2
+  exit 91
+fi
 printf '%s\\n' "$*" >> "$NAS_TEST_NIX_LOG"
 case "$1" in
   eval)
@@ -44,8 +45,18 @@ case "$1" in
     for path in "$@"; do
       printf '%s\\n' "$path"
       case "$path" in
-        */core) ;;
-        *) printf '%s\\n' /nix/store/aaaaaaaaaa-core ;;
+      *-nas-vm-driver|*-nas-vm-encrypted-driver)
+        printf '%s\\n' /nix/store/aaaaaaaaaa-driver-shared
+        printf '%s\\n' /nix/store/aaaaaaaaaa-identity
+        ;;
+      *-core) ;;
+      *-vm-drivers)
+        printf '%s\\n' /nix/store/aaaaaaaaaa-core
+        printf '%s\\n' /nix/store/aaaaaaaaaa-identity
+        ;;
+      *)
+        printf '%s\\n' /nix/store/aaaaaaaaaa-core
+        ;;
       esac
     done
     ;;
@@ -102,7 +113,7 @@ class VmBundleScriptTests(unittest.TestCase):
         env["NAS_TEST_NIX_STORE_LOG"] = str(nix_store_log)
         return env, nix_log, nix_store_log
 
-    def test_list_lists_core_first_then_each_application(self) -> None:
+    def test_list_lists_core_before_applications_and_driver_delta(self) -> None:
         result = self._run("list")
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         self.assertEqual(result.stdout.splitlines(), EXPECTED_BUNDLES)
@@ -136,13 +147,17 @@ class VmBundleScriptTests(unittest.TestCase):
         lines = result.stdout.splitlines()
         self.assertEqual(len(lines), len(EXPECTED_BUNDLES))
         for name in EXPECTED_BUNDLES:
-            expected_hash = "aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa" if name == "test-tools" else "aaaaaaaaaa"
+            expected_hash = {
+                "core": "aaaaaaaaaa",
+                "vm-drivers": "aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa",
+            }.get(name, "aaaaaaaaaa-aaaaaaaaaa")
             expected = f"key_{name.replace('-', '_')}={expected_hash}"
             self.assertIn(expected, lines)
             self.assertEqual((out_dir / f"{name}.key").read_text(encoding="utf-8").strip(), expected_hash)
 
-    def test_test_tools_key_tracks_both_exact_nixos_test_drivers(self) -> None:
+    def test_vm_drivers_key_tracks_core_and_both_exact_nixos_test_drivers(self) -> None:
         env, nix_log, _ = self._fake_environment()
+        env["NIX_STORE"] = "/nix/store"
         result = self._run("keys", env=env)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         calls = nix_log.read_text(encoding="utf-8").splitlines()
@@ -154,9 +169,42 @@ class VmBundleScriptTests(unittest.TestCase):
             "eval --raw .#checks.x86_64-linux.nas-vm-encrypted.driver.outPath",
             calls,
         )
-        self.assertIn("key_test_tools=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
+        self.assertIn("key_vm_drivers=aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa-aaaaaaaaaa", result.stdout.splitlines())
 
-    def test_save_exports_core_first_then_each_application_delta(self) -> None:
+    def test_build_builds_every_bundle_root_including_both_drivers(self) -> None:
+        env, nix_log, _ = self._fake_environment()
+        result = self._run("build", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertEqual(
+            nix_log.read_text(encoding="utf-8").splitlines(),
+            [
+                "build --no-link -L "
+                ".#packages.x86_64-linux.core "
+                ".#packages.x86_64-linux.identity "
+                ".#packages.x86_64-linux.observability "
+                ".#packages.x86_64-linux.storage "
+                ".#packages.x86_64-linux.ai "
+                ".#packages.x86_64-linux.vm-drivers "
+                ".#checks.x86_64-linux.nas-vm.driver "
+                ".#checks.x86_64-linux.nas-vm-encrypted.driver",
+            ],
+        )
+
+    def test_build_accepts_a_selected_bundle_root(self) -> None:
+        env, nix_log, _ = self._fake_environment()
+        result = self._run("build", "vm-drivers", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertEqual(
+            nix_log.read_text(encoding="utf-8").splitlines(),
+            [
+                "build --no-link -L "
+                ".#packages.x86_64-linux.vm-drivers "
+                ".#checks.x86_64-linux.nas-vm.driver "
+                ".#checks.x86_64-linux.nas-vm-encrypted.driver",
+            ],
+        )
+
+    def test_save_batches_build_then_exports_core_app_deltas_and_driver_delta(self) -> None:
         env, nix_log, nix_store_log = self._fake_environment()
         out_dir = self._root / "bundles"
         result = self._run("save", str(out_dir), env=env)
@@ -168,46 +216,125 @@ class VmBundleScriptTests(unittest.TestCase):
 
         with gzip.open(out_dir / "core.nar.gz", "rb") as stream:
             self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-core\n")
-        with gzip.open(out_dir / "copyparty.nar.gz", "rb") as stream:
-            self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-copyparty\n")
+        with gzip.open(out_dir / "identity.nar.gz", "rb") as stream:
+            self.assertEqual(stream.read().decode(), "NAR:/nix/store/aaaaaaaaaa-identity\n")
+        self.assertTrue((out_dir / "vm-drivers.nar.gz").is_file())
+        manifest = (out_dir / "bundle-manifest.tsv").read_text(encoding="utf-8")
+        self.assertIn("vm-drivers\t/nix/store/aaaaaaaaaa-nas-vm-driver", manifest)
+        self.assertIn("identity\t/nix/store/aaaaaaaaaa-identity", manifest)
+        self.assertNotIn("vm-drivers\t/nix/store/aaaaaaaaaa-identity", manifest)
+        self.assertTrue((out_dir / "bundle-handoff.sha256").is_file())
+        for name in EXPECTED_BUNDLES:
+            self.assertTrue((out_dir / f"{name}.paths").is_file(), name)
+        verified = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
 
         nix_calls = nix_log.read_text(encoding="utf-8").splitlines()
-        for name in EXPECTED_BUNDLES:
-            if name == "test-tools":
-                continue
-            self.assertIn(f"build --no-link .#packages.x86_64-linux.{name}", nix_calls)
-
-        test_tools_build = (
-            "build --no-link .#packages.x86_64-linux.test-tools "
-            ".#checks.x86_64-linux.nas-vm.driver "
-            ".#checks.x86_64-linux.nas-vm-encrypted.driver"
+        build_calls = [call for call in nix_calls if call.startswith("build --no-link ")]
+        expected_build = "build --no-link -L " + " ".join(
+            [f".#packages.x86_64-linux.{name}" for name in EXPECTED_BUNDLES]
+            + [
+                ".#checks.x86_64-linux.nas-vm.driver",
+                ".#checks.x86_64-linux.nas-vm-encrypted.driver",
+            ]
         )
-        self.assertIn(test_tools_build, nix_calls)
+        self.assertEqual(build_calls, [expected_build])
         self.assertIn(
-            "path-info -r /nix/store/aaaaaaaaaa-test-tools "
+            "path-info -r /nix/store/aaaaaaaaaa-vm-drivers "
             "/nix/store/aaaaaaaaaa-nas-vm-driver "
             "/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver",
             nix_calls,
         )
-
-        first_build = nix_calls.index("build --no-link .#packages.x86_64-linux.core")
-        self.assertLess(
-            first_build,
-            nix_calls.index("build --no-link .#packages.x86_64-linux.copyparty"),
+        self.assertEqual(
+            len([call for call in nix_calls if call.startswith("path-info -r ")]),
+            len(EXPECTED_BUNDLES),
+            "each bundle closure should be enumerated once per export",
         )
+
         store_calls = nix_store_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len([c for c in store_calls if c.startswith("--export")]), len(EXPECTED_BUNDLES))
         driver_export = next(c for c in store_calls if c.startswith("--export") and "nas-vm-driver" in c)
         self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-driver", driver_export)
         self.assertIn("/nix/store/aaaaaaaaaa-nas-vm-encrypted-driver", driver_export)
-        self.assertIn("/nix/store/aaaaaaaaaa-test-tools", driver_export)
+        self.assertIn("/nix/store/aaaaaaaaaa-vm-drivers", driver_export)
+        self.assertNotIn("/nix/store/aaaaaaaaaa-identity", driver_export)
         self.assertNotIn("/nix/store/aaaaaaaaaa-core", driver_export)
 
-    def test_import_restores_core_first(self) -> None:
+    def test_verify_rejects_duplicate_manifest_paths(self) -> None:
+        env, _, _ = self._fake_environment()
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        (out_dir / "bundle-manifest.tsv").write_text(
+            "core\t/nix/store/shared\nvm-drivers\t/nix/store/shared\n", encoding="utf-8"
+        )
+        result = self._run("verify", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate", result.stderr)
+
+    def test_verify_handoff_rejects_missing_and_corrupt_archives(self) -> None:
+        env, _, _ = self._fake_environment()
+        out_dir = self._root / "handoff"
+        out_dir.mkdir()
+        for name in EXPECTED_BUNDLES:
+            (out_dir / f"{name}.nar.gz").write_bytes(f"archive-{name}\n".encode())
+        (out_dir / "bundle-manifest.tsv").write_text(
+            "".join(f"{name}\t/nix/store/{name}\n" for name in EXPECTED_BUNDLES), encoding="utf-8"
+        )
+        files = [out_dir / f"{name}.nar.gz" for name in EXPECTED_BUNDLES] + [out_dir / "bundle-manifest.tsv"]
+        checksums = subprocess.run(
+            ["sha256sum", *(str(path.name) for path in files)],
+            cwd=out_dir,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        (out_dir / "bundle-handoff.sha256").write_text(checksums.stdout, encoding="utf-8")
+        result = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        (out_dir / "vm-drivers.nar.gz").unlink()
+        result = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("archive is missing", result.stderr)
+
+        (out_dir / "vm-drivers.nar.gz").write_bytes(b"restored-but-corrupt\n")
+        result = self._run("verify-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum validation failed", result.stderr)
+
+    def test_verify_partial_handoff_accepts_only_missing_archives(self) -> None:
+        env, _, _ = self._fake_environment()
+        out_dir = self._root / "partial-handoff"
+        out_dir.mkdir()
+        (out_dir / "vm-drivers.nar.gz").write_bytes(b"driver-archive\n")
+        (out_dir / "bundle-manifest.tsv").write_text("vm-drivers\t/nix/store/driver\n", encoding="utf-8")
+        checksums = subprocess.run(
+            ["sha256sum", "vm-drivers.nar.gz", "bundle-manifest.tsv"],
+            cwd=out_dir,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        (out_dir / "bundle-handoff.partial.sha256").write_text(checksums.stdout, encoding="utf-8")
+
+        result = self._run("verify-partial-handoff", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        (out_dir / "vm-drivers.nar.gz").write_bytes(b"corrupt\n")
+        result = self._run("verify-partial-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum validation failed", result.stderr)
+
+        (out_dir / "vm-drivers.nar.gz").unlink()
+        result = self._run("verify-partial-handoff", str(out_dir), env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("contains no archives", result.stderr)
+
+    def test_import_restores_core_before_application_and_driver_deltas(self) -> None:
         env, _, nix_store_log = self._fake_environment()
         in_dir = self._root / "bundles"
         in_dir.mkdir()
-        for name in ("core", "copyparty", "identity"):
+        for name in EXPECTED_BUNDLES:
             with gzip.open(in_dir / f"{name}.nar.gz", "wb") as stream:
                 stream.write(f"NAR:/nix/store/aaaaaaaaaa-{name}\n".encode())
 
@@ -222,15 +349,119 @@ class VmBundleScriptTests(unittest.TestCase):
             imports,
             [
                 "NAR:/nix/store/aaaaaaaaaa-core",
-                "NAR:/nix/store/aaaaaaaaaa-copyparty",
                 "NAR:/nix/store/aaaaaaaaaa-identity",
+                "NAR:/nix/store/aaaaaaaaaa-observability",
+                "NAR:/nix/store/aaaaaaaaaa-storage",
+                "NAR:/nix/store/aaaaaaaaaa-ai",
+                "NAR:/nix/store/aaaaaaaaaa-vm-drivers",
             ],
         )
+
+    def test_import_builds_missing_core_before_restoring_cached_deltas(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        in_dir = self._root / "bundles"
+        in_dir.mkdir()
+        with gzip.open(in_dir / "identity.nar.gz", "wb") as stream:
+            stream.write(b"NAR:/nix/store/aaaaaaaaaa-identity\n")
+
+        result = self._run("import", str(in_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("core bundle archive is unavailable", result.stderr)
+        self.assertIn(
+            "build --no-link .#packages.x86_64-linux.core",
+            nix_log.read_text(encoding="utf-8").splitlines(),
+        )
+        imports = [
+            line.removeprefix("import:")
+            for line in nix_store_log.read_text(encoding="utf-8").splitlines()
+            if line.startswith("import:")
+        ]
+        self.assertEqual(imports, ["NAR:/nix/store/aaaaaaaaaa-identity"])
 
     def test_save_requires_a_directory_argument(self) -> None:
         result = self._run("save")
         self.assertEqual(result.returncode, 1)
         self.assertIn("save requires exactly one directory", result.stderr)
+
+    def test_save_missing_preserves_existing_archives(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        with gzip.open(out_dir / "core.nar.gz", "wb") as stream:
+            stream.write(b"existing-core\n")
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        with gzip.open(out_dir / "core.nar.gz", "rb") as stream:
+            self.assertEqual(stream.read(), b"existing-core\n")
+        build_calls = [
+            call for call in nix_log.read_text(encoding="utf-8").splitlines() if call.startswith("build --no-link ")
+        ]
+        self.assertEqual(len(build_calls), 1)
+        self.assertNotIn(".#packages.x86_64-linux.core", build_calls[0])
+        exports = [
+            line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")
+        ]
+        self.assertEqual(len(exports), len(EXPECTED_BUNDLES) - 1)
+
+    def test_save_missing_can_reuse_roots_built_by_an_earlier_step(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        env["NAS_BUNDLE_SKIP_BUILD"] = "1"
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        with gzip.open(out_dir / "core.nar.gz", "wb") as stream:
+            stream.write(b"existing-core\n")
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertNotIn("build --no-link", nix_log.read_text(encoding="utf-8"))
+        self.assertEqual(
+            len(
+                [line for line in nix_store_log.read_text(encoding="utf-8").splitlines() if line.startswith("--export")]
+            ),
+            len(EXPECTED_BUNDLES) - 1,
+        )
+
+    def test_save_missing_reuses_cached_closure_manifests_for_existing_archives(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        env["NAS_BUNDLE_SKIP_BUILD"] = "1"
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        for name in EXPECTED_BUNDLES[:-1]:
+            with gzip.open(out_dir / f"{name}.nar.gz", "wb") as stream:
+                stream.write(f"existing-{name}\n".encode())
+            (out_dir / f"{name}.paths").write_text(f"/nix/store/aaaaaaaaaa-{name}\n", encoding="utf-8")
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        path_info_calls = [
+            line for line in nix_log.read_text(encoding="utf-8").splitlines() if line.startswith("path-info -r ")
+        ]
+        self.assertEqual(len(path_info_calls), 1, path_info_calls)
+        self.assertTrue((out_dir / "vm-drivers.paths").is_file())
+        self.assertTrue(
+            any(line.startswith("--export") for line in nix_store_log.read_text(encoding="utf-8").splitlines())
+        )
+
+    def test_save_missing_is_a_noop_when_every_archive_exists(self) -> None:
+        env, nix_log, nix_store_log = self._fake_environment()
+        out_dir = self._root / "bundles"
+        out_dir.mkdir()
+        for name in EXPECTED_BUNDLES:
+            with gzip.open(out_dir / f"{name}.nar.gz", "wb") as stream:
+                stream.write(f"existing-{name}\n".encode())
+        (out_dir / "bundle-manifest.tsv").write_text(
+            "".join(f"{name}\t/nix/store/existing-{name}\n" for name in EXPECTED_BUNDLES),
+            encoding="utf-8",
+        )
+
+        result = self._run("save-missing", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertFalse(nix_log.exists())
+        self.assertFalse(nix_store_log.exists())
+        for name in EXPECTED_BUNDLES:
+            with gzip.open(out_dir / f"{name}.nar.gz", "rb") as stream:
+                self.assertEqual(stream.read(), f"existing-{name}\n".encode())
 
     def test_import_requires_a_directory_argument(self) -> None:
         result = self._run("import")

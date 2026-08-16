@@ -66,7 +66,9 @@ from nas_feature_model import (
 )
 
 CATALOG_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_CATALOG", "/etc/nas-control/features.json"))
-_SCHEMA_DEFAULT = pathlib.Path(__file__).resolve().parents[1] / "schemas" / "feature-catalog.schema.json"
+_SOURCE_SCHEMA = pathlib.Path(__file__).resolve().parents[1] / "schemas" / "feature-catalog.schema.json"
+_RUNTIME_SCHEMA = pathlib.Path("/etc/nas-control/feature-catalog.schema.json")
+_SCHEMA_DEFAULT = _RUNTIME_SCHEMA if _RUNTIME_SCHEMA.is_file() else _SOURCE_SCHEMA
 SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_SCHEMA", str(_SCHEMA_DEFAULT)))
 STATE_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_STATE", "/var/lib/nas-control/settings.json"))
 JOURNAL_PATH = pathlib.Path(os.environ.get("NAS_FEATURE_JOURNAL", "/var/lib/nas-control/transaction.json"))
@@ -1236,6 +1238,8 @@ def authorize_service_scope(scope: str, headers: Any) -> bool:
     endpoint = effective.get("endpoints", {}).get(key)
     if not isinstance(endpoint, dict):
         return False
+    if endpoint.get("available") is not True:
+        return False
     auth = endpoint.get("auth") or {}
     mode = auth.get("mode", endpoint.get("access", "admin"))
     if mode == "public":
@@ -1450,23 +1454,24 @@ def main() -> int:
                 result = status(catalog, state)
             elif args.command == "apply":
                 result = apply(catalog, state, strict=False, preserve_on_demand=False)
-                result["status"] = status(catalog, state)
             elif args.command == "set":
                 result = set_mode(catalog, state, args.feature, args.mode)
-                result["status"] = status(catalog, state)
             elif args.command == "set-many":
                 result = set_modes(catalog, state, read_mode_document(args.source))
-                result["status"] = status(catalog, state)
             elif args.command == "wake":
                 result = wake_feature(catalog, state, args.feature)
-                result["status"] = status(catalog, state)
             elif args.command == "reap":
                 result = reap(catalog, state)
-                result["status"] = status(catalog, state)
             else:
                 candidate = default_state(catalog)
                 result = commit_state_transactionally(catalog, state, candidate)
-                result["status"] = status(catalog, state)
+        if args.command in {"apply", "set", "set-many", "wake", "reap", "reset"}:
+            # Status includes readiness probes and memory observations. Keep
+            # that slow, read-only report outside the mutation locks so a
+            # second legitimate feature change is not rejected while the
+            # first command is only formatting its result.
+            current_catalog = load_catalog()
+            result["status"] = status(current_catalog, load_state(current_catalog))
         print(json.dumps(result, indent=2, sort_keys=True))
         if args.command in {"apply", "reap"} and not result.get("ok", False):
             return 1

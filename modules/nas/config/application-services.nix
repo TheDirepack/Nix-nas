@@ -4,6 +4,7 @@ let
   inherit (nasInternal)
     authentikEnvironmentFile
     authentikPort
+    nasAuthentikBlueprints
     cockpitNasPlugin
     cockpitPort
     cockpitZfsPlugin
@@ -36,6 +37,9 @@ let
       backend = "file";
       file.path = "/var/lib/authentik/data";
     };
+    # Load the repository-owned NAS blueprint instead of Authentik's immutable
+    # package directory, which is not writable by the service.
+    blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";
     avatars = "initials";
     disable_update_check = true;
     disable_startup_analytics = true;
@@ -89,6 +93,13 @@ in
         AllowMultiHost = false;
       };
     };
+
+    # The NAS plugin uses Cockpit's privileged bridge for its allow-listed API.
+    # NixOS also enables pkexec, but a headless service has no authentication
+    # agent; use the wheel policy that already governs the local administrator.
+    systemd.services.cockpit.environment.COCKPIT_SUPERUSER = "sudo";
+    systemd.services.cockpit-wsinstance-http.environment.COCKPIT_SUPERUSER = "sudo";
+    systemd.services."cockpit-wsinstance-https@".environment.COCKPIT_SUPERUSER = "sudo";
 
     environment.etc."authentik/config.yml".source = authentikSettings;
     services.postgresql = {
@@ -151,7 +162,9 @@ in
 
     services.copyparty = {
       enable = true;
-      package = pkgs.copyparty;
+      package = pkgs.copyparty.overridePythonAttrs (old: {
+        dependencies = old.dependencies ++ lib.optional cfg.tftp.enable pkgs.python3Packages.partftpy;
+      });
       openFilesLimit = 8192;
       settings = {
         i = "unix:660:copyparty:/run/copyparty/http.sock";
@@ -164,7 +177,9 @@ in
         "auth-ord" = "idp";
         usernames = true;
         rproxy = 1;
-        "xff-src" = "127.0.0.1/32";
+        # NixOS's Unix-socket proxy presents to CopyParty from its dedicated
+        # loopback proxy namespace, not from 127.0.0.1 itself.
+        "xff-src" = "127.8.0.0/16";
         dedup = true;
         e2dsa = true;
         e2ts = true;
@@ -174,6 +189,10 @@ in
         "idp-store" = 3;
       } // lib.optionalAttrs cfg.tftp.enable {
         tftp = cfg.tftp.internalPort;
+        # The HTTP endpoint is intentionally Unix-socket-only. TFTP is a
+        # separate UDP listener, so bind it to loopback explicitly instead of
+        # inheriting the Unix socket and silently disabling TFTP.
+        "tftp-i" = "127.0.0.1";
         "tftp-pr" = "${toString cfg.tftp.responsePortStart}-${toString cfg.tftp.responsePortEnd}";
       };
       globalExtraConfig = ''

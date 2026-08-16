@@ -119,6 +119,7 @@ test("backend link destinations remain same-origin root-relative paths", () => {
     "//evil.invalid/",
     "https://evil.invalid/",
     "javascript:alert(1)",
+    "/\\evil.example/",
     "/ok\r\nX-Test: bad",
   ]) {
     assert.equal(safeInternalPath(value), null, String(value));

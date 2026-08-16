@@ -209,6 +209,35 @@ class CockpitApiTests(unittest.TestCase):
         path.read_text.return_value = '{"schemaVersion":2,"endpoints":{}}'
         self.assertEqual({}, api.endpoint_links(path))
 
+    def test_endpoint_links_accepts_generated_v2_registry(self):
+        path = mock.Mock()
+        path.read_text.return_value = json.dumps(
+            {
+                "schemaVersion": 2,
+                "services": {
+                    "cockpit": {
+                        "enabled": True,
+                        "endpoints": {
+                            "main": {
+                                "linkKey": "console",
+                                "exposure": {"type": "path", "value": "/console/"},
+                            }
+                        },
+                    },
+                    "disabled": {
+                        "enabled": False,
+                        "endpoints": {
+                            "main": {
+                                "linkKey": "disabled",
+                                "exposure": {"type": "path", "value": "/disabled/"},
+                            }
+                        },
+                    },
+                },
+            }
+        )
+        self.assertEqual({"console": "/console/"}, api.endpoint_links(path))
+
     def test_optional_warning_file_disappearing_is_safe(self):
         path = mock.Mock()
         path.read_text.side_effect = FileNotFoundError
@@ -919,6 +948,7 @@ class CockpitApiTests(unittest.TestCase):
                         "endpoints": {
                             "good": {"available": True, "linkKey": "good", "publicPath": "/safe/"},
                             "schemeRelative": {"available": True, "linkKey": "bad1", "publicPath": "//evil.example/"},
+                            "backslash": {"available": True, "linkKey": "bad3", "publicPath": "/\\evil.example/"},
                             "newline": {"available": True, "linkKey": "bad2", "publicPath": "/safe\nInjected"},
                         },
                     }

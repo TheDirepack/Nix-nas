@@ -12,7 +12,9 @@ import json
 import os
 import pathlib
 import re
+import subprocess
 import tempfile
+from copy import deepcopy
 from typing import Any
 
 try:
@@ -27,10 +29,12 @@ STORE_PATH = pathlib.Path(os.environ.get("NAS_MANAGED_SERVICE_STORE", "/var/lib/
 EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_EFFECTIVE_REGISTRY", "/run/nas-control/effective-endpoints.json"))
 PORTAL_PATH = pathlib.Path(os.environ.get("NAS_PORTAL_JSON", "/run/nas-control/portal.json"))
 BUILTIN_REGISTRY = pathlib.Path(os.environ.get("NAS_BUILTIN_REGISTRY", "/etc/nas-control/endpoints.json"))
+_SOURCE_SCHEMA = pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json"
+_RUNTIME_SCHEMA = pathlib.Path("/etc/nas-control/managed-service.schema.json")
 SCHEMA_PATH = pathlib.Path(
     os.environ.get(
         "NAS_MANAGED_SERVICE_SCHEMA",
-        str(pathlib.Path(__file__).resolve().parents[1] / "schemas/managed-service.schema.json"),
+        str(_RUNTIME_SCHEMA if _RUNTIME_SCHEMA.is_file() else _SOURCE_SCHEMA),
     )
 )
 
@@ -420,6 +424,51 @@ def atomic_write_store(data: dict[str, Any], path: pathlib.Path = STORE_PATH) ->
         tmp_path.unlink(missing_ok=True)
 
 
+def _builtin_endpoints(builtin: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Normalize the generated V2 registry into the endpoint projection."""
+
+    schema_version = builtin.get("schemaVersion")
+    if schema_version == 1:
+        endpoints = builtin.get("endpoints", {})
+        if not isinstance(endpoints, dict):
+            raise ManagedServiceError("Built-in endpoint registry endpoints must be an object")
+        return {key: dict(value) for key, value in endpoints.items() if isinstance(value, dict)}
+    if schema_version != SCHEMA_VERSION:
+        raise ManagedServiceError(f"Unsupported built-in registry schemaVersion {schema_version!r}")
+    services = builtin.get("services")
+    if not isinstance(services, dict):
+        raise ManagedServiceError("Built-in service registry services must be an object")
+    endpoints: dict[str, dict[str, Any]] = {}
+    for service_id, service in services.items():
+        if not isinstance(service, dict):
+            raise ManagedServiceError(f"Built-in service {service_id!r} must be an object")
+        service_endpoints = service.get("endpoints", {})
+        if not isinstance(service_endpoints, dict):
+            raise ManagedServiceError(f"Built-in service {service_id!r} endpoints must be an object")
+        for endpoint_id, endpoint in service_endpoints.items():
+            if not isinstance(endpoint, dict):
+                raise ManagedServiceError(f"Built-in endpoint {service_id}:{endpoint_id} must be an object")
+            normalized = dict(endpoint)
+            normalized["serviceId"] = service_id
+            normalized["endpointId"] = endpoint_id
+            normalized["label"] = f"{service.get('label', service_id)}: {endpoint_id}"
+            normalized["available"] = service.get("enabled") is True
+            if "publicPath" not in normalized:
+                exposure = normalized.get("exposure")
+                if isinstance(exposure, dict) and exposure.get("type") == "path":
+                    normalized["publicPath"] = exposure.get("value")
+            service_portal_value = service.get("portal")
+            service_portal: dict[str, Any] = service_portal_value if isinstance(service_portal_value, dict) else {}
+            endpoint_portal_value = endpoint.get("portal")
+            endpoint_portal: dict[str, Any] = endpoint_portal_value if isinstance(endpoint_portal_value, dict) else {}
+            normalized["portal"] = {**service_portal, **endpoint_portal}
+            link_key = endpoint.get("linkKey", normalized["portal"].get("linkKey"))
+            if link_key is not None:
+                normalized["linkKey"] = link_key
+            endpoints[f"{service_id}:{endpoint_id}"] = normalized
+    return endpoints
+
+
 def effective_registry(
     builtin_path: pathlib.Path = BUILTIN_REGISTRY, store_path: pathlib.Path = STORE_PATH
 ) -> dict[str, Any]:
@@ -429,7 +478,7 @@ def effective_registry(
         builtin = {"schemaVersion": 1, "endpoints": {}}
     store = load_store(store_path)
     builtin_endpoints: dict[str, Any] = {}
-    for eid, ep in builtin.get("endpoints", {}).items():
+    for eid, ep in _builtin_endpoints(builtin).items():
         norm = dict(ep)
         if "publicPath" in ep and "exposure" not in ep:
             norm["exposure"] = {"type": "path", "value": ep["publicPath"]}
@@ -560,6 +609,191 @@ def write_portal(
     return portal
 
 
+def _systemd_unit_is_active(unit: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _adapter_plan(service_id: str, service: dict[str, Any]) -> dict[str, Any]:
+    from nas_service_authentik import plan_authentik
+    from nas_service_firewall import plan_firewall
+
+    runtime_type = service.get("runtime", {}).get("type")
+    if runtime_type == "compose":
+        from nas_service_runtime_compose import plan_compose
+
+        runtime = plan_compose(service_id, service)
+    elif runtime_type == "quadlet":
+        from nas_service_runtime_podman import plan_podman
+
+        runtime = plan_podman(service_id, service)
+    elif runtime_type == "vm":
+        from nas_service_runtime_libvirt import plan_libvirt
+
+        runtime = plan_libvirt(service_id, service)
+    elif runtime_type in ("external", "native"):
+        runtime = {
+            "service": service_id,
+            "runtime": runtime_type,
+            "actions": [],
+            "warnings": [f"Service {service_id} delegates runtime ownership to the host"],
+        }
+    else:
+        raise ManagedServiceError(f"Unsupported runtime type {runtime_type!r}")
+    return {
+        "service": service_id,
+        "runtime": runtime,
+        "authentik": plan_authentik(service_id, service),
+        "firewall": plan_firewall(service_id, service),
+    }
+
+
+def _apply_adapters(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
+    """Apply every adapter or fail; never report a plan as an applied change."""
+
+    from nas_service_authentik import apply_authentik
+    from nas_service_firewall import apply_firewall
+
+    runtime_type = service.get("runtime", {}).get("type")
+    if runtime_type == "compose":
+        from nas_service_runtime_compose import apply_compose
+
+        runtime = apply_compose(service_id, service, dry_run=dry_run)
+    elif runtime_type == "quadlet":
+        from nas_service_runtime_podman import apply_podman
+
+        runtime = apply_podman(service_id, service, dry_run=dry_run)
+    elif runtime_type == "vm":
+        from nas_service_runtime_libvirt import apply_libvirt
+
+        runtime = apply_libvirt(service_id, service, dry_run=dry_run)
+    elif runtime_type in ("external", "native"):
+        runtime = {"service": service_id, "runtime": runtime_type, "actions": []}
+    else:
+        raise ManagedServiceError(f"Unsupported runtime type {runtime_type!r}")
+    return {
+        "service": service_id,
+        "runtime": runtime,
+        "authentik": apply_authentik(service_id, service, dry_run=dry_run),
+        "firewall": apply_firewall(service_id, service, dry_run=dry_run),
+    }
+
+
+def _remove_adapters(service_id: str, service: dict[str, Any], *, dry_run: bool = False) -> None:
+    from nas_service_authentik import remove_authentik
+    from nas_service_firewall import remove_firewall
+
+    runtime_type = service.get("runtime", {}).get("type")
+    if runtime_type == "compose":
+        from nas_service_runtime_compose import remove_compose
+
+        remove_compose(service_id, service, dry_run=dry_run)
+    elif runtime_type == "quadlet":
+        from nas_service_runtime_podman import remove_podman
+
+        remove_podman(service_id, dry_run=dry_run)
+    elif runtime_type == "vm":
+        from nas_service_runtime_libvirt import remove_libvirt
+
+        remove_libvirt(service_id, dry_run=dry_run)
+    elif runtime_type not in ("external", "native"):
+        raise ManagedServiceError(f"Unsupported runtime type {runtime_type!r}")
+    remove_authentik(service_id, dry_run=dry_run)
+    remove_firewall(service_id, service, dry_run=dry_run)
+
+
+def _reconcile_runtime() -> dict[str, Any]:
+    effective = write_effective()
+    portal = write_portal()
+    import nas_service_caddy
+
+    nas_service_caddy.write_caddy_fragment(
+        effective=effective,
+        reload_caddy=_systemd_unit_is_active("caddy"),
+    )
+    return {"effective": effective, "portal": portal}
+
+
+def _read_json_input(path: pathlib.Path | None) -> dict[str, Any]:
+    if path is None or str(path) == "-":
+        import sys
+
+        raw = sys.stdin.read()
+    else:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ManagedServiceError(f"Unable to read service input {path}: {exc}") from exc
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ManagedServiceError(f"Service input is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ManagedServiceError("Service input must be an object")
+    return value
+
+
+def _service_from_input(service_id: str | None, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    if service_id:
+        service = payload.get("service", payload)
+        if not isinstance(service, dict):
+            raise ManagedServiceError("Service input must contain an object")
+        return _validate_service_id(service_id), service
+    services = payload.get("services")
+    if isinstance(services, dict) and len(services) == 1:
+        sid, service = next(iter(services.items()))
+        if isinstance(sid, str) and isinstance(service, dict):
+            return _validate_service_id(sid), service
+    sid = payload.get("serviceId")
+    service = payload.get("service")
+    if isinstance(sid, str) and isinstance(service, dict):
+        return _validate_service_id(sid), service
+    raise ManagedServiceError("Service input must include serviceId and service")
+
+
+def _mutate_service(command: str, service_id: str, service: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    validate_service(service_id, service)
+    store = load_store()
+    services = dict(store.get("services", {}))
+    previous = deepcopy(services.get(service_id))
+    if command == "create" and previous is not None:
+        raise ManagedServiceError(f"Service {service_id!r} already exists")
+    if command == "update" and previous is None:
+        raise ManagedServiceError(f"Service {service_id!r} does not exist")
+    if dry_run:
+        return _adapter_plan(service_id, service)
+    services[service_id] = service
+    candidate = {**store, "services": services}
+    atomic_write_store(candidate)
+    try:
+        result = _apply_adapters(service_id, service)
+        result["projection"] = _reconcile_runtime()
+        return result
+    except Exception as exc:
+        rollback = {**store, "services": services}
+        if previous is None:
+            rollback["services"].pop(service_id, None)
+        else:
+            rollback["services"][service_id] = previous
+        atomic_write_store(rollback)
+        try:
+            _reconcile_runtime()
+        except Exception:
+            pass
+        if isinstance(exc, ManagedServiceError):
+            raise
+        raise ManagedServiceError(f"Unable to apply service {service_id}: {exc}") from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
@@ -571,30 +805,93 @@ def main(argv: list[str] | None = None) -> int:
     show = sub.add_parser("show", help="Show effective registry")
     show.add_argument("--json", action="store_true")
     for cmd in ("plan", "create", "update", "delete", "start", "stop", "restart", "adopt", "export", "import"):
-        sub.add_parser(cmd, help=f"Managed-service {cmd} (not yet implemented)")
+        command = sub.add_parser(cmd, help=f"Managed-service {cmd}")
+        command.add_argument("service_id", nargs="?")
+        command.add_argument("--input", type=pathlib.Path, help="JSON service definition; '-' reads stdin")
+        command.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.command in (
-            "plan",
-            "create",
-            "update",
-            "delete",
-            "start",
-            "stop",
-            "restart",
-            "adopt",
-            "export",
-            "import",
-        ):
+        if args.command == "plan":
+            if args.service_id and not args.input:
+                service = load_store().get("services", {}).get(args.service_id)
+                if not isinstance(service, dict):
+                    raise ManagedServiceError(f"Service {args.service_id!r} does not exist")
+                service_id = _validate_service_id(args.service_id)
+            elif args.input:
+                service_id, service = _service_from_input(args.service_id, _read_json_input(args.input))
+            else:
+                store = load_store()
+                print(
+                    json.dumps(
+                        {sid: _adapter_plan(sid, service) for sid, service in store.get("services", {}).items()},
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            print(json.dumps(_adapter_plan(service_id, service), indent=2, sort_keys=True))
+            return 0
+        if args.command in ("create", "update", "adopt", "import"):
+            payload = _read_json_input(args.input)
+            service_id, service = _service_from_input(args.service_id, payload)
+            if args.command == "adopt":
+                if service_id in load_store().get("services", {}):
+                    raise ManagedServiceError(f"Service {service_id!r} already exists")
+                args.command = "create"
+            if args.command == "import":
+                args.command = "update" if service_id in load_store().get("services", {}) else "create"
             print(
-                f"nas-managed-service: {args.command} is not yet implemented (runtime adapters pending)",
-                file=sys.stderr,
+                json.dumps(
+                    _mutate_service(args.command, service_id, service, dry_run=args.dry_run), indent=2, sort_keys=True
+                )
             )
-            return 2
+            return 0
+        if args.command == "delete":
+            if not args.service_id:
+                raise ManagedServiceError("delete requires service_id")
+            store = load_store()
+            service = store.get("services", {}).get(args.service_id)
+            if not isinstance(service, dict):
+                raise ManagedServiceError(f"Service {args.service_id!r} does not exist")
+            if args.dry_run:
+                _remove_adapters(args.service_id, service, dry_run=True)
+                print(json.dumps({"service": args.service_id, "deleted": True}, indent=2))
+                return 0
+            _remove_adapters(args.service_id, service)
+            services = dict(store.get("services", {}))
+            del services[args.service_id]
+            atomic_write_store({**store, "services": services})
+            print(
+                json.dumps({"service": args.service_id, "deleted": True, "projection": _reconcile_runtime()}, indent=2)
+            )
+            return 0
+        if args.command in ("start", "stop", "restart"):
+            if not args.service_id:
+                raise ManagedServiceError(f"{args.command} requires service_id")
+            service = load_store().get("services", {}).get(args.service_id)
+            if not isinstance(service, dict):
+                raise ManagedServiceError(f"Service {args.service_id!r} does not exist")
+            desired = deepcopy(service)
+            desired["enabled"] = args.command != "stop"
+            result = _apply_adapters(args.service_id, desired, dry_run=args.dry_run)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        if args.command == "export":
+            if not args.service_id:
+                raise ManagedServiceError("export requires service_id")
+            service = load_store().get("services", {}).get(args.service_id)
+            if not isinstance(service, dict):
+                raise ManagedServiceError(f"Service {args.service_id!r} does not exist")
+            print(
+                json.dumps(
+                    {"schemaVersion": SCHEMA_VERSION, "serviceId": args.service_id, "service": service},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
         if args.command == "reconcile":
-            effective = write_effective()
-            portal = write_portal()
-            print(json.dumps({"effective": effective, "portal": portal}, indent=2))
+            print(json.dumps(_reconcile_runtime(), indent=2))
             return 0
         elif args.command == "validate":
             load_store()

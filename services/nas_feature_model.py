@@ -89,7 +89,7 @@ def normalize_catalog(
     top_fields, feature_fields, probe_fields, memory_fields = contract
     reject_unknown_fields(catalog, top_fields, "Feature catalog")
     schema = catalog.get("schemaVersion")
-    if schema not in {1, 2}:
+    if type(schema) is not int or schema not in {1, 2}:
         raise FeatureError("Unsupported feature catalog schema")
     features = catalog.get("features")
     if not isinstance(features, dict) or not features:
@@ -99,21 +99,22 @@ def normalize_catalog(
             raise FeatureError("Malformed feature catalog entry")
         reject_unknown_fields(entry, feature_fields, f"Feature {feature_id}")
         parent = entry.get("parent")
-        if parent is not None and parent not in features:
+        if parent is not None and (not isinstance(parent, str) or parent not in features):
             raise FeatureError(f"Feature {feature_id} references unknown parent {parent}")
         allowed = entry_allowed_modes(entry)
         if not allowed or any(mode not in VALID_MODES for mode in allowed) or "off" not in allowed:
             raise FeatureError(f"Feature {feature_id} has invalid allowedModes")
         if entry_default_mode(entry) not in allowed:
             raise FeatureError(f"Feature {feature_id} default mode is not allowed")
-        if "on-demand" in allowed and int(entry.get("idleSeconds", 0)) <= 0:
+        idle_seconds = entry.get("idleSeconds", 0)
+        if "on-demand" in allowed and (type(idle_seconds) is not int or idle_seconds <= 0):
             raise FeatureError(f"Feature {feature_id} requires a positive idleSeconds value")
         for field in ("startUnits", "stopUnits"):
             units = entry.get(field, [])
             if not isinstance(units, list) or not all(isinstance(unit, str) and unit for unit in units):
                 raise FeatureError(f"Feature {feature_id} has invalid {field}")
         ports = entry.get("activePorts", [])
-        if not isinstance(ports, list) or not all(isinstance(port, int) and 0 < port < 65536 for port in ports):
+        if not isinstance(ports, list) or not all(type(port) is int and 0 < port < 65536 for port in ports):
             raise FeatureError(f"Feature {feature_id} has invalid activePorts")
         health_urls = entry.get("healthUrls", [])
         health_url = entry.get("healthUrl")
@@ -132,7 +133,14 @@ def normalize_catalog(
                 raise FeatureError(f"Feature {feature_id} has invalid availabilityProbe")
             reject_unknown_fields(probe, probe_fields, f"Feature {feature_id} availabilityProbe")
             probe_type = probe.get("type")
-            if probe_type not in {"path", "device-any", "executable", "systemd-unit", "tcp", "http"}:
+            if not isinstance(probe_type, str) or probe_type not in {
+                "path",
+                "device-any",
+                "executable",
+                "systemd-unit",
+                "tcp",
+                "http",
+            }:
                 raise FeatureError(f"Feature {feature_id} has unsupported availability probe type")
             if probe_type in {"path", "executable"}:
                 path = probe.get("path")
@@ -152,7 +160,12 @@ def normalize_catalog(
             elif probe_type == "tcp":
                 host = probe.get("host", "127.0.0.1")
                 port = probe.get("port")
-                if host not in {"127.0.0.1", "localhost", "::1"} or not isinstance(port, int) or not 0 < port < 65536:
+                if (
+                    not isinstance(host, str)
+                    or host not in {"127.0.0.1", "localhost", "::1"}
+                    or type(port) is not int
+                    or not 0 < port < 65536
+                ):
                     raise FeatureError(f"Feature {feature_id} TCP probe must target a loopback port")
             elif probe_type == "http":
                 if not valid_loopback_http_url(probe.get("url")):
@@ -166,7 +179,7 @@ def normalize_catalog(
             raise FeatureError(f"Memory component {index} is not an object")
         reject_unknown_fields(component, memory_fields, f"Memory component {index}")
         feature = component.get("feature")
-        if feature is not None and feature not in features:
+        if feature is not None and (not isinstance(feature, str) or feature not in features):
             raise FeatureError(f"Memory component {index} references unknown feature {feature}")
         units = component.get("units", [])
         if not isinstance(units, list) or not all(isinstance(unit, str) and unit for unit in units):

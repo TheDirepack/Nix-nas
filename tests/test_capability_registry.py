@@ -21,10 +21,14 @@ class CapabilityRegistryTests(unittest.TestCase):
     def test_generated_registry_is_exported_and_schema_backed(self) -> None:
         internal = text("modules/nas/internal/default.nix")
         system = text("modules/nas/config/system.nix")
+        registry = text("modules/nas/internal/service-registry.nix")
         validator = text("scripts/validate-repository-data.py")
         self.assertIn("common // core_registry", internal)
         self.assertIn('"nas-control/capabilities.json"', system)
         self.assertIn('"nas-control/capability-registry.schema.json"', system)
+        self.assertIn('"nas-control/endpoints.json".text = builtins.toJSON nasInternal.serviceRegistryV2', system)
+        self.assertIn("serviceRegistryV2 =", registry)
+        self.assertIn("services = registry", registry)
         self.assertIn('"schemas/capability-registry.schema.json"', validator)
 
     def test_caddy_capabilities_fail_closed(self) -> None:
@@ -32,6 +36,29 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertIn("Unknown NAS capability referenced by a Caddy route", caddy)
         self.assertIn("lib.attrByPath", caddy)
         self.assertNotIn("nas_allow_files", caddy)
+
+    def test_caddy_gate_uses_trusted_authentik_identity(self) -> None:
+        caddy = text("modules/nas/internal/caddy-helpers.nix")
+        for expected in (
+            "request_header Remote-User {http.request.header.X-Authentik-Username}",
+            "request_header Remote-Groups {http.request.header.X-Authentik-Groups}",
+            "request_header Remote-Name {http.request.header.X-Authentik-Name}",
+            "request_header Remote-Email {http.request.header.X-Authentik-Email}",
+            "request_header Remote-UID {http.request.header.X-Authentik-Uid}",
+            "header_up Remote-User {http.request.header.X-Authentik-Username}",
+            "header_up Remote-Groups {http.request.header.X-Authentik-Groups}",
+            "header_up Remote-Name {http.request.header.X-Authentik-Name}",
+            "header_up Remote-Email {http.request.header.X-Authentik-Email}",
+            "header_up Remote-UID {http.request.header.X-Authentik-Uid}",
+        ):
+            self.assertIn(expected, caddy)
+        self.assertIn("not header X-Authentik-Username *", caddy)
+        self.assertIn(
+            "copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements",
+            caddy,
+        )
+        self.assertNotIn("not header Remote-User *", caddy)
+        self.assertNotIn("X-Authentik-Groups>Remote-Groups", caddy)
 
     def test_runtime_loader_accepts_a_generated_shape(self) -> None:
         value = {

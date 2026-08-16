@@ -7,7 +7,6 @@ let
     cfg
     copypartyMountRoot
     copypartyUserConfigDir
-    nasAuthentikBlueprints
     featureCatalog
     lanHost
     llamaCppPackage
@@ -38,6 +37,7 @@ let
     [/shares]
       ${copypartyMountRoot}
       accs:
+        r: @nas_allow_files
         A: @nas_admin
 
     [/shares/users/''${u%+nas_allow_files}]
@@ -51,9 +51,9 @@ let
     [/shares/admin/copyparty-config]
       ${copypartyUserConfigDir}
       accs:
-        A: @nas_admin
+      A: @nas_admin
       flags:
-        noidx
+        noidx: .*
         nohtml
 
     ${lib.optionalString cfg.tftp.enable ''
@@ -63,7 +63,7 @@ let
         # CopyParty evaluates TFTP as anonymous `*`.
         ${if cfg.tftp.writable then "rw" else "r"}: *
       flags:
-        noidx
+        noidx: .*
         nohtml
         no-readme
         no-logues
@@ -132,8 +132,6 @@ in
       "f /run/lock/nas-update.lock 0660 root wheel -"
       "f /run/lock/nas-secrets.lock 0660 root wheel -"
       "f /run/lock/nas-identity-sync.lock 0660 root wheel -"
-      "d /blueprints 0755 root root -"
-      "L+ /blueprints/nas-user-settings.yaml - - - - ${nasAuthentikBlueprints}/share/authentik/blueprints/nas-user-settings.yaml"
     ];
 
     environment.etc."nas-control/capabilities.json".text = builtins.toJSON capabilityRegistryDocument;

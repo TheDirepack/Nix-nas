@@ -88,6 +88,8 @@ FEATURE_MODES = {"off", "on-demand", "always"}
 ZFS_TOPOLOGIES = {"single", "stripe", "mirror", "raidz1", "raidz2", "raidz3"}
 COMMAND_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("NAS_SETUP_COMMAND_TIMEOUT_SECONDS", "900")))
 COMMAND_MAX_OUTPUT_BYTES = max(4096, int(os.environ.get("NAS_SETUP_COMMAND_MAX_OUTPUT_BYTES", str(256 * 1024))))
+FEATURE_STATUS_ATTEMPTS = max(1, int(os.environ.get("NAS_FEATURE_STATUS_ATTEMPTS", "20")))
+FEATURE_STATUS_RETRY_SECONDS = max(0.05, float(os.environ.get("NAS_FEATURE_STATUS_RETRY_SECONDS", "0.25")))
 
 
 def progress(message: str) -> None:
@@ -508,10 +510,18 @@ def provision_share_directories(accounts: Sequence[Mapping[str, Any]]) -> list[s
 
 
 def apply_features(features: Mapping[str, str]) -> dict[str, str]:
-    run_root(
-        coordinated_child(["nas-feature-control", "set-many", "-"]),
-        input_text=json.dumps(dict(features), sort_keys=True) + "\n",
-    )
+    # Feature modes are policy, not credentials. A temporary document keeps
+    # diagnostics from being redacted as protected stdin while retaining a
+    # private, one-shot handoff to the privileged controller.
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(json.dumps(dict(features), sort_keys=True) + "\n")
+        handle.flush()
+        os.fchmod(handle.fileno(), 0o600)
+        source = pathlib.Path(handle.name)
+    try:
+        run_root(coordinated_child(["nas-feature-control", "set-many", str(source)]))
+    finally:
+        source.unlink(missing_ok=True)
     return dict(features)
 
 
@@ -519,7 +529,10 @@ def write_state(report: Mapping[str, Any]) -> None:
     safe_report = json.loads(json.dumps(report))
     safe_report.pop("password", None)
     payload = json.dumps(safe_report, indent=2, sort_keys=True) + "\n"
-    run_root(["install", "-d", "-m", "0750", "-o", "root", "-g", "wheel", str(STATE_PATH.parent)])
+    # The administrator-owned setup process must be able to resume and finish
+    # its journal after this state write. Keep the directory's wheel-group
+    # write bit aligned with the declared first-run authority policy.
+    run_root(["install", "-d", "-m", "0770", "-o", "root", "-g", "wheel", str(STATE_PATH.parent)])
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(payload)
         temp_path = pathlib.Path(handle.name)
@@ -751,28 +764,43 @@ def preflight_ready(_result: Any = None) -> bool:
 
 
 def feature_policy_ready(features: Mapping[str, str]) -> bool:
-    completed = run_root_noninteractive(["nas-feature-control", "status"], check=False)
-    if completed.returncode != 0:
+    value: Any = None
+    for attempt in range(FEATURE_STATUS_ATTEMPTS):
+        completed = run_root_noninteractive(["nas-feature-control", "status"], check=False)
+        if completed.returncode == 0:
+            try:
+                value = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                return False
+            break
+        if attempt + 1 < FEATURE_STATUS_ATTEMPTS:
+            time.sleep(FEATURE_STATUS_RETRY_SECONDS)
+    if not isinstance(value, Mapping):
         return False
-    try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return False
-    rows = value.get("features", []) if isinstance(value, Mapping) else []
+    rows = value.get("features", [])
     by_id = {row.get("id"): row for row in rows if isinstance(row, Mapping)}
     return all(by_id.get(feature, {}).get("requestedMode") == mode for feature, mode in features.items())
 
 
 def share_directories_ready(accounts: Sequence[Mapping[str, Any]]) -> bool:
+    def directory_is_safe(path: pathlib.Path) -> bool:
+        if os.geteuid() == 0:
+            try:
+                mode = path.lstat().st_mode
+            except FileNotFoundError:
+                return False
+            return stat.S_ISDIR(mode) and not stat.S_ISLNK(mode)
+        completed = run_root_noninteractive(["stat", "-c", "%F", str(path)], check=False)
+        return completed.returncode == 0 and completed.stdout.strip() == "directory"
+
     for account in accounts:
-        if not bool(account.get("active", True)) or GUEST_GROUP in account.get("groups", []):
+        groups = set(account.get("groups", []))
+        if not bool(account.get("active", True)) or not (
+            ADMIN_GROUP in groups or CAPABILITY_GROUPS["files"][0] in groups
+        ):
             continue
         path = SHARE_ROOT / "users" / str(account["username"])
-        try:
-            mode = path.lstat().st_mode
-        except FileNotFoundError:
-            return False
-        if not stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
+        if not directory_is_safe(path):
             return False
     return True
 
@@ -1564,10 +1592,10 @@ def main() -> int:
         elif args.command == "account" and args.account_command == "apply":
             if args.password_stdin and args.set_password:
                 raise SetupError("Choose only one of --set-password or --password-stdin")
-            with acquire_operation("account-apply", ("identity", "runtime")):
+            with acquire_operation("account-apply", ("identity", "runtime"), blocking=True):
                 result = one_account(args)
         elif args.command == "account" and args.account_command == "disable":
-            with acquire_operation("account-disable", ("identity", "runtime")):
+            with acquire_operation("account-disable", ("identity", "runtime"), blocking=True):
                 result = disable_account(args)
         else:
             result = status_report()

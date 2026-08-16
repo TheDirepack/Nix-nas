@@ -4,12 +4,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import ssl
 import stat
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException, WebDriverException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -18,10 +25,18 @@ from selenium.webdriver.support.ui import WebDriverWait
 class RouteExpectation:
     path: str
     allowed: bool
+    allowed_redirect_prefix: str | None = None
 
 
 def browser() -> webdriver.Chrome:
+    from selenium.webdriver.chrome.service import Service
+
     options = webdriver.ChromeOptions()
+    chromium = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+    chromedriver = shutil.which("chromedriver")
+    if not chromium or not chromedriver:
+        raise RuntimeError("The VM browser suite requires packaged chromium and chromedriver binaries")
+    options.binary_location = chromium
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
     for argument in [
         "--headless=new",
@@ -31,28 +46,67 @@ def browser() -> webdriver.Chrome:
         "--window-size=1280,900",
     ]:
         options.add_argument(argument)
-    return webdriver.Chrome(options=options)
+    return webdriver.Chrome(service=Service(executable_path=chromedriver), options=options)
+
+
+def search_roots(driver: webdriver.Chrome) -> Iterator[Any]:
+    roots: list[Any] = [driver]
+    for root in roots:
+        yield root
+        try:
+            children = root.find_elements(By.CSS_SELECTOR, "*")
+        except WebDriverException:
+            continue
+        for child in children:
+            try:
+                shadow_root = child.shadow_root
+            except WebDriverException:
+                continue
+            roots.append(shadow_root)
 
 
 def first(driver: webdriver.Chrome, selectors: list[str]) -> Any:
-    for selector in selectors:
-        try:
-            element = driver.find_element(By.CSS_SELECTOR, selector)
-            if element.is_displayed():
-                return element
-        except NoSuchElementException:
-            pass
+    for root in search_roots(driver):
+        for selector in selectors:
+            try:
+                element = root.find_element(By.CSS_SELECTOR, selector)
+                if element.is_displayed():
+                    return element
+            except (NoSuchElementException, WebDriverException):
+                pass
     raise NoSuchElementException(", ".join(selectors))
+
+
+def login_form_visible(driver: webdriver.Chrome) -> bool:
+    try:
+        return any(element.is_displayed() for element in driver.find_elements(By.CSS_SELECTOR, "#login-user-input"))
+    except WebDriverException:
+        # Authentik/Cockpit can replace the login form while the redirect is
+        # completing; let WebDriverWait re-query the new document instead of
+        # treating that normal transition as a test failure.
+        return True
 
 
 def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
     for element in driver.find_elements(By.TAG_NAME, "button"):
-        if element.is_displayed() and element.text.strip() == label:
-            return element
+        try:
+            if element.is_displayed() and element.text.strip() == label:
+                return element
+        except WebDriverException:
+            continue
     return None
 
 
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
+ALLOWED_ROUTE_RETRY_ATTEMPTS = 30
+PORTAL_AUTHORIZATION_RETRY_ATTEMPTS = 30
+
+
+def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
+    message = str(entry.get("message", ""))
+    return ("/favicon.ico" in message and "404" in message) or (
+        "/console/cockpit/login" in message and "401" in message
+    )
 
 
 def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
@@ -98,7 +152,11 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
         if result["duplicates"]:
             failures.append({"viewport": [width, height], "reason": "duplicate-dom-ids", **result})
     try:
-        severe = [entry for entry in driver.get_log("browser") if entry.get("level") == "SEVERE"]
+        severe = [
+            entry
+            for entry in driver.get_log("browser")
+            if entry.get("level") == "SEVERE" and not expected_cockpit_shell_entry(entry)
+        ]
     except (WebDriverException, ValueError):
         severe = []
     if severe:
@@ -134,11 +192,54 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
     )
     password_input.send_keys(password)
     first(driver, ['button[type="submit"]', 'input[type="submit"]']).click()
-    wait.until(lambda current: "/identity/if/flow/" not in current.current_url)
+    public_origin = origin.rstrip("/")
+
+    def authenticated_portal_loaded(current: webdriver.Chrome) -> bool:
+        url = current.current_url
+        if "/identity/if/flow/" in url or "/outpost.goauthentik.io/callback" in url:
+            return False
+        if url != public_origin and not url.startswith(public_origin + "/"):
+            return False
+        return current.execute_script("return document.readyState") in {"interactive", "complete"}
+
+    try:
+        wait.until(authenticated_portal_loaded)
+        wait_for_authenticated_portal(driver, public_origin)
+    except TimeoutException as error:
+        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+        raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
+
+
+def wait_for_authenticated_portal(driver: webdriver.Chrome, origin: str) -> None:
+    """Wait for the forward-auth chain to accept the new outpost session."""
+    last_error = ""
+    for attempt in range(PORTAL_AUTHORIZATION_RETRY_ATTEMPTS):
+        try:
+            driver.get(origin + "/")
+            ready = driver.execute_script("return document.readyState") in {"interactive", "complete"}
+            body = str(driver.execute_script("return document.body?.innerText || ''"))
+            if ready and not any(
+                marker in body for marker in ("HTTP ERROR 401", "HTTP ERROR 403", "Access to " + origin + " was denied")
+            ):
+                return
+            last_error = body[:500]
+            # A failed probe leaves a Chrome network error in the browser log.
+            # It is a useful failure diagnostic, but must not poison the real
+            # rendering check after a delayed outpost reload succeeds.
+            driver.get_log("browser")
+        except (TimeoutException, WebDriverException) as error:
+            last_error = str(error)
+        if attempt + 1 < PORTAL_AUTHORIZATION_RETRY_ATTEMPTS:
+            time.sleep(1)
+    raise TimeoutException(
+        f"authenticated portal did not become reachable after "
+        f"{PORTAL_AUTHORIZATION_RETRY_ATTEMPTS} attempts: {last_error!r}"
+    )
 
 
 def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
-    driver.get(origin + "/")
+    cockpit_root = origin.rstrip("/") + "/console/"
+    driver.get(cockpit_root)
     wait = WebDriverWait(driver, 60)
     username_input = wait.until(
         lambda current: first(
@@ -162,24 +263,113 @@ def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password
     )
     password_input.send_keys(password)
     first(driver, ["#login-button", 'button[type="submit"]']).click()
-    wait.until(lambda current: "/cockpit/" in current.current_url)
+    wait.until(
+        lambda current: (
+            current.current_url.startswith(origin.rstrip("/") + "/console/") and not login_form_visible(current)
+        )
+    )
+
+
+def safe_browser_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def browser_diagnostics(driver: webdriver.Chrome) -> dict[str, Any]:
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+    except WebDriverException as error:
+        body_text = f"<unable to read body: {error}>"
+    try:
+        console = driver.get_log("browser")[-20:]
+    except (WebDriverException, ValueError):
+        console = []
+    return {
+        "url": safe_browser_url(driver.current_url),
+        "title": driver.title,
+        "body": body_text[:5000],
+        "console": console,
+    }
+
+
+def browser_step(driver: webdriver.Chrome, label: str, operation: Callable[[], None]) -> None:
+    print(f"VM-BROWSER-STAGE-START: {label}", file=sys.stderr, flush=True)
+    try:
+        operation()
+    except Exception as error:
+        diagnostics = json.dumps(browser_diagnostics(driver), default=str, indent=2, sort_keys=True)
+        print(
+            f"VM-BROWSER-STAGE-FAIL: {label}: {type(error).__name__}: {error}\nVM-BROWSER-DIAGNOSTICS: {diagnostics}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
+    print(f"VM-BROWSER-STAGE-DONE: {label}", file=sys.stderr, flush=True)
+
+
+def wait_for_page_text(driver: webdriver.Chrome, wait: WebDriverWait, text: str, label: str) -> None:
+    try:
+        wait.until(lambda current: text in current.page_source)
+    except TimeoutException as error:
+        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+        raise RuntimeError(f"{label} did not render {text!r}:\n{details}") from error
+
+
+def rendered_text(driver: webdriver.Chrome) -> str:
+    """Return document text, including open shadow roots and same-origin frames."""
+    try:
+        return str(
+            driver.execute_script(
+                """
+                const collect = root => {
+                  let value = root.body?.innerText || root.innerText || '';
+                  value += '\\n' + (root.body?.textContent || root.textContent || '');
+                  for (const element of root.querySelectorAll('*')) {
+                    if (element.shadowRoot) value += '\\n' + collect(element.shadowRoot);
+                    if (element.tagName === 'IFRAME') {
+                      try {
+                        if (element.contentDocument) value += '\\n' + collect(element.contentDocument);
+                      } catch (_error) {
+                        // Cross-origin frames are intentionally inaccessible.
+                      }
+                    }
+                  }
+                  return value;
+                };
+                return collect(document);
+                """
+            )
+        )
+    except WebDriverException:
+        return driver.page_source
 
 
 def verify_cockpit_react_interactions(origin: str, username: str, password: str) -> None:
     driver = browser()
     try:
-        cockpit_login(driver, origin, username, password)
-        driver.get(origin + "/cockpit/@localhost/nas/index.html")
-        wait = WebDriverWait(driver, 90)
-        wait.until(lambda current: "NAS Overview" in current.page_source)
-        wait.until(lambda current: "Maintenance actions" in current.page_source)
-        wait.until(lambda current: button_with_text(current, "Refresh")).click()
-        wait.until(lambda current: button_with_text(current, "Run health checks")).click()
-        wait.until(lambda current: "Confirm maintenance action" in current.page_source)
-        cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
-        cancel.click()
-        wait.until(lambda current: "Confirm maintenance action" not in current.page_source)
-        verify_rendering_quality(driver, "Cockpit NAS page")
+        browser_step(driver, f"Cockpit login ({username})", lambda: cockpit_login(driver, origin, username, password))
+
+        def verify_page() -> None:
+            driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
+            wait = WebDriverWait(driver, 90)
+            wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
+            wait_for_page_text(driver, wait, "Maintenance actions", "Cockpit NAS page")
+
+        browser_step(driver, "Cockpit NAS page", verify_page)
+
+        def verify_actions() -> None:
+            wait = WebDriverWait(driver, 90)
+            wait.until(lambda current: button_with_text(current, "Refresh")).click()
+            wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
+            wait.until(lambda current: "Confirm maintenance action" in current.page_source)
+            cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
+            cancel.click()
+            wait.until(lambda current: "Confirm maintenance action" not in current.page_source)
+
+        browser_step(driver, "Cockpit maintenance actions", verify_actions)
+        browser_step(
+            driver, "Cockpit rendering and console", lambda: verify_rendering_quality(driver, "Cockpit NAS page")
+        )
     finally:
         driver.quit()
 
@@ -197,11 +387,38 @@ def fetch_status(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
 
 
 def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]) -> None:
+    def matches(expectation: RouteExpectation, result: dict[str, Any]) -> bool:
+        status = int(result.get("status", 0))
+        url = str(result.get("url", ""))
+        url_path = urllib.parse.urlsplit(url).path
+        identity_flow = "/identity/if/flow/" in url_path
+        if expectation.allowed:
+            return (
+                200 <= status < 400
+                and (not identity_flow or expectation.allowed_redirect_prefix is not None)
+                and (
+                    expectation.allowed_redirect_prefix is None
+                    or url_path.startswith(expectation.allowed_redirect_prefix)
+                )
+            )
+        return status in {401, 403} or identity_flow
+
     failures: list[dict[str, Any]] = []
     for expectation in expectations:
         result = fetch_status(driver, expectation.path)
-        denied = result["status"] in {401, 403} or "/identity/if/flow/" in result["url"]
-        if denied == expectation.allowed:
+        for _ in range(ALLOWED_ROUTE_RETRY_ATTEMPTS):
+            if matches(expectation, result):
+                break
+            # CopyParty creates the first IdP user lazily. Its first request
+            # can race the configuration reload, so retry only transient
+            # failures for routes that should be reachable. The reload can
+            # involve Authentik and indexing, so keep this bounded but longer
+            # than the usual one-second proxy retry window.
+            if not expectation.allowed or result.get("status") not in {401, 403, 502, 503}:
+                break
+            time.sleep(1)
+            result = fetch_status(driver, expectation.path)
+        if not matches(expectation, result):
             failures.append({"path": expectation.path, "expectedAllowed": expectation.allowed, **result})
     if failures:
         raise RuntimeError(json.dumps(failures, indent=2, sort_keys=True))
@@ -209,14 +426,42 @@ def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]
 
 def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
     driver.get(origin + "/identity/if/flow/nas-user-settings/")
-    WebDriverWait(driver, 60).until(lambda current: "Syncthing" in current.page_source)
-    if "nasSyncthingDevices" not in driver.page_source and "Syncthing devices" not in driver.page_source:
-        raise RuntimeError("Authentik NAS user-settings flow did not render the Syncthing field")
+    wait = WebDriverWait(driver, 60)
+    try:
+        wait.until(lambda current: "Syncthing" in rendered_text(current))
+        first(
+            driver,
+            [
+                'textarea[name="attributes.nasSyncthingDevices"]',
+                'textarea[aria-label*="Syncthing"]',
+                "textarea",
+            ],
+        )
+    except (NoSuchElementException, TimeoutException) as error:
+        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+        raise RuntimeError(
+            f"Authentik NAS user-settings flow did not render the Syncthing field:\n{details}"
+        ) from error
 
 
-def verify_native_share_route(driver: webdriver.Chrome, origin: str) -> None:
-    driver.get(origin + "/share/not-a-real-token")
-    if "/identity/if/flow/" in driver.current_url:
+def native_share_response(origin: str) -> dict[str, Any]:
+    url = origin.rstrip("/") + "/share/not-a-real-token"
+    request = urllib.request.Request(url, headers={"Accept": "text/html"})
+    context = ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(request, context=context, timeout=30) as response:
+            return {"status": response.status, "url": response.geturl()}
+    except urllib.error.HTTPError as response:
+        return {"status": response.code, "url": response.geturl()}
+    except (OSError, urllib.error.URLError, TimeoutError) as error:
+        raise RuntimeError(f"CopyParty native share route request failed: {error}") from error
+
+
+def verify_native_share_route(_driver: webdriver.Chrome, origin: str) -> None:
+    # An invalid native share can execute CopyParty's own error-page script;
+    # inspect the response with a non-browser client so that page cannot run.
+    result = native_share_response(origin)
+    if "/identity/if/flow/" in result["url"]:
         raise RuntimeError("CopyParty native share route was intercepted by Authentik")
 
 
@@ -228,14 +473,18 @@ def verify_no_identity_markup_injection(driver: webdriver.Chrome, username: str)
         return {
           injectedImage: Boolean(document.querySelector('img[src="x"]')),
           executionMarker: document.body?.dataset?.nasXss || null,
-          signedInText: document.body?.innerText?.includes('<img src=x onerror=document.body.dataset.nasXss=1>') || false,
         };
         """
     )
     if result["injectedImage"] or result["executionMarker"]:
         raise RuntimeError(f"portal executed identity-derived HTML: {result!r}")
-    if not result["signedInText"]:
-        raise RuntimeError("portal did not render the hostile identity display name as inert text")
+    hostile_display_name = "<img src=x onerror=document.body.dataset.nasXss=1>"
+    text = rendered_text(driver)
+    if hostile_display_name not in text:
+        raise RuntimeError(
+            "portal did not render the hostile identity display name as inert text: "
+            f"url={safe_browser_url(driver.current_url)!r} text={text[:2000]!r}"
+        )
 
 
 def run_account(
@@ -243,13 +492,21 @@ def run_account(
 ) -> None:
     driver = browser()
     try:
-        login(driver, origin, username, password)
-        verify_rendering_quality(driver, f"portal for {username}")
-        verify_no_identity_markup_injection(driver, username)
-        verify_routes(driver, expectations)
-        verify_native_share_route(driver, origin)
+        browser_step(driver, f"Portal login ({username})", lambda: login(driver, origin, username, password))
+        browser_step(
+            driver,
+            f"Portal rendering and console ({username})",
+            lambda: verify_rendering_quality(driver, f"portal for {username}"),
+        )
+        browser_step(
+            driver, f"Portal identity text ({username})", lambda: verify_no_identity_markup_injection(driver, username)
+        )
+        browser_step(driver, f"Portal capability routes ({username})", lambda: verify_routes(driver, expectations))
+        browser_step(
+            driver, f"Portal native share route ({username})", lambda: verify_native_share_route(driver, origin)
+        )
         if settings:
-            verify_settings_form(driver, origin)
+            browser_step(driver, f"Portal settings form ({username})", lambda: verify_settings_form(driver, origin))
     finally:
         driver.quit()
 
@@ -281,15 +538,17 @@ def read_secret(path: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--origin", default="https://nas-test.local")
-    parser.add_argument("--cockpit-origin", default="https://127.0.0.1:9092")
+    parser.add_argument("--cockpit-origin", default="https://localhost:9092")
+    parser.add_argument("--cockpit-password-file", required=True)
     parser.add_argument("--operator-password-file", required=True)
     parser.add_argument("--alice-password-file", required=True)
     parser.add_argument("--baseline-password-file", required=True)
     args = parser.parse_args()
+    cockpit_password = read_secret(args.cockpit_password_file)
     operator_password = read_secret(args.operator_password_file)
     alice_password = read_secret(args.alice_password_file)
     baseline_password = read_secret(args.baseline_password_file)
-    verify_cockpit_react_interactions(args.cockpit_origin, "operator", operator_password)
+    verify_cockpit_react_interactions(args.cockpit_origin, "admin", cockpit_password)
     capability_routes = {
         "files": "/shares/",
         "webdav": "/dav/",
@@ -308,7 +567,11 @@ def main() -> int:
         common_allowed
         + [
             RouteExpectation(capability_routes["webdav"], True),
-            RouteExpectation(capability_routes["syncthing"], True),
+            RouteExpectation(
+                capability_routes["syncthing"],
+                True,
+                "/identity/if/flow/nas-user-settings/",
+            ),
             RouteExpectation("/syncthing/", True),
             RouteExpectation(capability_routes["ai"], True),
             RouteExpectation("/alerts/", True),
@@ -323,7 +586,11 @@ def main() -> int:
         common_allowed
         + [
             RouteExpectation(capability_routes["webdav"], False),
-            RouteExpectation(capability_routes["syncthing"], True),
+            RouteExpectation(
+                capability_routes["syncthing"],
+                True,
+                "/identity/if/flow/nas-user-settings/",
+            ),
             RouteExpectation("/syncthing/", False),
             RouteExpectation(capability_routes["ai"], False),
             RouteExpectation("/alerts/", False),

@@ -300,11 +300,36 @@ def endpoint_links(path: pathlib.Path = ENDPOINT_REGISTRY) -> dict[str, str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
-    if not isinstance(payload, dict) or payload.get("schemaVersion") != 1:
+    if not isinstance(payload, dict) or payload.get("schemaVersion") not in (1, 2):
         return {}
-    endpoints = payload.get("endpoints")
-    if not isinstance(endpoints, dict):
-        return {}
+    if payload.get("schemaVersion") == 1:
+        endpoints = payload.get("endpoints")
+        if not isinstance(endpoints, dict):
+            return {}
+    else:
+        endpoints = {}
+        services = payload.get("services")
+        if not isinstance(services, dict):
+            return {}
+        for service_id, service in services.items():
+            if not isinstance(service, dict) or service.get("enabled") is not True:
+                continue
+            service_endpoints = service.get("endpoints")
+            if not isinstance(service_endpoints, dict):
+                continue
+            for endpoint_id, endpoint in service_endpoints.items():
+                if not isinstance(endpoint, dict):
+                    continue
+                value = dict(endpoint)
+                value["available"] = True
+                portal_value = value.get("portal")
+                portal: dict[str, Any] = portal_value if isinstance(portal_value, dict) else {}
+                value["linkKey"] = value.get("linkKey") or portal.get("linkKey")
+                exposure_value = value.get("exposure")
+                exposure: dict[str, Any] = exposure_value if isinstance(exposure_value, dict) else {}
+                if "publicPath" not in value and exposure.get("type") == "path":
+                    value["publicPath"] = exposure.get("value")
+                endpoints[f"{service_id}:{endpoint_id}"] = value
     links: dict[str, str] = {}
     for value in endpoints.values():
         if not isinstance(value, dict) or value.get("available") is not True:
@@ -317,6 +342,7 @@ def endpoint_links(path: pathlib.Path = ENDPOINT_REGISTRY) -> dict[str, str]:
             and isinstance(public_path, str)
             and public_path.startswith("/")
             and not public_path.startswith("//")
+            and "\\" not in public_path
             and not any(ord(character) < 32 or ord(character) == 127 for character in public_path)
         ):
             links[key] = public_path

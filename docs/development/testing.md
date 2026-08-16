@@ -14,7 +14,17 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 ./scripts/test-matrix.py all --require-all --report test-evidence/full.json
 ```
 
-The local matrix `fast` command includes its smart-fuzz tier. GitHub's fast workflow dispatch is narrower and may omit heavyweight generated testing. `all` additionally runs the Nix configuration/negative-fixture matrix, built-browser, native NixOS VM, and official-ISO installer tiers. Each stage has an outer deadline; missing heavyweight tools or reviewed frontend artifacts are reported as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the source stage also forces complete preflight, so missing Ruff, Pyright, ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial source pass.
+The local matrix `fast` command runs source and security checks only. The
+generated smart-fuzz tier is explicit (`test-matrix.py fuzz`) and should be run
+locally during pre-merge qualification. GitHub's fast workflow dispatch is
+narrower and may omit heavyweight generated testing. `all` additionally runs
+the smart-fuzz, Nix configuration/negative-fixture matrix, built-browser,
+native NixOS VM, and official-ISO installer tiers. Each stage has an outer
+deadline; missing heavyweight tools or reviewed frontend artifacts are reported
+as **skipped** unless `--require-all` is supplied. In `--require-all` mode, the
+source stage also forces complete preflight, so missing Ruff, Pyright,
+ShellCheck, Nix, or reviewed Cockpit artifacts cannot be hidden as a partial
+source pass.
 
 The CI pipeline summary applies event- and dispatch-tier requirements. A job required for that run must succeed; a skipped required job fails pipeline qualification rather than being accepted as an intentional skip.
 
@@ -43,7 +53,17 @@ node --test tests/js/*.test.mjs
 node cockpit/build.js --check-source
 ```
 
+Workflow syntax is checked with `actionlint` in the static CI job. It is also
+included in the `.#test` development shell for local validation:
+
+```bash
+nix develop .#test -c actionlint .github/workflows/ci.yml
+```
+
 `tests/custom-script-contracts.json` is the executable coverage authority. Every NAS-owned installed command and every executable repository-maintenance script must declare focused tests plus an adversarial/whole-process strategy. Installed commands must also declare an installed-system test. `scripts/validate-test-inventory.py` discovers the executable surfaces and fails closed when a command is added, removed, or assigned an unsupported strategy without updating the test architecture.
+
+The `qemu-test` development shell includes the host-side QEMU, SSH, archive,
+Git, Python, and core utility commands required by the wrapper.
 
 ## 2. Smart fuzzing and generated properties
 
@@ -52,6 +72,7 @@ The project does not maintain a project-local RNG mutator. **Hypothesis** is the
 `scripts/run-fuzz.py` is an orchestrator, not a fuzzer. Its independent source classes can run in parallel:
 
 - `boundaries` — parser, identifier, path, normalization, and decoder properties from `tests/test_fuzz_boundaries.py`.
+- `custom-inputs` — pure input-boundary and service-adapter properties for every `services/nas_*.py` module from `tests/test_fuzz_custom_inputs.py`.
 - `properties` — cross-object, round-trip, metamorphic, and validation properties from `tests/test_property_invariants.py`.
 - `stateful` — `RuleBasedStateMachine` lifecycle sequences and differential projection checks from `tests/slow_managed_service_stateful.py`.
 - `security` — generated secret/logging/transaction properties from `tests/test_secret_security_fuzz.py`.
@@ -67,6 +88,25 @@ Reusable Python generators live in `tests/fuzz_strategies.py`. They must not gro
 ./scripts/run-fuzz.py --suite javascript --suite executable-contracts --jobs 2
 ```
 
+The ordinary commands are bounded one-pass qualification and are suitable for
+the fast source tier. Immediately before merging a security-sensitive change,
+run the same selected suites locally for a sustained search window; each
+worker repeats its own suite independently and stops after the requested
+duration:
+
+```bash
+./scripts/run-fuzz.py --duration-seconds 3600 --jobs 6
+```
+
+This long-duration mode is intentionally local-only. It is not enabled by
+ordinary pull-request CI; the merge decision should attach the resulting
+logs/evidence from the local run. The runner places each suite's Hypothesis
+example database under its own system temporary-directory
+`nix-nas-hypothesis-*` directory by default. Set
+`HYPOTHESIS_STORAGE_DIRECTORY` when reproducing a specific shared corpus. Keep
+the generated `node_modules`, reports, and other runtime output outside the
+worktree or remove them before commit.
+
 `scripts/fuzz.py` remains only as a stable compatibility entry point for the Hypothesis boundary suite. `scripts/fuzz-executables.py` is retained as a compatibility filename for the executable contract layer; despite the old name it does not perform mutation fuzzing or repeat generic payload lists.
 
 The installed disposable VM uses the same principle in `tests/vm/adversarial-installed.py`. Hypothesis generates strategy-specific **guaranteed-invalid** argv values for each declared command grammar and shrinks failures. Because each example starts a real appliance command, the example budget is intentionally small; repeatedly launching a command with hundreds of generic SQL/XSS/path strings would consume VM time without useful search guidance. Explicit shell-injection and other historically important values remain as regression examples.
@@ -75,11 +115,18 @@ Known attack strings belong in deterministic regression tests or Hypothesis `@ex
 
 For a genuinely byte-oriented, fast in-process parser where code-coverage feedback can guide mutations, prefer a maintained coverage-guided engine such as Atheris/libFuzzer rather than adding another local RNG loop. Do not wrap subprocess, systemd, QEMU, or browser workflows in byte mutation merely to increase a case counter. If the project later exposes a machine-readable OpenAPI or GraphQL surface, use a schema-aware engine such as Schemathesis rather than generic HTTP request spraying.
 
-CI currently sequences the generated source-property shards after deterministic QEMU integration. That is an orchestration choice, not a limitation of Hypothesis or fast-check. The important boundary is tool selection: use the cheapest layer that proves the invariant while preserving higher-fidelity VM or browser checks where those semantics matter.
+GitHub CI runs deterministic checks through the QEMU and installer tiers; it does not run long fuzz searches. Run the generated source-property shards locally only after deterministic qualification succeeds, one suite at a time for the requested sustained search window. The important boundary is tool selection: use the cheapest layer that proves the invariant while preserving higher-fidelity VM or browser checks where those semantics matter.
 
 CI does not cache qualification pass markers. Dependency downloads, immutable installer media, and incremental Nix build outputs may be cached because they accelerate execution without replacing test evidence.
 
 After the fast gates pass, one `build` job uses one runner to materialize and verify Cockpit (compiling it on a cache miss), round-trip the source archive, and build the NixOS closures in sequence. Browser qualification and KVM/QEMU integration remain downstream jobs. This runner consolidation does not remove or pass-cache any qualification tier.
+
+To qualify the cold handoff path on demand, dispatch the GitHub `CI` workflow with
+`test-tier=full` and `force-cache-miss=true`. The run uses a unique cache
+namespace, so it must export every missing bundle, pass the signed handoff to
+the integration jobs, and report cache persistence without overwriting the
+normal reusable cache. A normal cache hit remains the default PR and scheduled
+path.
 
 ## 3. Static security and injection checks
 
@@ -152,6 +199,59 @@ The reinstall, failed-candidate, candidate-switch, rollback, and final reconfigu
 The guest suite deliberately checks states that must never occur: protected services running while secrets are locked, unauthenticated or spoofed identities receiving protected access, destructive setup without exact confirmation, hostile identifiers reaching shell execution, SQL-shaped usernames passing account validation, traversal-shaped device paths, malformed alert requests producing tracebacks, unsafe state/archive members, stale operation residue, and recovery/rollback inconsistencies.
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
+
+### VM failure and handoff contracts
+
+The fast PR contract includes executable process-level failure injection, not
+only source-text assertions:
+
+```bash
+tests/vm/cleanup-failure-injection.sh
+tests/vm/resource-failure-injection.sh
+```
+
+These cases run the shared VM cleanup/profile libraries through every declared
+guest phase, inject ordinary and signal failures, and verify phase timing,
+last-command, artifact-path, profiler, cleanup, temporary-secret,
+run-owned-dependency, VM-state, and outpost evidence. They also rerun against
+the same paths to catch stale processes, secrets, symlinks, and partial
+`node_modules` trees. Resource cases cover missing commands, failed Nix and
+QEMU starts, unavailable network, disk-full, and hung systemd simulations.
+
+`tests/vm/timeout-budget.json` is the single phase manifest. The timeout
+contract executes the real `timeout-budget.sh` functions with slow fake
+commands, checks the phase-specific failure label, and verifies that the outer
+watchdog is derived from all phase budgets. Bundle consumers must run:
+
+```bash
+./scripts/vm-bundles.sh verify-handoff <bundle-directory>
+```
+
+This checks every archive checksum, the complete manifest, and the
+`vm-drivers` closure-deduplication rule. Missing or corrupt handoffs fail
+closed; a missing reusable cache remains a functional cache miss and rebuilds
+the exact base as needed.
+
+Pull requests run the deterministic source, contract, build, and handoff
+checks. Browser, native QEMU, and reboot/installer tiers are qualification
+work: they run on the scheduled workflow, protected main/tag pushes, or an
+explicit `workflow_dispatch` full/installer tier. The `full` tier includes the
+official installer and installed-VM checks; `installer` is the narrower
+on-demand tier for rerunning that portion. Long fuzzing remains a local,
+one-suite-at-a-time pre-merge qualification step. The summary still reports
+every release-critical job and calls out cache persistence failures as
+non-authoritative warnings.
+
+The build job has an exact-reuse path. A commit-keyed, manifest-verified
+source archive skips the package/re-extract/reference-evaluation round-trip on
+reruns. When all six VM bundle keys are exact cache hits, the build imports
+those archives, skips `save-missing`, skips the large handoff upload, and the
+integration matrix restores the same cache keys directly. A cache miss exports
+only the missing bundle and keeps the short-lived handoff path for the current
+run. The core bundle contains boot, recovery, unlock, primary-access, and
+deterministic-test packages. Identity, observability, storage add-ons, and AI
+remain separate application bundles; `vm-drivers` contains only the small
+configuration-sensitive driver delta.
 
 Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testing.md).
 

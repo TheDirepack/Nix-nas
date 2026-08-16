@@ -7,7 +7,10 @@ TIMEOUT="${NAS_TEST_REBUILD_TIMEOUT:-1800}"
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
-rebuild() { timeout --foreground "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false; }
+rebuild() {
+  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false
+}
 
 [[ -f "$SOURCE/flake.nix" ]] || fail "reviewed source flake is missing: $SOURCE"
 [[ "$(cat "$SENTINEL" 2>/dev/null || true)" == preserve-me ]] || fail "installer persistence sentinel is missing"

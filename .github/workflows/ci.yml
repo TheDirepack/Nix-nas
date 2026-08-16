@@ -5,14 +5,21 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       test-tier:
-        description: Test scope for on-demand runs
+        description: Test scope for on-demand runs; full includes installer and deterministic installed-VM checks; fuzzing is local-only
         type: choice
         required: false
         default: fast
         options: [fast, full, installer]
+      force-cache-miss:
+        description: Run the full cache-miss bundle handoff and persistence path in an isolated cache namespace
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -22,7 +29,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_CACHE_SCHEMA: ci-v4-node24-ubuntu2404
+  CI_CACHE_SCHEMA: ci-v5-node24-ubuntu2404
 
 jobs:
   # Fast deterministic qualification runs in parallel. Downstream jobs depend
@@ -176,6 +183,8 @@ jobs:
         run: nix shell nixpkgs#bats -c bats tests/bats
       - name: ShellCheck
         run: nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
+      - name: actionlint
+        run: nix develop .#test -c actionlint .github/workflows/ci.yml
       - name: Python lint formatting and types
         run: |
           nix shell nixpkgs#ruff -c ruff check services tests scripts
@@ -241,11 +250,6 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
       - name: Coverage on the main-branch fast baseline
         if: steps.main-coverage.outputs.cache-hit != 'true'
         working-directory: main
@@ -278,6 +282,21 @@ jobs:
     needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]
     runs-on: ubuntu-24.04
     timeout-minutes: 270
+    outputs:
+      key_core: ${{ steps.vm_bundles.outputs.key_core }}
+      key_identity: ${{ steps.vm_bundles.outputs.key_identity }}
+      key_observability: ${{ steps.vm_bundles.outputs.key_observability }}
+      key_storage: ${{ steps.vm_bundles.outputs.key_storage }}
+      key_ai: ${{ steps.vm_bundles.outputs.key_ai }}
+      key_vm_drivers: ${{ steps.vm_bundles.outputs.key_vm_drivers }}
+      cache_core_hit: ${{ steps.vm_bundle_handoff.outputs.restored_core }}
+      cache_identity_hit: ${{ steps.vm_bundle_handoff.outputs.restored_identity }}
+      cache_observability_hit: ${{ steps.vm_bundle_handoff.outputs.restored_observability }}
+      cache_storage_hit: ${{ steps.vm_bundle_handoff.outputs.restored_storage }}
+      cache_ai_hit: ${{ steps.vm_bundle_handoff.outputs.restored_ai }}
+      cache_vm_drivers_hit: ${{ steps.vm_bundle_handoff.outputs.restored_vm_drivers }}
+      bundle_cache_complete: ${{ steps.vm_bundle_handoff.outputs.cache_complete }}
+      bundle_cache_namespace: ${{ steps.vm_bundle_namespace.outputs.suffix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -320,12 +339,105 @@ jobs:
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - name: Resolve Nix store bundle versions
+        id: vm_bundles
+        run: ./scripts/vm-bundles.sh keys >> "$GITHUB_OUTPUT"
+      - name: Select VM bundle cache namespace
+        id: vm_bundle_namespace
+        env:
+          FORCE_CACHE_MISS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force-cache-miss == 'true' }}
+        run: |
+          if [[ "$FORCE_CACHE_MISS" == true ]]; then
+            printf 'suffix=-forced-%s\n' "$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "Forced cache-miss qualification uses an isolated namespace."
+          else
+            printf 'suffix=\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: "Restore/cache Nix store bundle: core"
+        id: vm_bundle_core
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
+          path: ${{ runner.temp }}/vm-bundles/core.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm_bundles.outputs.key_core }}${{ steps.vm_bundle_namespace.outputs.suffix }}
+      - name: "Restore/cache Nix store bundle: identity"
+        id: vm_bundle_identity
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm_bundles.outputs.key_identity }}${{ steps.vm_bundle_namespace.outputs.suffix }}
+      - name: "Restore/cache Nix store bundle: observability"
+        id: vm_bundle_observability
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm_bundles.outputs.key_observability }}${{ steps.vm_bundle_namespace.outputs.suffix }}
+      - name: "Restore/cache Nix store bundle: storage"
+        id: vm_bundle_storage
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm_bundles.outputs.key_storage }}${{ steps.vm_bundle_namespace.outputs.suffix }}
+      - name: "Restore/cache Nix store bundle: ai"
+        id: vm_bundle_ai
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm_bundles.outputs.key_ai }}${{ steps.vm_bundle_namespace.outputs.suffix }}
+      - name: "Restore/cache Nix store bundle: vm-drivers"
+        id: vm_bundle_vm_drivers
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ steps.vm_bundles.outputs.key_vm_drivers }}${{ steps.vm_bundle_namespace.outputs.suffix }}
+      - name: Determine whether the exact VM bundle set was restored
+        id: vm_bundle_handoff
+        run: |
+          set -euo pipefail
+          bundle_dir="$RUNNER_TEMP/vm-bundles"
+          missing=()
+          for name in core identity observability storage ai vm-drivers; do
+            archive="$bundle_dir/$name.nar.gz"
+            # The cache action can complete successfully on a miss. The archive
+            # on disk is the authoritative handoff state used by every later job.
+            if [[ -s "$archive" ]] && gzip -t "$archive"; then
+              printf 'restored_%s=true\n' "${name//-/_}" >> "$GITHUB_OUTPUT"
+            else
+              [[ ! -e "$archive" ]] || rm -f -- "$archive"
+              printf 'restored_%s=false\n' "${name//-/_}" >> "$GITHUB_OUTPUT"
+              missing+=("$name")
+            fi
+          done
+          if ((${#missing[@]} == 0)); then
+            printf 'cache_complete=true\n' >> "$GITHUB_OUTPUT"
+            echo "All exact VM bundle archives were restored and validated; export and publish are unnecessary."
+          else
+            printf 'cache_complete=false\n' >> "$GITHUB_OUTPUT"
+            printf 'Missing or corrupt VM bundle archives: %s\n' "${missing[*]}"
+            echo "Only missing bundles will be exported."
+          fi
+          if [[ -s "$bundle_dir/core.nar.gz" && \
+            -s "$bundle_dir/identity.nar.gz" && \
+            -s "$bundle_dir/observability.nar.gz" && \
+            -s "$bundle_dir/storage.nar.gz" && \
+            -s "$bundle_dir/ai.nar.gz"
+          ]]; then
+            printf 'package_cache_complete=true\n' >> "$GITHUB_OUTPUT"
+            echo "Core and all application bundle archives were restored; source packaging is unnecessary."
+          else
+            printf 'package_cache_complete=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Reassemble cached Nix store bundles before configuration builds
+        run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+      - name: Restore verified source archive
+        id: source_archive_cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: nas-source-release
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - name: Package and verify as an untrusted consumer
+        if: >-
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
+          steps.source_archive_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           node cockpit/build.js --check
@@ -347,8 +459,6 @@ jobs:
           test -n "$archive"
           extract="$RUNNER_TEMP/extracted-source"
           mkdir -p "$extract"
-          # Python's zipfile extractor intentionally ignores Unix executable bits;
-          # Info-ZIP unzip preserves the modes encoded by package-release.sh.
           unzip -q "$archive" -d "$extract"
           root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
           test -n "$root"
@@ -363,71 +473,187 @@ jobs:
           ./scripts/evaluate-reference-configurations.sh
           restore_dependencies
           trap - EXIT
+      - name: Verify restored source archive
+        if: >-
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
+          steps.source_archive_cache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          archive=$(find nas-source-release -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit)
+          test -n "$archive"
+          unzip -tq "$archive"
+          extract="$RUNNER_TEMP/extracted-source-cache"
+          mkdir -p "$extract"
+          unzip -q "$archive" -d "$extract"
+          root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
+          test -n "$root"
+          test -x "$root/scripts/preflight.sh"
+          test -x "$root/scripts/package-release.sh"
+          test -x "$root/scripts/qemu-test.sh"
+          test -x "$root/cockpit/build.js"
+          (cd "$root" && sha256sum -c MANIFEST.sha256)
+          echo "Reused the verified source archive for commit $GITHUB_SHA."
+      - name: Save verified source archive
+        if: >-
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
+          steps.source_archive_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: nas-source-release
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm_bundle_namespace.outputs.suffix }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: >-
+          steps.vm_bundle_handoff.outputs.package_cache_complete != 'true' &&
+          steps.source_archive_cache.outputs.cache-hit != 'true'
         with:
           name: source-archive-evidence
           if-no-files-found: error
           retention-days: 14
           path: nas-source-release
-      - name: Build testable systems
+      - name: Build missing testable systems and reusable VM bundle roots
+        if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
         run: |
-          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace
-          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace
-      - name: Resolve Nix store bundle versions
-        id: vm-bundles
-        run: ./scripts/vm-bundles.sh keys >> "$GITHUB_OUTPUT"
-      - name: Export Nix store bundles for downstream VMs
-        run: ./scripts/vm-bundles.sh save "$RUNNER_TEMP/vm-bundles"
-      - name: "Cache Nix store bundle: core"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          bundle_args=()
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_core }}" == true ]] || bundle_args+=(core)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_identity }}" == true ]] || bundle_args+=(identity)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_observability }}" == true ]] || bundle_args+=(observability)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_storage }}" == true ]] || bundle_args+=(storage)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_ai }}" == true ]] || bundle_args+=(ai)
+          [[ "${{ steps.vm_bundle_handoff.outputs.restored_vm_drivers }}" == true ]] || bundle_args+=(vm-drivers)
+          if [[ "${{ steps.vm_bundle_handoff.outputs.package_cache_complete }}" != true ]]; then
+            nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace -L
+            nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace -L
+          fi
+          ((${#bundle_args[@]} > 0))
+          ./scripts/vm-bundles.sh build "${bundle_args[@]}"
+      - name: Export missing Nix store bundles for downstream VMs
+        if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
+        env:
+          NAS_BUNDLE_SKIP_BUILD: "1"
+        run: ./scripts/vm-bundles.sh save-missing "$RUNNER_TEMP/vm-bundles"
+      - name: Prepare missing-only Nix bundle handoff
+        if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/vm-bundles"
+          handoff_dir="$RUNNER_TEMP/vm-bundle-handoff"
+          rm -rf -- "$handoff_dir"
+          mkdir -p "$handoff_dir"
+          all_archives=(core.nar.gz identity.nar.gz observability.nar.gz storage.nar.gz ai.nar.gz vm-drivers.nar.gz)
+          missing_archives=()
+          partial_files=(bundle-manifest.tsv)
+          for archive in "${all_archives[@]}"; do
+            name=${archive%.nar.gz}
+            case "$name" in
+              core) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_core }}" ;;
+              identity) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_identity }}" ;;
+              observability) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_observability }}" ;;
+              storage) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_storage }}" ;;
+              ai) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_ai }}" ;;
+              vm-drivers) cache_hit="${{ steps.vm_bundle_handoff.outputs.restored_vm_drivers }}" ;;
+              *) exit 1 ;;
+            esac
+            if [[ "$cache_hit" != true ]]; then
+              cp -- "$source_dir/$archive" "$handoff_dir/$archive"
+              if [[ -f "$source_dir/$name.paths" ]]; then
+                cp -- "$source_dir/$name.paths" "$handoff_dir/$name.paths"
+                partial_files+=("$name.paths")
+              fi
+              missing_archives+=("$archive")
+              partial_files+=("$archive")
+            fi
+          done
+          ((${#missing_archives[@]} > 0))
+          cp -- "$source_dir/bundle-manifest.tsv" "$handoff_dir/bundle-manifest.tsv"
+          cp -- "$source_dir/bundle-handoff.sha256" "$handoff_dir/bundle-handoff.sha256"
+          (
+            cd -- "$handoff_dir"
+            sha256sum "${partial_files[@]}" > bundle-handoff.partial.sha256
+          )
+          ./scripts/vm-bundles.sh verify-partial-handoff "$handoff_dir"
+          printf 'Missing-only handoff contains: %s\n' "${missing_archives[*]}"
+      - name: Publish the exact Nix bundles used by this run
+        if: steps.vm_bundle_handoff.outputs.cache_complete != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vm-bundle-handoff
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            ${{ runner.temp }}/vm-bundle-handoff/*.nar.gz
+            ${{ runner.temp }}/vm-bundle-handoff/*.paths
+            ${{ runner.temp }}/vm-bundle-handoff/bundle-manifest.tsv
+            ${{ runner.temp }}/vm-bundle-handoff/bundle-handoff.sha256
+            ${{ runner.temp }}/vm-bundle-handoff/bundle-handoff.partial.sha256
+
+  cache-vm-bundles:
+    name: Persist reusable Nix VM bundles
+    if: >-
+      always() && needs.build.result == 'success' &&
+      needs.build.outputs.bundle_cache_complete != 'true'
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the exact bundles produced by the build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vm-bundle-handoff
+          path: ${{ runner.temp }}/vm-bundles
+      - name: Verify bundle handoff before cache persistence
+        run: ./scripts/vm-bundles.sh verify-partial-handoff "$RUNNER_TEMP/vm-bundles"
+      - name: "Save reusable Nix store bundle: core"
+        if: needs.build.outputs.cache_core_hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/core.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm-bundles.outputs.key_core }}
-      - name: "Cache Nix store bundle: copyparty"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/copyparty.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-copyparty-${{ steps.vm-bundles.outputs.key_copyparty }}
-      - name: "Cache Nix store bundle: caddy"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/caddy.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-caddy-${{ steps.vm-bundles.outputs.key_caddy }}
-      - name: "Cache Nix store bundle: identity"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Save reusable Nix store bundle: identity"
+        if: needs.build.outputs.cache_identity_hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm-bundles.outputs.key_identity }}
-      - name: "Cache Nix store bundle: observability"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Save reusable Nix store bundle: observability"
+        if: needs.build.outputs.cache_observability_hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm-bundles.outputs.key_observability }}
-      - name: "Cache Nix store bundle: storage"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Save reusable Nix store bundle: storage"
+        if: needs.build.outputs.cache_storage_hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm-bundles.outputs.key_storage }}
-      - name: "Cache Nix store bundle: ai"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Save reusable Nix store bundle: ai"
+        if: needs.build.outputs.cache_ai_hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm-bundles.outputs.key_ai }}
-      - name: "Cache Nix store bundle: test-browser"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Save reusable Nix store bundle: vm-drivers"
+        if: needs.build.outputs.cache_vm_drivers_hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: ${{ runner.temp }}/vm-bundles/test-browser.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-browser-${{ steps.vm-bundles.outputs.key_test_browser }}
-      - name: "Cache Nix store bundle: test-tools"
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/test-tools.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ steps.vm-bundles.outputs.key_test_tools }}
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: Report cache persistence status
+        if: always()
+        env:
+          CACHE_JOB_STATUS: ${{ job.status }}
+        run: |
+          echo "cache-vm-bundles status: $CACHE_JOB_STATUS"
+          echo "Cache persistence is reusable acceleration; qualification evidence remains the build handoff."
 
   browser:
     name: Post-build deterministic Cockpit layout, XSS, and accessibility
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build]
+    if: >-
+      always() && needs.test.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'fast'))
+    needs: [build, test]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -436,9 +662,17 @@ jobs:
         with:
           node-version: 24
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.build.result == 'success'
         with:
           name: cockpit-bundle
           path: cockpit
+      - name: Restore reviewed Cockpit build for fast tier
+        id: browser-build-cache
+        if: needs.build.result != 'success'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/dist
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-build-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json', 'cockpit/package.json', 'cockpit/build.js', 'cockpit/src/**') }}
       - name: Restore exact dependencies
         id: browser-deps
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -448,6 +682,14 @@ jobs:
       - name: Install dependencies on cache miss
         if: steps.browser-deps.outputs.cache-hit != 'true'
         run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Build production bundle for fast tier
+        if: needs.build.result != 'success' && steps.browser-build-cache.outputs.cache-hit != 'true'
+        run: npm --prefix cockpit run build
+      - name: Verify the post-build Cockpit bundle
+        run: |
+          node cockpit/build.js --check
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
       - name: Restore Playwright engines
         id: playwright-browsers
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -475,11 +717,24 @@ jobs:
             cockpit/test-results
 
   integration:
-    name: Post-build full-stack QEMU integration
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-    needs: [build, browser]
+    name: Post-build full-stack QEMU integration (${{ matrix.vm }})
+    if: >-
+      always() && needs.build.result == 'success' &&
+      (github.event_name == 'schedule' || github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))
+    needs: [build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    # 379 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
+    timeout-minutes: 409
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - vm: unencrypted
+            check: nas-vm
+          - vm: encrypted
+            check: nas-vm-encrypted
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -491,74 +746,74 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           enable_kvm: true
-      - name: Enable incremental Nix build and VM cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-      - name: Resolve Nix store bundle versions
-        id: vm-bundles
-        run: ./scripts/vm-bundles.sh keys >> "$GITHUB_OUTPUT"
-      - name: "Restore Nix store bundle: core"
+      - name: "Restore exact cached Nix bundle: core"
+        if: needs.build.outputs.cache_core_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/core.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ steps.vm-bundles.outputs.key_core }}
-      - name: "Restore Nix store bundle: copyparty"
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/copyparty.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-copyparty-${{ steps.vm-bundles.outputs.key_copyparty }}
-      - name: "Restore Nix store bundle: caddy"
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ${{ runner.temp }}/vm-bundles/caddy.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-caddy-${{ steps.vm-bundles.outputs.key_caddy }}
-      - name: "Restore Nix store bundle: identity"
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-core-${{ needs.build.outputs.key_core }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Restore exact cached Nix bundle: identity"
+        if: needs.build.outputs.cache_identity_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/identity.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ steps.vm-bundles.outputs.key_identity }}
-      - name: "Restore Nix store bundle: observability"
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-identity-${{ needs.build.outputs.key_identity }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Restore exact cached Nix bundle: observability"
+        if: needs.build.outputs.cache_observability_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/observability.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ steps.vm-bundles.outputs.key_observability }}
-      - name: "Restore Nix store bundle: storage"
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-observability-${{ needs.build.outputs.key_observability }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Restore exact cached Nix bundle: storage"
+        if: needs.build.outputs.cache_storage_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/storage.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ steps.vm-bundles.outputs.key_storage }}
-      - name: "Restore Nix store bundle: ai"
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-storage-${{ needs.build.outputs.key_storage }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Restore exact cached Nix bundle: ai"
+        if: needs.build.outputs.cache_ai_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/vm-bundles/ai.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ steps.vm-bundles.outputs.key_ai }}
-      - name: "Restore Nix store bundle: test-browser"
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-ai-${{ needs.build.outputs.key_ai }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: "Restore exact cached Nix bundle: vm-drivers"
+        if: needs.build.outputs.cache_vm_drivers_hit == 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: ${{ runner.temp }}/vm-bundles/test-browser.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-browser-${{ steps.vm-bundles.outputs.key_test_browser }}
-      - name: "Restore Nix store bundle: test-tools"
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+          path: ${{ runner.temp }}/vm-bundles/vm-drivers.nar.gz
+          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-vm-drivers-${{ needs.build.outputs.key_vm_drivers }}${{ needs.build.outputs.bundle_cache_namespace }}
+      - name: Download the exact Nix bundles used by the build
+        if: needs.build.outputs.bundle_cache_complete != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: ${{ runner.temp }}/vm-bundles/test-tools.nar.gz
-          key: ${{ env.CI_CACHE_SCHEMA }}-vm-bundle-test-tools-${{ steps.vm-bundles.outputs.key_test_tools }}
-      - name: Reassemble Nix store from VM bundles
+          name: vm-bundle-handoff
+          path: ${{ runner.temp }}/vm-bundles
+      - name: Verify exact bundle handoff before import
+        if: needs.build.outputs.bundle_cache_complete != 'true'
+        run: ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+      - name: Verify restored cached bundle archives
+        if: needs.build.outputs.bundle_cache_complete == 'true'
+        run: |
+          set -euo pipefail
+          for archive in "$RUNNER_TEMP"/vm-bundles/*.nar.gz; do
+            gzip -t "$archive"
+          done
+      - name: Reassemble Nix store from the build handoff
         run: ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
-      - name: Run unencrypted NixOS VM integration tests
-        run: nix build .#checks.x86_64-linux.nas-vm --show-trace -L
-      - name: Run encrypted NixOS VM integration tests
-        run: nix build .#checks.x86_64-linux.nas-vm-encrypted --show-trace -L
+      - name: Run ${{ matrix.vm }} NixOS VM integration tests
+        run: nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L
 
   installer:
     name: Official-ISO install, reboot, and final-VM deterministic checks
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'installer') ||
-      (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
-    needs: [integration, build]
+      always() && needs.build.result == 'success' &&
+      needs.browser.result == 'success' && needs.integration.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')) ||
+       (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
+    needs: [integration, browser, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 420
+    # 489 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
+    timeout-minutes: 519
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -615,7 +870,7 @@ jobs:
       - name: Install from the official NixOS ISO and reboot-test the appliance
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM deterministic layout/accessibility/security checks
-        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs -c bash ./scripts/qemu-final-browser.sh
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Retain final-VM browser evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -634,19 +889,18 @@ jobs:
   source-fuzz:
     name: Final smart fuzz shard (${{ matrix.shard }})
     if: >-
-      always() && needs.integration.result == 'success' &&
+      always() && needs.integration.result == 'success' && needs.browser.result == 'success' &&
       (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
-      (github.event_name == 'pull_request' ||
-       (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
-       (github.event_name == 'workflow_dispatch' && (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')))
-    needs: [integration, installer]
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
+    needs: [integration, browser, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
       fail-fast: false
       max-parallel: 6
       matrix:
-        shard: [boundaries, properties, stateful, security, javascript, executable-contracts]
+        shard: [boundaries, custom-inputs, properties, stateful, security, javascript, executable-contracts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -654,11 +908,11 @@ jobs:
         with:
           node-version: 24
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        if: matrix.shard == 'boundaries' || matrix.shard == 'properties' || matrix.shard == 'stateful' || matrix.shard == 'security'
+        if: matrix.shard == 'boundaries' || matrix.shard == 'custom-inputs' || matrix.shard == 'properties' || matrix.shard == 'stateful' || matrix.shard == 'security'
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Enable incremental Nix build cache
-        if: matrix.shard == 'boundaries' || matrix.shard == 'properties' || matrix.shard == 'stateful' || matrix.shard == 'security'
+        if: matrix.shard == 'boundaries' || matrix.shard == 'custom-inputs' || matrix.shard == 'properties' || matrix.shard == 'stateful' || matrix.shard == 'security'
         uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
         with:
           diagnostic-endpoint: ""
@@ -678,9 +932,14 @@ jobs:
 
   installed-command-fuzz:
     name: Final installed-command and HTTP adversarial checks
+    if: >-
+      always() && needs.installer.result == 'success' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
-    timeout-minutes: 420
+    # This job invokes the 489-minute installer wrapper; retain the same setup margin.
+    timeout-minutes: 519
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -717,7 +976,7 @@ jobs:
           NAS_FINAL_VM_WORKLOAD: installed-command-fuzz
           NAS_INSTALLED_FUZZ_OUT: installed-command-fuzz.json
           NAS_HTTP_ADVERSARIAL_OUT: http-adversarial.json
-        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Retain installed-command and HTTP adversarial evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -731,9 +990,14 @@ jobs:
 
   zap-fuzz:
     name: Final installed-VM active ZAP fuzz
+    if: >-
+      always() && needs.installer.result == 'success' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
-    timeout-minutes: 420
+    # This job invokes the 489-minute installer wrapper; retain the same setup margin.
+    timeout-minutes: 519
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -775,7 +1039,7 @@ jobs:
           NAS_ZAP_BROWSER_WORKERS: "2"
         run: |
           test -n "$NAS_ZAP_IMAGE"
-          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl -c bash ./scripts/qemu-final-browser.sh
+          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Retain active ZAP evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -788,7 +1052,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, browser, integration, installer, source-fuzz, installed-command-fuzz, zap-fuzz]
+    needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff, build, cache-vm-bundles, browser, integration, installer, source-fuzz, installed-command-fuzz, zap-fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

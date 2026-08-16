@@ -48,6 +48,7 @@ let
       "nas_identity_sync"
       "nas_logging"
       "nas_migrate_state"
+      "nas_service_caddy"
       "nas_setup"
       "nas_state"
     ];
@@ -438,7 +439,12 @@ let
   '';
 
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''
-    install -d "$out/share/authentik/blueprints"
+    mkdir -p "$out/share/authentik/blueprints"
+    # Authentik's worker expects its built-in system/bootstrap blueprint below
+    # the configured root. Preserve that package tree and layer the repository
+    # blueprint into the same immutable runtime bundle.
+    cp -a ${pkgs.authentik.src}/blueprints/. "$out/share/authentik/blueprints/"
+    chmod -R u+w "$out/share/authentik/blueprints"
     install -m 0444 ${../../../authentik/blueprints/nas-user-settings.yaml} \
       "$out/share/authentik/blueprints/nas-user-settings.yaml"
   '';

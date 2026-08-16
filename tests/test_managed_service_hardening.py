@@ -205,6 +205,30 @@ class GateTests(unittest.TestCase):
                 gate._EFFECTIVE_CACHE["mtime"] = 0.0
                 self.assertFalse(gate.authorize_service_scope(scope, headers))
 
+    def test_disabled_service_endpoint_is_never_authorized(self):
+        headers = {"Remote-User": "alice", "Remote-Groups": "nas_admin"}
+        scope = "service:test:web"
+        with tempfile.TemporaryDirectory() as tmp:
+            effective_path = pathlib.Path(tmp) / "effective.json"
+            effective_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "generation": 1,
+                        "endpoints": {
+                            "test:web": {
+                                "auth": {"mode": "public"},
+                                "available": False,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"NAS_EFFECTIVE_REGISTRY": str(effective_path)}):
+                gate._EFFECTIVE_CACHE["mtime"] = 0.0
+                self.assertFalse(gate.authorize_service_scope(scope, headers))
+
     def test_remote_uid_used(self):
         headers = {"Remote-User": "alice", "Remote-Groups": "family", "Remote-UID": "123"}
         scope = "service:test:web"
