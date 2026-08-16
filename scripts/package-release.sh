@@ -159,7 +159,7 @@ if git_checkout:
         text=True,
     ).stdout.strip()
     if status:
-        raise SystemExit("release checkout is dirty or has untracked files; review and commit inputs first")
+        raise SystemExit(f"release checkout is dirty or has untracked files; review and commit inputs first:\n{status}")
     payload = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
     selected = [pathlib.PurePosixPath(item.decode()) for item in payload.split(b"\0") if item]
     selection_policy = "git-tracked-clean"
