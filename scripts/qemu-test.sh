@@ -48,7 +48,7 @@ qemu_network_args() {
   validate_host_bind_address
   printf '%s\n' \
     -netdev \
-    "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443,hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092" \
+    "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443" \
     -device \
     virtio-net-pci,netdev=net0
 }
