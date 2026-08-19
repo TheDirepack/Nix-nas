@@ -375,11 +375,15 @@ in
       };
     };
 
+    # Caddy must start before secret activation (bootstrap phase). The
+    # nas-caddy-bootstrap selector synchronously ensures reconcile is fresh
+    # once secrets exist, so reconcile/authentik-reconcile are ordering-only
+    # here: a hard Requires would block the bootstrap preview on a service
+    # that cannot run until ZFS is mounted and secrets are staged.
     systemd.services.caddy = {
-      requires = [
+      wants = [
         "nas-managed-services-reconcile.service"
         "nas-managed-services-authentik-reconcile.service"
-        "nas-managed-services-wake.socket"
       ];
       after = [
         "nas-managed-services-reconcile.service"

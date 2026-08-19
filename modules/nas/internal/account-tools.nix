@@ -382,6 +382,7 @@ let
   nasPortalStatic = pkgs.runCommand "nas-portal-static" { } ''
     install -d "$out/share/nas-portal"
     install -m 0444 ${../../../web/portal/index.html} "$out/share/nas-portal/index.html"
+    install -m 0444 ${../../../web/portal/setup.html} "$out/share/nas-portal/setup.html"
   '';
 
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''

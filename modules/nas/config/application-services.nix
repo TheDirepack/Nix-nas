@@ -291,6 +291,10 @@ in
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
+      serviceConfig = {
+        StateDirectory = lib.mkForce "${cfg.zfsRoot}/copyparty";
+        StateDirectoryMode = lib.mkForce "0750";
+      };
     };
     systemd.services.syncthing = lib.mkIf cfg.syncthing.enable {
       requires = [ "nas-zfs-mount-guard.service" ];

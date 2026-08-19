@@ -76,9 +76,12 @@ in
       wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = lib.mkOverride 90 [ ];
       listenStreams = lib.mkOverride 90 (
-        if cfg.hostPolicy.directCockpitRecovery
-        then [ "0.0.0.0:${toString cockpitPort}" "[::]:${toString cockpitPort}" ]
-        else [ "127.0.0.1:${toString cockpitPort}" "[::1]:${toString cockpitPort}" ]
+        # The leading "" resets the packaged unit's ListenStream=9090 (same
+        # trick the nixpkgs cockpit module uses); without it systemd binds both
+        # 9090 and the loopback streams. Cockpit is reachable only through the
+        # Caddy reverse proxy; it never binds a network-facing listener. Caddy
+        # proxies /console to loopback.
+        [ "" "127.0.0.1:${toString cockpitPort}" "[::1]:${toString cockpitPort}" ]
       );
       socketConfig.BindIPv6Only = "ipv6-only";
       unitConfig = {
@@ -87,20 +90,8 @@ in
       };
       conflicts = [ "shutdown.target" ];
       before = [ "shutdown.target" ];
-      requires = [ "sysinit.target" ] ++ lib.optional (
-        cfg.hostPolicy.directCockpitRecovery
-        && cfg.networking.enable
-        && cfg.networking.firewall.enable
-        && cfg.trustedInterfaces != [ ]
-        && !cfg.testing.installationReadyFixture
-      ) "nas-management-network-guard.service";
-      after = [ "sysinit.target" "basic.target" ] ++ lib.optional (
-        cfg.hostPolicy.directCockpitRecovery
-        && cfg.networking.enable
-        && cfg.networking.firewall.enable
-        && cfg.trustedInterfaces != [ ]
-        && !cfg.testing.installationReadyFixture
-      ) "nas-management-network-guard.service";
+      requires = [ "sysinit.target" ];
+      after = [ "sysinit.target" "basic.target" ];
     };
 
     services.journald.extraConfig = ''

@@ -17,6 +17,7 @@
     ./config/identities.nix
     ./config/application-services.nix
     ./config/reverse-proxy.nix
+    ./config/caddy-bootstrap.nix
     ./config/observability.nix
     ./config/storage-monitoring.nix
     ./config/systemd-services.nix

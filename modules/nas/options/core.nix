@@ -32,7 +32,7 @@
       directCockpitRecovery = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Expose Cockpit's direct TLS/PAM recovery listener on trusted LAN interfaces. When false, Cockpit listens only on loopback for reverse-proxy access.";
+        description = "Deprecated. Cockpit is only reachable through the Caddy reverse proxy (loopback-only listener); this option no longer exposes a direct Cockpit listener.";
       };
     };
     installationReady = lib.mkOption {

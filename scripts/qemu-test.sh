@@ -53,6 +53,20 @@ qemu_network_args() {
     virtio-net-pci,netdev=net0
 }
 
+qemu_extra_drive_args() {
+  local disks_path disks
+  disks=""
+  if [[ -d "${NAS_QEMU_EXTRA_DISKS_DIR:-}" ]]; then
+    disks_path="$NAS_QEMU_EXTRA_DISKS_DIR"
+    while IFS= read -r -d '' image; do
+      disks="$disks${disks:+ }$image"
+    done < <(find "$disks_path" -maxdepth 1 -name '*.qcow2' -print0 2>/dev/null | sort -z)
+  fi
+  for disk in ${disks:-}; do
+    printf '%s\n' -drive "file=$disk,format=qcow2,if=virtio"
+  done
+}
+
 validate_host_bind_address
 
 usage() {
@@ -558,6 +572,7 @@ run_installer() {
 
     mapfile -t accel < <(qemu_acceleration)
     mapfile -t network_args < <(qemu_network_args)
+    mapfile -t extra_drive_args < <(qemu_extra_drive_args)
     options="$(cat "$boot_dir/options") console=ttyS0,115200n8 systemd.show_status=1"
     log "Installing NixOS NAS into a fresh QEMU disk"
     expect "$ROOT/tests/vm/install.expect" \
@@ -590,6 +605,7 @@ run_installer() {
 
   mapfile -t accel < <(qemu_acceleration)
   mapfile -t network_args < <(qemu_network_args)
+  mapfile -t extra_drive_args < <(qemu_extra_drive_args)
   if [[ ! -s "$pidfile" ]]; then
     log "Booting installed NAS in a disposable QEMU VM"
   elif nas_qemu_pid_from_pidfile "$pidfile"; then
@@ -606,6 +622,7 @@ run_installer() {
       -m "$MEMORY_MIB" -smp "$CPUS" \
       -drive "file=$os_disk,format=qcow2,if=virtio" \
       -drive "file=$data_disk,format=qcow2,if=virtio" \
+      "${extra_drive_args[@]}" \
       -device virtio-rng-pci \
       "${network_args[@]}" \
       -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
@@ -683,6 +700,7 @@ run_installer() {
     -m "$MEMORY_MIB" -smp "$CPUS" \
     -drive "file=$os_disk,format=qcow2,if=virtio" \
     -drive "file=$data_disk,format=qcow2,if=virtio" \
+    "${extra_drive_args[@]}" \
     -device virtio-rng-pci \
     "${network_args[@]}" \
     -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"

@@ -20,13 +20,13 @@ let
   '';
   trustedInterfacesArgs = lib.concatMapStringsSep " " lib.escapeShellArg cfg.trustedInterfaces;
   ownedServices = [ "ssh" "http" "https" "mdns" ];
+  # The NAS-owned zone exposes exactly the management plane: SSH plus the Caddy
+  # HTTPS front door (Caddy is the only host on the default HTTPS port).
+  # Cockpit is reachable only through Caddy at /console on loopback and never
+  # opens a LAN firewall port.
   ownedPorts = [
     { port = "443"; protocol = "udp"; }
-  ]
-  ++ lib.optional cfg.hostPolicy.directCockpitRecovery {
-    port = toString cockpitPort;
-    protocol = "tcp";
-  };
+  ];
   ownedForwardPorts = [ ];
   zoneXml = pkgs.writeText "nas-owned-zone.xml" ''
     <zone target="default">
@@ -167,8 +167,7 @@ in
     };
 
     systemd.services.nas-management-network-guard = lib.mkIf (
-      cfg.hostPolicy.directCockpitRecovery
-      && cfg.networking.firewall.enable
+      cfg.networking.firewall.enable
       && cfg.trustedInterfaces != [ ]
       && !cfg.testing.installationReadyFixture
     ) {

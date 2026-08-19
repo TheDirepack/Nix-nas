@@ -102,6 +102,14 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = "${nasZfsMountCheck}/bin/nas-zfs-mount-check";
+        # The dataset may be created after boot (first-run setup creates the
+        # pool and mounts it at runtime), in which case the boot-time tmpfiles
+        # pass only materialized ${cfg.zfsRoot}/* as plain root-filesystem
+        # directories that the new mount shadows. Re-apply the rules scoped to
+        # the ZFS root so per-type app directories (postgresql, authentik,
+        # nas-control, ...) exist behind the mount before any protected
+        # service starts. Idempotent; no-op when the dirs already exist.
+        ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix ${cfg.zfsRoot}";
       };
     };
 
@@ -441,12 +449,18 @@ in
 
     caddy = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
       wants = caddyBackendUnits;
-      requires = [ "nas-managed-services-reconcile.service" ];
-      after = caddyBackendUnits ++ [ "nas-managed-services-reconcile.service" ];
-      unitConfig.ConditionPathExists = "${secretRoot}/ready";
+      # The bootstrap-phase Caddy must come up before secret activation; the
+      # selector (nas-caddy-bootstrap.service) synchronously ensures reconcile
+      # is fresh post-secrets. Do not require reconcile here: pre-secrets it
+      # cannot run (ZFS mount guard) and would permanently block Caddy.
+      requires = [ "nas-caddy-bootstrap.service" "nas-managed-services-wake.socket" ];
+      after = caddyBackendUnits ++ [
+        "nas-caddy-bootstrap.service"
+        "nas-managed-services-wake.socket"
+      ];
     };
 
     sanoid = lib.mkIf (cfg.scheduler.backend == "systemd") { onFailure = failureAlert; };
