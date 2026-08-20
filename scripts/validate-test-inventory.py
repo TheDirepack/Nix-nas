@@ -30,6 +30,7 @@ NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/vm-bundles.sh",
     "scripts/vm-pytest.sh",
     "scripts/vm-reset.sh",
+    "scripts/vm-run.sh",
     "scripts/vm-start.sh",
     "scripts/vm-stop.sh",
     "scripts/zap-automation-scan.sh",

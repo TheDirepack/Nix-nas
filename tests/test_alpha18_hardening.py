@@ -111,12 +111,14 @@ class Alpha18HardeningContracts(unittest.TestCase):
     def test_firewall_baseline_is_exact_and_cockpit_fails_closed(self) -> None:
         firewall = text("modules/nas/config/network-firewall.nix")
         system = text("modules/nas/config/system.nix")
+        caddy = text("modules/nas/config/caddy-bootstrap.nix")
         self.assertIn("nas-firewall-baseline", firewall)
         self.assertIn("nas-management-network-guard", firewall)
         self.assertIn("nas-owned-zone.xml", firewall)
         self.assertIn("--query-service", firewall)
         self.assertIn("--query-port", firewall)
-        self.assertIn("nas-management-network-guard.service", system)
+        self.assertIn('"127.0.0.1:${toString cockpitPort}"', system)
+        self.assertIn("nas-management-network-guard.service", caddy)
 
     def test_authentik_has_one_non_secret_config_channel_and_distinct_runtime_dirs(self) -> None:
         services = text("modules/nas/config/application-services.nix")

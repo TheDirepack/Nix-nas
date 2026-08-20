@@ -622,7 +622,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("run_dynamic_web_scan", host)
         self.assertNotIn("NAS_ZAP_IMAGE", host)
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", host)
-        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
+        self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
         self.assertIn("zap-fuzz-evidence", workflow)
         self.assertIn('NAS_ZAP_CONFIRM_ACTIVE: "1"', workflow)
         self.assertNotIn("adversarial-installed.py", guest)

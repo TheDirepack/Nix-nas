@@ -1,6 +1,6 @@
-# Caddy First-Boot Bootstrap — Implementation Plan (initial)
+# Caddy First-Boot Bootstrap — Implementation Plan
 
-**Status:** Draft — refine as work proceeds.
+**Status:** Implemented and validated.
 **Branch:** `agent/managed-services-v2-simplify-v2`
 
 ## 1. Objective
@@ -39,8 +39,10 @@ exactly as it is for the post-secrets world.
 The nixpkgs caddy module bakes one Caddyfile (store path exposed at
 `/etc/caddy/caddy_config`). Pre-secrets:
 
-- `import /run/nas-control/caddy-managed.conf` fails (reconcile can't run: needs ZFS
-  mount + seed + firewalld, and ZFS is unlocked by secrets).
+- The V2 desired-state seed and reconcile run before first-run creates or mounts the
+  ZFS pool. `tmpfiles` creates their root-filesystem directories; the later ZFS mount
+  shadows those directories. Protected runtime services still wait for
+  `nas-zfs-mount-guard`.
 - forward-auth blocks point at an Authentik outpost that is not running → portal dead.
 
 Hence a separate bootstrap config that has none of those, and a runtime selector that
@@ -139,22 +141,18 @@ Verify the following don't regress:
 3. **Selector runs every boot** — cheap ready-check + one `import` line (no
    self-disable flag; state variant is the fallback if timing shows up).
 
-## 9. Limitations
+## 9. Remaining constraints
 
 1. **Caddy authorization surface pre-secrets:** `/console` has only Cockpit's own PAM
    gate (no admin password exists yet → effectively locked), and no forward-auth.
    Acceptable, documented.
 2. **ExecStart/ExecReload override vs module** — verify `adapter caddyfile` and that
-   `reloadTriggers`/`restartTriggers` (baked store path) don't fight the runtime file.
-   Validate in VM.
-3. **Test suite drift:** stale hostfwd assertions in `test_vm_suite.py:82-86` /
-   `test_contract_tooling.py:625` and `directCockpitRecovery` references in
-   `test_contract_operations.py:71` / `test_alpha18_hardening.py:115-119` must be
-   updated in the final test pass.
+    `reloadTriggers`/`restartTriggers` (baked store path) don't fight the runtime file.
+    Validate in VM.
+
+The persistent QEMU suite passed after the pre-ZFS seed/reconcile ordering change.
 
 ## 10. Verification path (VM)
-
-## 9. Verification path (VM)
 
 ```bash
 ssh -p 2222 -i ~/.cache/nixos-nas-qemu/state/installer-admin-ed25519 \

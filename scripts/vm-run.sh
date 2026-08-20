@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CACHE_DIR="${NAS_QEMU_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu}"
 STATE_DIR="${NAS_QEMU_STATE_DIR:-$CACHE_DIR/state}"
 SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"

@@ -30,6 +30,30 @@
       "setting": "nixpkgs.config.rocmSupport",
       "count": 1,
       "reason": "NixOS 26.05 sets nixpkgs.config read-only; host-platform must force rocmSupport based on nas.hardware.llamaCpp.backend."
+    },
+    {
+      "path": "modules/nas/config/caddy-bootstrap.nix",
+      "setting": "systemd.services.caddy.serviceConfig.ExecStart",
+      "count": 1,
+      "reason": "The NixOS Caddy module bakes a static configFile; the bootstrap/full transition is a runtime decision, so the unit must force a /run-selected active config path."
+    },
+    {
+      "path": "modules/nas/config/caddy-bootstrap.nix",
+      "setting": "systemd.services.caddy.serviceConfig.ExecReload",
+      "count": 1,
+      "reason": "Reload must re-read the /run-selected active config so Caddy follows the bootstrap-to-full secret activation without restarting the unit."
+    },
+    {
+      "path": "modules/nas/config/application-services.nix",
+      "setting": "StateDirectory",
+      "count": 1,
+      "reason": "CopyParty and Vaultwarden store data on the ZFS tank, so StateDirectory must be forced to the absolute ZFS path instead of the default /var/lib path."
+    },
+    {
+      "path": "modules/nas/config/application-services.nix",
+      "setting": "StateDirectoryMode",
+      "count": 1,
+      "reason": "The ZFS-backed StateDirectory must keep a restrictive mode that matches the NAS share-group write policy."
     }
   ]
 }

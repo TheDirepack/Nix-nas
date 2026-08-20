@@ -57,10 +57,29 @@ class ContractTests(unittest.TestCase):
         systemd = text("modules/nas/config/managed-services.nix")
         self.assertIn("nas-managed-services-reconcile", systemd)
 
+    def test_v2_authority_bootstraps_before_first_run_storage(self) -> None:
+        managed = text("modules/nas/config/managed-services.nix")
+        seed = managed.split("systemd.services.nas-managed-services-seed = {", 1)[1].split(
+            "systemd.services.nas-managed-services-reconcile = {", 1
+        )[0]
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile = {", 1
+        )[0]
+        protected = text("modules/nas/config/systemd-services.nix")
+
+        # The seed uses tmpfiles-backed root-fs directories until first-run creates the pool.
+        self.assertNotIn("nas-zfs-mount-guard.service", seed)
+        self.assertNotIn("RequiresMountsFor", seed)
+        self.assertNotIn("nas-zfs-mount-guard.service", reconcile)
+        self.assertNotIn("RequiresMountsFor", reconcile)
+        self.assertIn('postgresql = {', protected)
+        self.assertIn('requires = [ "nas-zfs-mount-guard.service" ];', protected)
+
     def test_cockpit_recovery_socket_is_available_before_protected_services(self) -> None:
         base = text("modules/nas/internal/base.nix")
         system = text("modules/nas/config/system.nix")
         firewall = text("modules/nas/config/network-firewall.nix")
+        caddy = text("modules/nas/config/caddy-bootstrap.nix")
         services = text("modules/nas/config/application-services.nix")
         secrets = text("modules/nas/internal/secret-tools.nix")
         self.assertNotIn('protectedServiceUnits = [\n    "cockpit.socket"', base)
@@ -68,7 +87,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("DefaultDependencies = false", system)
         self.assertIn('conflicts = [ "shutdown.target" ]', system)
         self.assertIn('requires = [ "sysinit.target" ]', system)
-        self.assertIn("lib.optional cfg.hostPolicy.directCockpitRecovery", firewall)
+        self.assertNotIn("directCockpitRecovery", firewall)
+        self.assertIn("nas-management-network-guard.service", caddy)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 

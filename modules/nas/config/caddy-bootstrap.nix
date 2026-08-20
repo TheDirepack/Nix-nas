@@ -9,13 +9,7 @@ let
     secretRoot
   ;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
-  bootstrapCaddyfileGen = pkgs.writeText "bootstrap-caddyfile-gen.sh" ''
-    #!/usr/bin/env bash
-    set -euo pipefail
-    NAS_PORTAL_STATIC=${nasPortalStatic}
-    COCKPIT_PORT=${toString cockpitPort}
-    LAN_HOST=${lanHost}
-    SECRET_ROOT=${secretRoot}
+  bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
     cat <<EOF
 {
   log {
@@ -29,7 +23,7 @@ let
   }
 }
 
-https://${LAN_HOST} {
+https://${lanHost} {
   tls internal
   encode zstd gzip
   header {
@@ -40,13 +34,13 @@ https://${LAN_HOST} {
   }
 
   handle /console/* {
-    reverse_proxy 127.0.0.1:${COCKPIT_PORT} {
+    reverse_proxy 127.0.0.1:${toString cockpitPort} {
       header_up X-Forwarded-Proto https
       header_up X-Forwarded-Prefix /console
     }
   }
   handle /console {
-    reverse_proxy 127.0.0.1:${COCKPIT_PORT} {
+    reverse_proxy 127.0.0.1:${toString cockpitPort} {
       header_up X-Forwarded-Proto https
       header_up X-Forwarded-Prefix /console
     }
@@ -63,7 +57,7 @@ https://${LAN_HOST} {
 
   # Serve the setup form at /setup.
   handle_path /setup {
-    root * ${NAS_PORTAL_STATIC}/share/nas-portal
+    root * ${nasPortalStatic}/share/nas-portal
     file_server
   }
 }
@@ -72,10 +66,6 @@ EOF
   bootstrapCaddyfile = pkgs.runCommand "bootstrap-caddyfile" {
     nativeBuildInputs = [ bootstrapCaddyfileGen ];
   } ''
-    export NAS_PORTAL_STATIC=${nasPortalStatic}
-    export COCKPIT_PORT=${toString cockpitPort}
-    export LAN_HOST=${lanHost}
-    export SECRET_ROOT=${secretRoot}
     ${bootstrapCaddyfileGen} > $out
   '';
   fullCaddyImport = "import /etc/caddy/caddy_config";
@@ -119,6 +109,21 @@ in
   # The module's reload triggers still reference the baked full config path so
   # NixOS activations keep reloading Caddy; our ExecReload re-reads the active
   # file, which imports the full config when secrets are active.
+
+  # Caddy is the HTTPS management front door, so it must not accept traffic
+  # until the trusted-interface firewall policy is verified. The guard is
+  # defined in network-firewall.nix under the same conditions; the cockpit
+  # socket it gates stays loopback-only behind Caddy.
+  systemd.services.caddy.requires = lib.mkIf (
+    cfg.networking.firewall.enable
+    && cfg.trustedInterfaces != [ ]
+    && !cfg.testing.installationReadyFixture
+  ) [ "nas-management-network-guard.service" ];
+  systemd.services.caddy.after = lib.mkIf (
+    cfg.networking.firewall.enable
+    && cfg.trustedInterfaces != [ ]
+    && !cfg.testing.installationReadyFixture
+  ) [ "nas-management-network-guard.service" ];
 
   systemd.services.nas-caddy-bootstrap = {
     description = "Select the active Caddy configuration (bootstrap vs full)";

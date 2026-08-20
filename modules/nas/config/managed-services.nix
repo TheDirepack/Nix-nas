@@ -197,10 +197,7 @@ in
     systemd.services.nas-managed-services-seed = {
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" ];
       before = [ "nas-managed-services-reconcile.service" ];
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
@@ -216,9 +213,8 @@ in
     systemd.services.nas-managed-services-reconcile = {
       description = "Compile and activate Managed Services V2 desired state";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "nas-managed-services-seed.service" "nas-zfs-mount-guard.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
-      after = [ "nas-managed-services-seed.service" "nas-zfs-mount-guard.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
+      requires = [ "nas-managed-services-seed.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
+      after = [ "nas-managed-services-seed.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
       before = [ "caddy.service" ];
       environment = {
         PYTHONPATH = "${v2Source}";
