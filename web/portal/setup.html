@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="canonical" href="/setup">
+  <title>NAS First start</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background:#111; color:#eee; }
+    body { max-width:70rem; margin:0 auto; padding:3rem 1.25rem; }
+    header { margin-bottom:2rem; }
+    h1 { margin:0 0 .35rem; font-size:clamp(2rem,6vw,4rem); }
+    p { color:#bbb; }
+    .setup-form { background: #f0f0f0; padding: 20px; border-radius: 8px; margin-top: 20px; }
+    input, button { padding: 10px; margin: 10px 0; width: 100%; }
+    button { background: #0066cc; color: white; border: none; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NAS</h1>
+    <p>This appliance is running but has not been set up yet.</p>
+  </header>
+  <main>
+    <div class="setup-form">
+      <form method="POST" action="/setup">
+        <div>
+          <label for="admin-user">Admin Username:</label>
+          <input type="text" id="admin-user" name="admin-user" required>
+        </div>
+        <div>
+          <label for="admin-pass">Admin Password:</label>
+          <input type="password" id="admin-pass" name="admin-pass" required>
+        </div>
+        <button type="submit">Continue Setup</button>
+      </form>
+      <p><small>This will initialize the secure store and generate initial keys.</small></p>
+    </div>
+  </main>
+  <footer>The first-run setup assistant lives inside the system console. Nothing on this page requires an account.</footer>
+</body>
+</html>

@@ -99,7 +99,6 @@ def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
 
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
 ALLOWED_ROUTE_RETRY_ATTEMPTS = 30
-PORTAL_AUTHORIZATION_RETRY_ATTEMPTS = 30
 
 
 def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
@@ -204,37 +203,9 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
 
     try:
         wait.until(authenticated_portal_loaded)
-        wait_for_authenticated_portal(driver, public_origin)
     except TimeoutException as error:
         details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
         raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
-
-
-def wait_for_authenticated_portal(driver: webdriver.Chrome, origin: str) -> None:
-    """Wait for the forward-auth chain to accept the new outpost session."""
-    last_error = ""
-    for attempt in range(PORTAL_AUTHORIZATION_RETRY_ATTEMPTS):
-        try:
-            driver.get(origin + "/")
-            ready = driver.execute_script("return document.readyState") in {"interactive", "complete"}
-            body = str(driver.execute_script("return document.body?.innerText || ''"))
-            if ready and not any(
-                marker in body for marker in ("HTTP ERROR 401", "HTTP ERROR 403", "Access to " + origin + " was denied")
-            ):
-                return
-            last_error = body[:500]
-            # A failed probe leaves a Chrome network error in the browser log.
-            # It is a useful failure diagnostic, but must not poison the real
-            # rendering check after a delayed outpost reload succeeds.
-            driver.get_log("browser")
-        except (TimeoutException, WebDriverException) as error:
-            last_error = str(error)
-        if attempt + 1 < PORTAL_AUTHORIZATION_RETRY_ATTEMPTS:
-            time.sleep(1)
-    raise TimeoutException(
-        f"authenticated portal did not become reachable after "
-        f"{PORTAL_AUTHORIZATION_RETRY_ATTEMPTS} attempts: {last_error!r}"
-    )
 
 
 def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:

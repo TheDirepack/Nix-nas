@@ -35,7 +35,7 @@
 
     hostPolicy = {
       mutableLocalPasswords = true;
-      directCockpitRecovery = true;
+      directCockpitRecovery = false;
     };
 
     installationReady = false;

@@ -161,7 +161,7 @@ jobs:
       - name: Validate generated Caddy fragment with real Caddy
         run: |
           nix shell nixpkgs#caddy -c caddy version
-          nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v
+          nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v
 
   static:
     name: Fast Nix evaluation, lint, type and formatting checks
@@ -724,8 +724,8 @@ jobs:
        (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))
     needs: [build]
     runs-on: ubuntu-24.04
-    # 379 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
-    timeout-minutes: 409
+    # 384 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
+    timeout-minutes: 414
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -812,8 +812,8 @@ jobs:
        (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [integration, browser, build]
     runs-on: ubuntu-24.04
-    # 489 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
-    timeout-minutes: 519
+    # 494 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
+    timeout-minutes: 524
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -938,8 +938,8 @@ jobs:
        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
-    # This job invokes the 489-minute installer wrapper; retain the same setup margin.
-    timeout-minutes: 519
+    # This job invokes the 494-minute installer wrapper; retain the same setup margin.
+    timeout-minutes: 524
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -996,8 +996,8 @@ jobs:
        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
-    # This job invokes the 489-minute installer wrapper; retain the same setup margin.
-    timeout-minutes: 519
+    # This job invokes the 494-minute installer wrapper; retain the same setup margin.
+    timeout-minutes: 524
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

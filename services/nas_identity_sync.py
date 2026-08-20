@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Bootstrap Authentik NAS groups and reconcile Authentik-owned Syncthing data.
+"""Bootstrap Authentik NAS roles and reconcile Authentik-owned Syncthing data.
 
 This service never writes CopyParty configuration. CopyParty owns volumes, ACLs,
-flags, and share links; Authentik owns users, credentials, groups, and profile
-attributes. The reconciler updates only Syncthing objects in the reserved
-``nas-`` namespace.
+flags, and share links; Authentik owns users, credentials, groups, application
+capability assignments, and profile attributes. Managed Services V2 ensures
+application capability objects separately. This reconciler updates base identity
+roles and Syncthing objects in the reserved ``nas-`` namespace only.
 """
 
 from __future__ import annotations
@@ -29,14 +30,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Mapping
 
-from nas_common import (
-    ADMIN_GROUP,
-    CAPABILITY_GROUPS,
-    DISABLED_GROUP,
-    GUEST_GROUP,
-    USER_GROUP,
-    capability_allowed,
-)
+from nas_common import ADMIN_GROUP, DISABLED_GROUP
 from nas_operation_journal import JournalError, OperationJournal, load_json
 from nas_operation_lock import (
     COORDINATION_TOKEN_ENV,
@@ -44,42 +38,21 @@ from nas_operation_lock import (
     acquire_operation,
     validate_coordination_token,
 )
-from nas_syncthing_devices import DeviceError, normalize_devices, validate_username
+from nas_syncthing_devices import DeviceError, validate_username
 from nas_identity_model import (
-    Group,
     RESERVED_GROUPS,
     IdentityModel,
     SyncError,
-    User,
-    attrs_map,
     build_model,
     capability_status,
     enabled_administrator_names,
-    group_names,
     model_status,
     normalized_account_plan,
     raw_group_pks,
     user_detail_pk,
-    user_device_values,
     validate_uid,
     desired_syncthing as desired_syncthing_model,
 )
-
-# Compatibility re-exports: callers and older tests import the identity-model
-# vocabulary from this command module. Keep the public surface explicit so
-# static analysis does not mistake these imports for dead code.
-__all__ = [
-    "CAPABILITY_GROUPS",
-    "GUEST_GROUP",
-    "USER_GROUP",
-    "capability_allowed",
-    "normalize_devices",
-    "Group",
-    "User",
-    "attrs_map",
-    "group_names",
-    "user_device_values",
-]
 
 AUTHENTIK_URL = os.environ.get("NAS_AUTHENTIK_URL", "http://127.0.0.1:9000/identity").rstrip("/")
 AUTHENTIK_TOKEN_FILE = pathlib.Path(os.environ.get("NAS_AUTHENTIK_TOKEN_FILE", "/run/nas-secrets/authentik/api-token"))
@@ -99,9 +72,36 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
     os.environ.get("NAS_ACCOUNT_JOURNAL", "/var/lib/nas-identity-sync/account-plan-journal.json")
 )
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
-SYNCTHING_URL = os.environ.get("NAS_SYNCTHING_URL", "http://127.0.0.1:8384").rstrip("/")
+
+
+def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
+    explicit = os.environ.get("NAS_SYNCTHING_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    try:
+        from nas_common import load_effective_authority
+
+        data = load_effective_authority()
+        port = (
+            data.get("services", {}).get("syncthing", {}).get("routes", {}).get("web", {}).get("target", {}).get("port")
+        )
+        if isinstance(port, int) and 1 <= port <= 65535:
+            return f"http://127.0.0.1:{port}"
+        raise RuntimeError("syncthing web target port missing in effective state")
+    except FileNotFoundError:
+        # Effective state not yet present (early boot/test). Fall back to legacy default
+        # but systemd ConditionPathExists will gate real VM execution until effective exists.
+        return "http://127.0.0.1:8384"
+    except Exception as exc:
+        raise RuntimeError(f"unable to resolve syncthing URL from effective state: {exc}") from exc
+
+
+try:
+    SYNCTHING_URL = _resolve_syncthing_url()
+except RuntimeError:
+    # Defer failure to call site; keep module importable in test harnesses.
+    SYNCTHING_URL = "http://127.0.0.1:8384"
 SYNCTHING_CONFIG_DIR = pathlib.Path(os.environ.get("NAS_SYNCTHING_CONFIG_DIR", "/var/lib/syncthing/.config/syncthing"))
-USERNAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
 
 
 def diagnostic(message: str) -> None:
@@ -171,8 +171,6 @@ def http_json(
         request_headers.update(headers)
 
     normalized_method = method.upper()
-    # Only retry reads. Replaying POST/PATCH/DELETE without an upstream idempotency
-    # contract can duplicate users, groups, tokens, or membership mutations.
     max_attempts = 3 if normalized_method in {"GET", "HEAD"} else 1
     reference = secrets.token_hex(6)
     last_error: BaseException | None = None
@@ -210,7 +208,7 @@ def http_json(
                 time.sleep(_retry_delay(attempt))
                 continue
             raise SyncError(f"Unable to reach Authentik (reference {reference})") from exc
-    else:  # pragma: no cover - the loop either breaks or raises
+    else:  # pragma: no cover
         raise SyncError(f"Unable to reach Authentik (reference {reference})") from last_error
 
     if not payload:
@@ -301,10 +299,7 @@ def ensure_groups(token: str) -> dict[str, Any]:
             corrected.append(name)
 
     refreshed_groups = authentik_list(token, "core/groups/?include_users=true")
-    admin_group = next(
-        (item for item in refreshed_groups if item.get("name") == ADMIN_GROUP),
-        None,
-    )
+    admin_group = next((item for item in refreshed_groups if item.get("name") == ADMIN_GROUP), None)
     if not isinstance(admin_group, Mapping) or admin_group.get("pk") is None:
         raise SyncError(f"Authentik group {ADMIN_GROUP} could not be loaded after bootstrap")
 
@@ -328,12 +323,7 @@ def ensure_groups(token: str) -> dict[str, Any]:
         if not isinstance(user_pk, int):
             raise SyncError("Authentik akadmin does not expose the numeric user ID required for group membership")
         group_pk = urllib.parse.quote(str(admin_group["pk"]), safe="")
-        authentik_request(
-            token,
-            f"core/groups/{group_pk}/add_user/",
-            method="POST",
-            body={"pk": user_pk},
-        )
+        authentik_request(token, f"core/groups/{group_pk}/add_user/", method="POST", body={"pk": user_pk})
         bootstrapped_member = "akadmin"
 
     return {
@@ -342,7 +332,7 @@ def ensure_groups(token: str) -> dict[str, Any]:
         "bootstrappedAdministrator": bootstrapped_member,
         "note": (
             f"{ADMIN_GROUP} is the only Authentik superuser group. It may contain "
-            "multiple fully trusted administrators; CopyParty independently owns shares and ACLs."
+            "multiple fully trusted administrators; application capability assignments remain Authentik-owned."
         ),
     }
 
@@ -525,11 +515,7 @@ def atomic_write(path: pathlib.Path, content: str, *, mode: int = 0o600) -> bool
 
 
 def atomic_write_json(path: pathlib.Path, value: Mapping[str, Any], *, mode: int = 0o600) -> bool:
-    return atomic_write(
-        path,
-        json.dumps(dict(value), indent=2, sort_keys=True) + "\n",
-        mode=mode,
-    )
+    return atomic_write(path, json.dumps(dict(value), indent=2, sort_keys=True) + "\n", mode=mode)
 
 
 def remove_file_durable(path: pathlib.Path) -> None:
@@ -678,10 +664,7 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
         "phase": "prepared",
         "generation": generation,
         "previousState": state,
-        "desired": {
-            "folders": folders,
-            "devices": devices,
-        },
+        "desired": {"folders": folders, "devices": devices},
     }
     atomic_write_json(SYNCTHING_JOURNAL_PATH, journal)
     for device_id, device in devices.items():
@@ -886,10 +869,7 @@ def apply_account_plan(
                 return 2
             return 1
 
-        ordered_accounts = sorted(
-            enumerate(accounts),
-            key=lambda pair: (write_priority(pair[1]), pair[0]),
-        )
+        ordered_accounts = sorted(enumerate(accounts), key=lambda pair: (write_priority(pair[1]), pair[0]))
         for _, account in ordered_accounts:
             username = account["username"]
             current = existing_by_name.get(username)
@@ -899,6 +879,8 @@ def apply_account_plan(
             merged_attrs["nasManagedBySetup"] = True
 
             current_group_pks = raw_group_pks(current) if isinstance(current, Mapping) else set()
+            # Application capability assignments are Authentik-owned and are not
+            # members of RESERVED_GROUPS, so account setup preserves them.
             non_reserved_pks = {key for key in current_group_pks if group_name_by_pk.get(key) not in RESERVED_GROUPS}
             desired_group_pks = non_reserved_pks | {str(group_by_name[name]["pk"]) for name in account["groups"]}
             body = {
@@ -917,12 +899,7 @@ def apply_account_plan(
                             token,
                             "core/users/",
                             method="POST",
-                            body={
-                                "username": username,
-                                "path": "users",
-                                "type": "internal",
-                                **body,
-                            },
+                            body={"username": username, "path": "users", "type": "internal", **body},
                         )
                         if not isinstance(created_user, Mapping):
                             raise SyncError(f"Authentik did not return the created user {username}")
@@ -1105,7 +1082,7 @@ def identity_command_lock(command: str):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("bootstrap", help="Create/correct reserved NAS groups using the bootstrap token")
+    sub.add_parser("bootstrap", help="Create/correct base NAS identity roles using the bootstrap token")
     sub.add_parser("verify-token", help="Verify the scoped runtime token can read identity state")
     sub.add_parser("bootstrap-runtime-token", help="Issue the scoped runtime token using bootstrap authority")
     sub.add_parser("sync", help="Validate Authentik identity state and reconcile Syncthing when enabled")
@@ -1113,7 +1090,7 @@ def main() -> int:
     fixture.add_argument("fixture", type=pathlib.Path)
     sub.add_parser("sync-syncthing", help="Reconcile only Authentik-owned Syncthing objects")
     sub.add_parser("status", help="Report the current Authentik identity model")
-    sub.add_parser("capabilities", help="Report application capabilities derived from Authentik groups")
+    sub.add_parser("capabilities", help="Report Authentik-owned Managed Services V2 application assignments")
     apply_parser = sub.add_parser("apply-accounts", help="Create/update Authentik accounts from a transient JSON plan")
     apply_parser.add_argument("source", help="JSON file or - for stdin")
     apply_parser.add_argument(

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "storage": {
     "createPool": false,
     "devices": [],
@@ -13,11 +13,7 @@
       "name": "Second NAS Administrator",
       "email": "operator@nas.local",
       "groups": [
-        "nas_admin",
-        "nas_allow_files",
-        "nas_allow_ai",
-        "nas_allow_vault",
-        "nas_allow_syncthing"
+        "nas_admin"
       ],
       "passwordFile": "/run/keys/nas-operator-password"
     },
@@ -26,10 +22,7 @@
       "name": "Alice Example",
       "email": "alice@nas.local",
       "groups": [
-        "nas_users",
-        "nas_allow_files",
-        "nas_allow_vault",
-        "nas_allow_syncthing"
+        "nas_users"
       ],
       "passwordFile": "/run/keys/nas-alice-password",
       "attributes": {
@@ -45,9 +38,9 @@
       ]
     }
   ],
-  "features": {
-    "aiRuntime": "on-demand",
-    "aiWorkspace": "on-demand",
+  "services": {
+    "ai-runtime": "always",
+    "ai-workspace": "on-demand",
     "grafana": "on-demand"
   },
   "deactivateMissingManagedAccounts": false,

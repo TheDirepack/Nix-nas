@@ -327,9 +327,34 @@ class ContractTests(unittest.TestCase):
                 shutil.copytree(
                     ROOT,
                     root,
-                    ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage", "state"),
+                    ignore=shutil.ignore_patterns(
+                        ".pytest_cache",
+                        ".ruff_cache",
+                        "__pycache__",
+                        ".coverage",
+                        ".coverage.*",
+                        "coverage.json",
+                        "node_modules",
+                        "state",
+                    ),
                 )
                 shutil.rmtree(root / ".git", ignore_errors=True)
+                if label == "ignored secret":
+                    # A non-git tree is authorized by the allowlist shipped inside a
+                    # source archive; seed it from the pristine copy so the injected
+                    # file is an unreviewed extra against that authority.
+                    subprocess.run(
+                        [
+                            "python3",
+                            str(root / "scripts" / "lib" / "manifest.py"),
+                            "--root",
+                            str(root),
+                            "--out",
+                            str(root / "MANIFEST.sha256"),
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
                 target = target_factory(root)
                 if label == "ignored secret":
                     target.parent.mkdir(parents=True)
@@ -464,7 +489,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("d /var/lib/nas-setup 0770 root wheel -", system)
         self.assertRegex(
             tools,
-            r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0770";',
+            r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0750";',
         )
         self.assertIn("def first_run", setup)
         self.assertIn("passwordFile", setup)
@@ -597,7 +622,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("run_dynamic_web_scan", host)
         self.assertNotIn("NAS_ZAP_IMAGE", host)
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", host)
-        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
+        self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
         self.assertIn("zap-fuzz-evidence", workflow)
         self.assertIn('NAS_ZAP_CONFIRM_ACTIVE: "1"', workflow)
         self.assertNotIn("adversarial-installed.py", guest)
@@ -624,12 +649,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-setup first-run", guest)
         self.assertIn("nas-setup account apply", guest)
         self.assertIn("/authorize?scope=files", guest)
-        self.assertIn("/authorize?feature=aiRuntime&scope=admin", guest)
-        self.assertIn('set_feature_modes \'{"aiRuntime":"always","aiWorkspace":"always"}\'', guest)
-        self.assertIn('set_feature_modes \'{"aiRuntime":"off","aiWorkspace":"off"}\'', guest)
-        self.assertIn('set_feature_modes \'{"aiRuntime":"on-demand","aiWorkspace":"on-demand"}\'', guest)
         self.assertIn("open-webui.service", guest)
-        self.assertIn("nas-feature-control set grafana always", guest)
+        self.assertIn("nas-managed-services-control status", guest)
+        self.assertIn("nas-managed-services-control document", guest)
+        self.assertIn("nas-managed-services-control set ", guest)
+        self.assertIn("nas-managed-services-control set-many", guest)
+        self.assertIn("nas-managed-services-control wake", guest)
+        self.assertIn("nas-managed-services-control set grafana", guest)
+        self.assertIn("ai-runtime", guest)
+        self.assertIn("ai-workspace", guest)
+        self.assertIn("ai-downloader", guest)
+        self.assertNotIn("nas-feature-control", guest)
+        self.assertNotIn("nas-migrate-state", guest)
+        self.assertNotIn("aiRuntime", guest)
+        self.assertNotIn("aiWorkspace", guest)
         self.assertIn("syncthing_config=/var/lib/syncthing/.config/syncthing/config.xml", guest)
         self.assertIn('REMOTE = "tftp/qemu-tftp.txt"', guest)
         self.assertIn("read-only TFTP accepted a write request", guest)

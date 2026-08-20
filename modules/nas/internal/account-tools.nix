@@ -5,15 +5,8 @@ let
     authentikBootstrapTokenFile
     authentikPort
     aiStorageRoot
-    capabilityRegistry
-    capabilityRegistryFile
     cfg
     copypartyUserConfigDir
-    featureCatalogPath
-    featureSchemaPath
-    featureRuntimePath
-    featureStatePath
-    identityAdminGroup
     lib
     llamaCppPackage
     nasSecrets
@@ -21,16 +14,15 @@ let
     nasPreflight
     nasZfsCreateEncryptedDataset
     nasZfsMountCheck
-    onDemandGateSocket
     pkgs
     shareRoot
     syncthingConfigDir
+    systemStateVersion
     vaultwardenBackupDir
   ;
-  capabilityEnvironment = ''
-    export NAS_CAPABILITY_REGISTRY_FILE=${lib.escapeShellArg capabilityRegistryFile}
-    export NAS_CAPABILITY_REGISTRY_REQUIRED=1
-  '';
+  vaultwardenStateDirectory =
+    if lib.versionOlder systemStateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
+  vaultwardenDataDir = "/var/lib/${vaultwardenStateDirectory}";
 
   nasPythonApplication = pkgs.python3Packages.buildPythonApplication {
     pname = "nixos-nas-control";
@@ -38,19 +30,25 @@ let
     pyproject = true;
     src = lib.cleanSource ../../..;
     build-system = [ pkgs.python3Packages.setuptools ];
-    dependencies = [ pkgs.python3Packages.pyyaml ];
+    dependencies = with pkgs.python3Packages; [
+      defusedxml
+      jsonschema
+      pyyaml
+      ruamel-yaml
+    ];
     pythonImportsCheck = [
       "nas_ai_config"
       "nas_alert_router"
       "nas_cockpit_api"
       "nas_doctor"
-      "nas_feature_control"
       "nas_identity_sync"
       "nas_logging"
-      "nas_migrate_state"
-      "nas_service_caddy"
       "nas_setup"
       "nas_state"
+      "nas_v2_backup"
+      "nas_v2_control"
+      "nas_v2_editor"
+      "nas_v2_session"
     ];
     doCheck = false;
   };
@@ -64,27 +62,10 @@ let
       export NAS_AUTHENTIK_URL=http://127.0.0.1:${toString authentikPort}${lib.removeSuffix "/" cfg.identity.authentikPath}
       export NAS_AUTHENTIK_TOKEN_FILE=${lib.escapeShellArg authentikApiTokenFile}
       export NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=${lib.escapeShellArg authentikBootstrapTokenFile}
-      ${capabilityEnvironment}
       export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
       export NAS_SYNCTHING_CONFIG_DIR=${lib.escapeShellArg syncthingConfigDir}
       exec ${nasIdentitySyncScript} "$@"
-    '';
-  };
-
-  nasFeatureControlScript = "${nasPythonApplication}/bin/nas-feature-control";
-  nasFeatureControl = pkgs.writeShellApplication {
-    name = "nas-feature-control";
-    runtimeInputs = [ pkgs.coreutils pkgs.python3 pkgs.systemd ];
-    text = ''
-      export NAS_FEATURE_CATALOG=${lib.escapeShellArg featureCatalogPath}
-      export NAS_FEATURE_SCHEMA=${lib.escapeShellArg featureSchemaPath}
-      export NAS_FEATURE_STATE=${lib.escapeShellArg featureStatePath}
-      export NAS_FEATURE_RUNTIME=${lib.escapeShellArg featureRuntimePath}
-      export NAS_FEATURE_LOCK=/var/lib/nas-control/feature-control.lock
-      export NAS_ON_DEMAND_SOCKET=${lib.escapeShellArg onDemandGateSocket}
-      ${capabilityEnvironment}
-      exec ${nasFeatureControlScript} "$@"
     '';
   };
 
@@ -98,7 +79,7 @@ let
       pkgs.systemd
       pkgs.util-linux
       pkgs.zfs
-      nasFeatureControl
+      nasPythonApplication
       nasIdentitySync
       nasPreflight
       nasSecrets
@@ -150,18 +131,18 @@ let
   # guessing root:root ownership from the empty target host.
   stateRegistry = [
     (mkPathAuthority {
-      name = "feature-control";
-      source = "/var/lib/nas-control";
-      owner = "nas-feature-gate";
-      group = "nas-feature-control";
-      rootMode = "0770";
+      name = "managed-services";
+      source = "/var/lib/nas-control/services.yaml";
+      owner = "root";
+      group = "nas-operations";
+      rootMode = "0640";
     })
     (mkPathAuthority {
       name = "first-run";
       source = "/var/lib/nas-setup";
       optional = true;
       group = "wheel";
-      rootMode = "0770";
+      rootMode = "0750";
     })
     (mkPathAuthority {
       name = "copyparty";
@@ -202,23 +183,8 @@ let
       rootMode = "0600";
     })
     (mkDatabaseAuthority { name = "authentik-database"; source = "postgresql://authentik"; })
-    (mkPathAuthority {
-      name = "managed-services";
-      source = "/var/lib/nas-control/services.json";
-      owner = "nas-feature-gate";
-      group = "nas-feature-control";
-      rootMode = "0600";
-    })
-    (mkPathAuthority {
-      name = "managed-apps";
-      source = "/var/lib/nas-control/apps";
-      owner = "nas-feature-gate";
-      group = "nas-feature-control";
-      rootMode = "0750";
-      optional = true;
-    })
   ]
-   ++ lib.optionals cfg.networking.enable [
+  ++ lib.optionals cfg.networking.enable [
     (mkPathAuthority {
       name = "networkmanager";
       source = "/etc/NetworkManager/system-connections";
@@ -245,7 +211,7 @@ let
   ++ lib.optionals cfg.vaultwarden.enable [
     (mkPathAuthority {
       name = "vaultwarden";
-      source = "/var/lib/bitwarden_rs";
+      source = vaultwardenDataDir;
       sensitive = true;
       owner = "vaultwarden";
       group = "vaultwarden";
@@ -329,9 +295,6 @@ let
     })
   ]
   ++ lib.optionals cfg.virtualization.enable [
-    # /var/lib/libvirt is heterogeneous; root ownership applies only to the
-    # authority root. Existing subpath owners are preserved and libvirt remains
-    # a priority for a dedicated native adapter/VM-backed restore test.
     (mkPathAuthority {
       name = "libvirt";
       source = "/var/lib/libvirt";
@@ -339,12 +302,11 @@ let
       rootMode = "0750";
     })
   ];
-  # Stop only authorities that require a quiet application writer. NetworkManager
-  # and firewalld remain live so a routine state export cannot sever management.
+
   stateQuiesceUnits = [
     "authentik.service"
     "authentik-worker.service"
-    "nas-identity-sync.timer"
+    "nas-v2-timer-identity-sync-0.timer"
     "copyparty.service"
     "caddy.service"
   ]
@@ -358,11 +320,9 @@ let
   ++ lib.optional (cfg.ai.enable && cfg.ai.modelDownloader.enable) "podman-hfdownloader.service"
   ++ lib.optional cfg.virtualization.enable "libvirtd.service";
 
-  # Restore can temporarily stop network/firewall authorities. Keep this list
-  # generated from the active profile so disabled services are never touched.
   stateRestoreUnits = [
     "nas-protected-services.target"
-    "nas-identity-sync.timer"
+    "nas-v2-timer-identity-sync-0.timer"
   ]
   ++ lib.optional cfg.networking.enable "NetworkManager.service"
   ++ lib.optional (cfg.networking.enable && cfg.networking.firewall.enable) "firewalld.service";
@@ -380,7 +340,6 @@ let
       pkgs.postgresql
     ] ++ lib.optional cfg.networking.enable pkgs.networkmanager;
     text = ''
-      export NAS_FEATURE_STATE_ROOT=/var/lib/nas-control
       export NAS_SETUP_STATE_ROOT=/var/lib/nas-setup
       export NAS_FIREWALL_STATE_ROOT=/var/lib/nas-firewall
       export NAS_NETWORKMANAGER_STATE_ROOT=/etc/NetworkManager/system-connections
@@ -396,8 +355,6 @@ let
       export NAS_STATE_SCHEMA=${../../../schemas/state-bundle.schema.json}
       export NAS_STATE_SIGNING_KEY=/run/nas-secrets/state/bundle-signing-key
       export NAS_VERSION=${lib.escapeShellArg (lib.removeSuffix "\n" (builtins.readFile ../../../VERSION))}
-      # The realized flake source path is immutable/content-addressed and gives state bundles
-      # exact build provenance even when a Git worktree is not present at runtime.
       export NAS_SOURCE_REVISION=${lib.escapeShellArg (toString ../../..)}
       exec ${nasStateScript} "$@"
     '';
@@ -408,8 +365,10 @@ let
     name = "nas-doctor";
     runtimeInputs = [ pkgs.coreutils pkgs.python3 pkgs.systemd ];
     text = ''
-      export NAS_FEATURE_CATALOG=${lib.escapeShellArg featureCatalogPath}
-      export NAS_FEATURE_STATE=${lib.escapeShellArg featureStatePath}
+      export NAS_V2_SPEC=/var/lib/nas-control/services.yaml
+      export NAS_V2_SCHEMA=/etc/nas-control/managed-services-v3.schema.json
+      export NAS_V2_PLATFORM=/etc/nas-control/platform-capabilities.json
+      export NAS_V2_EFFECTIVE=/run/nas-control/effective.json
       export NAS_SETUP_STATE=/var/lib/nas-setup/state.json
       export NAS_SETUP_JOURNAL=/var/lib/nas-setup/first-run-journal.json
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
@@ -420,22 +379,10 @@ let
     '';
   };
 
-  nasMigrateStateScript = "${nasPythonApplication}/bin/nas-migrate-state";
-  nasMigrateState = pkgs.writeShellApplication {
-    name = "nas-migrate-state";
-    runtimeInputs = [ pkgs.coreutils pkgs.python3 pkgs.systemd ];
-    text = ''
-      export NAS_FEATURE_CATALOG=${lib.escapeShellArg featureCatalogPath}
-      export NAS_FEATURE_STATE=${lib.escapeShellArg featureStatePath}
-      export NAS_SETUP_STATE=/var/lib/nas-setup/state.json
-      export NAS_MIGRATION_ROOT=/var/lib/nas-migrations
-      exec ${nasMigrateStateScript} "$@"
-    '';
-  };
-
   nasPortalStatic = pkgs.runCommand "nas-portal-static" { } ''
     install -d "$out/share/nas-portal"
     install -m 0444 ${../../../web/portal/index.html} "$out/share/nas-portal/index.html"
+    install -m 0444 ${../../../web/portal/setup.html} "$out/share/nas-portal/setup.html"
   '';
 
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''
@@ -454,7 +401,7 @@ let
     name = "nas-cockpit-api";
     runtimeInputs = [
       pkgs.coreutils pkgs.git pkgs.hostname pkgs.python3 pkgs.sanoid pkgs.systemd pkgs.zfs
-      nasFeatureControl nasIdentitySync nasSetup nasUpdate
+      nasPythonApplication nasIdentitySync nasSetup nasUpdate
     ];
     text = ''
       export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
@@ -466,7 +413,6 @@ let
       export NAS_BACKUP_ENABLE=${if cfg.backup.enable then "1" else "0"}
       export NAS_ZFS_REPLICATION_ENABLE=${if cfg.zfsReplication.enable then "1" else "0"}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
-      export NAS_ENDPOINT_REGISTRY=/etc/nas-control/endpoints.json
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
       export NAS_AI_MODEL_ROOT=${lib.escapeShellArg aiStorageRoot}
@@ -475,12 +421,11 @@ let
     '';
   };
 
-
 in
 {
   inherit
-    nasPythonApplication nasAlertRouter nasIdentitySyncScript nasIdentityPython nasIdentitySync nasFeatureControlScript nasFeatureControl
-    nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasMigrateStateScript nasMigrateState nasPortalStatic nasAuthentikBlueprints
+    nasPythonApplication nasAlertRouter nasIdentitySyncScript nasIdentityPython nasIdentitySync
+    nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
     nasCockpitApiScript nasCockpitApi
   ;
 }

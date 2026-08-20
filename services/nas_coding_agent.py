@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Launch Pi coding-agent sessions inside the NAS systemd sandbox."""
+"""Launch Pi coding-agent sessions inside the NAS systemd sandbox.
+
+Managed Services V2 owns the coding-session lease and the canonical Authentik
+capability object. This launcher remains application-specific session plumbing:
+it validates the requested workspace and asks systemd to create one transient,
+sandboxed Pi process. It does not own users, groups, lifecycle state, or an idle
+reaper.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +23,11 @@ from collections.abc import Sequence
 
 class CodingAgentError(RuntimeError):
     """Expected coding-agent launch failure."""
+
+
+CODING_CAPABILITY_GROUP = "application.ai-coding.access"
+CODING_SERVICE_ID = "ai-coding"
+ADMIN_GROUP = "nas_admin"
 
 
 def configured_roots() -> tuple[pathlib.Path, ...]:
@@ -77,7 +89,7 @@ def session_command(workspace: pathlib.Path, pi_args: Sequence[str]) -> list[str
         "ProtectControlGroups=yes",
         "RestrictSUIDSGID=yes",
         "LockPersonality=yes",
-        # Network allowed for Pi web/GitHub; host loopback blocked except via proxy (10.200.1.1)
+        # Network allowed for Pi web/GitHub; host loopback blocked except via proxy (10.200.1.1).
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
         "NetworkNamespacePath=/run/netns/pi",
         f"Slice={slice_name}",
@@ -108,10 +120,11 @@ def session_command(workspace: pathlib.Path, pi_args: Sequence[str]) -> list[str
     return command
 
 
-def heartbeat(stop: threading.Event, feature_control: str, interval: int) -> None:
+def heartbeat(stop: threading.Event, managed_services_control: str, interval: int) -> None:
+    """Refresh the native V2 lease while a transient coding session is active."""
     while not stop.wait(interval):
         subprocess.run(
-            [feature_control, "wake", "aiCoding"],
+            [managed_services_control, "wake", CODING_SERVICE_ID],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -131,97 +144,44 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _check_coding_access() -> None:
+    """Require canonical V2 access or the appliance administrator role.
+
+    The launcher intentionally has no Linux-group or UID authorization fallback.
+    Authentik owns assignments; V2 only ensures the capability object exists.
+    The caller must pass the already-authenticated identity produced by the
+    Cockpit/Caddy boundary.
+    """
     identity_json = os.environ.get("NAS_AUTHENTICATED_IDENTITY_JSON", "")
-    if identity_json.strip():
-        try:
-            data = json.loads(identity_json)
-        except json.JSONDecodeError as exc:
-            print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
-            raise CodingAgentError(
-                "Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]"
-            ) from exc
-        if not isinstance(data, dict):
-            print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
-            raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
-        groups_raw = data.get("groups", [])
-        if not isinstance(groups_raw, list) or not all(isinstance(entry, str) for entry in groups_raw):
-            print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
-            raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
-        groups: set[str] = set(groups_raw)
-        if data.get("admin") is True or data.get("role") == "admin":
-            groups.add("nas_admin")
-            try:
-                from nas_common import ADMIN_GROUP as _ADMIN_GROUP
-
-                groups.add(_ADMIN_GROUP)
-            except ImportError:
-                pass
-        username = data.get("username", "")
-        if not isinstance(username, str):
-            username = str(username)
-        print("nas-code-agent: auth mode=identity-json", file=sys.stderr)
-        try:
-            from nas_common import ADMIN_GROUP, capability_allowed
-
-            if capability_allowed(groups, "coding") or ADMIN_GROUP in groups or "nas_admin" in groups:
-                return
-        except ImportError:
-            if "nas_allow_coding" in groups or "nas_admin" in groups:
-                return
+    if not identity_json.strip():
+        print("nas-code-agent: auth mode=no-identity (deny)", file=sys.stderr)
         raise CodingAgentError(
-            f"User {username!r} denied: coding capability required (groups: {sorted(groups)}) [mode=identity-json]"
+            "Coding agent denied: authenticated identity is required; "
+            f"membership in {CODING_CAPABILITY_GROUP} or {ADMIN_GROUP} is required [mode=no-identity]"
         )
-    sudo_user = os.environ.get("SUDO_USER", "")
-    insecure = os.environ.get("NAS_CODING_INSECURE_UID_AUTH", "") == "1"
-    if sudo_user:
-        if not insecure:
-            print("nas-code-agent: auth mode=uid-deny (insecure flag not set)", file=sys.stderr)
-            raise CodingAgentError(
-                f"User {sudo_user!r} denied: coding agent requires authenticated identity (NAS_AUTHENTICATED_IDENTITY_JSON missing). "
-                "Invoke via Cockpit/Caddy-authenticated path or set NAS_CODING_INSECURE_UID_AUTH=1 for legacy UID fallback [mode=uid-deny]"
-            )
-        print("nas-code-agent: auth mode=insecure-uid", file=sys.stderr)
-        user_groups: set[str] = set()
-        try:
-            import grp
-            import pwd
-
-            try:
-                pw = pwd.getpwnam(sudo_user)
-                user_groups.add(pw.pw_name)
-                for g in grp.getgrall():
-                    if sudo_user in g.gr_mem:
-                        user_groups.add(g.gr_name)
-                result = subprocess.run(["id", "-nG", sudo_user], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    user_groups.update(result.stdout.strip().split())
-            except (KeyError, OSError):
-                pass
-        except Exception:
-            pass
-        try:
-            from nas_common import capability_allowed
-
-            if capability_allowed(user_groups, "coding"):
-                return
-            if "nas_admin" in user_groups:
-                return
-        except ImportError:
-            if "nas_allow_coding" in user_groups or "nas_admin" in user_groups:
-                return
+    try:
+        data = json.loads(identity_json)
+    except json.JSONDecodeError as exc:
+        print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
         raise CodingAgentError(
-            f"User {sudo_user!r} is not in nas_allow_coding or nas_admin; "
-            f"request access via Authentik and Cockpit (groups: {sorted(user_groups)}) [mode=insecure-uid]"
-        )
-    print("nas-code-agent: auth mode=no-identity (deny)", file=sys.stderr)
-    if os.geteuid() == 0:
-        raise CodingAgentError(
-            "Coding agent denied: no authenticated identity and no SUDO_USER (euid==0 direct root invocation denied). "
-            "Invoke via Cockpit/Caddy-authenticated path with NAS_AUTHENTICATED_IDENTITY_JSON [mode=no-identity]"
-        )
+            "Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]"
+        ) from exc
+    if not isinstance(data, dict):
+        print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
+        raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
+    groups_raw = data.get("groups", [])
+    if not isinstance(groups_raw, list) or not all(isinstance(entry, str) for entry in groups_raw):
+        print("nas-code-agent: auth mode=identity-json malformed", file=sys.stderr)
+        raise CodingAgentError("Invalid NAS identity token; denied (malformed identity JSON) [mode=identity-json]")
+    groups = set(groups_raw)
+    username = data.get("username", "")
+    if not isinstance(username, str):
+        username = str(username)
+    print("nas-code-agent: auth mode=identity-json", file=sys.stderr)
+    if CODING_CAPABILITY_GROUP in groups or ADMIN_GROUP in groups:
+        return
     raise CodingAgentError(
-        "Coding agent denied: no authenticated identity and no SUDO_USER. "
-        "Invoke via Cockpit/Caddy-authenticated path [mode=no-identity]"
+        f"User {username!r} denied: {CODING_CAPABILITY_GROUP} capability required "
+        f"(groups: {sorted(groups)}) [mode=identity-json]"
     )
 
 
@@ -239,11 +199,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise CodingAgentError(
                 "Coding-agent llama-swap client credential is unavailable; activate NAS secrets first"
             )
-        feature_control = os.environ.get("NAS_FEATURE_CONTROL", "nas-feature-control")
-        run_checked([feature_control, "wake", "aiCoding"])
+        managed_services_control = os.environ.get("NAS_MANAGED_SERVICES_CONTROL", "nas-managed-services-control")
+        run_checked([managed_services_control, "wake", CODING_SERVICE_ID])
         interval = max(30, int(os.environ.get("NAS_CODING_HEARTBEAT_SECONDS", "120")))
         stop = threading.Event()
-        worker = threading.Thread(target=heartbeat, args=(stop, feature_control, interval), daemon=True)
+        worker = threading.Thread(
+            target=heartbeat,
+            args=(stop, managed_services_control, interval),
+            daemon=True,
+        )
         worker.start()
         try:
             pi_args = list(args.pi_args)

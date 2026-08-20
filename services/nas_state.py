@@ -97,7 +97,6 @@ def default_authorities() -> tuple[Authority, ...]:
     """Fallback registry for direct development use; Nix installs a profile-aware registry."""
 
     return (
-        Authority("feature-control", os.environ.get("NAS_FEATURE_STATE_ROOT", "/var/lib/nas-control")),
         Authority("first-run", os.environ.get("NAS_SETUP_STATE_ROOT", "/var/lib/nas-setup"), optional=True),
         Authority("firewall", os.environ.get("NAS_FIREWALL_STATE_ROOT", "/var/lib/nas-firewall"), optional=True),
         Authority(
@@ -145,7 +144,7 @@ def default_authorities() -> tuple[Authority, ...]:
         Authority("authentik-database", "postgresql://authentik", kind="database", sensitive=True),
         Authority(
             "managed-services",
-            os.environ.get("NAS_MANAGED_SERVICES_STATE_ROOT", "/var/lib/nas-control/services.json"),
+            os.environ.get("NAS_MANAGED_SERVICES_STATE_PATH", "/var/lib/nas-control/services.yaml"),
         ),
         Authority(
             "managed-apps",
@@ -381,8 +380,6 @@ def run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProc
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        # The helpers used here can be wrappers (for example runuser) that spawn
-        # database children. Kill the complete session before rollback starts.
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -536,7 +533,9 @@ def signing_key() -> bytes:
             return b""
         raise StateError(f"State bundle signing key is unavailable: {key_path}") from exc
     if not re.fullmatch(r"[0-9A-Fa-f]{64,256}", raw):
-        raise StateError("State bundle signing key has an invalid format")
+        raise StateError(f"State bundle signing key at {key_path} has an invalid format: must be 64-256 hex digits")
+    if raw.strip("0") == "":
+        raise StateError(f"State bundle signing key at {key_path} must not be all zeros")
     return bytes.fromhex(raw)
 
 
@@ -612,7 +611,39 @@ def _safe_tar_info(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
-def export_quiesce_units() -> tuple[str, ...]:
+def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integration
+    # V2 effective is the authority when available; otherwise fall back to env or static.
+    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    try:
+        raw = pathlib.Path(effective_path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("effective top-level must be object")
+        if not isinstance(data.get("services"), dict):
+            raise ValueError("effective missing services")
+        if not isinstance(data.get("derived"), dict):
+            raise ValueError("effective missing derived")
+        services = data["services"]
+        derived_runtime = data["derived"].get("runtime", {})
+        if not isinstance(derived_runtime, dict):
+            raise ValueError("derived.runtime must be object")
+        units: list[str] = []
+        for unit in (
+            "authentik.service",
+            "authentik-worker.service",
+            "nas-v2-timer-identity-sync-0.timer",
+            "caddy.service",
+        ):
+            units.append(unit)
+        for service_id, runtime in derived_runtime.items():
+            owner = runtime.get("ownerUnit") if isinstance(runtime, dict) else None
+            svc = services.get(service_id, {}) if isinstance(services, dict) else {}
+            if isinstance(owner, str) and owner and svc.get("managed") is True:
+                units.append(owner)
+        if units:
+            return tuple(dict.fromkeys(units))
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
     raw = os.environ.get("NAS_STATE_QUIESCE_UNITS_JSON")
     if raw:
         try:
@@ -625,7 +656,7 @@ def export_quiesce_units() -> tuple[str, ...]:
     return (
         "authentik.service",
         "authentik-worker.service",
-        "nas-identity-sync.timer",
+        "nas-v2-timer-identity-sync-0.timer",
         "copyparty.service",
         "syncthing.service",
         "vaultwarden.service",
@@ -944,6 +975,7 @@ def compare_bundle(bundle: pathlib.Path) -> tuple[dict[str, Any], bool]:
             authority = registry[entry["name"]]
             status = entry["status"]
             comparison = "match"
+            current: str | None = None
             if status == "absent":
                 exists = lstat_type(pathlib.Path(authority.source)) != 0 if authority.kind == "path" else True
                 row_status = "drift" if exists else "match-absent"
@@ -1003,8 +1035,6 @@ def authority_root_policy(authority: Authority) -> PathPolicy:
 
     default_mode = 0o700 if authority.sensitive else 0o750
     if authority.owner is None or authority.group is None or authority.rootMode is None:
-        # Direct-development fixtures may use the fallback registry. Installed
-        # execution requires the generated registry with explicit ownership.
         return PathPolicy(0, 0, default_mode, authority.sensitive)
     try:
         uid = pwd.getpwnam(authority.owner).pw_uid
@@ -1127,6 +1157,72 @@ def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_
             restore_path(payload, pathlib.Path(authority.source), authority)
 
 
+def _file_content_digest(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _dir_content_digest(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    for child in sorted(path.rglob("*")):
+        rel = child.relative_to(path).as_posix()
+        if child.is_dir():
+            digest.update(f"d\0{rel}\0".encode())
+        elif child.is_file():
+            digest.update(f"f\0{rel}\0".encode())
+            with child.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_restored_state(staging: pathlib.Path, manifest: dict[str, Any]) -> None:
+    """Post-restore validation: re-hash each restored authority and compare to manifest.
+
+    Re-hashes the live filesystem/database state and compares it to the
+    manifest payload. For path authorities this compares content digests
+    (payload file vs live file, or directory tree contents) so that
+    mode-preserving restores (local_path_policies) do not trigger false
+    failures while still detecting content corruption. Database authorities
+    use the existing comparison digest. Failures are fatal and trigger
+    rollback before the journal is marked committed.
+    """
+
+    registry = {item.name: item for item in authorities()}
+    for entry in canonical_apply_entries(manifest):
+        if entry["status"] != "captured":
+            continue
+        authority = registry[entry["name"]]
+        if authority.kind == "database":
+            current = database_comparison_digest()
+            if current != entry["comparisonDigest"]:
+                raise StateError(
+                    f"Post-restore validation failed for {authority.name}: database comparison digest mismatch"
+                )
+        else:
+            source = pathlib.Path(authority.source)
+            if lstat_type(source) == 0:
+                raise StateError(
+                    f"Post-restore validation failed for {authority.name}: restored path is missing at {authority.source}"
+                )
+            payload = staging.joinpath(*safe_member_name(entry["payload"]).parts)
+            src_mode = source.lstat().st_mode
+            payload_mode = payload.lstat().st_mode
+            if stat.S_ISREG(src_mode) and stat.S_ISREG(payload_mode):
+                current = _file_content_digest(source)
+                expected = _file_content_digest(payload)
+            elif stat.S_ISDIR(src_mode) and stat.S_ISDIR(payload_mode):
+                current = _dir_content_digest(source)
+                expected = _dir_content_digest(payload)
+            else:
+                raise StateError(f"Post-restore validation failed for {authority.name}: restored kind mismatch")
+            if current != expected:
+                raise StateError(f"Post-restore validation failed for {authority.name}: digest mismatch")
+
+
 def restore_units() -> tuple[str, ...]:
     raw = os.environ.get("NAS_STATE_RESTORE_UNITS_JSON")
     if raw:
@@ -1139,7 +1235,7 @@ def restore_units() -> tuple[str, ...]:
         return tuple(dict.fromkeys(value))
     return (
         "nas-protected-services.target",
-        "nas-identity-sync.timer",
+        "nas-v2-timer-identity-sync-0.timer",
         "NetworkManager.service",
         "firewalld.service",
     )
@@ -1163,7 +1259,7 @@ def stop_active_units(snapshot: Mapping[str, bool]) -> None:
         for unit in reversed(stopped):
             try:
                 run_systemctl("start", unit)
-            except Exception as exc:  # retain every failed recovery action
+            except Exception as exc:
                 recovery_errors.append(f"{unit}: {exc}")
         if recovery_errors:
             raise StateError(
@@ -1226,9 +1322,6 @@ def reapply_runtime_consumers(snapshot: Mapping[str, bool]) -> None:
                 run_systemctl("start", unit)
 
     if snapshot.get("NetworkManager.service", False):
-        # Reload connection profiles explicitly. `systemctl reload NetworkManager`
-        # reloads daemon configuration but does not guarantee that restored
-        # system-connections are re-read into NetworkManager's runtime state.
         result = run_process(["nmcli", "connection", "reload"], timeout=60)
         if result.returncode != 0:
             raise StateError("NetworkManager connection profile reload failed")
@@ -1327,18 +1420,23 @@ def restore_bundle(
         prune_rollbacks()
         rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
         unit_snapshot = capture_unit_state(restore_units())
-        stop_active_units(unit_snapshot)
-        restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+        # BUG 2 fix: capture rollback BEFORE quiescing. Services that finalize
+        # writes on shutdown would otherwise leave a post-stop quiesced baseline
+        # in the rollback instead of the true pre-restore state. We export
+        # with quiesce=False while units are still running (mildly incoherent
+        # snapshot) and then stop; post-restore digest validation (BUG 1) covers
+        # incoherence by failing the restore before it is marked committed.
         rollback_ready = False
         try:
-            # The appliance is already quiesced. Capture rollback state once without
-            # an additional stop/start cycle before applying the requested bundle.
             export_bundle(rollback, include_sensitive=True, quiesce=False)
             rollback_ready = True
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
+            stop_active_units(unit_snapshot)
+            restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
             reapply_runtime_consumers(unit_snapshot)
+            verify_restored_state(staging, manifest)
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:
             if not rollback_ready:
@@ -1429,9 +1527,6 @@ def main() -> None:
                 validate_coordination_token(token, ("appliance",))
                 value = export_bundle(args.output, include_sensitive=args.include_sensitive)
             else:
-                # A state bundle spans multiple mutable authorities. Hold the
-                # appliance-wide coordinator so custom writers cannot race the
-                # quiesced service snapshot.
                 with acquire_operation("state-export", ("appliance",)):
                     value = export_bundle(args.output, include_sensitive=args.include_sensitive)
         elif args.command == "validate":

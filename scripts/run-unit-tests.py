@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import concurrent.futures
 import os
 import pathlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,7 +24,7 @@ ALLOWLIST_ZERO = frozenset()
 # Caddy binary. Generic source/non-root jobs may lack that external executable,
 # so an all-skipped result there is allowed only for this explicit capability
 # test. Every other discovered test file must execute at least one real test.
-ALLOWLIST_ALL_SKIPPED = frozenset({"test_service_caddy_validate.py"})
+ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})
 FAILURES_RE = re.compile(r"failures=(\d+)")
 ERRORS_RE = re.compile(r"errors=(\d+)")
 SKIPPED_RE = re.compile(r"skipped=(\d+)")
@@ -39,6 +41,16 @@ SERIAL_TEST_FILES = frozenset(
         "test_script_inventory.py",
     }
 )
+
+
+def _github_escape(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _github_error(title: str, detail: str) -> None:
+    """Expose bounded per-file failures through GitHub check-run annotations."""
+    bounded = detail[-6000:]
+    print(f"::error title={_github_escape(title)}::{_github_escape(bounded)}", file=sys.stderr)
 
 
 def _kill_process_group(pid: int) -> None:
@@ -182,18 +194,11 @@ def main() -> int:
         # Use the same hermetic state dir for the journal so it is writable
         _state_journal_dir = pathlib.Path(env.get("NAS_STATE_ROLLBACK_ROOT", str(_hermetic_tmp / "nas-state-rollback")))
         env["NAS_STATE_RESTORE_JOURNAL"] = str(_state_journal_dir / "restore-operation.json")
-    # Feature control / setup / operation roots (all under /var/lib or /run on host)
+    # Setup / operation roots that need writable host-independent test locations.
     _hermetic_map = {
-        "NAS_FEATURE_STATE": str(_hermetic_tmp / "nas-control" / "settings.json"),
-        "NAS_FEATURE_JOURNAL": str(_hermetic_tmp / "nas-control" / "transaction.json"),
-        "NAS_FEATURE_LAST_GOOD": str(_hermetic_tmp / "nas-control" / "settings.last-good.json"),
-        "NAS_FEATURE_RUNTIME": str(_hermetic_tmp / "nas-control" / "on-demand.json"),
-        "NAS_FEATURE_LOCK": str(_hermetic_tmp / "nas-control" / "feature-control.lock"),
-        "NAS_FEATURE_CATALOG": str(_hermetic_tmp / "nas-control" / "features.json"),
         "NAS_SETUP_STATE": str(_hermetic_tmp / "nas-setup" / "state.json"),
         "NAS_SETUP_JOURNAL": str(_hermetic_tmp / "nas-setup" / "first-run-journal.json"),
         "NAS_SETUP_STATE_ROOT": str(_hermetic_tmp / "nas-setup"),
-        "NAS_FEATURE_STATE_ROOT": str(_hermetic_tmp / "nas-control"),
         "NAS_OPERATION_ROOT": str(_hermetic_tmp / "nas-operations"),
         "NAS_OPERATION_GROUP": "users",  # host fallback when nas-operations group missing
         "NAS_IDENTITY_LOCK": str(_hermetic_tmp / "nas-identity-sync.lock"),
@@ -201,7 +206,7 @@ def main() -> int:
     }
     for key, val in _hermetic_map.items():
         env.setdefault(key, val)
-    # Ensure secret and state root subdirs exist so lstat() checks pass
+    # Ensure secret and state root subdirs exist so lstat() checks pass.
     try:
         pathlib.Path(env["NAS_SECRET_ROOT"]).mkdir(parents=True, exist_ok=True)
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ai").mkdir(parents=True, exist_ok=True)
@@ -209,9 +214,6 @@ def main() -> int:
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ready").touch(exist_ok=True)
         for key in [
             "NAS_STATE_ROLLBACK_ROOT",
-            "NAS_FEATURE_STATE",
-            "NAS_FEATURE_JOURNAL",
-            "NAS_FEATURE_LAST_GOOD",
             "NAS_SETUP_STATE",
             "NAS_SETUP_JOURNAL",
             "NAS_OPERATION_ROOT",
@@ -221,15 +223,9 @@ def main() -> int:
                 # If it's a file path, ensure parent exists; if dir, ensure dir exists
                 target = p.parent if p.suffix else p
                 target.mkdir(parents=True, exist_ok=True)
-        # Seed minimal feature catalog and setup state so load_state() does not fail
-        _feat_catalog = pathlib.Path(env["NAS_FEATURE_CATALOG"])
-        if not _feat_catalog.exists():
-            _feat_catalog.parent.mkdir(parents=True, exist_ok=True)
-            _feat_catalog.write_text('{"features": {}, "groups": {}}', encoding="utf-8")
-        for pkey in ["NAS_FEATURE_STATE", "NAS_SETUP_STATE"]:
-            p = pathlib.Path(env[pkey])
-            if not p.exists():
-                p.write_text("{}", encoding="utf-8")
+        setup_state = pathlib.Path(env["NAS_SETUP_STATE"])
+        if not setup_state.exists():
+            setup_state.write_text("{}", encoding="utf-8")
     except OSError:
         pass
     python_path = [str(ROOT / "services"), str(ROOT / "tests")]
@@ -237,121 +233,204 @@ def main() -> int:
         python_path.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(python_path)
 
-    if args.coverage:
+    # mktemp -d style unique temp dir for manifest (deterministic helper)
+    _manifest_tmp = pathlib.Path(tempfile.mkdtemp(prefix="nas-manifest-"))
+    _manifest_path = _manifest_tmp / "MANIFEST.sha256"
+    env["MANIFEST_PATH"] = str(_manifest_path)
+    env["NAS_TEST_MANIFEST"] = str(_manifest_path)
+
+    def _cleanup_harness_temps() -> None:
+        shutil.rmtree(_manifest_tmp, ignore_errors=True)
+        shutil.rmtree(_hermetic_tmp, ignore_errors=True)
+
+    atexit.register(_cleanup_harness_temps)
+
+    def _handle_interrupt(signum, frame):  # noqa: ARG001
+        _cleanup_harness_temps()
+        raise SystemExit(128 + signum)
+
+    for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         try:
-            subprocess.run(
-                [sys.executable, "-m", "coverage", "--version"],
-                cwd=ROOT,
-                env=env,
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            print("coverage.py is required for --coverage", file=sys.stderr)
-            return 2
-        coverage_cleanup()
+            signal.signal(_sig, _handle_interrupt)
+        except ValueError:
+            pass
 
-    total_ran = 0
-    total_passed = 0
-    total_failed = 0
-    total_errored = 0
-    total_skipped = 0
-    total_expected = 0
-    total_unexpected = 0
-    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/lib/manifest.py"), "--root", str(ROOT), "--out", str(_manifest_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            print(result.stdout + result.stderr, file=sys.stderr)
+            _cleanup_harness_temps()
+            return result.returncode
+    except subprocess.TimeoutExpired:
+        print("manifest generation timed out", file=sys.stderr)
+        _cleanup_harness_temps()
+        return 124
+    except Exception as exc:  # noqa: BLE001
+        print(f"manifest generation failed: {exc}", file=sys.stderr)
+        _cleanup_harness_temps()
+        return 1
 
-    def _parse_counts(output: str) -> tuple[int, int, int, int, int, int]:
-        ran = 0
-        m = RAN_RE.search(output or "")
-        if m:
-            ran = int(m.group(1))
-        failures = 0
-        errors = 0
-        skipped = 0
-        expected = 0
-        unexpected = 0
-        rm = RESULT_RE.search(output or "")
-        detail = rm.group(2) if rm and rm.group(2) else ""
-        if detail:
-            pairs = {k.strip(): v for k, v in re.findall(r"([a-z ]+)=\s*(\d+)", detail)}
-            if "failures" in pairs:
-                failures = int(pairs["failures"])
-            if "errors" in pairs:
-                errors = int(pairs["errors"])
-            if "skipped" in pairs:
-                skipped = int(pairs["skipped"])
-            if "expected failures" in pairs:
-                expected = int(pairs["expected failures"])
-            if "unexpected successes" in pairs:
-                unexpected = int(pairs["unexpected successes"])
-        return ran, failures, errors, skipped, expected, unexpected
-
-    def command_for(unittest_command: list[str]) -> list[str]:
+    try:
         if args.coverage:
-            return [
-                sys.executable,
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "coverage", "--version"],
+                    cwd=ROOT,
+                    env=env,
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                )
+            except (OSError, subprocess.CalledProcessError):
+                print("coverage.py is required for --coverage", file=sys.stderr)
+                return 2
+            coverage_cleanup()
+
+        total_ran = 0
+        total_passed = 0
+        total_failed = 0
+        total_errored = 0
+        total_skipped = 0
+        total_expected = 0
+        total_unexpected = 0
+        started = time.monotonic()
+
+        def _parse_counts(output: str) -> tuple[int, int, int, int, int, int]:
+            ran = 0
+            m = RAN_RE.search(output or "")
+            if m:
+                ran = int(m.group(1))
+            failures = 0
+            errors = 0
+            skipped = 0
+            expected = 0
+            unexpected = 0
+            rm = RESULT_RE.search(output or "")
+            detail = rm.group(2) if rm and rm.group(2) else ""
+            if detail:
+                pairs = {k.strip(): v for k, v in re.findall(r"([a-z ]+)=\s*(\d+)", detail)}
+                if "failures" in pairs:
+                    failures = int(pairs["failures"])
+                if "errors" in pairs:
+                    errors = int(pairs["errors"])
+                if "skipped" in pairs:
+                    skipped = int(pairs["skipped"])
+                if "expected failures" in pairs:
+                    expected = int(pairs["expected failures"])
+                if "unexpected successes" in pairs:
+                    unexpected = int(pairs["unexpected successes"])
+            return ran, failures, errors, skipped, expected, unexpected
+
+        def command_for(unittest_command: list[str]) -> list[str]:
+            if args.coverage:
+                return [
+                    sys.executable,
+                    "-m",
+                    "coverage",
+                    "run",
+                    "--parallel-mode",
+                    "--branch",
+                    "--source=services",
+                    *unittest_command,
+                ]
+            return [sys.executable, *unittest_command]
+
+        def run_file(
+            path: pathlib.Path,
+        ) -> tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None]:
+            unittest_command = [
                 "-m",
-                "coverage",
-                "run",
-                "--parallel-mode",
-                "--branch",
-                "--source=services",
-                *unittest_command,
+                "unittest",
+                "discover",
+                "-s",
+                str(TESTS),
+                "-p",
+                path.name,
             ]
-        return [sys.executable, *unittest_command]
+            if not args.quiet:
+                unittest_command.append("-v")
+            command = command_for(unittest_command)
+            file_started = time.monotonic()
+            try:
+                completed = run(command, timeout=args.timeout, env=env)
+            except subprocess.TimeoutExpired as exc:
+                output = ""
+                if isinstance(exc.stdout, str):
+                    output += exc.stdout
+                if isinstance(exc.stderr, str):
+                    output += exc.stderr
+                return path, None, time.monotonic() - file_started, 0, output
+            output = completed.stdout + completed.stderr
+            match = RAN_RE.search(output)
+            count = int(match.group(1)) if match else 0
+            return path, completed, time.monotonic() - file_started, count, output
 
-    def run_file(
-        path: pathlib.Path,
-    ) -> tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None]:
-        unittest_command = [
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            str(TESTS),
-            "-p",
-            path.name,
-        ]
-        if not args.quiet:
-            unittest_command.append("-v")
-        command = command_for(unittest_command)
-        file_started = time.monotonic()
-        try:
-            completed = run(command, timeout=args.timeout, env=env)
-        except subprocess.TimeoutExpired as exc:
-            output = ""
-            if isinstance(exc.stdout, str):
-                output += exc.stdout
-            if isinstance(exc.stderr, str):
-                output += exc.stderr
-            return path, None, time.monotonic() - file_started, 0, output
-        output = completed.stdout + completed.stderr
-        match = RAN_RE.search(output)
-        count = int(match.group(1)) if match else 0
-        return path, completed, time.monotonic() - file_started, count, output
+        failures: list[tuple[pathlib.Path, str]] = []
 
-    failures: list[tuple[pathlib.Path, str]] = []
-
-    def record(result: tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None]) -> None:
-        nonlocal total_ran, total_passed, total_failed, total_errored, total_skipped, total_expected, total_unexpected
-        path, completed, elapsed, count, output = result
-        relative = path.relative_to(ROOT).as_posix()
-        ran, fail_c, err_c, skip_c, exp_c, unexp_c = _parse_counts(output or "")
-        passed_c = ran - fail_c - err_c - skip_c - exp_c - unexp_c
-        if passed_c < 0:
-            passed_c = 0
-        if completed is None:
-            total_ran += ran
-            total_failed += fail_c
-            total_errored += err_c
-            total_skipped += skip_c
-            total_expected += exp_c
-            total_unexpected += unexp_c
-            failures.append((path, f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"))
-            print(f"FAIL {relative}: exceeded {args.timeout}s", file=sys.stderr)
-            return
-        if completed.returncode != 0:
+        def record(
+            result: tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None],
+        ) -> None:
+            nonlocal \
+                total_ran, \
+                total_passed, \
+                total_failed, \
+                total_errored, \
+                total_skipped, \
+                total_expected, \
+                total_unexpected
+            path, completed, elapsed, count, output = result
+            relative = path.relative_to(ROOT).as_posix()
+            ran, fail_c, err_c, skip_c, exp_c, unexp_c = _parse_counts(output or "")
+            passed_c = ran - fail_c - err_c - skip_c - exp_c - unexp_c
+            if passed_c < 0:
+                passed_c = 0
+            if completed is None:
+                total_ran += ran
+                total_failed += fail_c
+                total_errored += err_c
+                total_skipped += skip_c
+                total_expected += exp_c
+                total_unexpected += unexp_c
+                detail = f"exceeded {args.timeout}s\n{(output or '')[-8000:]}"
+                failures.append((path, detail))
+                _github_error(f"Unit test timeout: {relative}", detail)
+                print(f"FAIL {relative}: exceeded {args.timeout}s", file=sys.stderr)
+                return
+            if completed.returncode != 0:
+                total_ran += ran
+                total_failed += fail_c
+                total_errored += err_c
+                total_skipped += skip_c
+                total_expected += exp_c
+                total_unexpected += unexp_c
+                total_passed += passed_c
+                detail = f"rc={completed.returncode}\n{(output or '')[-16000:]}"
+                failures.append((path, detail))
+                _github_error(f"Unit test failure: {relative}", detail)
+                print(f"FAIL {relative}: rc={completed.returncode} after {elapsed:.1f}s", file=sys.stderr)
+                return
+            if ran == 0 and path.name not in ALLOWLIST_ZERO:
+                total_ran += ran
+                total_skipped += skip_c
+                detail = "no tests discovered\n" + (output or "")[-16000:]
+                failures.append((path, detail))
+                _github_error(f"No tests discovered: {relative}", detail)
+                print(f"FAIL {relative}: no tests discovered after {elapsed:.1f}s", file=sys.stderr)
+                return
+            if ran > 0 and skip_c == ran and path.name not in ALLOWLIST_ALL_SKIPPED:
+                total_ran += ran
+                total_skipped += skip_c
+                detail = "all discovered tests were skipped\n" + (output or "")[-16000:]
+                failures.append((path, detail))
+                _github_error(f"All tests skipped: {relative}", detail)
+                print(f"FAIL {relative}: all {ran} discovered tests were skipped after {elapsed:.1f}s", file=sys.stderr)
+                return
             total_ran += ran
             total_failed += fail_c
             total_errored += err_c
@@ -359,101 +438,81 @@ def main() -> int:
             total_expected += exp_c
             total_unexpected += unexp_c
             total_passed += passed_c
-            failures.append((path, f"rc={completed.returncode}\n{(output or '')[-16000:]}"))
-            print(f"FAIL {relative}: rc={completed.returncode} after {elapsed:.1f}s", file=sys.stderr)
-            return
-        if ran == 0 and path.name not in ALLOWLIST_ZERO:
-            total_ran += ran
-            total_skipped += skip_c
-            failures.append((path, "no tests discovered\n" + (output or "")[-16000:]))
-            print(f"FAIL {relative}: no tests discovered after {elapsed:.1f}s", file=sys.stderr)
-            return
-        if ran > 0 and skip_c == ran and path.name not in ALLOWLIST_ALL_SKIPPED:
-            total_ran += ran
-            total_skipped += skip_c
-            failures.append((path, "all discovered tests were skipped\n" + (output or "")[-16000:]))
-            print(f"FAIL {relative}: all {ran} discovered tests were skipped after {elapsed:.1f}s", file=sys.stderr)
-            return
-        total_ran += ran
-        total_failed += fail_c
-        total_errored += err_c
-        total_skipped += skip_c
-        total_expected += exp_c
-        total_unexpected += unexp_c
-        total_passed += passed_c
-        detail_parts = []
-        if skip_c:
-            detail_parts.append(f"skipped={skip_c}")
-        if exp_c:
-            detail_parts.append(f"expected failures={exp_c}")
-        if unexp_c:
-            detail_parts.append(f"unexpected successes={unexp_c}")
-        if fail_c:
-            detail_parts.append(f"failures={fail_c}")
-        if err_c:
-            detail_parts.append(f"errors={err_c}")
-        detail_str = f" ({', '.join(detail_parts)})" if detail_parts else ""
-        print(f"PASS {relative}: {passed_c} test(s) passed, {ran} ran{detail_str}, {elapsed:.1f}s")
+            detail_parts = []
+            if skip_c:
+                detail_parts.append(f"skipped={skip_c}")
+            if exp_c:
+                detail_parts.append(f"expected failures={exp_c}")
+            if unexp_c:
+                detail_parts.append(f"unexpected successes={unexp_c}")
+            if fail_c:
+                detail_parts.append(f"failures={fail_c}")
+            if err_c:
+                detail_parts.append(f"errors={err_c}")
+            detail_str = f" ({', '.join(detail_parts)})" if detail_parts else ""
+            print(f"PASS {relative}: {passed_c} test(s) passed, {ran} ran{detail_str}, {elapsed:.1f}s")
 
-    serial_files = [path for path in files if path.name in SERIAL_TEST_FILES]
-    parallel_files = [path for path in files if path.name not in SERIAL_TEST_FILES]
-    if parallel_files:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            futures = [pool.submit(run_file, path) for path in parallel_files]
-            for future in concurrent.futures.as_completed(futures):
-                record(future.result())
-    # Repository/package validator tests intentionally execute alone. They create clean
-    # copies and run heavyweight release tooling; concurrent copies only add timeout
-    # noise and can make resource pressure look like a product regression.
-    for path in serial_files:
-        record(run_file(path))
+        serial_files = [path for path in files if path.name in SERIAL_TEST_FILES]
+        parallel_files = [path for path in files if path.name not in SERIAL_TEST_FILES]
+        if parallel_files:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+                futures = [pool.submit(run_file, path) for path in parallel_files]
+                for future in concurrent.futures.as_completed(futures):
+                    record(future.result())
+        # Repository/package validator tests intentionally execute alone. They create clean
+        # copies and run heavyweight release tooling; concurrent copies only add timeout
+        # noise and can make resource pressure look like a product regression.
+        for path in serial_files:
+            record(run_file(path))
 
-    if failures:
-        for path, detail in sorted(failures, key=lambda item: item[0].name):
-            print(f"--- {path.relative_to(ROOT).as_posix()} ---", file=sys.stderr)
-            print(detail, file=sys.stderr)
+        if failures:
+            for path, detail in sorted(failures, key=lambda item: item[0].name):
+                print(f"--- {path.relative_to(ROOT).as_posix()} ---", file=sys.stderr)
+                print(detail, file=sys.stderr)
+            print(
+                f"unit suite failed: {total_passed} tests passed, {total_failed} failed, {total_errored} errored, "
+                f"{total_skipped} skipped, {total_expected} expectedFailures, {total_unexpected} unexpectedSuccesses, "
+                f"{total_ran} ran across {len(files)} files with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s",
+                file=sys.stderr,
+            )
+            return 124 if any("exceeded" in detail for _, detail in failures) else 1
+
+        if args.coverage:
+            report = pathlib.Path(args.coverage)
+            combine = subprocess.run(
+                [sys.executable, "-m", "coverage", "combine", "--keep"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if combine.returncode != 0:
+                print(combine.stdout + combine.stderr, file=sys.stderr)
+                return combine.returncode
+            exported = subprocess.run(
+                [sys.executable, "-m", "coverage", "json", "-o", str(report)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if exported.returncode != 0:
+                print(exported.stdout + exported.stderr, file=sys.stderr)
+                return exported.returncode
+            print(exported.stdout.strip())
+
         print(
-            f"unit suite failed: {total_passed} tests passed, {total_failed} failed, {total_errored} errored, "
-            f"{total_skipped} skipped, {total_expected} expectedFailures, {total_unexpected} unexpectedSuccesses, "
-            f"{total_ran} ran across {len(files)} files with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s",
-            file=sys.stderr,
+            f"unit suite passed: {total_passed} tests across {len(files)} files "
+            f"with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s "
+            f"(passed={total_passed}, failed={total_failed}, errored={total_errored}, "
+            f"skipped={total_skipped}, expectedFailures={total_expected}, "
+            f"unexpectedSuccesses={total_unexpected}, ran={total_ran})"
         )
-        return 124 if any("exceeded" in detail for _, detail in failures) else 1
-
-    if args.coverage:
-        report = pathlib.Path(args.coverage)
-        combine = subprocess.run(
-            [sys.executable, "-m", "coverage", "combine", "--keep"],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if combine.returncode != 0:
-            print(combine.stdout + combine.stderr, file=sys.stderr)
-            return combine.returncode
-        exported = subprocess.run(
-            [sys.executable, "-m", "coverage", "json", "-o", str(report)],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if exported.returncode != 0:
-            print(exported.stdout + exported.stderr, file=sys.stderr)
-            return exported.returncode
-        print(exported.stdout.strip())
-
-    print(
-        f"unit suite passed: {total_passed} tests across {len(files)} files "
-        f"with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s "
-        f"(passed={total_passed}, failed={total_failed}, errored={total_errored}, "
-        f"skipped={total_skipped}, expectedFailures={total_expected}, "
-        f"unexpectedSuccesses={total_unexpected}, ran={total_ran})"
-    )
-    return 0
+        return 0
+    finally:
+        _cleanup_harness_temps()
 
 
 if __name__ == "__main__":

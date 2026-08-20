@@ -7,9 +7,9 @@
 - KeePassXC owns machine secrets. Its database password is operator input and is never persisted by the project.
 - CopyParty owns volumes, paths, ACLs, flags, quotas, share links, WebDAV, and file policy.
 - Syncthing owns its runtime configuration; the reconciler modifies only reserved `nas-*` objects.
-- The feature controller owns only feature lifecycle mode and on-demand runtime timestamps.
+- V2 `services.yaml` owns application lifecycle mode and on-demand idle timestamps (seed-once, then YAML/Cockpit is authority; Nix never regenerates it).
 
-Do not introduce another account database, share database, secret database, or feature configuration store.
+Do not introduce another account database, share database, secret database, or mutable desired-state database. `JSON Schema` at `/etc/nas-control/managed-services-v3.schema.json` is the sole structural/UI contract.
 
 ## Mutable appliance state
 
@@ -40,6 +40,7 @@ Cockpit and the local PAM administrator are the recovery plane. Authentik, Caddy
 - Dataset mount guards must verify the exact dataset and mountpoint before protected services start.
 - Snapshot restore creates a safety snapshot first.
 - Same-pool Restic is boot/appliance recovery, not independent whole-pool backup.
+- Native backup artifacts are confined to the dedicated staging root `/run/nas-control/backup-staging/<resource-id>` (derived from the resource identity). Artifact paths outside the staging root or that escape via symlink (`path.resolve`/`relative_to` check) are rejected. Stale artifacts are removed before each preparation, recorded in durable runtime state, and cleaned up on both normal and partial-prepare failure paths.
 
 ## Tests
 

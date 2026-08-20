@@ -85,9 +85,9 @@ in
         };
       };
       upsd.listen = if cfg.power.ups.mode == "netserver" then
-        map (address: { inherit address; port = 3493; }) cfg.power.ups.serverListenAddresses
+        map (address: { inherit address; port = cfg.power.ups.web.upsdPort; }) cfg.power.ups.serverListenAddresses
       else
-        [ { address = "127.0.0.1"; port = 3493; } { address = "::1"; port = 3493; } ];
+        [ { address = "127.0.0.1"; port = cfg.power.ups.web.upsdPort; } { address = "::1"; port = cfg.power.ups.web.upsdPort; } ];
     };
     boot.supportedFilesystems = [ "zfs" ];
     boot.zfs = {

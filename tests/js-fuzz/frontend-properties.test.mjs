@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import fc from "fast-check";
 
 import {
-  enabledLinkKeys,
-  featureMap,
-  featureOperationsBusy,
-  featureRuntimeText,
-  featureUnitState,
   inactiveServiceCount,
+  managedApplicationLinks,
+  managedServiceMap,
+  managedServiceOperationsBusy,
+  managedServiceRuntimeText,
+  managedServiceUnitState,
   mib,
   operationBusy,
-  operationConflicts,
   revisionModel,
   safeInternalPath,
   setupModel,
+  staticLinks,
   visibleOperations,
 } from "../../cockpit/src/view-model.js";
 
@@ -64,18 +64,14 @@ test("safeInternalPath accepts only same-origin root-relative control-free strin
   );
 });
 
-test("featureMap only exposes non-empty string identifiers", () => {
-  const feature = fc.record(
-    {
-      id: fc.oneof(fc.string({maxLength: 64}), fc.integer(), fc.constant(null)),
-      effective: fc.boolean(),
-      available: fc.boolean(),
-    },
-    {requiredKeys: ["id"]},
-  );
+test("managedServiceMap only exposes non-empty string identifiers", () => {
+  const service = fc.record({
+    id: fc.oneof(fc.string({maxLength: 64}), fc.integer(), fc.constant(null)),
+    label: fc.oneof(fc.string({maxLength: 64}), fc.constant(null)),
+  });
   fc.assert(
-    fc.property(fc.array(feature, {maxLength: 100}), (features) => {
-      const result = featureMap({featureControl: {features}});
+    fc.property(fc.array(service, {maxLength: 100}), (services) => {
+      const result = managedServiceMap({managedServices: {services}});
       for (const [key, value] of Object.entries(result)) {
         assert.equal(typeof key, "string");
         assert.notEqual(key, "");
@@ -86,18 +82,21 @@ test("featureMap only exposes non-empty string identifiers", () => {
   );
 });
 
-test("enabledLinkKeys never enables unknown backend link names", () => {
+test("staticLinks never exposes unknown backend link names or unsafe paths", () => {
   fc.assert(
     fc.property(
       fc.dictionary(fc.string({maxLength: 64}), shallowJson, {maxKeys: 60}),
-      fc.array(
-        fc.record({id: fc.string({minLength: 1, maxLength: 32}), effective: fc.boolean(), available: fc.boolean()}),
-        {maxLength: 40},
-      ),
-      (links, features) => {
-        const keys = enabledLinkKeys({links, featureControl: {features}});
-        assert.equal(new Set(keys).size, keys.length);
-        for (const key of keys) assert.ok(Object.hasOwn(links, key));
+      (links) => {
+        const entries = staticLinks({links});
+        const seen = new Set();
+        for (const entry of entries) {
+          assert.ok(Object.hasOwn(links, entry.key));
+          assert.ok(!seen.has(entry.key));
+          seen.add(entry.key);
+          assert.equal(typeof entry.url, "string");
+          assert.ok(entry.url.startsWith("/"));
+          assert.ok(!entry.url.startsWith("//"));
+        }
       },
     ),
     {numRuns: 800},
@@ -146,15 +145,15 @@ test("all backend view-model helpers remain total for hostile JSON", () => {
       shallowJson,
       fc.string({maxLength: 64}),
       (value, actionId) => {
-        assert.doesNotThrow(() => featureMap(value));
+        assert.doesNotThrow(() => managedServiceMap(value));
         assert.doesNotThrow(() => setupModel(value));
-        assert.doesNotThrow(() => featureUnitState(value));
-        assert.doesNotThrow(() => featureRuntimeText(value));
-        assert.doesNotThrow(() => operationConflicts(value, actionId));
+        assert.doesNotThrow(() => managedServiceUnitState(value));
+        assert.doesNotThrow(() => managedServiceRuntimeText(value));
         assert.doesNotThrow(() => operationBusy(value, actionId));
-        assert.doesNotThrow(() => featureOperationsBusy(value));
+        assert.doesNotThrow(() => managedServiceOperationsBusy(value));
         assert.doesNotThrow(() => visibleOperations(value));
-        assert.doesNotThrow(() => enabledLinkKeys(value));
+        assert.doesNotThrow(() => staticLinks(value));
+        assert.doesNotThrow(() => managedApplicationLinks(value));
         assert.doesNotThrow(() => inactiveServiceCount(value));
         assert.doesNotThrow(() => revisionModel(value));
       },

@@ -2,6 +2,7 @@
 
 let
   inherit (nasInternal)
+    authentikDataDir
     authentikEnvironmentFile
     authentikPort
     nasAuthentikBlueprints
@@ -9,12 +10,15 @@ let
     cockpitPort
     cockpitZfsPlugin
     cfg
+    copypartyDataDir
     copypartyUserConfigDir
     lanHost
+    postgresqlDataDir
     syncthingConfigDir
     syncthingDataDir
     syncthingGuiPort
     vaultwardenBackupDir
+    vaultwardenDataDir
     vaultwardenOidcAuthority
     vaultwardenOidcClientId
     vaultwardenPort
@@ -35,7 +39,7 @@ let
     web.path = cfg.identity.authentikPath;
     storage = {
       backend = "file";
-      file.path = "/var/lib/authentik/data";
+      file.path = "${authentikDataDir}/data";
     };
     # Load the repository-owned NAS blueprint instead of Authentik's immutable
     # package directory, which is not writable by the service.
@@ -47,20 +51,19 @@ let
   };
   authentikEnvironment = {
     AUTHENTIK_ENV = "production";
-    HOME = "/var/lib/authentik";
+    HOME = authentikDataDir;
   };
   authentikServiceConfig = {
     User = "authentik";
     Group = "authentik";
-    StateDirectory = "authentik";
     UMask = "0027";
-    WorkingDirectory = "/var/lib/authentik";
+    WorkingDirectory = authentikDataDir;
     EnvironmentFile = [ authentikEnvironmentFile ];
     NoNewPrivileges = true;
     PrivateTmp = true;
     ProtectHome = true;
     ProtectSystem = "strict";
-    ReadWritePaths = [ "/var/lib/authentik" ];
+    ReadWritePaths = [ authentikDataDir "/var/lib/authentik" ];
     Restart = "on-failure";
     RestartSec = "2s";
   };
@@ -102,8 +105,27 @@ in
     systemd.services."cockpit-wsinstance-https@".environment.COCKPIT_SUPERUSER = "sudo";
 
     environment.etc."authentik/config.yml".source = authentikSettings;
+    systemd.tmpfiles.rules = [
+      "d ${authentikDataDir} 0750 authentik authentik -"
+      "d ${authentikDataDir}/data 0750 authentik authentik -"
+      "L+ /var/lib/authentik - - - - ${authentikDataDir}"
+      "d ${syncthingDataDir} 0700 syncthing copyparty -"
+      "d ${syncthingConfigDir} 0700 syncthing copyparty -"
+      "L+ /var/lib/syncthing - - - - ${syncthingDataDir}"
+      "d ${vaultwardenDataDir} 0700 vaultwarden vaultwarden -"
+      "d ${vaultwardenBackupDir} 0700 vaultwarden vaultwarden -"
+      "L+ /var/lib/${if lib.versionOlder config.system.stateVersion "24.11" then "bitwarden_rs" else "vaultwarden"} - - - - ${vaultwardenDataDir}"
+      "L+ /var/backup/vaultwarden - - - - ${vaultwardenBackupDir}"
+      "d ${copypartyDataDir} 0750 copyparty copyparty -"
+      "d ${copypartyDataDir}/shares 2770 copyparty copyparty -"
+      "L+ /var/lib/copyparty - - - - ${copypartyDataDir}"
+      "d ${postgresqlDataDir} 0700 postgres postgres -"
+      "L+ /var/lib/postgresql - - - - ${postgresqlDataDir}"
+    ];
+
     services.postgresql = {
       enable = true;
+      dataDir = postgresqlDataDir;
       ensureDatabases = [ "authentik" ];
       ensureUsers = [
         {
@@ -112,11 +134,17 @@ in
         }
       ];
     };
+    systemd.services.postgresql = {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot postgresqlDataDir ];
+    };
     systemd.services.authentik-migrate = {
       description = "Migrate the Authentik database";
-      requires = [ "postgresql.service" ];
-      after = [ "postgresql.service" ];
+      requires = [ "postgresql.service" "nas-zfs-mount-guard.service" ];
+      after = [ "postgresql.service" "nas-zfs-mount-guard.service" ];
       before = [ "authentik.service" "authentik-worker.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot authentikDataDir ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
         Type = "oneshot";
@@ -124,31 +152,33 @@ in
         RuntimeDirectoryMode = "0750";
         RemainAfterExit = true;
         Restart = "on-failure";
-        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/authentik/data";
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${pkgs.authentik}/bin/ak migrate";
       };
     };
     systemd.services.authentik-worker = {
       description = "Authentik background worker";
-      requires = [ "authentik-migrate.service" ];
-      after = [ "authentik-migrate.service" ];
+      requires = [ "authentik-migrate.service" "nas-zfs-mount-guard.service" ];
+      after = [ "authentik-migrate.service" "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot authentikDataDir ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
         RuntimeDirectory = "authentik-worker";
         RuntimeDirectoryMode = "0750";
-        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/authentik/data";
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${pkgs.authentik}/bin/ak worker";
       };
     };
     systemd.services.authentik = {
       description = "Authentik identity provider";
-      requires = [ "authentik-migrate.service" "authentik-worker.service" ];
-      after = [ "authentik-migrate.service" "authentik-worker.service" ];
+      requires = [ "authentik-migrate.service" "authentik-worker.service" "nas-zfs-mount-guard.service" ];
+      after = [ "authentik-migrate.service" "authentik-worker.service" "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot authentikDataDir ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
         RuntimeDirectory = "authentik-server";
         RuntimeDirectoryMode = "0750";
-        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /var/lib/authentik/data";
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${pkgs.authentik}/bin/ak server";
         ExecStartPost = pkgs.writeShellScript "authentik-ready" ''
           exec ${pkgs.coreutils}/bin/timeout 90s ${pkgs.curl}/bin/curl \
@@ -255,6 +285,26 @@ in
         IP_HEADER_TRUSTED_PROXIES = "local";
         LOG_LEVEL = "info";
       };
+    };
+
+    systemd.services.copyparty = {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
+      serviceConfig = {
+        StateDirectory = lib.mkForce "${cfg.zfsRoot}/copyparty";
+        StateDirectoryMode = lib.mkForce "0750";
+      };
+    };
+    systemd.services.syncthing = lib.mkIf cfg.syncthing.enable {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
+    };
+    systemd.services.vaultwarden = lib.mkIf cfg.vaultwarden.enable {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
     };
   };
 }

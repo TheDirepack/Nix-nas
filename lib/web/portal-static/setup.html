@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NAS Setup</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="canonical" href="/setup">
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+    .setup-form { background: #f0f0f0; padding: 20px; border-radius: 8px; margin-top: 20px; }
+    input, button { padding: 10px; margin: 10px 0; width: 100%; }
+    button { background: #0066cc; color: white; border: none; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>NAS Setup</h1>
+  <p>This is the setup page for your NAS instance.</p>
+  <div class="setup-form">
+    <form method="POST" action="/setup">
+      <div>
+        <label for="admin-user">Admin Username:</label>
+        <input type="text" id="admin-user" name="admin-user" required>
+      </div>
+      <div>
+        <label for="admin-pass">Admin Password:</label>
+        <input type="password" id="admin-pass" name="admin-pass" required>
+      </div>
+      <button type="submit">Continue Setup</button>
+    </form>
+    <p><small>This will initialize the secure store and generate initial keys.</small></p>
+  </div>
+</body>
+</html>

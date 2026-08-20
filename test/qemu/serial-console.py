@@ -21,11 +21,10 @@ DSL (one directive per line, '#' starts a comment):
 
 `loginroot` timeout is controlled by --boot-timeout (the kernel takes a while).
 """
+
 import argparse
-import os
 import re
 import socket
-import sys
 import time
 
 
@@ -37,7 +36,9 @@ def parse_script(path):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
-            if "\t" in line and not stripped.startswith(("#", "wait", "any", "send", "sleep", "loginroot", "ctrlc", "if", "endif")):
+            if "\t" in line and not stripped.startswith(
+                ("#", "wait", "any", "send", "sleep", "loginroot", "ctrlc", "if", "endif")
+            ):
                 # Indented block bodies inside if/endif are allowed and skipped
                 # by the parser via dedicated handling; ignore stray tabs.
                 stripped = line.strip()
@@ -134,16 +135,14 @@ def main():
             # `login:` prompt. Reach a shell either way, then escalate to root
             # via passwordless `sudo -i` (the live `nixos` user is in wheel).
             con.send("")  # newline: harmless at a prompt, elicits output if idle
-            idx = con.wait(["login:", r"(?:nixos|root)@nixos[^$]*[#$]"],
-                           args.boot_timeout, "login prompt / shell")
+            idx = con.wait(["login:", r"(?:nixos|root)@nixos[^$]*[#$]"], args.boot_timeout, "login prompt / shell")
             if idx is None:
                 fail("timed out waiting for the login prompt or shell after boot")
             if idx == 0:
                 # `login:` was shown; give auto-login a moment, else type it.
                 if con.wait([r"(?:nixos|root)@nixos[^$]*[#$]"], 20) is None:
                     con.send("nixos")
-                    if con.wait([r"[Pp]assword:", r"(?:nixos|root)@nixos[^$]*[#$]"],
-                                args.wait_timeout) == 0:
+                    if con.wait([r"[Pp]assword:", r"(?:nixos|root)@nixos[^$]*[#$]"], args.wait_timeout) == 0:
                         con.send("")
                         con.wait([r"(?:nixos|root)@nixos[^$]*[#$]"], args.wait_timeout)
             if re.search(r"root@nixos[^$]*#", con.buf):
@@ -152,11 +151,11 @@ def main():
             if con.wait([r"root@nixos[^$]*#"], args.wait_timeout) is None:
                 fail("could not escalate to a root shell (sudo -i failed)")
         elif cmd.startswith("wait:"):
-            rx = cmd[len("wait:"):]
+            rx = cmd[len("wait:") :]
             if con.wait([rx], args.wait_timeout) is None:
                 fail(f"timeout waiting for: {rx!r}  (last output: ...{con.buf[-400:]!r})")
         elif cmd.startswith("waitopt:"):
-            rest = cmd[len("waitopt:"):]
+            rest = cmd[len("waitopt:") :]
             rx, _, secs = rest.rpartition(",")
             try:
                 secs = float(secs)
@@ -164,13 +163,13 @@ def main():
                 secs = 15.0
             con.wait([rx], secs)
         elif cmd.startswith("any:"):
-            rxs = cmd[len("any:"):].split("|")
+            rxs = cmd[len("any:") :].split("|")
             idx = con.wait(rxs, args.wait_timeout)
             last_any = idx
             if idx is None:
                 fail(f"timeout waiting for any of: {rxs!r}")
         elif cmd.startswith("if:"):
-            target = int(cmd[len("if:"):])
+            target = int(cmd[len("if:") :])
             if last_any != target:
                 depth = 1
                 while i < n and depth:
@@ -187,13 +186,13 @@ def main():
         elif cmd == "endif":
             pass
         elif cmd.startswith("send:"):
-            con.send(cmd[len("send:"):])
+            con.send(cmd[len("send:") :])
         elif cmd.startswith("sendraw:"):
-            con.send(cmd[len("sendraw:"):], newline=False)
+            con.send(cmd[len("sendraw:") :], newline=False)
         elif cmd == "ctrlc":
             con.sock.sendall(b"\x03")
         elif cmd.startswith("sleep:"):
-            time.sleep(float(cmd[len("sleep:"):]))
+            time.sleep(float(cmd[len("sleep:") :]))
         else:
             fail(f"unknown directive: {cmd!r}")
         i += 1

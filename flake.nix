@@ -1,5 +1,5 @@
 {
-  description = "NixOS NAS 2.2.0-alpha.35 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
+  description = "NixOS NAS 2.2.0-alpha.22 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -96,21 +96,10 @@
           };
         };
 
-      # Reusable Nix store roots for the QEMU integration VMs. The full VM
-      # system closure is thousands of store paths; fetching them one at a
-      # time through the Magic Nix Cache trips GitHub's per-path cache rate
-      # limit. The core root contains boot, recovery, unlock, primary access,
-      # and deterministic-test tooling. Optional applications remain separate
-      # roots so a change to one application does not invalidate the others.
       packages.x86_64-linux =
         let
           pkgs = mkPkgs "x86_64-linux";
-          # The vaultwarden systemd unit runs the package with dbBackend="sqlite"
-          # (see modules/nas/config/application-services.nix), so the bundled
-          # derivation must be the same override the module produces.
           vaultwardenBundle = pkgs.vaultwarden.override { dbBackend = "sqlite"; };
-          # The cockpit-zfs plugin is built with Node 22 as a workaround for
-          # NixOS/nixpkgs#530137 (see modules/nas/internal/zfs-tools.nix).
           cockpitZfsBuildPackages = pkgs.buildPackages // {
             yarn-berry = pkgs.buildPackages.yarn-berry.override {
               nodejs = pkgs.buildPackages.nodejs_22;
@@ -201,8 +190,11 @@
               bandit
               coverage
               hypothesis
-              selenium
+              jsonschema
+              ruamel-yaml
             ]))
+            pkgs.caddy
+            pkgs.pyright
             pkgs.semgrep
             pkgs.shellcheck
             pkgs.actionlint

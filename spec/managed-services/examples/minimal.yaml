@@ -1,0 +1,6 @@
+schemaVersion: 3
+services:
+  example:
+    name: Example
+    workload: {kind: daemon}
+    runtime: {type: systemd, unit: example.service}

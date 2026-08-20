@@ -1,1880 +1,75 @@
 import React, {useCallback, useEffect, useMemo, useState} from "react";
 import {
   Alert,
-  AlertActionCloseButton,
   Button,
   Card,
   CardBody,
+  CardHeader,
   CardTitle,
-  Checkbox,
-  CodeBlock,
-  CodeBlockCode,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
   Form,
   FormGroup,
-  FormSelect,
-  FormSelectOption,
-  Gallery,
-  Grid,
-  GridItem,
   Label,
-  List,
-  ListItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  Page,
-  PageSection,
   Spinner,
-  Stack,
-  StackItem,
   TextArea,
   TextInput,
   Title,
-  Toolbar,
-  ToolbarContent,
-  ToolbarItem,
 } from "@patternfly/react-core";
-import {api, apiInput, activateSecrets, startFirstRun} from "./api.js";
 import {
-  CAPABILITIES,
-  LINK_LABELS,
+  activateSecrets,
+  api,
+  apiInput,
+  managedServicesDocument,
+  replaceManagedServicesDocument,
+  replaceManagedServicesJsonDocument,
+  setManagedServiceMode,
+  startFirstRun,
+} from "./api.js";
+import {SchemaEditor} from "./schema-editor.jsx";
+import {
   MODE_LABELS,
-  enabledLinkKeys,
-  featureMap,
-  featureRuntimeText,
-  featureUnitState,
-  inactiveServiceCount,
-  featureOperationsBusy,
+  managedApplicationLinks,
+  managedServiceOperationsBusy,
+  managedServiceRows,
+  managedServiceRuntimeText,
+  managedServiceUnitState,
   mib,
-  operationBusy,
   revisionModel,
   setupModel,
-  safeInternalPath,
+  staticLinks,
   visibleOperations,
 } from "./view-model.js";
 
-function errorText(error) {
-  return error instanceof Error ? error.message : String(error);
+const PAGES = [
+  ["overview", "Overview"],
+  ["services", "Managed services"],
+  ["applications", "Applications"],
+  ["operations", "Operations"],
+  ["ai", "AI configuration"],
+  ["source", "Source & updates"],
+  ["setup", "First start"],
+];
+
+function message(error) {
+  if (error instanceof Error) return error.message;
+  return String(error || "Unknown error");
 }
 
-function statusVariant(value) {
-  return ["active", "enabled", "static", true].includes(value) ? "green" : "red";
+function pretty(value) {
+  return JSON.stringify(value, null, 2);
 }
 
-function StatusLabel({value, children}) {
-  return <Label color={statusVariant(value)}>{children ?? value ?? "unknown"}</Label>;
-}
-
-function Output({children, ariaLabel}) {
-  if (!children) return null;
-  return (
-    <CodeBlock className="nas-code-output" tabIndex={0} role="region" aria-label={ariaLabel}>
-      <CodeBlockCode aria-label={ariaLabel}>{children}</CodeBlockCode>
-    </CodeBlock>
-  );
-}
-
-function Notice({notice, onClose}) {
-  if (!notice) return null;
-  return (
-    <Alert
-      variant={notice.variant}
-      title={notice.title}
-      actionClose={<AlertActionCloseButton onClose={onClose} />}
-      isInline
-    >
-      {notice.message}
-    </Alert>
-  );
-}
-
-function FirstStartPanel({model, onComplete, setNotice}) {
-  const [password, setPassword] = useState("");
-  const [destructive, setDestructive] = useState(false);
-  const [confirmPasswordReapply, setConfirmPasswordReapply] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [output, setOutput] = useState("");
-
-  const submit = async (event) => {
-    event.preventDefault();
-    if (model.destructiveRequired && !destructive) {
-      setNotice({
-        variant: "danger",
-        title: "Confirmation required",
-        message: "Confirm the destructive storage plan before continuing.",
-      });
-      return;
-    }
-    setRunning(true);
-    setOutput("Running resumable first-start setup…\n");
-    try {
-      const process = startFirstRun(password, {
-        allowDestructiveStorage: model.destructiveRequired && destructive,
-        planDigest: model.planDigest,
-        confirmPasswordReapply,
-      });
-      setPassword("");
-      const result = await process;
-      setOutput(
-        (current) =>
-          `${current}Setup job ${result.operationId || "unknown"} ${result.status || "started"}. Progress will continue in systemd and the setup journal.\n`,
-      );
-      setNotice({
-        variant: "info",
-        title: "First-start setup started",
-        message: "The job continues independently; this page will follow its journal progress.",
-      });
-      await onComplete();
-    } catch (error) {
-      setPassword("");
-      const message = errorText(error);
-      setOutput((current) => `${current}${message}\n`);
-      setNotice({variant: "danger", title: "First-start setup failed", message});
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const devices = Array.isArray(model.storage.devices) ? model.storage.devices : [];
-  return (
-    <PageSection>
-      <Card isFullHeight>
-        <CardTitle>
-          <Title headingLevel="h2">Finish first-start setup</Title>
-        </CardTitle>
-        <CardBody>
-          <Stack hasGutter>
-            <StackItem>
-              <p className="nas-muted">{model.message}</p>
-            </StackItem>
-            {model.ready && (
-              <StackItem>
-                <DescriptionList isHorizontal>
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>Configuration</DescriptionListTerm>
-                    <DescriptionListDescription>
-                      <code>{model.configPath || "unknown"}</code>
-                    </DescriptionListDescription>
-                  </DescriptionListGroup>
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>Storage</DescriptionListTerm>
-                    <DescriptionListDescription>
-                      {model.storage.pool || "unknown"} / {model.storage.dataset || "unknown"} ·{" "}
-                      {model.storage.topology || "unknown"}
-                    </DescriptionListDescription>
-                  </DescriptionListGroup>
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>Initial accounts and services</DescriptionListTerm>
-                    <DescriptionListDescription>
-                      {model.accountCount} accounts · {model.featureCount} service policies
-                    </DescriptionListDescription>
-                  </DescriptionListGroup>
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>Plan fingerprint</DescriptionListTerm>
-                    <DescriptionListDescription>
-                      <code>{model.planDigest || "unavailable"}</code>
-                    </DescriptionListDescription>
-                  </DescriptionListGroup>
-                </DescriptionList>
-                {devices.length > 0 && (
-                  <List className="nas-device-list" isPlain>
-                    {devices.map((device) => (
-                      <ListItem key={device}>
-                        <code>{device}</code>
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-              </StackItem>
-            )}
-            {model.journal && (
-              <StackItem>
-                <Alert
-                  variant={model.journal.status === "manual-recovery-required" ? "danger" : "info"}
-                  title={`Setup journal: ${model.journal.status || "unknown"}`}
-                  isInline
-                >
-                  {model.journal.currentStep ? `Current stage: ${model.journal.currentStep}. ` : ""}
-                  {model.journal.error ||
-                    "The setup journal is authoritative for resume and recovery state."}
-                </Alert>
-              </StackItem>
-            )}
-            <StackItem>
-              <Form className="nas-password-form" onSubmit={submit}>
-                <FormGroup
-                  label="KeePassXC database password"
-                  isRequired
-                  fieldId="first-start-password"
-                >
-                  <TextInput
-                    id="first-start-password"
-                    value={password}
-                    type="password"
-                    autoComplete="current-password"
-                    onChange={(_event, value) => setPassword(value)}
-                    isRequired
-                    maxLength={4096}
-                  />
-                </FormGroup>
-                {model.destructiveRequired && (
-                  <Checkbox
-                    id="first-start-destructive"
-                    label="I understand that the listed storage devices will be used to create the configured ZFS pool and existing data on them may be destroyed."
-                    isChecked={destructive}
-                    onChange={(_event, checked) => setDestructive(checked)}
-                  />
-                )}
-                <Checkbox
-                  id="first-start-password-reapply"
-                  label="If this resumes an interrupted identity stage, repeat the configured account password changes"
-                  isChecked={confirmPasswordReapply}
-                  onChange={(_event, checked) => setConfirmPasswordReapply(checked)}
-                />
-                <Button
-                  type="submit"
-                  variant="primary"
-                  isDisabled={!model.ready || running || !password || !model.planDigest}
-                  isLoading={running}
-                >
-                  Start setup
-                </Button>
-              </Form>
-            </StackItem>
-            <StackItem>
-              <Output ariaLabel="First-start setup output">{output}</Output>
-            </StackItem>
-            <StackItem>
-              <p className="nas-muted">
-                The password is sent only over standard input to the privileged setup process. Setup
-                is journaled and resumes completed stages after an interruption.
-              </p>
-            </StackItem>
-          </Stack>
-        </CardBody>
-      </Card>
-    </PageSection>
-  );
-}
-
-function UnlockPanel({model, onComplete, setNotice}) {
-  const [password, setPassword] = useState("");
-  const [running, setRunning] = useState(false);
-  const [output, setOutput] = useState("");
-
-  const submit = async (event) => {
-    event.preventDefault();
-    setRunning(true);
-    setOutput("Starting protected services…\n");
-    try {
-      const process = activateSecrets(password);
-      setPassword("");
-      if (typeof process.stream === "function") {
-        process.stream((chunk) => setOutput((current) => current + chunk));
-      }
-      await process;
-      setOutput((current) => `${current}\nUnlock completed. Refreshing status…\n`);
-      setNotice({
-        variant: "success",
-        title: "NAS unlocked",
-        message: "Protected storage and services started successfully.",
-      });
-      await onComplete();
-    } catch (error) {
-      setPassword("");
-      const message = errorText(error);
-      setOutput((current) => `${current}\n${message}\n`);
-      setNotice({variant: "danger", title: "Unlock failed", message});
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  return (
-    <PageSection>
-      <Card>
-        <CardTitle>
-          <Title headingLevel="h2">Unlock protected storage and services</Title>
-        </CardTitle>
-        <CardBody>
-          <Stack hasGutter>
-            <StackItem>
-              <p className="nas-muted">
-                Cockpit remains available as the recovery interface while KeePassXC and encrypted
-                ZFS are locked. The password is written only to{" "}
-                <code>nas-secrets activate-stdin</code> over process standard input.
-              </p>
-            </StackItem>
-            {model.journal && (
-              <StackItem>
-                <Alert
-                  variant={model.journal.status === "manual-recovery-required" ? "danger" : "info"}
-                  title={`Setup journal: ${model.journal.status || "unknown"}`}
-                  isInline
-                >
-                  {model.journal.currentStep ? `Current stage: ${model.journal.currentStep}. ` : ""}
-                  {model.journal.error ||
-                    "The setup journal is authoritative for resume and recovery state."}
-                </Alert>
-              </StackItem>
-            )}
-            <StackItem>
-              <Form className="nas-password-form" onSubmit={submit}>
-                <FormGroup label="KeePassXC database password" isRequired fieldId="unlock-password">
-                  <TextInput
-                    id="unlock-password"
-                    value={password}
-                    type="password"
-                    autoComplete="off"
-                    onChange={(_event, value) => setPassword(value)}
-                    isRequired
-                    maxLength={4096}
-                  />
-                </FormGroup>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  isDisabled={running || !password}
-                  isLoading={running}
-                >
-                  Unlock NAS
-                </Button>
-              </Form>
-            </StackItem>
-            <StackItem>
-              <Output ariaLabel="Unlock output">{output}</Output>
-            </StackItem>
-            <StackItem>
-              <p className="nas-muted">
-                Sign in with the local Linux/Cockpit administrator. Authentik accounts are
-                unavailable until Authentik itself is unlocked and started.
-              </p>
-            </StackItem>
-          </Stack>
-        </CardBody>
-      </Card>
-    </PageSection>
-  );
-}
-
-function SummaryCards({data}) {
-  const revision = revisionModel(data.update || {});
-  const memory = data.featureControl?.memory;
-  const resident = memory?.residentEstimateMiB || memory?.estimateMiB || {};
-  const active = memory?.activeEstimateMiB || resident;
-  const configured = memory?.configuredMaximumMiB || resident;
-  const savings = memory?.onDemandSavingsMiB || {};
-  const identity = data.identity || {};
-
-  return (
-    <PageSection>
-      <Gallery hasGutter minWidths={{default: "19rem"}}>
-        <Card className="nas-summary-card">
-          <CardTitle>System lock state</CardTitle>
-          <CardBody className="nas-status-stack">
-            <StatusLabel value={Boolean(data.protectedReady)}>
-              {data.protectedReady ? "Ready" : "Locked"}
-            </StatusLabel>
-            <p>{inactiveServiceCount(data.services)} inactive listed services</p>
-            {data.authentikTokenWarning && (
-              <Alert variant="warning" title="Authentik token warning" isInline>
-                {data.authentikTokenWarning}
-              </Alert>
-            )}
-          </CardBody>
-        </Card>
-        <Card className="nas-summary-card">
-          <CardTitle>Identity and access</CardTitle>
-          <CardBody className="nas-status-stack">
-            {identity.ok === false || !data.identity ? (
-              <>
-                <StatusLabel value={false}>Unavailable</StatusLabel>
-                <p>{identity.error || "Authentik is locked or offline"}</p>
-              </>
-            ) : (
-              <>
-                <StatusLabel value>Available</StatusLabel>
-                <p>
-                  {identity.users?.length ?? 0} users, {identity.groups?.length ?? 0} groups
-                </p>
-                <p>
-                  Trusted administrators: {(identity.administrators || []).join(", ") || "none"}
-                </p>
-                <p>Share authority: {identity.shareAuthority || "CopyParty"}</p>
-              </>
-            )}
-          </CardBody>
-        </Card>
-        <Card className="nas-summary-card">
-          <CardTitle>Source revision</CardTitle>
-          <CardBody className="nas-status-stack">
-            {revision.kind === "error" ? (
-              <>
-                <StatusLabel value={false}>Inspection failed</StatusLabel>
-                <p>{revision.error}</p>
-              </>
-            ) : (
-              <>
-                <code>{revision.revision}</code>
-                <p>Branch: {revision.branch}</p>
-                <p>Upstream: {revision.upstream}</p>
-                <p>{revision.divergence}</p>
-                <StatusLabel value={revision.checkout === "clean"}>
-                  {revision.checkout === "dirty"
-                    ? "Uncommitted changes"
-                    : revision.checkout === "clean"
-                      ? "Clean checkout"
-                      : "Checkout state unavailable"}
-                </StatusLabel>
-              </>
-            )}
-          </CardBody>
-        </Card>
-        <Card className="nas-summary-card">
-          <CardTitle>Memory footprint</CardTitle>
-          <CardBody className="nas-status-stack">
-            {!memory ? (
-              <StatusLabel value={false}>Unavailable</StatusLabel>
-            ) : (
-              <>
-                <strong>{resident.typical ?? "—"} MiB resident typical</strong>
-                <p>
-                  {resident.min ?? "—"}–{resident.max ?? "—"} MiB steady-state fixed userspace
-                </p>
-                <p>Active now: ~{active.typical ?? "—"} MiB</p>
-                <p>All configured apps awake: ~{configured.typical ?? "—"} MiB</p>
-                <p>On-demand savings: ~{savings.typical ?? 0} MiB</p>
-                <p>{mib(memory.system?.availableBytes)} MiB currently available</p>
-              </>
-            )}
-          </CardBody>
-        </Card>
-      </Gallery>
-    </PageSection>
-  );
-}
-
-function FeatureGrid({data, busyFeature, onModeChange}) {
-  const operationsBusy = featureOperationsBusy(data);
-  const features = data.featureControl?.features || [];
-  return (
-    <PageSection>
-      <Title headingLevel="h2" className="nas-section-heading">
-        Service policies
-      </Title>
-      <p className="nas-muted nas-section-heading">
-        Choose how optional services run. On-demand services wake for authorized use and sleep after
-        their idle period; NixOS still controls what is installed.
-      </p>
-      {!features.length ? (
-        <Alert variant="warning" title="Feature catalog unavailable" isInline>
-          {data.featureControl?.error || "No feature data was returned."}
-        </Alert>
-      ) : (
-        <Gallery hasGutter minWidths={{default: "20rem"}}>
-          {features.map((feature) => {
-            const runtime = featureRuntimeText(feature);
-            return (
-              <Card
-                key={feature.id}
-                className={`nas-feature-card ${feature.effective ? "nas-feature-card--enabled" : ""}`}
-              >
-                <CardTitle>{feature.label}</CardTitle>
-                <CardBody>
-                  <Stack hasGutter>
-                    <StackItem>
-                      <p>
-                        {feature.description}
-                        {feature.parent ? ` Depends on ${feature.parent}.` : ""}
-                      </p>
-                    </StackItem>
-                    <StackItem>
-                      <FormGroup label="Runtime policy" fieldId={`feature-${feature.id}`}>
-                        <FormSelect
-                          id={`feature-${feature.id}`}
-                          value={feature.requestedMode}
-                          onChange={(_event, value) => onModeChange(feature.id, value)}
-                          isDisabled={
-                            !feature.available || busyFeature === feature.id || operationsBusy
-                          }
-                          aria-label={`${feature.label} runtime policy`}
-                        >
-                          {(feature.allowedModes || ["off", "always"]).map((mode) => (
-                            <FormSelectOption
-                              key={mode}
-                              value={mode}
-                              label={MODE_LABELS[mode] || mode}
-                            />
-                          ))}
-                        </FormSelect>
-                      </FormGroup>
-                    </StackItem>
-                    <StackItem className="nas-feature-labels">
-                      <Label color={feature.available ? "green" : "grey"}>
-                        {feature.available ? "Installed" : "Not installed"}
-                      </Label>
-                      <Label color={feature.runtimeAvailable === false ? "red" : "green"}>
-                        {feature.runtimeAvailable === false
-                          ? "Runtime unavailable"
-                          : "Runtime available"}
-                      </Label>
-                      <Label color="blue">
-                        {MODE_LABELS[feature.effectiveMode] || feature.effectiveMode}
-                      </Label>
-                      <Label color={feature.running ? "green" : "grey"}>
-                        {featureUnitState(feature)}
-                      </Label>
-                    </StackItem>
-                    {runtime && (
-                      <StackItem>
-                        <small className="nas-muted">{runtime}</small>
-                      </StackItem>
-                    )}
-                  </Stack>
-                </CardBody>
-              </Card>
-            );
-          })}
-        </Gallery>
-      )}
-    </PageSection>
-  );
-}
-
-function CapabilityTable({data}) {
-  const value = data.capabilities;
-  return (
-    <PageSection>
-      <Toolbar className="nas-section-heading">
-        <ToolbarContent>
-          <ToolbarItem variant="label">
-            <Title headingLevel="h2">User access</Title>
-          </ToolbarItem>
-          <ToolbarItem align={{default: "alignEnd"}}>
-            <Button
-              component="a"
-              href="/identity/"
-              target="_blank"
-              rel="noopener noreferrer"
-              variant="secondary"
-            >
-              Open Authentik
-            </Button>
-          </ToolbarItem>
-        </ToolbarContent>
-      </Toolbar>
-      <p className="nas-muted nas-section-heading">
-        Access comes from Authentik groups. Use Authentik to change memberships, MFA, and
-        application policy; this view is read-only.
-      </p>
-      {!value || value.ok === false ? (
-        <Alert variant="danger" title="Capability data unavailable" isInline>
-          {value?.error || "No capability data was returned."}
-        </Alert>
-      ) : (
-        <div className="nas-table-wrap" tabIndex={0} role="region" aria-label="User access">
-          <table
-            className="pf-v6-c-table pf-m-grid-md nas-table"
-            role="grid"
-            aria-label="User access"
-          >
-            <thead>
-              <tr>
-                <th>User</th>
-                {CAPABILITIES.map(([, label]) => (
-                  <th key={label}>{label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(value.users || []).length === 0 ? (
-                <tr>
-                  <td colSpan={CAPABILITIES.length + 1}>No human Authentik users found.</td>
-                </tr>
-              ) : (
-                (value.users || []).map((user) => (
-                  <tr key={user.id}>
-                    <td data-label="User">
-                      <strong>{user.displayName || user.id}</strong>
-                      <br />
-                      <code>{user.id}</code>
-                      {user.administrator && (
-                        <>
-                          <br />
-                          <Label color="blue">Administrator</Label>
-                        </>
-                      )}
-                    </td>
-                    {CAPABILITIES.map(([capability, label]) => {
-                      const current = user.capabilities?.[capability] || {};
-                      return (
-                        <td key={capability} data-label={label}>
-                          <StatusLabel value={Boolean(current.allowed)}>
-                            {current.allowed ? "Allowed" : "Denied"}
-                          </StatusLabel>
-                          <br />
-                          <small>{current.source || "default"}</small>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </PageSection>
-  );
-}
-
-function MemoryTable({data}) {
-  const memory = data.featureControl?.memory;
-  return (
-    <PageSection>
-      <Title headingLevel="h2" className="nas-section-heading">
-        Memory planner
-      </Title>
-      <p className="nas-muted nas-section-heading">
-        Estimates show fixed userspace memory with no AI model loaded. Current values use systemd
-        accounting when available; adaptive ZFS ARC cache is not included.
-      </p>
-      {!memory ? (
-        <Alert variant="warning" title="Memory model unavailable" isInline />
-      ) : (
-        <div className="nas-table-wrap" tabIndex={0} role="region" aria-label="Memory planner">
-          <table
-            className="pf-v6-c-table pf-m-grid-md nas-table"
-            role="grid"
-            aria-label="Memory planner"
-          >
-            <thead>
-              <tr>
-                <th>Component</th>
-                <th>Policy</th>
-                <th>Resident</th>
-                <th>Predicted MiB</th>
-                <th>Current MiB</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(memory.components || []).map((component) => (
-                <tr
-                  key={component.id || component.label}
-                  className={component.configured ? "" : "nas-table__excluded"}
-                >
-                  <td data-label="Component">
-                    <strong>{component.label}</strong>
-                  </td>
-                  <td data-label="Policy">{component.mode || "core"}</td>
-                  <td data-label="Resident">
-                    <StatusLabel value={Boolean(component.resident)}>
-                      {component.resident ? "Yes" : "No"}
-                    </StatusLabel>
-                  </td>
-                  <td data-label="Predicted MiB">
-                    {component.estimateMiB.min}–{component.estimateMiB.max}
-                    <br />
-                    <small>typical {component.estimateMiB.typical}</small>
-                  </td>
-                  <td data-label="Current MiB">{mib(component.currentBytes)}</td>
-                  <td data-label="Notes">{component.notes || ""}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </PageSection>
-  );
-}
-
-const AI_PROVIDER_PRESETS = {
-  custom: {label: "Custom OpenAI-compatible", id: "", url: ""},
-  openrouter: {label: "OpenRouter", id: "openrouter", url: "https://openrouter.ai/api"},
-  openai: {label: "OpenAI", id: "openai", url: "https://api.openai.com"},
-  groq: {label: "Groq", id: "groq", url: "https://api.groq.com/openai"},
-  deepseek: {label: "DeepSeek", id: "deepseek", url: "https://api.deepseek.com"},
-};
-
-const CODING_ROLE_LABELS = {
-  "coding/default": "Default coding agent",
-  "coding/cheap": "Economy worker",
-  "coding/planner": "Planner",
-  "coding/reviewer": "Reviewer",
-  "coding/research": "Researcher",
-  "coding/local-worker": "Local bounded worker",
-};
-
-function lines(value) {
-  return String(value || "")
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function numberOr(value, fallback) {
-  const parsed = Number.parseInt(String(value), 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function argvLines(value) {
-  return String(value || "")
-    .split(/\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function AIConfiguration({data, onRefresh, setNotice}) {
-  const config = data.aiConfig || {};
-  const [preset, setPreset] = useState("custom");
-  const [providerId, setProviderId] = useState("");
-  const [providerUrl, setProviderUrl] = useState("");
-  const [providerModels, setProviderModels] = useState("");
-  const [providerKey, setProviderKey] = useState("");
-  const [keepassPassword, setKeepassPassword] = useState("");
-  const [connectTimeout, setConnectTimeout] = useState("30");
-  const [keepaliveTimeout, setKeepaliveTimeout] = useState("30");
-  const [responseTimeout, setResponseTimeout] = useState("60");
-  const [tlsTimeout, setTlsTimeout] = useState("10");
-  const [idleTimeout, setIdleTimeout] = useState("90");
-  const [stripParams, setStripParams] = useState("");
-  const [setParams, setSetParams] = useState("{}");
-  const [providerBusy, setProviderBusy] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [localModelId, setLocalModelId] = useState("");
-  const [localModelPath, setLocalModelPath] = useState("");
-  const [localContext, setLocalContext] = useState("32768");
-  const [localTtl, setLocalTtl] = useState("300");
-  const [localTools, setLocalTools] = useState(true);
-  const [localArgs, setLocalArgs] = useState("");
-  const [localBusy, setLocalBusy] = useState(false);
-  const [localDeleteTarget, setLocalDeleteTarget] = useState(null);
-  const [roleBusy, setRoleBusy] = useState(null);
-  const [advancedBusy, setAdvancedBusy] = useState(false);
-  const [advanced, setAdvanced] = useState({
-    healthCheckTimeout: String(config.advanced?.healthCheckTimeout ?? 300),
-    globalTTL: String(config.advanced?.globalTTL ?? 300),
-    unloadTimeout: String(config.advanced?.unloadTimeout ?? 10),
-    logLevel: String(config.advanced?.logLevel ?? "info"),
-    captureBuffer: String(config.advanced?.captureBuffer ?? 0),
-    metricsMaxInMemory: String(config.advanced?.metricsMaxInMemory ?? 250),
-  });
-  const [roles, setRoles] = useState(() =>
-    Object.fromEntries(
-      Object.keys(CODING_ROLE_LABELS).map((role) => {
-        const current = config.codingRoles?.[role] || {};
-        return [
-          role,
-          {
-            targets: (current.targets || []).join("\n"),
-            strategy: current.strategy || "warm",
-            spillover: String(current.spillover ?? 1),
-          },
-        ];
-      }),
-    ),
-  );
-
-  const advancedSignature = JSON.stringify(config.advanced || {});
-  const rolesSignature = JSON.stringify(config.codingRoles || {});
-
-  useEffect(() => {
-    setAdvanced({
-      healthCheckTimeout: String(config.advanced?.healthCheckTimeout ?? 300),
-      globalTTL: String(config.advanced?.globalTTL ?? 300),
-      unloadTimeout: String(config.advanced?.unloadTimeout ?? 10),
-      logLevel: String(config.advanced?.logLevel ?? "info"),
-      captureBuffer: String(config.advanced?.captureBuffer ?? 0),
-      metricsMaxInMemory: String(config.advanced?.metricsMaxInMemory ?? 250),
-    });
-    setRoles(
-      Object.fromEntries(
-        Object.keys(CODING_ROLE_LABELS).map((role) => {
-          const current = config.codingRoles?.[role] || {};
-          return [
-            role,
-            {
-              targets: (current.targets || []).join("\n"),
-              strategy: current.strategy || "warm",
-              spillover: String(current.spillover ?? 1),
-            },
-          ];
-        }),
-      ),
-    );
-    // Polling returns fresh objects; only reset form state when values actually changed.
-  }, [advancedSignature, rolesSignature]);
-
-  const applyPreset = (value) => {
-    setPreset(value);
-    const selected = AI_PROVIDER_PRESETS[value];
-    if (selected && value !== "custom") {
-      setProviderId(selected.id);
-      setProviderUrl(selected.url);
-    }
-  };
-
-  const editProvider = (provider) => {
-    setPreset(Object.hasOwn(AI_PROVIDER_PRESETS, provider.id) ? provider.id : "custom");
-    setProviderId(provider.id || "");
-    setProviderUrl(provider.url || "");
-    setProviderModels((provider.models || []).join("\n"));
-    setProviderKey("");
-    setKeepassPassword("");
-    setConnectTimeout(String(provider.timeouts?.connect ?? 30));
-    setKeepaliveTimeout(String(provider.timeouts?.keepalive ?? 30));
-    setResponseTimeout(String(provider.timeouts?.responseHeader ?? 60));
-    setTlsTimeout(String(provider.timeouts?.tlsHandshake ?? 10));
-    setIdleTimeout(String(provider.timeouts?.idleConn ?? 90));
-    setStripParams(provider.filters?.stripParams || "");
-    setSetParams(JSON.stringify(provider.filters?.setParams || {}, null, 2));
-  };
-
-  const saveProvider = async (event) => {
-    event.preventDefault();
-    setProviderBusy(true);
-    try {
-      let parsedSetParams;
-      try {
-        parsedSetParams = JSON.parse(setParams || "{}");
-      } catch (_error) {
-        throw new Error("Provider setParams must be valid JSON.");
-      }
-      await apiInput(["ai-provider-set"], {
-        id: providerId.trim(),
-        url: providerUrl.trim(),
-        models: lines(providerModels),
-        apiKey: providerKey,
-        keepassPassword,
-        timeouts: {
-          connect: numberOr(connectTimeout, 30),
-          keepalive: numberOr(keepaliveTimeout, 30),
-          responseHeader: numberOr(responseTimeout, 60),
-          tlsHandshake: numberOr(tlsTimeout, 10),
-          idleConn: numberOr(idleTimeout, 90),
-        },
-        filters: {stripParams: stripParams.trim(), setParams: parsedSetParams},
-      });
-      setProviderKey("");
-      setKeepassPassword("");
-      setNotice({
-        variant: "success",
-        title: "AI provider saved",
-        message: `${providerId} is now routed through llama-swap.`,
-      });
-      await onRefresh({quiet: true});
-    } catch (error) {
-      setProviderKey("");
-      setKeepassPassword("");
-      setNotice({variant: "danger", title: "AI provider update failed", message: errorText(error)});
-    } finally {
-      setProviderBusy(false);
-    }
-  };
-
-  const deleteProvider = async (provider) => {
-    if (provider.credentialConfigured && !keepassPassword) {
-      setNotice({
-        variant: "warning",
-        title: "KeePass password required",
-        message:
-          "Enter the KeePassXC database password in the provider form before deleting a provider with a stored key.",
-      });
-      return;
-    }
-    setProviderBusy(true);
-    try {
-      await apiInput(["ai-provider-delete"], {id: provider.id, keepassPassword});
-      setKeepassPassword("");
-      if (providerId === provider.id) {
-        setProviderId("");
-        setProviderUrl("");
-        setProviderModels("");
-        setProviderKey("");
-      }
-      setNotice({
-        variant: "success",
-        title: "AI provider removed",
-        message: `${provider.id} and its stored credential reference were removed.`,
-      });
-      setDeleteTarget(null);
-      await onRefresh({quiet: true});
-    } catch (error) {
-      setKeepassPassword("");
-      setNotice({
-        variant: "danger",
-        title: "AI provider removal failed",
-        message: errorText(error),
-      });
-    } finally {
-      setProviderBusy(false);
-    }
-  };
-
-  const editLocalModel = (model) => {
-    if (!model.managed) {
-      setNotice({
-        variant: "info",
-        title: "Manual model",
-        message: `${model.id} is defined outside Cockpit and is intentionally read-only here.`,
-      });
-      return;
-    }
-    setLocalModelId(model.id || "");
-    setLocalModelPath(model.path || "");
-    setLocalContext(String(model.context ?? 32768));
-    setLocalTtl(String(model.ttl ?? 300));
-    setLocalTools(Boolean(model.tools));
-    setLocalArgs((model.extraArgs || []).join("\n"));
-  };
-
-  const saveLocalModel = async (event) => {
-    event.preventDefault();
-    setLocalBusy(true);
-    try {
-      await apiInput(["ai-local-model-set"], {
-        id: localModelId.trim(),
-        path: localModelPath.trim(),
-        context: numberOr(localContext, 32768),
-        ttl: numberOr(localTtl, 300),
-        tools: localTools,
-        extraArgs: argvLines(localArgs),
-      });
-      setNotice({
-        variant: "success",
-        title: "Local model saved",
-        message: `${localModelId} is available through llama-swap.`,
-      });
-      await onRefresh({quiet: true});
-    } catch (error) {
-      setNotice({variant: "danger", title: "Local model update failed", message: errorText(error)});
-    } finally {
-      setLocalBusy(false);
-    }
-  };
-
-  const deleteLocalModel = async (model) => {
-    setLocalBusy(true);
-    try {
-      await apiInput(["ai-local-model-delete"], {id: model.id});
-      if (localModelId === model.id) {
-        setLocalModelId("");
-        setLocalModelPath("");
-        setLocalArgs("");
-      }
-      setLocalDeleteTarget(null);
-      setNotice({
-        variant: "success",
-        title: "Local model removed",
-        message: `${model.id} was removed from the managed llama-swap configuration.`,
-      });
-      await onRefresh({quiet: true});
-    } catch (error) {
-      setNotice({
-        variant: "danger",
-        title: "Local model removal failed",
-        message: errorText(error),
-      });
-    } finally {
-      setLocalBusy(false);
-    }
-  };
-
-  const saveRole = async (role) => {
-    const current = roles[role];
-    setRoleBusy(role);
-    try {
-      await apiInput(["ai-role-set"], {
-        role,
-        targets: lines(current.targets),
-        strategy: current.strategy,
-        spillover: numberOr(current.spillover, 1),
-      });
-      setNotice({
-        variant: "success",
-        title: "Coding model role saved",
-        message: `${role} routing was updated.`,
-      });
-      await onRefresh({quiet: true});
-    } catch (error) {
-      setNotice({variant: "danger", title: "Coding role update failed", message: errorText(error)});
-    } finally {
-      setRoleBusy(null);
-    }
-  };
-
-  const saveAdvanced = async (event) => {
-    event.preventDefault();
-    setAdvancedBusy(true);
-    try {
-      await apiInput(["ai-advanced-set"], {
-        healthCheckTimeout: numberOr(advanced.healthCheckTimeout, 300),
-        globalTTL: numberOr(advanced.globalTTL, 300),
-        unloadTimeout: numberOr(advanced.unloadTimeout, 10),
-        logLevel: advanced.logLevel,
-        captureBuffer: numberOr(advanced.captureBuffer, 0),
-        metricsMaxInMemory: numberOr(advanced.metricsMaxInMemory, 250),
-      });
-      setNotice({
-        variant: "success",
-        title: "AI runtime settings saved",
-        message: "llama-swap will reload the structured runtime configuration.",
-      });
-      await onRefresh({quiet: true});
-    } catch (error) {
-      setNotice({variant: "danger", title: "AI runtime update failed", message: errorText(error)});
-    } finally {
-      setAdvancedBusy(false);
-    }
-  };
-
-  return (
-    <PageSection>
-      <Title headingLevel="h2" className="nas-section-heading">
-        AI configuration
-      </Title>
-      <p className="nas-muted nas-section-heading">
-        llama-swap is the single model authority. Configure local/remote model routing here; cloud
-        provider keys are written to KeePass and only staged into llama-swap, never Pi or Open
-        WebUI.
-      </p>
-      {!config.ok ? (
-        <Alert variant="warning" title="AI runtime configuration unavailable" isInline>
-          {config.error || "Enable and unlock the AI runtime first."}
-        </Alert>
-      ) : (
-        <Grid hasGutter>
-          <GridItem md={12}>
-            <Card>
-              <CardTitle>Local llama.cpp models</CardTitle>
-              <CardBody>
-                <Stack hasGutter>
-                  {(config.localModels || []).length > 0 && (
-                    <StackItem>
-                      <div
-                        className="nas-table-wrap"
-                        tabIndex={0}
-                        role="region"
-                        aria-label="Local AI models"
-                      >
-                        <table
-                          className="pf-v6-c-table pf-m-grid-md nas-table"
-                          aria-label="Local AI models"
-                        >
-                          <thead>
-                            <tr>
-                              <th>Model</th>
-                              <th>Source</th>
-                              <th>Context</th>
-                              <th>TTL</th>
-                              <th>Tools</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(config.localModels || []).map((model) => (
-                              <tr key={model.id}>
-                                <td>
-                                  <code>{model.id}</code>
-                                </td>
-                                <td>
-                                  {model.managed ? (
-                                    <code>{model.path}</code>
-                                  ) : (
-                                    <StatusLabel value={true}>Manual config</StatusLabel>
-                                  )}
-                                </td>
-                                <td>{model.managed ? model.context : "—"}</td>
-                                <td>{model.managed ? `${model.ttl}s` : "—"}</td>
-                                <td>{model.managed ? (model.tools ? "Yes" : "No") : "—"}</td>
-                                <td>
-                                  {model.managed ? (
-                                    <>
-                                      <Button variant="link" onClick={() => editLocalModel(model)}>
-                                        Edit
-                                      </Button>
-                                      <Button
-                                        variant="link"
-                                        isDanger
-                                        onClick={() => setLocalDeleteTarget(model)}
-                                        isDisabled={localBusy}
-                                      >
-                                        Delete
-                                      </Button>
-                                    </>
-                                  ) : (
-                                    <Button variant="link" onClick={() => editLocalModel(model)}>
-                                      Details
-                                    </Button>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </StackItem>
-                  )}
-                  <StackItem>
-                    <Form onSubmit={saveLocalModel}>
-                      <Grid hasGutter>
-                        <GridItem sm={6}>
-                          <FormGroup label="Model ID" isRequired fieldId="ai-local-model-id">
-                            <TextInput
-                              id="ai-local-model-id"
-                              value={localModelId}
-                              onChange={(_e, value) => setLocalModelId(value)}
-                              placeholder="qwen35-9b-q4"
-                            />
-                          </FormGroup>
-                        </GridItem>
-                        <GridItem sm={6}>
-                          <FormGroup label="GGUF path" isRequired fieldId="ai-local-model-path">
-                            <TextInput
-                              id="ai-local-model-path"
-                              value={localModelPath}
-                              onChange={(_e, value) => setLocalModelPath(value)}
-                              placeholder="/tank/ai/huggingface/models/model.gguf"
-                            />
-                          </FormGroup>
-                        </GridItem>
-                        <GridItem sm={4}>
-                          <FormGroup label="Context tokens">
-                            <TextInput
-                              aria-label="Context tokens"
-                              type="number"
-                              min={1024}
-                              max={1048576}
-                              value={localContext}
-                              onChange={(_e, value) => setLocalContext(value)}
-                            />
-                          </FormGroup>
-                        </GridItem>
-                        <GridItem sm={4}>
-                          <FormGroup label="Idle TTL (seconds)">
-                            <TextInput
-                              aria-label="Idle TTL (seconds)"
-                              type="number"
-                              min={-1}
-                              max={604800}
-                              value={localTtl}
-                              onChange={(_e, value) => setLocalTtl(value)}
-                            />
-                          </FormGroup>
-                        </GridItem>
-                        <GridItem sm={4}>
-                          <FormGroup label="Capabilities">
-                            <Checkbox
-                              id="ai-local-tools"
-                              label="Tool/function calling"
-                              isChecked={localTools}
-                              onChange={(_e, value) => setLocalTools(value)}
-                            />
-                          </FormGroup>
-                        </GridItem>
-                      </Grid>
-                      <FormGroup
-                        label="Extra llama-server arguments (one argv item per line)"
-                        fieldId="ai-local-model-args"
-                      >
-                        <TextArea
-                          id="ai-local-model-args"
-                          value={localArgs}
-                          onChange={(_e, value) => setLocalArgs(value)}
-                          rows={4}
-                          placeholder={"--n-gpu-layers=999\n--flash-attn=on"}
-                        />
-                      </FormGroup>
-                      <p className="nas-muted">
-                        Cockpit fixes the server host, port, model path and context flags. Extra
-                        arguments are validated as argv entries rather than evaluated as shell text.
-                      </p>
-                      <Button
-                        type="submit"
-                        variant="primary"
-                        isLoading={localBusy}
-                        isDisabled={localBusy || !localModelId || !localModelPath}
-                      >
-                        Save local model
-                      </Button>
-                    </Form>
-                  </StackItem>
-                </Stack>
-              </CardBody>
-            </Card>
-          </GridItem>
-          <GridItem md={12} xl={7}>
-            <Card isFullHeight>
-              <CardTitle>Remote/cloud providers</CardTitle>
-              <CardBody>
-                <Stack hasGutter>
-                  {(config.providers || []).length > 0 && (
-                    <StackItem>
-                      <div
-                        className="nas-table-wrap"
-                        tabIndex={0}
-                        role="region"
-                        aria-label="AI providers"
-                      >
-                        <table
-                          className="pf-v6-c-table pf-m-grid-md nas-table"
-                          aria-label="AI providers"
-                        >
-                          <thead>
-                            <tr>
-                              <th>Provider</th>
-                              <th>Endpoint</th>
-                              <th>Models</th>
-                              <th>Credential</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(config.providers || []).map((provider) => (
-                              <tr key={provider.id}>
-                                <td>
-                                  <code>{provider.id}</code>
-                                </td>
-                                <td>
-                                  <code>{provider.url}</code>
-                                </td>
-                                <td>{(provider.models || []).length}</td>
-                                <td>
-                                  <StatusLabel value={Boolean(provider.credentialConfigured)}>
-                                    {provider.credentialConfigured ? "KeePass" : "None"}
-                                  </StatusLabel>
-                                </td>
-                                <td>
-                                  <Button variant="link" onClick={() => editProvider(provider)}>
-                                    Edit
-                                  </Button>
-                                  <Button
-                                    variant="link"
-                                    isDanger
-                                    onClick={() => setDeleteTarget(provider)}
-                                    isDisabled={providerBusy}
-                                  >
-                                    Delete
-                                  </Button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </StackItem>
-                  )}
-                  <StackItem>
-                    <Form onSubmit={saveProvider}>
-                      <FormGroup label="Provider preset" fieldId="ai-provider-preset">
-                        <FormSelect
-                          id="ai-provider-preset"
-                          value={preset}
-                          onChange={(_e, value) => applyPreset(value)}
-                        >
-                          {Object.entries(AI_PROVIDER_PRESETS).map(([id, value]) => (
-                            <FormSelectOption key={id} value={id} label={value.label} />
-                          ))}
-                        </FormSelect>
-                      </FormGroup>
-                      <FormGroup label="Provider ID" isRequired fieldId="ai-provider-id">
-                        <TextInput
-                          id="ai-provider-id"
-                          value={providerId}
-                          onChange={(_e, value) => setProviderId(value)}
-                          placeholder="openrouter"
-                        />
-                      </FormGroup>
-                      <FormGroup
-                        label="OpenAI-compatible base URL"
-                        isRequired
-                        fieldId="ai-provider-url"
-                      >
-                        <TextInput
-                          id="ai-provider-url"
-                          value={providerUrl}
-                          onChange={(_e, value) => setProviderUrl(value)}
-                          placeholder="https://provider.example/api"
-                        />
-                      </FormGroup>
-                      <FormGroup
-                        label="Model IDs (one per line)"
-                        isRequired
-                        fieldId="ai-provider-models"
-                      >
-                        <TextArea
-                          id="ai-provider-models"
-                          value={providerModels}
-                          onChange={(_e, value) => setProviderModels(value)}
-                          rows={6}
-                        />
-                      </FormGroup>
-                      <FormGroup label="Provider API key" fieldId="ai-provider-key">
-                        <TextInput
-                          id="ai-provider-key"
-                          type="password"
-                          autoComplete="new-password"
-                          value={providerKey}
-                          onChange={(_e, value) => setProviderKey(value)}
-                          placeholder="Leave blank to keep the existing key"
-                        />
-                      </FormGroup>
-                      <FormGroup label="KeePassXC database password" fieldId="ai-provider-keepass">
-                        <TextInput
-                          id="ai-provider-keepass"
-                          type="password"
-                          autoComplete="current-password"
-                          value={keepassPassword}
-                          onChange={(_e, value) => setKeepassPassword(value)}
-                          placeholder="Required only when changing/removing a provider key"
-                        />
-                      </FormGroup>
-                      <Grid hasGutter>
-                        {[
-                          ["Connect", connectTimeout, setConnectTimeout],
-                          ["Keepalive", keepaliveTimeout, setKeepaliveTimeout],
-                          ["Response header", responseTimeout, setResponseTimeout],
-                          ["TLS handshake", tlsTimeout, setTlsTimeout],
-                          ["Idle connection", idleTimeout, setIdleTimeout],
-                        ].map(([label, value, setter]) => (
-                          <GridItem key={label} sm={6} lg={4}>
-                            <FormGroup label={`${label} timeout (s)`}>
-                              <TextInput
-                                aria-label={`${label} timeout (seconds)`}
-                                type="number"
-                                min={0}
-                                max={3600}
-                                value={value}
-                                onChange={(_e, next) => setter(next)}
-                              />
-                            </FormGroup>
-                          </GridItem>
-                        ))}
-                      </Grid>
-                      <FormGroup label="Strip request parameters" fieldId="ai-provider-strip">
-                        <TextInput
-                          id="ai-provider-strip"
-                          value={stripParams}
-                          onChange={(_e, value) => setStripParams(value)}
-                          placeholder="temperature, top_p"
-                        />
-                      </FormGroup>
-                      <FormGroup
-                        label="Forced request parameters (JSON)"
-                        fieldId="ai-provider-set-params"
-                      >
-                        <TextArea
-                          id="ai-provider-set-params"
-                          value={setParams}
-                          onChange={(_e, value) => setSetParams(value)}
-                          rows={5}
-                        />
-                      </FormGroup>
-                      <Button
-                        type="submit"
-                        variant="primary"
-                        isLoading={providerBusy}
-                        isDisabled={
-                          providerBusy ||
-                          !providerId ||
-                          !providerUrl ||
-                          lines(providerModels).length === 0
-                        }
-                      >
-                        Save provider
-                      </Button>
-                    </Form>
-                  </StackItem>
-                </Stack>
-              </CardBody>
-            </Card>
-          </GridItem>
-          <GridItem md={12} xl={5}>
-            <Stack hasGutter>
-              <StackItem>
-                <Card>
-                  <CardTitle>Coding-agent model roles</CardTitle>
-                  <CardBody>
-                    <Stack hasGutter>
-                      {Object.entries(CODING_ROLE_LABELS).map(([role, label]) => {
-                        const current = roles[role] || {
-                          targets: "",
-                          strategy: "warm",
-                          spillover: "1",
-                        };
-                        return (
-                          <StackItem key={role}>
-                            <Form>
-                              <FormGroup label={label} fieldId={`role-${role}`}>
-                                <TextArea
-                                  id={`role-${role}`}
-                                  value={current.targets}
-                                  onChange={(_e, value) =>
-                                    setRoles((old) => ({
-                                      ...old,
-                                      [role]: {...current, targets: value},
-                                    }))
-                                  }
-                                  placeholder={(config.availableTargets || []).join("\n")}
-                                  rows={2}
-                                />
-                              </FormGroup>
-                              <Grid hasGutter>
-                                <GridItem sm={7}>
-                                  <FormGroup label="Routing strategy">
-                                    <FormSelect
-                                      aria-label={`${role} routing strategy`}
-                                      value={current.strategy}
-                                      onChange={(_e, value) =>
-                                        setRoles((old) => ({
-                                          ...old,
-                                          [role]: {...current, strategy: value},
-                                        }))
-                                      }
-                                    >
-                                      <FormSelectOption value="warm" label="Warm / ready first" />
-                                      <FormSelectOption value="pin" label="Pin first target" />
-                                      <FormSelectOption value="spillover" label="Spillover" />
-                                    </FormSelect>
-                                  </FormGroup>
-                                </GridItem>
-                                {current.strategy === "spillover" && (
-                                  <GridItem sm={5}>
-                                    <FormGroup label="Requests/target">
-                                      <TextInput
-                                        aria-label={`${role} requests per target`}
-                                        type="number"
-                                        min={1}
-                                        max={128}
-                                        value={current.spillover}
-                                        onChange={(_e, value) =>
-                                          setRoles((old) => ({
-                                            ...old,
-                                            [role]: {...current, spillover: value},
-                                          }))
-                                        }
-                                      />
-                                    </FormGroup>
-                                  </GridItem>
-                                )}
-                              </Grid>
-                              <Button
-                                variant="secondary"
-                                onClick={() => saveRole(role)}
-                                isLoading={roleBusy === role}
-                                isDisabled={
-                                  Boolean(roleBusy) || lines(current.targets).length === 0
-                                }
-                              >
-                                Save {label}
-                              </Button>
-                            </Form>
-                          </StackItem>
-                        );
-                      })}
-                      {(config.availableTargets || []).length === 0 && (
-                        <Alert variant="info" title="No model targets configured" isInline>
-                          Add a remote provider or a local llama-swap model before assigning coding
-                          roles.
-                        </Alert>
-                      )}
-                    </Stack>
-                  </CardBody>
-                </Card>
-              </StackItem>
-              <StackItem>
-                <Card>
-                  <CardTitle>llama-swap runtime limits</CardTitle>
-                  <CardBody>
-                    <Form onSubmit={saveAdvanced}>
-                      <FormGroup label="Health check timeout (s)">
-                        <TextInput
-                          aria-label="Health check timeout (seconds)"
-                          type="number"
-                          min={15}
-                          max={3600}
-                          value={advanced.healthCheckTimeout}
-                          onChange={(_e, value) =>
-                            setAdvanced((old) => ({...old, healthCheckTimeout: value}))
-                          }
-                        />
-                      </FormGroup>
-                      <FormGroup label="Default model idle TTL (s)">
-                        <TextInput
-                          aria-label="Default model idle TTL (seconds)"
-                          type="number"
-                          min={0}
-                          max={604800}
-                          value={advanced.globalTTL}
-                          onChange={(_e, value) =>
-                            setAdvanced((old) => ({...old, globalTTL: value}))
-                          }
-                        />
-                      </FormGroup>
-                      <FormGroup label="Model unload grace timeout (s)">
-                        <TextInput
-                          aria-label="Model unload grace timeout (seconds)"
-                          type="number"
-                          min={0}
-                          max={3600}
-                          value={advanced.unloadTimeout}
-                          onChange={(_e, value) =>
-                            setAdvanced((old) => ({...old, unloadTimeout: value}))
-                          }
-                        />
-                      </FormGroup>
-                      <FormGroup label="Log level">
-                        <FormSelect
-                          aria-label="Log level"
-                          value={advanced.logLevel}
-                          onChange={(_e, value) =>
-                            setAdvanced((old) => ({...old, logLevel: value}))
-                          }
-                        >
-                          {["debug", "info", "warn", "error"].map((value) => (
-                            <FormSelectOption key={value} value={value} label={value} />
-                          ))}
-                        </FormSelect>
-                      </FormGroup>
-                      <FormGroup label="Capture buffer (MiB)">
-                        <TextInput
-                          aria-label="Capture buffer (MiB)"
-                          type="number"
-                          min={0}
-                          max={1024}
-                          value={advanced.captureBuffer}
-                          onChange={(_e, value) =>
-                            setAdvanced((old) => ({...old, captureBuffer: value}))
-                          }
-                        />
-                      </FormGroup>
-                      <FormGroup label="Metrics retained in memory">
-                        <TextInput
-                          aria-label="Metrics retained in memory"
-                          type="number"
-                          min={0}
-                          max={1000000}
-                          value={advanced.metricsMaxInMemory}
-                          onChange={(_e, value) =>
-                            setAdvanced((old) => ({...old, metricsMaxInMemory: value}))
-                          }
-                        />
-                      </FormGroup>
-                      <Button
-                        type="submit"
-                        variant="secondary"
-                        isLoading={advancedBusy}
-                        isDisabled={advancedBusy}
-                      >
-                        Save runtime settings
-                      </Button>
-                    </Form>
-                  </CardBody>
-                </Card>
-              </StackItem>
-            </Stack>
-          </GridItem>
-        </Grid>
-      )}
-      <p className="nas-muted">
-        Install-time security boundaries—service UIDs, ports, allowed workspace roots, extension
-        installation, and systemd sandbox policy—remain declarative NixOS settings. Runtime local
-        models, remote/cloud providers, provider policy, coding role routing, and safe llama-swap
-        tuning are managed here.
-      </p>
-      <Modal
-        isOpen={Boolean(localDeleteTarget)}
-        onClose={localBusy ? undefined : () => setLocalDeleteTarget(null)}
-        aria-labelledby="ai-local-model-delete-title"
-      >
-        <ModalHeader title="Remove local AI model" labelId="ai-local-model-delete-title" />
-        <ModalBody>
-          Remove <strong>{localDeleteTarget?.id}</strong> from the Cockpit-managed llama-swap
-          configuration? The GGUF file itself will not be deleted. Any coding-role target using this
-          model will be removed.
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="danger"
-            onClick={() => localDeleteTarget && deleteLocalModel(localDeleteTarget)}
-            isLoading={localBusy}
-            isDisabled={localBusy}
-          >
-            Remove model configuration
-          </Button>
-          <Button variant="link" onClick={() => setLocalDeleteTarget(null)} isDisabled={localBusy}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
-      <Modal
-        isOpen={Boolean(deleteTarget)}
-        onClose={providerBusy ? undefined : () => setDeleteTarget(null)}
-        aria-labelledby="ai-provider-delete-title"
-      >
-        <ModalHeader title="Remove AI provider" labelId="ai-provider-delete-title" />
-        <ModalBody>
-          Remove <strong>{deleteTarget?.id}</strong>? Any coding-role targets using this provider
-          will be removed.
-          {deleteTarget?.credentialConfigured && (
-            <p className="nas-muted">
-              This provider has a KeePass credential. Enter the KeePassXC database password in the
-              provider form before confirming so the stored key is removed too.
-            </p>
-          )}
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="danger"
-            onClick={() => deleteTarget && deleteProvider(deleteTarget)}
-            isLoading={providerBusy}
-            isDisabled={providerBusy || (deleteTarget?.credentialConfigured && !keepassPassword)}
-          >
-            Remove provider
-          </Button>
-          <Button variant="link" onClick={() => setDeleteTarget(null)} isDisabled={providerBusy}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
-    </PageSection>
-  );
-}
-
-function StorageAndFailures({data, onRequestAction}) {
-  const replicationBusy = operationBusy(data, "zfs-replicate");
-  return (
-    <PageSection>
-      <Grid hasGutter>
-        <GridItem md={6}>
-          <Card isFullHeight>
-            <CardTitle>ZFS</CardTitle>
-            <CardBody>
-              <Stack hasGutter>
-                <StackItem>
-                  <Output ariaLabel="ZFS status">{`${data.zpool?.text || ""}\n${data.zfs?.text || ""}`}</Output>
-                </StackItem>
-                {data.zfsReplicationInstalled && (
-                  <StackItem>
-                    <Button
-                      isDisabled={replicationBusy}
-                      onClick={() => onRequestAction("zfs-replicate", "Replicate ZFS now")}
-                    >
-                      Replicate ZFS now
-                    </Button>
-                  </StackItem>
-                )}
-              </Stack>
-            </CardBody>
-          </Card>
-        </GridItem>
-        <GridItem md={6}>
-          <Card isFullHeight>
-            <CardTitle>Failed units</CardTitle>
-            <CardBody>
-              <Output ariaLabel="Failed units">
-                {data.failedUnits?.length ? data.failedUnits.join("\n") : "No failed units"}
-              </Output>
-            </CardBody>
-          </Card>
-        </GridItem>
-      </Grid>
-    </PageSection>
-  );
-}
-
-function Links({data}) {
-  const visible = new Set(enabledLinkKeys(data));
-  return (
-    <PageSection>
-      <Toolbar className="nas-section-heading">
-        <ToolbarContent>
-          <ToolbarItem variant="label">
-            <Title headingLevel="h2">Applications and tools</Title>
-          </ToolbarItem>
-          <ToolbarItem align={{default: "alignEnd"}}>
-            <Button
-              component="a"
-              href="docs/index.html"
-              target="_blank"
-              rel="noopener noreferrer"
-              variant="secondary"
-            >
-              Open help
-            </Button>
-          </ToolbarItem>
-        </ToolbarContent>
-      </Toolbar>
-      <p className="nas-muted nas-section-heading">
-        Open the owning application for settings that belong to that service. The NAS page stays
-        focused on host-level status and safe appliance actions.
-      </p>
-      <div className="nas-link-list">
-        {Object.entries(data.links || {})
-          .filter(([key, href]) => visible.has(key) && safeInternalPath(href))
-          .map(([key, href]) => (
-            <Button
-              key={key}
-              component="a"
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              variant="secondary"
-            >
-              {LINK_LABELS[key] || key}
-            </Button>
-          ))}
-      </div>
-    </PageSection>
-  );
-}
-
-function Operations({data, onRequestAction}) {
-  const active = data.operationState?.active || [];
-  return (
-    <PageSection>
-      <Title headingLevel="h2" className="nas-section-heading">
-        Maintenance actions
-      </Title>
-      {active.length > 0 && (
-        <Alert
-          variant="info"
-          title="Privileged operation in progress"
-          isInline
-          className="nas-section-heading"
-        >
-          {active
-            .map(
-              (item) =>
-                `${item.action} (started ${new Date(item.startedAt * 1000).toLocaleString()})`,
-            )
-            .join(" · ")}
-        </Alert>
-      )}
-      <div className="nas-action-list">
-        {visibleOperations(data).map(([id, label]) => (
-          <Button
-            key={id}
-            variant="secondary"
-            isDisabled={operationBusy(data, id)}
-            onClick={() => onRequestAction(id, label)}
-          >
-            {label}
-          </Button>
-        ))}
-      </div>
-    </PageSection>
-  );
-}
-
-function Services({data}) {
-  return (
-    <PageSection>
-      <Title headingLevel="h2" className="nas-section-heading">
-        System services
-      </Title>
-      <div className="nas-table-wrap" tabIndex={0} role="region" aria-label="NAS services">
-        <table
-          className="pf-v6-c-table pf-m-grid-md nas-table"
-          role="grid"
-          aria-label="NAS services"
-        >
-          <thead>
-            <tr>
-              <th>Unit</th>
-              <th>Active</th>
-              <th>Enabled</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data.services || []).map((item) => (
-              <tr key={item.unit}>
-                <td data-label="Unit">
-                  <code>{item.unit}</code>
-                </td>
-                <td data-label="Active">
-                  <StatusLabel value={item.active}>{item.active || "unknown"}</StatusLabel>
-                </td>
-                <td data-label="Enabled">
-                  <StatusLabel value={item.enabled}>{item.enabled || "unknown"}</StatusLabel>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </PageSection>
-  );
-}
-
-function Timers({data}) {
-  return (
-    <PageSection>
-      <Title headingLevel="h2" className="nas-section-heading">
-        Scheduled maintenance
-      </Title>
-      <Output ariaLabel="Scheduled maintenance">
-        {data.timers?.length ? data.timers.join("\n") : "No NAS timers found"}
-      </Output>
-    </PageSection>
-  );
-}
-
-function ActionModal({action, running, error, onClose, onConfirm}) {
-  return (
-    <Modal
-      isOpen={Boolean(action)}
-      onClose={running ? undefined : onClose}
-      aria-labelledby="nas-action-modal-title"
-    >
-      <ModalHeader title="Confirm maintenance action" labelId="nas-action-modal-title" />
-      <ModalBody>
-        Run <strong>{action?.label}</strong>? The NAS will execute the reviewed maintenance action
-        and report the result here.
-        {error && (
-          <Alert variant="danger" title="Operation failed" isInline>
-            {error}
-          </Alert>
-        )}
-      </ModalBody>
-      <ModalFooter>
-        <Button variant="primary" onClick={onConfirm} isLoading={running} isDisabled={running}>
-          Run action
-        </Button>
-        <Button variant="link" onClick={onClose} isDisabled={running}>
-          Cancel
-        </Button>
-      </ModalFooter>
-    </Modal>
-  );
-}
-
-export default function App() {
+function useOverview() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState(null);
-  const [busyFeature, setBusyFeature] = useState(null);
-  const [action, setAction] = useState(null);
-  const [actionRunning, setActionRunning] = useState(false);
-  const [actionError, setActionError] = useState("");
+  const [error, setError] = useState("");
 
-  const refresh = useCallback(async ({quiet = false} = {}) => {
-    if (!quiet) setLoading(true);
+  const refresh = useCallback(async () => {
+    setLoading(true);
     try {
       setData(await api(["overview"]));
-    } catch (error) {
-      setNotice({
-        variant: "danger",
-        title: "Unable to refresh NAS state",
-        message: errorText(error),
-      });
+      setError("");
+    } catch (reason) {
+      setError(message(reason));
     } finally {
       setLoading(false);
     }
@@ -1883,139 +78,1070 @@ export default function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      void refresh({quiet: true});
-    }, 5000);
-    return () => window.clearInterval(interval);
-  }, [refresh]);
 
-  const setup = useMemo(() => setupModel(data || {}), [data]);
+  return {data, loading, error, refresh, setData};
+}
 
-  const changeFeature = async (id, mode) => {
-    const label = featureMap(data || {})[id]?.label || id;
-    setBusyFeature(id);
-    setNotice({
-      variant: "info",
-      title: "Applying service policy",
-      message: `Setting ${label} to ${MODE_LABELS[mode] || mode}.`,
-    });
+function Status({ok, children}) {
+  return <Label color={ok ? "green" : "orange"}>{children}</Label>;
+}
+
+function LinkCard({entry}) {
+  return (
+    <Card isCompact>
+      <CardHeader>
+        <CardTitle>{entry.label}</CardTitle>
+      </CardHeader>
+      <CardBody>
+        {entry.description ? <p>{entry.description}</p> : null}
+        <Button component="a" href={entry.url} variant="link" isInline>
+          Open
+        </Button>
+      </CardBody>
+    </Card>
+  );
+}
+
+function OverviewPage({data, refresh, busy}) {
+  const setup = setupModel(data || {});
+  const services = managedServiceRows(data || {});
+  const running = services.filter((service) => service.running).length;
+  const zfsHealthy = data?.zfs?.healthy === true;
+  return (
+    <div className="nas-grid nas-grid--overview">
+      <Card>
+        <CardHeader>
+          <CardTitle>Appliance</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p>
+            <strong>{data?.host || "NAS"}</strong>
+          </p>
+          <p>
+            Protected services:{" "}
+            <Status ok={data?.protectedReady === true}>
+              {data?.protectedReady ? "ready" : "locked"}
+            </Status>
+          </p>
+          <p>
+            First start: <Status ok={setup.complete}>{setup.status}</Status>
+          </p>
+        </CardBody>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Managed Services V2</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p>{services.length} services in the current authority.</p>
+          <p>{running} native owner units currently active.</p>
+          <Button variant="secondary" onClick={refresh} isDisabled={busy}>
+            Refresh
+          </Button>
+        </CardBody>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>ZFS</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p>
+            <Status ok={zfsHealthy}>{zfsHealthy ? "healthy" : "attention required"}</Status>
+          </p>
+          <pre className="nas-pre">{data?.zfs?.summary || "Unavailable"}</pre>
+          <pre className="nas-pre">{data?.zfs?.dataset || ""}</pre>
+        </CardBody>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Failures</CardTitle>
+        </CardHeader>
+        <CardBody>
+          {Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
+            <pre className="nas-pre">{data.failedUnits.join("\n")}</pre>
+          ) : (
+            <p>No failed units reported.</p>
+          )}
+        </CardBody>
+      </Card>
+    </div>
+  );
+}
+
+function ServiceCard({service, onMode, disabled}) {
+  const modes = Array.isArray(service.allowedModes) ? service.allowedModes : ["off", "always"];
+  return (
+    <Card isCompact>
+      <CardHeader>
+        <CardTitle>{service.label || service.id}</CardTitle>
+      </CardHeader>
+      <CardBody>
+        <div className="nas-card-row">
+          <Status ok={service.healthy === true || service.effectiveMode === "on-demand"}>
+            {managedServiceUnitState(service)}
+          </Status>
+          <Label>{MODE_LABELS[service.requestedMode] || service.requestedMode || "unknown"}</Label>
+        </div>
+        <p>{service.description || service.id}</p>
+        <p className="nas-muted">{managedServiceRuntimeText(service)}</p>
+        {service.managed === false ? (
+          <p className="nas-muted">
+            This entry is visible to V2 for dependencies/routes; its native lifecycle is
+            platform-owned.
+          </p>
+        ) : (
+          <label className="nas-field">
+            <span>Lifecycle mode</span>
+            <select
+              value={service.requestedMode || "off"}
+              disabled={disabled}
+              onChange={(event) => onMode(service.id, event.target.value)}
+            >
+              {modes.map((mode) => (
+                <option key={mode} value={mode}>
+                  {MODE_LABELS[mode] || mode}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {Array.isArray(service.units) && service.units.length ? (
+          <div className="nas-unit-list">
+            {service.units.map((unit) => (
+              <div key={unit.unit}>
+                <code>{unit.unit}</code> ·{" "}
+                {unit.activeState || (unit.active ? "active" : "inactive")} ·{" "}
+                {mib(unit.memoryBytes)} MiB
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
+}
+
+function ServicesPage({data, mutate, busy}) {
+  const services = managedServiceRows(data || {});
+  const serviceBusy = managedServiceOperationsBusy(data || {}) || busy;
+  const [document, setDocument] = useState(null);
+  const [formValue, setFormValue] = useState(null);
+  const [yaml, setYaml] = useState("");
+  const [editorMode, setEditorMode] = useState("form");
+  const [editorError, setEditorError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const loadDocument = async () => {
     try {
-      await api(["feature", id, mode]);
-      setNotice({
-        variant: "success",
-        title: "Service policy applied",
-        message: `${label} is now ${MODE_LABELS[mode] || mode}.`,
-      });
-    } catch (error) {
-      setNotice({variant: "danger", title: "Feature policy failed", message: errorText(error)});
-    } finally {
-      setBusyFeature(null);
-      await refresh({quiet: true});
+      const value = await managedServicesDocument();
+      setDocument(value);
+      setFormValue(value.document || null);
+      setYaml(value.yaml || "");
+      setEditorMode("form");
+      setEditorError("");
+    } catch (reason) {
+      setEditorError(message(reason));
     }
   };
 
-  const requestAction = (id, label) => {
-    if (operationBusy(data || {}, id)) {
-      setNotice({
-        variant: "warning",
-        title: "Operation is busy",
-        message: `${label} conflicts with another privileged operation.`,
-      });
-      return;
-    }
-    setActionError("");
-    setAction({id, label});
-  };
-  const runAction = async () => {
-    if (!action) return;
-    setActionError("");
-    setActionRunning(true);
+  const saveFormDocument = async () => {
+    setSaving(true);
     try {
-      await api(["action", action.id]);
-      setNotice({
-        variant: "success",
-        title: "Operation completed",
-        message: `${action.label} completed successfully.`,
-      });
-      setAction(null);
-      await refresh({quiet: true});
-    } catch (error) {
-      setActionError(errorText(error));
+      await mutate(() => replaceManagedServicesJsonDocument(formValue));
+      setEditorError("");
+      await loadDocument();
+    } catch (reason) {
+      setEditorError(message(reason));
     } finally {
-      setActionRunning(false);
+      setSaving(false);
+    }
+  };
+
+  const saveYamlDocument = async () => {
+    setSaving(true);
+    try {
+      await mutate(() => replaceManagedServicesDocument(yaml));
+      setEditorError("");
+      await loadDocument();
+    } catch (reason) {
+      setEditorError(message(reason));
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <Page className="nas-page">
-      <PageSection>
-        <Toolbar className="nas-page__header">
-          <ToolbarContent>
-            <ToolbarItem>
-              <Title headingLevel="h1">NAS Overview</Title>
-              <p className="nas-page__subtitle">
-                Storage, access, service policy, maintenance, and recovery status in one place.
-              </p>
-            </ToolbarItem>
-            <ToolbarItem align={{default: "alignEnd"}}>
+    <>
+      <div className="nas-section-header">
+        <div>
+          <Title headingLevel="h2">Managed Services V2</Title>
+          <p>/var/lib/nas-control/services.yaml is the sole mutable lifecycle authority.</p>
+        </div>
+        <Button variant="secondary" onClick={loadDocument}>
+          Edit services
+        </Button>
+      </div>
+      <div className="nas-grid">
+        {services.map((service) => (
+          <ServiceCard
+            key={service.id}
+            service={service}
+            disabled={serviceBusy}
+            onMode={(serviceId, mode) => mutate(() => setManagedServiceMode(serviceId, mode))}
+          />
+        ))}
+      </div>
+      {document ? (
+        <Card className="nas-editor-card">
+          <CardHeader>
+            <CardTitle>Schema-driven desired state</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <p className="nas-muted">
+              The form below is generated from the same JSON Schema used by the V2 compiler. Raw
+              YAML remains available for advanced edits.
+            </p>
+            {editorError ? <Alert variant="danger" isInline title={editorError} /> : null}
+            <div className="nas-actions">
               <Button
-                variant="secondary"
-                onClick={() => refresh()}
-                isDisabled={loading}
-                icon={loading ? <Spinner size="sm" /> : undefined}
+                variant={editorMode === "form" ? "primary" : "secondary"}
+                onClick={() => setEditorMode("form")}
               >
-                Refresh
+                Schema form
               </Button>
-            </ToolbarItem>
-          </ToolbarContent>
-        </Toolbar>
-      </PageSection>
-      {notice && (
-        <PageSection>
-          <Notice notice={notice} onClose={() => setNotice(null)} />
-        </PageSection>
-      )}
-      {loading && !data ? (
-        <PageSection>
-          <Spinner aria-label="Loading NAS state" />
-        </PageSection>
-      ) : (
-        data && (
-          <>
-            {setup.pending && (
-              <FirstStartPanel model={setup} onComplete={refresh} setNotice={setNotice} />
+              <Button
+                variant={editorMode === "yaml" ? "primary" : "secondary"}
+                onClick={() => setEditorMode("yaml")}
+              >
+                Advanced YAML
+              </Button>
+            </div>
+            {editorMode === "form" && formValue ? (
+              <SchemaEditor schema={document.schema} value={formValue} onChange={setFormValue} />
+            ) : (
+              <TextArea
+                value={yaml}
+                onChange={(_event, value) => setYaml(value)}
+                rows={24}
+                resizeOrientation="vertical"
+              />
             )}
-            {setup.complete && !data.protectedReady && (
-              <UnlockPanel model={setup} onComplete={refresh} setNotice={setNotice} />
-            )}
-            <SummaryCards data={data} />
-            {setup.complete && data.protectedReady && (
-              <>
-                <StorageAndFailures data={data} onRequestAction={requestAction} />
-                <Operations data={data} onRequestAction={requestAction} />
-                <FeatureGrid data={data} busyFeature={busyFeature} onModeChange={changeFeature} />
-                <AIConfiguration data={data} onRefresh={refresh} setNotice={setNotice} />
-                <Links data={data} />
-                <CapabilityTable data={data} />
-                <Services data={data} />
-                <Timers data={data} />
-                <MemoryTable data={data} />
-              </>
-            )}
-          </>
-        )
-      )}
-      <ActionModal
-        action={action}
-        running={actionRunning}
-        error={actionError}
-        onClose={() => {
-          setAction(null);
-          setActionError("");
-        }}
-        onConfirm={runAction}
-      />
-    </Page>
+            <div className="nas-actions">
+              <Button
+                onClick={editorMode === "form" ? saveFormDocument : saveYamlDocument}
+                isLoading={saving}
+                isDisabled={saving || (editorMode === "form" && !formValue)}
+              >
+                Validate, save, and reconcile
+              </Button>
+              <Button variant="link" onClick={() => setDocument(null)}>
+                Close
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
+function ApplicationsPage({data}) {
+  const managed = managedApplicationLinks(data || {});
+  const staticEntries = staticLinks(data || {});
+  const grouped = useMemo(() => {
+    const result = new Map();
+    for (const entry of managed) {
+      if (!result.has(entry.category)) result.set(entry.category, []);
+      result.get(entry.category).push(entry);
+    }
+    return result;
+  }, [managed]);
+  return (
+    <>
+      <Title headingLevel="h2">Applications</Title>
+      <p>
+        Application links are projected from Managed Services V2 route metadata; Caddy still
+        enforces authorization on every request.
+      </p>
+      {[...grouped.entries()].map(([category, entries]) => (
+        <section key={category} className="nas-section">
+          <Title headingLevel="h3">{category}</Title>
+          <div className="nas-grid">
+            {entries.map((entry) => (
+              <LinkCard key={entry.id} entry={entry} />
+            ))}
+          </div>
+        </section>
+      ))}
+      <section className="nas-section">
+        <Title headingLevel="h3">Platform tools</Title>
+        <div className="nas-grid">
+          {staticEntries.map((entry) => (
+            <LinkCard key={entry.key} entry={entry} />
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function OperationsPage({data, mutate, busy}) {
+  const operations = visibleOperations(data || {});
+  const confirmationRequired = new Set([
+    "snapshot",
+    "zfs-scrub",
+    "backup",
+    "replicate",
+    "update-sync",
+    "update-apply",
+    "protected-restart",
+  ]);
+  const [pending, setPending] = useState(null);
+  const [lastResult, setLastResult] = useState(null);
+  const remote = data?.backupRemote || {};
+  const [remoteDraft, setRemoteDraft] = useState({
+    provider: remote.provider || "local",
+    scope: remote.scope || "config-only",
+    rcloneRemote: remote.rcloneRemote || "",
+  });
+  useEffect(() => {
+    setRemoteDraft({
+      provider: remote.provider || "local",
+      scope: remote.scope || "config-only",
+      rcloneRemote: remote.rcloneRemote || "",
+    });
+  }, [remote.provider, remote.scope, remote.rcloneRemote]);
+  const run = async (id) => {
+    const result = await mutate(() => api(["action", id]));
+    setPending(null);
+    setLastResult(result);
+  };
+  const saveRemote = async () => {
+    const result = await mutate(() => apiInput(["backup-remote-set"], remoteDraft));
+    setLastResult(result);
+  };
+  return (
+    <>
+      <Title headingLevel="h2">Operations</Title>
+      <div className="nas-actions nas-actions--wrap">
+        {operations.map(([id, label]) => (
+          <Button
+            key={id}
+            variant="secondary"
+            onClick={() => (confirmationRequired.has(id) ? setPending({id, label}) : run(id))}
+            isDisabled={busy}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      {pending ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Confirm maintenance action</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <p>
+              Run <strong>{pending.label}</strong>? This action can change appliance state.
+            </p>
+            <div className="nas-actions">
+              <Button variant="danger" onClick={() => run(pending.id)} isDisabled={busy}>
+                Confirm
+              </Button>
+              <Button variant="link" onClick={() => setPending(null)} isDisabled={busy}>
+                Cancel
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+      <Card>
+        <CardHeader>
+          <CardTitle>Backup — remote destination</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p className="nas-muted">
+            Remote backups use <code>restic + rclone</code>. Config-only includes boot system,
+            Caddy, Authentik DB dump, Keepass database, Syncthing config and firewall/identity
+            substrate — the minimum needed to restore the Authentik remote sign-in route. All also
+            includes V2 app data emitted via <code>storageResources</code>.
+          </p>
+          <Form>
+            <FormGroup label="Provider">
+              <select
+                value={remoteDraft.provider}
+                onChange={(event) => setRemoteDraft({...remoteDraft, provider: event.target.value})}
+                disabled={busy}
+              >
+                <option value="local">local (ZFS restic-system)</option>
+                <option value="gdrive">Google Drive (gdrive)</option>
+                <option value="icloud">iCloud (rclone)</option>
+                <option value="pcloud">pCloud (pcloud)</option>
+                <option value="s3">S3 (s3)</option>
+                <option value="b2">Backblaze B2 (b2)</option>
+                <option value="rclone">Custom rclone remote</option>
+              </select>
+            </FormGroup>
+            <FormGroup label="Scope">
+              <select
+                value={remoteDraft.scope}
+                onChange={(event) => setRemoteDraft({...remoteDraft, scope: event.target.value})}
+                disabled={busy}
+              >
+                <option value="config-only">
+                  config-only (Caddy + Authentik + Keepass + system)
+                </option>
+                <option value="all">all (also app data)</option>
+              </select>
+            </FormGroup>
+            <FormGroup label="rclone remote (empty = auto from provider)">
+              <TextInput
+                value={remoteDraft.rcloneRemote}
+                onChange={(_e, value) => setRemoteDraft({...remoteDraft, rcloneRemote: value})}
+                placeholder="gdrive:nas-backup / s3:bucket/prefix"
+                isDisabled={busy}
+              />
+            </FormGroup>
+            <Button variant="secondary" onClick={saveRemote} isDisabled={busy}>
+              Save remote (stub — wire to V2 authority when backend lands)
+            </Button>
+          </Form>
+          <pre className="nas-pre">{pretty(remote)}</pre>
+        </CardBody>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Operation coordinator</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <pre className="nas-pre">{pretty(data?.operations || {})}</pre>
+        </CardBody>
+      </Card>
+      {lastResult ? (
+        <Card>
+          <CardBody>
+            <pre className="nas-pre">{pretty(lastResult)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
+function AiPage({data, mutate, busy}) {
+  const config = data?.aiConfig && typeof data.aiConfig === "object" ? data.aiConfig : {};
+  const [provider, setProvider] = useState({
+    id: "",
+    url: "",
+    models: "",
+    apiKey: "",
+    keepassPassword: "",
+  });
+  const [providerDelete, setProviderDelete] = useState({id: "", keepassPassword: ""});
+  const [local, setLocal] = useState({
+    id: "",
+    path: "",
+    context: "4096",
+    ttl: "-1",
+    tools: false,
+    extraArgs: "",
+  });
+  const [role, setRole] = useState({
+    role: "default",
+    targets: "",
+    strategy: "fallback",
+    spillover: "1",
+  });
+  const [advanced, setAdvanced] = useState("{}");
+  const [result, setResult] = useState(null);
+
+  const submit = async (call) => setResult(await mutate(call));
+  return (
+    <>
+      <Title headingLevel="h2">AI configuration</Title>
+      <div className="nas-grid">
+        <Card>
+          <CardHeader>
+            <CardTitle>Current llama-swap configuration</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <pre className="nas-pre">{pretty(config)}</pre>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Set remote provider</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Form>
+              <FormGroup label="Provider ID">
+                <TextInput
+                  value={provider.id}
+                  onChange={(_e, value) => setProvider({...provider, id: value})}
+                />
+              </FormGroup>
+              <FormGroup label="OpenAI-compatible URL">
+                <TextInput
+                  value={provider.url}
+                  onChange={(_e, value) => setProvider({...provider, url: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Models (comma-separated)">
+                <TextInput
+                  value={provider.models}
+                  onChange={(_e, value) => setProvider({...provider, models: value})}
+                />
+              </FormGroup>
+              <FormGroup label="API key">
+                <TextInput
+                  type="password"
+                  value={provider.apiKey}
+                  onChange={(_e, value) => setProvider({...provider, apiKey: value})}
+                />
+              </FormGroup>
+              <FormGroup label="KeePassXC password">
+                <TextInput
+                  type="password"
+                  value={provider.keepassPassword}
+                  onChange={(_e, value) => setProvider({...provider, keepassPassword: value})}
+                />
+              </FormGroup>
+              <Button
+                isDisabled={busy}
+                onClick={() =>
+                  submit(() =>
+                    apiInput(["ai-provider-set"], {
+                      ...provider,
+                      models: provider.models
+                        .split(",")
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                    }),
+                  )
+                }
+              >
+                Save provider
+              </Button>
+            </Form>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Delete remote provider</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Form>
+              <FormGroup label="Provider ID">
+                <TextInput
+                  value={providerDelete.id}
+                  onChange={(_e, value) => setProviderDelete({...providerDelete, id: value})}
+                />
+              </FormGroup>
+              <FormGroup label="KeePassXC password">
+                <TextInput
+                  type="password"
+                  value={providerDelete.keepassPassword}
+                  onChange={(_e, value) =>
+                    setProviderDelete({...providerDelete, keepassPassword: value})
+                  }
+                />
+              </FormGroup>
+              <Button
+                variant="danger"
+                isDisabled={busy}
+                onClick={() => submit(() => apiInput(["ai-provider-delete"], providerDelete))}
+              >
+                Delete provider
+              </Button>
+            </Form>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Local model</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Form>
+              <FormGroup label="Model ID">
+                <TextInput
+                  value={local.id}
+                  onChange={(_e, value) => setLocal({...local, id: value})}
+                />
+              </FormGroup>
+              <FormGroup label="GGUF path">
+                <TextInput
+                  value={local.path}
+                  onChange={(_e, value) => setLocal({...local, path: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Context">
+                <TextInput
+                  value={local.context}
+                  onChange={(_e, value) => setLocal({...local, context: value})}
+                />
+              </FormGroup>
+              <FormGroup label="TTL">
+                <TextInput
+                  value={local.ttl}
+                  onChange={(_e, value) => setLocal({...local, ttl: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Extra args (one per line)">
+                <TextArea
+                  rows={4}
+                  value={local.extraArgs}
+                  onChange={(_e, value) => setLocal({...local, extraArgs: value})}
+                />
+              </FormGroup>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={local.tools}
+                  onChange={(event) => setLocal({...local, tools: event.target.checked})}
+                />{" "}
+                Tool-capable model
+              </label>
+              <div className="nas-actions">
+                <Button
+                  isDisabled={busy}
+                  onClick={() =>
+                    submit(() =>
+                      apiInput(["ai-local-model-set"], {
+                        id: local.id,
+                        path: local.path,
+                        context: Number(local.context),
+                        ttl: Number(local.ttl),
+                        tools: local.tools,
+                        extraArgs: local.extraArgs
+                          .split("\n")
+                          .map((v) => v.trim())
+                          .filter(Boolean),
+                      }),
+                    )
+                  }
+                >
+                  Save local model
+                </Button>
+                <Button
+                  variant="danger"
+                  isDisabled={busy}
+                  onClick={() => submit(() => apiInput(["ai-local-model-delete"], {id: local.id}))}
+                >
+                  Delete local model
+                </Button>
+              </div>
+            </Form>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Model role</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Form>
+              <FormGroup label="Role">
+                <TextInput
+                  value={role.role}
+                  onChange={(_e, value) => setRole({...role, role: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Targets (comma-separated)">
+                <TextInput
+                  value={role.targets}
+                  onChange={(_e, value) => setRole({...role, targets: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Strategy">
+                <select
+                  value={role.strategy}
+                  onChange={(event) => setRole({...role, strategy: event.target.value})}
+                >
+                  <option value="fallback">fallback</option>
+                  <option value="round-robin">round-robin</option>
+                  <option value="least-busy">least-busy</option>
+                </select>
+              </FormGroup>
+              <FormGroup label="Spillover">
+                <TextInput
+                  value={role.spillover}
+                  onChange={(_e, value) => setRole({...role, spillover: value})}
+                />
+              </FormGroup>
+              <Button
+                isDisabled={busy}
+                onClick={() =>
+                  submit(() =>
+                    apiInput(["ai-role-set"], {
+                      role: role.role,
+                      targets: role.targets
+                        .split(",")
+                        .map((v) => v.trim())
+                        .filter(Boolean),
+                      strategy: role.strategy,
+                      spillover: Number(role.spillover),
+                    }),
+                  )
+                }
+              >
+                Save role
+              </Button>
+            </Form>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Advanced AI settings</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <p>Submit only supported llama-swap advanced keys.</p>
+            <TextArea rows={10} value={advanced} onChange={(_e, value) => setAdvanced(value)} />
+            <Button
+              isDisabled={busy}
+              onClick={() => submit(() => apiInput(["ai-advanced-set"], JSON.parse(advanced)))}
+            >
+              Apply advanced settings
+            </Button>
+          </CardBody>
+        </Card>
+      </div>
+      {result ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Last AI mutation</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <pre className="nas-pre">{pretty(result)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
+function SourcePage({data, mutate, busy}) {
+  const revision = revisionModel(data?.update || {});
+  const [result, setResult] = useState(null);
+  const run = async (operation) =>
+    setResult(await mutate(() => apiInput(["source-control"], {operation})));
+  return (
+    <>
+      <Title headingLevel="h2">Source & updates</Title>
+      <Card>
+        <CardBody>
+          {revision.kind === "error" ? (
+            <Alert variant="danger" isInline title={revision.error} />
+          ) : (
+            <dl className="nas-details">
+              <dt>Revision</dt>
+              <dd>{revision.revision}</dd>
+              <dt>Branch</dt>
+              <dd>{revision.branch}</dd>
+              <dt>Upstream</dt>
+              <dd>{revision.upstream}</dd>
+              <dt>State</dt>
+              <dd>
+                {revision.divergence}; checkout {revision.checkout}
+              </dd>
+            </dl>
+          )}
+          <div className="nas-actions nas-actions--wrap">
+            {["status", "diff", "log", "pull", "rebuild", "pull-rebuild"].map((operation) => (
+              <Button
+                key={operation}
+                variant="secondary"
+                isDisabled={busy}
+                onClick={() => run(operation)}
+              >
+                {operation}
+              </Button>
+            ))}
+          </div>
+        </CardBody>
+      </Card>
+      {result ? (
+        <Card>
+          <CardBody>
+            <pre className="nas-pre">{pretty(result)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
+function SetupPage({data, mutate, busy}) {
+  const model = setupModel(data || {});
+  const [password, setPassword] = useState("");
+  const [selectedDevices, setSelectedDevices] = useState([]);
+  const [allowDestructive, setAllowDestructive] = useState(false);
+  const [confirmPasswordReapply, setConfirmPasswordReapply] = useState(false);
+  const [job, setJob] = useState(null);
+  const [recoveryNote, setRecoveryNote] = useState("");
+  const devices = Array.isArray(model.storage?.devices) ? model.storage.devices : [];
+
+  const submit = async () => {
+    const value = await startFirstRun(password, {
+      planDigest: model.planDigest,
+      devices: selectedDevices,
+      allowDestructiveStorage: allowDestructive,
+      confirmPasswordReapply,
+    });
+    setPassword("");
+    setJob(value);
+  };
+
+  useEffect(() => {
+    if (!job?.jobId || ["complete", "failed"].includes(job.status)) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const value = await api(["first-start-job-status", job.jobId]);
+        setJob(value);
+      } catch (_reason) {
+        // Keep the last visible job state and retry on the next interval.
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [job]);
+
+  return (
+    <>
+      <Title headingLevel="h2">First start</Title>
+      <Card>
+        <CardBody>
+          <p>
+            <Status ok={model.complete}>{model.status}</Status>
+          </p>
+          <p>{model.message}</p>
+          <p>
+            {model.accountCount} account definitions · {model.serviceCount} V2 service policy
+            overrides
+          </p>
+          {model.configPath ? (
+            <p>
+              <code>{model.configPath}</code>
+            </p>
+          ) : null}
+        </CardBody>
+      </Card>
+      {!model.complete ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Run first start</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <Form>
+              <FormGroup label="KeePassXC database password">
+                <TextInput
+                  type="password"
+                  value={password}
+                  onChange={(_e, value) => setPassword(value)}
+                />
+              </FormGroup>
+              {devices.length ? (
+                <FormGroup label="Confirmed storage devices">
+                  {devices.map((device) => (
+                    <label key={device} className="nas-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={selectedDevices.includes(device)}
+                        onChange={(event) =>
+                          setSelectedDevices(
+                            event.target.checked
+                              ? [...selectedDevices, device]
+                              : selectedDevices.filter((value) => value !== device),
+                          )
+                        }
+                      />{" "}
+                      <code>{device}</code>
+                    </label>
+                  ))}
+                </FormGroup>
+              ) : null}
+              {model.destructiveRequired ? (
+                <label className="nas-checkbox">
+                  <input
+                    id="first-start-destructive"
+                    type="checkbox"
+                    checked={allowDestructive}
+                    onChange={(event) => setAllowDestructive(event.target.checked)}
+                  />{" "}
+                  I reviewed the exact device list and permit destructive pool creation.
+                </label>
+              ) : null}
+              <label className="nas-checkbox">
+                <input
+                  type="checkbox"
+                  checked={confirmPasswordReapply}
+                  onChange={(event) => setConfirmPasswordReapply(event.target.checked)}
+                />{" "}
+                Permit reapplying password mutations if resuming an incomplete account stage.
+              </label>
+              <Button
+                onClick={submit}
+                isDisabled={
+                  busy ||
+                  !model.ready ||
+                  !password ||
+                  (model.destructiveRequired && !allowDestructive)
+                }
+              >
+                Start
+              </Button>
+            </Form>
+          </CardBody>
+        </Card>
+      ) : null}
+      {job ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>First-start job</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <pre className="nas-pre">{pretty(job)}</pre>
+          </CardBody>
+        </Card>
+      ) : null}
+      {model.journal?.status === "manual-recovery-required" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Manual recovery acknowledgement</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <TextArea
+              rows={4}
+              value={recoveryNote}
+              onChange={(_e, value) => setRecoveryNote(value)}
+            />
+            <Button
+              isDisabled={busy || !recoveryNote.trim()}
+              onClick={() =>
+                mutate(() => apiInput(["first-start-reconcile"], {note: recoveryNote}))
+              }
+            >
+              Acknowledge repair
+            </Button>
+          </CardBody>
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
+export default function App() {
+  const {data, loading, error, refresh} = useOverview();
+  const [page, setPage] = useState("overview");
+  const [busy, setBusy] = useState(false);
+  const [mutationError, setMutationError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [unlockPassword, setUnlockPassword] = useState("");
+
+  const mutate = useCallback(
+    async (operation) => {
+      setBusy(true);
+      setMutationError("");
+      setNotice("");
+      try {
+        const result = await operation();
+        setNotice("Operation completed.");
+        await refresh();
+        return result;
+      } catch (reason) {
+        setMutationError(message(reason));
+        throw reason;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh],
+  );
+
+  const unlock = async () => {
+    setBusy(true);
+    setMutationError("");
+    try {
+      await activateSecrets(unlockPassword);
+      setUnlockPassword("");
+      setNotice("Runtime secrets activated.");
+      await refresh();
+    } catch (reason) {
+      setMutationError(message(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  let content = null;
+  if (loading && !data) content = <Spinner size="xl" />;
+  else if (page === "overview")
+    content = <OverviewPage data={data} refresh={refresh} busy={busy} />;
+  else if (page === "services") content = <ServicesPage data={data} mutate={mutate} busy={busy} />;
+  else if (page === "applications") content = <ApplicationsPage data={data} />;
+  else if (page === "operations")
+    content = <OperationsPage data={data} mutate={mutate} busy={busy} />;
+  else if (page === "ai") content = <AiPage data={data} mutate={mutate} busy={busy} />;
+  else if (page === "source") content = <SourcePage data={data} mutate={mutate} busy={busy} />;
+  else if (page === "setup") content = <SetupPage data={data} mutate={mutate} busy={busy} />;
+
+  return (
+    <div className="nas-shell">
+      <header className="nas-header">
+        <div>
+          <Title headingLevel="h1">NixOS NAS</Title>
+          <span className="nas-muted">Managed Services V2</span>
+        </div>
+        <Button variant="secondary" onClick={refresh} isDisabled={busy}>
+          Refresh
+        </Button>
+      </header>
+      <div className="nas-layout">
+        <nav className="nas-nav" aria-label="NAS sections">
+          {PAGES.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={page === id ? "nas-nav-item nas-nav-item--active" : "nas-nav-item"}
+              onClick={() => setPage(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        <main className="nas-main">
+          {error ? (
+            <Alert variant="danger" isInline title="Unable to load appliance status">
+              {error}
+            </Alert>
+          ) : null}
+          {mutationError ? (
+            <Alert variant="danger" isInline title="Operation failed">
+              {mutationError}
+            </Alert>
+          ) : null}
+          {notice ? <Alert variant="success" isInline title={notice} /> : null}
+          {data && data.protectedReady === false ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Protected services are locked</CardTitle>
+              </CardHeader>
+              <CardBody>
+                <Form>
+                  <FormGroup label="KeePassXC database password">
+                    <TextInput
+                      type="password"
+                      value={unlockPassword}
+                      onChange={(_e, value) => setUnlockPassword(value)}
+                    />
+                  </FormGroup>
+                  <Button onClick={unlock} isDisabled={busy || !unlockPassword}>
+                    Activate secrets
+                  </Button>
+                </Form>
+              </CardBody>
+            </Card>
+          ) : null}
+          {content}
+        </main>
+      </div>
+    </div>
   );
 }

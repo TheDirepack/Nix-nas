@@ -43,13 +43,9 @@ export NAS_STATE_ROLLBACK_ROOT="$work/rollback"
 export NAS_STATE_RESTORE_JOURNAL="$work/rollback/restore-operation.json"
 export NAS_SECRET_ROOT="$work/secrets"
 export NAS_LLAMA_SWAP_CONFIG="$work/llama-swap/config.yaml"
-export NAS_FEATURE_STATE="$work/control/settings.json"
-export NAS_FEATURE_JOURNAL="$work/control/transaction.json"
-export NAS_FEATURE_LAST_GOOD="$work/control/settings.last-good.json"
-export NAS_FEATURE_RUNTIME="$work/control/on-demand.json"
-export NAS_FEATURE_LOCK="$work/control/feature-control.lock"
-export NAS_FEATURE_CATALOG="$work/control/features.json"
-export NAS_FEATURE_STATE_ROOT="$work/control"
+export NAS_V2_DESIRED="$work/control/services"
+export NAS_V2_EFFECTIVE="$work/control/effective.json"
+export NAS_V2_SCHEMA="$repo/schemas/managed-services-v3.schema.json"
 export NAS_SETUP_STATE="$work/setup/state.json"
 export NAS_SETUP_JOURNAL="$work/setup/first-run-journal.json"
 export NAS_SETUP_STATE_ROOT="$work/setup"
@@ -60,10 +56,10 @@ export NAS_COCKPIT_SUPERUSER_BYPASS=1
 export NAS_PREFLIGHT_STATUS_FILE="$work/preflight.json"
 
 mkdir -p \
-  "$NAS_STATE_RUNTIME_ROOT" "$NAS_STATE_ROLLBACK_ROOT" "$NAS_FEATURE_STATE_ROOT" \
+  "$NAS_STATE_RUNTIME_ROOT" "$NAS_STATE_ROLLBACK_ROOT" "$work/control/services" \
   "$NAS_SETUP_STATE_ROOT" "$NAS_OPERATION_ROOT"
-printf '{}\n' >"$NAS_FEATURE_CATALOG"
-printf '{}\n' >"$NAS_FEATURE_STATE"
+printf 'schemaVersion: 3\nservices: {}\n' >"$NAS_V2_DESIRED/00-default.yaml"
+printf '{}\n' >"$NAS_V2_EFFECTIVE"
 printf '{}\n' >"$NAS_SETUP_STATE"
 
 run_appliance() {
@@ -77,13 +73,9 @@ run_appliance() {
     -u NAS_STATE_RESTORE_JOURNAL \
     -u NAS_SECRET_ROOT \
     -u NAS_LLAMA_SWAP_CONFIG \
-    -u NAS_FEATURE_STATE \
-    -u NAS_FEATURE_JOURNAL \
-    -u NAS_FEATURE_LAST_GOOD \
-    -u NAS_FEATURE_RUNTIME \
-    -u NAS_FEATURE_LOCK \
-    -u NAS_FEATURE_CATALOG \
-    -u NAS_FEATURE_STATE_ROOT \
+    -u NAS_V2_DESIRED \
+    -u NAS_V2_EFFECTIVE \
+    -u NAS_V2_SCHEMA \
     -u NAS_SETUP_STATE \
     -u NAS_SETUP_JOURNAL \
     -u NAS_SETUP_STATE_ROOT \

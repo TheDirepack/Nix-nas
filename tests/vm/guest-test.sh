@@ -79,11 +79,6 @@ wait_http() {
     bash "$@" "$url"
 }
 
-set_feature_modes() {
-  local modes=$1
-  printf '%s\n' "$modes" | nas-feature-control set-many - | jq -e '.ok == true' >/dev/null
-}
-
 http_code() {
   curl --silent --show-error --insecure --output /dev/null --write-out '%{http_code}' \
     --connect-timeout 3 --max-time 20 "$@"
@@ -212,13 +207,15 @@ ensure_authentik_proxy_fixture() {
 }
 
 require_commands \
-  curl findmnt firewall-cmd git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-feature-control \
-  nas-identity-sync nas-managed-service nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
+  curl findmnt firewall-cmd git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-managed-services-control \
+  nas-identity-sync nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock proxy python3 ss systemctl zfs zpool
 
-nas-managed-service validate >/dev/null
-pass "nas-managed-service store is valid (file-based, accept-list, no SQLite)"
+nas-managed-services-control status >/dev/null
+pass "nas-managed-services-control status reports the V2 authority"
+nas-managed-services-control document >/dev/null
+pass "nas-managed-services-control document returns the editable YAML authority"
 
 log "Locked-state and configuration checks"
 wait_active cockpit.socket
@@ -383,10 +380,10 @@ pass "nas-setup created storage, KeePass secrets, accounts, shares, and activate
 log "Adversarial command, SQL-like input, and HTTP validation"
 rm -f /tmp/nas-command-injection-marker
 # shellcheck disable=SC2016
-if nas-cockpit-api feature 'aiWorkspace;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
-  fail "Cockpit API accepted a command-injection-shaped feature identifier"
+if nas-cockpit-api managed-service 'ai-workspace;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
+  fail "Cockpit API accepted a command-injection-shaped service identifier"
 fi
-[[ ! -e /tmp/nas-command-injection-marker ]] || fail "feature identifier escaped into shell execution"
+[[ ! -e /tmp/nas-command-injection-marker ]] || fail "service identifier escaped into shell execution"
 if nas-setup account disable "' OR '1'='1" >/tmp/nas-bad-account.out 2>/tmp/nas-bad-account.err; then
   fail "account command accepted an SQL-injection-shaped username"
 fi
@@ -444,7 +441,7 @@ for unit in \
   nas-on-demand-gate.service caddy.service; do
   wait_active "$unit"
 done
-wait_active nas-identity-sync.timer
+wait_active nas-v2-timer-identity-sync-0.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 ensure_authentik_proxy_fixture
@@ -584,8 +581,8 @@ gate_allow="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
 case "$gate_allow" in 200|204) : ;; *) fail "explicit files capability returned HTTP $gate_allow" ;; esac
 gate_admin="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
-  'http://localhost/authorize?feature=aiRuntime&scope=admin')"
-case "$gate_admin" in 200|204) : ;; *) fail "administrator-only feature gate returned HTTP $gate_admin" ;; esac
+  'http://localhost/authorize?scope=admin')"
+case "$gate_admin" in 200|204) : ;; *) fail "administrator-only gate returned HTTP $gate_admin" ;; esac
 python3 - <<'PYHOSTILEGATE'
 import socket
 
@@ -612,7 +609,7 @@ if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
     raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
 PYHOSTILEGATE
 pass "malformed trusted identity headers remain fail-closed inside the installed gate"
-nas-feature-control set aiRuntime off >/dev/null
+nas-managed-services-control set ai-runtime off >/dev/null
 wait_inactive nas-llama-swap.service
 
 backend_admin="$(http_code --unix-socket /run/copyparty/http.sock \
@@ -694,14 +691,7 @@ ip netns del nas-untrusted-test
 ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
-log "Browser-level Authentik and capability authorization"
-# The browser matrix verifies that an allowed administrator can reach the
-# enabled AI route. Keep the optional stack resident for this phase; the
-# feature lifecycle phase below exercises its off/on-demand transitions.
-set_feature_modes '{"aiRuntime":"always","aiWorkspace":"always"}'
-wait_active nas-llama-swap.service
-wait_active open-webui.service
-wait_http http://127.0.0.1:9380/health
+log "Browser-level authorization and deterministic bundle probes"
 # The persistent wrapper keeps mutable local users across generations. Seed
 # the disposable fixture's PAM credential so direct Cockpit recovery remains
 # deterministic after the installed OS is updated in place.
@@ -727,10 +717,17 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   --baseline-password-file "$authz_secret_dir/baseline"
 cleanup_authz_secrets
 authz_secret_dir=""
-set_feature_modes '{"aiRuntime":"off","aiWorkspace":"off"}'
-wait_inactive open-webui.service
-wait_inactive nas-llama-swap.service
 pass "Browser authorization and Authentik user-settings flow"
+
+# Deterministic bundle probes serve the built distribution over loopback with a
+# stub base1/cockpit.js so the React app mounts without the Cockpit shell, then
+# replay hostile backend strings and viewport/text-scale combinations. The VM
+# owns the committed distribution copy at /var/lib/nas-test/repo/cockpit/dist.
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value deterministicBundle)" python3 /var/lib/nas-test/repo/tests/browser/deterministic.py \
+  --dist /var/lib/nas-test/repo/cockpit/dist \
+  --evidence /tmp/nas-deterministic-bundle.json
+pass "Deterministic bundle XSS, layout, and console-error probes"
 
 log "Custom command surfaces and generated configuration"
 nas-secrets status | grep -q 'Runtime secrets: active'
@@ -741,17 +738,17 @@ grep -q 'bootstrap token' /tmp/nas-token-warning.log
 ! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-zfs-export-recovery-key /tmp/disabled-zfs-key \
   >/tmp/nas-zfs-export-disabled.log 2>&1 || fail "ZFS recovery key unexpectedly existed while encryption was disabled"
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
-nas-feature-control status | jq -e '.schemaVersion == 2 and (.features | length > 0)' >/dev/null
-! nas-feature-control set '../aiRuntime' always >/tmp/nas-feature-injection.log 2>&1 || fail "path-like feature identifier was accepted"
-! nas-feature-control set 'aiRuntime;touch /tmp/pwned' always >>/tmp/nas-feature-injection.log 2>&1 || fail "shell-like feature identifier was accepted"
-[[ ! -e /tmp/pwned ]] || fail "feature identifier injection created an unexpected file"
+nas-managed-services-control status | jq -e '.schemaVersion == 3 and (.services | length > 0)' >/dev/null
+nas-managed-services-control document | jq -e '.document.services | type == "object"' >/dev/null
+! nas-managed-services-control set '../ai-runtime' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
+! nas-managed-services-control set 'ai-runtime;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
+[[ ! -e /tmp/pwned ]] || fail "service identifier injection created an unexpected file"
 ! run_as_admin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
 ! run_as_admin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
 nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
 nas-doctor --json | jq -e '.schemaVersion >= 1 and (.checks | type == "array")' >/tmp/nas-doctor.json
-nas-migrate-state plan | jq -e '.schemaVersion == 1 and .status != "manual-recovery-required"' >/tmp/nas-migration-plan.json
 nas-state authorities | jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' >/tmp/nas-state-authorities.json
 rm -f /tmp/nas-qemu-state.tar.gz
 nas-state export /tmp/nas-qemu-state.tar.gz --include-sensitive >/tmp/nas-state-export.json
@@ -766,31 +763,36 @@ NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
 pass "all custom command surfaces and in-VM repository preflight succeeded"
 
 log "Open WebUI and llama-swap start/stop/on-demand lifecycle"
-nas-feature-control set aiRuntime always | jq -e '.ok == true' >/dev/null
+nas-managed-services-control set ai-runtime always | jq -e '.ok == true' >/dev/null
 wait_active nas-llama-swap.service
 assert_http_responsive "llama-swap web interface" http://127.0.0.1:9292/ui/
 
-nas-feature-control set aiWorkspace always | jq -e '.ok == true' >/dev/null
+nas-managed-services-control set ai-workspace always | jq -e '.ok == true' >/dev/null
 wait_active open-webui.service
 wait_http http://127.0.0.1:9380/health
 
-nas-feature-control set aiWorkspace off | jq -e '.ok == true' >/dev/null
+nas-managed-services-control set ai-workspace off | jq -e '.ok == true' >/dev/null
 wait_inactive open-webui.service
-nas-feature-control set aiRuntime off | jq -e '.ok == true' >/dev/null
+nas-managed-services-control set ai-runtime off | jq -e '.ok == true' >/dev/null
 wait_inactive nas-llama-swap.service
 
-set_feature_modes '{"aiRuntime":"on-demand","aiWorkspace":"on-demand"}'
-nas-feature-control wake aiWorkspace | jq -e '.ok == true' >/dev/null
+printf '{"ai-runtime":"on-demand","ai-workspace":"on-demand"}' | nas-managed-services-control set-many - | jq -e '.ok == true' >/dev/null
+nas-managed-services-control wake ai-workspace | jq -e '.ok == true' >/dev/null
 wait_active nas-llama-swap.service
 wait_active open-webui.service
 wait_http http://127.0.0.1:9380/health
-set_feature_modes '{"aiRuntime":"off","aiWorkspace":"off"}'
+nas-managed-services-control set ai-workspace off >/dev/null
+nas-managed-services-control set ai-runtime off >/dev/null
 wait_inactive open-webui.service
 wait_inactive nas-llama-swap.service
-pass "Open WebUI and llama-swap start, stop, and wake correctly"
+nas-managed-services-control set ai-downloader always | jq -e '.ok == true' >/dev/null
+wait_active podman-hfdownloader.service
+nas-managed-services-control set ai-downloader off | jq -e '.ok == true' >/dev/null
+wait_inactive podman-hfdownloader.service
+pass "Open WebUI, llama-swap, and ai-downloader start, stop, and wake correctly"
 
 log "Observability, notifications, Syncthing, Vaultwarden, and Cockpit assets"
-nas-feature-control set grafana always | jq -e '.ok == true' >/dev/null
+nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
 for unit in \
   victoriametrics.service telegraf.service vmalert-nas.service \
   nas-alert-router.service grafana.service ntfy-sh.service \

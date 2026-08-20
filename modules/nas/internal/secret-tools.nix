@@ -489,7 +489,6 @@ NTFY_ENV
           require_secret_atom "$provider_key" "llama-swap provider $provider_id API key" 8 4096
           printf '%s=%s\n' "$provider_env" "$provider_key" >> "$local_stage/ai/llama-swap.env"
         done < <(ai_provider_pairs)
-        printf '%s' "$llama_swap_api_key" > "$local_stage/ai/gate-api-key"
         printf 'WEBUI_SECRET_KEY=%s\nWEBUI_ADMIN_PASSWORD=%s\n' "$open_webui_secret" "$open_webui_admin_password" > "$local_stage/ai/open-webui.env"
         printf 'HF_TOKEN=%s\n' "$huggingface_token" > "$local_stage/ai/hfdownloader.env"
         ''}
@@ -525,7 +524,6 @@ NTFY_ENV
         ${lib.optionalString cfg.ai.enable ''
         install_secret "$local_stage/ai/llama-swap.env" "$root_stage/ai/llama-swap.env" nas-ai nas-ai
         ${lib.optionalString cfg.ai.codingAgent.enable ''install_secret "$local_stage/ai/coding-agent-api-key" "$root_stage/ai/coding-agent-api-key" nas-code-agent nas-code-agent''}
-        install_secret "$local_stage/ai/gate-api-key" "$root_stage/ai/gate-api-key" nas-feature-gate nas-feature-control
         install_secret "$local_stage/ai/open-webui.env" "$root_stage/ai/open-webui.env" root root
         install_secret "$local_stage/ai/hfdownloader.env" "$root_stage/ai/hfdownloader.env" hfdownloader hfdownloader
         ''}
@@ -545,7 +543,7 @@ NTFY_ENV
           exit 71
         fi
 
-        for unit in authentik.service authentik-worker.service copyparty.service caddy.service; do
+        for unit in authentik.service authentik-worker.service caddy.service; do
           if sudo systemctl is-failed --quiet "$unit"; then
             echo "Protected service entered the failed state: $unit" >&2
             exit 72
@@ -571,16 +569,12 @@ NTFY_ENV
           exit 73
         fi
 
-        for unit in authentik.service authentik-worker.service copyparty.service caddy.service; do
+        for unit in authentik.service authentik-worker.service caddy.service; do
           if ! sudo systemctl is-active --quiet "$unit"; then
             echo "Protected service is not active after readiness validation: $unit" >&2
             exit 74
           fi
         done
-        if ! sudo test -S /run/copyparty/http.sock; then
-          echo "CopyParty is active but its Unix socket is unavailable." >&2
-          exit 75
-        fi
 
         nas_secret_tx_commit
         echo "Runtime service secrets activated. Authentik remains the identity source of truth."
@@ -590,7 +584,7 @@ NTFY_ENV
         [[ -f "$secret_root/ready" ]] && echo "Runtime secrets: active" || echo "Runtime secrets: inactive"
         [[ -f "$database" ]] && echo "KeePassXC database: configured" || echo "KeePassXC database: missing"
         systemctl is-active authentik.service 2>/dev/null || true
-        systemctl is-active nas-identity-sync.timer 2>/dev/null || true
+        systemctl is-active nas-v2-timer-identity-sync-0.timer 2>/dev/null || true
         if [[ -f "$secret_root/authentik-token-warning" ]]; then
           echo "Authentik API token: WARNING — bootstrap token still in use"
         else

@@ -1,20 +1,51 @@
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from nas_common import ADMIN_GROUP, CAPABILITY_GROUPS, DISABLED_GROUP, GUEST_GROUP, USER_GROUP, capability_allowed
+from nas_common import (
+    ADMIN_GROUP,
+    DISABLED_GROUP,
+    GUEST_GROUP,
+    USER_GROUP,
+    application_capability_allowed,
+)
 from nas_syncthing_devices import DeviceError, normalize_devices, validate_username
+
+_SYNCTHING_SERVICE = os.environ.get("NAS_V2_SYNCTHING_SERVICE", "syncthing")
+_SYNCTHING_CAPABILITY = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", "access")
+
+
+def _resolve_syncthing_capability() -> tuple[str, str] | None:  # pragma: no cover - V2 integration
+    service = os.environ.get("NAS_V2_SYNCTHING_SERVICE", _SYNCTHING_SERVICE)
+    capability = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", _SYNCTHING_CAPABILITY)
+    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    try:
+        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
+        derived = data.get("derived", {}).get("authorization", {})
+        if not isinstance(derived, dict):
+            raise ValueError("derived.authorization is not a dict")
+        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
+        if isinstance(caps, dict) and capability in caps:
+            return service, capability
+        if isinstance(derived, dict) and derived:
+            return None
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return service, capability
+
 
 RESERVED_GROUPS = (
     ADMIN_GROUP,
     USER_GROUP,
     GUEST_GROUP,
     DISABLED_GROUP,
-    *[group for pair in CAPABILITY_GROUPS.values() for group in pair],
 )
+APPLICATION_GROUP_PREFIX = "application."
 
 
 class SyncError(RuntimeError):
@@ -35,7 +66,11 @@ class User:
 
     @property
     def personal_sync(self) -> bool:
-        return capability_allowed(set(self.groups), "syncthing")
+        resolved = _resolve_syncthing_capability()
+        if resolved is None:
+            return False
+        service, capability = resolved
+        return application_capability_allowed(set(self.groups), service, capability)
 
 
 @dataclass(frozen=True)
@@ -125,7 +160,6 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
                 explicit_groups_by_uid.setdefault(username, set()).add(group_name)
 
     users: list[User] = []
-    raw_by_uid: dict[str, Mapping[str, Any]] = {}
     for raw in raw_users:
         username = raw.get("username")
         if not isinstance(username, str):
@@ -142,7 +176,6 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
             frozenset(user_groups),
             attrs_map(raw.get("attributes")),
         )
-        raw_by_uid[uid] = raw
         if user.enabled:
             users.append(user)
 
@@ -194,31 +227,28 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
 
 
 def capability_status(model: IdentityModel) -> dict[str, Any]:
+    """Report Authentik-owned V2 application assignments without re-evaluating policy."""
     users: list[dict[str, Any]] = []
     for user in model.users:
-        capabilities: dict[str, dict[str, Any]] = {}
-        for capability, (allow_group, deny_group) in CAPABILITY_GROUPS.items():
-            source = (
-                "administrator"
-                if ADMIN_GROUP in user.groups
-                else "explicit-deny"
-                if deny_group in user.groups
-                else "explicit-allow"
-                if allow_group in user.groups
-                else "default-deny"
-            )
-            capabilities[capability] = {"allowed": capability_allowed(set(user.groups), capability), "source": source}
+        assigned = sorted(group for group in user.groups if group.startswith(APPLICATION_GROUP_PREFIX))
         users.append(
             {
                 "id": user.uid,
                 "displayName": user.display_name,
                 "email": user.email,
                 "administrator": ADMIN_GROUP in user.groups,
+                "administratorBypass": ADMIN_GROUP in user.groups,
                 "groups": sorted(user.groups),
-                "capabilities": capabilities,
+                "capabilities": {group: {"allowed": True, "source": "authentik-assignment"} for group in assigned},
+                "assignedApplicationCapabilities": assigned,
             }
         )
-    return {"identityProvider": "Authentik", "managementUrl": "/identity/if/user/", "users": users}
+    return {
+        "identityProvider": "Authentik",
+        "capabilityModel": "managed-services-v2",
+        "managementUrl": "/identity/if/user/",
+        "users": users,
+    }
 
 
 def user_device_values(user: User) -> list[Any]:
@@ -267,6 +297,7 @@ def model_status(model: IdentityModel) -> dict[str, Any]:
     return {
         "identityProvider": "Authentik",
         "shareAuthority": "CopyParty",
+        "capabilityModel": "managed-services-v2",
         "users": [user.uid for user in model.users],
         "groups": [group.name for group in model.groups],
         "administrators": list(model.administrators),
@@ -301,11 +332,14 @@ def normalized_account_plan(raw: Any, index: int) -> dict[str, Any]:
         raise SyncError(f"accounts[{index}].active must be true or false")
     groups_raw = raw.get("groups", [USER_GROUP])
     if not isinstance(groups_raw, list) or not all(isinstance(item, str) for item in groups_raw):
-        raise SyncError(f"accounts[{index}].groups must be a list of strings")
+        raise SyncError(f"accounts[{index}].groups must be a list of base identity roles")
     groups = {item.strip() for item in groups_raw if item.strip()}
     unknown = sorted(groups - set(RESERVED_GROUPS))
     if unknown:
-        raise SyncError(f"accounts[{index}] contains unknown reserved groups: {', '.join(unknown)}")
+        raise SyncError(
+            f"accounts[{index}] contains non-role group(s): {', '.join(unknown)}; "
+            "application capability assignments are Authentik-owned"
+        )
     if active:
         groups.discard(DISABLED_GROUP)
         if not ({ADMIN_GROUP, GUEST_GROUP} & groups):
