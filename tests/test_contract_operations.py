@@ -70,10 +70,29 @@ class ContractTests(unittest.TestCase):
         # The seed uses tmpfiles-backed root-fs directories until first-run creates the pool.
         self.assertNotIn("nas-zfs-mount-guard.service", seed)
         self.assertNotIn("RequiresMountsFor", seed)
-        self.assertNotIn("nas-zfs-mount-guard.service", reconcile)
-        self.assertNotIn("RequiresMountsFor", reconcile)
-        self.assertIn('postgresql = {', protected)
-        self.assertIn('requires = [ "nas-zfs-mount-guard.service" ];', protected)
+        self.assertIn("nas-zfs-mount-guard.service", reconcile)
+        self.assertIn("RequiresMountsFor", reconcile)
+        self.assertIn("postgresql = {", protected)
+        self.assertIn('requires = [ "nas-bootstrap-runtime-select.service" ];', protected)
+
+    def test_identity_runtime_reinitializes_on_zfs_and_retires_bootstrap_authorities(self) -> None:
+        applications = text("modules/nas/config/application-services.nix")
+        services = text("modules/nas/config/systemd-services.nix")
+        setup = text("services/nas_setup.py")
+        secrets = text("modules/nas/internal/secret-tools.nix")
+        self.assertIn("nas-bootstrap-runtime-select.service", applications)
+        self.assertIn("bootstrapAuthentikDataDir", applications)
+        self.assertIn("bootstrapPostgresqlDataDir", applications)
+        self.assertIn("operational-runtime-select", applications)
+        self.assertIn("promote_bootstrap_runtime", setup)
+        self.assertIn("retire-bootstrap", setup)
+        self.assertIn("retire-authentik-bootstrap-stdin", setup)
+        self.assertNotIn('run_root(["mv", str(source), str(destination)])', setup)
+        self.assertIn("command_retire_authentik_bootstrap_stdin", secrets)
+        self.assertIn(
+            '[[ -n "$authentik_bootstrap_token" && "$authentik_api_token" == "$authentik_bootstrap_token" ]]', secrets
+        )
+        self.assertIn('ConditionPathExists = "!/var/lib/nas-setup/state.json"', services)
 
     def test_cockpit_recovery_socket_is_available_before_protected_services(self) -> None:
         base = text("modules/nas/internal/base.nix")
@@ -89,6 +108,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('requires = [ "sysinit.target" ]', system)
         self.assertNotIn("directCockpitRecovery", firewall)
         self.assertIn("nas-management-network-guard.service", caddy)
+        self.assertIn('header_up Origin "https://${lanHost}"', caddy)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 

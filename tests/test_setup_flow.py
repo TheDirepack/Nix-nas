@@ -14,19 +14,13 @@ class TestSetupHTML(unittest.TestCase):
         html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
         self.assertTrue(html_path.exists(), "setup.html should exist")
 
-    def test_setup_html_has_username_field(self):
-        """Verify setup.html contains admin username field."""
+    def test_setup_html_has_console_link(self):
+        """Verify setup.html links to console setup instead of POST form."""
         html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
         content = html_path.read_text()
-        self.assertIn('name="admin-user"', content, "setup.html should have admin username field")
-        self.assertIn('type="text"', content, "Username field should be text type")
-
-    def test_setup_html_has_password_field(self):
-        """Verify setup.html contains admin password field."""
-        html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
-        content = html_path.read_text()
-        self.assertIn('name="admin-pass"', content, "setup.html should have admin password field")
-        self.assertIn('type="password"', content, "Password field should be password type")
+        self.assertIn('href="/console/"', content, "setup.html should link to console")
+        self.assertIn('Open Console Setup', content, "setup.html should have console button")
+        self.assertNotIn('method="POST"', content, "setup.html should not use POST form")
 
     def test_setup_html_has_canonical_link(self):
         """Verify setup.html has canonical link to /setup."""
@@ -44,8 +38,8 @@ class TestCaddyConfig(unittest.TestCase):
         bootstrap_path = pathlib.Path(ROOT / "modules/nas/config/caddy-bootstrap.nix")
         self.assertTrue(pathlib.Path(bootstrap_path).exists(), "caddy-bootstrap.nix should exist")
         content = bootstrap_path.read_text()
-        self.assertIn("redir /setup 303", content, "Caddy config should redirect / to /setup")
-        self.assertIn("handle_path /setup", content, "Caddy config should have /setup handler")
+        self.assertIn("redir * /setup 303", content, "Caddy config should redirect / to /setup")
+        self.assertIn("handle /setup", content, "Caddy config should have /setup handler")
 
     def test_caddy_no_shell_conditionals(self):
         """Verify Caddy config doesn't have invalid shell conditionals."""

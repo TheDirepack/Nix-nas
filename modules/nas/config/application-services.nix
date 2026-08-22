@@ -3,6 +3,10 @@
 let
   inherit (nasInternal)
     authentikDataDir
+    bootstrapAuthentikDataDir
+    bootstrapPostgresqlDataDir
+    bootstrapRuntimeRoot
+    bootstrapSecretsDir
     authentikEnvironmentFile
     authentikPort
     nasAuthentikBlueprints
@@ -106,9 +110,11 @@ in
 
     environment.etc."authentik/config.yml".source = authentikSettings;
     systemd.tmpfiles.rules = [
-      "d ${authentikDataDir} 0750 authentik authentik -"
-      "d ${authentikDataDir}/data 0750 authentik authentik -"
-      "L+ /var/lib/authentik - - - - ${authentikDataDir}"
+      "d ${bootstrapRuntimeRoot} 0755 root root -"
+      "d ${bootstrapAuthentikDataDir} 0750 authentik authentik -"
+      "d ${bootstrapAuthentikDataDir}/data 0750 authentik authentik -"
+      "d ${bootstrapPostgresqlDataDir} 0700 postgres postgres -"
+      "d ${bootstrapSecretsDir} 0700 admin users -"
       "d ${syncthingDataDir} 0700 syncthing copyparty -"
       "d ${syncthingConfigDir} 0700 syncthing copyparty -"
       "L+ /var/lib/syncthing - - - - ${syncthingDataDir}"
@@ -119,8 +125,6 @@ in
       "d ${copypartyDataDir} 0750 copyparty copyparty -"
       "d ${copypartyDataDir}/shares 2770 copyparty copyparty -"
       "L+ /var/lib/copyparty - - - - ${copypartyDataDir}"
-      "d ${postgresqlDataDir} 0700 postgres postgres -"
-      "L+ /var/lib/postgresql - - - - ${postgresqlDataDir}"
     ];
 
     services.postgresql = {
@@ -135,16 +139,15 @@ in
       ];
     };
     systemd.services.postgresql = {
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" ];
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot postgresqlDataDir ];
+      requires = [ "nas-bootstrap-runtime-select.service" ];
+      after = [ "nas-bootstrap-runtime-select.service" ];
     };
     systemd.services.authentik-migrate = {
       description = "Migrate the Authentik database";
-      requires = [ "postgresql.service" "nas-zfs-mount-guard.service" ];
-      after = [ "postgresql.service" "nas-zfs-mount-guard.service" ];
+      requires = [ "postgresql.service" "nas-bootstrap-runtime-select.service" ];
+      after = [ "postgresql.service" "nas-bootstrap-runtime-select.service" ];
       before = [ "authentik.service" "authentik-worker.service" ];
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot authentikDataDir ];
+      unitConfig.RequiresMountsFor = [ ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
         Type = "oneshot";
@@ -158,9 +161,9 @@ in
     };
     systemd.services.authentik-worker = {
       description = "Authentik background worker";
-      requires = [ "authentik-migrate.service" "nas-zfs-mount-guard.service" ];
-      after = [ "authentik-migrate.service" "nas-zfs-mount-guard.service" ];
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot authentikDataDir ];
+      requires = [ "authentik-migrate.service" "nas-bootstrap-runtime-select.service" ];
+      after = [ "authentik-migrate.service" "nas-bootstrap-runtime-select.service" ];
+      unitConfig.RequiresMountsFor = [ ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
         RuntimeDirectory = "authentik-worker";
@@ -171,9 +174,9 @@ in
     };
     systemd.services.authentik = {
       description = "Authentik identity provider";
-      requires = [ "authentik-migrate.service" "authentik-worker.service" "nas-zfs-mount-guard.service" ];
-      after = [ "authentik-migrate.service" "authentik-worker.service" "nas-zfs-mount-guard.service" ];
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot authentikDataDir ];
+      requires = [ "authentik-migrate.service" "authentik-worker.service" "nas-bootstrap-runtime-select.service" ];
+      after = [ "authentik-migrate.service" "authentik-worker.service" "nas-bootstrap-runtime-select.service" ];
+      unitConfig.RequiresMountsFor = [ ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
         RuntimeDirectory = "authentik-server";
@@ -305,6 +308,32 @@ in
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
+    };
+  };
+
+  config.systemd.services.nas-bootstrap-runtime-select = {
+    description = "Select boot-root or ZFS identity runtime storage";
+    before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = pkgs.writeShellScript "nas-bootstrap-runtime-select" ''
+        set -euo pipefail
+        if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
+          ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.zfsRoot}
+          target=${lib.escapeShellArg cfg.zfsRoot}
+        else
+          target=${lib.escapeShellArg bootstrapRuntimeRoot}
+        fi
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
+        ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
+        ${pkgs.coreutils}/bin/install -d -m 0700 -o admin -g users "$target/nas-secrets"
+        for name in authentik postgresql nas-secrets; do
+          ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
+          ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
+        done
+      '';
+      NoNewPrivileges = false;
     };
   };
 }

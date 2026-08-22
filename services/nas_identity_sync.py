@@ -1041,6 +1041,35 @@ def export_account(token: str, username: str) -> dict[str, Any]:
     }
 
 
+def retire_bootstrap_administrator(token: str, administrator: str) -> dict[str, str]:
+    administrator = validate_uid(administrator)
+    users = authentik_list(token, "core/users/?include_groups=true")
+    groups = authentik_list(token, "core/groups/?include_users=true")
+    admin_group = next((group for group in groups if group.get("name") == ADMIN_GROUP), None)
+    if not isinstance(admin_group, Mapping):
+        raise SyncError(f"Authentik group {ADMIN_GROUP} is missing")
+    replacement = next((user for user in users if user.get("username") == administrator), None)
+    replacement_pk = replacement.get("pk") if isinstance(replacement, Mapping) else None
+    members = admin_group.get("users_obj", admin_group.get("users", []))
+    member_pks = (
+        {member.get("pk", member.get("num_pk")) if isinstance(member, Mapping) else member for member in members}
+        if isinstance(members, list)
+        else set()
+    )
+    if (
+        not isinstance(replacement, Mapping)
+        or replacement.get("is_active") is not True
+        or replacement_pk not in member_pks
+    ):
+        raise SyncError(f"Chosen administrator {administrator!r} is not an enabled explicit member of {ADMIN_GROUP}")
+    bootstrap = next((user for user in users if user.get("username") == "akadmin"), None)
+    if not isinstance(bootstrap, Mapping):
+        raise SyncError("Authentik bootstrap administrator akadmin is missing")
+    bootstrap_pk = user_detail_pk(bootstrap)
+    authentik_request(token, f"core/users/{bootstrap_pk}/", method="DELETE")
+    return {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": administrator}
+
+
 @contextlib.contextmanager
 def identity_mutation_operation(action: str):
     token = os.environ.get(COORDINATION_TOKEN_ENV)
@@ -1085,6 +1114,10 @@ def main() -> int:
     sub.add_parser("bootstrap", help="Create/correct base NAS identity roles using the bootstrap token")
     sub.add_parser("verify-token", help="Verify the scoped runtime token can read identity state")
     sub.add_parser("bootstrap-runtime-token", help="Issue the scoped runtime token using bootstrap authority")
+    retire = sub.add_parser(
+        "retire-bootstrap", help="Delete Authentik bootstrap administrator after replacement verification"
+    )
+    retire.add_argument("administrator")
     sub.add_parser("sync", help="Validate Authentik identity state and reconcile Syncthing when enabled")
     fixture = sub.add_parser("status-fixture", help="Report identity state from fixture JSON without touching services")
     fixture.add_argument("fixture", type=pathlib.Path)
@@ -1105,7 +1138,14 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        mutating = {"bootstrap", "bootstrap-runtime-token", "apply-accounts", "sync", "sync-syncthing"}
+        mutating = {
+            "bootstrap",
+            "bootstrap-runtime-token",
+            "retire-bootstrap",
+            "apply-accounts",
+            "sync",
+            "sync-syncthing",
+        }
         operation = (
             identity_mutation_operation(f"identity-{args.command}")
             if args.command in mutating
@@ -1116,6 +1156,8 @@ def main() -> int:
                 result = ensure_groups(authentik_token(bootstrap=True))
             elif args.command == "bootstrap-runtime-token":
                 result = provision_runtime_token(authentik_token(bootstrap=True))
+            elif args.command == "retire-bootstrap":
+                result = retire_bootstrap_administrator(authentik_token(), args.administrator)
             elif args.command == "apply-accounts":
                 result = apply_account_plan(
                     authentik_token(),

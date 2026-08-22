@@ -162,7 +162,7 @@ in
         PasswordAuthentication = false;
         KbdInteractiveAuthentication = false;
         X11Forwarding = false;
-        AllowUsers = [ cfg.adminUser ];
+        AllowGroups = [ "nas-administrators" ];
       };
     };
 

@@ -5,8 +5,11 @@ let
 in
 {
   config = {
-    users.mutableUsers = lib.mkDefault cfg.hostPolicy.mutableLocalPasswords;
+    # First-run creates the operator-selected local administrator. Nix must not
+    # recreate or overwrite that mutable identity on later activations.
+    users.mutableUsers = true;
     users.groups.authentik = { };
+    users.groups.nas-administrators = { };
     users.groups.nas-operations = { };
     users.users.authentik = {
       isSystemUser = true;
@@ -16,11 +19,5 @@ in
       homeMode = "0750";
     };
     users.users.caddy.extraGroups = [ "copyparty" ];
-    users.users.${cfg.adminUser} = {
-      hashedPasswordFile = lib.mkIf (cfg.adminPasswordHashFile != null) cfg.adminPasswordHashFile;
-      autoSubUidGidRange = true;
-      linger = true;
-      extraGroups = lib.mkAfter ([ "nas-operations" ] ++ lib.optionals cfg.virtualization.enable [ "libvirtd" "kvm" ]);
-    };
   };
 }

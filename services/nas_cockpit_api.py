@@ -327,14 +327,13 @@ def static_links() -> dict[str, str]:
         "scheduler": "/console/system/services#/timers",
         "virtualMachines": "/console/@localhost/machines",
         "containers": "/console/podman",
-        "files": "/console/files",
         "storage": "/console/storage",
         "network": "/console/network",
         "power": "/console/system",
         "logs": "/console/system/logs",
         "softwareUpdates": "/console/system/software",
         "terminal": "/console/system/terminal",
-        "docs": "/console/nas/docs/",
+        "docs": "/console/cockpit/@localhost/nas/docs/index.html",
         "accountSettings": "/settings/",
     }
 
@@ -464,6 +463,17 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     password = _json_string(request, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
     if "\n" in password or "\r" in password:
         raise ApiError("KeePassXC database password must be a single line")
+    administrator = request.get("administrator")
+    if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
+        raise ApiError("First-start administrator details are invalid")
+    username = _json_string(administrator, "username", required=True, max_length=64)
+    name = _json_string(administrator, "name", required=True, max_length=256)
+    email = _json_string(administrator, "email", required=True, max_length=320)
+    administrator_password = _json_string(administrator, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
+        raise ApiError("Administrator username is invalid")
+    if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
+        raise ApiError("Administrator details must be single-line values")
     plan_digest = _json_string(request, "planDigest", required=True, max_length=64)
     if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
         raise ApiError("Invalid first-start plan digest")
@@ -520,7 +530,21 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     }
     try:
         _write_private_new(request_path, json.dumps(job, sort_keys=True) + "\n")
-        _write_private_new(password_path, password + "\n")
+        _write_private_new(
+            password_path,
+            json.dumps(
+                {
+                    "keepass": password,
+                    "administrator": {
+                        "username": username,
+                        "name": name,
+                        "email": email,
+                        "password": administrator_password,
+                    },
+                }
+            )
+            + "\n",
+        )
         _start_first_start_unit(job_id, request_path, password_path)
         return {"schemaVersion": 1, "jobId": job_id, "status": "submitted"}
     except Exception:
@@ -530,6 +554,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         raise
     finally:
         password = ""
+        administrator_password = ""
 
 
 def reconcile_first_start(request: dict[str, Any]) -> dict[str, Any]:

@@ -169,6 +169,7 @@ test("first-run sends password and safety choices only in a JSON stdin request",
   };
   const result = await startFirstRun(
     "correct horse battery staple",
+    {username: "nasadmin", name: "NAS Administrator", email: "admin@example.test", password: "new local password"},
     {
       allowDestructiveStorage: true,
       planDigest: "a".repeat(64),
@@ -186,6 +187,7 @@ test("first-run sends password and safety choices only in a JSON stdin request",
   const request = JSON.parse(calls[1][1]);
   assert.deepEqual(request, {
     password: "correct horse battery staple",
+    administrator: {username: "nasadmin", name: "NAS Administrator", email: "admin@example.test", password: "new local password"},
     planDigest: "a".repeat(64),
     devices: ["/dev/disk/by-id/disk-one"],
     allowDestructiveStorage: true,
@@ -217,7 +219,7 @@ test("secret transports reject empty and multiline passwords before spawning", (
   assert.throws(() => activateSecrets("", fail), /Enter/);
   assert.throws(() => activateSecrets("bad\nvalue", fail), /single line/);
   assert.throws(
-    () => startFirstRun("bad\rvalue", {planDigest: "a".repeat(64)}, fail),
+    () => startFirstRun("bad\rvalue", {username: "nasadmin", name: "Admin", email: "admin@example.test", password: "password"}, {planDigest: "a".repeat(64)}, fail),
     /single line/,
   );
 });
@@ -230,7 +232,7 @@ test("secret transports preserve hostile single-line values only on stdin", asyn
     return process;
   };
   const password = "'\"\\$`;&|<> password";
-  await startFirstRun(password, {planDigest: "b".repeat(64)}, spawn);
+  await startFirstRun(password, {username: "nasadmin", name: "Admin", email: "admin@example.test", password}, {planDigest: "b".repeat(64)}, spawn);
   activateSecrets(password, spawn);
   assert.deepEqual(inputs.map(({command}) => command), [
     ["nas-cockpit-api", "first-run"],

@@ -217,22 +217,28 @@ let
     mdbook build "$work" --dest-dir "$out/share/cockpit/nas/docs"
   '';
 
-  cockpitNasPlugin = pkgs.runCommand "cockpit-nas-management" {
-    nativeBuildInputs = [ pkgs.nodejs ];
-  } ''
-    cd ${../../../cockpit}
-    node build.js --check
-    cockpit_dist=${../../../cockpit/dist}
-    for asset in manifest.json index.html index.js index.css build-meta.json; do
-      test -s "$cockpit_dist/$asset" || {
-        printf 'Cockpit React/PatternFly bundle is missing %s. Restore the reviewed lockfile, run npm ci, then npm run build in cockpit/.\n' "$asset" >&2
-        exit 1
-      }
-    done
-    install -d "$out/share/cockpit/nas"
-    cp -R "$cockpit_dist/." "$out/share/cockpit/nas/"
-    cp -R ${nasDocumentation}/share/cockpit/nas/docs "$out/share/cockpit/nas/docs"
-  '';
+  cockpitNasPlugin =
+    let
+      plugin = pkgs.runCommand "cockpit-nas-management" {
+        nativeBuildInputs = [ pkgs.nodejs ];
+      } ''
+        cd ${../../../cockpit}
+        node build.js --check
+        cockpit_dist=${../../../cockpit/dist}
+        for asset in manifest.json index.html index.js index.css build-meta.json; do
+          test -s "$cockpit_dist/$asset" || {
+            printf 'Cockpit React/PatternFly bundle is missing %s. Restore the reviewed lockfile, run npm ci, then npm run build in cockpit/.\n' "$asset" >&2
+            exit 1
+          }
+        done
+        install -d "$out/share/cockpit/nas"
+        cp -R "$cockpit_dist/." "$out/share/cockpit/nas/"
+        cp -R ${nasDocumentation}/share/cockpit/nas/docs "$out/share/cockpit/nas/docs"
+      '';
+    in
+    plugin // {
+      passthru.cockpitPath = [ plugin ];
+    };
 in
 {
   inherit nasDocumentation cockpitNasPlugin;

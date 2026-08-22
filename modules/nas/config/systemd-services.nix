@@ -3,7 +3,6 @@
 let
   inherit (nasInternal)
     authentikApiTokenFile
-    authentikBootstrapTokenFile
     authentikDataDir
     authentikEnvironmentFile
     authentikPort
@@ -39,12 +38,33 @@ let
 in
 {
   config.systemd.services = {
+    nas-bootstrap-administrator = lib.mkIf cfg.firstStart.enable {
+      description = "Create the disposable local administrator for first-run setup";
+      wantedBy = [ "multi-user.target" ];
+      before = [ "cockpit.socket" "nas-first-start.service" ];
+      unitConfig.ConditionPathExists = "!/var/lib/nas-setup/state.json";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "nas-bootstrap-administrator" ''
+          set -euo pipefail
+          if ! ${pkgs.shadow}/bin/id --user nas-bootstrap >/dev/null 2>&1; then
+            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash nas-bootstrap
+          fi
+          printf '%s\n' 'nas-bootstrap:nixos-nas-bootstrap' | ${pkgs.shadow}/bin/chpasswd
+          ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations nas-bootstrap
+        '';
+        NoNewPrivileges = false;
+        UMask = "0077";
+      };
+    };
+
     nas-first-start = lib.mkIf cfg.firstStart.enable {
       description = "Prepare the automatic NixOS NAS first-start workflow";
       wantedBy = [ "multi-user.target" ];
-      wants = [ "cockpit.socket" ];
+      wants = [ "cockpit.socket" "nas-bootstrap-administrator.service" ];
+      after = [ "nas-bootstrap-administrator.service" "local-fs.target" ];
       before = [ "cockpit.socket" ];
-      after = [ "local-fs.target" ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -97,6 +117,7 @@ in
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
         AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathExists = [ "/var/lib/nas-setup/state.json" ];
       };
       serviceConfig = {
         Type = "oneshot";
@@ -117,9 +138,9 @@ in
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       before = [ "authentik-migrate.service" ];
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" ];
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot postgresqlDataDir ];
+      requires = [ "nas-bootstrap-runtime-select.service" ];
+      after = [ "nas-bootstrap-runtime-select.service" ];
+      unitConfig.RequiresMountsFor = [ ];
     };
 
     authentik-migrate = {
@@ -152,7 +173,6 @@ in
       unitConfig.ConditionPathExists = [
         "${secretRoot}/ready"
         authentikApiTokenFile
-        authentikBootstrapTokenFile
         "/var/lib/nas-setup/state.json"
         "/run/nas-control/effective.json"
       ];
@@ -180,7 +200,7 @@ in
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig = {
         Type = "oneshot";
@@ -203,7 +223,7 @@ in
       unitConfig = {
         RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
         ConditionPathExists = "${secretRoot}/ready";
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig = {
         RuntimeDirectoryMode = lib.mkOverride 90 "0750";
@@ -230,7 +250,7 @@ in
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig = {
         Type = "oneshot";
@@ -274,7 +294,7 @@ in
       partOf = [ "nas-protected-services.target" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
         ConditionPathExists = [ "${secretRoot}/ready" ] ++ lib.optional cfg.zfsEncryption.enable zfsKeyPath;
       };
     };
@@ -292,7 +312,7 @@ in
       wants = [ "network-online.target" ];
       unitConfig = {
         RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
         ConditionPathExists = [ "${secretRoot}/ready" ] ++ lib.optional cfg.zfsEncryption.enable zfsKeyPath;
       };
       serviceConfig = {
@@ -380,7 +400,7 @@ in
       unitConfig = {
         ConditionPathExists = "${vaultwardenSecretDir}/environment";
         RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig.BindReadOnlyPaths = [ caddyCaExportPath ];
     };

@@ -28,6 +28,20 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(model.administrators, ("admin",))
         self.assertEqual(sync.model_status(model)["capabilityModel"], "managed-services-v2")
 
+    def test_retire_bootstrap_administrator_requires_a_verified_replacement_then_deletes_akadmin(self) -> None:
+        groups = [{"pk": "admins", "name": "nas_admin", "users_obj": [{"pk": 2}]}]
+        users = [
+            {"username": "akadmin", "pk": 1, "is_active": True, "groups": ["admins"]},
+            {"username": "nasadmin", "pk": 2, "is_active": True, "groups": ["admins"]},
+        ]
+        with (
+            mock.patch.object(sync, "authentik_list", side_effect=[users, groups]),
+            mock.patch.object(sync, "authentik_request") as request,
+        ):
+            result = sync.retire_bootstrap_administrator("runtime-token", "nasadmin")
+        self.assertEqual(result, {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": "nasadmin"})
+        request.assert_called_once_with("runtime-token", "core/users/1/", method="DELETE")
+
     def test_capability_report_uses_canonical_authentik_assignments(self) -> None:
         report = identity_model.capability_status(self.model())
         users = {row["id"]: row for row in report["users"]}

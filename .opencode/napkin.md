@@ -8,7 +8,9 @@
 
 ## Execution & Validation (Highest Priority)
 1. **[2026-08-18] Run everything in the VM via `scripts/vm-run.sh`**
-   Do instead: use `scripts/vm-run.sh '<cmd>'` (SSH into the VM as admin, sets the right key/port). Examples: `scripts/vm-run.sh 'sudo ss -tlnp'`, `scripts/vm-run.sh 'sudo curl -k https://127.0.0.1:443/'`. Never `curl`/`ss` on the host to infer guest state. Host nix store is dead; all `nix build`/`nix eval`/`nixos-rebuild switch` run inside the VM. Code changes happen on the HOST worktree (the VM's `/var/lib/nas-test/repo` is a synced copy, not the GitHub source); when work is done, sync with `scripts/qemu-test.sh persistent-test` or a manual tar+ssh sync.
+    Do instead: use `scripts/vm-run.sh '<cmd>'` (SSH into the VM as admin, sets the right key/port). Examples: `scripts/vm-run.sh 'sudo ss -tlnp'`, `scripts/vm-run.sh 'sudo curl -k https://127.0.0.1:443/'`. Never `curl`/`ss` on the host to infer guest state. Host nix store is dead; all `nix build`/`nix eval`/`nixos-rebuild switch` run inside the VM. Code changes happen on the HOST worktree (the VM's `/var/lib/nas-test/repo` is a synced copy, not the GitHub source); when work is done, sync with `scripts/qemu-test.sh persistent-test` or a manual tar+ssh sync.
+2. **[2026-08-20] Direct VM Nix evaluation can reject the synced checkout ownership**
+   Do instead: use `scripts/qemu-test.sh persistent-test` to resync and evaluate; do not change Git safe-directory configuration in the guest.
 
 ## Shell & Command Reliability
 1. **[2026-08-16] Host Nix store is not writable**

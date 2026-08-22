@@ -178,6 +178,85 @@ class ShareProvisioningTests(unittest.TestCase):
         self.assertNotIn("nas_deny_", rendered)
 
 
+class LocalAdministratorTests(unittest.TestCase):
+    def test_setup_creates_a_user_chosen_linux_administrator_without_password_arguments(self) -> None:
+        calls: list[tuple[list[str], str | None]] = []
+
+        def capture(command, *, input_text=None, **_kwargs):
+            calls.append((list(command), input_text))
+            if command[:3] == ["id", "--user", "nasadmin"]:
+                return setup.Completed(tuple(command), "", "", 1)
+            return setup.Completed(tuple(command), "", "")
+
+        with mock.patch.object(setup, "run_root", side_effect=capture):
+            result = setup.create_local_administrator(
+                {"username": "nasadmin", "name": "NAS Administrator", "email": "admin@example.test"},
+                "new-local-password",
+            )
+
+        self.assertEqual(result["username"], "nasadmin")
+        self.assertEqual(result["groups"], ["nas_admin"])
+        self.assertIn(
+            (["useradd", "--create-home", "--shell", "/run/current-system/sw/bin/bash", "nasadmin"], None), calls
+        )
+        self.assertIn((["chpasswd"], "nasadmin:new-local-password\n"), calls)
+        self.assertIn(
+            (["usermod", "--append", "--groups", "wheel,nas-administrators,nas-operations", "nasadmin"], None), calls
+        )
+        self.assertTrue(all("new-local-password" not in " ".join(command) for command, _input in calls))
+
+    def test_finalizing_local_administrator_removes_bootstrap_and_persists_only_username(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / "administrator.json"
+            with (
+                mock.patch.object(setup, "ADMIN_STATE_PATH", state),
+                mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "")) as run_root,
+            ):
+                result = setup.finalize_local_administrator({"username": "nasadmin"})
+                persisted = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(result, {"username": "nasadmin"})
+        self.assertEqual(run_root.call_args.args[0], ["userdel", "--remove", "nas-bootstrap"])
+        self.assertEqual(persisted, {"username": "nasadmin"})
+
+    def test_promoting_bootstrap_runtime_rejects_existing_operational_authorities_and_never_moves_bootstrap_state(
+        self,
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def capture(command, **_kwargs):
+            calls.append(list(command))
+            return setup.Completed(tuple(command), "", "")
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            bootstrap = root / "bootstrap"
+            operational = root / "operational"
+            bootstrap.mkdir()
+            for name in ("authentik", "postgresql", "nas-secrets"):
+                (bootstrap / name).mkdir()
+            (bootstrap / "nas-secrets" / "NAS.kdbx").write_text("database", encoding="utf-8")
+            with mock.patch.object(setup, "run_root", side_effect=capture):
+                result = setup.promote_bootstrap_runtime(bootstrap, operational)
+
+        self.assertEqual(result, {"operationalRuntimeSelected": True})
+        self.assertIn(
+            ["systemctl", "stop", "authentik.service", "authentik-worker.service", "postgresql.service"], calls
+        )
+        self.assertIn(["install", "-d", "-m", "0700", str(operational)], calls)
+        self.assertFalse(any(command[0] == "mv" for command in calls))
+        self.assertFalse(any(command[:2] == ["rm", "-rf"] and str(bootstrap) in command for command in calls))
+
+    def test_promoting_bootstrap_runtime_fails_closed_when_an_operational_authority_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            bootstrap = root / "bootstrap"
+            operational = root / "operational"
+            bootstrap.mkdir()
+            (operational / "authentik").mkdir(parents=True)
+            with self.assertRaisesRegex(setup.SetupError, "already exists"):
+                setup.promote_bootstrap_runtime(bootstrap, operational)
+
+
 class FirstStartStatusTests(unittest.TestCase):
     def config_file(self, root: pathlib.Path) -> pathlib.Path:
         path = root / "first-run.json"

@@ -6,10 +6,23 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
+  Checkbox,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  Flex,
   Form,
   FormGroup,
   Label,
+  Nav,
+  NavItem,
+  NavList,
+  Page,
+  PageSection,
   Spinner,
+  Stack,
+  StackItem,
   TextArea,
   TextInput,
   Title,
@@ -872,6 +885,7 @@ function SourcePage({data, mutate, busy}) {
 function SetupPage({data, mutate, busy}) {
   const model = setupModel(data || {});
   const [password, setPassword] = useState("");
+  const [administrator, setAdministrator] = useState({username: "", name: "", email: "", password: ""});
   const [selectedDevices, setSelectedDevices] = useState([]);
   const [allowDestructive, setAllowDestructive] = useState(false);
   const [confirmPasswordReapply, setConfirmPasswordReapply] = useState(false);
@@ -880,13 +894,14 @@ function SetupPage({data, mutate, busy}) {
   const devices = Array.isArray(model.storage?.devices) ? model.storage.devices : [];
 
   const submit = async () => {
-    const value = await startFirstRun(password, {
+    const value = await startFirstRun(password, administrator, {
       planDigest: model.planDigest,
       devices: selectedDevices,
       allowDestructiveStorage: allowDestructive,
       confirmPasswordReapply,
     });
     setPassword("");
+    setAdministrator({...administrator, password: ""});
     setJob(value);
   };
 
@@ -904,84 +919,126 @@ function SetupPage({data, mutate, busy}) {
   }, [job]);
 
   return (
-    <>
-      <Title headingLevel="h2">First start</Title>
-      <Card>
-        <CardBody>
-          <p>
-            <Status ok={model.complete}>{model.status}</Status>
-          </p>
+    <Stack hasGutter>
+      <StackItem>
+        <Title headingLevel="h2">First start</Title>
+      </StackItem>
+      <StackItem>
+        <Alert
+          variant={model.complete ? "success" : model.ready ? "info" : "warning"}
+          title={`Setup status: ${model.status}`}
+          isInline
+        >
           <p>{model.message}</p>
-          <p>
-            {model.accountCount} account definitions · {model.serviceCount} V2 service policy
-            overrides
-          </p>
-          {model.configPath ? (
-            <p>
-              <code>{model.configPath}</code>
-            </p>
-          ) : null}
-        </CardBody>
-      </Card>
+          <DescriptionList isHorizontal>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Plan</DescriptionListTerm>
+              <DescriptionListDescription>
+                A new local and Authentik administrator will be created, with {model.serviceCount} V2 service policy overrides
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+            {model.configPath ? (
+              <DescriptionListGroup>
+                <DescriptionListTerm>Configuration</DescriptionListTerm>
+                <DescriptionListDescription>
+                  <code>{model.configPath}</code>
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+            ) : null}
+          </DescriptionList>
+        </Alert>
+      </StackItem>
       {!model.complete ? (
-        <Card>
+        <StackItem>
+          <Card>
           <CardHeader>
-            <CardTitle>Run first start</CardTitle>
+            <CardTitle>Review and start setup</CardTitle>
           </CardHeader>
           <CardBody>
             <Form>
-              <FormGroup label="KeePassXC database password">
+              <FormGroup label="KeePassXC database password" fieldId="first-start-keepass-password">
                 <TextInput
+                  id="first-start-keepass-password"
                   type="password"
                   value={password}
                   onChange={(_e, value) => setPassword(value)}
                 />
               </FormGroup>
+              <FormGroup label="Administrator username" fieldId="first-start-administrator-username">
+                <TextInput
+                  id="first-start-administrator-username"
+                  value={administrator.username}
+                  onChange={(_event, value) => setAdministrator({...administrator, username: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Administrator name" fieldId="first-start-administrator-name">
+                <TextInput
+                  id="first-start-administrator-name"
+                  value={administrator.name}
+                  onChange={(_event, value) => setAdministrator({...administrator, name: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Administrator email" fieldId="first-start-administrator-email">
+                <TextInput
+                  id="first-start-administrator-email"
+                  type="email"
+                  value={administrator.email}
+                  onChange={(_event, value) => setAdministrator({...administrator, email: value})}
+                />
+              </FormGroup>
+              <FormGroup label="Administrator password" fieldId="first-start-administrator-password">
+                <TextInput
+                  id="first-start-administrator-password"
+                  type="password"
+                  value={administrator.password}
+                  onChange={(_event, value) => setAdministrator({...administrator, password: value})}
+                />
+              </FormGroup>
               {devices.length ? (
                 <FormGroup label="Confirmed storage devices">
-                  {devices.map((device) => (
-                    <label key={device} className="nas-checkbox">
-                      <input
-                        type="checkbox"
-                        checked={selectedDevices.includes(device)}
-                        onChange={(event) =>
+                  <Stack hasGutter>
+                    {devices.map((device) => (
+                      <Checkbox
+                        id={`first-start-device-${device}`}
+                        key={device}
+                        label={<code>{device}</code>}
+                        isChecked={selectedDevices.includes(device)}
+                        onChange={(_event, checked) =>
                           setSelectedDevices(
-                            event.target.checked
+                            checked
                               ? [...selectedDevices, device]
                               : selectedDevices.filter((value) => value !== device),
                           )
                         }
-                      />{" "}
-                      <code>{device}</code>
-                    </label>
-                  ))}
+                      />
+                    ))}
+                  </Stack>
                 </FormGroup>
               ) : null}
               {model.destructiveRequired ? (
-                <label className="nas-checkbox">
-                  <input
-                    id="first-start-destructive"
-                    type="checkbox"
-                    checked={allowDestructive}
-                    onChange={(event) => setAllowDestructive(event.target.checked)}
-                  />{" "}
-                  I reviewed the exact device list and permit destructive pool creation.
-                </label>
+                <Checkbox
+                  id="first-start-destructive"
+                  label="I reviewed the exact device list and permit destructive pool creation."
+                  isChecked={allowDestructive}
+                  onChange={(_event, checked) => setAllowDestructive(checked)}
+                />
               ) : null}
-              <label className="nas-checkbox">
-                <input
-                  type="checkbox"
-                  checked={confirmPasswordReapply}
-                  onChange={(event) => setConfirmPasswordReapply(event.target.checked)}
-                />{" "}
-                Permit reapplying password mutations if resuming an incomplete account stage.
-              </label>
+              <Checkbox
+                id="first-start-password-reapply"
+                label="Permit reapplying password mutations if resuming an incomplete account stage."
+                isChecked={confirmPasswordReapply}
+                onChange={(_event, checked) => setConfirmPasswordReapply(checked)}
+              />
               <Button
                 onClick={submit}
                 isDisabled={
                   busy ||
                   !model.ready ||
                   !password ||
+                  !administrator.username ||
+                  !administrator.name ||
+                  !administrator.email ||
+                  !administrator.password ||
                   (model.destructiveRequired && !allowDestructive)
                 }
               >
@@ -989,20 +1046,24 @@ function SetupPage({data, mutate, busy}) {
               </Button>
             </Form>
           </CardBody>
-        </Card>
+          </Card>
+        </StackItem>
       ) : null}
       {job ? (
-        <Card>
+        <StackItem>
+          <Card>
           <CardHeader>
             <CardTitle>First-start job</CardTitle>
           </CardHeader>
           <CardBody>
             <pre className="nas-pre">{pretty(job)}</pre>
           </CardBody>
-        </Card>
+          </Card>
+        </StackItem>
       ) : null}
       {model.journal?.status === "manual-recovery-required" ? (
-        <Card>
+        <StackItem>
+          <Card>
           <CardHeader>
             <CardTitle>Manual recovery acknowledgement</CardTitle>
           </CardHeader>
@@ -1021,9 +1082,10 @@ function SetupPage({data, mutate, busy}) {
               Acknowledge repair
             </Button>
           </CardBody>
-        </Card>
+          </Card>
+        </StackItem>
       ) : null}
-    </>
+    </Stack>
   );
 }
 
@@ -1083,30 +1145,36 @@ export default function App() {
   else if (page === "setup") content = <SetupPage data={data} mutate={mutate} busy={busy} />;
 
   return (
-    <div className="nas-shell">
-      <header className="nas-header">
-        <div>
+    <Page className="nas-page">
+      <PageSection>
+        <Flex justifyContent={{default: "justifyContentSpaceBetween"}} alignItems={{default: "alignItemsCenter"}}>
+          <div>
           <Title headingLevel="h1">NixOS NAS</Title>
           <span className="nas-muted">Managed Services V2</span>
-        </div>
-        <Button variant="secondary" onClick={refresh} isDisabled={busy}>
-          Refresh
-        </Button>
-      </header>
-      <div className="nas-layout">
-        <nav className="nas-nav" aria-label="NAS sections">
+          </div>
+          <Button variant="secondary" onClick={refresh} isDisabled={busy}>
+            Refresh
+          </Button>
+        </Flex>
+      </PageSection>
+      <PageSection>
+        <Nav variant="tertiary" aria-label="NAS sections">
+          <NavList>
           {PAGES.map(([id, label]) => (
-            <button
+            <NavItem
               key={id}
-              type="button"
-              className={page === id ? "nas-nav-item nas-nav-item--active" : "nas-nav-item"}
+              itemId={id}
+              isActive={page === id}
               onClick={() => setPage(id)}
             >
               {label}
-            </button>
+            </NavItem>
           ))}
-        </nav>
-        <main className="nas-main">
+          </NavList>
+        </Nav>
+      </PageSection>
+      <PageSection>
+        <Stack hasGutter>
           {error ? (
             <Alert variant="danger" isInline title="Unable to load appliance status">
               {error}
@@ -1139,9 +1207,9 @@ export default function App() {
               </CardBody>
             </Card>
           ) : null}
-          {content}
-        </main>
-      </div>
-    </div>
+          <StackItem>{content}</StackItem>
+        </Stack>
+      </PageSection>
+    </Page>
   );
 }

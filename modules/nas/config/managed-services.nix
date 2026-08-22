@@ -213,8 +213,9 @@ in
     systemd.services.nas-managed-services-reconcile = {
       description = "Compile and activate Managed Services V2 desired state";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "nas-managed-services-seed.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
-      after = [ "nas-managed-services-seed.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
+      requires = [ "nas-managed-services-seed.service" "nas-zfs-mount-guard.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
+      after = [ "nas-managed-services-seed.service" "nas-zfs-mount-guard.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
       before = [ "caddy.service" ];
       environment = {
         PYTHONPATH = "${v2Source}";

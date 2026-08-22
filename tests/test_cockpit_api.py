@@ -103,6 +103,12 @@ class CockpitApiTests(unittest.TestCase):
             "password": "database-password",
             "planDigest": "a" * 64,
             "devices": ["/dev/disk/by-id/a", "/dev/disk/by-id/a"],
+            "administrator": {
+                "username": "nasadmin",
+                "name": "NAS Administrator",
+                "email": "admin@example.test",
+                "password": "administrator-password",
+            },
         }
         with mock.patch.object(api, "reserve_operation") as reserve:
             with self.assertRaisesRegex(api.ApiError, "duplicates"):

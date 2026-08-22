@@ -125,7 +125,10 @@ class SecretVaultRenderingTests(unittest.TestCase):
     def test_every_runtime_environment_secret_is_guarded_before_rendering(self) -> None:
         source = SECRET_TOOLS.read_text(encoding="utf-8")
         required_pairs = (
-            ('require_secret_atom "$authentik_password"', "AUTHENTIK_BOOTSTRAP_PASSWORD=$authentik_password"),
+            (
+                'require_secret_atom "$authentik_bootstrap_password"',
+                "AUTHENTIK_BOOTSTRAP_PASSWORD=$authentik_bootstrap_password",
+            ),
             ('require_secret_atom "$llama_swap_api_key"', "LLAMA_SWAP_API_KEY=%s"),
             ('require_secret_atom "$open_webui_secret"', "WEBUI_SECRET_KEY=%s"),
             ('require_secret_atom "$open_webui_admin_password"', "WEBUI_ADMIN_PASSWORD=%s"),

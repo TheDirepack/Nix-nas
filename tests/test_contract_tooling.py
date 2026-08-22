@@ -47,6 +47,10 @@ class ContractTests(unittest.TestCase):
         self.assertIn("Web interfaces and endpoints", summary)
         self.assertIn("Trusted superusers", summary)
 
+    def test_nas_help_package_is_discoverable_by_cockpit(self):
+        documentation = text("modules/nas/internal/documentation-tools.nix")
+        self.assertIn("passthru.cockpitPath = [ plugin ];", documentation)
+
     def test_packaging_concerns_are_split_without_duplicate_exports(self):
         accounts = text("modules/nas/internal/account-tools.nix")
         documentation = text("modules/nas/internal/documentation-tools.nix")

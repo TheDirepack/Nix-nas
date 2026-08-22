@@ -2,9 +2,6 @@
 
 let
   inherit (nasInternal)
-    adminAccount
-    adminGroups
-    adminKeys
     bootLoaderConfigured
     cfg
     gpuVendors
@@ -126,22 +123,6 @@ in
         message = "nas.scheduler.backend = cockpit-scheduler requires a reproducibly packaged plugin in nas.scheduler.package.";
       }
       {
-        assertion = cfg.adminUser == "admin";
-        message = "nas.adminUser is the immutable runtime identity anchor and must remain admin.";
-      }
-      {
-        assertion = adminAccount != null;
-        message = "users.users.${cfg.adminUser} must be declared.";
-      }
-      {
-        assertion = adminAccount == null || (adminAccount.isNormalUser or false);
-        message = "nas.adminUser must be a normal Linux user.";
-      }
-      {
-        assertion = adminAccount == null || lib.elem "wheel" adminGroups;
-        message = "nas.adminUser must belong to the wheel group.";
-      }
-      {
         assertion = lib.elem hostSystem supportedHostSystems;
         message = "This appliance release supports x86_64-linux only; got ${hostSystem}.";
       }
@@ -243,14 +224,6 @@ in
       {
         assertion = !cfg.installationReady || !cfg.networking.firewall.enable || cfg.networking.firewall.seedDefaults;
         message = "installationReady requires the mandatory firewalld baseline when the managed firewall is enabled.";
-      }
-      {
-        assertion = !cfg.installationReady || adminKeys != [ ];
-        message = "Add at least one SSH public key for the administrator before installation.";
-      }
-      {
-        assertion = !cfg.installationReady || (cfg.adminPasswordHashFile != null && lib.hasPrefix "/" cfg.adminPasswordHashFile);
-        message = "Set nas.adminPasswordHashFile to an absolute root-only password-hash file before installation.";
       }
       {
         assertion =

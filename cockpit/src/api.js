@@ -87,8 +87,21 @@ export function setManagedServiceMode(serviceId, mode, spawn = globalThis.cockpi
   }).then(parseJsonOutput);
 }
 
-export function startFirstRun(password, options = {}, spawn = globalThis.cockpit?.spawn) {
+export function startFirstRun(password, administrator, options = {}, spawn = globalThis.cockpit?.spawn) {
   const secret = singleLinePassword(password);
+  if (!administrator || typeof administrator !== "object") {
+    throw new Error("Enter the administrator details.");
+  }
+  const {username, name, email, password: administratorPassword} = administrator;
+  if (![username, name, email, administratorPassword].every((value) => typeof value === "string" && value.length > 0)) {
+    throw new Error("Complete every administrator field.");
+  }
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(username)) {
+    throw new Error("Administrator username is invalid.");
+  }
+  if ([name, email, administratorPassword].some((value) => value.includes("\n") || value.includes("\r"))) {
+    throw new Error("Administrator details must be single-line values.");
+  }
   if (typeof options.planDigest !== "string" || !/^[0-9a-f]{64}$/.test(options.planDigest)) {
     throw new Error("Refresh and review the current first-start plan before continuing.");
   }
@@ -100,6 +113,7 @@ export function startFirstRun(password, options = {}, spawn = globalThis.cockpit
     ["first-run"],
     {
       password: secret,
+      administrator: {username, name, email, password: administratorPassword},
       planDigest: options.planDigest,
       devices,
       allowDestructiveStorage: options.allowDestructiveStorage === true,

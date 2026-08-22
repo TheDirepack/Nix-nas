@@ -22,6 +22,6 @@ All normal browser routes use `https://<nas-hostname>.local`. The direct Cockpit
 | `/notifications/` | Native ntfy credentials | ntfy UI and client API. |
 | `/console/` | Local Cockpit/PAM admin | Cockpit through Caddy after unlock. |
 | `https://<host>:9092/console/` | Local Cockpit/PAM admin | Locked-state Cockpit and web unlock; does not depend on Authentik/Caddy. |
-| `/docs/` (Cockpit navigation item) | Cockpit admin | Searchable manual generated for the deployed release. |
+| `/console/cockpit/@localhost/nas/docs/index.html` (Cockpit navigation item) | Cockpit admin | Searchable manual generated for the deployed release, served through the authenticated Cockpit package route. |
 
 Routes compiled out by disabled Nix options do not exist. On-demand services may start when an authorized request arrives; authorization-only capability checks do not themselves grant a feature or application permission.

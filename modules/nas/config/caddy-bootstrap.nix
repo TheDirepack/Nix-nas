@@ -2,12 +2,16 @@
 
 let
   inherit (nasInternal)
+    authentikPort
+    authentikOutpostPort
+    caddyForwardAuth
     cfg
     cockpitPort
     lanHost
     nasPortalStatic
     secretRoot
   ;
+  authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
   bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
     cat <<EOF
@@ -35,12 +39,14 @@ https://${lanHost} {
 
   handle /console/* {
     reverse_proxy 127.0.0.1:${toString cockpitPort} {
+      header_up Origin "https://${lanHost}"
       header_up X-Forwarded-Proto https
       header_up X-Forwarded-Prefix /console
     }
   }
   handle /console {
     reverse_proxy 127.0.0.1:${toString cockpitPort} {
+      header_up Origin "https://${lanHost}"
       header_up X-Forwarded-Proto https
       header_up X-Forwarded-Prefix /console
     }
@@ -51,14 +57,21 @@ https://${lanHost} {
   # Authentik admin, system password, KeePass encryption key). No auth is
   # required pre-secrets; the setup page is the only public surface until
   # first-run completes.
-  handle_path / {
-    redir /setup 303
+  handle /setup {
+    @post method POST
+    handle @post {
+      redir * /setup 303
+    }
+    root * ${nasPortalStatic}/share/nas-portal
+    rewrite * /setup.html
+    file_server
   }
-
-  # Serve the setup form at /setup.
-  handle_path /setup {
+  handle /setup/* {
     root * ${nasPortalStatic}/share/nas-portal
     file_server
+  }
+  handle {
+    redir * /setup 303
   }
 }
 EOF
@@ -73,7 +86,7 @@ EOF
   runOptions = "--config ${activeCaddyPath} --adapter caddyfile";
   renderActive = pkgs.writeShellScript "nas-caddy-bootstrap-select" ''
     set -euo pipefail
-    if [[ -f ${secretRoot}/ready ]]; then
+    if [[ -f ${secretRoot}/ready && -f /var/lib/nas-setup/state.json ]]; then
       # Secrets are active: ensure the V2 fragment is fresh before choosing the
       # full NixOS-generated configuration. Ordering against reconcile is
       # enforced here synchronously so Caddy never starts against a stale file.
@@ -146,7 +159,7 @@ in
     description = "Rebuild the active Caddy config when secret activation changes";
     wantedBy = [ "multi-user.target" ];
     pathConfig = {
-      PathChanged = "${secretRoot}/ready";
+      PathChanged = [ "${secretRoot}/ready" "/var/lib/nas-setup/state.json" ];
       Unit = "nas-caddy-bootstrap.service";
     };
   };

@@ -9,7 +9,6 @@ export const LINK_LABELS = {
   accountSettings: "My account settings",
   docs: "NAS help",
   copypartyConfig: "CopyParty settings",
-  files: "Host files",
   storage: "ZFS storage",
   containers: "Containers",
   virtualMachines: "Virtual machines",

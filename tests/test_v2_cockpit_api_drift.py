@@ -56,6 +56,8 @@ class CockpitApiDriftTests(unittest.TestCase):
         links = api.static_links()
         self.assertEqual(links["scheduler"], "/console/system/services#/timers")
         self.assertEqual(links["accountSettings"], "/settings/")
+        self.assertEqual(links["docs"], "/console/cockpit/@localhost/nas/docs/index.html")
+        self.assertNotIn("files", links)
         with mock.patch.object(api, "_json_command", return_value={"ok": True}) as command:
             self.assertEqual(api.identity_status(), {"ok": True})
             self.assertEqual(api.capability_status(), {"ok": True})
@@ -138,12 +140,36 @@ class CockpitApiDriftTests(unittest.TestCase):
             "storage": {"devices": ["/dev/a", "/dev/b"]},
         }
 
+    def administrator(self) -> dict[str, str]:
+        return {
+            "username": "nasadmin",
+            "name": "NAS Administrator",
+            "email": "admin@example.test",
+            "password": "admin-password",
+        }
+
     def test_start_first_start_rejects_bad_inputs_before_reservation(self) -> None:
         cases = [
-            ({"password": "x\ny", "planDigest": "a" * 64}, "single line"),
-            ({"password": "pw", "planDigest": "bad"}, "plan digest"),
-            ({"password": "pw", "planDigest": "a" * 64, "devices": ["/dev/a", "/dev/a"]}, "duplicates"),
-            ({"password": "pw", "planDigest": "a" * 64, "allowDestructiveStorage": "yes"}, "flags must be boolean"),
+            ({"password": "x\ny", "administrator": self.administrator(), "planDigest": "a" * 64}, "single line"),
+            ({"password": "pw", "administrator": self.administrator(), "planDigest": "bad"}, "plan digest"),
+            (
+                {
+                    "password": "pw",
+                    "administrator": self.administrator(),
+                    "planDigest": "a" * 64,
+                    "devices": ["/dev/a", "/dev/a"],
+                },
+                "duplicates",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": self.administrator(),
+                    "planDigest": "a" * 64,
+                    "allowDestructiveStorage": "yes",
+                },
+                "flags must be boolean",
+            ),
         ]
         with mock.patch.object(api, "reserve_operation") as reserve:
             for request, message in cases:
@@ -152,7 +178,12 @@ class CockpitApiDriftTests(unittest.TestCase):
         reserve.assert_not_called()
 
     def test_start_first_start_rejects_status_digest_device_and_destructive_mismatches(self) -> None:
-        request = {"password": "pw", "planDigest": "a" * 64, "devices": ["/dev/a", "/dev/b"]}
+        request = {
+            "password": "pw",
+            "administrator": self.administrator(),
+            "planDigest": "a" * 64,
+            "devices": ["/dev/a", "/dev/b"],
+        }
         with mock.patch.object(api, "first_start_status", return_value={"status": "complete"}):
             self.assertEqual(api.start_first_start(request)["status"], "complete")
         with mock.patch.object(api, "first_start_status", return_value={"status": "blocked", "message": "not ready"}):
@@ -175,6 +206,7 @@ class CockpitApiDriftTests(unittest.TestCase):
     def test_start_first_start_submits_private_job_and_cancels_on_failure(self) -> None:
         request = {
             "password": "db-password",
+            "administrator": self.administrator(),
             "planDigest": "a" * 64,
             "devices": ["/dev/a", "/dev/b"],
             "allowDestructiveStorage": True,
@@ -195,7 +227,9 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(result, {"schemaVersion": 1, "jobId": "c" * 24, "status": "submitted"})
         self.assertEqual(len(writes), 2)
         self.assertIn("reservation-token", writes[0][1])
-        self.assertEqual(writes[1][1], "db-password\n")
+        self.assertNotIn("db-password", writes[0][1])
+        self.assertEqual(json.loads(writes[1][1])["keepass"], "db-password")
+        self.assertEqual(json.loads(writes[1][1])["administrator"]["password"], "admin-password")
 
         with (
             mock.patch.object(api, "first_start_status", return_value=self.prepared_first_start()),

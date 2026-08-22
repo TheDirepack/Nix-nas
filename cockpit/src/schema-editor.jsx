@@ -1,5 +1,13 @@
 import React, {useMemo, useState} from "react";
-import {Button, Label, TextArea, TextInput} from "@patternfly/react-core";
+import {
+  Button,
+  Checkbox,
+  FormSelect,
+  FormSelectOption,
+  Label,
+  TextArea,
+  TextInput,
+} from "@patternfly/react-core";
 import {
   defaultValue,
   migrateVariantValue,
@@ -38,7 +46,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
   if (Object.hasOwn(resolved, "const")) return <code>{String(resolved.const)}</code>;
   if (Array.isArray(resolved.enum)) {
     return (
-      <select
+      <FormSelect
         id={id}
         value={value ?? ""}
         onChange={(event) => {
@@ -47,40 +55,37 @@ function ScalarEditor({root, schema, value, onChange, id}) {
         }}
       >
         {resolved.enum.map((entry) => (
-          <option key={String(entry)} value={String(entry)}>
-            {String(entry)}
-          </option>
+          <FormSelectOption key={String(entry)} value={String(entry)} label={String(entry)} />
         ))}
-      </select>
+      </FormSelect>
     );
   }
 
   const type = schemaType(root, resolved);
   if (type === "boolean") {
     return (
-      <input
+      <Checkbox
         id={id}
-        type="checkbox"
-        checked={value === true}
-        onChange={(event) => onChange(event.target.checked)}
+        isChecked={value === true}
+        onChange={(_event, checked) => onChange(checked)}
       />
     );
   }
   if (type === "integer" || type === "number") {
     return (
-      <input
+      <TextInput
         id={id}
         type="number"
         value={value ?? ""}
         min={resolved.minimum}
         max={resolved.maximum}
         step={type === "integer" ? 1 : "any"}
-        onChange={(event) => {
-          if (event.target.value === "") return onChange(undefined);
+        onChange={(_event, next) => {
+          if (next === "") return onChange(undefined);
           const parsed =
             type === "integer"
-              ? Number.parseInt(event.target.value, 10)
-              : Number(event.target.value);
+              ? Number.parseInt(next, 10)
+              : Number(next);
           onChange(Number.isFinite(parsed) ? parsed : value);
         }}
       />
@@ -207,14 +212,16 @@ function ObjectEditor({root, schema, value, onChange, path}) {
 
       {absentOptional.length ? (
         <div className="nas-schema-add-row">
-          <select value={fieldToAdd} onChange={(event) => setFieldToAdd(event.target.value)}>
-            <option value="">Add optional field…</option>
+          <FormSelect value={fieldToAdd} onChange={(event) => setFieldToAdd(event.target.value)}>
+            <FormSelectOption value="" label="Add optional field…" />
             {absentOptional.map((name) => (
-              <option key={name} value={name}>
-                {titleFor(resolveSchema(root, properties[name]), name)}
-              </option>
+              <FormSelectOption
+                key={name}
+                value={name}
+                label={titleFor(resolveSchema(root, properties[name]), name)}
+              />
             ))}
-          </select>
+          </FormSelect>
           <Button
             variant="secondary"
             size="sm"
@@ -301,7 +308,7 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
       {options.length ? (
         <label className="nas-schema-variant" htmlFor={`${id}-variant`}>
           <span>Shape</span>
-          <select
+          <FormSelect
             id={`${id}-variant`}
             value={selected}
             onChange={(event) => {
@@ -310,11 +317,9 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
             }}
           >
             {options.map((option) => (
-              <option key={option.index} value={option.index}>
-                {option.label}
-              </option>
+              <FormSelectOption key={option.index} value={option.index} label={option.label} />
             ))}
-          </select>
+          </FormSelect>
         </label>
       ) : null}
       {type === "object" ? (

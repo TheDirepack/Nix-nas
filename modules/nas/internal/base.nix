@@ -14,13 +14,16 @@ let
   authentikEnvironmentFile = "${authentikSecretDir}/environment";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
-  # Per-type ZFS application roots. Only Caddy, PAM/Cockpit, and the ZFS
-  # unencrypt substrate remain on the main pool; all other app data lives
-  # under cfg.zfsRoot with an L+ symlink for compatibility.
-  authentikDataDir = "${cfg.zfsRoot}/authentik";
+  bootstrapRuntimeRoot = "/var/lib/nas-bootstrap";
+  bootstrapAuthentikDataDir = "${bootstrapRuntimeRoot}/authentik";
+  bootstrapPostgresqlDataDir = "${bootstrapRuntimeRoot}/postgresql";
+  bootstrapSecretsDir = "${bootstrapRuntimeRoot}/nas-secrets";
+  # These stable compatibility paths are selected at boot: boot-root before
+  # first-run, ZFS thereafter. Services never write directly to the selector.
+  authentikDataDir = "/var/lib/authentik";
   copypartyDataDir = "${cfg.zfsRoot}/copyparty";
   copypartyUserConfigDir = "${copypartyDataDir}/user.d";
-  postgresqlDataDir = "${cfg.zfsRoot}/postgresql";
+  postgresqlDataDir = "/var/lib/postgresql";
   vaultwardenStateDirectory =
     if lib.versionOlder systemStateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
   vaultwardenDataDir = "${cfg.zfsRoot}/${vaultwardenStateDirectory}";
@@ -90,9 +93,6 @@ let
     "caddy.service"
   ] ++ lib.optional cfg.zfsEncryption.enable "nas-zfs-unlock.service";
 
-  adminAccount = lib.attrByPath [ cfg.adminUser ] null config.users.users;
-  adminGroups = if adminAccount == null then [ ] else (adminAccount.extraGroups or [ ]);
-  adminKeys = if adminAccount == null then [ ] else lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] adminAccount;
   observabilityUidCollisions = lib.attrNames (lib.filterAttrs
     (name: user: name != "nas-observability" && (user.uid or null) == cfg.observability.serviceUid)
     config.users.users);
@@ -135,6 +135,7 @@ in
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
     authentikOutpostPort authentikOutpostPath
+    bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
@@ -142,8 +143,8 @@ in
     vaultwardenOidcCallback shareRoot aiStorageRoot copypartyMountRoot tftpMountRoot
     vmStoragePath upsUsesLocalDriver upsMonitorSystem syncthingDataDir syncthingConfigDir
     hostSystem isX86_64 supportedHostSystems failureAlert
-    bootLoaderConfigured rootFilesystemConfigured caddyBackendUnits protectedServiceUnits adminAccount adminGroups
-    adminKeys observabilityUidCollisions observabilityGidCollisions managementPorts
+    bootLoaderConfigured rootFilesystemConfigured caddyBackendUnits protectedServiceUnits
+    observabilityUidCollisions observabilityGidCollisions managementPorts
     loopbackServicePorts gpuVendors hasIntelGpu hasAmdGpu hasNvidiaGpu llamaBackend
     llamaCppPackage
   ;
