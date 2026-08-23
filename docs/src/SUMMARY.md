@@ -38,16 +38,10 @@
 # Reference
 
 - [Generated NAS command help](reference/commands.md)
-  - [Platform and upstream command help](reference/platform-command-help.md)
   - [Installed component versions](reference/installed-versions.md)
   - [Web interfaces and endpoints](reference/interfaces.md)
   - [Runtime paths and backup ownership](reference/runtime-paths.md)
-  - [NAS and AI Nix option source](reference/nix-options-source.md)
-  - [Deployed custom configuration source](reference/configuration-source.md)
-  - [Cockpit UI source](reference/cockpit-source.md)
   - [Authentik blueprint source](reference/authentik-nas-user-settings-blueprint.md)
-  - [CopyParty global help](reference/copyparty-help.md)
-  - [CopyParty volume flags](reference/copyparty-flags.md)
   - [Disko OS-disk example](reference/disko-os-disk-example.md)
   - [Disko fresh-pool example](reference/disko-fresh-pool-example.md)
   - [Pool-layout worksheet](reference/pool-layout.md)

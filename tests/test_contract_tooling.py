@@ -29,18 +29,23 @@ class ContractTests(unittest.TestCase):
         self.assertIn("${BASH_REMATCH[1]}", updater)
         self.assertIn('nas-update", "--status", "--json', cockpit)
 
-    def test_searchable_docs_include_all_management_surfaces_and_sources(self):
+    def test_searchable_docs_include_management_surfaces_and_closure_reference(self):
         tools = text("modules/nas/internal/documentation-tools.nix")
         summary = text("docs/src/SUMMARY.md")
-        self.assertIn("--help-flags", tools)
+        # Generated pages are limited to closure-accurate NAS command help,
+        # installed versions, and small installation sources; source dumps and
+        # upstream binary snapshots were removed on purpose.
+        self.assertIn("emit_help nas-identity-sync", tools)
+        self.assertIn("emit_help nas-update", tools)
+        self.assertNotIn("--help-flags", tools)
         self.assertIn("authentik-nas-user-settings-blueprint.md", tools)
-        self.assertIn("nix-options-source.md", tools)
         self.assertIn("installed-versions.md", tools)
-        self.assertIn("cockpit-source.md", tools)
-        self.assertIn("modules/nas/config/observability.nix", tools)
-        self.assertIn("services/nas_identity_sync.py", tools)
-        self.assertIn("services/nas_setup.py", tools)
         self.assertIn("project-CHANGELOG.md", tools)
+        self.assertNotIn("nix-options-source.md", tools)
+        self.assertNotIn("cockpit-source.md", tools)
+        self.assertNotIn("configuration-source.md", tools)
+        self.assertNotIn("platform-command-help", tools)
+        self.assertNotIn("copyparty-help", tools)
         self.assertNotIn("REVIEW-ALPHA", tools)
         self.assertNotIn("project-ALPHA-", summary)
         self.assertIn("Locked-state unlock", summary)
@@ -60,7 +65,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("documentation_tools = import ./documentation-tools.nix", internal)
         self.assertIn('mergeChecked "account and documentation tools"', internal)
         self.assertNotIn("storage-tools.nix", documentation)
-        self.assertIn("zfs-tools.nix", documentation)
+        self.assertNotIn("zfs-tools.nix", documentation)
 
     def test_ci_runs_tests_and_pins_actions(self):
         workflow = text(".github/workflows/ci.yml")
@@ -542,12 +547,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("pythonPackages.selenium", vm)
         self.assertIn("tests/browser/authz.py", guest)
 
-    def test_browser_fixture_assigns_authentik_flow_roles_correctly(self):
+    def test_vm_verifies_the_bootstrap_managed_authentik_portal(self):
         guest = text("tests/vm/guest-test.sh")
-        self.assertIn("default-authentication-flow", guest)
-        self.assertIn("default-provider-authorization-implicit-consent", guest)
-        self.assertIn("authentication_flow:$authentication", guest)
-        self.assertIn("authorization_flow:$authorization", guest)
+        self.assertIn("verify_bootstrap_authentik_proxy", guest)
+        self.assertIn('select(.name == "NAS Portal")', guest)
+        self.assertIn('select(.slug == "nas-portal"', guest)
+        self.assertIn('select(.managed == "goauthentik.io/outposts/embedded")', guest)
+        self.assertIn("AUTHENTIK_PUBLIC_HOST", guest)
 
     def test_nix_matrix_covers_reusable_profiles_and_rejected_configurations(self):
         flake = text("flake.nix")
@@ -646,7 +652,7 @@ class ContractTests(unittest.TestCase):
         vm_common = text("tests/nixos/vm-common.nix")
         self.assertIn("PasswordAuthentication = lib.mkForce false", vm_common)
         self.assertIn('(pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$', vm_common)
-        self.assertNotIn("authorizedKeys.keys", vm_common)
+        self.assertIn("openssh.authorizedKeys.keys", vm_common)
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))
         self.assertIn("nas-secrets activate-stdin", guest)
