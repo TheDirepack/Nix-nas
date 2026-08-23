@@ -24,13 +24,11 @@ class V2SessionRuntimeTests(unittest.TestCase):
         path.write_text(
             json.dumps(
                 {
-                    "schemaVersion": 2,
+                    "schemaVersion": 3,
                     "serviceId": "code-agent",
                     "podman": "/usr/bin/podman",
                     "systemctl": "/usr/bin/systemctl",
                     "systemdRun": "/usr/bin/systemd-run",
-                    "python": "/usr/bin/python3",
-                    "runner": "/opt/nas/nas_v2_session.py",
                     "targetUnit": "nas-v2-session-code-agent.target",
                     "requires": ["nas-v2-session-code-agent.target", "nas-v2-snet-code-agent-network.service"],
                     "after": ["nas-v2-session-code-agent.target", "nas-v2-snet-code-agent-network.service"],
@@ -58,7 +56,7 @@ class V2SessionRuntimeTests(unittest.TestCase):
             root = pathlib.Path(raw)
             descriptor_path = self.descriptor(root)
             descriptor = session._load_descriptor(descriptor_path)
-            run, _stop, _cleanup = session._podman_commands(descriptor, "work-01", None)
+            run = session._podman_run_command(descriptor, "work-01", None)
             self.assertEqual(run[0:2], ["/usr/bin/podman", "run"])
             self.assertIn("nas-v2-session-code-agent-work-01", run)
             self.assertIn(f"{root / 'instances/work-01'}:/workspace:rw", run)
@@ -70,8 +68,8 @@ class V2SessionRuntimeTests(unittest.TestCase):
             descriptor_path = self.descriptor(root, user_scoped=True)
             descriptor = session._load_descriptor(descriptor_path)
             with self.assertRaisesRegex(session.SessionError, "requires --user"):
-                session._podman_commands(descriptor, "work-01", None)
-            run, _stop, _cleanup = session._podman_commands(descriptor, "work-01", "alice@example.com")
+                session._podman_run_command(descriptor, "work-01", None)
+            run = session._podman_run_command(descriptor, "work-01", "alice@example.com")
             self.assertIn(f"{root / 'users/alice@example.com'}:/workspace:rw", run)
             self.assertIn("io.nixos-nas.v2.user=alice@example.com", run)
             self.assertNotIn("alice@example.com", session.unit_name("code-agent", "work-01", "alice@example.com"))
@@ -113,7 +111,7 @@ class V2SessionRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(session.SessionError, "escapes its declared storage root"):
                 session._resolved_volume_args(descriptor, "escape", None)
 
-    def test_transient_start_carries_dependencies_and_user_without_database(self):
+    def test_transient_start_runs_podman_directly_under_systemd(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             descriptor_path = self.descriptor(root, user_scoped=True)
@@ -130,6 +128,18 @@ class V2SessionRuntimeTests(unittest.TestCase):
             self.assertIn("--service-type=exec", command)
             self.assertIn("--property=PartOf=nas-v2-session-code-agent.target", command)
             self.assertTrue(any(item.startswith("--property=Requires=") for item in command))
+            self.assertIn("--property=KillMode=mixed", command)
+            payload = command[command.index("--") + 1 :]
+            self.assertEqual(
+                payload[0:2], ["/usr/bin/podman", "run"], "no Python supervisor between systemd and Podman"
+            )
+            self.assertNotIn("/usr/bin/python3", command)
+            container = session.container_name("code-agent", "abc1", "alice")
+            self.assertIn(
+                f"--property=ExecStopPost=/usr/bin/podman rm --force --ignore {container}",
+                command,
+                "systemd owns stop/cleanup instead of a Python signal handler",
+            )
             self.assertEqual(command[-2:], ["--user", "alice"])
             self.assertFalse(any("session.db" in item for item in command))
 

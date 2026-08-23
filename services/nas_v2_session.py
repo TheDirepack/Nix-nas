@@ -3,8 +3,9 @@
 
 This helper contains no authorization or session database. An authenticated
 caller supplies a service, instance, and (when user-scoped resources require
-it) a user identifier. ``systemd-run`` creates one transient service; Podman
-owns the container and the helper performs stop/cleanup on termination.
+it) a user identifier. ``systemd-run`` creates one transient service whose
+exec process is Podman itself; systemd owns termination (``KillMode=mixed``)
+and cleanup (``ExecStopPost``), so no long-running supervisor process exists.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ import json
 import os
 import pathlib
 import re
-import signal
 import subprocess
 import sys
 from typing import Any
@@ -156,7 +156,7 @@ def _load_descriptor(path: pathlib.Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SessionError(f"unable to read session descriptor {path}: {exc}") from exc
-    if not isinstance(value, dict) or value.get("schemaVersion") != 2:
+    if not isinstance(value, dict) or value.get("schemaVersion") != 3:
         raise SessionError("session descriptor is invalid")
     service_id = value.get("serviceId")
     image = value.get("image")
@@ -176,7 +176,7 @@ def _load_descriptor(path: pathlib.Path) -> dict[str, Any]:
     ):
         raise SessionError("session descriptor fields are invalid")
     validate_service_id(service_id)
-    for field in ("podman", "systemctl", "systemdRun", "python", "runner"):
+    for field in ("podman", "systemctl", "systemdRun"):
         value[field] = _safe_binary(value.get(field), field=f"session descriptor {field}")
     value["targetUnit"] = _safe_unit(value.get("targetUnit"), field="session targetUnit")
     value["requires"] = [_safe_unit(item, field="session requires") for item in requires]
@@ -230,14 +230,16 @@ def _run(command: list[str], *, timeout: int | None = None) -> subprocess.Comple
         raise SessionError(f"unable to execute {command[0]}: {exc}") from exc
 
 
-def _podman_commands(
+def _podman_run_command(
     descriptor: dict[str, Any],
     instance_id: str,
     user_id: str | None,
-) -> tuple[list[str], list[str], list[str]]:
+) -> list[str]:
     instance_id = validate_instance_id(instance_id)
     if user_id is not None:
         user_id = validate_user_id(user_id)
+    if descriptor["requiresUser"] and user_id is None:
+        raise SessionError("this session requires --user because it uses user-scoped storage")
     service_id = descriptor["serviceId"]
     name = container_name(service_id, instance_id, user_id)
     labels = [
@@ -248,7 +250,7 @@ def _podman_commands(
     ]
     if user_id is not None:
         labels.extend(["--label", f"io.nixos-nas.v2.user={user_id}"])
-    run = [
+    return [
         descriptor["podman"],
         "run",
         "--rm",
@@ -260,46 +262,19 @@ def _podman_commands(
         descriptor["image"],
         *descriptor["command"],
     ]
-    stop = [descriptor["podman"], "stop", "--ignore", "--time", "10", name]
-    cleanup = [descriptor["podman"], "rm", "--force", "--ignore", name]
-    return run, stop, cleanup
-
-
-def run_session(descriptor_path_value: pathlib.Path, instance_id: str, user_id: str | None = None) -> int:
-    descriptor = _load_descriptor(descriptor_path_value)
-    run, stop, cleanup = _podman_commands(descriptor, instance_id, user_id)
-    try:
-        process = subprocess.Popen(run, stdin=None, stdout=None, stderr=None, text=True)
-    except OSError as exc:
-        raise SessionError(f"unable to execute {run[0]}: {exc}") from exc
-
-    previous: dict[int, Any] = {}
-
-    def terminate(_signum: int, _frame: Any) -> None:
-        _run(stop, timeout=30)
-
-    try:
-        for signum in (signal.SIGTERM, signal.SIGINT):
-            previous[signum] = signal.getsignal(signum)
-            signal.signal(signum, terminate)
-        return process.wait()
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
-        _run(cleanup, timeout=30)
 
 
 def stop_session(descriptor_path_value: pathlib.Path, instance_id: str, user_id: str | None = None) -> int:
     descriptor = _load_descriptor(descriptor_path_value)
-    _run_command, stop, _cleanup = _podman_commands(descriptor, instance_id, user_id)
-    result = _run(stop, timeout=30)
+    name = container_name(descriptor["serviceId"], instance_id, user_id)
+    result = _run([descriptor["podman"], "stop", "--ignore", "--time", "10", name], timeout=30)
     return result.returncode
 
 
 def cleanup_session(descriptor_path_value: pathlib.Path, instance_id: str, user_id: str | None = None) -> int:
     descriptor = _load_descriptor(descriptor_path_value)
-    _run_command, _stop, cleanup = _podman_commands(descriptor, instance_id, user_id)
-    result = _run(cleanup, timeout=30)
+    name = container_name(descriptor["serviceId"], instance_id, user_id)
+    result = _run([descriptor["podman"], "rm", "--force", "--ignore", name], timeout=30)
     return result.returncode
 
 
@@ -317,6 +292,7 @@ def _transient_command(
     elif user_id is not None:
         user_id = validate_user_id(user_id)
     unit = unit_name(descriptor["serviceId"], instance_id, user_id)
+    run = _podman_run_command(descriptor, instance_id, user_id)
     command = [
         descriptor["systemdRun"],
         "--unit",
@@ -330,14 +306,12 @@ def _transient_command(
         "--property=KillMode=mixed",
         "--property=TimeoutStopSec=45s",
         "--property=Restart=no",
+        # systemd performs the container cleanup that the removed Python
+        # supervisor used to perform in a ``finally`` block.
+        f"--property=ExecStopPost={descriptor['podman']} rm --force --ignore "
+        f"{container_name(descriptor['serviceId'], instance_id, user_id)}",
         "--",
-        descriptor["python"],
-        descriptor["runner"],
-        "run",
-        "--config",
-        str(descriptor_path_value),
-        "--instance",
-        instance_id,
+        *run,
     ]
     if user_id is not None:
         command.extend(["--user", user_id])
@@ -373,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for command in ("run", "stop", "cleanup"):
+    for command in ("stop", "cleanup"):
         child = sub.add_parser(command)
         child.add_argument("--config", required=True)
         child.add_argument("--instance", required=True)
@@ -388,8 +362,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        if args.command == "run":
-            return run_session(pathlib.Path(args.config), args.instance, args.user)
         if args.command == "stop":
             return stop_session(pathlib.Path(args.config), args.instance, args.user)
         if args.command == "cleanup":
@@ -641,8 +613,6 @@ def _descriptor(
     service_id: str,
     service: dict[str, Any],
     *,
-    python_bin: str,
-    source_dir: pathlib.Path,
     systemctl_bin: str,
     podman_bin: str,
 ) -> dict[str, Any]:
@@ -663,7 +633,6 @@ def _descriptor(
         raise SessionProjectionError(f"session service {service_id!r} may not declare schedules")
 
     _absolute_binary(podman_bin, field="session Podman binary")
-    _absolute_binary(python_bin, field="session Python binary")
     _absolute_binary(systemctl_bin, field="session systemctl binary")
     systemd_run_bin = str(pathlib.PurePosixPath(systemctl_bin).with_name("systemd-run"))
     _absolute_binary(systemd_run_bin, field="session systemd-run binary")
@@ -678,13 +647,11 @@ def _descriptor(
         requires.append(network_service)
         after.append(network_service)
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "serviceId": service_id,
         "podman": podman_bin,
         "systemctl": systemctl_bin,
         "systemdRun": systemd_run_bin,
-        "python": python_bin,
-        "runner": str(source_dir / "nas_v2_session.py"),
         "targetUnit": target,
         "requires": sorted(set(requires)),
         "after": sorted(set(after)),
@@ -778,8 +745,6 @@ def generate_projection(
             effective,
             service_id,
             service,
-            python_bin=python_bin,
-            source_dir=source_dir,
             systemctl_bin=systemctl_bin,
             podman_bin=podman_bin,
         )
