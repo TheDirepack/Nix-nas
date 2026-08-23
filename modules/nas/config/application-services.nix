@@ -76,17 +76,30 @@ let
     Restart = "on-failure";
     RestartSec = "2s";
   };
+  # cockpit's Python bridge dies on sd_bus_attach_event returning EINVAL
+  # (libsystemd variant mismatch under Nix); upstream only tolerates EBUSY.
+  # Tolerating EINVAL turns a fatal shared-session crash into a per-channel
+  # error, keeping the Authentik-gated session alive.
+  cockpitPatched = pkgs.cockpit.overrideAttrs (old: {
+    postPatch =
+      (old.postPatch or "")
+      + ''
+        substituteInPlace cockpit/channels/dbus.py \
+          --replace-fail 'if err.errno != errno.EBUSY:' 'if err.errno not in (errno.EBUSY, errno.EINVAL):' || true
+      '';
+  });
+
   cockpitWebService = pkgs.writeShellScript "nas-cockpit-webservice" ''
     set -euo pipefail
     # Caddy + Authentik are the only authorization boundary for /console.
     # cockpit-ws itself accepts the trusted loopback proxy without its own
     # login; --local-session shares one privileged bridge for that proxy.
     # nixpkgs installs cockpit-bridge under bin/, unlike Fedora's libexec.
-    exec ${pkgs.cockpit}/libexec/cockpit-ws \
+    exec ${cockpitPatched}/libexec/cockpit-ws \
       --address 127.0.0.1 \
       --port ${toString cockpitPort} \
       --no-tls \
-      --local-session ${pkgs.cockpit}/bin/cockpit-bridge
+      --local-session ${cockpitPatched}/bin/cockpit-bridge
   '';
   authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
     set -euo pipefail
@@ -148,7 +161,9 @@ in
       environment.HOME = "/var/lib/nas-cockpit-sso";
       serviceConfig = {
         ExecStart = cockpitWebService;
-        Restart = "on-failure";
+        # A crashed shared bridge must never degrade into a second login
+        # prompt; restarting ws respawns the local session within seconds.
+        Restart = "always";
         RestartSec = "2s";
         NoNewPrivileges = true;
         PrivateTmp = true;
