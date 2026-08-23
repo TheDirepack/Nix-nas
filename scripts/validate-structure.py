@@ -109,6 +109,7 @@ REQUIRED_FILES = {
     "tests/js/security.test.mjs",
     "scripts/qemu-test.sh",
     "scripts/vm-pytest.sh",
+    "scripts/vm-dev.sh",
     "scripts/vm-start.sh",
     "scripts/vm-stop.sh",
     "scripts/vm-reset.sh",

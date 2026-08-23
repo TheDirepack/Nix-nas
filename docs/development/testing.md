@@ -255,6 +255,27 @@ configuration-sensitive driver delta.
 
 Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testing.md).
 
+### Interactive VM testing
+
+For hands-on browser testing of a worktree, use the dev wrapper. It starts (or
+reuses) the persistent VM, refreshes the current worktree into it, waits until
+Caddy, Authentik, the proxy outpost, and Cockpit SSO are active, probes the
+Console redirect, and prints the testing URLs:
+
+```bash
+./scripts/vm-dev.sh
+```
+
+- Launcher/setup: `https://nas-test.local:8443/`
+- Authentik: `https://nas-test.local:8443/identity/`
+- Cockpit console: `https://nas-test.local:8443/console/`
+
+Before first-run setup completes, sign in with the bootstrap account
+`akadmin` / `nas-admin-first-boot`; setup retires it after verifying the
+chosen administrator (see [`../src/admin/first-run.md`](../src/admin/first-run.md)).
+Run one-off guest commands with `scripts/vm-run.sh '<command>'`. The host
+needs QEMU/KVM; Nix runs inside the guest, so host-side Nix is not required.
+
 ## 8. Dynamic web security
 
 The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI fails closed when the reviewed repository variable is absent and retains HTML, JSON, and Markdown reports.
