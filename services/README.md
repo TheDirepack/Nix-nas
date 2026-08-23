@@ -19,23 +19,19 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_v2_spec.py` | YAML 1.2 parsing, schema validation, normalization, semantic validation, and effective-state compilation |
 | `nas_v2_plan.py` | Deterministic reconciliation plan generation |
 | `nas_v2_apply.py` | Finite compile/apply orchestration and projection staging |
-| `nas_v2_cli.py` | Administrative compile/plan/apply command surface |
+| `nas_v2_entry.py` | V2 command-surface entry/import boundary |
 | `nas_v2_control.py` | Finite status/document/edit/reconcile surface used by Cockpit and operators |
 | `nas_v2_editor.py` | Comment-preserving atomic `services.yaml` editing |
 | `nas_v2_systemd.py` | Unified systemd projection for cross-runtime lifecycle, jobs, readiness, dependencies, and on-demand lease/idle units |
 | `nas_v2_quadlet.py` | Direct OCI/Quadlet projection |
 | `nas_v2_compose.py` | Compose override projection for V2-owned cross-cutting policy |
 | `nas_v2_libvirt.py` | Libvirt/QEMU runtime projection |
-| `nas_v2_session.py` | Finite transient-session launcher |
-| `nas_v2_session_projection.py` | Session descriptors, lifecycle targets, resource/device/network lowering |
-| `nas_v2_podman_network.py` | Native Podman isolated-network projection |
-| `nas_v2_firewalld.py` | Firewalld policy projection for compiled network intent |
+| `nas_v2_session.py` | Finite transient-session launcher plus session descriptors, lifecycle targets, and resource/device/network lowering |
+| `nas_v2_network.py` | Combined network projection: native Podman isolated networks and firewalld policy for compiled network intent |
 | `nas_v2_authentik.py` | Ensures stable V2 application/capability objects without owning assignments |
 | `nas_v2_caddy.py` | Caddy routing and Authentik request-time authorization projection |
 | `nas_v2_wake.py` | Authorization-free socket-activated wake plumbing after Caddy authorization |
-| `nas_v2_backup.py` | Resource-oriented backup inventory compilation |
-| `nas_v2_backup_runtime.py` | Finite backup preparation/cleanup from compiled inventory |
-| `nas_v2_native_dump.py` | Generic synchronous native-dump job preparation |
+| `nas_v2_backup.py` | Resource-oriented backup inventory compilation plus finite preparation/cleanup from compiled inventory |
 
 ## Dependency direction
 
