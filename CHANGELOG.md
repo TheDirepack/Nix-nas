@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0-alpha.23 — 2026-08-22
+
+- Modularize the Cockpit front end: split the monolithic `app.jsx` into a shell plus `src/pages/`, `src/components/`, `src/hooks/`, and `src/lib/` modules with a section registry, and extend the source contract tests to the new layout.
+- Replace bespoke Cockpit scaffolding with PatternFly templates: raw selects/checkboxes become `FormSelect`/`Checkbox`, destructive confirmations become danger modals, card grids use `Gallery`, source details use `DescriptionList`, and seventeen dead SCSS classes are removed.
+- Follow the Cockpit shell dark-mode switcher via a vendored `cockpit-dark-theme` module (mirrors `shell:style` and `cockpit-style` onto `pf-v6-theme-dark`) with direct Node coverage.
+
 ## 2.2.0-alpha.22 — 2026-08-15
 
 - Make Managed Services V2 the single port authority: define syncthing/vaultwarden/NUT listeners in `managed-services-helpers.nix` and consume them in `managed-services-seed-v2.nix` (no literals in `base.nix`/`validation.nix`/`host-platform.nix`); delete the split no-op catalogs (`managed-services-native-services.nix`, `managed-services-platform-routes.nix`).

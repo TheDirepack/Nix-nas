@@ -69,7 +69,7 @@ for (const [name, payload] of payloads) {
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     await installPayload(page, payload);
     await page.goto("/index.html");
-    await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
+    await expect(page.getByRole("heading", {name: "NixOS NAS"})).toBeVisible();
     expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
     expect(
       await page

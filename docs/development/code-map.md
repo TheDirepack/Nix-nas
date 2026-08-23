@@ -59,10 +59,15 @@ Pure policy and schema helpers should contain no service-management side effects
 
 ## Front end
 
-- `cockpit/src/index.jsx`: React 18 entry point and PatternFly stylesheet imports.
-- `cockpit/src/app.jsx`: PatternFly page, forms, cards, status views, tables, and confirmation modals.
-- `cockpit/src/api.js`: allowed Cockpit bridge invocations, including finite Managed Services document/status/edit calls and stdin-only secret delivery.
+- `cockpit/src/index.jsx`: React 18 entry point, PatternFly stylesheet imports, and Cockpit dark-theme sync.
+- `cockpit/src/app.jsx`: single-page shell — section registry (`PAGES`), stock PatternFly `Nav`, alert stack, and the secrets-unlock card.
+- `cockpit/src/pages/`: one module per UI section (overview, services, applications, operations, ai, source, setup); adding a section means one file plus one `PAGES` entry.
+- `cockpit/src/components/`: shared presentation components (status label, output block, section header, link/service cards).
+- `cockpit/src/hooks/`: `use-overview` data fetch and `use-mutation` busy/error/notice wrapper shared by all pages.
+- `cockpit/src/schema-editor.jsx`, `cockpit/src/schema-model.js`: schema-driven desired-state form generated from the canonical V2 JSON Schema.
+- `cockpit/src/api.js`: allowed Cockpit bridge invocations, including finite Managed Services document/status/edit calls and stdin-only secret delivery after browser authorization.
 - `cockpit/src/view-model.js`: pure backend-to-view conversion and visibility policy.
+- `cockpit/src/lib/format.js`: error-message and JSON display helpers.
 - `cockpit/src/app.scss`: NAS-specific layout only; PatternFly owns component styling.
 - `cockpit/build.js`: Starter Kit style esbuild/Sass source-to-package build and source-hash stale-output check.
 - `cockpit/dist/`: generated React/PatternFly package payload installed by Nix; never edit it directly.
