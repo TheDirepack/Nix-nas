@@ -45,7 +45,7 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_v2_quadlet.py` | Direct OCI/Quadlet projection | `test_v2_quadlet.py` |
 | `nas_v2_compose.py` | Compose override projection for V2-owned cross-cutting policy | `test_v2_compose.py`, `test_v2_compose_systemd.py` |
 | `nas_v2_libvirt.py` | Libvirt/QEMU projection and explicit passthrough policy | `test_v2_libvirt.py` |
-| `nas_v2_session.py` | Finite transient-session launch plus descriptor/resource/network projection (candidate for `systemd-run --scope` replacement) | `test_v2_session.py`, `test_v2_session_projection.py` |
+| `nas_v2_session.py` | Finite transient-session launch plus descriptor/resource/network projection; Podman is the direct systemd exec process (`ExecStopPost` cleanup, no supervisor process) | `test_v2_session.py`, `test_v2_session_projection.py` |
 | `nas_v2_accelerator.py` | Generic accelerator resolution for device nodes, CDI, Compose targets, and VM passthrough (candidate for `hardware.nvidia` + CDI) | `test_v2_accelerator.py` |
 | `nas_v2_network.py` | Combined V2 network policy: isolated Podman networks and firewalld policy projection (candidate for static `networking.firewall` absorption) | `test_v2_podman_network.py`, `test_v2_firewalld.py` |
 | `nas_v2_authentik.py` | Ensures stable `application.<service>.<capability>` objects without owning assignments | `test_v2_authentik.py` |
