@@ -91,15 +91,33 @@ let
 
   cockpitWebService = pkgs.writeShellScript "nas-cockpit-webservice" ''
     set -euo pipefail
+    export PATH="${pkgs.procps}/bin:$PATH"
     # Caddy + Authentik are the only authorization boundary for /console.
-    # cockpit-ws itself accepts the trusted loopback proxy without its own
-    # login; --local-session shares one privileged bridge for that proxy.
-    # nixpkgs installs cockpit-bridge under bin/, unlike Fedora's libexec.
-    exec ${cockpitPatched}/libexec/cockpit-ws \
-      --address 127.0.0.1 \
-      --port ${toString cockpitPort} \
-      --no-tls \
-      --local-session ${cockpitPatched}/bin/cockpit-bridge
+    # cockpit-ws serves the shared no-password --local-session bridge; if the
+    # bridge ever dies, ws alone would fall back to its own PAM login, so the
+    # supervisor kills ws immediately and systemd respawns the whole unit.
+    term() {
+      [[ -n "''${WSPID:-}" ]] && kill -TERM "''${WSPID}" 2>/dev/null || true
+      exit 0
+    }
+    trap term TERM INT
+    while true; do
+      ${cockpitPatched}/libexec/cockpit-ws \
+        --address 127.0.0.1 \
+        --port ${toString cockpitPort} \
+        --no-tls \
+        --local-session ${cockpitPatched}/bin/cockpit-bridge &
+      WSPID=$!
+      while kill -0 "$WSPID" 2>/dev/null; do
+        sleep 2
+        if ! pgrep -P "$WSPID" -f 'cockpit-bridge' >/dev/null 2>&1; then
+          kill -TERM "$WSPID" 2>/dev/null || true
+          break
+        fi
+      done
+      wait "$WSPID" 2>/dev/null || true
+      sleep 1
+    done
   '';
   authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
     set -euo pipefail
