@@ -12,7 +12,6 @@ requires-python = ">=3.12"
 nas-ai-config = "nas_ai_config:main"
 nas-alert-router = "nas_alert_router:main"
 nas-cockpit-api = "nas_cockpit_api:main"
-nas-cockpit-auth = "nas_cockpit_auth:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-doctor = "nas_doctor:main"
 nas-identity-sync = "nas_identity_sync:main"
@@ -32,7 +31,6 @@ py-modules = [
   "nas_alert_router",
   "nas_common",
   "nas_cockpit_api",
-  "nas_cockpit_auth",
   "nas_coding_agent",
   "nas_doctor",
   "nas_identity_model",

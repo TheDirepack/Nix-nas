@@ -163,18 +163,18 @@ class V2ReferenceTests(unittest.TestCase):
         self.assertIn("derived", effective)
 
     def test_cockpit_port_consistency(self):
-        # Remote admin firewall should use 9092 by default, derived from V2 cockpit port
+        # Cockpit remains private on 9092; browser clients use the Caddy route.
         network = (ROOT / "services/nas_v2_network.py").read_text(encoding="utf-8")
         self.assertIn("NAS_V2_COCKPIT_PORT", network)
         self.assertIn("_remote_admin_ports", network)
         self.assertIn('"9092"', network)
         self.assertNotIn('("9090", "tcp")', network)
-        # Check base.nix and interfaces.md
+        # Check the private listener declaration and public interface documentation.
         base = (ROOT / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
         self.assertIn("cockpitPort = 9092", base)
         interfaces = (ROOT / "docs/src/reference/interfaces.md").read_text(encoding="utf-8")
-        # Should mention 9092
-        self.assertIn("9092", interfaces)
+        self.assertIn("`/console/`", interfaces)
+        self.assertNotIn("9092", interfaces)
 
     def test_portal_delimiter_parity(self):
         # Both nas_common and portal should use same delimiter

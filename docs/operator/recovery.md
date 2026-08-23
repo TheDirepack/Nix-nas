@@ -265,6 +265,6 @@ Then confirm:
 
 Perform a quarterly restore drill against disposable media or a VM and record the date, backup snapshot, commands used, failures, and corrective actions.
 
-### Web unlock after recovery
+### Locked-boot recovery
 
-If the normal reverse proxy is unavailable because secrets are locked, use `https://<host>.local:9092/console/` from a trusted interface. Authenticate with the local Linux administrator, open NAS Overview, and run the unlock form. If Cockpit is unavailable, use the local console and `sudo nas-secrets activate`; do not weaken the firewall or expose the recovery port publicly.
+If secrets are locked, recover through the local console, SSH with a provisioned recovery key, or hardware KVM. Run `sudo nas-secrets activate`, repair any reported failure, and then verify the normal Caddy and Authentik browser route. Do not add a firewall exception or a direct Cockpit browser route.

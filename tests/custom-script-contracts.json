@@ -49,14 +49,6 @@
         "tests/test_adversarial_security.py"
       ]
     },
-    "nas-cockpit-auth": {
-      "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_cockpit_auth.py",
-      "systemTest": "tests/vm/adversarial-installed.py",
-      "tests": [
-        "tests/test_cockpit_auth.py"
-      ]
-    },
     "nas-code": {
       "fuzzStrategy": "system-lifecycle",
       "sources": [
@@ -468,9 +460,6 @@
       "tests/test_adversarial_security.py",
       "tests/test_security_surface.py",
       "tests/test_ai_secret_transaction.py"
-    ],
-    "services/nas_cockpit_auth.py": [
-      "tests/test_cockpit_auth.py"
     ],
     "services/nas_coding_agent.py": [
       "tests/test_coding_agent.py"

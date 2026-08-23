@@ -2,8 +2,8 @@
 
 let
   inherit (nasInternal)
-    authentikPort
     authentikOutpostPort
+    authentikPort
     caddyForwardAuth
     cfg
     cockpitPort
@@ -37,45 +37,60 @@ https://${lanHost} {
     Permissions-Policy "camera=(), microphone=(), geolocation=()"
   }
 
-  handle /console/* {
+  handle / {
+    redir * ${cfg.identity.authentikPath}if/user/ 303
+  }
+  handle /setup {
     route {
       ${caddyForwardAuth}
-      reverse_proxy 127.0.0.1:${toString cockpitPort} {
-        header_up Authorization "Basic YWRtaW46YWRtaW4tdm0tcGFzc3dvcmQ="
-        header_up Origin "https://${lanHost}"
-        header_up X-Forwarded-Proto https
-        header_up X-Forwarded-Prefix /console
+      @post method POST
+      handle @post {
+        redir * /setup 303
       }
+      root * ${nasPortalStatic}/share/nas-portal
+      rewrite * /setup.html
+      file_server
     }
   }
-  handle /console {
+  handle /setup/* {
     route {
       ${caddyForwardAuth}
-      reverse_proxy 127.0.0.1:${toString cockpitPort} {
-        header_up Authorization "Basic YWRtaW46YWRtaW4tdm0tcGFzc3dvcmQ="
-        header_up Origin "https://${lanHost}"
-        header_up X-Forwarded-Proto https
-        header_up X-Forwarded-Prefix /console
-      }
+      root * ${nasPortalStatic}/share/nas-portal
+      file_server
     }
   }
 
-  handle /setup {
-    @post method POST
-    handle @post {
-      redir * /setup 303
-    }
-    root * ${nasPortalStatic}/share/nas-portal
-    rewrite * /setup.html
-    file_server
+  redir ${authentikPathNoSlash} ${cfg.identity.authentikPath}
+  @authentikUi path ${cfg.identity.authentikPath}*
+  handle @authentikUi {
+    reverse_proxy 127.0.0.1:${toString authentikPort}
   }
-  handle /setup/* {
-    root * ${nasPortalStatic}/share/nas-portal
-    file_server
+  @authentikFlows path /flows/*
+  handle @authentikFlows {
+    uri replace /flows ${cfg.identity.authentikPath}flows
+    reverse_proxy 127.0.0.1:${toString authentikPort}
+  }
+  @authentikOutpost path /outpost.goauthentik.io/*
+  handle @authentikOutpost {
+    reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+      header_up Host {http.request.host}
+      header_up X-Forwarded-Proto https
+    }
+  }
+  handle /console* {
+    route {
+      ${caddyForwardAuth}
+      @missingCockpitAdmin not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)
+      respond @missingCockpitAdmin 403
+      reverse_proxy 127.0.0.1:${toString cockpitPort} {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Prefix /console
+      }
+    }
   }
 
   handle {
-    redir * /setup 303
+    redir * ${cfg.identity.authentikPath}if/user/ 303
   }
 }
 EOCF
@@ -91,7 +106,7 @@ EOCF
   renderActive = pkgs.writeShellScript "nas-caddy-bootstrap-select" ''
     set -euo pipefail
     if [[ -f ${secretRoot}/ready && -f /var/lib/nas-setup/state.json ]]; then
-      ${pkgs.systemd}/bin/systemctl start nas-managed-services-reconcile.service || true
+      ${pkgs.systemd}/bin/systemctl start --no-block nas-managed-services-reconcile.service || true
       if [[ -f /run/nas-control/caddy-managed.conf ]]; then
         printf '%s\n' ${lib.escapeShellArg fullCaddyImport} > ${activeCaddyPath}
       else

@@ -32,7 +32,7 @@ New-pool creation additionally requires `--allow-destructive-storage` and one ex
 - [Locked-state unlock](../src/locked-unlock.md)
 - [Recovery runbook](recovery.md)
 
-Cockpit remains available on the trusted LAN at `https://<host>.local:9092/console/`.
+Use the local console, SSH with a provisioned recovery key, or hardware KVM. Locked boot has no browser recovery path.
 
 ```bash
 sudo nas-secrets activate

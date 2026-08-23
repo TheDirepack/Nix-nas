@@ -32,8 +32,3 @@ Add shared/group volumes directly in CopyParty configuration. Reference Authenti
 ## Native shares
 
 Native share links are enabled at `/share`. `nas_admin` may administer all shares. Ordinary users can create or use shares only according to their accessible volume's ACLs and share-related flags.
-
-## Reference
-
-- [Global command help](../reference/copyparty-help.md)
-- [Volume flags](../reference/copyparty-flags.md)

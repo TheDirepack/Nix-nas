@@ -49,9 +49,10 @@ def main() -> int:
         desired = pathlib.Path(sys.argv[1])
 
     caddy_bin = os.environ.get("NAS_V2_CADDY_BIN", "caddy")
-    authentik_upstream = os.environ.get("NAS_V2_AUTHENTIK_UPSTREAM", "127.0.0.1:9000")
+    authentik_upstream = os.environ.get("NAS_V2_AUTHENTIK_UPSTREAM", "127.0.0.1:9010")
     authentik_path = os.environ.get("NAS_V2_AUTHENTIK_PATH", "/identity/")
     lan_host = os.environ.get("NAS_V2_LAN_HOST", "nas.local")
+    authentik_public_host = os.environ.get("NAS_V2_AUTHENTIK_PUBLIC_HOST", lan_host)
     wake_socket = os.environ.get("NAS_V2_WAKE_SOCKET", "/run/nas-control/wake.sock")
     systemd_analyze_bin = os.environ.get("NAS_V2_SYSTEMD_ANALYZE_BIN", "systemd-analyze")
     systemctl_bin = os.environ.get("NAS_V2_SYSTEMCTL_BIN", "systemctl")
@@ -80,6 +81,7 @@ def main() -> int:
                 authentik_upstream=authentik_upstream,
                 authentik_path=authentik_path,
                 lan_host=lan_host,
+                authentik_public_host=authentik_public_host,
                 wake_socket=wake_socket,
             ),
             systemd=SystemdProjection(

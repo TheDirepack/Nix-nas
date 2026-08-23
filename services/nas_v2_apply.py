@@ -110,9 +110,10 @@ class ApplyPaths:
 class CaddyProjection:
     output: pathlib.Path
     caddy_bin: str
-    authentik_upstream: str = "127.0.0.1:9000"
+    authentik_upstream: str = "127.0.0.1:9010"
     authentik_path: str = "/identity/"
     lan_host: str = "nas.local"
+    authentik_public_host: str | None = None
     wake_socket: str | None = None
 
 
@@ -369,6 +370,7 @@ def _caddy_bytes(effective: dict[str, Any], projection: CaddyProjection) -> byte
         authentik_upstream=projection.authentik_upstream,
         authentik_path=projection.authentik_path,
         lan_host=projection.lan_host,
+        authentik_public_host=projection.authentik_public_host,
         wake_socket=projection.wake_socket,
     )
     validate_caddyfile(content, caddy_bin=projection.caddy_bin)

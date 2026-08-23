@@ -140,7 +140,6 @@ in
 
   nas = {
     installationReady = lib.mkForce true;
-    identity.authentikOutpostPort = lib.mkForce 9000;
     testing.installationReadyFixture = true;
     configurationDir = lib.mkForce "/var/lib/nas-test/repo";
     # The guest suite creates its first-run plan here; keep the installed

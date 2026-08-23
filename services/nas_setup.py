@@ -1502,7 +1502,10 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
             raise SetupError("First-start secret payload is invalid") from exc
         if not isinstance(secrets_payload, dict) or set(secrets_payload) != {"keepass", "administrator"}:
             raise SetupError("First-start secret payload contract is invalid")
-        password = normalize_secret_line(secrets_payload.get("keepass"), "KeePass database password")
+        raw_password = secrets_payload.get("keepass")
+        if not isinstance(raw_password, str):
+            raise SetupError("First-start KeePass database password is invalid")
+        password = normalize_secret_line(raw_password, "KeePass database password")
         administrator = secrets_payload.get("administrator")
         if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
             raise SetupError("First-start administrator secret payload is invalid")

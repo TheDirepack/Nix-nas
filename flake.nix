@@ -199,7 +199,6 @@
             pkgs.shellcheck
             pkgs.actionlint
             pkgs.nodejs
-            pkgs.pyright
             pkgs.ruff
           ];
           shellHook = ''

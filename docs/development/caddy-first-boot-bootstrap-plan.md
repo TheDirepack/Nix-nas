@@ -1,6 +1,6 @@
 # Caddy First-Boot Bootstrap — Implementation Plan
 
-**Status:** Implemented and validated.
+**Status:** Obsolete historical plan. [ADR-0001](adr-0001-authentik-only-browser-access.md) supersedes this document for browser authentication, Cockpit access, and recovery. Do not use the design, commands, or verification steps below as implementation guidance.
 **Branch:** `agent/managed-services-v2-simplify-v2`
 
 ## 1. Objective

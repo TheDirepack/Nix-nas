@@ -42,6 +42,8 @@ Run the deterministic official-ISO installation harness through fresh install, r
 Retain evidence for:
 
 - locked boot and KeePass activation;
+- initial static setup guidance, followed by Authentik-authorized browser access after activation;
+- absence of direct Cockpit or local-PAM browser login on every network interface;
 - firewall access from an independent client;
 - ZFS import, encryption, snapshot, replication, and restore;
 - Restic restore to independent storage;

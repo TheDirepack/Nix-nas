@@ -1,6 +1,6 @@
 # Web interfaces and endpoints
 
-All normal browser routes use `https://<nas-hostname>.local`. The direct Cockpit recovery endpoint uses port `9092` and is restricted to trusted interfaces by firewalld.
+All browser routes use `https://<nas-hostname>.local`. Authentik authenticates every browser route that can reach Cockpit or an application.
 
 | Path | Audience | Authority / purpose |
 |---|---|---|
@@ -20,8 +20,9 @@ All normal browser routes use `https://<nas-hostname>.local`. The direct Cockpit
 | `/victoriametrics/` | `nas_admin` | VictoriaMetrics VMUI and PromQL-compatible APIs. |
 | `/alerts/` | `nas_admin` | Read-only NAS alert-router status and delivery state. |
 | `/notifications/` | Native ntfy credentials | ntfy UI and client API. |
-| `/console/` | Local Cockpit/PAM admin | Cockpit through Caddy after unlock. |
-| `https://<host>:9092/console/` | Local Cockpit/PAM admin | Locked-state Cockpit and web unlock; does not depend on Authentik/Caddy. |
-| `/console/cockpit/@localhost/nas/docs/index.html` (Cockpit navigation item) | Cockpit admin | Searchable manual generated for the deployed release, served through the authenticated Cockpit package route. |
+| `/console/` | `nas_admin` | Cockpit through Caddy after Authentik authentication and authorization. |
+| `/console/cockpit/@localhost/nas/docs/index.html` (Cockpit navigation item) | `nas_admin` | Searchable manual generated for the deployed release, served through the authenticated Cockpit package route. |
 
 Routes compiled out by disabled Nix options do not exist. On-demand services may start when an authorized request arrives; authorization-only capability checks do not themselves grant a feature or application permission.
+
+While locked, no browser recovery endpoint exists. Use console, SSH, or hardware KVM to activate secrets; see [Locked-state unlock](../locked-unlock.md).

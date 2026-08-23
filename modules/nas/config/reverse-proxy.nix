@@ -8,7 +8,6 @@ let
     caddyOnDemandTransport
     cfg
     lanHost
-    nasPortalStatic
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
 in
@@ -69,7 +68,15 @@ in
           header_up X-Forwarded-For {remote_host}
         }
       }
-
+      @authentikFlows path /flows/*
+      handle @authentikFlows {
+        uri replace /flows ${cfg.identity.authentikPath}flows
+        reverse_proxy 127.0.0.1:${toString authentikPort} {
+          header_up Host {http.request.host}
+          header_up X-Forwarded-Proto https
+          header_up X-Forwarded-For {remote_host}
+        }
+      }
       # V2 owns all application routes; no app-specific Caddy redirects are needed.
       # Trailing-slash canonicalization and route handling are defined in the V2
       # seed (managed-services-seed-v2.nix) and applied via generic Caddy primitives.
@@ -88,19 +95,9 @@ in
       }
       redir /settings* ${cfg.identity.authentikPath}if/user/
 
-      # V2 application routes are imported before this bootstrap/fallback block.
+      # Authentik owns the appliance home page and application launcher.
       handle {
-        route {
-          ${caddyForwardAuth}
-          root * ${nasPortalStatic}/share/nas-portal
-          rewrite * /index.html
-          templates {
-            # The portal template renders the runtime projection written to
-            # /run/nas-control/portal.json by the control plane.
-            root /
-          }
-          file_server
-        }
+        redir * ${cfg.identity.authentikPath}if/user/ 303
       }
     '';
   };

@@ -13,8 +13,8 @@ Nix OS NAS <display-version> source.zip
 For the current prerelease version:
 
 ```text
-VERSION:                         2.2.0-alpha.22
-source archive filename:        Nix OS NAS 2.2.22 source.zip
+VERSION:                         2.2.0-alpha.23
+source archive filename:        Nix OS NAS 2.2.23 source.zip
 ```
 
 For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.MINOR.N`. This keeps development archives short and readable without changing `VERSION` or creating a new software release merely to repackage the same source.
@@ -22,7 +22,7 @@ For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.
 The ZIP keeps a canonical internal root directory containing the full repository version and qualification state, for example:
 
 ```text
-nixos-nas-2.2.0-alpha.22-source-only-unverified/
+nixos-nas-2.2.0-alpha.23-source-only-unverified/
 ```
 
 That internal name, `VERSION`, `README.md`, `CHANGELOG.md`, and the provenance JSON remain authoritative when exact release identity matters.

@@ -317,13 +317,9 @@ PY_AI_PROVIDERS
           store_value authentik-api-token "$(get_secret authentik-bootstrap-token)"
           echo "Created KeePassXC item: Authentik NAS API token (initially the bootstrap token)"
         fi
-        if ${if cfg.testing.installationReadyFixture then "true" else "false"}; then
-          if ! has_secret authentik-bootstrap-password; then
-            store_value authentik-bootstrap-password "admin-vm-password-1234567890"
-            echo "Created KeePassXC item: Authentik bootstrap administrator password (VM fixture)"
-          fi
-        else
-          store_random_if_missing authentik-bootstrap-password "Authentik bootstrap administrator password" 24
+        if ! has_secret authentik-bootstrap-password; then
+          store_value authentik-bootstrap-password "nas-admin-first-boot"
+          echo "Created KeePassXC item: Authentik bootstrap administrator password"
         fi
         store_random_if_missing state-bundle-signing-key "NAS state bundle HMAC signing key" 32
         ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''

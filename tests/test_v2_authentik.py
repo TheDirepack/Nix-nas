@@ -164,6 +164,33 @@ class V2AuthentikTests(unittest.TestCase):
             self.assertEqual(called_req.full_url, "http://auth.example/api/v3/core/groups/")
             self.assertEqual(called_req.get_header("Authorization"), "Bearer secret-token")
 
+    def test_desired_route_apps_collect_identity_hostname_routes(self):
+        effective = {
+            "schemaVersion": 3,
+            "services": {
+                "media": {
+                    "runtime": {"unit": "jellyfin.service"},
+                    "routes": {
+                        "web": {
+                            "exposure": {"type": "hostname", "hostnames": ["media.nas.local"], "path": "/"},
+                            "auth": {"mode": "identity", "capability": "admin"},
+                            "target": {"type": "http", "host": "127.0.0.1", "port": 8096},
+                        },
+                        "health": {
+                            "exposure": {"type": "path", "paths": ["/health"]},
+                            "auth": {"mode": "public"},
+                            "target": {"type": "http", "host": "127.0.0.1", "port": 8096},
+                        },
+                    },
+                }
+            },
+        }
+        apps = authentik.desired_route_apps(effective)
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0]["slug"], "v2-media-web")
+        self.assertEqual(apps[0]["hostname"], "media.nas.local")
+        self.assertEqual(apps[0]["internalHost"], "http://127.0.0.1:8096")
+
 
 if __name__ == "__main__":
     unittest.main()

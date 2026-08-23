@@ -14,7 +14,12 @@ let
     request_header -X-Authentik-Uid
     forward_auth 127.0.0.1:${toString authentikOutpostPort} {
       uri ${authentikOutpostPath}
-      header_down Location "^http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}(.*)$" "https://${lanHost}${cfg.identity.authentikPath}$1"
+      # The outpost's Caddy handler needs this exact trio to detect the
+      # original request and build the authorize redirect.
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Uri {uri}
+      header_up X-Original-URL {http.request.scheme}://{http.request.host}{http.request.orig_uri}
       copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements X-Authentik-Name X-Authentik-Email X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
     }
     @missingAuthentikIdentity not header X-Authentik-Username *

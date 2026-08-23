@@ -2,13 +2,13 @@
 
 `nas-first-start.service` runs automatically at each installed boot when
 `nas.firstStart.enable` is true. It inspects the configured setup file and
-publishes a password-free state document for Cockpit before the Cockpit socket
-is opened. Cockpit therefore remains reachable while KeePassXC secrets, ZFS,
-and the protected application stack are locked.
+publishes a password-free state document. It prepares the resumable workflow;
+it does not expose Cockpit while KeePassXC secrets, ZFS, and protected services
+are locked.
 
 The service does not silently create a pool, read a KeePassXC password, or make
 identity changes. It prepares the resumable workflow and shows one of these
-states in Cockpit:
+states in `nas-setup status`:
 
 - `configuration-missing`: create the configured JSON file;
 - `configuration-invalid`: correct the reported schema or policy error;
@@ -35,6 +35,15 @@ component authorities in their required order. It does not replace NixOS,
 KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
 
 ## Prepare the configuration
+
+## First-boot Authentik access
+
+The first-boot Authentik setup identity is `akadmin`. Its documented initial
+password is `nas-admin-first-boot`. Setup uses it only during initial setup.
+
+The setup workflow creates the administrator you choose, verifies that account
+is an enabled `nas_admin` member, and then retires the bootstrap Authentik
+identity. Do not use the bootstrap identity for normal administration.
 
 Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
 may define storage creation, Authentik accounts, reserved NAS groups, and initial
@@ -67,28 +76,26 @@ Validate the file before making changes:
 nas-setup validate-config /etc/nixos/nixos-nas/first-run.json
 ```
 
-## Complete the automatic Cockpit workflow
+## Complete first start from the recovery plane
 
-Open Cockpit after the first installed boot. The NAS page displays the setup
-state published by `nas-first-start.service`. When the state is `ready`, review
-the exact pool, dataset, topology, and stable device paths, enter the KeePassXC
-database password, and start setup.
+On the first installed boot, use the local console, SSH with a provisioned
+recovery key, or hardware KVM. Run `nas-setup prepare-first-start` and inspect
+the published `ready` state before starting setup. Review the exact pool,
+dataset, topology, stable device paths, and plan digest.
 
-When the plan creates a new pool, Cockpit requires a separate destructive-storage
-checkbox. Cockpit also sends the displayed SHA-256 plan digest. The backend
-re-reads and normalizes the root-owned configuration, recomputes the digest,
-copies the exact configured device list into the guarded CLI invocation, and
-refuses a stale digest or mismatched device confirmation. It sends the KeePassXC
-password only over the spawned process's stdin; the password is not placed in an
-argument, environment variable, state file, or first-start status document.
+When the plan creates a pool, pass a separate destructive-storage confirmation
+and the displayed SHA-256 plan digest. The backend re-reads and normalizes the
+root-owned configuration, recomputes the digest, copies the exact device list
+into the guarded invocation, and rejects a stale digest or mismatched device
+confirmation. It reads the KeePassXC password from standard input only.
 
 Setup is resumable. Completed stages are reused only after their live
 postcondition probes still pass. A `manual-recovery-required` journal never
 automatically resumes; repair the reported authority and run
 `nas-setup reconcile-first-run --note 'what was repaired'` before retrying. If
-resume reaches the account-password stage, Cockpit requires a separate checkbox
-before password changes can be repeated. Cockpit stays available while
-protected services remain locked.
+resume reaches the account-password stage, pass
+`--confirm-password-reapply` before repeating password changes. Keep the
+recovery terminal available until the protected stack is ready.
 
 The workflow prompts once for the KeePass database password. It then:
 
@@ -107,10 +114,10 @@ The workflow prompts once for the KeePass database password. It then:
 11. writes a password-free completion report to
     `/var/lib/nas-setup/state.json`.
 
-## CLI fallback and automation
+## First-start commands and automation
 
-The same workflow can be run from a shell as the configured local
-administrator, not as root:
+Run the workflow from the recovery plane as the configured local administrator,
+not as root:
 
 ```bash
 status_json="$(nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json)"
@@ -143,6 +150,19 @@ input. It is not created or retained by the NAS project. Any account
 `passwordFile` referenced by the JSON must also exist on every run; remove that
 field after bootstrap when a rerun should preserve the current Authentik
 password.
+
+## Browser bootstrap and locked boot
+
+Before setup completes, Caddy can serve the static `/setup` guidance page. It
+does not provide a browser login, Cockpit session, secret unlock form, or
+protected application access. Complete `nas-setup first-run` from the recovery
+plane.
+
+During first start, Authentik creates its temporary `akadmin` bootstrap identity
+with the documented initial password `nas-admin-first-boot`. Setup creates and
+verifies the chosen `nas_admin` administrator, then retires that bootstrap
+identity. After protected services are ready, use Authentik through Caddy for
+all browser access.
 
 ## New-pool safeguards
 

@@ -1,16 +1,14 @@
 # Locked-state unlock
 
-The NAS intentionally starts in a **locked** state when the KeePass-backed runtime secret tree is absent. Authentik, Caddy, CopyParty, encrypted ZFS datasets, and other protected services remain stopped.
+The NAS intentionally starts **locked** when the KeePass-backed runtime secret tree is absent. Authentik, Cockpit, CopyParty, encrypted ZFS datasets, and protected services are unavailable to browsers.
 
-Cockpit is the exception. It is the bootstrap and recovery interface and remains available on the trusted LAN at:
+Recover from the local console, SSH using a provisioned recovery key, or hardware KVM. Sign in as the local recovery administrator and activate the secret tree:
 
-```text
-https://<nas-hostname>.local:9092/console/
+```bash
+sudo nas-secrets activate
 ```
 
-Sign in with the local Linux administrator configured by `nas.adminUser`. This is a PAM account, not an Authentik account; Authentik cannot authenticate anyone until it has been unlocked.
-
-Open **NAS Overview** and enter the KeePass database password in **Unlock protected storage and services**. Cockpit launches `nas-secrets activate-stdin` with superuser escalation and sends the password over process standard input. The password is not written to a URL, process argument, environment variable, Nix store path, browser storage, or disk file.
+Enter the KeePass database password only at the local terminal prompt. The command reads it from standard input; it does not store it in a URL, argument, environment variable, Nix store path, browser storage, or disk file.
 
 Activation performs the following transaction:
 
@@ -23,18 +21,12 @@ Activation performs the following transaction:
 7. Validate Authentik API readiness, CopyParty's Unix socket, and required service state.
 8. Roll back to the previous secret tree and service state if validation fails.
 
-The CLI remains available:
-
-```bash
-sudo nas-secrets activate
-```
-
-`activate-stdin` exists only for trusted process integrations such as Cockpit. Do not pipe passwords through shell history, command substitutions, or network tools.
+`activate-stdin` exists for trusted process integrations. Do not pipe passwords through shell history, command substitutions, or network tools.
 
 ## Locked-state troubleshooting
 
-- If Cockpit is unreachable, verify `cockpit.socket`, the trusted-interface firewalld zone, port `9092/tcp`, DNS/mDNS, and the machine's Cockpit certificate.
-- If the form reports an incorrect password, test `sudo nas-secrets activate` locally.
+- Confirm that you have console, SSH, or KVM access before changing network or storage state.
+- If the password is rejected, retry `sudo nas-secrets activate` at the local recovery terminal.
 - If activation rolls back, inspect `systemctl --failed`, `journalctl -u nas-protected-services.target`, and the specific exit message.
 - If the KDBX file is missing, restore it before attempting activation.
-- Additional Authentik superusers cannot perform the boot unlock unless they also have an authorized local Cockpit/PAM administrator account.
+- An Authentik administrator is not automatically a local recovery administrator.

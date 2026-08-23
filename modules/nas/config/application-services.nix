@@ -8,10 +8,15 @@ let
     bootstrapRuntimeRoot
     bootstrapSecretsDir
     authentikEnvironmentFile
+    authentikRuntimeEnvironmentFile
+    authentikRuntimeApiTokenFile
+    authentikApiTokenFile
     authentikPort
+    authentikOutpostPort
     nasAuthentikBlueprints
     cockpitNasPlugin
     cockpitPort
+    cockpitOauthPort
     cockpitZfsPlugin
     cfg
     copypartyDataDir
@@ -36,8 +41,8 @@ let
       user = "authentik";
     };
     listen = {
-      http = [ "127.0.0.1:${toString authentikPort}" ];
-      https = [ ];
+      http = "127.0.0.1:${toString authentikPort}";
+      https = "";
       trusted_proxy_cidrs = [ "127.0.0.1/32" "::1/128" ];
     };
     web.path = cfg.identity.authentikPath;
@@ -62,7 +67,7 @@ let
     Group = "authentik";
     UMask = "0027";
     WorkingDirectory = authentikDataDir;
-    EnvironmentFile = [ authentikEnvironmentFile ];
+    EnvironmentFile = [ authentikRuntimeEnvironmentFile ];
     NoNewPrivileges = true;
     PrivateTmp = true;
     ProtectHome = true;
@@ -71,6 +76,37 @@ let
     Restart = "on-failure";
     RestartSec = "2s";
   };
+  cockpitWebService = pkgs.writeShellScript "nas-cockpit-webservice" ''
+    set -euo pipefail
+    # Caddy + Authentik are the only authorization boundary for /console.
+    # cockpit-ws itself accepts the trusted loopback proxy without its own
+    # login; --local-session shares one privileged bridge for that proxy.
+    # nixpkgs installs cockpit-bridge under bin/, unlike Fedora's libexec.
+    exec ${pkgs.cockpit}/libexec/cockpit-ws \
+      --address 127.0.0.1 \
+      --port ${toString cockpitPort} \
+      --no-tls \
+      --local-session ${pkgs.cockpit}/bin/cockpit-bridge
+  '';
+  authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
+    set -euo pipefail
+    token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
+    outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
+      -H "Authorization: Bearer $token" \
+      http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/outposts/instances/?page_size=100 \
+      | ${pkgs.jq}/bin/jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
+    outpost_token="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
+      -H "Authorization: Bearer $token" \
+      "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/core/tokens/ak-outpost-$outpost-api/view_key/" \
+      | ${pkgs.jq}/bin/jq -er '.key')"
+    exec ${pkgs.util-linux}/bin/runuser --user authentik -- env \
+      AUTHENTIK_HOST="http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}" \
+      AUTHENTIK_HOST_BROWSER="https://${cfg.identity.publicHost}${cfg.identity.authentikPath}" \
+      AUTHENTIK_TOKEN="$outpost_token" \
+      AUTHENTIK_INSECURE=true \
+      AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}" \
+      ${pkgs.authentik-outposts.proxy}/bin/proxy
+  '';
 in
 {
   config = {
@@ -89,6 +125,7 @@ in
       ++ lib.optional (cfg.scheduler.backend == "cockpit-scheduler" && cfg.scheduler.package != null) cfg.scheduler.package;
       allowed-origins = [
         "https://${lanHost}"
+        "https://${cfg.identity.publicHost}"
         "https://${lanHost}:${toString cockpitPort}"
       ];
       settings.WebService = {
@@ -101,12 +138,47 @@ in
       };
     };
 
-    # The NAS plugin uses Cockpit's privileged bridge for its allow-listed API.
-    # NixOS also enables pkexec, but a headless service has no authentication
-    # agent; use the wheel policy that already governs the local administrator.
-    systemd.services.cockpit.environment.COCKPIT_SUPERUSER = "sudo";
-    systemd.services.cockpit-wsinstance-http.environment.COCKPIT_SUPERUSER = "sudo";
-    systemd.services."cockpit-wsinstance-https@".environment.COCKPIT_SUPERUSER = "sudo";
+    systemd.services.nas-cockpit-sso = {
+      description = "Cockpit web service behind the Caddy Authentik gate";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "nas-first-start.service" ];
+      requires = [ "nas-first-start.service" ];
+      # The shared bridge runs unauthenticated-by-design behind the Caddy
+      # Authentik gate; it needs a writable HOME for agent/ssh state.
+      environment.HOME = "/var/lib/nas-cockpit-sso";
+      serviceConfig = {
+        ExecStart = cockpitWebService;
+        Restart = "on-failure";
+        RestartSec = "2s";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        StateDirectory = "nas-cockpit-sso";
+        StateDirectoryMode = "0700";
+        ReadOnlyPaths = [ "/var/lib/nas-setup/state.json" ];
+        ReadWritePaths = [ "/var/lib/nas-cockpit-sso" ];
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+      };
+    };
+    systemd.services.nas-authentik-proxy-outpost = {
+      description = "Dedicated Authentik proxy outpost";
+      wantedBy = [ "multi-user.target" ];
+      requires = [ "authentik.service" "nas-identity-bootstrap.service" ];
+      after = [ "authentik.service" "nas-identity-bootstrap.service" ];
+      unitConfig.ConditionPathExists = [ authentikRuntimeApiTokenFile ];
+      serviceConfig = {
+        ExecStart = authentikProxyOutpost;
+        Restart = "on-failure";
+        RestartSec = "2s";
+        NoNewPrivileges = false;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadOnlyPaths = [ authentikRuntimeApiTokenFile ];
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+      };
+    };
 
     environment.etc."authentik/config.yml".source = authentikSettings;
     systemd.tmpfiles.rules = [
@@ -314,6 +386,8 @@ in
   config.systemd.services.nas-bootstrap-runtime-select = {
     description = "Select boot-root or ZFS identity runtime storage";
     before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
+    wants = [ "nas-bootstrap-authentik-secrets.service" ];
+    after = [ "nas-bootstrap-authentik-secrets.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -322,8 +396,12 @@ in
         if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
           ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.zfsRoot}
           target=${lib.escapeShellArg cfg.zfsRoot}
+          environment=${lib.escapeShellArg authentikEnvironmentFile}
+          api_token=${lib.escapeShellArg authentikApiTokenFile}
         else
           target=${lib.escapeShellArg bootstrapRuntimeRoot}
+          environment="$target/authentik/environment"
+          api_token="$target/authentik/api-token"
         fi
         ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
@@ -332,8 +410,46 @@ in
           ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
           ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
         done
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik
+        ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
+        ${pkgs.coreutils}/bin/ln -s "$environment" ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
+        ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+        ${pkgs.coreutils}/bin/ln -s "$api_token" ${lib.escapeShellArg authentikRuntimeApiTokenFile}
       '';
       NoNewPrivileges = false;
+    };
+  };
+
+  config.systemd.services.nas-bootstrap-authentik-secrets = {
+    description = "Create the first-boot-only Authentik runtime secrets";
+    unitConfig.ConditionPathExists = [
+      "!/var/lib/nas-setup/operational-runtime-select"
+      "!/var/lib/nas-setup/state.json"
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = pkgs.writeShellScript "nas-bootstrap-authentik-secrets" ''
+        set -euo pipefail
+        environment=${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment"}
+        [[ -e "$environment" ]] && exit 0
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik ${lib.escapeShellArg bootstrapAuthentikDataDir}
+        temporary="$(${pkgs.coreutils}/bin/mktemp ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment.XXXXXX"})"
+        token_file="$temporary.token"
+        trap '${pkgs.coreutils}/bin/rm -f -- "$temporary" "$token_file"' EXIT
+        {
+          token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
+          printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot'
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
+        } > "$temporary"
+        ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"
+        printf '%s' "$token" > "$token_file"
+        ${pkgs.coreutils}/bin/install -m 0400 -o root -g root "$token_file" ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/api-token"}
+        unset token
+      '';
+      UMask = "0077";
     };
   };
 }

@@ -5,6 +5,8 @@ let
     authentikApiTokenFile
     authentikDataDir
     authentikEnvironmentFile
+    authentikRuntimeApiTokenFile
+    authentikRuntimeEnvironmentFile
     authentikPort
     caddyBackendUnits
     caddyCaExportDir
@@ -41,15 +43,18 @@ in
     nas-bootstrap-administrator = lib.mkIf cfg.firstStart.enable {
       description = "Create the disposable local administrator for first-run setup";
       wantedBy = [ "multi-user.target" ];
-      before = [ "cockpit.socket" "nas-first-start.service" ];
+      before = [ "nas-first-start.service" ];
       unitConfig.ConditionPathExists = "!/var/lib/nas-setup/state.json";
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = pkgs.writeShellScript "nas-bootstrap-administrator" ''
           set -euo pipefail
-          if ! ${pkgs.shadow}/bin/id --user nas-bootstrap >/dev/null 2>&1; then
-            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash nas-bootstrap
+          if ! ${pkgs.glibc.bin}/bin/getent passwd nas-bootstrap >/dev/null 2>&1; then
+            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash nas-bootstrap || {
+              rc=$?
+              [[ "$rc" -eq 9 ]] || exit "$rc"
+            }
           fi
           printf '%s\n' 'nas-bootstrap:nixos-nas-bootstrap' | ${pkgs.shadow}/bin/chpasswd
           ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations nas-bootstrap
@@ -62,9 +67,8 @@ in
     nas-first-start = lib.mkIf cfg.firstStart.enable {
       description = "Prepare the automatic NixOS NAS first-start workflow";
       wantedBy = [ "multi-user.target" ];
-      wants = [ "cockpit.socket" "nas-bootstrap-administrator.service" ];
+      wants = [ "nas-bootstrap-administrator.service" ];
       after = [ "nas-bootstrap-administrator.service" "local-fs.target" ];
-      before = [ "cockpit.socket" ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -147,21 +151,52 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      unitConfig.ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];
+      unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };
 
     authentik-worker = {
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      unitConfig.ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];
+      unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };
 
     authentik = {
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      unitConfig.ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];
+      unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
+    };
+
+    nas-identity-bootstrap = {
+      description = "Reconcile the Authentik portal provider before starting its proxy outpost";
+      # Authentik is ordered after runtime selection, which creates the token
+      # this unit requires. Starting from multi-user.target races that token.
+      wantedBy = [ "authentik.service" ];
+      requires = [ "authentik.service" ];
+      after = [ "authentik.service" ];
+      unitConfig.ConditionPathExists = [
+        authentikRuntimeApiTokenFile
+        "!/var/lib/nas-setup/state.json"
+      ];
+      environment = {
+        NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;
+        NAS_PUBLIC_HOST = cfg.identity.publicHost;
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync bootstrap";
+        ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ "/run/lock" "/run/nas-operations" ];
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        UMask = "0077";
+      };
     };
 
     nas-identity-sync = {
@@ -190,6 +225,7 @@ in
         ];
         UMask = "0077";
       };
+      environment.NAS_PUBLIC_HOST = cfg.identity.publicHost;
     };
 
     nas-copyparty-share-root = {

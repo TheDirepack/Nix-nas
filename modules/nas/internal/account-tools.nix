@@ -33,6 +33,7 @@ let
     dependencies = with pkgs.python3Packages; [
       defusedxml
       jsonschema
+      pyjwt
       pyyaml
       ruamel-yaml
     ];
@@ -61,7 +62,7 @@ let
     text = ''
       export NAS_AUTHENTIK_URL=http://127.0.0.1:${toString authentikPort}${lib.removeSuffix "/" cfg.identity.authentikPath}
       export NAS_AUTHENTIK_TOKEN_FILE=${lib.escapeShellArg authentikApiTokenFile}
-      export NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=${lib.escapeShellArg authentikBootstrapTokenFile}
+      export NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE="''${NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE:-${lib.escapeShellArg authentikBootstrapTokenFile}}"
       export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
       export NAS_SYNCTHING_CONFIG_DIR=${lib.escapeShellArg syncthingConfigDir}

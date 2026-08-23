@@ -25,6 +25,7 @@ setup/first-run.json
 *.qcow2
 *.log
 .qemu-state/
+tmp/
 
 # Packaged releases
 *.zip

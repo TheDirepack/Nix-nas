@@ -7,7 +7,7 @@ NixOS NAS is designed as a single-host appliance with explicit authorities rathe
 ```text
                     local administrator
                            |
-                     Cockpit / CLI
+              console / SSH / CLI
                            |
                     nas-cockpit-api
                            |
@@ -55,7 +55,7 @@ Capability definitions come from V2 `application.<service>.<capability>` objects
 
 ## Locked boot and secrets
 
-The machine can boot before KeePassXC is unlocked. Cockpit and the local PAM administrator form the recovery plane. `nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
+The machine can boot before KeePassXC is unlocked. Local console, SSH with a provisioned recovery key, or hardware KVM form the recovery plane; browser management is unavailable while locked. The initial Caddy bootstrap may serve static setup guidance, but it does not provide a browser login or recovery operation. `nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
 
 No long-running service should need broad read access to the whole secret tree when an exact credential or read-only path is sufficient.
 

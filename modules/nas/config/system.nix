@@ -72,27 +72,9 @@ let
 in
 {
   config = {
-    systemd.sockets.cockpit = {
-      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
-      partOf = lib.mkOverride 90 [ ];
-      listenStreams = lib.mkOverride 90 (
-        # The leading "" resets the packaged unit's ListenStream=9090 (same
-        # trick the nixpkgs cockpit module uses); without it systemd binds both
-        # 9090 and the loopback streams. Cockpit is reachable only through the
-        # Caddy reverse proxy; it never binds a network-facing listener. Caddy
-        # proxies /console to loopback.
-        [ "" "127.0.0.1:${toString cockpitPort}" "[::1]:${toString cockpitPort}" ]
-      );
-      socketConfig.BindIPv6Only = "ipv6-only";
-      unitConfig = {
-        ConditionPathExists = lib.mkOverride 90 [ ];
-        DefaultDependencies = false;
-      };
-      conflicts = [ "shutdown.target" ];
-      before = [ "shutdown.target" ];
-      requires = [ "sysinit.target" ];
-      after = [ "sysinit.target" "basic.target" ];
-    };
+    # The packaged socket would occupy cockpitPort before nas-cockpit-sso can
+    # start. The SSO service is the sole Cockpit listener.
+    systemd.sockets.cockpit.enable = false;
 
     services.journald.extraConfig = ''
       Storage=persistent

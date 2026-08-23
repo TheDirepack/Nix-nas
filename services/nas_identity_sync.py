@@ -72,6 +72,8 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
     os.environ.get("NAS_ACCOUNT_JOURNAL", "/var/lib/nas-identity-sync/account-plan-journal.json")
 )
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
+PUBLIC_HOST = os.environ.get("NAS_PUBLIC_HOST", "").strip()
+DEFAULT_FLOW_WAIT_SECONDS = 90.0
 
 
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
@@ -335,6 +337,175 @@ def ensure_groups(token: str) -> dict[str, Any]:
             "multiple fully trusted administrators; application capability assignments remain Authentik-owned."
         ),
     }
+
+
+def default_flows(token: str) -> dict[str, Any]:
+    required = {
+        "authentication_flow": "default-authentication-flow",
+        "authorization_flow": "default-provider-authorization-implicit-consent",
+        "invalidation_flow": "default-invalidation-flow",
+    }
+    deadline = time.monotonic() + DEFAULT_FLOW_WAIT_SECONDS
+    while True:
+        flows = {str(item.get("slug")): item for item in authentik_list(token, "flows/instances/")}
+        missing = [slug for slug in required.values() if not isinstance(flows.get(slug), Mapping)]
+        if not missing:
+            return flows
+        if time.monotonic() >= deadline:
+            raise SyncError("Authentik default flow(s) are missing: " + ", ".join(missing))
+        time.sleep(1)
+
+
+def ensure_portal_proxy(token: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", PUBLIC_HOST):
+        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+    flows = default_flows(token)
+    payload: dict[str, Any] = {
+        "name": "NAS Portal",
+        # This is one protected NAS application. Domain-level forward auth
+        # cannot enforce the application's authorization policy.
+        "mode": "forward_single",
+        "external_host": f"https://{PUBLIC_HOST}",
+        "internal_host": "http://127.0.0.1:8080",
+        "internal_host_ssl_validation": False,
+    }
+    for field, slug in {
+        "authentication_flow": "default-authentication-flow",
+        "authorization_flow": "default-provider-authorization-implicit-consent",
+        "invalidation_flow": "default-invalidation-flow",
+    }.items():
+        flow = flows.get(slug)
+        if not isinstance(flow, Mapping) or flow.get("pk") is None:
+            raise SyncError(f"Authentik flow {slug} is missing")
+        payload[field] = flow["pk"]
+    provider = next(
+        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Portal"), None
+    )
+    if provider is None:
+        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
+    else:
+        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
+    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
+    if provider_pk is None:
+        raise SyncError("Authentik NAS Portal provider has no primary key")
+    app_payload = {
+        "name": "NAS Portal",
+        "slug": "nas-portal",
+        "provider": provider_pk,
+        "meta_launch_url": f"https://{PUBLIC_HOST}",
+    }
+    application = next(
+        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-portal"), None
+    )
+    if application is None:
+        authentik_request(token, "core/applications/", method="POST", body=app_payload)
+    else:
+        authentik_request(token, "core/applications/nas-portal/", method="PATCH", body=app_payload)
+    outpost = next(
+        (
+            item
+            for item in authentik_list(token, "outposts/instances/")
+            if item.get("managed") == "goauthentik.io/outposts/embedded"
+        ),
+        None,
+    )
+    if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
+        raise SyncError("Authentik embedded outpost is missing")
+    providers = list(outpost.get("providers") or [])
+    current_config = outpost.get("config")
+    desired_config = dict(current_config) if isinstance(current_config, Mapping) else {}
+    desired_config.update(
+        {
+            # The outpost advertises the public origin so every authorize
+            # redirect already carries the browser-reachable host. Its own
+            # control-plane calls resolve that public hostname back to Caddy
+            # inside the appliance, so no loopback Location rewriting is
+            # needed in any reverse-proxy projection.
+            "authentik_host": f"https://{PUBLIC_HOST}/identity/",
+            "authentik_host_browser": f"https://{PUBLIC_HOST}/identity/",
+        }
+    )
+    if provider_pk not in providers or desired_config != current_config:
+        authentik_request(
+            token,
+            f"outposts/instances/{outpost['pk']}/",
+            method="PATCH",
+            body={
+                "providers": providers if provider_pk in providers else providers + [provider_pk],
+                "config": desired_config,
+            },
+        )
+    return {"provider": "NAS Portal", "application": "nas-portal"}
+
+
+def ensure_cockpit_launcher(token: str) -> dict[str, Any]:
+    """Expose Cockpit as an Authentik launcher application behind forward auth.
+
+    Caddy enforces the nas_admin group check for /console; this provider only
+    gives the outpost an authorize endpoint so the launcher tile can start a
+    session that returns to /console/.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", PUBLIC_HOST):
+        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+    flows = default_flows(token)
+    payload: dict[str, Any] = {
+        "name": "NAS Cockpit",
+        "mode": "forward_single",
+        "external_host": f"https://{PUBLIC_HOST}/console/",
+        "internal_host": "http://127.0.0.1:9092",
+        "internal_host_ssl_validation": False,
+    }
+    for field, slug in {
+        "authentication_flow": "default-authentication-flow",
+        "authorization_flow": "default-provider-authorization-implicit-consent",
+        "invalidation_flow": "default-invalidation-flow",
+    }.items():
+        flow = flows.get(slug)
+        if not isinstance(flow, Mapping) or flow.get("pk") is None:
+            raise SyncError(f"Authentik flow {slug} is missing")
+        payload[field] = flow["pk"]
+    provider = next(
+        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Cockpit"), None
+    )
+    if provider is None:
+        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
+    else:
+        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
+    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
+    if provider_pk is None:
+        raise SyncError("Authentik NAS Cockpit provider has no primary key")
+    app_payload = {
+        "name": "NAS Cockpit",
+        "slug": "nas-cockpit",
+        "provider": provider_pk,
+        "meta_launch_url": f"https://{PUBLIC_HOST}/console/",
+    }
+    application = next(
+        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-cockpit"), None
+    )
+    if application is None:
+        authentik_request(token, "core/applications/", method="POST", body=app_payload)
+    else:
+        authentik_request(token, "core/applications/nas-cockpit/", method="PATCH", body=app_payload)
+    outpost = next(
+        (
+            item
+            for item in authentik_list(token, "outposts/instances/")
+            if item.get("managed") == "goauthentik.io/outposts/embedded"
+        ),
+        None,
+    )
+    if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
+        raise SyncError("Authentik embedded outpost is missing")
+    providers = list(outpost.get("providers") or [])
+    if provider_pk not in providers:
+        authentik_request(
+            token,
+            f"outposts/instances/{outpost['pk']}/",
+            method="PATCH",
+            body={"providers": providers + [provider_pk]},
+        )
+    return {"provider": "NAS Cockpit", "application": "nas-cockpit"}
 
 
 AUTOMATION_ROLE = "NAS automation"
@@ -1153,7 +1324,12 @@ def main() -> int:
         )
         with operation, identity_command_lock(args.command):
             if args.command == "bootstrap":
-                result = ensure_groups(authentik_token(bootstrap=True))
+                token = authentik_token(bootstrap=True)
+                result = {
+                    "groups": ensure_groups(token),
+                    "portal": ensure_portal_proxy(token),
+                    "cockpit": ensure_cockpit_launcher(token),
+                }
             elif args.command == "bootstrap-runtime-token":
                 result = provision_runtime_token(authentik_token(bootstrap=True))
             elif args.command == "retire-bootstrap":

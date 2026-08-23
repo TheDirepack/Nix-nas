@@ -428,7 +428,7 @@ class V2NestedRouteCaddyTests(unittest.TestCase):
         )
         rendered = caddy.generate_caddyfile(effective)
         first_strip = rendered.index("request_header -Remote-User")
-        forward = rendered.index("forward_auth 127.0.0.1:9000")
+        forward = rendered.index("forward_auth 127.0.0.1:9010")
         self.assertLess(first_strip, forward)
 
 

@@ -1,4 +1,4 @@
-{ lib, ... }:
+{ config, lib, ... }:
 
 {
   options.nas = {
@@ -63,6 +63,11 @@
       description = "LAN interfaces allowed to reach SSH, HTTPS, mDNS, Syncthing, and optional TFTP. Empty is fail-closed.";
     };
     identity = {
+      publicHost = lib.mkOption {
+        type = lib.types.strMatching "^[A-Za-z0-9.-]+(:[0-9]+)?$";
+        default = "${config.networking.hostName}.local";
+        description = "Browser-facing NAS hostname, optionally with its HTTPS port. This is used for Authentik application redirect URLs.";
+      };
       authentikPath = lib.mkOption {
         type = lib.types.strMatching "^/[A-Za-z0-9._/-]*/$";
         default = "/identity/";
@@ -70,8 +75,8 @@
       };
       authentikOutpostPort = lib.mkOption {
         type = lib.types.port;
-        default = 9000;
-        description = "Loopback port used by the Authentik outpost. The default is Authentik's embedded listener; VM fixtures may select a standalone proxy listener.";
+        default = 9010;
+        description = "Loopback port used by the dedicated Authentik proxy outpost.";
       };
       bootstrapEmail = lib.mkOption {
         type = lib.types.strMatching "^[^[:space:]@]+@[^[:space:]@]+$";

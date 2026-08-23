@@ -30,7 +30,6 @@ else:
     HAS_HYPOTHESIS = True
     import nas_ai_config as ai_config
     import nas_alert_router as alert_router
-    import nas_cockpit_auth as cockpit_auth
     import nas_cockpit_api as cockpit_api
     import nas_coding_agent as coding_agent
     import nas_common as common
@@ -57,7 +56,6 @@ SERVICE_INPUT_MODULES = frozenset(
     {
         "nas_ai_config",
         "nas_alert_router",
-        "nas_cockpit_auth",
         "nas_cockpit_api",
         "nas_coding_agent",
         "nas_common",
@@ -198,10 +196,6 @@ if HAS_HYPOTHESIS:
                 cockpit_api._json_string_list,
                 value if isinstance(value, dict) else {},
                 "values",
-            )
-            expected_boundary_error(
-                cockpit_auth.validate_claims,
-                value if isinstance(value, dict) and isinstance(value.get("groups"), list) else {"aud": value},
             )
             expected_boundary_error(setup_config.normalize_config, value if isinstance(value, dict) else {})
             expected_boundary_error(

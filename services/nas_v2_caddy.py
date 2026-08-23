@@ -101,6 +101,7 @@ def _render_identity_auth(
     required_capability: str,
     authentik_upstream: str,
     authentik_path: str,
+    authentik_public_host: str,
     indent: str,
 ) -> None:
     if _ctl(authentik_upstream) or "{" in authentik_upstream or "}" in authentik_upstream:
@@ -115,6 +116,10 @@ def _render_identity_auth(
         [
             f"{indent}forward_auth {authentik_upstream} {{",
             f"{indent}  uri {_q(authentik_uri)}",
+            f"{indent}  header_up X-Original-URL {{http.request.scheme}}://{{http.request.host}}{{http.request.orig_uri}}",
+            f"{indent}  header_up X-Forwarded-Proto {{scheme}}",
+            f"{indent}  header_up X-Forwarded-Host {{host}}",
+            f"{indent}  header_up X-Forwarded-Uri {{uri}}",
             f"{indent}  copy_headers {' '.join(AUTHENTIK_COPY_HEADERS)}",
             f"{indent}}}",
         ]
@@ -222,6 +227,7 @@ def _render_handler(
     route: dict[str, Any],
     authentik_upstream: str,
     authentik_path: str,
+    authentik_public_host: str,
     wake_socket: str | None,
     indent: str,
 ) -> None:
@@ -253,6 +259,7 @@ def _render_handler(
             required_capability=capability,
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
+            authentik_public_host=authentik_public_host,
             indent=inner,
         )
     elif route["authMode"] not in {"public", "upstream"}:
@@ -266,13 +273,17 @@ def _render_handler(
 def generate_caddyfile(
     effective: dict[str, Any],
     *,
-    authentik_upstream: str = "127.0.0.1:9000",
+    authentik_upstream: str = "127.0.0.1:9010",
     authentik_path: str = "/identity/",
     lan_host: str = "nas.local",
+    authentik_public_host: str | None = None,
     wake_socket: str | None = None,
 ) -> str:
     if not HOSTNAME_RE.fullmatch(lan_host):
         raise CaddyProjectionError(f"Invalid appliance hostname {lan_host!r}")
+    public_host = authentik_public_host or lan_host
+    if _ctl(public_host) or "/" in public_host or "{" in public_host or "}" in public_host:
+        raise CaddyProjectionError(f"Invalid Authentik public host {public_host!r}")
     services = effective.get("services")
     derived = effective.get("derived")
     if not isinstance(services, dict) or not isinstance(derived, dict) or not isinstance(derived.get("routes"), list):
@@ -336,6 +347,7 @@ def generate_caddyfile(
             route=route,
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
+            authentik_public_host=public_host,
             wake_socket=wake_socket,
             indent="    ",
         )
@@ -351,6 +363,7 @@ def generate_caddyfile(
             route=route,
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
+            authentik_public_host=public_host,
             wake_socket=wake_socket,
             indent="    ",
         )

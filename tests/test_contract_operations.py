@@ -6,6 +6,22 @@ from repo_test_utils import ROOT, text
 
 
 class ContractTests(unittest.TestCase):
+    def test_caddy_wants_but_does_not_wait_for_managed_services_reconciliation(self) -> None:
+        managed = text("modules/nas/config/managed-services.nix")
+        caddy = managed.split("systemd.services.caddy = {", 1)[1].split(
+            "systemd.services.nas-managed-services-caddy-reload", 1
+        )[0]
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile", 1
+        )[0]
+        self.assertIn('"nas-managed-services-reconcile.service"', caddy)
+        self.assertNotIn('after = [\n        "nas-managed-services-reconcile.service"', caddy)
+        self.assertNotIn('before = [ "caddy.service" ];', reconcile)
+
+    def test_caddy_bootstrap_does_not_block_on_managed_services_reconciliation(self) -> None:
+        bootstrap = text("modules/nas/config/caddy-bootstrap.nix")
+        self.assertIn("systemctl start --no-block nas-managed-services-reconcile.service || true", bootstrap)
+
     def test_zfs_replication_and_boot_recovery_roles_are_separate(self) -> None:
         options = text("modules/nas/options/storage.nix") + text("modules/nas/options/operations.nix")
         storage = text("modules/nas/config/storage-monitoring.nix")
@@ -94,7 +110,23 @@ class ContractTests(unittest.TestCase):
         )
         self.assertIn('ConditionPathExists = "!/var/lib/nas-setup/state.json"', services)
 
-    def test_cockpit_recovery_socket_is_available_before_protected_services(self) -> None:
+    def test_first_boot_authentik_uses_only_a_random_bootstrap_runtime_environment(self) -> None:
+        applications = text("modules/nas/config/application-services.nix")
+        base = text("modules/nas/internal/base.nix")
+        services = text("modules/nas/config/systemd-services.nix")
+        setup = text("services/nas_setup.py")
+        self.assertIn("nas-bootstrap-authentik-secrets", applications)
+        self.assertIn("openssl rand -hex 64", applications)
+        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot", applications)
+        self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
+        self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
+        self.assertNotIn("EnvironmentFile = [ authentikEnvironmentFile ];", applications)
+        self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
+        self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
+        self.assertIn("retire_bootstrap_runtime", setup)
+        self.assertIn('run_root(["rm", "-rf", str(bootstrap_root)])', setup)
+
+    def test_cockpit_is_isolated_until_authentik_can_authorize_it(self) -> None:
         base = text("modules/nas/internal/base.nix")
         system = text("modules/nas/config/system.nix")
         firewall = text("modules/nas/config/network-firewall.nix")
@@ -102,13 +134,18 @@ class ContractTests(unittest.TestCase):
         services = text("modules/nas/config/application-services.nix")
         secrets = text("modules/nas/internal/secret-tools.nix")
         self.assertNotIn('protectedServiceUnits = [\n    "cockpit.socket"', base)
-        self.assertIn('wantedBy = lib.mkOverride 90 [ "multi-user.target" ]', system)
-        self.assertIn("DefaultDependencies = false", system)
-        self.assertIn('conflicts = [ "shutdown.target" ]', system)
-        self.assertIn('requires = [ "sysinit.target" ]', system)
+        self.assertIn("systemd.sockets.cockpit.enable = false;", system)
         self.assertNotIn("directCockpitRecovery", firewall)
         self.assertIn("nas-management-network-guard.service", caddy)
-        self.assertIn('header_up Origin "https://${lanHost}"', caddy)
+        console = caddy.split("handle /console* {", 1)[1].split("reverse_proxy", 1)[0]
+        self.assertIn("${caddyForwardAuth}", console)
+        self.assertIn("@missingCockpitAdmin", caddy)
+        self.assertIn("respond @missingCockpitAdmin 403", caddy)
+        self.assertIn("nas-cockpit-sso", services)
+        self.assertIn("--local-session", services)
+        self.assertNotIn("settings.bearer", services)
+        self.assertNotIn("nas-cockpit-oauth", services)
+        self.assertIn("--address 127.0.0.1", services)
         self.assertIn("AllowUnencrypted = false", services)
         self.assertIn("activate-stdin)", secrets)
 

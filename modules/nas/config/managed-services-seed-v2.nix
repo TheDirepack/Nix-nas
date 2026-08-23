@@ -479,7 +479,7 @@ let
       };
       runtime = {
         type = "systemd";
-        unit = "cockpit.socket";
+        unit = "nas-cockpit-sso.service";
       };
       authorization.capabilities = [
         { id = "admin"; title = "Administer the NAS with Cockpit"; }

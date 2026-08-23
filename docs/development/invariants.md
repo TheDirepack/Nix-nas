@@ -17,7 +17,7 @@ Runtime-managed upstream state is authoritative in appliance-managed mode. `nas-
 
 ## Locked boot
 
-Cockpit and the local PAM administrator are the recovery plane. Authentik, Caddy, CopyParty, and protected services remain stopped until secret activation and storage validation succeed. An Authentik administrator is not automatically a Linux/PAM administrator.
+Local console, SSH, or hardware KVM and a local PAM administrator are the recovery plane. Authentik, CopyParty, and protected services remain stopped until secret activation and storage validation succeed. Caddy may serve static setup guidance, but no browser management endpoint is exposed while locked. An Authentik administrator is not automatically a Linux/PAM administrator.
 
 ## Authorization
 
@@ -49,5 +49,5 @@ Changes to authentication, root commands, storage destruction, secret activation
 ## Deployment boundaries
 
 - Disko examples remain unimported and destructive only when invoked explicitly.
-- Authentik superusers and local Cockpit/PAM administrators remain separate authorities.
+- Authentik superusers and local PAM recovery administrators remain separate authorities.
 - Removing an identity does not delete CopyParty data; retained volumes require explicit administrator review.

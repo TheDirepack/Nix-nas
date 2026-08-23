@@ -216,7 +216,6 @@ in
       requires = [ "nas-managed-services-seed.service" "nas-zfs-mount-guard.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
       after = [ "nas-managed-services-seed.service" "nas-zfs-mount-guard.service" ] ++ lib.optional firewalldEnabled "firewalld.service";
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
-      before = [ "caddy.service" ];
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;
@@ -231,9 +230,10 @@ in
         NAS_V2_RESTIC_PATHS = resticPathsPath;
         NAS_V2_FIREWALLD = firewalldProjectionPath;
         NAS_V2_CADDY_BIN = "${pkgs.caddy}/bin/caddy";
-        NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString nasInternal.authentikPort}";
+        NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
+        NAS_V2_AUTHENTIK_PUBLIC_HOST = cfg.identity.publicHost;
         NAS_V2_WAKE_SOCKET = wakeSocketPath;
         NAS_V2_SYSTEMD_ANALYZE_BIN = "${pkgs.systemd}/bin/systemd-analyze";
         NAS_V2_SYSTEMCTL_BIN = "${pkgs.systemd}/bin/systemctl";
@@ -297,7 +297,6 @@ in
         "nas-identity-sync.service"
         "nas-managed-services-reconcile.service"
       ];
-      before = [ "caddy.service" ];
       unitConfig.ConditionPathExists = [ effectivePath authentikApiTokenFile ];
       environment.PYTHONPATH = "${v2Source}";
       serviceConfig = {
@@ -372,19 +371,15 @@ in
       };
     };
 
-    # Caddy must start before secret activation (bootstrap phase). The
-    # nas-caddy-bootstrap selector synchronously ensures reconcile is fresh
-    # once secrets exist, so reconcile/authentik-reconcile are ordering-only
-    # here: a hard Requires would block the bootstrap preview on a service
-    # that cannot run until ZFS is mounted and secrets are staged.
+    # Reconciliation is optional during bootstrap. Caddy cannot wait for it:
+    # managed services may need Caddy's CA export before their storage and
+    # secrets conditions can be evaluated.
     systemd.services.caddy = {
       wants = [
         "nas-managed-services-reconcile.service"
         "nas-managed-services-authentik-reconcile.service"
       ];
       after = [
-        "nas-managed-services-reconcile.service"
-        "nas-managed-services-authentik-reconcile.service"
         "nas-managed-services-wake.socket"
       ];
     };

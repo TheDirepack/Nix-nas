@@ -48,7 +48,10 @@ run_as_admin_with_stdin() {
 }
 
 log "Verify encrypted fixture starts locked"
-wait_active cockpit.socket
+! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
+wait_active nas-cockpit-sso.service
+ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
+! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
 

@@ -15,6 +15,7 @@
 
   networking.usePredictableInterfaceNames = lib.mkForce false;
   nas.trustedInterfaces = lib.mkForce [ "eth0" ];
+  nas.identity.publicHost = lib.mkForce "nas-test.local:8443";
   users.users.admin.openssh.authorizedKeys.keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci"
   ];

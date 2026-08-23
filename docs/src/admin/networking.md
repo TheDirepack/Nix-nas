@@ -14,15 +14,9 @@ Interfaces not listed in `nas.trustedInterfaces` remain fail-closed by default.
 | CopyParty | `https://<nas-hostname>.local/shares/` |
 | Native CopyParty share links | `https://<nas-hostname>.local/share/` |
 
-## Locked-state recovery access
+## Locked-state recovery
 
-Cockpit is also available directly on the trusted LAN at:
-
-```text
-https://<nas-hostname>.local:9092/console/
-```
-
-This path uses Cockpit TLS and local PAM authentication, so it does not depend on Caddy, Authentik, KeePass activation, or the protected application stack. Keep it restricted to trusted interfaces; it is the intended cold-boot recovery path.
+Locked boot exposes no browser management endpoint. Use the local console, SSH with a provisioned recovery key, or hardware KVM to run `sudo nas-secrets activate`. After activation, use the normal Caddy route and Authentik login.
 
 ## Optional ports
 

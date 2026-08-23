@@ -41,15 +41,123 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         }
         rendered = caddy.generate_caddyfile(self.compile(service))
         self.assertIn("request_header -X-Authentik-Username", rendered)
-        self.assertIn("forward_auth 127.0.0.1:9000", rendered)
+        self.assertIn("forward_auth 127.0.0.1:9010", rendered)
         self.assertIn('uri "/identity/outpost.goauthentik.io/auth/caddy"', rendered)
+        self.assertIn("X-Original-URL {http.request.scheme}://{http.request.host}{http.request.orig_uri}", rendered)
+        self.assertNotIn("X-Original-URL {http.request.scheme}://{http.request.host}{http.request.uri}", rendered)
+        self.assertIn("header_up X-Forwarded-Uri {uri}", rendered)
         self.assertIn("not header_regexp X-Authentik-Groups", rendered)
         self.assertIn(r"application\\.demo\\.admin", rendered)
         self.assertIn("respond @v2_demo_web_missing_capability 403", rendered)
-        self.assertLess(rendered.index("forward_auth 127.0.0.1:9000"), rendered.index("reverse_proxy 127.0.0.1:8080"))
+        self.assertLess(rendered.index("forward_auth 127.0.0.1:9010"), rendered.index("reverse_proxy 127.0.0.1:8080"))
         self.assertLess(rendered.index("missing_capability"), rendered.index("reverse_proxy 127.0.0.1:8080"))
         self.assertNotIn("nas-feature-control", rendered)
         self.assertNotIn("/authorize?", rendered)
+
+    def test_authentik_listener_configuration_uses_scalar_addresses(self):
+        config = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        self.assertIn('http = "127.0.0.1:${toString authentikPort}";', config)
+        self.assertIn('https = "";', config)
+        self.assertNotIn('http = [ "127.0.0.1:${toString authentikPort}" ];', config)
+
+    def test_standalone_authentik_outpost_uses_explicit_proxy_package(self):
+        config = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        self.assertIn("systemd.services.nas-authentik-proxy-outpost", config)
+        self.assertIn("${pkgs.authentik-outposts.proxy}/bin/proxy", config)
+        self.assertIn(
+            'AUTHENTIK_HOST="http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}"',
+            config,
+        )
+        self.assertIn(
+            'AUTHENTIK_HOST_BROWSER="https://${cfg.identity.publicHost}${cfg.identity.authentikPath}"', config
+        )
+        self.assertIn('AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}"', config)
+        self.assertIn('after = [ "authentik.service" "nas-identity-bootstrap.service" ];', config)
+
+    def test_bootstrap_waits_for_authentik_default_flows_before_reconciling(self):
+        services = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
+        applications = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        self.assertIn('ExecStartPost = pkgs.writeShellScript "authentik-ready"', applications)
+        self.assertIn('after = [ "authentik.service" ];', services)
+
+    def test_authentik_login_flow_routes_rewrite_to_the_prefixed_ui(self):
+        for relative_path in (
+            "modules/nas/config/caddy-bootstrap.nix",
+            "modules/nas/config/reverse-proxy.nix",
+        ):
+            with self.subTest(path=relative_path):
+                config = (ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertIn("@authentikFlows path /flows/*", config)
+                flow_start = config.index("handle @authentikFlows {")
+                flow_end = (
+                    config.index("\n      }", flow_start)
+                    if "reverse-proxy" in relative_path
+                    else config.index("\n  }", flow_start)
+                )
+                flow_handler = config[flow_start:flow_end]
+                self.assertIn("uri replace /flows ${cfg.identity.authentikPath}flows", flow_handler)
+                self.assertIn("reverse_proxy 127.0.0.1:${toString authentikPort}", flow_handler)
+                self.assertNotIn("${caddyForwardAuth}", flow_handler)
+
+    def test_managed_routes_forward_authenticate_through_the_proxy_outpost(self):
+        config = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
+        self.assertIn(
+            'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";',
+            config,
+        )
+        self.assertNotIn(
+            'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString nasInternal.authentikPort}";',
+            config,
+        )
+        self.assertIn("NAS_V2_AUTHENTIK_PUBLIC_HOST = cfg.identity.publicHost;", config)
+
+    def test_forward_auth_sends_forwarded_trio_and_does_not_rewrite_locations(self):
+        helpers = (ROOT / "modules/nas/internal/caddy-helpers.nix").read_text(encoding="utf-8")
+        self.assertIn("header_up X-Forwarded-Proto {scheme}", helpers)
+        self.assertIn("header_up X-Forwarded-Host {host}", helpers)
+        self.assertIn("header_up X-Forwarded-Uri {uri}", helpers)
+        self.assertIn("X-Original-URL", helpers)
+        self.assertNotIn("header_down Location", helpers)
+
+        service = self.base_service()
+        service["authorization"] = {"capabilities": [{"id": "admin", "title": "Administration"}]}
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "path", "paths": ["/demo/"]},
+                "auth": {"mode": "identity", "capability": "admin"},
+            }
+        }
+        rendered = caddy.generate_caddyfile(self.compile(service))
+        self.assertIn("forward_auth 127.0.0.1:9010", rendered)
+        self.assertIn("header_up X-Forwarded-Uri {uri}", rendered)
+        self.assertNotIn("header_down Location", rendered)
+
+    def test_bootstrap_reconciles_the_portal_before_starting_the_outpost(self):
+        options = (ROOT / "modules/nas/options/core.nix").read_text(encoding="utf-8")
+        services = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
+        applications = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
+        vm = (ROOT / "tests/nixos/qemu-installed.nix").read_text(encoding="utf-8")
+
+        self.assertIn("publicHost = lib.mkOption", options)
+        self.assertIn('default = "${config.networking.hostName}.local";', options)
+        self.assertIn('nas.identity.publicHost = lib.mkForce "nas-test.local:8443";', vm)
+        self.assertIn("nas-identity-bootstrap = {", services)
+        self.assertIn('requires = [ "authentik.service" ];', services)
+        self.assertIn('wantedBy = [ "authentik.service" ];', services)
+        self.assertNotIn(
+            'wantedBy = [ "multi-user.target" ];', services[services.index("nas-identity-bootstrap = {") :]
+        )
+        self.assertIn("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;", services)
+        self.assertIn("NAS_PUBLIC_HOST = cfg.identity.publicHost;", services)
+        self.assertIn(
+            'ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";',
+            services,
+        )
+        self.assertIn("\"''${NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE:-", account_tools)
+        self.assertIn('"authentik.service" "nas-identity-bootstrap.service"', applications)
+        self.assertIn('after = [ "authentik.service" "nas-identity-bootstrap.service" ];', applications)
 
     def test_public_and_upstream_routes_do_not_call_authentik(self):
         for mode in ("public", "upstream"):

@@ -117,12 +117,12 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("nas-owned-zone.xml", firewall)
         self.assertIn("--query-service", firewall)
         self.assertIn("--query-port", firewall)
-        self.assertIn('"127.0.0.1:${toString cockpitPort}"', system)
+        self.assertIn("systemd.sockets.cockpit.enable = false;", system)
         self.assertIn("nas-management-network-guard.service", caddy)
 
     def test_authentik_has_one_non_secret_config_channel_and_distinct_runtime_dirs(self) -> None:
         services = text("modules/nas/config/application-services.nix")
-        self.assertNotIn("AUTHENTIK_LISTEN__", services)
+        self.assertIn('AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}"', services)
         self.assertNotIn("AUTHENTIK_WEB__", services)
         for directory in ("authentik-migrate", "authentik-worker", "authentik-server"):
             self.assertIn(f'RuntimeDirectory = "{directory}";', services)

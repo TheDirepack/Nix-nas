@@ -311,6 +311,51 @@ class FirstStartStatusTests(unittest.TestCase):
         self.assertNotIn("features", result)
 
 
+class FirstStartJobTests(unittest.TestCase):
+    def test_rejects_non_string_keepass_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            request_file = root / "request.json"
+            password_file = root / "password.json"
+            request_file.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "jobId": "a" * 24,
+                        "reservationToken": "b" * 32,
+                        "config": "/tmp/config.json",
+                        "planDigest": "c" * 64,
+                        "devices": [],
+                        "allowDestructiveStorage": False,
+                        "confirmPasswordReapply": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            password_file.write_text(
+                json.dumps(
+                    {
+                        "keepass": None,
+                        "administrator": {
+                            "username": "nasadmin",
+                            "name": "NAS Administrator",
+                            "email": "admin@example.test",
+                            "password": "password",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            request_file.chmod(0o600)
+            password_file.chmod(0o600)
+            with (
+                mock.patch.object(setup, "STATE_PATH", root / "state.json"),
+                mock.patch.object(setup, "cancel_reservation"),
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "KeePass database password is invalid"):
+                    setup.run_first_start_job(request_file, password_file)
+
+
 class CliTests(unittest.TestCase):
     def test_validate_config_cli_outputs_schema_two(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

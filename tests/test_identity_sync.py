@@ -42,6 +42,121 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(result, {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": "nasadmin"})
         request.assert_called_once_with("runtime-token", "core/users/1/", method="DELETE")
 
+    def test_portal_proxy_requires_a_valid_public_host(self) -> None:
+        with mock.patch.object(sync, "PUBLIC_HOST", "https://not-a-host"):
+            with self.assertRaisesRegex(sync.SyncError, "NAS_PUBLIC_HOST"):
+                sync.ensure_portal_proxy("runtime-token")
+
+    def test_portal_proxy_reconciles_provider_application_and_embedded_outpost_for_public_hosts(self) -> None:
+        flows = [
+            {"slug": "default-authentication-flow", "pk": "authentication"},
+            {"slug": "default-provider-authorization-implicit-consent", "pk": "authorization"},
+            {"slug": "default-invalidation-flow", "pk": "invalidation"},
+        ]
+        outpost = {
+            "pk": "embedded",
+            "managed": "goauthentik.io/outposts/embedded",
+            "providers": [],
+            "config": {"existing": "value"},
+        }
+        for public_host in ("nas.local", "nas-test.local:8443"):
+            with self.subTest(public_host=public_host):
+                with (
+                    mock.patch.object(sync, "PUBLIC_HOST", public_host),
+                    mock.patch.object(sync, "authentik_list", side_effect=[flows, [], [], [outpost]]),
+                    mock.patch.object(
+                        sync,
+                        "authentik_request",
+                        side_effect=[{"pk": "portal-provider"}, None, None],
+                    ) as request,
+                ):
+                    self.assertEqual(
+                        sync.ensure_portal_proxy("bootstrap-token"),
+                        {"provider": "NAS Portal", "application": "nas-portal"},
+                    )
+
+                provider_request, application_request, outpost_request = request.call_args_list[:3]
+                self.assertEqual(provider_request.args, ("bootstrap-token", "providers/proxy/"))
+                self.assertEqual(provider_request.kwargs["method"], "POST")
+                self.assertEqual(provider_request.kwargs["body"]["external_host"], f"https://{public_host}")
+                self.assertEqual(provider_request.kwargs["body"]["mode"], "forward_single")
+                self.assertEqual(application_request.args, ("bootstrap-token", "core/applications/"))
+                self.assertEqual(application_request.kwargs["body"]["meta_launch_url"], f"https://{public_host}")
+                self.assertEqual(outpost_request.args, ("bootstrap-token", "outposts/instances/embedded/"))
+                self.assertEqual(
+                    outpost_request.kwargs,
+                    {
+                        "method": "PATCH",
+                        "body": {
+                            "providers": ["portal-provider"],
+                            "config": {
+                                "existing": "value",
+                                "authentik_host": f"https://{public_host}/identity/",
+                                "authentik_host_browser": f"https://{public_host}/identity/",
+                            },
+                        },
+                    },
+                )
+
+    def test_portal_proxy_waits_for_authentik_default_flows(self) -> None:
+        flows = [
+            {"slug": "default-authentication-flow", "pk": "authentication"},
+            {"slug": "default-provider-authorization-implicit-consent", "pk": "authorization"},
+            {"slug": "default-invalidation-flow", "pk": "invalidation"},
+        ]
+        outpost = {"pk": "embedded", "managed": "goauthentik.io/outposts/embedded", "providers": [], "config": {}}
+        with (
+            mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
+            mock.patch.object(sync, "authentik_list", side_effect=[[], flows, [], [], [outpost]]),
+            mock.patch.object(sync, "authentik_request", side_effect=[{"pk": "portal-provider"}, None, None]),
+            mock.patch.object(sync.time, "sleep") as sleep,
+        ):
+            self.assertEqual(
+                sync.ensure_portal_proxy("bootstrap-token"),
+                {"provider": "NAS Portal", "application": "nas-portal"},
+            )
+        sleep.assert_called_once_with(1)
+
+    def test_cockpit_launcher_uses_forward_single_proxy_provider(self) -> None:
+        flows = [
+            {"slug": "default-authentication-flow", "pk": "auth"},
+            {"slug": "default-provider-authorization-implicit-consent", "pk": "authorization"},
+            {"slug": "default-invalidation-flow", "pk": "invalidation"},
+        ]
+        with (
+            mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=[
+                    flows,
+                    [],  # providers/proxy/
+                    [],  # core/applications/
+                    [{"managed": "goauthentik.io/outposts/embedded", "pk": 7, "providers": []}],
+                    None,
+                ],
+            ),
+            mock.patch.object(sync, "authentik_request", side_effect=[{"pk": 9}, None, None]) as request,
+        ):
+            self.assertEqual(
+                sync.ensure_cockpit_launcher("bootstrap-token"),
+                {"provider": "NAS Cockpit", "application": "nas-cockpit"},
+            )
+        provider_request, application_request, outpost_request = request.call_args_list[:3]
+        payload = provider_request.kwargs["body"]
+        self.assertEqual(provider_request.args[1], "providers/proxy/")
+        self.assertEqual(payload["mode"], "forward_single")
+        self.assertEqual(payload["external_host"], "https://nas.local/console/")
+        self.assertEqual(payload["internal_host"], "http://127.0.0.1:9092")
+        self.assertEqual(application_request.kwargs["body"]["meta_launch_url"], "https://nas.local/console/")
+        self.assertEqual(outpost_request.kwargs["body"], {"providers": [9]})
+        self.assertEqual(outpost_request.args[1], "outposts/instances/7/")
+
+    def test_cockpit_launcher_requires_valid_public_host(self) -> None:
+        with mock.patch.object(sync, "PUBLIC_HOST", "not valid"):
+            with self.assertRaisesRegex(sync.SyncError, "NAS_PUBLIC_HOST"):
+                sync.ensure_cockpit_launcher("bootstrap-token")
+
     def test_capability_report_uses_canonical_authentik_assignments(self) -> None:
         report = identity_model.capability_status(self.model())
         users = {row["id"]: row for row in report["users"]}

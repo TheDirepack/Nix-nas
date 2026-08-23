@@ -30,4 +30,4 @@ If the group is empty during bootstrap, the appliance attempts to add the enable
 
 ## Cockpit and locked-state access
 
-`nas_admin` grants NAS application administration after Authentik is running. Cockpit itself authenticates a Linux/PAM account because it must remain usable while Authentik and the encrypted dataset are locked. Adding an Authentik superuser does not silently create a Linux account. Grant direct Cockpit/boot-unlock access only by deliberately provisioning a local administrator with the required wheel/polkit policy.
+`nas_admin` grants NAS application and Cockpit administration after Authentik is running. Adding an Authentik superuser does not create a local recovery account. Provision local console, SSH, or KVM recovery access separately.

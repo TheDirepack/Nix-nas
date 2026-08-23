@@ -14,12 +14,12 @@ class TestSetupHTML(unittest.TestCase):
         html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
         self.assertTrue(html_path.exists(), "setup.html should exist")
 
-    def test_setup_html_has_console_link(self):
-        """Verify setup.html links to console setup instead of POST form."""
+    def test_setup_html_links_to_the_authentik_gated_console(self):
+        """Verify setup.html links to the GUI setup Console."""
         html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
         content = html_path.read_text()
-        self.assertIn('href="/console/"', content, "setup.html should link to console")
-        self.assertIn('Open Console Setup', content, "setup.html should have console button")
+        self.assertIn('href="/console/"', content, "setup.html should link to Console")
+        self.assertIn("Sign in to Authentik", content, "setup.html should explain Authentik access")
         self.assertNotIn('method="POST"', content, "setup.html should not use POST form")
 
     def test_setup_html_has_canonical_link(self):
@@ -33,13 +33,36 @@ class TestSetupHTML(unittest.TestCase):
 class TestCaddyConfig(unittest.TestCase):
     """Tests for Caddy configuration changes."""
 
-    def test_caddy_redirects_root_to_setup(self):
-        """Verify Caddy config redirects root to /setup."""
+    def test_caddy_bootstrap_sends_home_and_unknown_paths_to_authentik_launcher(self):
+        """Authentik owns the appliance home page in both Caddy configurations."""
         bootstrap_path = pathlib.Path(ROOT / "modules/nas/config/caddy-bootstrap.nix")
         self.assertTrue(pathlib.Path(bootstrap_path).exists(), "caddy-bootstrap.nix should exist")
-        content = bootstrap_path.read_text()
-        self.assertIn("redir * /setup 303", content, "Caddy config should redirect / to /setup")
-        self.assertIn("handle /setup", content, "Caddy config should have /setup handler")
+        content = bootstrap_path.read_text(encoding="utf-8")
+
+        # Authentik must remain reachable without forward-auth to avoid a loop.
+        for route in ("handle @authentikUi {", "handle @authentikOutpost {"):
+            with self.subTest(route=route):
+                start = content.index(route)
+                end = content.index("\n  }", start)
+                self.assertNotIn("${caddyForwardAuth}", content[start:end])
+
+        for route in ("handle /setup {", "handle /setup/* {"):
+            with self.subTest(route=route):
+                start = content.index(route)
+                end = content.find("\n  }", start)
+                self.assertIn("${caddyForwardAuth}", content[start:end], f"{route} must require Authentik")
+
+        console_start = content.index("handle /console* {")
+        console_end = content.find("\n  }\n", console_start)
+        console = content[console_start:console_end]
+        self.assertIn("${caddyForwardAuth}", console)
+        self.assertIn("respond @missingCockpitAdmin 403", console)
+        self.assertIn("reverse_proxy 127.0.0.1:${toString cockpitPort}", console)
+
+        root = content[content.index("handle / {") : content.index("handle /setup {")]
+        self.assertIn("redir * ${cfg.identity.authentikPath}if/user/ 303", root)
+        fallback = content[content.rindex("handle {") :]
+        self.assertIn("redir * ${cfg.identity.authentikPath}if/user/ 303", fallback)
 
     def test_caddy_no_shell_conditionals(self):
         """Verify Caddy config doesn't have invalid shell conditionals."""

@@ -120,7 +120,41 @@ class BrowserAuthzInputTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "first-browser-operation"):
                     self.authz.main()
-            first_browser.assert_called_once_with("https://localhost:9092", "admin", "operator-secret")
+            first_browser.assert_called_once_with("https://nas-test.local", "admin", "operator-secret")
+
+    def test_bootstrap_only_cli_checks_akadmin_portal_setup_and_console_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            password = self.secret(pathlib.Path(temporary), "bootstrap", "bootstrap-secret")
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "authz.py",
+                        "--origin",
+                        "https://nas-test.local:8443",
+                        "--bootstrap-only",
+                        "--bootstrap-password-file",
+                        str(password),
+                    ],
+                ),
+                mock.patch.object(self.authz, "run_account") as run_account,
+                mock.patch.object(self.authz, "verify_callback_return_paths") as callback_paths,
+                mock.patch.object(self.authz, "verify_launcher_opens_console") as launcher_console,
+            ):
+                self.assertEqual(self.authz.main(), 0)
+
+        origin, username, secret, expectations, settings = run_account.call_args.args
+        self.assertEqual(
+            (origin, username, secret, settings), ("https://nas-test.local:8443", "akadmin", "bootstrap-secret", False)
+        )
+        self.assertEqual(
+            [(item.path, item.allowed) for item in expectations], [("/", True), ("/setup", True), ("/console/", True)]
+        )
+        callback_paths.assert_called_once_with(
+            "https://nas-test.local:8443", "akadmin", "bootstrap-secret", ["/setup", "/console/"]
+        )
+        launcher_console.assert_called_once_with("https://nas-test.local:8443", "akadmin", "bootstrap-secret")
 
     def test_secret_reader_rejects_symlink_and_permissive_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -211,6 +211,165 @@ def reconcile_capabilities(
     }
 
 
+def desired_route_apps(effective: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect Authentik proxy applications for identity-gated hostname routes.
+
+    Every V2 route exposed on its own hostname (sub- or sub-sub-domain) shares
+    the same Caddy forward-auth boundary; this projection only ensures each
+    such host has a matching Authentik application so the outpost can authorize
+    and redirect for it.
+    """
+    apps: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    services = effective.get("services")
+    if not isinstance(services, dict):
+        return apps
+    for service_id, service in sorted(services.items()):
+        if not isinstance(service, dict):
+            continue
+        routes = service.get("routes")
+        if not isinstance(routes, dict):
+            continue
+        runtime = service.get("runtime") or {}
+        unit = runtime.get("unit") if isinstance(runtime, dict) else None
+        for route_id, route in sorted(routes.items()):
+            if not isinstance(route, dict) or route.get("enabled") is False:
+                continue
+            authz = route.get("auth") or {}
+            if authz.get("mode") != "identity":
+                continue
+            exposure = route.get("exposure") or {}
+            if exposure.get("type") != "hostname":
+                continue
+            target = route.get("target") or {}
+            host = target.get("host", "127.0.0.1")
+            port = target.get("port")
+            internal = f"http://{host}:{port}" if isinstance(port, int) else None
+            for hostname in exposure.get("hostnames") or []:
+                key = f"{service_id}/{route_id}/{hostname}"
+                if key in seen or not isinstance(internal, str):
+                    continue
+                seen.add(key)
+                apps.append(
+                    {
+                        "slug": f"v2-{service_id}-{route_id}",
+                        "name": f"NAS {service_id} ({route_id})",
+                        "hostname": hostname,
+                        "internalHost": internal,
+                        "launchUrl": f"https://{hostname}/",
+                        "unit": unit if isinstance(unit, str) else "",
+                    }
+                )
+    return apps
+
+
+def reconcile_route_apps(
+    effective: dict[str, Any],
+    *,
+    token: str,
+    authentik_url: str,
+    public_authentik_path: str = "/identity/",
+) -> dict[str, Any]:
+    """Ensure one forward_single proxy provider + application per hostname route."""
+    api_root = _api_root(authentik_url)
+    desired_apps = desired_route_apps(effective)
+
+    providers = _request_json(url=f"{api_root}/providers/proxy/?page_size=100", token=token, method="GET")
+    provider_by_name = {p.get("name"): p for p in providers if isinstance(p, dict)}
+    applications = _request_json(url=f"{api_root}/core/applications/?page_size=100", token=token, method="GET")
+    app_by_slug = {a.get("slug"): a for a in applications if isinstance(a, dict)}
+
+    outposts = _request_json(url=f"{api_root}/outposts/instances/?page_size=100", token=token, method="GET")
+    outpost = next(
+        (o for o in outposts if isinstance(o, dict) and o.get("managed") == "goauthentik.io/outposts/embedded"), None
+    )
+    outpost_pk = outpost.get("pk") if isinstance(outpost, dict) else None
+
+    flows = _request_json(url=f"{api_root}/flows/instances/?page_size=100", token=token, method="GET")
+    flow_by_slug = {f.get("slug"): f.get("pk") for f in flows if isinstance(f, dict)}
+
+    def _flow(slug: str) -> int:
+        pk = flow_by_slug.get(slug)
+        if pk is None:
+            raise AuthentikProjectionError(f"Authentik flow {slug!r} is missing")
+        return pk
+
+    created: list[str] = []
+    updated: list[str] = []
+    for app in desired_apps:
+        name = app["name"]
+        external_host = f"https://{app['hostname']}"
+        provider_body = {
+            "name": name,
+            "mode": "forward_single",
+            "external_host": external_host,
+            "internal_host": app["internalHost"],
+            "internal_host_ssl_validation": False,
+            "authentication_flow": _flow("default-authentication-flow"),
+            "authorization_flow": _flow("default-provider-authorization-implicit-consent"),
+            "invalidation_flow": _flow("default-invalidation-flow"),
+        }
+        existing_provider = provider_by_name.get(name)
+        if existing_provider is None:
+            provider = _request_json(url=f"{api_root}/providers/proxy/", token=token, method="POST", body=provider_body)
+            created.append(app["slug"])
+        else:
+            provider = _request_json(
+                url=f"{api_root}/providers/proxy/{existing_provider['pk']}/",
+                token=token,
+                method="PATCH",
+                body=provider_body,
+            )
+            updated.append(app["slug"])
+        provider_pk = provider.get("pk") if isinstance(provider, dict) else None
+        if provider_pk is None:
+            raise AuthentikProjectionError(f"provider for {name!r} has no primary key")
+
+        application_payload = {
+            "name": name,
+            "slug": app["slug"],
+            "provider": provider_pk,
+            "meta_launch_url": app["launchUrl"],
+        }
+        existing_app = app_by_slug.get(app["slug"])
+        if existing_app is None:
+            _request_json(url=f"{api_root}/core/applications/", token=token, method="POST", body=application_payload)
+        else:
+            _request_json(
+                url=f"{api_root}/core/applications/{app['slug']}/",
+                token=token,
+                method="PATCH",
+                body=application_payload,
+            )
+
+        if not isinstance(outpost, dict) or outpost_pk is None:
+            continue
+        assigned = [p for p in (outpost.get("providers") or []) if isinstance(p, int)]
+        raw_config = outpost.get("config")
+        config = dict(raw_config) if isinstance(raw_config, dict) else {}
+        config.update(
+            {
+                "authentik_host": f"https://{_public_host_from_launch(app['launchUrl'])}{public_authentik_path}",
+                "authentik_host_browser": f"https://{_public_host_from_launch(app['launchUrl'])}{public_authentik_path}",
+            }
+        )
+        if provider_pk not in assigned:
+            assigned.append(provider_pk)
+        _request_json(
+            url=f"{api_root}/outposts/instances/{outpost_pk}/",
+            token=token,
+            method="PATCH",
+            body={"providers": assigned, "config": config},
+        )
+
+    return {"schemaVersion": 1, "desired": [a["slug"] for a in desired_apps], "created": created, "updated": updated}
+
+
+def _public_host_from_launch(launch_url: str) -> str:
+    parsed = urllib.parse.urlsplit(launch_url)
+    return parsed.netloc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ensure Managed Services V2 capability groups in Authentik")
     parser.add_argument("--effective", type=pathlib.Path, default=pathlib.Path("/run/nas-control/effective.json"))
@@ -226,8 +385,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        effective_state = _read_json_object(args.effective, label="compiled effective state")
         result = reconcile_capabilities(
-            _read_json_object(args.effective, label="compiled effective state"),
+            effective_state,
+            token=_read_token(args.token_file),
+            authentik_url=args.authentik_url,
+        )
+        result["routeApps"] = reconcile_route_apps(
+            effective_state,
             token=_read_token(args.token_file),
             authentik_url=args.authentik_url,
         )

@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ZFS_DEVICE="${1:-${NAS_TEST_ZFS_DEVICE:-/dev/vdb}}"
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
 PUBLIC_HOST="${NAS_TEST_PUBLIC_HOST:-nas-test.local}"
+AUTHENTIK_PUBLIC_HOST="${NAS_TEST_AUTHENTIK_PUBLIC_HOST:-nas-test.local:8443}"
 CONFIG_DIR="${NAS_CONFIG_DIR:-/var/lib/nas-test/repo}"
 TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-$(nas_vm_ordinary_wait_seconds)}"
 AUTHENTIK_OUTPOST_PORT="${NAS_AUTHENTIK_OUTPOST_PORT:-9010}"
@@ -97,6 +98,20 @@ assert_http_responsive() {
   esac
 }
 
+assert_no_502_authentik_redirect() {
+  local path=$1 description=$2 response
+  response="$(curl --silent --show-error --insecure --output /dev/null \
+    --write-out '%{http_code} %{redirect_url}' \
+    --connect-timeout 3 --max-time 20 \
+    --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST$path" || true)"
+  case "$response" in
+    301\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|302\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|303\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|307\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|308\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*)
+      pass "$description redirects to Authentik ($response)"
+      ;;
+    *) fail "$description returned an unavailable or non-Authentik response instead of redirecting to https://$AUTHENTIK_PUBLIC_HOST/identity/ ($response)" ;;
+  esac
+}
+
 assert_blocked() {
   local path=$1 code
   code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST$path")"
@@ -143,67 +158,25 @@ authentik_api() {
   fi
 }
 
-ensure_authentik_proxy_fixture() {
-  # The VM owns a disposable Authentik database, so create the provider and
-  # application through the same API used by an operator. This keeps the
-  # browser test independent of an external Authentik export and makes the
-  # provider assignment survive an Authentik restart.
-  local auth_flow authorization_flow invalidation_flow provider_id outpost_id existing_providers outpost_config payload
-  AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-secrets/authentik/bootstrap-token)"
-  auth_flow="$(authentik_api GET 'flows/instances/?slug=default-authentication-flow' | jq -er '.results[0].pk')"
-  authorization_flow="$(authentik_api GET 'flows/instances/?slug=default-provider-authorization-implicit-consent' | jq -er '.results[0].pk')"
-  invalidation_flow="$(authentik_api GET 'flows/instances/?slug=default-invalidation-flow' | jq -er '.results[0].pk')"
-
-  provider_id="$(authentik_api GET 'providers/proxy/?page_size=100' | jq -er '.results[] | select(.name == "NAS VM Test Proxy") | .pk' | head -n1 || true)"
-  payload="$(jq -cn --arg name 'NAS VM Test Proxy' --arg authentication "$auth_flow" --arg authorization "$authorization_flow" --arg invalidation "$invalidation_flow" '{name:$name, authentication_flow:$authentication, authorization_flow:$authorization, invalidation_flow:$invalidation, mode:"forward_single", external_host:"https://nas-test.local", internal_host:"http://127.0.0.1:8080", internal_host_ssl_validation:false}')"
-  if [[ -z "$provider_id" ]]; then
-    provider_id="$(authentik_api POST 'providers/proxy/' "$payload" | jq -er '.pk')"
-  else
-    authentik_api PATCH "providers/proxy/$provider_id/" "$payload" >/dev/null
-  fi
-
-  if ! authentik_api GET 'core/applications/?page_size=100' | jq -e '.results[] | select(.slug == "nas-vm-portal") | .pk' >/dev/null; then
-    payload="$(jq -cn --arg name 'NAS VM Portal' --arg slug 'nas-vm-portal' --argjson provider "$provider_id" '{name:$name, slug:$slug, provider:$provider, meta_launch_url:"https://nas-test.local"}')"
-    authentik_api POST 'core/applications/' "$payload" >/dev/null
-  fi
-
-  outpost_id="$(authentik_api GET 'outposts/instances/?page_size=100' | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk' | head -n1 || true)"
-  [[ -n "$outpost_id" ]] || fail 'Authentik embedded outpost is missing'
-  existing_providers="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --argjson provider "$provider_id" '([.providers[]?] + [$provider]) | unique')"
-  # The authorization code is issued by the public Caddy URL.  The standalone
-  # outpost must use that same issuer when redeeming it; using the loopback
-  # Authentik URL here creates a valid login followed by an endless callback
-  # redirect.  API provisioning above still uses the loopback listener.
-  outpost_config="$(authentik_api GET "outposts/instances/$outpost_id/" | jq -c --arg host "https://$PUBLIC_HOST/identity/" '.config + {authentik_host:$host, authentik_host_browser:$host}')"
-  payload="$(jq -cn --argjson providers "$existing_providers" --argjson config "$outpost_config" '{providers:$providers,config:$config}')"
-  authentik_api PATCH "outposts/instances/$outpost_id/" "$payload" >/dev/null
-
-  local outpost_token
-  outpost_token="$(authentik_api GET "core/tokens/ak-outpost-${outpost_id}-api/view_key/" | jq -er '.key')"
-  install -d -o authentik -g authentik -m 0750 /run/nas-authentik-vm-outpost
-  install -o authentik -g authentik -m 0640 /dev/null "$AUTHENTIK_OUTPOST_LOG"
-  runuser -u authentik -- env \
-    AUTHENTIK_HOST="https://$PUBLIC_HOST/identity/" \
-    AUTHENTIK_HOST_BROWSER="https://$PUBLIC_HOST/identity/" \
-    AUTHENTIK_TOKEN="$outpost_token" \
-    AUTHENTIK_INSECURE=true \
-    AUTHENTIK_LISTEN__HTTP="127.0.0.1:$AUTHENTIK_OUTPOST_PORT" \
-    AUTHENTIK_LISTEN__HTTPS="127.0.0.1:9011" \
-    AUTHENTIK_LISTEN__METRICS="127.0.0.1:9310" \
-    proxy >>"$AUTHENTIK_OUTPOST_LOG" 2>&1 &
-  AUTHENTIK_OUTPOST_PID=$!
-
-  local code=''
-  for _ in $(seq 1 60); do
-    code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
-    [[ "$code" == 204 ]] && break
-    sleep 2
-  done
-  [[ "$code" == 204 ]] || {
-    tail -80 "$AUTHENTIK_OUTPOST_LOG" >&2 || true
-    fail "Authentik VM proxy outpost did not become reachable (HTTP ${code:-none})"
-  }
-  pass 'Authentik VM proxy provider, application, and Caddy outpost backend are ready'
+verify_bootstrap_authentik_proxy() {
+  local provider_id outpost_id code
+  provider_id="$(authentik_api GET 'providers/proxy/?page_size=100' | jq -er '.results[] | select(.name == "NAS Portal") | .pk')"
+  authentik_api GET 'providers/proxy/?page_size=100' | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
+    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null
+  authentik_api GET 'core/applications/?page_size=100' | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
+    '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null
+  authentik_api GET 'core/groups/?include_users=true&page_size=100' | jq -e \
+    '.results[] | select(.name == "nas_admin") | (.users_obj // .users // []) | any(.username == "akadmin")' >/dev/null
+  outpost_id="$(authentik_api GET 'outposts/instances/?page_size=100' | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
+  authentik_api GET "outposts/instances/$outpost_id/" | jq -e --arg provider "$provider_id" \
+    '(.providers | map(tostring) | index($provider)) != null' >/dev/null
+  authentik_api GET "outposts/instances/$outpost_id/" | jq -e \
+    --arg host 'http://127.0.0.1:9000/identity/' \
+    --arg browser_host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
+    '.config.authentik_host == $host and .config.authentik_host_browser == $browser_host' >/dev/null
+  code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
+  [[ "$code" == 204 ]] || fail "Authentik bootstrap proxy outpost did not become reachable (HTTP ${code:-none})"
+  pass 'bootstrap Authentik portal provider, application, and outpost assignment are ready'
 }
 
 require_commands \
@@ -218,23 +191,50 @@ nas-managed-services-control document >/dev/null
 pass "nas-managed-services-control document returns the editable YAML authority"
 
 log "Locked-state and configuration checks"
-wait_active cockpit.socket
+! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
+wait_active nas-cockpit-sso.service
+ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only while locked"
+! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
 wait_active nas-first-start.service
 systemctl show nas-first-start.service --property=RemainAfterExit --value | grep -qx yes
-jq -e '.schemaVersion == 1 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
+jq -e '.schemaVersion == 2 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
 systemctl restart nas-first-start.service
 wait_active nas-first-start.service
-jq -e '.schemaVersion == 1 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
+jq -e '.schemaVersion == 2 and (.status | type == "string")' /var/lib/nas-first-start/status.json >/dev/null
 pass "first-start oneshot remains active and republishes readiness across restart"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active at boot"
-! systemctl is-active --quiet caddy.service || fail "Caddy must remain stopped while locked"
+wait_active caddy.service
 ! systemctl is-active --quiet copyparty.service || fail "CopyParty must remain stopped while locked"
-! systemctl is-active --quiet authentik.service || fail "Authentik must remain stopped while locked"
-code="$(http_code https://127.0.0.1:9092/console/ || true)"
-case "$code" in
-  200|301|302|303|307|308|401) pass "locked-state Cockpit endpoint is reachable ($code)" ;;
-  *) fail "locked-state Cockpit endpoint returned HTTP ${code:-none}" ;;
-esac
+wait_active authentik.service
+[[ "$(systemctl show nas-identity-bootstrap.service --property=NRestarts --value)" == 0 ]] || \
+  fail "identity bootstrap retried before Authentik's default flows were ready"
+wait_active nas-authentik-proxy-outpost.service
+AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
+verify_bootstrap_authentik_proxy
+[[ -f /var/lib/nas-bootstrap/authentik/environment ]] || fail "first-boot Authentik environment is missing"
+[[ -f /var/lib/nas-bootstrap/authentik/api-token ]] || fail "first-boot Authentik API token is missing"
+[[ "$(readlink -f /run/nas-authentik/environment)" == "/var/lib/nas-bootstrap/authentik/environment" ]] || \
+  fail "Authentik did not select the first-boot environment"
+wait_http http://127.0.0.1:9000/identity/-/health/ready/
+assert_no_502_authentik_redirect / "locked base route"
+assert_no_502_authentik_redirect /console "locked console route"
+bootstrap_authz_secret_dir=$(mktemp -d /run/nas-bootstrap-authz-test.XXXXXX)
+cleanup_bootstrap_authz_secrets() {
+  [[ -n "${bootstrap_authz_secret_dir:-}" ]] || return 0
+  rm -rf -- "$bootstrap_authz_secret_dir"
+}
+nas_vm_cleanup_add cleanup_bootstrap_authz_secrets
+chmod 0700 "$bootstrap_authz_secret_dir"
+printf '%s\n' 'nas-admin-first-boot' > "$bootstrap_authz_secret_dir/akadmin"
+chmod 0600 "$bootstrap_authz_secret_dir/akadmin"
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --bootstrap-only \
+  --bootstrap-password-file "$bootstrap_authz_secret_dir/akadmin"
+cleanup_bootstrap_authz_secrets
+bootstrap_authz_secret_dir=""
+pass "locked first boot runs isolated Authentik and routes browser access through the public Authentik host"
 
 [[ -d "$CONFIG_DIR" ]] || fail "test configuration checkout is missing: $CONFIG_DIR"
 json="$(nas-update --status --json)"
@@ -444,7 +444,6 @@ done
 wait_active nas-v2-timer-identity-sync-0.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
-ensure_authentik_proxy_fixture
 curl --fail --silent --show-error --max-time 20 \
   --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
 nas-identity-sync status | jq -e '
@@ -628,6 +627,11 @@ assert_blocked /vault/admin
 assert_blocked /metrics/
 assert_blocked /alerts/
 
+# V2 routes must begin their unauthenticated flow at Authentik, rather than
+# falling through to the launcher after the flow completes.
+assert_no_502_authentik_redirect /console/ "managed Cockpit route"
+assert_no_502_authentik_redirect /shares/ "managed application route"
+
 identity_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/identity/")"
 case "$identity_code" in 200|301|302|303|307|308) : ;; *) fail "public Authentik login route returned $identity_code" ;; esac
 
@@ -693,8 +697,8 @@ pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while
 
 log "Browser-level authorization and deterministic bundle probes"
 # The persistent wrapper keeps mutable local users across generations. Seed
-# the disposable fixture's PAM credential so direct Cockpit recovery remains
-# deterministic after the installed OS is updated in place.
+# the disposable fixture's Authentik administrator credential so the Cockpit
+# OAuth browser flow remains deterministic after the installed OS is updated.
 printf '%s\n' 'admin:admin-vm-password' | chpasswd
 authz_secret_dir=$(mktemp -d /run/nas-authz-test.XXXXXX)
 cleanup_authz_secrets() {
@@ -710,8 +714,8 @@ printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
 chmod 0600 "$authz_secret_dir"/*
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
-  --origin "https://$PUBLIC_HOST" \
-  --cockpit-password-file "$authz_secret_dir/admin" \
+   --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+   --cockpit-password-file "$authz_secret_dir/admin" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
   --baseline-password-file "$authz_secret_dir/baseline"
@@ -860,7 +864,9 @@ wait_inactive caddy.service
 wait_inactive copyparty.service
 wait_inactive authentik.service
 wait_inactive nas-zfs-mount-guard.service
-wait_active cockpit.socket
+wait_active nas-cockpit-sso.service
+! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket started after setup"
+ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session is not loopback-only"
 [[ ! -e /run/nas-secrets ]] || fail "runtime secret tree survived nas-secrets stop"
 
 activate_secrets

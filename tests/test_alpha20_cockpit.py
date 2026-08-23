@@ -6,6 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def caddy_forward_auth_marker(bootstrap: str) -> str:
+    marker = "forward_auth 127.0.0.1:${toString authentikOutpostPort}"
+    if marker in bootstrap:
+        return marker
+    raise AssertionError("outpost forward_auth target missing from bootstrap Caddyfile")
+
+
 def text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
@@ -20,17 +27,23 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn('wantedBy = [ "multi-user.target" ];', first_start)
         self.assertIn("prepare-first-start", first_start)
 
-    def test_cockpit_uses_authentik_oauth_bearer_authentication(self) -> None:
+    def test_cockpit_sits_behind_caddy_authentik_gate(self) -> None:
         application = text("modules/nas/config/application-services.nix")
+        bootstrap = text("modules/nas/config/caddy-bootstrap.nix")
         system = text("modules/nas/config/system.nix")
         seed = text("modules/nas/config/managed-services-seed-v2.nix")
         self.assertIn("nas-cockpit-sso", application)
-        self.assertIn("--for-tls-proxy", application)
-        self.assertNotIn("--local-session", application)
-        self.assertNotIn("--no-tls \\\n+      --for-tls-proxy", application)
-        self.assertIn("settings.OAuth.URL", application)
-        self.assertIn("settings.bearer", application)
-        self.assertIn("nas-cockpit-auth", application)
+        self.assertIn("--local-session", application)
+        self.assertIn("cockpit-bridge", application)
+        self.assertIn("--no-tls", application)
+        self.assertNotIn("settings.bearer", application)
+        self.assertNotIn("nas-cockpit-oauth", application)
+        # Caddy owns authorization: forward auth via the outpost plus the
+        # nas_admin group check before any request reaches Cockpit.
+        console = bootstrap.split("handle /console* {", 1)[1].split("reverse_proxy", 1)[0]
+        self.assertIn("${caddyForwardAuth}", console)
+        self.assertIn("missingCockpitAdmin", console)
+        self.assertIn("respond @missingCockpitAdmin 403", console)
         self.assertIn("--address 127.0.0.1", application)
         self.assertIn("systemd.sockets.cockpit.enable = false;", system)
         self.assertNotIn("ConditionPathExists = lib.mkOverride", system)

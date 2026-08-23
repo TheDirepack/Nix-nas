@@ -12,6 +12,8 @@ let
   secretRoot = "/run/nas-secrets";
   authentikSecretDir = "${secretRoot}/authentik";
   authentikEnvironmentFile = "${authentikSecretDir}/environment";
+  authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";
+  authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
   bootstrapRuntimeRoot = "/var/lib/nas-bootstrap";
@@ -78,7 +80,7 @@ let
   caddyBackendUnits = [
     "authentik.service"
     "authentik-worker.service"
-    "cockpit.socket"
+    "nas-cockpit-sso.service"
   ];
 
   # Secret activation owns only host/security substrate. In particular, do not
@@ -132,6 +134,7 @@ in
 {
   inherit
     cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
+    authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
     authentikOutpostPort authentikOutpostPath

@@ -653,6 +653,7 @@ run_installer() {
           -p "$SSH_PORT" admin@127.0.0.1 \
           "cd /var/lib/nas-test/repo &&
            sudo -n systemctl reset-failed &&
+           sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1; sleep 1; done' &&
            sudo -n nas-secrets stop &&
            sudo -n env NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
              nix develop path:/var/lib/nas-test/repo#test -c \
