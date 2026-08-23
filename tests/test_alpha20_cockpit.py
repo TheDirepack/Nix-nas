@@ -11,18 +11,33 @@ def text(relative: str) -> str:
 
 
 class Alpha20CockpitContracts(unittest.TestCase):
-    def test_first_start_is_enabled_and_cockpit_has_qualified_early_boot_ordering(self) -> None:
+    def test_first_start_is_enabled(self) -> None:
         options = text("modules/nas/options/core.nix")
         services = text("modules/nas/config/systemd-services.nix")
-        system = text("modules/nas/config/system.nix")
         self.assertIn("firstStart = {", options)
         self.assertIn("default = true;", options.split("firstStart = {", 1)[1].split("};", 1)[0])
         first_start = services.split("nas-first-start =", 1)[1].split("nas-zfs-unlock =", 1)[0]
         self.assertIn('wantedBy = [ "multi-user.target" ];', first_start)
         self.assertIn("prepare-first-start", first_start)
-        self.assertIn('wantedBy = lib.mkOverride 90 [ "multi-user.target" ]', system)
-        self.assertIn("DefaultDependencies = false", system)
-        self.assertIn('after = [ "sysinit.target" "basic.target" ]', system)
+
+    def test_cockpit_uses_authentik_oauth_bearer_authentication(self) -> None:
+        application = text("modules/nas/config/application-services.nix")
+        system = text("modules/nas/config/system.nix")
+        seed = text("modules/nas/config/managed-services-seed-v2.nix")
+        self.assertIn("nas-cockpit-sso", application)
+        self.assertIn("--for-tls-proxy", application)
+        self.assertNotIn("--local-session", application)
+        self.assertNotIn("--no-tls \\\n+      --for-tls-proxy", application)
+        self.assertIn("settings.OAuth.URL", application)
+        self.assertIn("settings.bearer", application)
+        self.assertIn("nas-cockpit-auth", application)
+        self.assertIn("--address 127.0.0.1", application)
+        self.assertIn("systemd.sockets.cockpit.enable = false;", system)
+        self.assertNotIn("ConditionPathExists = lib.mkOverride", system)
+        cockpit = seed.split("cockpit = {", 1)[1].split("    };\n  };", 1)[0]
+        self.assertIn('unit = "nas-cockpit-sso.service";', cockpit)
+        self.assertIn('mode = "identity";', cockpit)
+        self.assertIn('capability = "admin";', cockpit)
 
     def test_cockpit_is_react_patternfly_and_has_no_legacy_dom_renderer(self) -> None:
         package = text("cockpit/package.json")
@@ -53,12 +68,13 @@ class Alpha20CockpitContracts(unittest.TestCase):
 
     def test_password_transport_and_destructive_confirmation_remain_explicit(self) -> None:
         api = text("cockpit/src/api.js")
-        app = text("cockpit/src/app.jsx")
+        operations = text("cockpit/src/pages/operations-page.jsx")
+        setup_page = text("cockpit/src/pages/setup-page.jsx")
         self.assertIn("process.input", api)
         self.assertIn('["nas-secrets", "activate-stdin"]', api)
         self.assertIn("allowDestructiveStorage", api)
-        self.assertIn("Confirm maintenance action", app)
-        self.assertIn("first-start-destructive", app)
+        self.assertIn("Confirm maintenance action", operations)
+        self.assertIn("first-start-destructive", setup_page)
 
     def test_syncthing_reconcile_uses_a_durable_generation_journal(self) -> None:
         identity = text("services/nas_identity_sync.py")
