@@ -39,7 +39,6 @@ REQUIRED_FILES = {
     "docs/development/code-map.md",
     "docs/development/invariants.md",
     "docs/development/known-risks.md",
-    "docs/development/combined-review-remediation.md",
     "docs/development/testing.md",
     "docs/development/dependencies.md",
     "docs/development/history.md",

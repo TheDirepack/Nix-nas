@@ -10,6 +10,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [Code map](code-map.md) — where a change belongs.
 - [Testing and validation](testing.md) — local, NixOS, VM, browser, and hardware validation.
 - [Known risks](known-risks.md) — unresolved multi-step failure boundaries and recovery expectations.
+- [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.
 
@@ -62,7 +63,3 @@ Useful supporting records:
 
 - [External validation](external-validation.md)
 - [Privileged-service audit](root-service-audit.md)
-- [Combined Alpha 18/20 remediation register](combined-review-remediation.md)
-- [Alpha.24 implementation record](alpha24-implementation.md)
-- [Alpha.2 audit remediation](alpha2-remediation.md)
-- [Alpha.3 audit remediation](alpha3-remediation.md)
