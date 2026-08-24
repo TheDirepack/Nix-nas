@@ -18,6 +18,7 @@ if str(SERVICES) not in sys.path:
 import nas_v2_libvirt as libvirt  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
+import nas_v2_systemd_native as systemd_native  # noqa: E402
 
 
 def required(element: ET.Element | None) -> ET.Element:
@@ -50,24 +51,14 @@ class V2LibvirtTests(unittest.TestCase):
         )
         document = {
             "schemaVersion": 3,
-            "storageResources": {
-                "projects": {
-                    "path": "/tank/projects",
-                    "stateClass": "authoritative",
-                }
-            },
+            "storageResources": {"projects": {"path": "/tank/projects", "stateClass": "authoritative"}},
             "services": {
                 "demo": {
                     "name": "Demo VM",
                     "workload": {"kind": "daemon", "activation": "persistent"},
                     "runtime": {"type": "vm", "source": str(source)},
                     "storage": [
-                        {
-                            "resource": "projects",
-                            "mountPath": "/workspace",
-                            "mountTag": "projects",
-                            "access": "read",
-                        }
+                        {"resource": "projects", "mountPath": "/workspace", "mountTag": "projects", "access": "read"}
                     ],
                     "resources": {
                         "accelerators": [
@@ -141,8 +132,7 @@ class V2LibvirtTests(unittest.TestCase):
             effective, service, app_root = self.fixture(root)
             source = pathlib.Path(service["runtime"]["source"])
             source.write_text(
-                '<!DOCTYPE domain [<!ENTITY x "bad">]><domain><name>&x;</name><devices/></domain>',
-                encoding="utf-8",
+                '<!DOCTYPE domain [<!ENTITY x "bad">]><domain><name>&x;</name><devices/></domain>', encoding="utf-8"
             )
             with (
                 mock.patch.object(libvirt, "APP_ROOT", app_root),
@@ -237,7 +227,7 @@ class V2LibvirtTests(unittest.TestCase):
         with self.assertRaisesRegex(systemd.SystemdProjectionError, "virt-xml-validate"):
             systemd.validate_projection(files, systemd_analyze_bin="systemd-analyze")
 
-        with mock.patch.object(systemd, "validate_domain_xml") as validate:
+        with mock.patch.object(systemd_native, "validate_domain_xml") as validate:
             systemd.validate_projection(
                 files,
                 systemd_analyze_bin="systemd-analyze",
@@ -250,10 +240,10 @@ class V2LibvirtTests(unittest.TestCase):
 
     def test_nix_runtime_module_pins_libvirt_tools(self):
         module = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
-        self.assertIn('"${pkgs.libvirt}/bin/virsh"', module)
-        self.assertIn('"${pkgs.libvirt}/bin/virt-xml-validate"', module)
-        self.assertIn('"--virsh-bin"', module)
-        self.assertIn('"--virt-xml-validate-bin"', module)
+        self.assertIn('NAS_V2_VIRSH_BIN = "${pkgs.libvirt}/bin/virsh";', module)
+        self.assertIn('NAS_V2_VIRT_XML_VALIDATE_BIN = "${pkgs.libvirt}/bin/virt-xml-validate";', module)
+        self.assertNotIn('"--virsh-bin"', module)
+        self.assertNotIn('"--virt-xml-validate-bin"', module)
 
 
 if __name__ == "__main__":
