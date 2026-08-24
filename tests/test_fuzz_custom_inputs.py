@@ -48,6 +48,7 @@ else:
     import nas_v2_authentik_blueprint as authentik_blueprint
     import nas_v2_caddy as caddy
     import nas_v2_compose as compose
+    import nas_v2_compose_import as compose_import
     import nas_v2_network as network
     import nas_v2_nmstate as nmstate
     import nas_v2_podman_network as podman_network
@@ -82,6 +83,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_bootstrap",
         "nas_v2_caddy",
         "nas_v2_compose",
+        "nas_v2_compose_import",
         "nas_v2_control",
         "nas_v2_editor",
         "nas_v2_entry",
@@ -177,9 +179,9 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(quadlet._reject_control, value, "fuzz field")
             expected_boundary_error(quadlet._single_line, value, field="fuzz field")
             expected_boundary_error(quadlet._safe_path, value, field="fuzz field")
-            expected_boundary_error(authentik._api_root, value)
             expected_boundary_error(authentik.desired_capabilities, {"services": {}})
             expected_boundary_error(authentik_blueprint._q, value)
+            expected_boundary_error(compose_import._absolute_binary, value, label="fuzz binary")
             expected_boundary_error(network.bridge_interface_name, value)
             expected_boundary_error(network.podman_network_name, value, {})
             expected_boundary_error(network.vlan_binding, {"vlanId": value, "vlanParent": value})
@@ -200,7 +202,6 @@ if HAS_HYPOTHESIS:
             v2_spec.SERVICE_ID_RE.fullmatch(value)
             v2_spec.CAPABILITY_ID_RE.fullmatch(value)
             v2_spec.SYSTEMD_UNIT_RE.fullmatch(value)
-            authentik.CAPABILITY_RE.fullmatch(value)
             authentik_blueprint.CAPABILITY_RE.fullmatch(value)
             accelerator.is_cdi_selector(value)
 
