@@ -136,7 +136,11 @@ def _augment_compose_imports(
         except ComposeImportError as exc:
             raise SystemdProjectionError(str(exc)) from exc
         entry_units = imported.get("entryUnits")
-        if not isinstance(entry_units, list) or not entry_units or any(not isinstance(unit, str) for unit in entry_units):
+        if (
+            not isinstance(entry_units, list)
+            or not entry_units
+            or any(not isinstance(unit, str) for unit in entry_units)
+        ):
             raise SystemdProjectionError(f"Compose import for {service_id!r} has no native entry units")
         for name, content in sorted(bundle.items()):
             path = quadlet_dir / name
@@ -161,18 +165,14 @@ def _augment_compose_imports(
             ).encode("utf-8")
         ).hexdigest()
 
-    manifest["links"] = [
-        {"target": target, "source": source} for target, source in sorted(links.items())
-    ]
+    manifest["links"] = [{"target": target, "source": source} for target, source in sorted(links.items())]
     manifest["quadletLinks"] = [
         {"target": target, "source": source} for target, source in sorted(quadlet_links.items())
     ]
     manifest["ownedUnits"] = sorted(owned)
     manifest["stopUnits"] = sorted(stop)
     manifest["fingerprints"] = fingerprints
-    files[output_dir / "manifest.json"] = (
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    files[output_dir / "manifest.json"] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
 def generate_projection(
