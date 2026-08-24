@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -56,44 +57,38 @@ class RevisionTests(unittest.TestCase):
             # ensure rev3 not written
             self.assertEqual(editor.read_document(desired_path=p, schema_path=SCHEMA)["revision"], rev2)
 
-    def test_rollback_does_not_overwrite_newer_edit(self):
-        # Simulate: A writes rev2, reconcile fails, B writes rev3, A rollback should not overwrite rev3
+    def test_control_does_not_restore_yaml_after_reconcile_failure(self):
         import nas_v2_control as control
 
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             p = root / "services.yaml"
-            # patch control's DESIRED_PATH and RECONCILE_UNIT
-            orig_desired = control.DESIRED_PATH
-            orig_schema = control.SCHEMA_PATH
-            orig_reconcile = control.RECONCILE_UNIT
-            orig_load_platform = editor.load_platform_capabilities
+            p.write_text(minimal_yaml("a"), encoding="utf-8")
+            original_desired = control.DESIRED_PATH
+            original_schema = control.SCHEMA_PATH
+            original_platform = control.PLATFORM_PATH
             try:
                 control.DESIRED_PATH = p
                 control.SCHEMA_PATH = SCHEMA
-                editor.load_platform_capabilities = lambda _path: set()  # type: ignore[method-assign]
-                # use a fake systemctl that fails
-                control.RECONCILE_UNIT = "fake-reconcile-unit"
-
-                # initial
-                p.write_text(minimal_yaml("a"), encoding="utf-8")
-                previous = p.read_text(encoding="utf-8")
-                # A writes rev2
-                yaml2 = minimal_yaml("b")
-                editor.replace_document(yaml2, desired_path=p, schema_path=SCHEMA, platform_path=None)
-                attempted = p.read_text(encoding="utf-8")
-                # B writes rev3
-                yaml3 = minimal_yaml("c")
-                p.write_text(yaml3, encoding="utf-8")
-                # A rollback should detect superseded and not overwrite
-                with self.assertRaisesRegex(control.ControlError, "already superseded"):
-                    control._rollback(previous, attempted, RuntimeError("reconcile failed"))
-                self.assertEqual(p.read_text(encoding="utf-8"), yaml3)
+                control.PLATFORM_PATH = None
+                with mock.patch.object(control, "_reconcile", side_effect=control.ControlError("reconcile failed")):
+                    with self.assertRaisesRegex(control.ControlError, "reconcile failed"):
+                        control._mutate_and_reconcile(
+                            lambda: editor.replace_document(
+                                minimal_yaml("b"),
+                                desired_path=p,
+                                schema_path=SCHEMA,
+                                platform_path=None,
+                            )
+                        )
+                # Rollback belongs to the guarded Git reconcile transaction.
+                # The control CLI must not race it by restoring prior text.
+                self.assertEqual(p.read_text(encoding="utf-8"), minimal_yaml("b"))
+                self.assertFalse(hasattr(control, "_rollback"))
             finally:
-                control.DESIRED_PATH = orig_desired
-                control.SCHEMA_PATH = orig_schema
-                control.RECONCILE_UNIT = orig_reconcile
-                editor.load_platform_capabilities = orig_load_platform  # type: ignore[method-assign]
+                control.DESIRED_PATH = original_desired
+                control.SCHEMA_PATH = original_schema
+                control.PLATFORM_PATH = original_platform
 
 
 if __name__ == "__main__":
