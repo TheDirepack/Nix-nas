@@ -82,7 +82,7 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
         self.assertIn("/public-demo/", rendered)
         caddy.validate_caddyfile(rendered, caddy_bin=self.caddy_bin)
 
-    def test_on_demand_identity_route_with_wake_is_accepted_by_real_caddy(self):
+    def test_on_demand_identity_route_with_native_activation_is_accepted_by_real_caddy(self):
         effective = self.compile(
             {
                 "on-demand": {
@@ -99,8 +99,9 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
                 }
             }
         )
-        rendered = caddy.generate_caddyfile(effective, wake_socket="/run/nas-control/wake.sock")
-        self.assertIn("/wake?service=on-demand", rendered)
+        rendered = caddy.generate_caddyfile(effective)
+        self.assertIn("reverse_proxy unix//run/nas-control/activate/on-demand-web.sock", rendered)
+        self.assertNotIn("/wake?", rendered)
         caddy.validate_caddyfile(rendered, caddy_bin=self.caddy_bin)
 
     def test_validate_helper_rejects_invalid_caddyfile(self):
