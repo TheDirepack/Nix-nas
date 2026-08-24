@@ -201,8 +201,6 @@ def generate_projection(
         source_dir=source_dir,
         systemctl_bin=systemctl_bin,
         uv_bin=uv_bin,
-        podman_bin=podman_bin,
-        compose_provider_bin=compose_provider_bin,
         virsh_bin=virsh_bin,
     )
     if compose_imports:
