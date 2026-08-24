@@ -156,7 +156,9 @@ def _apply_zone(firewall_cmd: str, name: str, payload: bytes) -> None:
     if target:
         _permanent(firewall_cmd, f"--zone={name}", f"--set-target={target}")
     for interface in root.findall("interface"):
-        _permanent(firewall_cmd, f"--zone={name}", f"--add-interface={_attr(interface, 'name', label='zone interface')}")
+        _permanent(
+            firewall_cmd, f"--zone={name}", f"--add-interface={_attr(interface, 'name', label='zone interface')}"
+        )
     for service in root.findall("service"):
         _permanent(firewall_cmd, f"--zone={name}", f"--add-service={_attr(service, 'name', label='zone service')}")
     for port in root.findall("port"):
