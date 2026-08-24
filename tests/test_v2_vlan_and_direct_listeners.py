@@ -11,7 +11,6 @@ if str(SERVICES) not in sys.path:
 
 import nas_v2_network as firewalld  # noqa: E402
 import nas_v2_network as network  # noqa: E402
-import nas_v2_podman_network as podman_network  # noqa: E402
 
 
 class V2VlanAndDirectListenerTests(unittest.TestCase):
