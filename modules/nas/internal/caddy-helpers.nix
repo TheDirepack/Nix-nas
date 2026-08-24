@@ -1,6 +1,6 @@
 args:
 let
-  inherit (args) authentikPort authentikOutpostPort authentikOutpostPath cfg lanHost vaultwardenPort;
+  inherit (args) authentikPort authentikOutpostPath cfg lanHost vaultwardenPort;
   caddyForwardAuth = ''
     request_header -Remote-User
     request_header -Remote-Groups
@@ -12,10 +12,10 @@ let
     request_header -X-Authentik-Name
     request_header -X-Authentik-Email
     request_header -X-Authentik-Uid
-    forward_auth 127.0.0.1:${toString authentikOutpostPort} {
+    forward_auth 127.0.0.1:${toString authentikPort} {
       uri ${authentikOutpostPath}
-      # The outpost's Caddy handler needs this exact trio to detect the
-      # original request and build the authorize redirect.
+      # The embedded outpost's Caddy handler needs this exact trio to detect
+      # the original request and build the authorize redirect.
       header_up X-Forwarded-Proto {scheme}
       # {http.request.hostport} keeps a non-standard external port
       # (QEMU forwards :8443); on a 443 deployment it equals {host}.
