@@ -1,0 +1,24 @@
+name: Prettier diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  format-diff:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Print canonical Prettier diff
+        run: |
+          set -euo pipefail
+          nix shell nixpkgs#prettier -c prettier --write "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "tests/js/*.mjs" prettier.config.mjs
+          git diff --exit-code -- cockpit/src cockpit/e2e tests/js prettier.config.mjs || {
+            git diff -- cockpit/src cockpit/e2e tests/js prettier.config.mjs
+            exit 1
+          }
