@@ -35,8 +35,7 @@ from nas_v2_spec import (
 )
 
 _MANAGED_PREAMBLE = (
-    "# Nix NAS Managed Services V2\n"
-    "# This file is primarily edited by the Nix NAS GUI. Git stores its history.\n"
+    "# Nix NAS Managed Services V2\n# This file is primarily edited by the Nix NAS GUI. Git stores its history.\n"
 )
 
 
