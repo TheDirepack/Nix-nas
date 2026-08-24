@@ -40,6 +40,9 @@
     "services/nas_v2_authentik.py": [
       "tests/test_v2_authentik.py"
     ],
+    "services/nas_v2_authentik_blueprint.py": [
+      "tests/test_v2_authentik_blueprint.py"
+    ],
     "services/nas_v2_backup.py": [
       "tests/test_v2_backup.py",
       "tests/test_v2_backup_runtime.py",
