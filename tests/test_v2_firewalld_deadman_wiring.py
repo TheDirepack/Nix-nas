@@ -13,7 +13,7 @@ class V2TransactionWiringTests(unittest.TestCase):
 
         self.assertIn("nas_guarded_apply.py", pre_start)
         self.assertIn("systemd-run", pre_start)
-        self.assertIn("INVOCATION_ID", pre_start)
+        self.assertIn("${guardUnitShell}", pre_start)
         self.assertNotIn(" record", pre_start)
         self.assertIn("desiredRevision", post_start)
         firewall_reconcile = post_start.index("statelessFirewalldArgs")
