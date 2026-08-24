@@ -484,8 +484,8 @@ def _service_storage_dirs(effective: dict[str, Any]) -> list[pathlib.Path]:
                     dirs.append(pathlib.Path(script).parent)
                 except Exception:
                     continue
-        # Per-type container/vm staging for readability — best-effort, still
-        # under the shared app root so a single tmpfiles base covers containment.
+        # Per-type container/vm staging for readability — still under the
+        # shared app root so a single tmpfiles base covers containment.
         rt = runtime.get("type") if isinstance(runtime, dict) else None
         if rt in {"oci", "quadlet", "compose"}:
             dirs.append(_SERVICE_APP_ROOT / service_id / "containers")
@@ -502,23 +502,29 @@ def _service_storage_dirs(effective: dict[str, Any]) -> list[pathlib.Path]:
 
 
 def _ensure_service_dirs(effective: dict[str, Any]) -> None:
+    """Create required app directories, failing closed in the root reconciler."""
+    strict = os.geteuid() == 0
+    gid: int | None = None
+    if strict:
+        import grp
+
+        try:
+            gid = grp.getgrnam("nas-operations").gr_gid
+        except KeyError as exc:
+            raise SystemdProjectionError("nas-operations group is missing while preparing service storage") from exc
+
     for path in _service_storage_dirs(effective):
         try:
             path.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            continue
-        try:
             os.chmod(path, 0o750)
-        except OSError:
-            continue
-        # Best-effort ownership root:nas-operations mirrors the base tmpfiles rule.
-        # Fallback to current uid/gid when the group is unavailable in test envs.
-        try:
-            import grp
-
-            gid = grp.getgrnam("nas-operations").gr_gid
-            os.chown(path, 0, gid)
-        except Exception:
+            if strict:
+                assert gid is not None
+                os.chown(path, 0, gid)
+        except OSError as exc:
+            if strict:
+                raise SystemdProjectionError(f"unable to prepare service storage directory {path}: {exc}") from exc
+            # Non-root developer/unit-test execution cannot prepare production
+            # /var/lib paths; projection validation remains usable there.
             continue
 
 
@@ -533,14 +539,9 @@ def apply(
 ) -> dict[str, Any]:
     with authority_lock(paths.desired):
         effective, plan = _compile_paths_inner(paths)
-        # Auto-generate per-service ZFS folders before materializing projections.
-        # This runs inside the reconcile transaction which has ReadWritePaths on
-        # ${zfsRoot}/nas-control, so the compat symlink target is writable.
-        try:
-            _ensure_service_dirs(effective)
-        except Exception:
-            # Folder creation is best-effort; projection validation remains authoritative.
-            pass
+        # The production reconciler is root and must not advertise a successful
+        # apply when a required service storage path cannot be prepared.
+        _ensure_service_dirs(effective)
         try:
             needs_firewalld = requires_firewalld(effective)
         except PodmanNetworkProjectionError as exc:
