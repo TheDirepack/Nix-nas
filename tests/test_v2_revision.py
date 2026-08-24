@@ -62,33 +62,25 @@ class RevisionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            p = root / "services.yaml"
-            p.write_text(minimal_yaml("a"), encoding="utf-8")
+            desired = root / "services.yaml"
+            source = root / "replacement.yaml"
+            desired.write_text(minimal_yaml("a"), encoding="utf-8")
+            source.write_text(minimal_yaml("b"), encoding="utf-8")
             original_desired = control.DESIRED_PATH
             original_schema = control.SCHEMA_PATH
-            original_platform = control.PLATFORM_PATH
             try:
-                control.DESIRED_PATH = p
+                control.DESIRED_PATH = desired
                 control.SCHEMA_PATH = SCHEMA
-                control.PLATFORM_PATH = None
                 with mock.patch.object(control, "_reconcile", side_effect=control.ControlError("reconcile failed")):
                     with self.assertRaisesRegex(control.ControlError, "reconcile failed"):
-                        control._mutate_and_reconcile(
-                            lambda: editor.replace_document(
-                                minimal_yaml("b"),
-                                desired_path=p,
-                                schema_path=SCHEMA,
-                                platform_path=None,
-                            )
-                        )
+                        control.replace_from_source(str(source))
                 # Rollback belongs to the guarded Git reconcile transaction.
                 # The control CLI must not race it by restoring prior text.
-                self.assertEqual(p.read_text(encoding="utf-8"), minimal_yaml("b"))
+                self.assertEqual(desired.read_text(encoding="utf-8"), minimal_yaml("b"))
                 self.assertFalse(hasattr(control, "_rollback"))
             finally:
                 control.DESIRED_PATH = original_desired
                 control.SCHEMA_PATH = original_schema
-                control.PLATFORM_PATH = original_platform
 
 
 if __name__ == "__main__":
