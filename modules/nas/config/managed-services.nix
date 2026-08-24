@@ -155,15 +155,6 @@ let
       ${pkgs.coreutils}/bin/mv -n "$tmp" ${lib.escapeShellArg desiredPath}
       trap - EXIT
     fi
-    # Remove stale directory authority if it exists (migration from services/ dir)
-    if [ -d ${lib.escapeShellArg desiredPath} ]; then
-      echo "warning: ${desiredPath} is a directory, expected file; leaving for manual migration" >&2
-    fi
-    if [ -d ${zfsControlRoot}/services ]; then
-      if [ -z "$(${pkgs.coreutils}/bin/ls -A ${zfsControlRoot}/services 2>/dev/null)" ]; then
-        ${pkgs.coreutils}/bin/rmdir ${zfsControlRoot}/services 2>/dev/null || true
-      fi
-    fi
   '';
 in
 {
@@ -259,6 +250,16 @@ in
         ${v2Python}/bin/python ${lib.escapeShellArgs firewalldReconcileArgs}
         ''}
         ${v2Python}/bin/python ${lib.escapeShellArgs systemdReconcileArgs}
+        ${lib.optionalString firewalldEnabled ''
+        pending=${lib.escapeShellArg "${firewalldDeadmanStateDir}/pending.json"}
+        if [ -f "$pending" ]; then
+          token="$(${pkgs.jq}/bin/jq -er '.token | select(type == "string" and length > 0)' "$pending")"
+          ${v2Python}/bin/python ${v2Source}/nas_v2_network.py \
+            --deadman-state-dir ${lib.escapeShellArg firewalldDeadmanStateDir} \
+            --systemd-bin ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
+            --acknowledge "$token"
+        fi
+        ''}
       '';
       serviceConfig = {
         Type = "oneshot";
