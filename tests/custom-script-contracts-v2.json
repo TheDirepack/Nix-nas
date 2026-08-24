@@ -90,6 +90,9 @@
       "tests/test_v2_podman_network.py",
       "tests/test_v2_vlan_and_direct_listeners.py"
     ],
+    "services/nas_v2_nmstate.py": [
+      "tests/test_v2_nmstate.py"
+    ],
     "services/nas_v2_plan.py": [
       "tests/test_v2_plan_apply.py"
     ],
