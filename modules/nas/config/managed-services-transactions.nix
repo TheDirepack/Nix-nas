@@ -6,6 +6,7 @@ let
   desiredPath = "/var/lib/nas-control/services.yaml";
   historyRepoPath = "${zfsControlRoot}/config-history.git";
   planPath = "/run/nas-control/plan.json";
+  reconcilePendingPath = "/run/nas-control/reconcile.pending";
   systemdProjectionPath = "/run/nas-control/systemd";
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
@@ -61,18 +62,32 @@ let
     export PYTHONPATH=${lib.escapeShellArg (toString v2Source)}
 
     # If the timer fired because reconciliation wedged, stop the owning unit
-    # first so it cannot keep the authority lock or continue mutating runtime
-    # projections while rollback is restoring the last-known-good revision.
+    # first so it cannot keep mutating runtime projections during rollback.
     ${pkgs.systemd}/bin/systemctl stop nas-managed-services-reconcile.service >/dev/null 2>&1 || true
-
-    # The immediate OnFailure path and the timer fallback share the same
-    # rollback action. Cancel any still-armed V2 timer before restoring state;
-    # systemctl performs the unit-name glob expansion itself.
     ${pkgs.systemd}/bin/systemctl stop 'nas-v2-apply-rollback-*.timer' >/dev/null 2>&1 || true
 
-    if ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} restore-applied; then
-      # Reconcile from the known-good Git revision. restore-applied records a
-      # new rollback commit, preserving the failed attempt in Git history.
+    # Prefer the exact compiled revision. If compilation failed before plan.json
+    # was materialized, HEAD is the revision recorded under the authority lock.
+    failed_head=""
+    if [ -r ${lib.escapeShellArg planPath} ]; then
+      failed_head="$(${pkgs.jq}/bin/jq -er '.desiredRevision | select(type == "string" and length > 0)' ${lib.escapeShellArg planPath} 2>/dev/null || true)"
+    fi
+    if [ -z "$failed_head" ]; then
+      failed_head="$(${pkgs.git}/bin/git \
+        --git-dir=${lib.escapeShellArg historyRepoPath} \
+        --work-tree=${lib.escapeShellArg (builtins.dirOf desiredPath)} \
+        rev-parse --verify HEAD 2>/dev/null || true)"
+    fi
+
+    restore_args=(${lib.escapeShellArgs historyArgs} restore-applied)
+    if [ -n "$failed_head" ]; then
+      restore_args+=(--failed-commit "$failed_head")
+    fi
+
+    if ${v2Python}/bin/python "''${restore_args[@]}"; then
+      # restore-applied refuses to overwrite a newer desired edit. In either
+      # case, restart once: restored state needs reprojection, while a newer
+      # edit needs its own finite transaction.
       ${pkgs.systemd}/bin/systemctl restart nas-managed-services-reconcile.service
       exit 0
     fi
@@ -104,10 +119,11 @@ in
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_HISTORY_REPOSITORY = historyRepoPath;
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_GIT_BIN = "${pkgs.git}/bin/git";
 
-    # Arm rollback before compilation. A compile failure therefore follows the
-    # same OnFailure path as a runtime activation failure, while the transient
-    # timer remains the crash/deadlock fallback.
+    # Arm rollback before compilation. Remove the previous plan first so a
+    # compile failure cannot accidentally identify an older invocation as the
+    # failed revision.
     systemd.services.nas-managed-services-reconcile.preStart = lib.mkBefore ''
+      ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg planPath}
       ${guardUnitShell}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
@@ -146,6 +162,16 @@ in
       ${v2Python}/bin/python ${lib.escapeShellArgs systemdReconcileArgs}
 
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} mark-applied --commit "$desired_head"
+
+      # services.yaml changes are converted to a level-triggered pending marker
+      # by managed-services.nix. Clear it only while the authority lock proves
+      # the worktree still equals this exact compiled commit. A mid-apply edit
+      # therefore leaves the marker present and PathExists queues one more run
+      # as soon as this oneshot becomes inactive.
+      ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} ack-pending \
+        --commit "$desired_head" \
+        --pending ${lib.escapeShellArg reconcilePendingPath}
+
       ${guardUnitShell}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
