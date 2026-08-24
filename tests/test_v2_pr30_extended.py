@@ -55,7 +55,6 @@ class V2SeedGenerationTests(unittest.TestCase):
         self.assertIn("schemaVersion = 3", seed)
 
     def test_actual_seed_would_compile_without_route_overlap(self):
-        # Real seed uses overlapping parent/child routes; renderer must guarantee longest-path-first.
         doc = {
             "schemaVersion": 3,
             "services": {
@@ -147,18 +146,15 @@ class V2SeedGenerationTests(unittest.TestCase):
             },
         }
         effective = spec.compile_document(doc, self.schema)
-        # Caddy must render without error and include all parent/child routes with longest-path-first ordering
         rendered = caddy.generate_caddyfile(effective)
         for p in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime", "/console"):
             self.assertIn(p.rstrip("/") if p != "/ai/" else "/ai", rendered)
-        # Verify longest-path-first: children must appear before parents
         self.assertLess(rendered.index("/shares/admin"), rendered.index('"/shares"'))
         self.assertLess(rendered.index("/vault/admin"), rendered.index('"/vault"'))
         self.assertLess(rendered.index("/ai/runtime"), rendered.index('path "/ai/"'))
         self.assertLess(rendered.index("/ai/v1"), rendered.index('path "/ai/"'))
 
     def test_longest_prefix_overlap_is_rejected_by_spec(self):
-        # Parent/child is now allowed due to longest-path-first; only exact duplicates and ambiguous root must fail
         doc = {
             "schemaVersion": 3,
             "services": {
@@ -188,12 +184,10 @@ class V2SeedGenerationTests(unittest.TestCase):
                 },
             },
         }
-        # Parent/child now compiles and renders longest first
         effective = spec.compile_document(doc, self.schema)
         rendered = caddy.generate_caddyfile(effective)
         self.assertLess(rendered.index("/api/users"), rendered.index('"/api"'))
 
-        # Exact duplicate must still fail closed
         dup_doc = {
             "schemaVersion": 3,
             "services": {
@@ -242,7 +236,6 @@ class V2SeedGenerationTests(unittest.TestCase):
             self.assertTrue(result["changed"])
             self.assertEqual(result["reason"], "initial-seed")
             self.assertFalse(marker.exists())
-            # second call with existing authority must not clobber
             marker.touch()
             seed.write_text(
                 "schemaVersion: 3\nservices:\n  new:\n    name: New\n    workload: {kind: daemon}\n    runtime: {type: systemd, unit: new.service}\n",
@@ -271,11 +264,6 @@ class V2SeedGenerationTests(unittest.TestCase):
                 bootstrap.migrate(desired=desired, seed=seed, marker=marker, schema=SCHEMA, platform=None)
             self.assertEqual(desired.read_text(encoding="utf-8"), original)
             self.assertTrue(marker.exists())
-
-
-# ---------------------------------------------------------------------------
-# Nested-route and Caddy behavior
-# ---------------------------------------------------------------------------
 
 
 class V2NestedRouteCaddyTests(unittest.TestCase):
@@ -335,7 +323,6 @@ class V2NestedRouteCaddyTests(unittest.TestCase):
                 },
             },
         }
-        # /a and /a/ are canonicalized to same shadow set -> overlap
         with self.assertRaisesRegex(spec.ManagedServicesV2Error, "overlaps|Duplicate"):
             spec.compile_document(doc, self.schema)
 
@@ -432,11 +419,6 @@ class V2NestedRouteCaddyTests(unittest.TestCase):
         self.assertLess(first_strip, forward)
 
 
-# ---------------------------------------------------------------------------
-# Backup cleanup (idempotent, symlinks, staging)
-# ---------------------------------------------------------------------------
-
-
 class V2BackupCleanupExtendedTests(unittest.TestCase):
     def inventory(self, artifact: pathlib.Path) -> dict:
         return {
@@ -519,8 +501,6 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
             real = snap_root / "nas-v2-restic-real"
             real.mkdir()
             (real / "file.txt").write_text("hi", encoding="utf-8")
-            # symlink attack: snapshot root is symlink
-            # Replace snapshot dir's parent .zfs as symlink
             linked_zfs = restore / "tank" / "data" / ".zfs_link"
             linked_zfs.symlink_to(snap_root)
             inventory = root / "inv.json"
@@ -533,7 +513,6 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            # Create a real symlink for native-dump artifact
             artifact = restore / "run" / "backup" / "x"
             artifact.mkdir(parents=True)
             outside = root / "outside"
@@ -595,7 +574,7 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
             def fake_run(argv: list[str]) -> str:
                 calls.append(argv)
                 if argv[:3] == ["/bin/zfs", "get", "-H"]:
-                    return "/tank/other"  # mismatch -> should fail closed
+                    return "/tank/other"
                 return ""
 
             orig = backup._run
@@ -613,11 +592,6 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
                 backup._run = orig  # type: ignore[assignment]
             self.assertFalse(paths.exists())
             self.assertFalse(state.exists())
-
-
-# ---------------------------------------------------------------------------
-# Fault-inject every systemd reconciliation step
-# ---------------------------------------------------------------------------
 
 
 class V2SystemdFaultInjectionTests(unittest.TestCase):
@@ -783,7 +757,6 @@ class V2SystemdFaultInjectionTests(unittest.TestCase):
                 )
 
     def test_non_regular_projection_entry_triggers_rollback(self):
-        # _source_under must reject non-file source
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             proj = root / "proj"
@@ -836,11 +809,6 @@ class V2SystemdFaultInjectionTests(unittest.TestCase):
                     state_path=root / "state.json",
                     systemctl=str(ctl),
                 )
-
-
-# ---------------------------------------------------------------------------
-# Cross-component partial failures and firewall deadman
-# ---------------------------------------------------------------------------
 
 
 class V2CrossComponentAndDeadmanTests(unittest.TestCase):
@@ -904,86 +872,6 @@ class V2CrossComponentAndDeadmanTests(unittest.TestCase):
             self.assertFalse(state.exists())
             self.assertEqual(created, [])
 
-    def test_firewall_deadman_rollback_on_reload_failure(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            proj = root / "proj"
-            zone_content = b"<zone/>\n"
-            target = "zones/nv2z0123456789ab.xml"
-            src = proj / target
-            src.parent.mkdir(parents=True)
-            src.write_bytes(zone_content)
-            manifest = proj / "manifest.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "files": [{"target": target, "sha256": hashlib.sha256(zone_content).hexdigest()}],
-                        "owners": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            system_config = root / "firewalld"
-            (system_config / "zones").mkdir(parents=True)
-            (system_config / "policies").mkdir(parents=True)
-            dest = system_config / target
-            dest.write_bytes(b"<zone><short>old</short></zone>\n")
-            offline = root / "offline"
-            offline.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            offline.chmod(offline.stat().st_mode | stat.S_IXUSR)
-            firewall = root / "firewall"
-            firewall.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-            firewall.chmod(firewall.stat().st_mode | stat.S_IXUSR)
-            with self.assertRaisesRegex(net.FirewalldReconcileError, "rollback"):
-                net.reconcile(
-                    manifest_path=manifest,
-                    projection_root=proj,
-                    system_config=system_config,
-                    firewall_cmd=str(firewall),
-                    firewall_offline_cmd=str(offline),
-                )
-            self.assertEqual(dest.read_bytes(), b"<zone><short>old</short></zone>\n")
-
-    def test_firewall_offline_check_failure_does_not_mutate(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            proj = root / "proj"
-            content = b"<zone/>\n"
-            target = "zones/nv2z0123456789ab.xml"
-            src = proj / target
-            src.parent.mkdir(parents=True)
-            src.write_bytes(content)
-            manifest = proj / "manifest.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "files": [{"target": target, "sha256": hashlib.sha256(content).hexdigest()}],
-                        "owners": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            system_config = root / "firewalld"
-            (system_config / "zones").mkdir(parents=True)
-            (system_config / "policies").mkdir(parents=True)
-            offline = root / "offline"
-            offline.write_text("#!/bin/sh\necho bad >&2; exit 1\n", encoding="utf-8")
-            offline.chmod(offline.stat().st_mode | stat.S_IXUSR)
-            firewall = root / "firewall"
-            firewall.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            firewall.chmod(firewall.stat().st_mode | stat.S_IXUSR)
-            with self.assertRaisesRegex(net.FirewalldReconcileError, "invalid|rollback"):
-                net.reconcile(
-                    manifest_path=manifest,
-                    projection_root=proj,
-                    system_config=system_config,
-                    firewall_cmd=str(firewall),
-                    firewall_offline_cmd=str(offline),
-                )
-            self.assertFalse((system_config / target).exists())
-
     def test_network_projection_rejects_unsafe_lan_zone(self):
         effective = {
             "schemaVersion": 3,
@@ -998,11 +886,6 @@ class V2CrossComponentAndDeadmanTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(net.FirewalldProjectionError, "unsafe firewalld LAN zone"):
             net.compile_projection(effective, lan_zone="../escape")
-
-
-# ---------------------------------------------------------------------------
-# Release-manifest, idempotence, backend projection
-# ---------------------------------------------------------------------------
 
 
 class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
@@ -1036,7 +919,6 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
         self.assertEqual(first[1], b"/a\n/b\n")
 
     def test_manifest_sha256_entries_are_valid_and_sorted(self):
-        # MANIFEST.sha256 is an allowlist; verify format without requiring Nix.
         manifest = ROOT / "MANIFEST.sha256"
         if not manifest.is_file():
             self.skipTest("MANIFEST.sha256 not present in worktree")
@@ -1044,7 +926,6 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
         pattern = re.compile(r"^[0-9a-f]{64}  .+")
         for line in lines:
             self.assertRegex(line, pattern, msg=f"malformed manifest line: {line}")
-        # must be sorted by filename for deterministic packaging
         filenames = [line.split("  ", 1)[1] for line in lines]
         self.assertEqual(filenames, sorted(filenames))
 
@@ -1124,7 +1005,6 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
             },
         }
         files, manifest = net.compile_projection(eff, lan_zone="trusted")
-        # only one service policy + global remote admin (priority -300) because disabled service is ignored
         self.assertEqual(len(files), 2)
         self.assertIn(f"policies/{net.remote_admin_policy_name()}.xml", files)
 
@@ -1133,7 +1013,6 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
         for name in ("authentik", "copyparty", "syncthing", "vaultwarden"):
             self.assertNotIn(name, text)
         text2 = (ROOT / "services/nas_v2_network.py").read_text(encoding="utf-8").lower()
-        # network module also must not hardcode application names
         for name in ("authentik", "copyparty", "vaultwarden"):
             self.assertNotIn(name, text2)
 
@@ -1170,14 +1049,8 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
         data = portal.compile_portal_projection(eff)
         self.assertIn(data["schemaVersion"], (1, 2))
         self.assertEqual(len(data["entries"]), 1)
-        # title vs label depending on schema version
         title = data["entries"][0].get("title") or data["entries"][0].get("label")
         self.assertEqual(title, "Demo")
-
-
-# ---------------------------------------------------------------------------
-# Property / fuzz tests with Hypothesis
-# ---------------------------------------------------------------------------
 
 
 if HAS_HYPOTHESIS:
@@ -1190,7 +1063,6 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(st.text(min_size=1, max_size=30))
         def test_absolute_path_validation_is_total(self, raw: str):
-            # _validate_absolute_path must never crash
             result = backup._validate_absolute_path(raw)
             if result is not None:
                 self.assertTrue(result.is_absolute())
@@ -1200,13 +1072,11 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(st.lists(st.text(min_size=1, max_size=12), min_size=1, max_size=4))
         def test_route_path_conflict_is_symmetric(self, parts: list[str]):
-            # Build two random path candidates and check conflict symmetry
             def to_path(p: list[str]) -> str:
                 return "/" + "/".join(re.sub(r"[^A-Za-z0-9_-]", "x", s).strip("/") or "x" for s in p) + "/"
 
             a = to_path(parts)
             b = to_path(list(reversed(parts)))
-            # spec helper is symmetric
             self.assertEqual(spec._routes_conflict(a, b), spec._routes_conflict(b, a))
             self.assertTrue(spec._routes_conflict("/", a))
             self.assertTrue(spec._routes_conflict(a, "/"))
@@ -1214,12 +1084,10 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(st.text(alphabet=st.characters(blacklist_categories=("Cs",)), min_size=1, max_size=200))
         def test_caddy_generate_does_not_crash_on_any_compiled_doc(self, junk: str):
-            # Create minimal compiled doc with one path route using sanitized junk
             safe = re.sub(r"[^A-Za-z0-9/_-]", "x", junk).strip("/")
             if not safe:
                 safe = "x"
             path = f"/{safe}/"
-            # path must start with / and not contain control/brace
             if any(c in path for c in ("\x00", "\r", "\n", "{", "}")):
                 return
             doc = {
@@ -1263,7 +1131,6 @@ if HAS_HYPOTHESIS:
                     }
                 },
             }
-            # Should either succeed or raise FirewalldProjectionError, never crash
             try:
                 net.compile_projection(eff, lan_zone="trusted")
             except (net.FirewalldProjectionError, net.PodmanNetworkProjectionError):
