@@ -512,8 +512,11 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                 )
             # exec has DynamicUser + BindReadOnly
             self.assertIn("DynamicUser=yes", files[out / "units/nas-v2-exec-app.service"].decode())
-            # python has venv
-            self.assertIn("nas_v2_python_prepare.py", files[out / "units/nas-v2-pyapp.service"].decode())
+            # Python runtime is delegated directly to uv; no custom venv preparer remains.
+            python_unit = files[out / "units/nas-v2-pyapp.service"].decode()
+            self.assertIn('ExecStart="/nix/store/uv/bin/uv" "run"', python_unit)
+            self.assertIn('"--with-requirements"', python_unit)
+            self.assertNotIn("nas_v2_python_prepare.py", python_unit)
             # compose has podman compose up
             unit_comp = files[out / "units/nas-v2-comp.service"].decode()
             self.assertIn("compose", unit_comp)
