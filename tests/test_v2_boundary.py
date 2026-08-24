@@ -10,6 +10,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_entry  # noqa: F401,E402 — import coverage for nas_v2_entry.py
+import nas_v2_systemd_attachments  # noqa: F401,E402 — split attachment boundary
 import nas_v2_systemd_native  # noqa: F401,E402 — native activation boundary
 
 
