@@ -13,7 +13,7 @@ def read(path: str) -> str:
 class BackupDomainArchitectureTests(unittest.TestCase):
     def test_root_restic_backup_never_traverses_encrypted_zfs(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
-        self.assertIn('paths = lib.mkForce [\n        "/"\n        "/boot"', module)
+        self.assertIn('paths = lib.mkForce [\n          "/"\n          "/boot"', module)
         self.assertIn("dynamicFilesFrom = lib.mkForce null;", module)
         self.assertIn('"--one-file-system"', module)
         self.assertIn('"--tag=root-control-plane"', module)
@@ -32,14 +32,15 @@ class BackupDomainArchitectureTests(unittest.TestCase):
     def test_encrypted_zfs_domain_uses_raw_syncoid_send(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
         storage = read("modules/nas/config/storage-monitoring.nix")
-        self.assertIn('lib.mkBefore [ "--sendoptions=w" ]', module)
-        self.assertIn("cfg.zfsReplication.enable && cfg.zfsEncryption.enable", module)
+        self.assertIn('lib.optional cfg.zfsEncryption.enable "--sendoptions=w"', module)
+        self.assertIn('lib.filter (argument: !(lib.hasPrefix "--sendoptions" argument))', module)
+        self.assertIn("systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkForce", module)
         self.assertIn("${pkgs.sanoid}/bin/syncoid", storage)
         self.assertIn("cfg.zfsDataset cfg.zfsReplication.target", storage)
 
     def test_root_restore_rejects_copied_v2_authority(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
-        self.assertIn('services.yaml', module)
+        self.assertIn("services.yaml", module)
         self.assertIn("Root Restic backup unexpectedly contains the ZFS V2 desired-state authority", module)
 
     def test_per_app_backup_scope_is_not_a_configuration_authority(self) -> None:
