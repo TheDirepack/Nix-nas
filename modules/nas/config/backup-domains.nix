@@ -31,9 +31,12 @@ let
     && !remoteEnabled
     && lib.hasPrefix "/" localResticRepository
   ) localResticRepository;
-  hasUserSendOptions = lib.any (
-    argument: lib.hasPrefix "--sendoptions" argument
-  ) cfg.zfsReplication.extraArgs;
+  reviewedSyncoidArgs =
+    lib.optional cfg.zfsReplication.recursive "--recursive"
+    ++ lib.optional cfg.zfsReplication.useExistingSnapshots "--no-sync-snap"
+    ++ lib.filter (argument: !(lib.hasPrefix "--sendoptions" argument)) cfg.zfsReplication.extraArgs
+    ++ lib.optional cfg.zfsEncryption.enable "--sendoptions=w"
+    ++ [ cfg.zfsDataset cfg.zfsReplication.target ];
 in
 {
   config = lib.mkMerge [
@@ -128,17 +131,13 @@ in
       };
     })
 
-    # Native encrypted replication is the complete ZFS backup domain. Syncoid
-    # forwards this to `zfs send`; raw sends preserve the source ciphertext and
-    # avoid creating any plaintext archive or application-specific backup path.
-    (lib.mkIf (cfg.zfsReplication.enable && cfg.zfsEncryption.enable) {
-      assertions = [
-        {
-          assertion = !hasUserSendOptions;
-          message = "Encrypted NAS ZFS replication reserves Syncoid --sendoptions so raw -w sends cannot be overridden.";
-        }
-      ];
-      nas.zfsReplication.extraArgs = lib.mkBefore [ "--sendoptions=w" ];
+    # Native encrypted replication is the complete ZFS backup domain. Override
+    # only Syncoid's command line so operator tuning remains available while
+    # --sendoptions cannot disable raw encrypted sends.
+    (lib.mkIf cfg.zfsReplication.enable {
+      systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkForce (
+        "${pkgs.sanoid}/bin/syncoid ${lib.escapeShellArgs reviewedSyncoidArgs}"
+      );
     })
   ];
 }
