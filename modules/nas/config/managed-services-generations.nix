@@ -16,12 +16,11 @@
 
     # Native per-route systemd sockets replaced the authorization-free Python
     # wake HTTP service. Caddy authenticates first and then connects directly to
-    # the generated activation socket.
+    # the generated activation socket. Keep the existing After= ordering: an
+    # ordering edge to a disabled socket is harmless and preserves all backend
+    # ordering contributed by systemd-services.nix.
     systemd.sockets.nas-managed-services-wake.enable = lib.mkForce false;
     systemd.services."nas-managed-services-wake@".enable = lib.mkForce false;
-    systemd.services.caddy = {
-      requires = lib.mkOverride 900 [ "nas-caddy-bootstrap.service" ];
-      after = lib.mkOverride 900 [ "nas-caddy-bootstrap.service" ];
-    };
+    systemd.services.caddy.requires = lib.mkOverride 900 [ "nas-caddy-bootstrap.service" ];
   };
 }
