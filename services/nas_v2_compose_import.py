@@ -186,7 +186,7 @@ def _namespace_bundle(
     raw_files: dict[str, str] = {}
     for path in sorted(generated_dir.iterdir(), key=lambda p: p.name):
         try:
-            info = path.lstat()
+            path.lstat()
         except OSError as exc:
             raise ComposeImportError(f"unable to inspect Podlet output {path}: {exc}") from exc
         if not path.is_file() or path.is_symlink():
