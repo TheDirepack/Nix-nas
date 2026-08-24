@@ -11,7 +11,7 @@ SERVICES = ROOT / "services"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
-import nas_v2_network as network  # noqa: E402
+import nas_v2_podman_network as podman_network  # noqa: E402
 import nas_v2_session as projection  # noqa: E402
 from nas_v2_spec import compile_document, load_schema, parse_yaml_text  # noqa: E402
 
@@ -91,7 +91,7 @@ services:
         with tempfile.TemporaryDirectory() as raw:
             output = pathlib.Path(raw) / "projection"
             files, manifest = self.generate(effective, output)
-            network.augment_projection(
+            podman_network.augment_projection(
                 effective,
                 output_dir=output,
                 files=files,
@@ -120,12 +120,7 @@ services:
     def test_cdi_accelerator_is_lowered_to_podman_device_selector(self):
         effective = self.effective()
         effective["services"]["agent"]["resources"]["accelerators"] = [
-            {
-                "type": "gpu",
-                "mode": "shared",
-                "quantity": 1,
-                "device": "nvidia.com/gpu=all",
-            }
+            {"type": "gpu", "mode": "shared", "quantity": 1, "device": "nvidia.com/gpu=all"}
         ]
         with tempfile.TemporaryDirectory() as raw:
             output = pathlib.Path(raw) / "projection"
