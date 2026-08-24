@@ -138,6 +138,26 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
         self.assertIn("nas-v2-demo-web.service", manifest["ownedUnits"])
         self.assertIn("nas-v2-demo.service", manifest["startUnits"])
 
+    def test_import_uses_compiled_owner_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, _source = self.fixture(root)
+            effective["derived"]["runtime"]["demo"]["ownerUnit"] = "compiled-compose-owner.service"
+            podman, provider, podlet = self.fake_tools(root / "tools")
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                mock.patch.object(compose_import, "APP_ROOT", root / "apps"),
+            ):
+                bundle, _manifest = compose_import.import_compose(
+                    effective,
+                    "demo",
+                    effective["services"]["demo"],
+                    podlet_bin=str(podlet),
+                    podman_bin=str(podman),
+                    compose_provider_bin=str(provider),
+                )
+        self.assertIn("PartOf=compiled-compose-owner.service", bundle["nas-v2-demo-web.container"].decode())
+
     def test_on_demand_import_uses_socket_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
