@@ -241,9 +241,15 @@ def _python_command(service_id: str, runtime: dict[str, Any], *, uv_bin: str) ->
     try:
         working.resolve(strict=False).relative_to((APP_ROOT / service_id).resolve(strict=False))
     except ValueError as exc:
-        raise SystemdProjectionError(f"Python service {service_id!r} workingDirectory must remain beneath its app root") from exc
+        raise SystemdProjectionError(
+            f"Python service {service_id!r} workingDirectory must remain beneath its app root"
+        ) from exc
     entrypoint = runtime["entrypoint"]
-    program = [interpreter, "-m", entrypoint["module"], *entrypoint["args"]] if "module" in entrypoint else [interpreter, entrypoint["script"], *entrypoint["args"]]
+    program = (
+        [interpreter, "-m", entrypoint["module"], *entrypoint["args"]]
+        if "module" in entrypoint
+        else [interpreter, entrypoint["script"], *entrypoint["args"]]
+    )
     requirements = runtime["dependencies"].get("requirementsFile")
     requirements_hash: str | None = None
     prefix = [uv_bin, "run", "--python", interpreter]
@@ -348,18 +354,38 @@ def _vm_unit(
 ) -> bytes:
     libvirt_unit = "libvirtd.service"
     virt = effective.get("services", {}).get("virtualization", {})
-    candidate = virt.get("runtime", {}).get("unit") if isinstance(virt, dict) and isinstance(virt.get("runtime"), dict) else None
+    candidate = (
+        virt.get("runtime", {}).get("unit")
+        if isinstance(virt, dict) and isinstance(virt.get("runtime"), dict)
+        else None
+    )
     if isinstance(candidate, str) and candidate.endswith(".service"):
         libvirt_unit = candidate
-    return ("\n".join([
-        "[Unit]", "Description=" + _single_line(service["name"], field="service name"),
-        f"Requires={libvirt_unit}", f"After={libvirt_unit}",
-        *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []), *_dependency_lines(effective, service), "",
-        "[Service]", "Type=oneshot", "RemainAfterExit=yes",
-        f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_libvirt.py'))} start --config {_quote(str(descriptor_path))}",
-        f"ExecStop={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_libvirt.py'))} stop --config {_quote(str(descriptor_path))}",
-        "TimeoutStartSec=0", "TimeoutStopSec=240", "NoNewPrivileges=yes", "PrivateTmp=yes", "ProtectHome=yes", "ProtectSystem=strict", "",
-    ])).encode()
+    return (
+        "\n".join(
+            [
+                "[Unit]",
+                "Description=" + _single_line(service["name"], field="service name"),
+                f"Requires={libvirt_unit}",
+                f"After={libvirt_unit}",
+                *(["StopWhenUnneeded=yes"] if _is_on_demand(service) else []),
+                *_dependency_lines(effective, service),
+                "",
+                "[Service]",
+                "Type=oneshot",
+                "RemainAfterExit=yes",
+                f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_libvirt.py'))} start --config {_quote(str(descriptor_path))}",
+                f"ExecStop={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_libvirt.py'))} stop --config {_quote(str(descriptor_path))}",
+                "TimeoutStartSec=0",
+                "TimeoutStopSec=240",
+                "NoNewPrivileges=yes",
+                "PrivateTmp=yes",
+                "ProtectHome=yes",
+                "ProtectSystem=strict",
+                "",
+            ]
+        )
+    ).encode()
 
 
 def _readiness_unit(
@@ -371,12 +397,26 @@ def _readiness_unit(
     descriptor_path: pathlib.Path,
     systemctl_bin: str,
 ) -> bytes:
-    return ("\n".join([
-        "[Unit]", f"Description=Managed Services V2 readiness gate for {service_id}", f"Requires={owner}", f"After={owner}", f"PartOf={owner}", "",
-        "[Service]", "Type=oneshot",
-        f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_readiness.py'))} --config {_quote(str(descriptor_path))} --systemctl {_quote(systemctl_bin)}",
-        "NoNewPrivileges=yes", "PrivateTmp=yes", "ProtectHome=yes", "ProtectSystem=strict", "",
-    ])).encode()
+    return (
+        "\n".join(
+            [
+                "[Unit]",
+                f"Description=Managed Services V2 readiness gate for {service_id}",
+                f"Requires={owner}",
+                f"After={owner}",
+                f"PartOf={owner}",
+                "",
+                "[Service]",
+                "Type=oneshot",
+                f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_readiness.py'))} --config {_quote(str(descriptor_path))} --systemctl {_quote(systemctl_bin)}",
+                "NoNewPrivileges=yes",
+                "PrivateTmp=yes",
+                "ProtectHome=yes",
+                "ProtectSystem=strict",
+                "",
+            ]
+        )
+    ).encode()
 
 
 def _systemd_socket_proxyd(systemctl_bin: str) -> str:
@@ -417,34 +457,76 @@ def _activation_units(
             backend = backend_target(route)
         except ActivationProjectionError as exc:
             raise SystemdProjectionError(str(exc)) from exc
-        socket_content = ("\n".join([
-            "[Unit]", f"Description=Managed Services V2 activation socket for {service_id}.{route_id}", "",
-            "[Socket]", f"ListenStream={spath}", "SocketMode=0600", "SocketUser=caddy", "SocketGroup=caddy",
-            "RemoveOnStop=yes", f"Service={pun}", "", "[Install]", "WantedBy=sockets.target", "",
-        ])).encode()
+        socket_content = (
+            "\n".join(
+                [
+                    "[Unit]",
+                    f"Description=Managed Services V2 activation socket for {service_id}.{route_id}",
+                    "",
+                    "[Socket]",
+                    f"ListenStream={spath}",
+                    "SocketMode=0600",
+                    "SocketUser=caddy",
+                    "SocketGroup=caddy",
+                    "RemoveOnStop=yes",
+                    f"Service={pun}",
+                    "",
+                    "[Install]",
+                    "WantedBy=sockets.target",
+                    "",
+                ]
+            )
+        ).encode()
         requires = [owner, sun]
         after = [owner, sun]
         if "readiness" in service:
             ready = f"nas-v2-ready-{service_id}.service"
             requires.append(ready)
             after.append(ready)
-        proxy_content = ("\n".join([
-            "[Unit]", f"Description=Managed Services V2 socket proxy for {service_id}.{route_id}",
-            "Requires=" + " ".join(requires), "After=" + " ".join(after), f"PartOf={sun}", "",
-            "[Service]", "Type=notify", f"ExecStart={_quote(proxyd)} --exit-idle-time={idle}s {_quote(backend)}",
-            "NoNewPrivileges=yes", "PrivateTmp=yes", "ProtectHome=yes", "ProtectSystem=strict", "",
-        ])).encode()
+        proxy_content = (
+            "\n".join(
+                [
+                    "[Unit]",
+                    f"Description=Managed Services V2 socket proxy for {service_id}.{route_id}",
+                    "Requires=" + " ".join(requires),
+                    "After=" + " ".join(after),
+                    f"PartOf={sun}",
+                    "",
+                    "[Service]",
+                    "Type=notify",
+                    f"ExecStart={_quote(proxyd)} --exit-idle-time={idle}s {_quote(backend)}",
+                    "NoNewPrivileges=yes",
+                    "PrivateTmp=yes",
+                    "ProtectHome=yes",
+                    "ProtectSystem=strict",
+                    "",
+                ]
+            )
+        ).encode()
         result.append((sun, socket_content, pun, proxy_content))
     if not result:
-        raise SystemdProjectionError(f"on-demand service {service_id!r} requires at least one Caddy route for native activation")
+        raise SystemdProjectionError(
+            f"on-demand service {service_id!r} requires at least one Caddy route for native activation"
+        )
     return result
 
 
 def _timer_unit(service_id: str, owner: str, index: int, schedule: dict[str, Any]) -> tuple[str, bytes]:
     unit = f"nas-v2-timer-{service_id}-{index}.timer"
-    lines = ["[Unit]", f"Description=Managed Services V2 schedule {index} for {service_id}", "", "[Timer]", f"Unit={owner}"]
+    lines = [
+        "[Unit]",
+        f"Description=Managed Services V2 schedule {index} for {service_id}",
+        "",
+        "[Timer]",
+        f"Unit={owner}",
+    ]
     if "calendar" in schedule:
-        lines.extend(["OnCalendar=" + _single_line(schedule["calendar"], field="calendar schedule"), f"Persistent={'true' if schedule['persistent'] else 'false'}"])
+        lines.extend(
+            [
+                "OnCalendar=" + _single_line(schedule["calendar"], field="calendar schedule"),
+                f"Persistent={'true' if schedule['persistent'] else 'false'}",
+            ]
+        )
     else:
         interval = schedule["intervalSeconds"]
         lines.extend([f"OnBootSec={interval}s", f"OnUnitActiveSec={interval}s"])
@@ -487,9 +569,13 @@ def generate_projection(
         requirements_hash: str | None = None
         if runtime["type"] == "exec":
             dpath = descriptor_dir / f"{service_id}.exec.json"
-            files[dpath] = _json_bytes({"command": runtime["command"], "workingDirectory": runtime.get("workingDirectory")})
+            files[dpath] = _json_bytes(
+                {"command": runtime["command"], "workingDirectory": runtime.get("workingDirectory")}
+            )
             upath = unit_dir / owner
-            files[upath] = _exec_unit(effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath)
+            files[upath] = _exec_unit(
+                effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
+            )
             links[owner] = str(upath)
         elif runtime["type"] == "python":
             upath = unit_dir / owner
@@ -504,9 +590,13 @@ def generate_projection(
             xpath = vm_dir / f"{service_id}.xml"
             files[xpath] = domain_xml
             dpath = descriptor_dir / f"{service_id}.vm.json"
-            files[dpath] = _json_bytes({"virsh": virsh_bin, "domain": domain_name, "xml": str(xpath), "shutdownTimeoutSeconds": 180})
+            files[dpath] = _json_bytes(
+                {"virsh": virsh_bin, "domain": domain_name, "xml": str(xpath), "shutdownTimeoutSeconds": 180}
+            )
             upath = unit_dir / owner
-            files[upath] = _vm_unit(effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath)
+            files[upath] = _vm_unit(
+                effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
+            )
             links[owner] = str(upath)
             source_hash = _sha256_file(source_path)
         elif runtime["type"] == "systemd":
@@ -520,7 +610,9 @@ def generate_projection(
             files[spath] = _quadlet_source(effective, service_id, service)
             quadlet_links[spath.name] = str(spath)
         else:
-            raise SystemdProjectionError(f"runtime {runtime['type']!r} for service {service_id!r} has no native adapter")
+            raise SystemdProjectionError(
+                f"runtime {runtime['type']!r} for service {service_id!r} has no native adapter"
+            )
 
         if "readiness" in service:
             readiness = json.loads(json.dumps(service["readiness"]))
@@ -531,13 +623,22 @@ def generate_projection(
             files[dpath] = _json_bytes(readiness)
             ready = f"nas-v2-ready-{service_id}.service"
             rpath = unit_dir / ready
-            files[rpath] = _readiness_unit(service_id, owner, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath, systemctl_bin=systemctl_bin)
+            files[rpath] = _readiness_unit(
+                service_id,
+                owner,
+                python_bin=python_bin,
+                source_dir=source_dir,
+                descriptor_path=dpath,
+                systemctl_bin=systemctl_bin,
+            )
             links[ready] = str(rpath)
             fingerprints[ready] = _fingerprint(readiness)
             if managed:
                 owned_units.add(ready)
 
-        for sun, scontent, pun, pcontent in _activation_units(effective, service_id, service, owner, systemctl_bin=systemctl_bin):
+        for sun, scontent, pun, pcontent in _activation_units(
+            effective, service_id, service, owner, systemctl_bin=systemctl_bin
+        ):
             spath = unit_dir / sun
             ppath = unit_dir / pun
             files[spath] = scontent
@@ -615,7 +716,9 @@ def validate_projection(
                 dst = tmp / src.name
                 dst.write_bytes(data)
                 verify_paths.append(str(dst))
-            result = subprocess.run([systemd_analyze_bin, "verify", *verify_paths], capture_output=True, text=True, timeout=30, check=False)
+            result = subprocess.run(
+                [systemd_analyze_bin, "verify", *verify_paths], capture_output=True, text=True, timeout=30, check=False
+            )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:4000]
             raise SystemdProjectionError(f"systemd-analyze rejected generated units: {detail}")
