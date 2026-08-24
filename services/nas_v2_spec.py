@@ -675,6 +675,27 @@ def semantic_validate(
                     code="network-vlan-runtime",
                 )
 
+        if isinstance(policy, dict) and policy.get("mode") == "isolated":
+            runtime_type = service["runtime"]["type"]
+            if not service["managed"] or runtime_type not in {"oci", "quadlet", "compose"}:
+                raise ManagedServicesV2Error(
+                    f"Isolated service {service_id!r} requires a V2-managed runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented",
+                    path=f"$.services.{service_id}.network.mode",
+                    code="network-isolated-runtime",
+                )
+            if kind == "session" and runtime_type != "oci":
+                raise ManagedServicesV2Error(
+                    f"Session service {service_id!r} with isolated networking currently requires direct OCI runtime",
+                    path=f"$.services.{service_id}.runtime.type",
+                    code="network-session-runtime",
+                )
+            if kind == "session" and (service["routes"] or service["listeners"]):
+                raise ManagedServicesV2Error(
+                    f"Session service {service_id!r} cannot expose fixed routes/listeners because concurrent instances require per-instance endpoints",
+                    path=f"$.services.{service_id}",
+                    code="network-session-endpoints",
+                )
+
         mount_targets: set[str] = set()
         for index, attachment in enumerate(service["storage"]):
             resource_id = attachment["resource"]
