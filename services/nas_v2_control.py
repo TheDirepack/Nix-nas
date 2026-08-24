@@ -33,12 +33,23 @@ DESIRED_PATH = pathlib.Path(
 )
 EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
 SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
+PLATFORM_PATH = pathlib.Path(os.environ.get("NAS_V2_PLATFORM", "/run/nas-control/platform-capabilities.json"))
 RECONCILE_UNIT = os.environ.get("NAS_V2_RECONCILE_UNIT", "nas-managed-services-reconcile.service")
 SYSTEMCTL = os.environ.get("NAS_V2_SYSTEMCTL", "systemctl")
 
 
 class ControlError(RuntimeError):
     """Raised when a finite V2 operator action fails."""
+
+
+def _editor_platform_path() -> pathlib.Path | None:
+    """Use the compiler's current probed inventory when it exists.
+
+    Fresh-install/bootstrap editing is still allowed before the finite platform
+    probe has materialized its runtime file; the reconcile transaction probes
+    immediately before compilation and remains the final fail-closed boundary.
+    """
+    return PLATFORM_PATH if PLATFORM_PATH.is_file() else None
 
 
 def _systemctl(*args: str, check: bool = True) -> None:
@@ -157,6 +168,7 @@ def set_mode(service_id: str, mode: str) -> dict[str, Any]:
             mode,
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
+            platform_path=_editor_platform_path(),
         )
         _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
@@ -171,6 +183,7 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
             modes,
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
+            platform_path=_editor_platform_path(),
         )
         _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
@@ -182,7 +195,12 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
 def replace_from_source(source: str) -> dict[str, Any]:
     try:
         text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
-        result = replace_document(text, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
+        result = replace_document(
+            text,
+            desired_path=DESIRED_PATH,
+            schema_path=SCHEMA_PATH,
+            platform_path=_editor_platform_path(),
+        )
         _reconcile()
         return result
     except (OSError, ManagedServicesEditorError, ControlError) as exc:
@@ -192,7 +210,12 @@ def replace_from_source(source: str) -> dict[str, Any]:
 def replace_json_from_source(source: str) -> dict[str, Any]:
     try:
         value = _read_json_document(source)
-        result = replace_document_value(value, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
+        result = replace_document_value(
+            value,
+            desired_path=DESIRED_PATH,
+            schema_path=SCHEMA_PATH,
+            platform_path=_editor_platform_path(),
+        )
         _reconcile()
         return result
     except (OSError, ManagedServicesEditorError, ControlError) as exc:
