@@ -67,14 +67,6 @@ from nas_syncthing_devices import DeviceError, validate_username
 # nas-setup-api ConditionPathExists ensure the wizard no longer serves.
 SETUP_APPLICATION_SLUG = "nas-setup"
 
-# Explicit setup application for first run. The wizard is served at /setup
-# behind Authentik forward-auth as an explicit Authentik Application
-# (nas-setup) so it is visible in the launcher during first run. After a
-# successful first run the application self-removes via the best-effort helper
-# below, and the Caddy bootstrap (secretReady + state.json) plus the
-# nas-setup-api ConditionPathExists ensure the wizard no longer serves.
-SETUP_APPLICATION_SLUG = "nas-setup"
-
 BOOTSTRAP_ADMIN_USER = "nas-bootstrap"
 # Kept as the pre-completion administrator identity for command callers that
 # run before the operator-selected account has been persisted.
@@ -1185,7 +1177,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             try:
                 _remove_setup_application()
             except Exception as exc:  # pragma: no cover - best-effort cleanup
-                diagnostic(f"Unable to remove setup application: {exc}")
+                progress(f"Unable to remove setup application: {exc}")
             publish_first_start_status(
                 {
                     "schemaVersion": SCHEMA_VERSION,
