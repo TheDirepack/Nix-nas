@@ -20,10 +20,13 @@ import nas_v2_apply as apply_mod  # noqa: E402
 import nas_v2_backup as backup  # noqa: E402
 import nas_v2_bootstrap as bootstrap  # noqa: E402
 import nas_v2_caddy as caddy  # noqa: E402
+import nas_v2_firewalld_reconcile as fwrec  # noqa: E402
 import nas_v2_network as net  # noqa: E402
+import nas_v2_podman_network as podnet  # noqa: E402
 import nas_v2_session as sess  # noqa: E402
 import nas_v2_spec as spec  # noqa: E402
 import nas_v2_systemd as sysd  # noqa: E402
+import nas_v2_systemd_attachments as sysattach  # noqa: E402
 import nas_v2_systemd_reconcile as recon  # noqa: E402
 from nas_v2_accelerator import enabled_capabilities, is_cdi_selector, load_platform_inventory  # noqa: E402
 
@@ -76,16 +79,13 @@ class SpecGapTests(unittest.TestCase):
             d.mkdir()
             self.assertTrue(spec.is_directory_authority(d))
             self.assertFalse(spec.is_directory_authority(d / "missing"))
-            # hash empty dir fails
             with self.assertRaises(spec.ManagedServicesV2Error):
                 spec.hash_authority(d)
             (d / "00.yaml").write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
             h = spec.hash_authority(d)
             self.assertEqual(len(h), 64)
-            # single file hash
             hf = spec.hash_authority(d / "00.yaml")
             self.assertEqual(hf, hashlib.sha256((d / "00.yaml").read_bytes()).hexdigest())
-            # parse_yaml directory + file
             parsed = spec.parse_yaml(d)
             self.assertIn("schemaVersion", parsed)
             parsed2 = spec.parse_yaml(d / "00.yaml")
@@ -97,7 +97,6 @@ class SpecGapTests(unittest.TestCase):
                 d = pathlib.Path(tmp) / "dir"
                 d.mkdir()
                 (d / "a.yaml").write_text("x: 1", encoding="utf-8")
-                # read_bytes patched will trigger io-read
                 with self.assertRaises(spec.ManagedServicesV2Error):
                     spec.hash_authority(d)
 
@@ -109,13 +108,10 @@ class SpecGapTests(unittest.TestCase):
                 spec.load_schema(bad)
             bad2 = pathlib.Path(tmp) / "bad2.json"
             bad2.write_text('{"type": "invalid"}', encoding="utf-8")
-            # not object schema check
             with self.assertRaises(spec.ManagedServicesV2Error):
                 spec.load_schema(bad2)
-            # validate_schema success
             doc = {"schemaVersion": 3, "services": {}}
             spec.validate_schema(doc, spec.load_schema(SCHEMA))
-            # fail
             with self.assertRaises(spec.ManagedServicesV2Error):
                 spec.validate_schema({"schemaVersion": 99}, spec.load_schema(SCHEMA))
 
@@ -142,7 +138,6 @@ class SpecGapTests(unittest.TestCase):
         }
         norm = spec.normalize(doc)
         self.assertEqual(norm["services"]["s"]["runtime"]["interpreter"], "/run/current-system/sw/bin/python3")
-        # exec runtime
         doc2 = {
             "schemaVersion": 3,
             "services": {
@@ -156,7 +151,6 @@ class SpecGapTests(unittest.TestCase):
         spec.normalize(doc2)
 
     def test_validate_runtime_paths_and_dependency_graph(self):
-        # valid
         svc = {
             "name": "X",
             "workload": {"kind": "daemon", "activation": "persistent"},
@@ -177,7 +171,6 @@ class SpecGapTests(unittest.TestCase):
             spec._validate_runtime_paths("x", {**svc, "runtime": {"type": "exec", "command": ["/"]}})
         with self.assertRaises(spec.ManagedServicesV2Error):
             spec._validate_runtime_paths("x", {**svc, "runtime": {"type": "systemd", "unit": "bad"}})
-        # dependency graph cycle
         services = {"a": {"dependencies": [{"service": "b"}]}, "b": {"dependencies": [{"service": "a"}]}}
         with self.assertRaises(spec.ManagedServicesV2Error):
             spec._validate_dependency_graph(services)
@@ -190,7 +183,6 @@ class SpecGapTests(unittest.TestCase):
         self.assertFalse(spec._routes_conflict("/api/v1", "/api/v2"))
 
     def test_semantic_validate_branches(self):
-        # user scope requires template
         doc = {
             "schemaVersion": 3,
             "storageResources": {
@@ -207,7 +199,6 @@ class SpecGapTests(unittest.TestCase):
         }
         with self.assertRaises(spec.ManagedServicesV2Error):
             spec.semantic_validate(spec.normalize(doc))
-        # vlan requires isolated
         doc2 = spec.normalize(
             {
                 "schemaVersion": 3,
@@ -243,8 +234,6 @@ class SpecGapTests(unittest.TestCase):
             p2.write_text(json.dumps({"capabilities": ["kvm"]}), encoding="utf-8")
             self.assertEqual(spec.load_platform_capabilities(p2), {"kvm"})
             p3 = pathlib.Path(tmp) / "bad.json"
-            p3.write_text(json.dumps({"capabilities": {"bad": "nope"}}), encoding="utf-8")
-            # string array vs object handling - list with bool? should fail if not string array
             p3.write_text(json.dumps({"capabilities": 123}), encoding="utf-8")
             with self.assertRaises(spec.ManagedServicesV2Error):
                 spec.load_platform_capabilities(p3)
@@ -255,7 +244,6 @@ class SpecGapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp) / "svc.yaml"
             d.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
-            # load_and_compile without platform
             eff = spec.load_and_compile(d, SCHEMA, platform_path=None)
             self.assertEqual(eff["schemaVersion"], 3)
 
@@ -290,7 +278,7 @@ class CaddyGapTests(unittest.TestCase):
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy._q("bad\x00")
 
-    def test_render_wake_and_identity(self):
+    def test_render_native_activation_and_upstream_auth_boundary(self):
         svc = {
             "name": "Demo",
             "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30},
@@ -303,10 +291,11 @@ class CaddyGapTests(unittest.TestCase):
                 }
             },
         }
-        eff = self._eff(svc)
-        with self.assertRaises(caddy.CaddyProjectionError):
-            caddy.generate_caddyfile(eff, wake_socket=None)
-        # upstream wake fails
+        rendered = caddy.generate_caddyfile(self._eff(svc), wake_socket=None)
+        self.assertIn("reverse_proxy unix//run/nas-control/activate/demo-w.sock", rendered)
+        self.assertNotIn("/wake?service=", rendered)
+        self.assertNotIn("nas_v2_wake", rendered)
+
         svc2 = {
             "name": "Demo",
             "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30},
@@ -319,9 +308,8 @@ class CaddyGapTests(unittest.TestCase):
                 }
             },
         }
-        eff2 = self._eff(svc2)
         with self.assertRaises(caddy.CaddyProjectionError):
-            caddy.generate_caddyfile(eff2, wake_socket="/run/wake.sock")
+            caddy.generate_caddyfile(self._eff(svc2), wake_socket=None)
 
     def test_generate_caddyfile_hostname_validation(self):
         svc = {
@@ -340,7 +328,6 @@ class CaddyGapTests(unittest.TestCase):
         with self.assertRaises(caddy.CaddyProjectionError):
             caddy.generate_caddyfile(eff, lan_host="bad host!")
         with self.assertRaises(caddy.CaddyProjectionError):
-            # invalid hostname in route
             svc_bad = {
                 "name": "D",
                 "workload": {"kind": "daemon", "activation": "persistent"},
@@ -357,7 +344,6 @@ class CaddyGapTests(unittest.TestCase):
             caddy.generate_caddyfile(eff_bad)
 
     def test_portal_bytes_and_compile(self):
-        # portal_bytes success + fail
         svc = {
             "name": "Demo",
             "workload": {"kind": "daemon", "activation": "persistent"},
@@ -374,7 +360,6 @@ class CaddyGapTests(unittest.TestCase):
         eff = self._eff(svc)
         data = caddy.portal_bytes(eff)
         self.assertIn(b"Demo", data)
-        # _route_url explicit
         self.assertEqual(caddy._route_url({"type": "path", "paths": ["/a"]}, {"url": "/custom"}), "/custom")
         with self.assertRaises(caddy.PortalProjectionError):
             caddy.compile_portal_projection({"schemaVersion": 2, "services": {}})
@@ -383,14 +368,12 @@ class CaddyGapTests(unittest.TestCase):
         self.assertEqual(caddy._access("s", {"auth": {"mode": "public"}})["mode"], "public")
 
     def test_validate_caddyfile_requires_binary(self):
-        # fake caddy that fails validation
         with tempfile.TemporaryDirectory() as tmp:
             fake = pathlib.Path(tmp) / "fake-caddy"
             fake.write_text("#!/bin/sh\necho 'bad' >&2; exit 1\n", encoding="utf-8")
             fake.chmod(0o755)
             with self.assertRaises(caddy.CaddyProjectionError):
                 caddy.validate_caddyfile("xxx", caddy_bin=str(fake))
-        # missing binary auto-detect
         with mock.patch("shutil.which", return_value=None):
             with self.assertRaises(caddy.CaddyProjectionError):
                 caddy.validate_caddyfile("xxx")
@@ -402,7 +385,6 @@ class SystemdGapTests(unittest.TestCase):
         cls.schema = spec.load_schema(SCHEMA)
 
     def test_attachment_lines_variants(self):
-        # storage read success, write requires existing identity
         eff = spec.compile_document(
             {
                 "schemaVersion": 3,
@@ -421,7 +403,6 @@ class SystemdGapTests(unittest.TestCase):
         svc = eff["services"]["demo"]
         lines = sysd.attachment_lines(eff, svc)
         self.assertTrue(any("BindReadOnlyPaths" in line for line in lines))
-        # credential environment-file
         eff2 = spec.compile_document(
             {
                 "schemaVersion": 3,
@@ -438,7 +419,6 @@ class SystemdGapTests(unittest.TestCase):
             self.schema,
         )
         self.assertIn("EnvironmentFile", sysd.attachment_lines(eff2, eff2["services"]["demo"])[0])
-        # duplicate mount rejected
         eff_dup = spec.compile_document(
             {
                 "schemaVersion": 3,
@@ -476,7 +456,6 @@ class SystemdGapTests(unittest.TestCase):
                 },
                 self.schema,
             )
-            # ensure source_dir exists for exec runner reference
             src = pathlib.Path(tmp) / "src"
             src.mkdir()
             (src / "nas_v2_exec_runner.py").write_text("# stub", encoding="utf-8")
@@ -489,7 +468,6 @@ class SystemdGapTests(unittest.TestCase):
                 uv_bin="/bin/uv",
             )
             self.assertIn("demo.service", str(files))
-            # systemd runtime dropin
             eff2 = spec.compile_document(
                 {
                     "schemaVersion": 3,
@@ -516,7 +494,6 @@ class SystemdGapTests(unittest.TestCase):
     def test_generate_projection_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = pathlib.Path(tmp)
-            # storage attachment with existing resource but colliding mount
             eff = spec.compile_document(
                 {
                     "schemaVersion": 3,
@@ -532,7 +509,6 @@ class SystemdGapTests(unittest.TestCase):
                 },
                 self.schema,
             )
-            # force fail via dynamic user writable bind: patch runtime identity to dynamic
             eff["services"]["demo"]["runtime"]["identity"] = {"mode": "dynamic"}
             src = pathlib.Path(tmp) / "src"
             src.mkdir()
@@ -547,13 +523,12 @@ class SystemdGapTests(unittest.TestCase):
                 )
 
     def test_quote_and_protect_conflicts(self):
-        with self.assertRaises(sysd.SystemdAttachmentError):
-            sysd._quote_attachment("bad\n")
-        with self.assertRaises(sysd.SystemdAttachmentError):
-            sysd._bind_path("/bad:colon", field="test")
+        with self.assertRaises(sysattach.SystemdAttachmentError):
+            sysattach._quote_attachment("bad\n")
+        with self.assertRaises(sysattach.SystemdAttachmentError):
+            sysattach._bind_path("/bad:colon", field="test")
 
     def test_validate_projection_no_files(self):
-        # empty is no-op
         sysd.validate_projection({}, systemd_analyze_bin="/bin/true")
 
 
@@ -570,7 +545,6 @@ class BackupGapTests(unittest.TestCase):
             backup._runtime_safe_absolute_path("relative", label="x")
 
     def test_compile_backup_projection_native_dump(self):
-        # need effective with native-dump graph
         doc = {
             "schemaVersion": 3,
             "storageResources": {
@@ -602,7 +576,6 @@ class BackupGapTests(unittest.TestCase):
         eff = spec.compile_document(doc, self.schema)
         inv, paths = backup.compile_backup_projection(eff)
         self.assertIn(b"nativeDump", inv)
-        # duplicate path fails
         doc2 = {
             "schemaVersion": 3,
             "storageResources": {
@@ -620,7 +593,6 @@ class BackupGapTests(unittest.TestCase):
             "services": {},
             "derived": {"backupResources": ["a", "b"]},
         }
-        # manually inject derived
         eff2 = spec.normalize(doc2)
         eff2["derived"] = {"backupResources": ["a", "b"], "authorization": {}, "runtime": {}, "routes": []}
         eff2["schemaVersion"] = 3
@@ -647,17 +619,14 @@ class BackupGapTests(unittest.TestCase):
             inv = t / "inv.json"
             paths = t / "paths"
             state = t / "state.json"
-            # empty inventory fails schema
             inv.write_text(json.dumps({"schemaVersion": 99, "resources": []}), encoding="utf-8")
             with self.assertRaises(backup.BackupRuntimeError):
                 backup.prepare(
                     inventory_path=inv, paths_path=paths, state_path=state, zfs_bin="true", systemctl_bin="true"
                 )
-            # cleanup with no state is ok
             state.unlink(missing_ok=True)
             res = backup.cleanup(state_path=state, paths_path=paths, zfs_bin="true")
             self.assertEqual(res["destroyed"], [])
-            # verify helpers
             inv.write_text(
                 json.dumps(
                     {"schemaVersion": 1, "resources": [{"id": "r", "path": "/srv/r", "consistency": "filesystem"}]}
@@ -665,39 +634,28 @@ class BackupGapTests(unittest.TestCase):
                 encoding="utf-8",
             )
             root = t / "restore"
-            # missing restore root fails
             with self.assertRaises(backup.BackupVerificationError):
                 backup.verify(inventory_path=inv, restore_root=root, pg_restore_bin="true")
             root.mkdir()
-            # missing resource file fails
             with self.assertRaises(backup.BackupVerificationError):
                 backup.verify(inventory_path=inv, restore_root=root, pg_restore_bin="true")
-            # create file then verify succeeds
             (root / "srv" / "r").mkdir(parents=True)
             (root / "srv" / "r" / "file").write_text("data", encoding="utf-8")
-            # actually resource path is /srv/r -> restored path is root/srv/r
-            # verify checks candidates exist — for filesystem, candidate is root/srv/r itself
-            # So need to ensure that candidate exists as directory
             res2 = backup.verify(inventory_path=inv, restore_root=root, pg_restore_bin="true")
             self.assertEqual(res2["schemaVersion"], 1)
-            # build parsers
             self.assertIsNotNone(backup.build_verify_parser())
             self.assertIsNotNone(backup.build_parser())
-            # _has_prefix and _verify_sqlite
             f = t / "test.txt"
             f.write_bytes(b"hello")
             self.assertTrue(backup._has_prefix(f, b"hel", restore_root=t))
             self.assertFalse(backup._has_prefix(f, b"world", restore_root=t))
-            # verify_main failure path
             rc = backup.verify_main(["--inventory", str(inv), "--restore-root", str(t / "nonexistent")])
             self.assertEqual(rc, 2)
-            # main prepare with mocked run
             inv2 = t / "inv2.json"
             inv2.write_text(json.dumps({"schemaVersion": 1, "resources": []}), encoding="utf-8")
             with mock.patch("nas_v2_backup._run", return_value="ok"):
                 out_paths = t / "out_paths"
                 out_state = t / "out_state"
-                # empty resources should produce empty runtime paths
                 result = backup.prepare(
                     inventory_path=inv2,
                     paths_path=out_paths,
@@ -732,7 +690,7 @@ class NetworkGapTests(unittest.TestCase):
         )
         self.assertIsNone(net.vlan_binding({}))
         with self.assertRaises(net.PodmanNetworkProjectionError):
-            net.vlan_binding({"vlanId": 10})  # missing parent
+            net.vlan_binding({"vlanId": 10})
         with self.assertRaises(net.PodmanNetworkProjectionError):
             net.vlan_binding({"vlanId": 9999, "vlanParent": "eth0"})
         self.assertFalse(net.requires_firewalld({"services": {"a": {"enabled": False, "network": {"mode": "host"}}}}))
@@ -740,35 +698,31 @@ class NetworkGapTests(unittest.TestCase):
         self.assertEqual(net.quadlet_network_reference({"services": {}}, "s", {"network": {"mode": "none"}}), "none")
         with self.assertRaises(net.PodmanNetworkProjectionError):
             net.quadlet_network_reference({"services": {}}, "s", {"network": {"mode": "none"}, "listeners": {"x": {}}})
-        # compile_projection empty still has remote admin (global, priority -300)
         files, manifest = net.compile_projection({"services": {}}, lan_zone="trusted")
         self.assertEqual(set(files), {f"policies/{net.remote_admin_policy_name()}.xml"})
         with self.assertRaises(net.FirewalldProjectionError):
             net.compile_projection({"services": {}}, lan_zone="bad zone!")
 
-    def test_augment_projection_noop(self):
+    def test_podman_network_augment_projection_noop(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = pathlib.Path(tmp)
             files = {}
             manifest = {"quadletLinks": [], "links": [], "ownedUnits": []}
-            net.augment_projection({"services": {}}, output_dir=out, files=files, manifest=manifest)
+            podnet.augment_projection({"services": {}}, output_dir=out, files=files, manifest=manifest)
             self.assertEqual(files, {})
 
-    def test_reconcile_requires_manifest(self):
+    def test_native_firewalld_reconcile_requires_manifest_and_safe_namespace(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = pathlib.Path(tmp)
-            # missing manifest fails
-            with self.assertRaises(net.FirewalldReconcileError):
-                net.reconcile(
+            with self.assertRaises(fwrec.FirewalldReconcileError):
+                fwrec.reconcile(
                     manifest_path=t / "missing.json",
                     projection_root=t,
                     system_config=t / "sys",
                     firewall_cmd="true",
-                    firewall_offline_cmd="true",
                 )
-            # safe target rejects outside namespace
-            with self.assertRaises(net.FirewalldReconcileError):
-                net._safe_target("zones/bad.xml")
+            with self.assertRaises(fwrec.FirewalldReconcileError):
+                fwrec._safe_target("zones/bad.xml")
 
 
 class BootstrapGapTests(unittest.TestCase):
@@ -804,7 +758,7 @@ class BootstrapGapTests(unittest.TestCase):
             marker.write_text("", encoding="utf-8")
             bootstrap._clear_marker(marker)
             self.assertFalse(marker.exists())
-            bootstrap._clear_marker(marker)  # noop
+            bootstrap._clear_marker(marker)
 
     def test_migrate_no_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -814,7 +768,6 @@ class BootstrapGapTests(unittest.TestCase):
             marker = d / "marker"
             seed.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
             desired.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
-            # no marker => unchanged
             res = bootstrap.migrate(desired=desired, seed=seed, marker=marker, schema=SCHEMA, platform=None)
             self.assertFalse(res["changed"])
 
@@ -840,12 +793,10 @@ class ApplyGapTests(unittest.TestCase):
             "services": {"s": {"managed": True, "enabled": True, "network": {"vlanId": 10}, "networkProfile": None}},
             "networkProfiles": {},
         }
-        # missing vlanParent env -> error
         with self.assertRaises(sysd.SystemdProjectionError):
             apply_mod._bind_platform_vlan_parent(eff, None)
         bound = apply_mod._bind_platform_vlan_parent(eff, "eth0")
         self.assertEqual(bound["services"]["s"]["network"]["vlanParent"], "eth0")
-        # no vlan -> unchanged
         eff2 = {
             "services": {"s": {"managed": True, "enabled": True, "network": {"mode": "host"}}},
             "networkProfiles": {},
@@ -860,29 +811,24 @@ class ApplyGapTests(unittest.TestCase):
         }
         dirs = apply_mod._service_storage_dirs(eff)
         self.assertTrue(any("demo" in str(d) for d in dirs))
-        # ensure does not raise
         apply_mod._ensure_service_dirs(eff)
 
     def test_stale_and_replace_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            # create stale candidate
             p = root / "units" / "nas-v2-demo.service"
             p.parent.mkdir(parents=True)
             p.write_text("old", encoding="utf-8")
             cur = {p}
             stale = apply_mod._projection_stale_files(root, cur)
             self.assertEqual(stale, set())
-            # new stale file not in current
             extra = root / "units" / "nas-v2-extra.service"
             extra.write_text("extra", encoding="utf-8")
             stale2 = apply_mod._projection_stale_files(root, cur)
             self.assertIn(extra, stale2)
-            # replace bundle
             dest = root / "out.json"
             changed = apply_mod._replace_bundle([(dest, b"hello", 0o644)])
             self.assertIn(dest, changed)
-            # second call no change
             changed2 = apply_mod._replace_bundle([(dest, b"hello", 0o644)])
             self.assertEqual(changed2, set())
 
@@ -938,20 +884,16 @@ class ReconcileGapTests(unittest.TestCase):
             runtime = pathlib.Path(tmp) / "run"
             root.mkdir()
             runtime.mkdir()
-            # source file
             src = root / "demo.service"
             src.write_text("content", encoding="utf-8")
-            # safe target valid
             p, name = recon._safe_target(runtime, "demo.service")
             self.assertEqual(name, "demo.service")
             with self.assertRaises(recon.SystemdReconcileError):
                 recon._safe_target(runtime, "../escape.service")
-            # quadlet target
             pq, _ = recon._safe_quadlet_target(runtime, "nas-v2-demo.container")
             self.assertTrue(str(pq).endswith(".container"))
             with self.assertRaises(recon.SystemdReconcileError):
                 recon._safe_quadlet_target(runtime, "bad.container")
-            # source_under success
             res = recon._source_under(root, str(src))
             self.assertEqual(res, src.resolve())
             with self.assertRaises(recon.SystemdReconcileError):
