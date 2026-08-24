@@ -19,12 +19,12 @@ from typing import Any
 
 from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, resolve_effective
 from nas_v2_backup import compile_backup_projection
-from nas_v2_caddy import generate_caddyfile, validate_caddyfile
+from nas_v2_caddy import generate_caddyfile, portal_bytes, validate_caddyfile
+from nas_v2_history import record_desired_locked
 from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
 from nas_v2_network import augment_projection as augment_podman_networks
 from nas_v2_network import materialize_projection as materialize_firewalld_projection
 from nas_v2_plan import build_plan
-from nas_v2_caddy import portal_bytes
 from nas_v2_session import SessionProjectionError, generate_projection as generate_systemd_projection
 from nas_v2_source_watch import (
     SourceWatchProjectionError,
@@ -60,42 +60,6 @@ except ImportError:  # pragma: no cover - fallback for minimal test harnesses
         yield
 
 
-def _is_directory_authority(path: pathlib.Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def _yaml_files(directory: pathlib.Path) -> list[pathlib.Path]:
-    try:
-        entries = list(directory.iterdir())
-    except OSError:
-        return []
-    files = [p for p in entries if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}]
-    return sorted(files, key=lambda p: p.name)
-
-
-def _desired_target(path: pathlib.Path) -> pathlib.Path:
-    if path.is_dir():
-        files = _yaml_files(path)
-        if len(files) == 1:
-            return files[0]
-        return path / "00-default.yaml"
-    if not path.exists() and path.suffix.lower() not in {".yaml", ".yml"}:
-        path.mkdir(parents=True, exist_ok=True)
-        return path / "00-default.yaml"
-    return path
-
-
-def _is_intended_directory(path: pathlib.Path) -> bool:
-    if path.is_dir():
-        return True
-    if path.exists():
-        return False
-    return path.suffix.lower() not in {".yaml", ".yml"}
-
-
 @dataclass(frozen=True)
 class ApplyPaths:
     desired: pathlib.Path = DEFAULT_SPEC_PATH
@@ -103,6 +67,8 @@ class ApplyPaths:
     platform: pathlib.Path | None = DEFAULT_PLATFORM_PATH
     effective: pathlib.Path = pathlib.Path("/run/nas-control/effective.json")
     plan: pathlib.Path = pathlib.Path("/run/nas-control/plan.json")
+    history_repository: pathlib.Path | None = None
+    git_bin: str = "git"
 
 
 @dataclass(frozen=True)
@@ -453,9 +419,6 @@ def _service_storage_dirs(effective: dict[str, Any]) -> list[pathlib.Path]:
     for service_id, service in effective.get("services", {}).items():
         if not isinstance(service_id, str) or not service_id:
             continue
-        # Generic per-service app root — required for exec/python/quadlet/compose/vm/oci
-        # sources that must live beneath /var/lib/nas-control/apps/<id>/ per
-        # nas_v2_spec._validate_runtime_paths.
         dirs.append(_SERVICE_APP_ROOT / service_id)
         runtime = service.get("runtime") if isinstance(service, dict) else None
         if isinstance(runtime, dict) and runtime.get("type") in {"quadlet", "compose", "vm"}:
@@ -463,8 +426,6 @@ def _service_storage_dirs(effective: dict[str, Any]) -> list[pathlib.Path]:
             if isinstance(source, str) and source:
                 try:
                     parent = pathlib.Path(source).parent
-                    # Only create parents that are beneath the app root to avoid
-                    # arbitrary host paths.
                     if str(parent).startswith(str(_SERVICE_APP_ROOT)):
                         dirs.append(parent)
                 except Exception:
@@ -484,20 +445,17 @@ def _service_storage_dirs(effective: dict[str, Any]) -> list[pathlib.Path]:
                     dirs.append(pathlib.Path(script).parent)
                 except Exception:
                     continue
-        # Per-type container/vm staging for readability — still under the
-        # shared app root so a single tmpfiles base covers containment.
         rt = runtime.get("type") if isinstance(runtime, dict) else None
         if rt in {"oci", "quadlet", "compose"}:
             dirs.append(_SERVICE_APP_ROOT / service_id / "containers")
         if rt == "vm":
             dirs.append(_SERVICE_APP_ROOT / service_id / "vms")
-    # Deduplicate while preserving order
     seen: set[pathlib.Path] = set()
     uniq: list[pathlib.Path] = []
-    for d in dirs:
-        if d not in seen:
-            seen.add(d)
-            uniq.append(d)
+    for directory in dirs:
+        if directory not in seen:
+            seen.add(directory)
+            uniq.append(directory)
     return uniq
 
 
@@ -525,8 +483,6 @@ def _ensure_service_dirs(effective: dict[str, Any]) -> None:
         except OSError as exc:
             if strict:
                 raise SystemdProjectionError(f"unable to prepare service storage directory {path}: {exc}") from exc
-            # Non-root developer/unit-test execution cannot prepare production
-            # /var/lib paths; projection validation remains usable there.
             continue
 
 
@@ -540,9 +496,18 @@ def apply(
     portal: PortalProjection | None = None,
 ) -> dict[str, Any]:
     with authority_lock(paths.desired):
+        desired_revision: str | None = None
+        if paths.history_repository is not None:
+            history = record_desired_locked(
+                authority=paths.desired,
+                repository=paths.history_repository,
+                git_bin=paths.git_bin,
+            )
+            desired_revision = str(history["head"])
+
         effective, plan = _compile_paths_inner(paths)
-        # The production reconciler is root and must not advertise a successful
-        # apply when a required service storage path cannot be prepared.
+        if desired_revision is not None:
+            plan["desiredRevision"] = desired_revision
         _ensure_service_dirs(effective)
         try:
             needs_firewalld = requires_firewalld(effective)
@@ -577,131 +542,38 @@ def apply(
             except FileNotFoundError:
                 return True
 
-        # Predict changed set before serializing plan so plan on disk contains changedFiles.
         predicted: set[pathlib.Path] = {path for path, data, mode in files if _would_change(path, data, mode)}
-        predicted.update({p for p in stale if p.exists()})
-        plan["changedFiles"] = sorted(str(p) for p in predicted)
+        predicted.update({path for path in stale if path.exists()})
+        plan["changedFiles"] = sorted(str(path) for path in predicted)
         plan_bytes = _json_bytes(plan)
         if _would_change(paths.plan, plan_bytes, 0o640):
             predicted.add(paths.plan)
-            plan["changedFiles"] = sorted(str(p) for p in predicted)
+            plan["changedFiles"] = sorted(str(path) for path in predicted)
             plan_bytes = _json_bytes(plan)
         files.append((paths.plan, plan_bytes, 0o640))
         changed = _replace_bundle(files, remove_paths=stale)
-        # Ensure plan's changedFiles reflects actual changed set (covers race-free prediction).
-        if {str(p) for p in changed} != set(plan["changedFiles"]):
-            plan["changedFiles"] = sorted(str(p) for p in changed)
+        if {str(path) for path in changed} != set(plan["changedFiles"]):
+            plan["changedFiles"] = sorted(str(path) for path in changed)
             _replace_bundle([(paths.plan, _json_bytes(plan), 0o640)], remove_paths=set())
         return plan
 
 
 def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str, Any]:
-    """Validate draft YAML, atomically save authority, compile, and roll back on failure."""
+    """Validate and atomically replace the single-file authority and derived state."""
     schema = load_schema(paths.schema)
     document = parse_yaml_text(yaml_text, source="<draft>")
     effective = _compile_document_with_platform(document, schema, paths.platform)
     plan = build_plan(effective)
 
     with authority_lock(paths.desired):
-        if _is_directory_authority(paths.desired) or _is_intended_directory(paths.desired):
-            target = _desired_target(paths.desired)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                old_stat = target.stat()
-                old_mode = old_stat.st_mode & 0o777
-                old_uid = old_stat.st_uid
-                old_gid = old_stat.st_gid
-                old_desired: tuple[bytes, int, int, int] | None = (
-                    target.read_bytes(),
-                    old_mode,
-                    old_uid,
-                    old_gid,
-                )
-                old_files = _yaml_files(paths.desired)
-            except FileNotFoundError:
-                old_mode = 0o640
-                old_uid = 0
-                old_gid = 0
-                old_desired = None
-                old_files = _yaml_files(paths.desired)
-            # Snapshot every non-target YAML file atomically before any mutation,
-            # so rollback can restore the complete directory authority.
-            old_snapshots: dict[pathlib.Path, tuple[bytes, int, int, int]] = {}
-            for snap_path in old_files:
-                if snap_path == target:
-                    continue
-                try:
-                    st = snap_path.stat()
-                    old_snapshots[snap_path] = (
-                        snap_path.read_bytes(),
-                        st.st_mode & 0o777,
-                        st.st_uid,
-                        st.st_gid,
-                    )
-                except FileNotFoundError:
-                    continue
-
-            desired_temp = _prepare_temp(target, yaml_text.encode("utf-8"), old_mode)
-            if os.geteuid() == 0 and old_desired is not None:
-                try:
-                    os.chown(desired_temp, old_uid, old_gid)
-                except OSError:
-                    pass
-            try:
-                os.replace(desired_temp, target)
-                _fsync_directory(target.parent)
-                for f in list(old_snapshots.keys()):
-                    if f.exists():
-                        try:
-                            f.unlink()
-                        except OSError:
-                            pass
-                        try:
-                            _fsync_directory(f.parent)
-                        except OSError:
-                            pass
-                try:
-                    _replace_bundle(
-                        [
-                            (paths.effective, _json_bytes(effective), 0o640),
-                            (paths.plan, _json_bytes(plan), 0o640),
-                        ]
-                    )
-                except Exception:
-                    if old_desired is None:
-                        target.unlink(missing_ok=True)
-                    else:
-                        rollback = _prepare_temp(target, old_desired[0], old_desired[1])
-                        if os.geteuid() == 0:
-                            try:
-                                os.chown(rollback, old_desired[2], old_desired[3])
-                            except OSError:
-                                pass
-                        os.replace(rollback, target)
-                    for snap_path, (snap_bytes, snap_mode, snap_uid, snap_gid) in old_snapshots.items():
-                        try:
-                            tmp = _prepare_temp(snap_path, snap_bytes, snap_mode)
-                            if os.geteuid() == 0:
-                                try:
-                                    os.chown(tmp, snap_uid, snap_gid)
-                                except OSError:
-                                    pass
-                            os.replace(tmp, snap_path)
-                            _fsync_directory(snap_path.parent)
-                        except OSError:
-                            pass
-                    _fsync_directory(target.parent)
-                    raise
-            finally:
-                desired_temp.unlink(missing_ok=True)
-            return plan
-
+        if paths.desired.is_dir():
+            raise ManagedServicesV2Error("Managed Services V2 authority must be one YAML file")
         try:
             old_stat = paths.desired.stat()
             old_mode = old_stat.st_mode & 0o777
             old_uid = old_stat.st_uid
             old_gid = old_stat.st_gid
-            old_desired = (
+            old_desired: tuple[bytes, int, int, int] | None = (
                 paths.desired.read_bytes(),
                 old_mode,
                 old_uid,
