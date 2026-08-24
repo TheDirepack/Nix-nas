@@ -15,6 +15,17 @@ import nas_v2_entry  # noqa: E402
 
 
 class V2EntryTests(unittest.TestCase):
+    def test_default_authority_is_canonical_services_yaml(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {}, clear=True),
+            mock.patch.object(sys, "argv", ["nas_v2_entry.py"]),
+            mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+        ):
+            self.assertEqual(nas_v2_entry.main(), 0)
+
+        paths = apply_mock.call_args.args[0]
+        self.assertEqual(paths.desired, pathlib.Path("/var/lib/nas-control/services.yaml"))
+
     def test_disabled_firewalld_does_not_project_policy_when_runtime_parent_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime = pathlib.Path(temporary)
