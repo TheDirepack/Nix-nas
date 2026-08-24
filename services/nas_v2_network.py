@@ -521,8 +521,6 @@ _DEADMAN_PENDING = "pending.json"
 _DEADMAN_ACK = "ack.json"
 _DEADMAN_ROLLBACK_DIR = "previous"
 _DEADMAN_TIMER_UNIT = "nas-v2-firewall-rollback.timer"
-_DEADMAN_SERVICE_UNIT = "nas-v2-firewall-rollback.service"
-_TOKEN_RE = re.compile(r"^[0-9a-fA-F]{12,64}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def _xml_document(lines: list[str]) -> bytes:
@@ -1567,9 +1565,6 @@ def reconcile_main(argv: list[str] | None = None) -> int:
     return 0
 
 
-# Backwards-compat alias: original reconcile module exposed `main`.
-main = reconcile_main
-
 __all__ = [
     "PodmanNetworkProjectionError",
     "FirewalldProjectionError",
@@ -1596,5 +1591,4 @@ __all__ = [
     "acknowledge_firewall",
     "handle_deadman_rollback",
     "reconcile_main",
-    "main",
 ]

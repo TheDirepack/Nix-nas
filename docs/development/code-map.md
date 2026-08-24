@@ -52,7 +52,7 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_v2_caddy.py`, `nas_v2_wake.py` | Request-time routing/auth projection (generic `proxy.*`, `requireHeaders`, `stripPrefix`, `onDemandWake`) and authorization-free post-auth wake | `test_v2_caddy.py`, `test_v2_wake.py` |
 | `nas_v2_backup.py` | Resource-oriented backup inventory and finite preparation/cleanup jobs (freshness via stale-clear); absorbs the former runtime/native-dump modules | `test_v2_backup.py`, `test_v2_backup_runtime.py`, `test_v2_native_dump.py` |
 
-The installed legacy command name `nas-feature-control` is only an executable alias to `nas_v2_control:main`; there is no `nas_feature_control.py` implementation. Do not restore the deleted gate/controller/reaper architecture to satisfy old tests or documentation.
+There is no `nas_feature_control.py` implementation and no installed `nas-feature-control` command; tests assert their absence. Do not restore the deleted gate/controller/reaper architecture to satisfy old tests or documentation.
 
 Pure policy and schema helpers should contain no service-management side effects. Runtime adapters project normalized V3 state into native mechanisms and fail closed when a requested semantic cannot be represented.
 

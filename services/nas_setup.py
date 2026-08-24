@@ -96,8 +96,6 @@ FIRST_START_JOB_RETAIN_SECONDS = max(
 )
 COMMAND_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("NAS_SETUP_COMMAND_TIMEOUT_SECONDS", "900")))
 COMMAND_MAX_OUTPUT_BYTES = max(4096, int(os.environ.get("NAS_SETUP_COMMAND_MAX_OUTPUT_BYTES", str(256 * 1024))))
-FEATURE_STATUS_ATTEMPTS = max(1, int(os.environ.get("NAS_FEATURE_STATUS_ATTEMPTS", "20")))
-FEATURE_STATUS_RETRY_SECONDS = max(0.05, float(os.environ.get("NAS_FEATURE_STATUS_RETRY_SECONDS", "0.25")))
 
 
 def progress(message: str) -> None:

@@ -72,13 +72,6 @@ def _revision_for_path(path: pathlib.Path) -> str:
 
 
 def _read_authority_document(path: pathlib.Path) -> tuple[str, dict[str, Any]]:
-    if _is_directory_authority(path):
-        try:
-            document = parse_yaml(path)
-        except ManagedServicesV2Error as exc:
-            raise ManagedServicesEditorError(str(exc)) from exc
-        yaml_text = _render(document)
-        return yaml_text, document
     try:
         yaml_text = path.read_text(encoding="utf-8")
     except OSError as exc:

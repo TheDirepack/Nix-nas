@@ -24,7 +24,6 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 DEFAULT_SPEC_PATH = pathlib.Path(os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services"))
-DEFAULT_DESIRED_PATH = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services"))
 DEFAULT_SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
 DEFAULT_PLATFORM_PATH = pathlib.Path(
     os.environ.get("NAS_V2_PLATFORM_CAPABILITIES", "/etc/nas-control/platform-capabilities.json")

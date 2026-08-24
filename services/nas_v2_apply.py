@@ -49,7 +49,6 @@ from nas_v2_systemd import validate_projection as validate_systemd_projection
 # managed-services.nix and system.nix). Creating them under the
 # compatibility symlink still lands on ZFS.
 _SERVICE_APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
-_SERVICE_SERVICES_ROOT = pathlib.Path("/var/lib/nas-control/services")
 
 try:
     from nas_v2_editor import authority_lock
