@@ -10,6 +10,7 @@ SCHEMA = ROOT / "schemas" / "managed-services-v3.schema.json"
 if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
+import nas_v2_activation as activation  # noqa: E402
 import nas_v2_caddy as caddy  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
 
@@ -188,7 +189,6 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         for header in caddy.IDENTITY_HEADERS:
             with self.subTest(header=header):
                 self.assertIn(f"request_header -{header}", rendered)
-        # Ensure stripping happens before proxy and no auth injection occurs
         self.assertLess(rendered.index("request_header -Remote-User"), rendered.index("reverse_proxy"))
         self.assertNotIn("Remote-User {http.request.header", rendered)
 
@@ -242,29 +242,18 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         for header in expected_headers:
             with self.subTest(header=header):
                 self.assertIn(f"request_header -{header}", rendered)
-        # Corpus must match module constant
         self.assertEqual(set(caddy.IDENTITY_HEADERS), set(expected_headers))
         self.assertEqual(caddy.TRUSTED_IDENTITY_HEADERS, frozenset(expected_headers))
-        # Stripping must occur before forward_auth
         self.assertLess(rendered.index("request_header -Remote-User"), rendered.index("forward_auth"))
 
-    def test_wake_socket_rejects_newline_and_brace(self):
-        service = self.base_service()
-        service["workload"] = {"kind": "daemon", "activation": "on-demand", "idleSeconds": 60}
-        service["routes"] = {
-            "web": {
-                "target": {"type": "http", "port": 8080},
-                "exposure": {"type": "path", "paths": ["/demo/"]},
-                "auth": {"mode": "identity"},
-            }
-        }
-        effective = self.compile(service)
-        for bad in ("/run/wake\n.sock", "/run/wake\r.sock", "/run/wake\x00.sock", "/run/wake{.sock", "/run/wake}.sock"):
-            with self.subTest(bad=repr(bad)):
-                with self.assertRaisesRegex(caddy.CaddyProjectionError, "absolute safe path"):
-                    caddy.generate_caddyfile(effective, wake_socket=bad)
+    def test_activation_socket_path_is_derived_from_validated_ids(self):
+        self.assertEqual(str(activation.socket_path("demo", "web")), "/run/nas-control/activate/demo-web.sock")
+        for service_id, route_id in (("../demo", "web"), ("demo", "web\nroute"), ("demo", "web/route")):
+            with self.subTest(service_id=service_id, route_id=route_id):
+                with self.assertRaises(activation.ActivationProjectionError):
+                    activation.socket_path(service_id, route_id)
 
-    def test_on_demand_route_requires_new_wake_boundary(self):
+    def test_on_demand_route_authorizes_before_native_socket_activation(self):
         service = self.base_service()
         service["workload"] = {"kind": "daemon", "activation": "on-demand", "idleSeconds": 60}
         service["routes"] = {
@@ -274,15 +263,13 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 "auth": {"mode": "identity"},
             }
         }
-        effective = self.compile(service)
-        with self.assertRaisesRegex(caddy.CaddyProjectionError, "wake socket"):
-            caddy.generate_caddyfile(effective)
-        rendered = caddy.generate_caddyfile(effective, wake_socket="/run/nas-control/v2-wake.sock")
+        rendered = caddy.generate_caddyfile(self.compile(service))
         capability_position = rendered.index("missing_capability")
-        wake_position = rendered.index("/wake?service=demo")
-        proxy_position = rendered.index("reverse_proxy 127.0.0.1:8080")
-        self.assertLess(capability_position, wake_position)
-        self.assertLess(wake_position, proxy_position)
+        proxy = "reverse_proxy unix//run/nas-control/activate/demo-web.sock"
+        proxy_position = rendered.index(proxy)
+        self.assertLess(capability_position, proxy_position)
+        self.assertNotIn("/wake?", rendered)
+        self.assertNotIn("reverse_proxy 127.0.0.1:8080", rendered)
         self.assertNotIn("Remote-User {http.request.header.Remote-User}", rendered)
 
     def test_on_demand_upstream_auth_fails_closed(self):
@@ -295,8 +282,8 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 "auth": {"mode": "upstream"},
             }
         }
-        with self.assertRaisesRegex(caddy.CaddyProjectionError, "pre-upstream authorization"):
-            caddy.generate_caddyfile(self.compile(service), wake_socket="/run/nas-control/v2-wake.sock")
+        with self.assertRaisesRegex(caddy.CaddyProjectionError, "native socket activation"):
+            caddy.generate_caddyfile(self.compile(service))
 
     def test_disabled_service_has_no_route(self):
         service = self.base_service()
@@ -375,7 +362,6 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
             caddy.generate_caddyfile(self.compile(service))
 
     def test_parent_child_routes_render_longest_first(self):
-        # Real seed parent/child must be ordered longest first regardless of input order
         def svc(sid: str, path: str) -> dict:
             return {
                 "name": sid,
@@ -390,7 +376,6 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 },
             }
 
-        # Input order is parent first, but renderer must put child first
         doc = v2.compile_document(
             {
                 "schemaVersion": 3,
@@ -407,24 +392,17 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
             self.schema,
         )
         rendered = caddy.generate_caddyfile(doc)
-        # Longest paths must appear before their parents
         self.assertLess(rendered.index("/shares/admin"), rendered.index('"/shares"'))
-        # Ensure /shares/admin appears before /shares (check handle ordering)
-        # Vault
         self.assertLess(rendered.index("/vault/admin"), rendered.index('"/vault"'))
-        # AI: /ai/runtime and /ai/v1 must appear before /ai/
-        # Extract positions of the path patterns
         pos_runtime = rendered.index("/ai/runtime")
         pos_v1 = rendered.index("/ai/v1")
         pos_ai = rendered.index('path "/ai/"')
-        # Fallback to check "/ai/*" pattern for /ai/
         if pos_ai == -1:
             pos_ai = rendered.index('"/ai/*"')
         self.assertLess(pos_runtime, pos_ai)
         self.assertLess(pos_v1, pos_ai)
 
     def test_real_seed_overlapping_routes_compile_and_render(self):
-        # Full real-seed set: /shares, /shares/admin, /vault, /vault/admin, /ai/, /ai/v1, /ai/runtime
         copyparty_files = {
             "name": "CopyParty",
             "workload": {"kind": "daemon"},
@@ -525,7 +503,6 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate"):
             v2.compile_document({"schemaVersion": 3, "services": {"one": one, "two": two}}, self.schema)
-        # Normalized duplicate with trailing slash variant
         one["routes"] = {
             "web": {
                 "target": {"type": "http", "port": 8080},
