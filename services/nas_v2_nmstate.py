@@ -26,7 +26,9 @@ class NmstateReconcileError(RuntimeError):
     """Raised when host network state cannot be reconciled safely."""
 
 
-def _run(command: Sequence[str], *, input_text: str | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: Sequence[str], *, input_text: str | None = None, timeout: int = 60
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             list(command),
@@ -141,9 +143,7 @@ def _with_stale_absent(desired: dict[str, Any], current: dict[str, Any]) -> dict
     if not isinstance(desired_ifaces, list) or not isinstance(current_ifaces, list):
         raise NmstateReconcileError("nmstate interface state must contain interface lists")
     wanted = {
-        iface.get("name")
-        for iface in desired_ifaces
-        if isinstance(iface, dict) and isinstance(iface.get("name"), str)
+        iface.get("name") for iface in desired_ifaces if isinstance(iface, dict) and isinstance(iface.get("name"), str)
     }
     stale: set[str] = set()
     for iface in current_ifaces:
@@ -152,7 +152,10 @@ def _with_stale_absent(desired: dict[str, Any], current: dict[str, Any]) -> dict
             stale.add(name)
     # Remove VRFs before their VLAN ports. nmstate still receives one atomic
     # desired state, but deterministic order makes diagnostics easier.
-    absent = [{"name": name, "state": "absent"} for name in sorted(stale, key=lambda item: (0 if _VRF_RE.fullmatch(item) else 1, item))]
+    absent = [
+        {"name": name, "state": "absent"}
+        for name in sorted(stale, key=lambda item: (0 if _VRF_RE.fullmatch(item) else 1, item))
+    ]
     return {"interfaces": [*desired_ifaces, *absent]}
 
 
@@ -174,7 +177,9 @@ def reconcile(
     return {
         "ok": True,
         "desiredInterfaces": sorted(
-            iface["name"] for iface in desired["interfaces"] if isinstance(iface, dict) and isinstance(iface.get("name"), str)
+            iface["name"]
+            for iface in desired["interfaces"]
+            if isinstance(iface, dict) and isinstance(iface.get("name"), str)
         ),
         "removedInterfaces": sorted(
             iface["name"] for iface in state["interfaces"] if isinstance(iface, dict) and iface.get("state") == "absent"
