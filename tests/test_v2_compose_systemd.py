@@ -35,18 +35,21 @@ class V2ComposeSystemdTests(unittest.TestCase):
             encoding="utf-8",
         )
         workload: dict[str, object] = {"kind": "daemon", "activation": activation}
+        service: dict[str, object] = {
+            "name": "Demo Compose",
+            "workload": workload,
+            "runtime": {"type": "compose", "source": str(source)},
+        }
         if activation == "on-demand":
             workload["idleSeconds"] = 120
-        document = {
-            "schemaVersion": 3,
-            "services": {
-                "demo": {
-                    "name": "Demo Compose",
-                    "workload": workload,
-                    "runtime": {"type": "compose", "source": str(source)},
+            service["routes"] = {
+                "web": {
+                    "target": {"type": "http", "port": 8080},
+                    "exposure": {"type": "path", "paths": ["/demo/"]},
+                    "auth": {"mode": "public"},
                 }
-            },
-        }
+            }
+        document = {"schemaVersion": 3, "services": {"demo": service}}
         with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
             effective = v2.compile_document(document, self.schema)
         return effective, source
@@ -86,19 +89,26 @@ class V2ComposeSystemdTests(unittest.TestCase):
         self.assertIn("nas-v2-demo.service", manifest["ownedUnits"])
         self.assertIn("nas-v2-demo.service", manifest["startUnits"])
 
-    def test_on_demand_compose_uses_same_native_lease_boundary(self):
+    def test_on_demand_compose_uses_native_socket_proxy_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             effective, _source = self.fixture(root, activation="on-demand")
             output = root / "projection"
             with mock.patch.object(compose, "APP_ROOT", root / "apps"):
                 files, manifest = self.generate(effective, output)
-            unit = files[output / "units/nas-v2-demo.service"].decode()
+            owner = files[output / "units/nas-v2-demo.service"].decode()
+            socket = files[output / "units/nas-v2-activate-demo-web.socket"].decode()
+            proxy = files[output / "units/nas-v2-activate-demo-web.service"].decode()
 
-        self.assertIn("StopWhenUnneeded=yes", unit)
+        self.assertIn("StopWhenUnneeded=yes", owner)
+        self.assertIn("ListenStream=/run/nas-control/activate/demo-web.sock", socket)
+        self.assertIn("SocketUser=caddy", socket)
+        self.assertIn("systemd-socket-proxyd", proxy)
+        self.assertIn("--exit-idle-time=120s", proxy)
         self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
-        self.assertIn("nas-v2-lease-demo.target", manifest["ownedUnits"])
-        self.assertIn("nas-v2-idle-demo.timer", manifest["ownedUnits"])
+        self.assertIn("nas-v2-activate-demo-web.socket", manifest["ownedUnits"])
+        self.assertNotIn("nas-v2-lease-demo.target", manifest["ownedUnits"])
+        self.assertNotIn("nas-v2-idle-demo.timer", manifest["ownedUnits"])
 
     def test_compose_source_content_changes_owner_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -142,11 +152,10 @@ class V2ComposeSystemdTests(unittest.TestCase):
 
     def test_nix_runtime_module_pins_podman_and_provider_store_paths(self):
         module = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
-
-        self.assertIn('"${pkgs.podman}/bin/podman"', module)
-        self.assertIn('"${pkgs.podman-compose}/bin/podman-compose"', module)
-        self.assertIn('"--podman-bin"', module)
-        self.assertIn('"--compose-provider-bin"', module)
+        self.assertIn('NAS_V2_PODMAN_BIN = "${pkgs.podman}/bin/podman";', module)
+        self.assertIn('NAS_V2_COMPOSE_PROVIDER_BIN = "${pkgs.podman-compose}/bin/podman-compose";', module)
+        self.assertNotIn('"--podman-bin"', module)
+        self.assertNotIn('"--compose-provider-bin"', module)
 
 
 if __name__ == "__main__":
