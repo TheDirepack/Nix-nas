@@ -1,13 +1,19 @@
 import React from 'react';
-import { FormGroup, TextInput, Checkbox } from '@patternfly/react-core';
+import { Alert, FormGroup, TextInput } from '@patternfly/react-core';
 
 const AuthentikStep = () => {
   const [authentikExternalUrl, setAuthentikExternalUrl] = React.useState('https://');
-  const [createOutpost, setCreateOutpost] = React.useState(true);
-  const [createProviderApp, setCreateProviderApp] = React.useState(true);
+  const [authentikPassword, setAuthentikPassword] = React.useState('');
+  const [authentikPasswordConfirm, setAuthentikPasswordConfirm] = React.useState('');
+  const passwordsMatch = !authentikPasswordConfirm || authentikPassword === authentikPasswordConfirm;
 
   return (
     <div>
+      <Alert isInline variant="info" title="Authentik owns web identity after setup">
+        The initial Authentik administrator receives a separate password. Static providers,
+        applications, policy bindings, and the embedded proxy outpost are appliance-managed
+        rather than optional setup-time objects.
+      </Alert>
       <FormGroup label="Authentik external URL" fieldId="wizard-authentik-url" isRequired>
         <TextInput
           id="wizard-authentik-url"
@@ -17,18 +23,33 @@ const AuthentikStep = () => {
           placeholder="https://nas.example.com"
         />
       </FormGroup>
-      <Checkbox
-        id="wizard-outpost"
-        label="Configure the embedded proxy outpost"
-        isChecked={createOutpost}
-        onChange={(_event, checked) => setCreateOutpost(checked)}
-      />
-      <Checkbox
-        id="wizard-provider-app"
-        label="Create the initial OAuth2 provider and application"
-        isChecked={createProviderApp}
-        onChange={(_event, checked) => setCreateProviderApp(checked)}
-      />
+      <FormGroup
+        label="Authentik administrator password"
+        fieldId="wizard-authentik-password"
+        isRequired
+      >
+        <TextInput
+          id="wizard-authentik-password"
+          type="password"
+          value={authentikPassword}
+          onChange={(_event, value) => setAuthentikPassword(value)}
+          autoComplete="new-password"
+        />
+      </FormGroup>
+      <FormGroup
+        label="Confirm Authentik administrator password"
+        fieldId="wizard-authentik-password-confirm"
+        isRequired
+      >
+        <TextInput
+          id="wizard-authentik-password-confirm"
+          type="password"
+          value={authentikPasswordConfirm}
+          onChange={(_event, value) => setAuthentikPasswordConfirm(value)}
+          autoComplete="new-password"
+          validated={passwordsMatch ? 'default' : 'error'}
+        />
+      </FormGroup>
     </div>
   );
 };
