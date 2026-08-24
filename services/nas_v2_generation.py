@@ -59,9 +59,17 @@ def allocate_generation(root: pathlib.Path, revision: str) -> pathlib.Path:
 
 def _seal_tree(root: pathlib.Path) -> None:
     """Make generated files immutable to ordinary runtime writers."""
-    for path in sorted((item for item in root.rglob("*") if item.is_file()), key=lambda item: len(item.parts), reverse=True):
+    for path in sorted(
+        (item for item in root.rglob("*") if item.is_file()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
         os.chmod(path, 0o444)
-    for path in sorted((item for item in root.rglob("*") if item.is_dir()), key=lambda item: len(item.parts), reverse=True):
+    for path in sorted(
+        (item for item in root.rglob("*") if item.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
         os.chmod(path, 0o555)
     os.chmod(root, 0o555)
 
