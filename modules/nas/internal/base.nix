@@ -32,7 +32,9 @@ let
   # Core appliance integration constants. Managed Services V2 owns the
   # service/route model; Authentik and Cockpit are platform substrate.
   authentikPort = 9000;
-  authentikOutpostPort = cfg.identity.authentikOutpostPort;
+  # The embedded proxy outpost is served by the Authentik server itself.
+  # Keeping one listener removes the custom token-discovery/outpost daemon.
+  authentikOutpostPort = authentikPort;
   authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
   cockpitPort = 9092;
 
