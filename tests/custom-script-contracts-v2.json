@@ -98,6 +98,9 @@
     "services/nas_v2_platform_probe.py": [
       "tests/test_v2_accelerator.py"
     ],
+    "services/nas_v2_podman_network.py": [
+      "tests/test_v2_podman_network.py"
+    ],
     "services/nas_v2_python_prepare.py": [
       "tests/test_v2_python_prepare.py"
     ],
