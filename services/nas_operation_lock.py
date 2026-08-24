@@ -190,11 +190,14 @@ def _release(handles: Sequence[Any], *, clear: bool = False) -> None:
 
 
 def _metadata(token: str, action: str, classes: tuple[str, ...]) -> str:
-    return json.dumps(
-        {"token": token, "action": action, "classes": list(classes), "pid": os.getpid()},
-        sort_keys=True,
-        separators=(",", ":"),
-    ) + "\n"
+    return (
+        json.dumps(
+            {"token": token, "action": action, "classes": list(classes), "pid": os.getpid()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
 
 
 def _read_metadata(handle: Any) -> dict[str, Any] | None:
