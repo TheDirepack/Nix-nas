@@ -337,7 +337,7 @@ def import_compose(
         generated.mkdir()
         merged.write_bytes(canonical)
         _run([podlet_bin, "--file", str(generated), "compose", str(merged)])
-        owner_unit = f"nas-v2-{service_id}.service"
+        owner_unit = effective["derived"]["runtime"][service_id]["ownerUnit"]
         files, entry_units = _namespace_bundle(service_id, generated, owner_unit=owner_unit)
 
     manifest = {
