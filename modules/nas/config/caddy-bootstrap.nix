@@ -9,10 +9,13 @@ let
     cockpitPort
     firstRunWizardStatic
     lanHost
+    nasPythonApplication
+    nasSetup
     secretRoot
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
+  firstRunApiSocket = "/run/nas-first-run-api/api.sock";
   bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
     cat <<EOCF
 {
@@ -45,13 +48,21 @@ https://${lanHost} {
   handle /setup {
     redir /setup /setup/ 308
   }
+  handle /setup/api/* {
+    route {
+      ${caddyForwardAuth}
+      uri strip_prefix /setup/api
+      reverse_proxy unix/${firstRunApiSocket} {
+        # The first-run API accepts identity only from this authenticated Caddy
+        # path. caddyForwardAuth removed any client-supplied Remote-* headers.
+        header_up Remote-User {http.request.header.Remote-User}
+        header_up Remote-Groups {http.request.header.Remote-Groups}
+      }
+    }
+  }
   handle /setup/* {
     route {
       ${caddyForwardAuth}
-      @post method POST
-      handle @post {
-        redir * /setup/ 303
-      }
       uri strip_prefix /setup
       root * ${firstRunWizardStatic}/share/nas-portal-wizard
       file_server
@@ -138,10 +149,50 @@ in
     && !cfg.testing.installationReadyFixture
   ) [ "nas-management-network-guard.service" ];
 
+  systemd.services.nas-first-run-api = {
+    description = "Authenticated standalone first-run setup API";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "caddy.service" ];
+    serviceConfig = {
+      Type = "simple";
+      User = "root";
+      Group = "caddy";
+      RuntimeDirectory = "nas-first-run-api";
+      RuntimeDirectoryMode = "0750";
+      UMask = "0077";
+      ExecStart = "${nasPythonApplication}/bin/nas-first-run-api --socket ${firstRunApiSocket}";
+      Restart = "on-failure";
+      RestartSec = "2s";
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      ReadWritePaths = [
+        "/run/nas-first-run-api"
+        "/run/nas-first-start"
+        "/run/nas-operations"
+        "/run/lock"
+      ];
+    };
+    path = [
+      pkgs.libpwquality
+      pkgs.systemd
+      nasSetup
+    ];
+  };
+
   systemd.services.nas-caddy-bootstrap = {
     description = "Select the active Caddy configuration (bootstrap vs full)";
     wantedBy = [ "multi-user.target" ];
     before = [ "caddy.service" ];
+    after = [ "nas-first-run-api.service" ];
+    wants = [ "nas-first-run-api.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
