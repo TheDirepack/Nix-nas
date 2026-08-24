@@ -26,7 +26,6 @@ from nas_v2_editor import (
     set_service_modes,
     status as desired_status,
 )
-from nas_v2_wake import WakeError, wake_service
 
 DESIRED_PATH = pathlib.Path(
     os.environ.get("NAS_V2_DESIRED", os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services.yaml"))
@@ -234,17 +233,6 @@ def reconcile() -> dict[str, Any]:
     return {"ok": True, "status": status()}
 
 
-def wake(service_id: str) -> dict[str, Any]:
-    try:
-        effective = json.loads(EFFECTIVE_PATH.read_text(encoding="utf-8"))
-        if not isinstance(effective, dict):
-            raise ControlError("Managed Services V2 effective state is invalid")
-        wake_service(effective, service_id, systemctl=SYSTEMCTL)
-    except (OSError, json.JSONDecodeError, WakeError) as exc:
-        raise ControlError(str(exc)) from exc
-    return {"ok": True, "service": service_id, "status": status()}
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -267,9 +255,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate a schema-editor JSON value, render YAML, replace authority, and reconcile",
     )
     replace_json_parser.add_argument("source", help="JSON object file or - for standard input")
-
-    wake_parser = sub.add_parser("wake", help="Acquire the native V2 on-demand lease for one service")
-    wake_parser.add_argument("service", help="Managed Services V2 service identifier")
     return parser
 
 
@@ -290,8 +275,6 @@ def main(argv: list[str] | None = None) -> int:
             result = replace_from_source(args.source)
         elif args.command == "replace-json-document":
             result = replace_json_from_source(args.source)
-        elif args.command == "wake":
-            result = wake(args.service)
         else:
             raise AssertionError(f"Unhandled command {args.command!r}")
         print(json.dumps(result, indent=2, sort_keys=True))
