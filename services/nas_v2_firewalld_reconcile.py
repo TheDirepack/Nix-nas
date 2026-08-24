@@ -71,12 +71,20 @@ def _read_projection(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise FirewalldReconcileError(f"unable to read firewalld manifest {manifest_path}: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 1 or not isinstance(manifest.get("files"), list):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schemaVersion") != 1
+        or not isinstance(manifest.get("files"), list)
+    ):
         raise FirewalldReconcileError("firewalld projection manifest is invalid")
 
     desired: dict[pathlib.PurePosixPath, pathlib.Path] = {}
     for entry in manifest["files"]:
-        if not isinstance(entry, dict) or not isinstance(entry.get("target"), str) or not isinstance(entry.get("sha256"), str):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("target"), str)
+            or not isinstance(entry.get("sha256"), str)
+        ):
             raise FirewalldReconcileError("firewalld manifest file entry is invalid")
         target = _safe_target(entry["target"])
         source = projection_root / str(target)
