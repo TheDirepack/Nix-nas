@@ -64,6 +64,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_coding_agent",
         "nas_common",
         "nas_doctor",
+        "nas_first_run_api",
         "nas_guarded_apply",
         "nas_identity_model",
         "nas_identity_sync",
