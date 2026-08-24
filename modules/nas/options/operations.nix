@@ -12,7 +12,7 @@
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Enable Restic recovery backups for the boot filesystem, appliance configuration, and mutable service state.";
+        description = "Enable the encrypted Restic recovery backup for the root/control-plane filesystem. ZFS application and user data is backed up separately by native ZFS replication.";
       };
       localRepository = lib.mkOption {
         type = lib.types.str;
@@ -44,18 +44,18 @@
       stagingPath = lib.mkOption {
         type = lib.types.strMatching "^/.*";
         default = "/var/lib/nas-backup/staging";
-        description = "Disk-backed private directory used for consistent database snapshots before Restic runs.";
+        description = "Disk-backed private directory available for backup scratch data.";
       };
       stagingMinFreeBytes = lib.mkOption {
         type = lib.types.ints.positive;
         default = 1073741824;
-        description = "Minimum free bytes required on the backup staging filesystem before snapshot preparation.";
+        description = "Minimum free bytes required on the backup verification/staging filesystem.";
       };
       restoreVerification = {
         enable = lib.mkOption {
           type = lib.types.bool;
           default = true;
-          description = "Periodically restore the latest backup into isolated scratch storage and validate PostgreSQL, SQLite, XML, and required state files.";
+          description = "Periodically restore the latest root/control-plane backup into isolated scratch storage and validate its recovery authorities.";
         };
         onCalendar = lib.mkOption {
           type = lib.types.str;
@@ -72,17 +72,12 @@
         enable = lib.mkOption {
           type = lib.types.bool;
           default = false;
-          description = "Enable remote backup destination via rclone (Google Drive, iCloud, pCloud, S3, etc.). When disabled, backups stay local (or use repositoryFile).";
+          description = "Enable the root/control-plane Restic destination through rclone (Google Drive, iCloud, pCloud, S3, etc.).";
         };
         provider = lib.mkOption {
           type = lib.types.enum [ "local" "gdrive" "icloud" "pcloud" "s3" "b2" "rclone" ];
           default = "local";
-          description = "Remote provider for restic+rclone. Use gdrive/icloud/pcloud/s3/b2/rclone; local keeps restic on ZFS.";
-        };
-        scope = lib.mkOption {
-          type = lib.types.enum [ "config-only" "all" ];
-          default = "config-only";
-          description = "What to send to the remote. config-only = boot system + Caddy/Authentik/Syncthing/Keepass key material (needed for remote sign-in route recovery); all = also user app data via V2 storageResources.";
+          description = "Remote provider for restic+rclone. Use gdrive/icloud/pcloud/s3/b2/rclone; local keeps Restic at localRepository.";
         };
         rcloneRemote = lib.mkOption {
           type = lib.types.str;
