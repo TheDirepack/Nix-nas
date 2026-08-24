@@ -22,9 +22,9 @@ from nas_v2_backup import compile_backup_projection
 from nas_v2_caddy import generate_caddyfile, portal_bytes, validate_caddyfile
 from nas_v2_history import record_desired_locked
 from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
-from nas_v2_network import augment_projection as augment_podman_networks
 from nas_v2_network import materialize_projection as materialize_firewalld_projection
 from nas_v2_plan import build_plan
+from nas_v2_podman_network import augment_projection as augment_podman_networks
 from nas_v2_session import SessionProjectionError, generate_projection as generate_systemd_projection
 from nas_v2_source_watch import (
     SourceWatchProjectionError,
@@ -95,9 +95,6 @@ class SystemdProjection:
     compose_provider_bin: str = "podman-compose"
     virsh_bin: str = "virsh"
     virt_xml_validate_bin: str | None = None
-    nmcli_bin: str = "nmcli"
-    install_bin: str = "install"
-    rm_bin: str = "rm"
     vlan_parent: str | None = field(default_factory=lambda: os.environ.get("NAS_V2_VLAN_PARENT"))
 
 
@@ -195,6 +192,8 @@ _V2_OWNED_DIRS = {
     "quadlet",
     "compose",
     "vm",
+    # Retain the old directory name for one-way stale cleanup during the
+    # nmstate migration. New code never generates NetworkManager profiles.
     "networkmanager",
 }
 _V2_STALE_SUFFIXES = (".service", ".timer", ".target", ".path", ".network", ".container", ".json")
@@ -367,9 +366,6 @@ def _systemd_files(
             files=generated,
             manifest=manifest,
             firewalld_enabled=firewalld_enabled,
-            nmcli_bin=projection.nmcli_bin,
-            install_bin=projection.install_bin,
-            rm_bin=projection.rm_bin,
         )
         augment_projection(
             projection_effective,
