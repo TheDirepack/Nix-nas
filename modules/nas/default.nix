@@ -24,6 +24,7 @@
     ./config/schedules.nix
     ./config/system.nix
     ./config/managed-services.nix
+    ./config/managed-services-transactions.nix
     ./config/managed-services-lifecycle.nix
     ./config/managed-services-network-platform.nix
     ./config/managed-services-seed-v2.nix
