@@ -10,7 +10,8 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_network as firewalld  # noqa: E402
-import nas_v2_network as podman_network  # noqa: E402
+import nas_v2_network as network  # noqa: E402
+import nas_v2_podman_network as podman_network  # noqa: E402
 
 
 class V2VlanAndDirectListenerTests(unittest.TestCase):
@@ -37,16 +38,19 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
             "derived": {"runtime": {"demo": {"ownerUnit": "nas-v2-demo.service"}}},
         }
 
-        reference = podman_network.quadlet_network_reference(effective, "demo", service)
-        vlan = podman_network.vlan_binding(service["network"])
+        reference = network.quadlet_network_reference(effective, "demo", service)
+        vlan = network.vlan_binding(service["network"])
         self.assertEqual(reference, "nas-v2-net-demo.network")
         assert vlan is not None
         self.assertEqual(vlan["id"], 42)
         self.assertEqual(vlan["parent"], "eno1")
 
-        source = (ROOT / "services" / "nas_v2_network.py").read_text(encoding="utf-8")
+        source = (SERVICES / "nas_v2_podman_network.py").read_text(encoding="utf-8")
         self.assertIn("lines.append(f\"Options=vrf={vlan['vrfInterface']}\"", source)
         self.assertNotIn("Options=vlan=", source)
+        nmstate = (SERVICES / "nas_v2_nmstate.py").read_text(encoding="utf-8")
+        self.assertIn("vrfInterface", nmstate)
+        self.assertIn("vlanInterface", nmstate)
 
     def test_vlan_is_rejected_for_host_network_mode(self) -> None:
         service = {
@@ -64,8 +68,8 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
             "routes": {},
             "listeners": {},
         }
-        with self.assertRaisesRegex(podman_network.PodmanNetworkProjectionError, "host-network"):
-            podman_network.quadlet_network_reference({"services": {"demo": service}}, "demo", service)
+        with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "host-network"):
+            network.quadlet_network_reference({"services": {"demo": service}}, "demo", service)
 
     def test_host_listener_can_forward_privileged_port_to_unprivileged_backend(self) -> None:
         effective = {
