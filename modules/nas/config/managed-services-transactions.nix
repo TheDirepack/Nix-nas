@@ -119,6 +119,34 @@ in
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_HISTORY_REPOSITORY = historyRepoPath;
     systemd.services.nas-managed-services-reconcile.environment.NAS_V2_GIT_BIN = "${pkgs.git}/bin/git";
 
+    # Convert edge-triggered services.yaml notifications into a level-triggered
+    # pending marker. systemd.path rechecks PathExists when the oneshot exits,
+    # so an edit that arrives while reconciliation is active cannot be lost.
+    systemd.services.nas-managed-services-dirty = {
+      description = "Queue Managed Services V2 desired-state reconciliation";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${pkgs.coreutils}/bin/touch ${reconcilePendingPath}";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ "/run/nas-control" ];
+      };
+    };
+    systemd.paths.nas-managed-services-dirty = {
+      description = "Notice Managed Services V2 desired-state changes";
+      wantedBy = [ "multi-user.target" ];
+      pathConfig = {
+        PathChanged = desiredPath;
+        Unit = "nas-managed-services-dirty.service";
+      };
+    };
+    systemd.paths.nas-managed-services-reconcile.pathConfig = lib.mkForce {
+      PathExists = reconcilePendingPath;
+      Unit = "nas-managed-services-reconcile.service";
+    };
+
     # Arm rollback before compilation. Remove the previous plan first so a
     # compile failure cannot accidentally identify an older invocation as the
     # failed revision.
@@ -163,11 +191,9 @@ in
 
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} mark-applied --commit "$desired_head"
 
-      # services.yaml changes are converted to a level-triggered pending marker
-      # by managed-services.nix. Clear it only while the authority lock proves
+      # Clear the level-triggered marker only while the authority lock proves
       # the worktree still equals this exact compiled commit. A mid-apply edit
-      # therefore leaves the marker present and PathExists queues one more run
-      # as soon as this oneshot becomes inactive.
+      # leaves the marker present and queues exactly one follow-up run.
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} ack-pending \
         --commit "$desired_head" \
         --pending ${lib.escapeShellArg reconcilePendingPath}
