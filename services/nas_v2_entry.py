@@ -42,6 +42,8 @@ def main() -> int:
     backup_inventory = pathlib.Path(os.environ.get("NAS_V2_BACKUP_INVENTORY", "/run/nas-control/backup-resources.json"))
     restic_paths = pathlib.Path(os.environ.get("NAS_V2_RESTIC_PATHS", "/run/nas-control/restic-v2-paths"))
     firewalld_output = pathlib.Path(os.environ.get("NAS_V2_FIREWALLD", "/run/nas-control/firewalld"))
+    history_repository = os.environ.get("NAS_V2_HISTORY_REPOSITORY")
+    git_bin = os.environ.get("NAS_V2_GIT_BIN", "git")
 
     # Allow Nix to override via args if invoked manually (not a supported CLI):
     # `python nas_v2_entry.py /custom/services.yaml` still works for debugging,
@@ -80,6 +82,8 @@ def main() -> int:
                 platform=platform if platform.exists() else None,
                 effective=effective,
                 plan=plan,
+                history_repository=pathlib.Path(history_repository) if history_repository else None,
+                git_bin=git_bin,
             ),
             caddy=CaddyProjection(
                 output=caddy_output,
