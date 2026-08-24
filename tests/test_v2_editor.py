@@ -143,6 +143,12 @@ class V2EditorTests(unittest.TestCase):
             desired = self.write_desired(root)
             value = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
             value["services"]["demo"]["name"] = "Edited through schema form"
+            value["services"]["demo"]["runtime"] = {
+                "type": "oci",
+                "image": "example.invalid/editor-roundtrip:1",
+                "pull": "missing",
+                "command": [],
+            }
             value["services"]["demo"]["network"] = {"mode": "isolated", "lanAccess": True}
 
             result = editor.replace_document_value(
