@@ -71,7 +71,11 @@ test("admin step gates the KeePassXC database password behind the shared-passwor
   assert.match(admin, /KeePassXC/);
   assert.match(admin, /useSamePassword/);
   assert.match(admin, /wizard-keepass-password/);
-  assert.match(admin, /wizard-admin-password-confirm/, "administrator password needs a confirm field");
+  assert.match(
+    admin,
+    /wizard-admin-password-confirm/,
+    "administrator password needs a confirm field",
+  );
 });
 
 test("wizard shell references only relative, locally served assets", async () => {
