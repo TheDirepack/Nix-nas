@@ -33,19 +33,19 @@ class SetupUtilityLifecycleTests(unittest.TestCase):
         # The setup wizard API should not be available after the first run
         # has written its completion state. The persisted state makes the
         # wizard, its Caddy route, and its Authentik application unnecessary.
-        start = app_services.index('systemd.services.nas-setup-api = {')
-        end = app_services.index('};', start)
+        start = app_services.index("systemd.services.nas-setup-api = {")
+        end = app_services.index("};", start)
         block = app_services[start:end]
-        self.assertIn('ConditionPathExists', block)
-        self.assertIn('!/var/lib/nas-setup/state.json', block)
+        self.assertIn("ConditionPathExists", block)
+        self.assertIn("!/var/lib/nas-setup/state.json", block)
 
     def test_caddy_bootstrap_hides_setup_after_ready(self) -> None:
         bootstrap = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
         # Bootstrap serves /setup, but renderActive switches to the managed
         # Caddy config once secrets and state are ready.
-        self.assertIn('handle /setup', bootstrap)
-        self.assertIn('firstRunWizardStatic', bootstrap)
-        self.assertIn('if [[ -f ${secretRoot}/ready && -f /var/lib/nas-setup/state.json ]]', bootstrap)
+        self.assertIn("handle /setup", bootstrap)
+        self.assertIn("firstRunWizardStatic", bootstrap)
+        self.assertIn("if [[ -f ${secretRoot}/ready && -f /var/lib/nas-setup/state.json ]]", bootstrap)
         # The managed Caddy config (generated from services.yaml) does not
         # contain the setup wizard – it self-removes at the Caddy layer.
 
@@ -61,7 +61,9 @@ class SetupUtilityLifecycleTests(unittest.TestCase):
         complete_idx = setup_py.index("journal.complete(report)")
         # Find the call site after complete, not the definition.
         remove_call_idx = setup_py.index("_remove_setup_application()", complete_idx)
-        self.assertGreater(remove_call_idx, complete_idx, "_remove_setup_application() call should be after journal.complete")
+        self.assertGreater(
+            remove_call_idx, complete_idx, "_remove_setup_application() call should be after journal.complete"
+        )
         self.assertIn("Unable to remove setup application", setup_py)
 
 
