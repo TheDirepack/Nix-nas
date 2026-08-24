@@ -84,8 +84,13 @@ class V2HistoryTests(unittest.TestCase):
             )
             self.assertNotEqual(failed["head"], good["head"])
 
-            restored = history.restore_applied(authority=authority, repository=repository)
+            restored = history.restore_applied(
+                authority=authority,
+                repository=repository,
+                failed_commit=failed["head"],
+            )
             self.assertTrue(restored["changed"])
+            self.assertFalse(restored["superseded"])
             self.assertEqual(restored["restoredFrom"], good["head"])
             self.assertEqual(authority.read_text(encoding="utf-8"), original)
             self.assertNotEqual(restored["head"], failed["head"])
@@ -96,6 +101,60 @@ class V2HistoryTests(unittest.TestCase):
             ).splitlines()
             self.assertEqual(log[0], "Automatic rollback to last applied Managed Services V2 state")
             self.assertIn("Attempt broken configuration", log)
+
+    def test_restore_does_not_overwrite_newer_uncompiled_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            original = "schemaVersion: 3\nservices: {}\n"
+            authority = self.write_authority(root, original)
+            repository = root / "history.git"
+            history.record_desired(authority=authority, repository=repository)
+            history.mark_applied(authority=authority, repository=repository)
+
+            failed_text = "schemaVersion: 3\nservices:\n  failed: {}\n"
+            authority.write_text(failed_text, encoding="utf-8")
+            failed = history.record_desired(authority=authority, repository=repository)
+
+            newer = "schemaVersion: 3\nservices:\n  newer: {}\n"
+            authority.write_text(newer, encoding="utf-8")
+            restored = history.restore_applied(
+                authority=authority,
+                repository=repository,
+                failed_commit=failed["head"],
+            )
+            self.assertTrue(restored["superseded"])
+            self.assertFalse(restored["changed"])
+            self.assertIsNone(restored["restoredFrom"])
+            self.assertEqual(authority.read_text(encoding="utf-8"), newer)
+
+    def test_pending_marker_is_cleared_only_for_current_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_authority(root, "schemaVersion: 3\nservices: {}\n")
+            repository = root / "history.git"
+            current = history.record_desired(authority=authority, repository=repository)
+            pending = root / "reconcile.pending"
+            pending.touch()
+
+            acknowledged = history.acknowledge_pending(
+                authority=authority,
+                repository=repository,
+                commit=current["head"],
+                pending=pending,
+            )
+            self.assertTrue(acknowledged["current"])
+            self.assertFalse(pending.exists())
+
+            pending.touch()
+            authority.write_text("schemaVersion: 3\nservices:\n  newer: {}\n", encoding="utf-8")
+            superseded = history.acknowledge_pending(
+                authority=authority,
+                repository=repository,
+                commit=current["head"],
+                pending=pending,
+            )
+            self.assertFalse(superseded["current"])
+            self.assertTrue(pending.exists())
 
     def test_restore_requires_last_applied_revision(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
