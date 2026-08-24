@@ -511,7 +511,9 @@ def _ensure_service_dirs(effective: dict[str, Any]) -> None:
         try:
             gid = grp.getgrnam("nas-operations").gr_gid
         except KeyError as exc:
-            raise SystemdProjectionError("nas-operations group is missing while preparing service storage") from exc
+            raise SystemdProjectionError(
+                "unable to prepare service storage directory: nas-operations group is missing"
+            ) from exc
 
     for path in _service_storage_dirs(effective):
         try:
