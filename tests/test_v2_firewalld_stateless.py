@@ -78,9 +78,7 @@ class V2StatelessFirewalldTests(unittest.TestCase):
             commands,
         )
         rich = next(
-            command[1]
-            for command in commands
-            if len(command) > 1 and command[1].startswith("--add-rich-rule=")
+            command[1] for command in commands if len(command) > 1 and command[1].startswith("--add-rich-rule=")
         )
         self.assertIn('family="ipv4"', rich)
         self.assertIn('destination address="10.0.0.0/8"', rich)
