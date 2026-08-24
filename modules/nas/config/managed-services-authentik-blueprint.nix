@@ -60,20 +60,22 @@ in
     systemd.services.authentik-worker.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
     systemd.services.authentik-migrate.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
 
-    # Replace the REST CRUD reconciler. No API token, HTTP access, pagination,
+    # Replace the REST CRUD reconciler. A normal lower-priority override is
+    # sufficient here; unlike mkForce it does not bypass the repository's
+    # audited module merge policy. No API token, HTTP access, pagination,
     # provider CRUD, outpost mutation, or membership mutation is required.
     systemd.services.nas-managed-services-authentik-reconcile = {
-      description = lib.mkForce "Apply Managed Services V2 Authentik blueprint";
-      unitConfig.ConditionPathExists = lib.mkForce [ effectivePath authentikEnvironment ];
+      description = lib.mkOverride 900 "Apply Managed Services V2 Authentik blueprint";
+      unitConfig.ConditionPathExists = lib.mkOverride 900 [ effectivePath authentikEnvironment ];
       environment = {
         PYTHONPATH = toString v2Source;
         AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
       };
       serviceConfig = {
-        ExecStart = lib.mkForce reconcileScript;
+        ExecStart = lib.mkOverride 900 reconcileScript;
         EnvironmentFile = [ authentikEnvironment ];
         ReadWritePaths = [ blueprintDir "/var/lib/nas-control" "/run/nas-control" ];
-        RestrictAddressFamilies = lib.mkForce [ "AF_UNIX" ];
+        RestrictAddressFamilies = lib.mkOverride 900 [ "AF_UNIX" ];
       };
     };
   };
