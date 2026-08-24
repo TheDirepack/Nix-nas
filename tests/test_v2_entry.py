@@ -60,13 +60,8 @@ class V2EntryTests(unittest.TestCase):
             self.assertIsNotNone(projection)
             self.assertEqual(projection.output_dir, runtime)
 
-    def test_network_projection_uses_nix_pinned_platform_tools(self) -> None:
-        env = {
-            "NAS_V2_NMCLI_BIN": "/nix/store/test-networkmanager/bin/nmcli",
-            "NAS_V2_INSTALL_BIN": "/nix/store/test-coreutils/bin/install",
-            "NAS_V2_RM_BIN": "/nix/store/test-coreutils/bin/rm",
-            "NAS_V2_VLAN_PARENT": "enp1s0",
-        }
+    def test_systemd_projection_keeps_only_the_host_vlan_binding(self) -> None:
+        env = {"NAS_V2_VLAN_PARENT": "enp1s0"}
         with (
             mock.patch.dict("os.environ", env, clear=True),
             mock.patch.object(sys, "argv", ["nas_v2_entry.py"]),
@@ -75,10 +70,10 @@ class V2EntryTests(unittest.TestCase):
             self.assertEqual(nas_v2_entry.main(), 0)
 
         projection = apply_mock.call_args.kwargs["systemd"]
-        self.assertEqual(projection.nmcli_bin, env["NAS_V2_NMCLI_BIN"])
-        self.assertEqual(projection.install_bin, env["NAS_V2_INSTALL_BIN"])
-        self.assertEqual(projection.rm_bin, env["NAS_V2_RM_BIN"])
         self.assertEqual(projection.vlan_parent, "enp1s0")
+        self.assertFalse(hasattr(projection, "nmcli_bin"))
+        self.assertFalse(hasattr(projection, "install_bin"))
+        self.assertFalse(hasattr(projection, "rm_bin"))
 
 
 if __name__ == "__main__":
