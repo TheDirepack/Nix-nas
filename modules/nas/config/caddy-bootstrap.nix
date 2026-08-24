@@ -2,7 +2,6 @@
 
 let
   inherit (nasInternal)
-    authentikOutpostPort
     authentikPort
     caddyForwardAuth
     cfg
@@ -81,7 +80,8 @@ https://${lanHost} {
   }
   @authentikOutpost path /outpost.goauthentik.io/*
   handle @authentikOutpost {
-    reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+    uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
+    reverse_proxy 127.0.0.1:${toString authentikPort} {
       header_up Host {http.request.host}
       header_up X-Forwarded-Proto https
     }
