@@ -116,7 +116,9 @@ def _authority_matches_commit_locked(
     if verified is None:
         raise DesiredStateHistoryError(f"unknown desired-state Git revision: {commit}")
     relative = authority.name
-    result = _git(repository, authority, git_bin, "diff", "--quiet", "--exit-code", verified, "--", relative, check=False)
+    result = _git(
+        repository, authority, git_bin, "diff", "--quiet", "--exit-code", verified, "--", relative, check=False
+    )
     if result.returncode == 0:
         return True
     if result.returncode == 1:
