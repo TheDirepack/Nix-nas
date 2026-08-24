@@ -204,10 +204,6 @@ class V2AuthentikTests(unittest.TestCase):
         self.assertEqual(apps[0]["hostname"], "media.nas.local")
         self.assertEqual(apps[0]["internalHost"], "http://127.0.0.1:8096")
 
-
-if __name__ == "__main__":
-    unittest.main()
-
     def test_desired_route_apps_projects_portal_visible_path_routes_as_providerless(self):
         effective = {
             "schemaVersion": 3,
@@ -238,3 +234,7 @@ if __name__ == "__main__":
         self.assertEqual(apps[0]["name"], "Vault")
         self.assertTrue(apps[0]["providerless"])
         self.assertEqual(apps[0]["launchUrl"], "https://nas.local:8443/vault/")
+
+
+if __name__ == "__main__":
+    unittest.main()
