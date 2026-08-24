@@ -5,6 +5,7 @@ let
   zfsControlRoot = "${cfg.zfsRoot}/nas-control";
   desiredPath = "/var/lib/nas-control/services.yaml";
   historyRepoPath = "${zfsControlRoot}/config-history.git";
+  planPath = "/run/nas-control/plan.json";
   systemdProjectionPath = "/run/nas-control/systemd";
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
@@ -59,19 +60,14 @@ let
     set -euo pipefail
     export PYTHONPATH=${lib.escapeShellArg (toString v2Source)}
 
-    # If this is the immediate OnFailure path, disarm the timer for the failed
-    # desired revision before creating the rollback commit. If the timer itself
-    # invoked this script, stopping its timer is harmless.
-    failed_head="$(${pkgs.git}/bin/git --git-dir=${lib.escapeShellArg historyRepoPath} rev-parse --verify HEAD 2>/dev/null || true)"
-    if [ -n "$failed_head" ]; then
-      suffix="$(printf '%s' "$failed_head" | ${pkgs.coreutils}/bin/cut -c1-12)"
-      ${pkgs.systemd}/bin/systemctl stop "nas-v2-apply-rollback-$suffix.timer" >/dev/null 2>&1 || true
-    fi
+    # The immediate OnFailure path and the timer fallback share the same
+    # rollback action. Cancel any still-armed V2 timer before restoring state;
+    # systemctl performs the unit-name glob expansion itself.
+    ${pkgs.systemd}/bin/systemctl stop 'nas-v2-apply-rollback-*.timer' >/dev/null 2>&1 || true
 
     if ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} restore-applied; then
       # Reconcile from the known-good Git revision. restore-applied records a
-      # new rollback commit, so the next guard gets a different transient unit
-      # name and cannot collide with the failed attempt's rollback service.
+      # new rollback commit, preserving the failed attempt in Git history.
       ${pkgs.systemd}/bin/systemctl restart nas-managed-services-reconcile.service
       exit 0
     fi
@@ -90,17 +86,23 @@ let
     exit 1
   '';
   guardUnitShell = ''
-    desired_head="$(${pkgs.git}/bin/git --git-dir=${lib.escapeShellArg historyRepoPath} rev-parse --verify HEAD)"
-    guard_suffix="$(printf '%s' "$desired_head" | ${pkgs.coreutils}/bin/cut -c1-12)"
+    guard_suffix="$(printf '%s' "$INVOCATION_ID" | ${pkgs.coreutils}/bin/tr -d '-' | ${pkgs.coreutils}/bin/cut -c1-12)"
+    test -n "$guard_suffix"
     guard_unit="nas-v2-apply-rollback-$guard_suffix"
   '';
 in
 {
   config = {
-    # Commit and arm rollback before compilation. This covers schema/compiler
-    # failures as well as failures in runtime projection activation.
+    # The compiler records the exact desired revision while holding the same
+    # authority lock used to parse services.yaml. These environment variables
+    # opt the production entry point into that history transaction.
+    systemd.services.nas-managed-services-reconcile.environment.NAS_V2_HISTORY_REPOSITORY = historyRepoPath;
+    systemd.services.nas-managed-services-reconcile.environment.NAS_V2_GIT_BIN = "${pkgs.git}/bin/git";
+
+    # Arm rollback before compilation. A compile failure therefore follows the
+    # same OnFailure path as a runtime activation failure, while the transient
+    # timer remains the crash/deadlock fallback.
     systemd.services.nas-managed-services-reconcile.preStart = lib.mkBefore ''
-      ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} record
       ${guardUnitShell}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
@@ -129,14 +131,16 @@ in
     systemd.services.nas-managed-services-reconcile.postStart = lib.mkForce ''
       set -euo pipefail
 
+      # Pin success to the revision that was compiled, not whatever Git HEAD
+      # might become after the compiler releases the authority lock.
+      desired_head="$(${pkgs.jq}/bin/jq -er '.desiredRevision | select(type == "string" and length > 0)' ${lib.escapeShellArg planPath})"
+
       ${lib.optionalString firewalldEnabled ''
       ${v2Python}/bin/python ${lib.escapeShellArgs statelessFirewalldArgs}
       ''}
       ${v2Python}/bin/python ${lib.escapeShellArgs systemdReconcileArgs}
 
-      # The core runtime projection has now been applied and verified. Keep this
-      # as a dedicated ref instead of inferring success from Git HEAD.
-      ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} mark-applied
+      ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} mark-applied --commit "$desired_head"
       ${guardUnitShell}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
