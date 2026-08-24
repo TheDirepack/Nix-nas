@@ -66,8 +66,9 @@ def build_plan(effective: dict[str, Any]) -> dict[str, Any]:
         elif workload["kind"] == "daemon" and workload["activation"] == "on-demand":
             plan["systemd"].append(
                 {
-                    "action": "idle-stop",
+                    "action": "socket-activation",
                     "service": service_id,
+                    "routes": sorted(service["routes"]),
                     "idleSeconds": workload["idleSeconds"],
                 }
             )
@@ -108,12 +109,7 @@ def build_plan(effective: dict[str, Any]) -> dict[str, Any]:
             )
 
     for route in derived["routes"]:
-        plan["caddy"].append(
-            {
-                "action": "route",
-                **copy.deepcopy(route),
-            }
-        )
+        plan["caddy"].append({"action": "route", **copy.deepcopy(route)})
 
     for resource_id in sorted(effective["storageResources"]):
         resource = effective["storageResources"][resource_id]
