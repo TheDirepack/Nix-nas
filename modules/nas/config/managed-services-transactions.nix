@@ -60,6 +60,11 @@ let
     set -euo pipefail
     export PYTHONPATH=${lib.escapeShellArg (toString v2Source)}
 
+    # If the timer fired because reconciliation wedged, stop the owning unit
+    # first so it cannot keep the authority lock or continue mutating runtime
+    # projections while rollback is restoring the last-known-good revision.
+    ${pkgs.systemd}/bin/systemctl stop nas-managed-services-reconcile.service >/dev/null 2>&1 || true
+
     # The immediate OnFailure path and the timer fallback share the same
     # rollback action. Cancel any still-armed V2 timer before restoring state;
     # systemctl performs the unit-name glob expansion itself.
