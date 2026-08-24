@@ -27,7 +27,7 @@ let
     "--repository"
     historyRepoPath
     "--git-bin"
-    "${pkgs.gitMinimal}/bin/git"
+    "${pkgs.git}/bin/git"
   ];
   statelessFirewalldArgs = [
     "${v2Source}/nas_v2_firewalld_reconcile.py"
@@ -134,5 +134,11 @@ in
       ${v2Python}/bin/python ${lib.escapeShellArgs guardCancelArgs}
       trap - ERR
     '';
+
+    # The original per-firewall acknowledgement protocol is superseded by the
+    # generic transaction guard above. Keep the old definitions inert until the
+    # remaining dead code is deleted from managed-services.nix/nas_v2_network.py.
+    systemd.services.nas-v2-firewall-rollback.enable = lib.mkForce false;
+    systemd.timers.nas-v2-firewall-rollback.enable = lib.mkForce false;
   };
 }
