@@ -65,6 +65,7 @@ def main() -> int:
     virt_xml_validate_bin = os.environ.get("NAS_V2_VIRT_XML_VALIDATE_BIN", "")
     lan_zone = os.environ.get("NAS_V2_LAN_ZONE", "nas-lan")
     firewall_offline_cmd = os.environ.get("NAS_V2_FIREWALL_OFFLINE_CMD", "firewall-offline-cmd")
+    firewalld_enabled = os.environ.get("NAS_V2_FIREWALLD_ENABLED") == "1"
 
     try:
         apply(
@@ -103,7 +104,7 @@ def main() -> int:
                 lan_zone=lan_zone,
                 firewall_offline_cmd=firewall_offline_cmd,
             )
-            if firewalld_output.parent.exists() or os.environ.get("NAS_V2_FIREWALLD_ENABLED") == "1"
+            if firewalld_enabled
             else None,
             portal=PortalProjection(output=portal_output),
         )
