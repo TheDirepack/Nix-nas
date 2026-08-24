@@ -42,7 +42,7 @@ class V2TransactionWiringTests(unittest.TestCase):
         self.assertNotIn("rev-parse --verify HEAD", managed)
 
     def test_compiler_owns_git_recording_under_authority_lock(self) -> None:
-        apply_source = text("services/nas_v2_apply.py")
+        apply_source = text("services/nas_v2_apply.py").split("def apply(", 1)[1]
         lock_body = apply_source.split("with authority_lock(paths.desired):", 1)[1].split("return plan", 1)[0]
         self.assertLess(lock_body.index("record_desired_locked"), lock_body.index("_compile_paths_inner"))
         self.assertIn('plan["desiredRevision"] = desired_revision', lock_body)
