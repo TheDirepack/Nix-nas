@@ -820,18 +820,20 @@ class BootstrapGapTests(unittest.TestCase):
 
 
 class ApplyGapTests(unittest.TestCase):
-    def test_yaml_files_and_desired_target(self):
+    def test_save_and_apply_rejects_directory_authority(self):
         with tempfile.TemporaryDirectory() as tmp:
-            d = pathlib.Path(tmp)
-            self.assertEqual(apply_mod._yaml_files(d), [])
-            (d / "a.yaml").write_text("x", encoding="utf-8")
-            self.assertEqual(len(apply_mod._yaml_files(d)), 1)
-            target = apply_mod._desired_target(d)
-            self.assertTrue(str(target).endswith(".yaml"))
-            # is_intended_directory
-            self.assertTrue(apply_mod._is_intended_directory(d))
-            self.assertFalse(apply_mod._is_intended_directory(d / "a.yaml"))
-            self.assertTrue(apply_mod._is_intended_directory(d / "newdir"))
+            root = pathlib.Path(tmp)
+            desired = root / "desired"
+            desired.mkdir()
+            paths = apply_mod.ApplyPaths(
+                desired=desired,
+                schema=SCHEMA,
+                platform=None,
+                effective=root / "effective.json",
+                plan=root / "plan.json",
+            )
+            with self.assertRaisesRegex(spec.ManagedServicesV2Error, "one YAML file"):
+                apply_mod.save_and_apply("schemaVersion: 3\nservices: {}\n", paths)
 
     def test_bind_platform_vlan_parent(self):
         eff = {
