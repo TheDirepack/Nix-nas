@@ -230,5 +230,38 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(
                 network.podman_network_name, service_id + hostile, {"workload": {"kind": "session"}}
             )
-            expected_boundary_error(network.network_policy, service_id + hostile, {"network": {"mode": "isolated"}})
-            expected_boundary_error(compose._safe_environment, {hostile: hostile})
+            expected_boundary_error(network.network_policy, {"networkProfiles": {}}, {"networkProfile": service_id})
+            expected_boundary_error(compose._is_host_volume_source, hostile)
+            expected_boundary_error(compose._volume_target, hostile)
+            expected_boundary_error(
+                caddy.generate_caddyfile, {"services": {}, "derived": {"routes": []}}, lan_host=hostile
+            )
+
+        @settings(max_examples=180, deadline=None)
+        @given(HOSTILE_TEXT)
+        def test_setup_and_alert_inputs_remain_bounded(self, value: str) -> None:
+            expected_boundary_error(
+                alert_router.normalize_alert,
+                {
+                    "labels": {"alertname": value, "severity": value},
+                    "annotations": {"summary": value, "description": value},
+                },
+            )
+            expected_boundary_error(setup.validate_service_request, {value: "on-demand"})
+            expected_boundary_error(
+                setup.validate_storage_request,
+                {"createPool": True, "devices": [value]},
+                [],
+                False,
+            )
+
+else:
+
+    @unittest.skip("Hypothesis is not installed; CI runs the property-test tier with it")
+    class CustomInputSurfaceFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
+        def test_hypothesis_tier_placeholder(self) -> None:
+            pass
+
+
+if __name__ == "__main__":
+    unittest.main()
