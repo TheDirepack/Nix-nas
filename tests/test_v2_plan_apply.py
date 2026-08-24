@@ -56,7 +56,7 @@ class ManagedServicesV2PlanApplyTests(unittest.TestCase):
         )
         self.assertEqual(plan["caddy"][0]["requiredCapability"], "application.starlight.access")
         self.assertTrue(plan["caddy"][0]["onDemandWake"])
-        self.assertEqual(plan["systemd"][0]["action"], "idle-stop")
+        self.assertEqual(plan["systemd"][0]["action"], "socket-activation")
         self.assertFalse(any("user" in json.dumps(action).lower() for action in plan["authentik"]))
         self.assertFalse(any(action.get("action") == "assign-capability" for action in plan["authentik"]))
 
@@ -205,7 +205,6 @@ services:
             with mock.patch("nas_v2_apply.authority_lock") as mock_lock:
                 mock_lock.return_value.__enter__ = mock.Mock(return_value=None)
                 mock_lock.return_value.__exit__ = mock.Mock(return_value=False)
-                # authority_lock is used as context manager, patch needs to be CM
                 from contextlib import contextmanager
 
                 @contextmanager
