@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from typing import Any
 
+from nas_v2_activation import ActivationProjectionError, socket_path
+
 PATH_SNIPPET = "nas_v2_managed_paths"
 HOSTNAME_RE = re.compile(
     r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
@@ -127,8 +129,6 @@ def _render_identity_auth(
     missing_identity = _matcher(service_id, route_id, "missing_identity")
     missing_capability = _matcher(service_id, route_id, "missing_capability")
     groups = (required_capability, ADMIN_GROUP)
-    if not groups:
-        raise CaddyProjectionError("At least one authorization group is required")
     for group in groups:
         if group != ADMIN_GROUP and not group.startswith("application."):
             raise CaddyProjectionError(f"Invalid service capability name {group!r}")
@@ -146,31 +146,6 @@ def _render_identity_auth(
             f"{indent}request_header Remote-Name {{http.request.header.X-Authentik-Name}}",
             f"{indent}request_header Remote-Email {{http.request.header.X-Authentik-Email}}",
             f"{indent}request_header Remote-UID {{http.request.header.X-Authentik-Uid}}",
-        ]
-    )
-
-
-def _render_wake(
-    lines: list[str],
-    *,
-    service_id: str,
-    auth_mode: str,
-    wake_socket: str | None,
-    indent: str,
-) -> None:
-    if auth_mode == "upstream":
-        raise CaddyProjectionError(
-            f"On-demand service {service_id!r} uses upstream-native authentication; "
-            "a pre-upstream authorization mechanism is required before Caddy may wake it"
-        )
-    if wake_socket is None:
-        raise CaddyProjectionError(f"On-demand service {service_id!r} requires the authorization-free V2 wake socket")
-    socket = _safe_posix(wake_socket, "Wake socket must be an absolute safe path")
-    lines.extend(
-        [
-            f"{indent}forward_auth unix/{socket} {{",
-            f"{indent}  uri {_q('/wake?service=' + service_id)}",
-            f"{indent}}}",
         ]
     )
 
@@ -200,19 +175,30 @@ def _render_proxy(
     strip_prefix = proxy.get("stripPrefix")
     if strip_prefix:
         lines.append(f"{indent}uri strip_prefix {_q(strip_prefix)}")
+
     target = route["target"]
     target_type = target["type"]
-    if target_type in {"http", "https"}:
+    is_https = target_type == "https"
+    if route["onDemandWake"]:
+        if route["authMode"] == "upstream":
+            raise CaddyProjectionError(
+                f"On-demand service {service_id!r} uses upstream-native authentication; "
+                "authorization must happen before native socket activation"
+            )
+        try:
+            upstream = f"unix/{socket_path(service_id, route_id)}"
+        except ActivationProjectionError as exc:
+            raise CaddyProjectionError(str(exc)) from exc
+    elif target_type in {"http", "https"}:
         host = target["host"]
         if _ctl(host) or " " in host or "{" in host or "}" in host:
             raise CaddyProjectionError(f"Unsafe upstream host {host!r}")
         upstream = f"{host}:{target['port']}"
-        is_https = target_type == "https"
     elif target_type == "unix-http":
         upstream = f"unix/{_safe_posix(target['socket'], 'Unix HTTP target socket must be an absolute safe path')}"
-        is_https = False
     else:  # pragma: no cover
         raise CaddyProjectionError(f"Unsupported route target type {target_type!r}")
+
     lines.append(f"{indent}reverse_proxy {upstream} {{")
     for name, value in sorted(proxy["responseHeaders"].items()):
         lines.append(f"{indent}  header_down {_header_name(name)} {_q(value)}")
@@ -228,7 +214,6 @@ def _render_handler(
     authentik_upstream: str,
     authentik_path: str,
     authentik_public_host: str,
-    wake_socket: str | None,
     indent: str,
 ) -> None:
     service_id = route["service"]
@@ -264,8 +249,6 @@ def _render_handler(
         )
     elif route["authMode"] not in {"public", "upstream"}:
         raise CaddyProjectionError(f"Unknown V2 route auth mode {route['authMode']!r}")
-    if route["onDemandWake"]:
-        _render_wake(lines, service_id=service_id, auth_mode=route["authMode"], wake_socket=wake_socket, indent=inner)
     _render_proxy(lines, route=route, service_id=service_id, route_id=route_id, indent=inner)
     lines.append(f"{indent}}}")
 
@@ -279,6 +262,9 @@ def generate_caddyfile(
     authentik_public_host: str | None = None,
     wake_socket: str | None = None,
 ) -> str:
+    # wake_socket is retained for one compatibility release; native socket
+    # activation no longer calls a V2 HTTP wake service.
+    del wake_socket
     if not HOSTNAME_RE.fullmatch(lan_host):
         raise CaddyProjectionError(f"Invalid appliance hostname {lan_host!r}")
     public_host = authentik_public_host or lan_host
@@ -315,24 +301,16 @@ def generate_caddyfile(
         else:  # pragma: no cover
             raise CaddyProjectionError(f"Unsupported route exposure type {exposure['type']!r}")
 
-    # Guarantee longest-path-first ordering so parent/child routes are unambiguous.
-    # More specific paths must be matched before their parents; see invariants.
     def _path_sort_key(item: tuple[dict[str, Any], str]) -> tuple[int, int, str, str, str]:
         route, path = item
         norm = path.rstrip("/") or "/"
-        if norm == "/":
-            seg_count = 0
-        else:
-            seg_count = len(norm.strip("/").split("/"))
+        seg_count = 0 if norm == "/" else len(norm.strip("/").split("/"))
         return (-seg_count, -len(norm), path, route["service"], route["route"])
 
     def _hostname_sort_key(item: tuple[dict[str, Any], str, str]) -> tuple[str, int, int, str, str, str]:
         route, hostname, path = item
         norm = path.rstrip("/") or "/"
-        if norm == "/":
-            seg_count = 0
-        else:
-            seg_count = len(norm.strip("/").split("/"))
+        seg_count = 0 if norm == "/" else len(norm.strip("/").split("/"))
         return (hostname, -seg_count, -len(norm), path, route["service"], route["route"])
 
     path_routes.sort(key=_path_sort_key)
@@ -348,7 +326,6 @@ def generate_caddyfile(
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
             authentik_public_host=public_host,
-            wake_socket=wake_socket,
             indent="    ",
         )
         lines.append("  }")
@@ -364,7 +341,6 @@ def generate_caddyfile(
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
             authentik_public_host=public_host,
-            wake_socket=wake_socket,
             indent="    ",
         )
         lines.extend(["  }", "}", ""])
@@ -441,8 +417,6 @@ def _access(service_id: str, route: dict[str, Any]) -> dict[str, Any]:
     if mode == "public":
         return {"mode": "public", "allow": "any", "groups": [], "users": []}
     if mode == "upstream":
-        # The portal is already behind appliance authentication. Upstream-native
-        # application auth remains authoritative after the user follows the link.
         return {"mode": "upstream", "allow": "any", "groups": [], "users": []}
     raise PortalProjectionError(f"route {service_id!r} has unsupported auth mode {mode!r}")
 
@@ -453,9 +427,6 @@ def compile_portal_projection(effective: dict[str, Any]) -> dict[str, Any]:
     services = effective.get("services")
     if not isinstance(services, dict):
         raise PortalProjectionError("effective state is missing services")
-    # Prefer the already-compiled derived routes (single source of truth for Caddy)
-    # to avoid re-traversing services and re-deriving capabilities. Fall back to
-    # services for unit tests that provide a minimal effective without derived.
     derived = effective.get("derived")
     if isinstance(derived, dict) and isinstance(derived.get("routes"), list):
         entries: list[dict[str, Any]] = []
