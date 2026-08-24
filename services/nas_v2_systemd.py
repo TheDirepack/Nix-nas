@@ -69,11 +69,9 @@ def _dependency_units(effective: dict[str, Any], service: dict[str, Any]) -> tup
 
 def _aggregate_unit(
     effective: dict[str, Any],
-    service_id: str,
     service: dict[str, Any],
     entry_units: list[str],
 ) -> bytes:
-    owner = effective["derived"]["runtime"][service_id]["ownerUnit"]
     requires, after = _dependency_units(effective, service)
     requires.update(entry_units)
     after.update(entry_units)
@@ -98,7 +96,6 @@ def _aggregate_unit(
             "",
         ]
     )
-    del owner  # name is carried by the projection path/manifest
     return "\n".join(lines).encode("utf-8")
 
 
@@ -148,7 +145,7 @@ def _augment_compose_imports(
             quadlet_links[name] = str(path)
         owner = effective["derived"]["runtime"][service_id]["ownerUnit"]
         owner_path = unit_dir / owner
-        files[owner_path] = _aggregate_unit(effective, service_id, service, entry_units)
+        files[owner_path] = _aggregate_unit(effective, service, entry_units)
         links[owner] = str(owner_path)
         owned.update(entry_units)
         if not service["enabled"]:
