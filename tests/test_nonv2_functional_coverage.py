@@ -163,7 +163,7 @@ class NonV2FunctionalCoverageTests(unittest.TestCase):
                     "worker", ("network",), blocking=False, reservation_token=reservation.token
                 ) as active:
                     self.assertIn("network", active.classes)
-                oplock.release_reservation(reservation.token)
+                oplock.cancel_reservation(reservation.token)
                 with oplock.acquire_operation(
                     "worker-again", ("network",), blocking=False, reservation_token=reservation.token
                 ) as active:
