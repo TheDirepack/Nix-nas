@@ -8,14 +8,14 @@ from repo_test_utils import ROOT, text
 class ContractTests(unittest.TestCase):
     def test_caddy_wants_but_does_not_wait_for_managed_services_reconciliation(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")
-        caddy = managed.split("systemd.services.caddy = {", 1)[1].split(
-            "systemd.services.nas-managed-services-caddy-reload", 1
-        )[0]
+        self.assertIn("systemd.services.caddy.wants = [", managed)
+        self.assertIn('"nas-managed-services-reconcile.service"', managed)
+        self.assertIn('"nas-managed-services-authentik-reconcile.service"', managed)
+        self.assertNotIn("systemd.services.caddy.requires", managed)
+        self.assertNotIn("systemd.services.caddy.after", managed)
         reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
             "systemd.paths.nas-managed-services-reconcile", 1
         )[0]
-        self.assertIn('"nas-managed-services-reconcile.service"', caddy)
-        self.assertNotIn('after = [\n        "nas-managed-services-reconcile.service"', caddy)
         self.assertNotIn('before = [ "caddy.service" ];', reconcile)
 
     def test_caddy_bootstrap_does_not_block_on_managed_services_reconciliation(self) -> None:
@@ -69,7 +69,6 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_feature_apply_defers_to_an_owned_runtime_operation(self):
-        # V2: feature-apply is now nas-managed-services-reconcile
         systemd = text("modules/nas/config/managed-services.nix")
         self.assertIn("nas-managed-services-reconcile", systemd)
 
@@ -83,7 +82,6 @@ class ContractTests(unittest.TestCase):
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
-        # The seed uses tmpfiles-backed root-fs directories until first-run creates the pool.
         self.assertNotIn("nas-zfs-mount-guard.service", seed)
         self.assertNotIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
