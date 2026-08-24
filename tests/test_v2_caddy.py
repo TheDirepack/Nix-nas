@@ -64,10 +64,13 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
     def test_embedded_authentik_outpost_reuses_server_listener(self):
         config = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
         base = (ROOT / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
+        options = (ROOT / "modules/nas/options/core.nix").read_text(encoding="utf-8")
         self.assertNotIn("systemd.services.nas-authentik-proxy-outpost", config)
         self.assertNotIn("authentik-outposts.proxy", config)
         self.assertNotIn("view_key", config)
-        self.assertIn("authentikOutpostPort = authentikPort;", base)
+        self.assertNotIn("authentikOutpostPort", base)
+        self.assertNotIn("authentikOutpostPort", options)
+        self.assertIn('authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";', base)
 
     def test_bootstrap_waits_for_authentik_default_flows_before_reconciling(self):
         services = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
@@ -94,16 +97,14 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 self.assertIn("reverse_proxy 127.0.0.1:${toString authentikPort}", flow_handler)
                 self.assertNotIn("${caddyForwardAuth}", flow_handler)
 
-    def test_managed_routes_forward_authenticate_through_the_proxy_outpost(self):
+    def test_managed_routes_forward_authenticate_through_embedded_outpost(self):
         config = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
         self.assertIn(
-            'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";',
-            config,
-        )
-        self.assertNotIn(
             'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString nasInternal.authentikPort}";',
             config,
         )
+        self.assertNotIn("authentikOutpostPort", config)
+        self.assertNotIn("NAS_AUTHENTIK_OUTPOST_PORT", config)
         self.assertIn("NAS_V2_AUTHENTIK_PUBLIC_HOST = cfg.identity.publicHost;", config)
 
     def test_forward_auth_sends_forwarded_trio_and_does_not_rewrite_locations(self):
