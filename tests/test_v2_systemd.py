@@ -16,7 +16,7 @@ if str(SERVICES) not in sys.path:
 
 import nas_v2_spec as v2  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
-import nas_v2_systemd as attachments  # noqa: E402
+import nas_v2_systemd_attachments as attachments  # noqa: E402
 
 
 class V2SystemdProjectionTests(unittest.TestCase):
@@ -47,6 +47,16 @@ class V2SystemdProjectionTests(unittest.TestCase):
             systemctl_bin="/run/current-system/sw/bin/systemctl",
             uv_bin="/nix/store/uv/bin/uv",
         )
+
+    @staticmethod
+    def route(port: int = 8080) -> dict:
+        return {
+            "web": {
+                "target": {"type": "http", "port": port},
+                "exposure": {"type": "path", "paths": ["/demo/"]},
+                "auth": {"mode": "public"},
+            }
+        }
 
     def test_exec_daemon_is_shell_free_hardened_and_resource_limited(self):
         effective = self.compile(
@@ -81,7 +91,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertEqual(descriptor["command"][1], "hello; not-a-shell")
         self.assertEqual(manifest["startUnits"], ["nas-v2-demo.service"])
 
-    def test_python_runtime_uses_private_change_aware_venv(self):
+    def test_python_runtime_delegates_environment_and_dependencies_to_uv(self):
         with tempfile.TemporaryDirectory() as tmp:
             app_root = pathlib.Path(tmp) / "apps"
             service_root = app_root / "demo"
@@ -111,22 +121,20 @@ class V2SystemdProjectionTests(unittest.TestCase):
                 )
                 files, manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
 
-        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
-        env_descriptor = json.loads(files[pathlib.Path("/run/nas-control/systemd/descriptors/demo.python-env.json")])
-        exec_descriptor = json.loads(files[pathlib.Path("/run/nas-control/systemd/descriptors/demo.python-exec.json")])
-
-        self.assertIn("nas_v2_python_prepare.py", unit)
-        self.assertIn("nas_v2_exec_runner.py", unit)
+        unit_path = pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")
+        unit = files[unit_path].decode()
+        self.assertIn('ExecStart="/nix/store/uv/bin/uv" "run"', unit)
+        self.assertIn('"--with-requirements"', unit)
+        self.assertIn(f'"{requirements}"', unit)
+        self.assertIn('"-m" "demo.server" "--serve"', unit)
         self.assertIn("DynamicUser=yes", unit)
-        self.assertIn("StateDirectory=nas-control/venvs/demo", unit)
         self.assertIn("CacheDirectory=nas-v2-uv/demo", unit)
-        self.assertNotIn("demo.server", unit)
-        self.assertEqual(env_descriptor["venv"], "/var/lib/nas-control/venvs/demo/venv")
-        self.assertRegex(env_descriptor["requirementsSha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(
-            exec_descriptor["command"],
-            ["/var/lib/nas-control/venvs/demo/venv/bin/python", "-m", "demo.server", "--serve"],
-        )
+        self.assertIn('Environment="UV_CACHE_DIR=/var/cache/nas-v2-uv/demo"', unit)
+        self.assertIn("Environment=UV_REQUIRE_HASHES=1", unit)
+        self.assertNotIn("nas_v2_python_prepare.py", unit)
+        self.assertNotIn("nas_v2_exec_runner.py", unit)
+        self.assertNotIn("StateDirectory=nas-control/venvs/demo", unit)
+        self.assertFalse(any("python-env" in str(path) or "python-exec" in str(path) for path in files))
         self.assertIn("nas-v2-demo.service", manifest["startUnits"])
 
     def test_python_requirements_content_changes_owner_fingerprint(self):
@@ -161,7 +169,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
             manifest2["fingerprints"]["nas-v2-demo.service"],
         )
 
-    def test_on_demand_daemon_gets_native_lease_and_idle_timer(self):
+    def test_on_demand_daemon_gets_native_socket_proxy_and_no_lease_timer(self):
         effective = self.compile(
             {
                 "demo": {
@@ -169,18 +177,23 @@ class V2SystemdProjectionTests(unittest.TestCase):
                     "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 90},
                     "runtime": {"type": "exec", "command": ["/bin/true"]},
                     "readiness": {"probes": [{"type": "path", "path": "/run/demo.ready"}]},
+                    "routes": self.route(),
                 }
             }
         )
         files, manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
         owner = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
-        lease = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-lease-demo.target")].decode()
-        timer = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-idle-demo.timer")].decode()
+        socket = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-activate-demo-web.socket")].decode()
+        proxy = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-activate-demo-web.service")].decode()
 
         self.assertIn("StopWhenUnneeded=yes", owner)
-        self.assertIn("Requires=nas-v2-demo.service nas-v2-ready-demo.service", lease)
-        self.assertIn("OnActiveSec=90s", timer)
-        self.assertEqual(manifest["startUnits"], [])
+        self.assertIn("ListenStream=/run/nas-control/activate/demo-web.sock", socket)
+        self.assertIn("SocketUser=caddy", socket)
+        self.assertIn("Requires=nas-v2-demo.service nas-v2-activate-demo-web.socket nas-v2-ready-demo.service", proxy)
+        self.assertIn("--exit-idle-time=90s", proxy)
+        self.assertIn("nas-v2-activate-demo-web.socket", manifest["startUnits"])
+        self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
+        self.assertFalse(any("nas-v2-lease-" in unit or "nas-v2-idle-" in unit for unit in manifest["ownedUnits"]))
 
     def test_ready_dependency_uses_transient_gate(self):
         effective = self.compile(
@@ -215,11 +228,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
                     "workload": {
                         "kind": "job",
                         "schedules": [
-                            {
-                                "calendar": "daily",
-                                "randomizedDelaySeconds": 900,
-                                "persistent": True,
-                            }
+                            {"calendar": "daily", "randomizedDelaySeconds": 900, "persistent": True}
                         ],
                     },
                     "runtime": {"type": "exec", "command": ["/bin/true"]},
@@ -252,10 +261,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
 
         self.assertIn("MemoryHigh=4096", dropin)
         self.assertNotIn("ProtectSystem", dropin)
-        self.assertIn(
-            {"target": "demo.service.d/50-nas-v2.conf", "source": str(dropin_path)},
-            manifest["links"],
-        )
+        self.assertIn({"target": "demo.service.d/50-nas-v2.conf", "source": str(dropin_path)}, manifest["links"])
 
     def test_read_only_storage_is_lowered_directly_into_generated_owner(self):
         effective = self.compile(
@@ -391,7 +397,9 @@ class V2SystemdProjectionTests(unittest.TestCase):
         )
         _files1, manifest1 = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
         effective["storageResources"] = {"media": {"path": "/tank/media"}}
-        effective["services"]["demo"]["storage"] = [{"resource": "media", "mountPath": "/media", "access": "read"}]
+        effective["services"]["demo"]["storage"] = [
+            {"resource": "media", "mountPath": "/media", "access": "read"}
+        ]
         _files2, manifest2 = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
         self.assertNotEqual(
             manifest1["fingerprints"]["demo.service"],
@@ -436,7 +444,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
         self.assertIn('Environment="NORMAL=hello world"', unit)
         self.assertIn('Environment="SECRET_TOKEN=super-secret-value"', unit)
 
-    def test_python_environment_emitted_via_unit_not_persisted(self):
+    def test_python_environment_is_emitted_directly_without_custom_descriptor(self):
         effective = self.compile(
             {
                 "demo": {
@@ -454,12 +462,9 @@ class V2SystemdProjectionTests(unittest.TestCase):
         )
         files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
         unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
-        exec_descriptor = json.loads(
-            files[pathlib.Path("/run/nas-control/systemd/descriptors/demo.python-exec.json")].decode()
-        )
-        self.assertNotIn("environment", exec_descriptor)
-        self.assertNotIn("s3cr3t", json.dumps(exec_descriptor))
         self.assertIn('Environment="SECRET=s3cr3t"', unit)
+        self.assertIn('ExecStart="/nix/store/uv/bin/uv" "run"', unit)
+        self.assertFalse(any("python-exec" in str(path) or "python-env" in str(path) for path in files))
 
     def test_on_demand_daemon_forces_restart_no(self):
         for runtime in [
@@ -472,6 +477,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
                         "name": "Demo",
                         "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 30},
                         "runtime": runtime,
+                        "routes": self.route(),
                     }
                 }
             )
@@ -492,6 +498,7 @@ class V2SystemdProjectionTests(unittest.TestCase):
                         "entrypoint": {"module": "demo.server"},
                         "restart": "always",
                     },
+                    "routes": self.route(),
                 }
             }
         )
@@ -499,7 +506,6 @@ class V2SystemdProjectionTests(unittest.TestCase):
         unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
         self.assertNotIn("Restart=always", unit)
         self.assertNotIn("Restart=", unit)
-        # persistent daemon should still respect restart
         effective = self.compile(
             {
                 "demo": {
