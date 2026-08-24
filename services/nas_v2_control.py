@@ -3,14 +3,13 @@
 
 This command is not a controller or supervisor. It edits only ``services.yaml``,
 starts the finite reconcile transaction, and reports live native systemd state.
-Request-time authorization remains Caddy + Authentik and idle expiry remains
-native systemd lease/timer behavior.
+Git-backed rollback is owned by that reconcile transaction rather than copied
+into every GUI mutation path.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import pathlib
@@ -36,64 +35,6 @@ EFFECTIVE_PATH = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-contr
 SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
 RECONCILE_UNIT = os.environ.get("NAS_V2_RECONCILE_UNIT", "nas-managed-services-reconcile.service")
 SYSTEMCTL = os.environ.get("NAS_V2_SYSTEMCTL", "systemctl")
-
-
-def _is_directory_authority(path: pathlib.Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def _yaml_files(directory: pathlib.Path) -> list[pathlib.Path]:
-    try:
-        entries = list(directory.iterdir())
-    except OSError:
-        return []
-    files = [p for p in entries if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}]
-    return sorted(files, key=lambda p: p.name)
-
-
-def _read_authority_text(path: pathlib.Path) -> str:
-    if _is_directory_authority(path):
-        try:
-            from nas_v2_spec import parse_yaml as _parse
-            from nas_v2_editor import _render as _ed_render  # type: ignore
-
-            doc = _parse(path)
-            return _ed_render(doc)
-        except Exception:
-            files = _yaml_files(path)
-            parts: list[str] = []
-            for f in files:
-                try:
-                    parts.append(f.read_text(encoding="utf-8"))
-                except OSError:
-                    continue
-            return "\n---\n".join(parts)
-    return path.read_text(encoding="utf-8")
-
-
-def _revision_for_path(path: pathlib.Path) -> str:
-    if _is_directory_authority(path):
-        files = _yaml_files(path)
-        h = hashlib.sha256()
-        for f in files:
-            try:
-                data = f.read_bytes()
-            except OSError:
-                continue
-            h.update(f.name.encode("utf-8"))
-            h.update(b"\x00")
-            h.update(str(len(data)).encode("utf-8"))
-            h.update(b"\x00")
-            h.update(data)
-            h.update(b"\x00")
-        return h.hexdigest()
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as exc:
-        raise ControlError(str(exc)) from exc
 
 
 class ControlError(RuntimeError):
@@ -204,53 +145,20 @@ def _read_json_document(source: str) -> dict[str, Any]:
 
 
 def _reconcile() -> None:
+    # The oneshot unit records the attempted Git revision, arms rollback,
+    # applies/verifies runtime projections, then advances refs/nas/applied.
     _systemctl("start", RECONCILE_UNIT)
-
-
-def _rollback(previous: str, attempted: str | None, original: Exception) -> None:
-    try:
-        if attempted is not None:
-            expected_revision = hashlib.sha256(attempted.encode("utf-8")).hexdigest()
-            try:
-                replace_document(
-                    previous,
-                    desired_path=DESIRED_PATH,
-                    schema_path=SCHEMA_PATH,
-                    expected_revision=expected_revision,
-                )
-            except ManagedServicesEditorError as exc:
-                if "revision conflict" in str(exc).lower() or "expected" in str(exc).lower():
-                    raise ControlError(
-                        f"Managed Services V2 update failed but authority was already superseded; original={original}"
-                    ) from original
-                raise
-        else:
-            replace_document(previous, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
-        _reconcile()
-    except ControlError:
-        raise
-    except Exception as rollback_error:  # noqa: BLE001
-        raise ControlError(
-            "Managed Services V2 update failed and rollback was incomplete; "
-            f"original={original}; rollback={rollback_error}"
-        ) from original
 
 
 def set_mode(service_id: str, mode: str) -> dict[str, Any]:
     try:
-        previous = _read_authority_text(DESIRED_PATH)
         result = set_service_mode(
             service_id,
             mode,
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
         )
-        attempted = _read_authority_text(DESIRED_PATH)
-        try:
-            _reconcile()
-        except Exception as exc:
-            _rollback(previous, attempted, exc)
-            raise
+        _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
     result["status"] = status()
@@ -259,18 +167,12 @@ def set_mode(service_id: str, mode: str) -> dict[str, Any]:
 
 def set_modes(modes: dict[str, str]) -> dict[str, Any]:
     try:
-        previous = _read_authority_text(DESIRED_PATH)
         result = set_service_modes(
             modes,
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
         )
-        attempted = _read_authority_text(DESIRED_PATH)
-        try:
-            _reconcile()
-        except Exception as exc:
-            _rollback(previous, attempted, exc)
-            raise
+        _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
     result["status"] = status()
@@ -280,13 +182,8 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
 def replace_from_source(source: str) -> dict[str, Any]:
     try:
         text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
-        previous = _read_authority_text(DESIRED_PATH)
         result = replace_document(text, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
-        try:
-            _reconcile()
-        except Exception as exc:
-            _rollback(previous, text, exc)
-            raise
+        _reconcile()
         return result
     except (OSError, ManagedServicesEditorError, ControlError) as exc:
         raise ControlError(str(exc)) from exc
@@ -295,14 +192,8 @@ def replace_from_source(source: str) -> dict[str, Any]:
 def replace_json_from_source(source: str) -> dict[str, Any]:
     try:
         value = _read_json_document(source)
-        previous = _read_authority_text(DESIRED_PATH)
         result = replace_document_value(value, desired_path=DESIRED_PATH, schema_path=SCHEMA_PATH)
-        attempted = _read_authority_text(DESIRED_PATH)
-        try:
-            _reconcile()
-        except Exception as exc:
-            _rollback(previous, attempted, exc)
-            raise
+        _reconcile()
         return result
     except (OSError, ManagedServicesEditorError, ControlError) as exc:
         raise ControlError(str(exc)) from exc
