@@ -30,6 +30,7 @@
     ./config/managed-services-backup-profile.nix
     ./config/managed-services-network-platform.nix
     ./config/managed-services-authentik-blueprint.nix
+    ./config/managed-services-compose-import.nix
     ./config/managed-services-seed-v2.nix
   ];
 
