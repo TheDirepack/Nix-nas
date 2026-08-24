@@ -31,7 +31,7 @@ def _run(command: Sequence[str], *, input_text: str | None = None, timeout: int 
         return subprocess.run(
             list(command),
             input=input_text,
-            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+            stdin=None if input_text is not None else subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
