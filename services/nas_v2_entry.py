@@ -63,6 +63,10 @@ def main() -> int:
     compose_provider_bin = os.environ.get("NAS_V2_COMPOSE_PROVIDER_BIN", "podman-compose")
     virsh_bin = os.environ.get("NAS_V2_VIRSH_BIN", "virsh")
     virt_xml_validate_bin = os.environ.get("NAS_V2_VIRT_XML_VALIDATE_BIN", "")
+    nmcli_bin = os.environ.get("NAS_V2_NMCLI_BIN", "nmcli")
+    install_bin = os.environ.get("NAS_V2_INSTALL_BIN", "install")
+    rm_bin = os.environ.get("NAS_V2_RM_BIN", "rm")
+    vlan_parent = os.environ.get("NAS_V2_VLAN_PARENT")
     lan_zone = os.environ.get("NAS_V2_LAN_ZONE", "nas-lan")
     firewall_offline_cmd = os.environ.get("NAS_V2_FIREWALL_OFFLINE_CMD", "firewall-offline-cmd")
     firewalld_enabled = os.environ.get("NAS_V2_FIREWALLD_ENABLED") == "1"
@@ -97,6 +101,10 @@ def main() -> int:
                 compose_provider_bin=compose_provider_bin,
                 virsh_bin=virsh_bin,
                 virt_xml_validate_bin=virt_xml_validate_bin or None,
+                nmcli_bin=nmcli_bin,
+                install_bin=install_bin,
+                rm_bin=rm_bin,
+                vlan_parent=vlan_parent,
             ),
             backup=BackupProjection(inventory=backup_inventory, restic_paths=restic_paths),
             firewalld=FirewalldProjection(
