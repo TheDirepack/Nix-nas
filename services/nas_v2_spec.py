@@ -23,7 +23,7 @@ from jsonschema.exceptions import SchemaError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-DEFAULT_SPEC_PATH = pathlib.Path(os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services"))
+DEFAULT_SPEC_PATH = pathlib.Path(os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services.yaml"))
 DEFAULT_SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
 DEFAULT_PLATFORM_PATH = pathlib.Path(
     os.environ.get("NAS_V2_PLATFORM_CAPABILITIES", "/etc/nas-control/platform-capabilities.json")
@@ -677,13 +677,13 @@ def semantic_validate(
 
         if isinstance(policy, dict) and policy.get("mode") == "isolated":
             runtime_type = service["runtime"]["type"]
-            if not service["managed"] or runtime_type not in {"oci", "quadlet", "compose"}:
+            if kind != "session" and (not service["managed"] or runtime_type not in {"oci", "quadlet", "compose"}):
                 raise ManagedServicesV2Error(
                     f"Isolated service {service_id!r} requires a V2-managed runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented",
                     path=f"$.services.{service_id}.network.mode",
                     code="network-isolated-runtime",
                 )
-            if kind == "session" and runtime_type != "oci":
+            if kind == "session" and runtime_type in {"quadlet", "compose"}:
                 raise ManagedServicesV2Error(
                     f"Session service {service_id!r} with isolated networking currently requires direct OCI runtime",
                     path=f"$.services.{service_id}.runtime.type",
