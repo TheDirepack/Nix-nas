@@ -109,8 +109,9 @@ class ManagedServicesV2BoundaryTests(unittest.TestCase):
     def test_deleted_request_time_gate_source_is_absent(self) -> None:
         self.assertFalse((SERVICES / "nas_feature_control.py").exists())
 
-    def test_wake_helper_contains_no_identity_or_group_authorization_logic(self) -> None:
-        source = (SERVICES / "nas_v2_wake.py").read_text(encoding="utf-8")
+    def test_native_activation_contains_no_identity_or_group_authorization_logic(self) -> None:
+        self.assertFalse((SERVICES / "nas_v2_wake.py").exists())
+        source = (SERVICES / "nas_v2_activation.py").read_text(encoding="utf-8")
         self.assertNotIn("Remote-User", source)
         self.assertNotIn("Remote-Groups", source)
         self.assertNotIn("X-authentik", source)
