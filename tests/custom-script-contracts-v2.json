@@ -21,6 +21,9 @@
     }
   },
   "pythonModules": {
+    "services/nas_guarded_apply.py": [
+      "tests/test_guarded_apply.py"
+    ],
     "services/nas_v2_accelerator.py": [
       "tests/test_v2_accelerator.py"
     ],
@@ -69,6 +72,12 @@
     ],
     "services/nas_v2_exec_runner.py": [
       "tests/test_v2_exec_runner.py"
+    ],
+    "services/nas_v2_firewalld_reconcile.py": [
+      "tests/test_v2_firewalld_stateless.py"
+    ],
+    "services/nas_v2_history.py": [
+      "tests/test_v2_history.py"
     ],
     "services/nas_v2_libvirt.py": [
       "tests/test_v2_libvirt.py"
