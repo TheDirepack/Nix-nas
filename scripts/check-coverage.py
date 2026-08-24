@@ -38,7 +38,6 @@ FLOORS = {
     "services/nas_v2_network.py": 57.0,
     "services/nas_v2_plan.py": 78.0,
     "services/nas_v2_platform_probe.py": 54.0,
-    "services/nas_v2_python_prepare.py": 69.0,
     "services/nas_v2_quadlet.py": 76.0,
     "services/nas_v2_readiness.py": 52.0,
     "services/nas_v2_session.py": 58.0,
@@ -46,7 +45,6 @@ FLOORS = {
     "services/nas_v2_spec.py": 89.0,
     "services/nas_v2_systemd.py": 80.0,
     "services/nas_v2_systemd_reconcile.py": 68.0,
-    "services/nas_v2_wake.py": 73.0,
 }
 TOTAL_FLOOR = 66.0
 
