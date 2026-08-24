@@ -1275,7 +1275,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
             if self.path == "/setup/api/reboot":
                 if not _setup_complete():
                     raise ApiError("Reboot is only offered after first-start setup completes")
-                completed = run_command(["systemctl", "reboot"], check=False, timeout_seconds=30)
+                completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
                 if completed.returncode != 0:
                     raise ApiError("Unable to schedule the reboot")
                 self._send_json(200, {"rebooting": True})
