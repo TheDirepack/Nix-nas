@@ -21,6 +21,7 @@
     }
   },
   "pythonModules": {
+    "services/nas_first_run_api.py": ["tests/test_fuzz_custom_inputs.py"],
     "services/nas_guarded_apply.py": ["tests/test_guarded_apply.py"],
     "services/nas_v2_accelerator.py": ["tests/test_v2_accelerator.py"],
     "services/nas_v2_activation.py": ["tests/test_v2_caddy.py", "tests/test_v2_systemd.py"],
