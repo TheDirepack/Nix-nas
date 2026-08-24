@@ -14,6 +14,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_compose as compose  # noqa: E402
+import nas_v2_compose_import as compose_import  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
 
@@ -109,6 +110,7 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
         with (
             mock.patch.object(systemd, "APP_ROOT", root / "apps"),
             mock.patch.object(compose, "APP_ROOT", root / "apps"),
+            mock.patch.object(compose_import, "APP_ROOT", root / "apps"),
             mock.patch.dict(os.environ, env, clear=False),
         ):
             return systemd.generate_projection(
