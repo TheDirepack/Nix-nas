@@ -32,9 +32,6 @@ let
   # Core appliance integration constants. Managed Services V2 owns the
   # service/route model; Authentik and Cockpit are platform substrate.
   authentikPort = 9000;
-  # The embedded proxy outpost is served by the Authentik server itself.
-  # Keeping one listener removes the custom token-discovery/outpost daemon.
-  authentikOutpostPort = authentikPort;
   authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
   cockpitPort = 9092;
 
@@ -60,8 +57,7 @@ let
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
   upsMonitorSystem =
-    if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
-    else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
+    if cfg.power.ups.monitorSystem != "" then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
   syncthingDataDir = "${cfg.zfsRoot}/syncthing";
   syncthingConfigDir = "${syncthingDataDir}/.config/syncthing";
@@ -105,7 +101,6 @@ let
     authentikPort
     cockpitPort
   ]
-  ++ lib.optional (authentikOutpostPort != authentikPort) authentikOutpostPort
   ++ lib.optional cfg.syncthing.enable syncthingGuiPort
   ++ lib.optional cfg.vaultwarden.enable vaultwardenPort
   ++ managementPorts
@@ -130,7 +125,7 @@ in
     authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
-    authentikOutpostPort authentikOutpostPath
+    authentikOutpostPath
     bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
