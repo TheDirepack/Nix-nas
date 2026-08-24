@@ -74,10 +74,13 @@ export default function App() {
   return (
     <Page className="nas-page">
       <PageSection>
-        <Flex justifyContent={{default: "justifyContentSpaceBetween"}} alignItems={{default: "alignItemsCenter"}}>
+        <Flex
+          justifyContent={{default: "justifyContentSpaceBetween"}}
+          alignItems={{default: "alignItemsCenter"}}
+        >
           <div>
-          <Title headingLevel="h1">NixOS NAS</Title>
-          <span className="nas-muted">Managed Services V2</span>
+            <Title headingLevel="h1">NixOS NAS</Title>
+            <span className="nas-muted">Managed Services V2</span>
           </div>
           <Button variant="secondary" onClick={refresh} isDisabled={busy}>
             Refresh
@@ -87,17 +90,17 @@ export default function App() {
       <PageSection>
         <Nav variant="tertiary" aria-label="NAS sections">
           <NavList>
-          {PAGES.map(([id, label]) => (
-            <NavItem
-              key={id}
-              itemId={id}
-              href={`#/${id}`}
-              isActive={page === id}
-              onClick={() => setPage(id)}
-            >
-              {label}
-            </NavItem>
-          ))}
+            {PAGES.map(([id, label]) => (
+              <NavItem
+                key={id}
+                itemId={id}
+                href={`#/${id}`}
+                isActive={page === id}
+                onClick={() => setPage(id)}
+              >
+                {label}
+              </NavItem>
+            ))}
           </NavList>
         </Nav>
       </PageSection>

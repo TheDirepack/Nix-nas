@@ -1,5 +1,15 @@
 import React, {useState} from "react";
-import {Alert, Button, Card, CardBody, CardHeader, CardTitle, Gallery, GalleryItem, TextArea} from "@patternfly/react-core";
+import {
+  Alert,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  Gallery,
+  GalleryItem,
+  TextArea,
+} from "@patternfly/react-core";
 import {
   managedServicesDocument,
   replaceManagedServicesDocument,
@@ -10,10 +20,7 @@ import {SchemaEditor} from "../schema-editor.jsx";
 import {ServiceCard} from "../components/service-card.jsx";
 import {SectionHeader} from "../components/section-header.jsx";
 import {message} from "../lib/format.js";
-import {
-  managedServiceOperationsBusy,
-  managedServiceRows,
-} from "../view-model.js";
+import {managedServiceOperationsBusy, managedServiceRows} from "../view-model.js";
 
 export function ServicesPage({data, mutate, busy}) {
   const services = managedServiceRows(data || {});

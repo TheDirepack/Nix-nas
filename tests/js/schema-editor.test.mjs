@@ -61,14 +61,16 @@ test("schema editor renders PatternFly form controls from the canonical V3 schem
 });
 
 test("schema editor keeps hostile values inert", async () => {
-  const html = await renderEditor({"<script>alert(1)</script>": {"x": "</textarea><img src=x onerror=alert(2)>"}});
+  const html = await renderEditor({
+    "<script>alert(1)</script>": {x: "</textarea><img src=x onerror=alert(2)>"},
+  });
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/, "hostile key must be entity-escaped");
   assert.doesNotMatch(html, /<\/textarea><img/, "hostile value must not break out of its field");
   assert.match(html, /&lt;script&gt;/, "escaped representation is present instead");
 });
 
 test("schema editor reflects provided values back into controlled fields", async () => {
-  const html = await renderEditor({"demo": {}});
+  const html = await renderEditor({demo: {}});
   assert.match(html, /Key for demo/, "renders a keyed entry for the provided map key");
   assert.match(html, /value="demo"/, "controlled input carries the provided key");
 });

@@ -82,10 +82,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
         step={type === "integer" ? 1 : "any"}
         onChange={(_event, next) => {
           if (next === "") return onChange(undefined);
-          const parsed =
-            type === "integer"
-              ? Number.parseInt(next, 10)
-              : Number(next);
+          const parsed = type === "integer" ? Number.parseInt(next, 10) : Number(next);
           onChange(Number.isFinite(parsed) ? parsed : value);
         }}
       />

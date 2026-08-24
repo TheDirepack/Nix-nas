@@ -65,11 +65,12 @@ export function OverviewPage({data, refresh, busy}) {
     },
     {
       title: "Failures",
-      body: Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
-        <OutputBlock>{data.failedUnits.join("\n")}</OutputBlock>
-      ) : (
-        <p>No failed units reported.</p>
-      ),
+      body:
+        Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
+          <OutputBlock>{data.failedUnits.join("\n")}</OutputBlock>
+        ) : (
+          <p>No failed units reported.</p>
+        ),
     },
   ];
   return (

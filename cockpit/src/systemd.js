@@ -25,12 +25,10 @@ function unitFromListRow(row) {
 async function memoryCurrent(client, objectPath) {
   if (!objectPath) return null;
   try {
-    const reply = await client.call(
-      objectPath,
-      PROPERTIES_INTERFACE,
-      "Get",
-      [UNIT_INTERFACE, "MemoryCurrent"],
-    );
+    const reply = await client.call(objectPath, PROPERTIES_INTERFACE, "Get", [
+      UNIT_INTERFACE,
+      "MemoryCurrent",
+    ]);
     const variant = onlyReturnValue(reply);
     const value = variant && typeof variant === "object" ? variant.v : null;
     return Number.isFinite(value) && value >= 0 ? value : null;
@@ -80,8 +78,8 @@ export async function readSystemdState(unitNames = []) {
     );
     return {
       units: Object.fromEntries(hydrated.map((unit) => [unit.unit, unit])),
-      failedUnits: failedUnits.map(
-        (unit) => `${unit.unit} ${unit.loadState} ${unit.activeState} ${unit.subState} ${unit.description}`.trim(),
+      failedUnits: failedUnits.map((unit) =>
+        `${unit.unit} ${unit.loadState} ${unit.activeState} ${unit.subState} ${unit.description}`.trim(),
       ),
     };
   } finally {
@@ -116,7 +114,9 @@ export function mergeSystemdState(data = {}, snapshot = {}) {
   return {
     ...data,
     services: unitState,
-    failedUnits: Array.isArray(snapshot?.failedUnits) ? snapshot.failedUnits : data?.failedUnits || [],
+    failedUnits: Array.isArray(snapshot?.failedUnits)
+      ? snapshot.failedUnits
+      : data?.failedUnits || [],
     managedServices: {...managedServices, services},
   };
 }

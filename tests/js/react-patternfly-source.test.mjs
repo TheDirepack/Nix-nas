@@ -65,7 +65,11 @@ test("destructive operations confirm through a danger dialog, not inline cards",
 test("pages are registered modules behind the single-page navigation shell", async () => {
   const app = await source(APP_SHELL);
   assert.match(app, /const PAGES = \[/);
-  assert.match(app, /href=\{`#\/\$\{id\}`\}/, "nav items must be hash links for keyboard reachability");
+  assert.match(
+    app,
+    /href=\{`#\/\$\{id\}`\}/,
+    "nav items must be hash links for keyboard reachability",
+  );
   assert.match(app, /hashchange/, "the shell must follow browser history navigation");
   for (const page of PAGES) {
     const text = await source(page);

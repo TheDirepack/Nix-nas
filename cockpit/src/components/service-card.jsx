@@ -8,7 +8,12 @@ import {
   FormSelectOption,
   Label,
 } from "@patternfly/react-core";
-import {MODE_LABELS, managedServiceRuntimeText, managedServiceUnitState, mib} from "../view-model.js";
+import {
+  MODE_LABELS,
+  managedServiceRuntimeText,
+  managedServiceUnitState,
+  mib,
+} from "../view-model.js";
 import {StatusLabel} from "./status-label.jsx";
 
 export function ServiceCard({service, onMode, disabled}) {
