@@ -26,9 +26,10 @@ from nas_v2_apply import (
 def main() -> int:
     import os
 
-    # Fixed authority paths — same as the previous nas_v2_cli defaults.
-    # Nix may override via environment (see managed-services.nix).
-    desired = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services"))
+    # Fixed authority paths. Nix may override via environment (see
+    # managed-services.nix), but the standalone/debug default is the same
+    # canonical services.yaml authority used by the control surface.
+    desired = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
     if os.environ.get("NAS_V2_SPEC") and not os.environ.get("NAS_V2_DESIRED"):
         desired = pathlib.Path(os.environ["NAS_V2_SPEC"])
     schema = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
