@@ -73,9 +73,7 @@ class V2AuthentikBlueprintTests(unittest.TestCase):
             "groups": ["application.demo.access", "application.old.access"],
             "applications": ["v2-demo-web", "v2-old-web"],
         }
-        rendered, _manifest = blueprint.render_blueprint(
-            effective(), public_host="nas.example.test", previous=previous
-        )
+        rendered, _manifest = blueprint.render_blueprint(effective(), public_host="nas.example.test", previous=previous)
         text = rendered.decode()
         self.assertIn('slug: "v2-old-web"', text)
         self.assertIn('name: "application.old.access"', text)
