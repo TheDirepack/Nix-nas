@@ -19,7 +19,6 @@ import secrets
 import socketserver
 import subprocess
 import sys
-import time
 from typing import Any
 
 from nas_operation_lock import OperationBusyError, cancel_reservation, reserve_operation
@@ -151,9 +150,6 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(current_digest, str) or not secrets.compare_digest(current_digest, plan_digest):
         raise RequestError(409, "The reviewed first-run plan is stale")
 
-    configuration = payload.get("configuration")
-    if not isinstance(configuration, dict):
-        configuration = {}
     confirmations = payload.get("confirmations")
     if not isinstance(confirmations, dict):
         confirmations = {}
@@ -237,8 +233,11 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
             "--property=UMask=0077",
             "--property=NoNewPrivileges=yes",
             "--property=PrivateTmp=yes",
+            # First-run is the one place that must create local accounts and
+            # operate on selected block devices. Keep /usr,/boot,/efi read-only
+            # while leaving /etc writable, and do not hide host block devices.
+            "--property=ProtectSystem=full",
             "--property=ProtectHome=yes",
-            "--property=ProtectSystem=strict",
             "--property=ReadWritePaths=/var/lib/nas-setup /var/lib/nas-operational /var/lib/nas-bootstrap /var/lib/nas-secrets /run/nas-secrets /run/nas-operations /run/lock /run/nas-first-start",
             "--property=TimeoutStartSec=6h",
             "--",
