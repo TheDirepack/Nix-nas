@@ -69,9 +69,7 @@ def _run(
         raise ComposeImportError(f"unable to execute {command[0]}: {exc}") from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:4000]
-        raise ComposeImportError(
-            f"Compose import command failed ({result.returncode}): {' '.join(command)}: {detail}"
-        )
+        raise ComposeImportError(f"Compose import command failed ({result.returncode}): {' '.join(command)}: {detail}")
     return result
 
 
@@ -238,7 +236,11 @@ def _read_cached(cache: pathlib.Path, fingerprint: str) -> tuple[dict[str, bytes
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 1 or manifest.get("fingerprint") != fingerprint:
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schemaVersion") != 1
+        or manifest.get("fingerprint") != fingerprint
+    ):
         return None
     entries = manifest.get("files")
     entry_units = manifest.get("entryUnits")
@@ -246,7 +248,11 @@ def _read_cached(cache: pathlib.Path, fingerprint: str) -> tuple[dict[str, bytes
         return None
     files: dict[str, bytes] = {}
     for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("sha256"), str):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("name"), str)
+            or not isinstance(entry.get("sha256"), str)
+        ):
             return None
         name = entry["name"]
         if _SAFE_FILE.fullmatch(name) is None or pathlib.Path(name).suffix not in _ALLOWED_SUFFIXES:
@@ -339,9 +345,7 @@ def import_compose(
         "fingerprint": fingerprint,
         "source": str(source),
         "entryUnits": entry_units,
-        "files": [
-            {"name": name, "sha256": _sha256(data)} for name, data in sorted(files.items())
-        ],
+        "files": [{"name": name, "sha256": _sha256(data)} for name, data in sorted(files.items())],
     }
     _commit_cache(cache, files, manifest)
     return files, manifest
