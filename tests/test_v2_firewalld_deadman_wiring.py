@@ -34,7 +34,7 @@ class V2TransactionWiringTests(unittest.TestCase):
         managed = text("modules/nas/config/managed-services-transactions.nix")
         self.assertIn("rev-parse --verify HEAD", managed)
         self.assertIn('guard_unit="nas-v2-apply-rollback-$guard_suffix"', managed)
-        self.assertIn("systemctl stop \"nas-v2-apply-rollback-$suffix.timer\"", managed)
+        self.assertIn('systemctl stop "nas-v2-apply-rollback-$suffix.timer"', managed)
 
 
 if __name__ == "__main__":
