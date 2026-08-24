@@ -38,14 +38,8 @@ in
     {
       assertion =
         !config.nas.networking.enable
-        || lib.attrByPath [ "NAS_V2_NMCLI_BIN" ] null reconcileEnvironment == "${pkgs.networkmanager}/bin/nmcli";
-      message = "Managed Services V2 must use the pinned NetworkManager nmcli binary for VLAN projection.";
-    }
-    {
-      assertion =
-        !config.nas.networking.enable
-        || lib.attrByPath [ "NAS_V2_INSTALL_BIN" ] null reconcileEnvironment == "${pkgs.coreutils}/bin/install";
-      message = "Managed Services V2 must use the pinned coreutils install binary for VLAN projection.";
+        || lib.attrByPath [ "NAS_V2_NMSTATECTL_BIN" ] null reconcileEnvironment == "${pkgs.nmstate}/bin/nmstatectl";
+      message = "Managed Services V2 must use the pinned nmstatectl binary for VLAN projection.";
     }
     {
       assertion = config.systemd.services.copyparty.wantedBy == [ ];

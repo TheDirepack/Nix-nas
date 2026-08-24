@@ -139,6 +139,106 @@ class CommonPolicyTests(unittest.TestCase):
         self.assertEqual(failed.stdout, "")
         self.assertIn("protected standard input", failed.stderr)
 
+    def test_run_command_merges_environment_and_handles_timeouts(self) -> None:
+        merged = common.run_command(
+            [sys.executable, "-c", "import os; print(os.environ['NAS_TEST_MARKER'])"],
+            env={"NAS_TEST_MARKER": "inherited-value"},
+        )
+        self.assertEqual(merged.returncode, 0)
+        self.assertIn("inherited-value", merged.stdout)
+
+        timed_out = common.run_command(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            timeout_seconds=1,
+            input_text="protected-payload",
+        )
+        self.assertEqual(timed_out.returncode, 124)
+        self.assertIn("protected standard input", timed_out.stderr)
+        self.assertEqual(timed_out.stdout, "")
+
+        timed_out_plain = common.run_command(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            timeout_seconds=1,
+        )
+        self.assertEqual(timed_out_plain.returncode, 124)
+        self.assertIn("Command timed out", timed_out_plain.stderr)
+
+    def test_split_groups_rejects_control_characters_in_individual_names(self) -> None:
+        with mock.patch("sys.stderr"):
+            # A control character hiding inside one comma-separated name
+            # rejects the whole header, not only the offending name. The
+            # per-name scan runs after stripping, so the control character
+            # must survive the strip to reach that branch.
+            self.assertEqual(common.split_groups("nas_users, bad\x0bname"), set())
+            self.assertEqual(common.split_groups("\x7f"), set())
+
+    def test_load_effective_authority_validates_shape_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+
+            def write(name: str, payload: str) -> pathlib.Path:
+                path = root / name
+                path.write_text(payload, encoding="utf-8")
+                return path
+
+            good = write(
+                "good.json",
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "services": {"demo": {"enabled": True}},
+                        "derived": {"authorization": {"demo": {"capabilities": {"access": "application.demo.access"}}}},
+                    }
+                ),
+            )
+            self.assertEqual(common.load_effective_authority(good)["schemaVersion"], 3)
+
+            for name, payload, message in [
+                ("not-object.json", "[]", "top-level must be object"),
+                ("bad-version.json", json.dumps({"schemaVersion": 1}), "unsupported schemaVersion"),
+                (
+                    "no-derived.json",
+                    json.dumps({"schemaVersion": 3, "services": {}}),
+                    "missing derived",
+                ),
+                (
+                    "no-authz.json",
+                    json.dumps({"schemaVersion": 3, "services": {}, "derived": {}}),
+                    "missing derived.authorization",
+                ),
+                (
+                    "no-services.json",
+                    json.dumps({"schemaVersion": 3, "derived": {"authorization": {}}}),
+                    "missing services",
+                ),
+                (
+                    "bad-authz-entry.json",
+                    json.dumps(
+                        {
+                            "schemaVersion": 3,
+                            "services": {},
+                            "derived": {"authorization": {"demo": "not-an-object"}},
+                        }
+                    ),
+                    "must be object",
+                ),
+                (
+                    "bad-caps.json",
+                    json.dumps(
+                        {
+                            "schemaVersion": 3,
+                            "services": {},
+                            "derived": {"authorization": {"demo": {"capabilities": "not-an-object"}}},
+                        }
+                    ),
+                    "must be object",
+                ),
+                ("invalid-json.json", "{not json", "Expecting"),
+            ]:
+                with self.subTest(name=name):
+                    with self.assertRaises(ValueError, msg=name):
+                        common.load_effective_authority(write(name, payload))
+
 
 if __name__ == "__main__":
     unittest.main()

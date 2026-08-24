@@ -36,3 +36,4 @@ cockpit/playwright-report/
 cockpit/test-results/
 coverage.json
 
+.coverage
