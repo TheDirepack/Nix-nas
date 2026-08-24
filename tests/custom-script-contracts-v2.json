@@ -1,5 +1,13 @@
 {
   "executables": {
+    "nas-first-run-api": {
+      "fuzzStrategy": "unknown-argv",
+      "source": "services/nas_first_run_api.py",
+      "systemTest": "tests/vm/adversarial-installed.py",
+      "tests": [
+        "tests/test_first_run_api_contract.py"
+      ]
+    },
     "nas-managed-services-control": {
       "fuzzStrategy": "feature-id",
       "source": "services/nas_v2_control.py",
@@ -21,6 +29,7 @@
     }
   },
   "pythonModules": {
+    "services/nas_first_run_api.py": ["tests/test_first_run_api_contract.py"],
     "services/nas_guarded_apply.py": ["tests/test_guarded_apply.py"],
     "services/nas_v2_accelerator.py": ["tests/test_v2_accelerator.py"],
     "services/nas_v2_activation.py": ["tests/test_v2_caddy.py", "tests/test_v2_systemd.py"],

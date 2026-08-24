@@ -127,13 +127,6 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = "${nasZfsMountCheck}/bin/nas-zfs-mount-check";
-        # The dataset may be created after boot (first-run setup creates the
-        # pool and mounts it at runtime), in which case the boot-time tmpfiles
-        # pass only materialized ${cfg.zfsRoot}/* as plain root-filesystem
-        # directories that the new mount shadows. Re-apply the rules scoped to
-        # the ZFS root so per-type app directories (postgresql, authentik,
-        # nas-control, ...) exist behind the mount before any protected
-        # service starts. Idempotent; no-op when the dirs already exist.
         ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix ${cfg.zfsRoot}";
       };
     };
@@ -169,9 +162,7 @@ in
     };
 
     nas-identity-bootstrap = {
-      description = "Reconcile the Authentik portal provider before starting its proxy outpost";
-      # Authentik is ordered after runtime selection, which creates the token
-      # this unit requires. Starting from multi-user.target races that token.
+      description = "Reconcile the temporary Authentik bootstrap identity objects";
       wantedBy = [ "authentik.service" ];
       requires = [ "authentik.service" ];
       after = [ "authentik.service" ];
@@ -186,7 +177,6 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nasIdentitySync}/bin/nas-identity-sync bootstrap";
-        ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
         Restart = "on-failure";
         RestartSec = "5s";
         NoNewPrivileges = true;
@@ -195,12 +185,14 @@ in
         ProtectSystem = "strict";
         ReadWritePaths = [ "/run/lock" "/run/nas-operations" ];
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        IPAddressDeny = "any";
+        IPAddressAllow = "localhost";
         UMask = "0077";
       };
     };
 
     nas-identity-sync = {
-      description = "Bootstrap and validate Authentik NAS identity policy";
+      description = "Validate Authentik NAS identity state with the scoped runtime token";
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       requires = [ "authentik.service" ];
@@ -213,16 +205,16 @@ in
       ];
       serviceConfig = {
         Type = "oneshot";
-        # Authentik restarts and feature reconciliation can briefly hold the
-        # runtime operation class. Retry the timer-triggered validation after
-        # that transient coordination conflict instead of leaving the target
-        # failed until the next timer tick.
         Restart = "on-failure";
         RestartSec = "5s";
-        ExecStart = [
-          "${nasIdentitySync}/bin/nas-identity-sync bootstrap"
-          "${nasIdentitySync}/bin/nas-identity-sync status"
-        ];
+        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync status";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        IPAddressDeny = "any";
+        IPAddressAllow = "localhost";
         UMask = "0077";
       };
       environment.NAS_PUBLIC_HOST = cfg.identity.publicHost;
@@ -382,6 +374,13 @@ in
             http://127.0.0.1:${toString syncthingGuiPort}/rest/noauth/health
         '';
         ExecStart = "${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        IPAddressDeny = "any";
+        IPAddressAllow = "localhost";
       };
     };
 
@@ -508,10 +507,6 @@ in
       wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
       wants = caddyBackendUnits;
-      # The bootstrap-phase Caddy must come up before secret activation; the
-      # selector (nas-caddy-bootstrap.service) synchronously ensures reconcile
-      # is fresh post-secrets. Do not require reconcile here: pre-secrets it
-      # cannot run (ZFS mount guard) and would permanently block Caddy.
       requires = [ "nas-caddy-bootstrap.service" "nas-managed-services-wake.socket" ];
       after = caddyBackendUnits ++ [
         "nas-caddy-bootstrap.service"

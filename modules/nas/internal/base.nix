@@ -20,8 +20,6 @@ let
   bootstrapAuthentikDataDir = "${bootstrapRuntimeRoot}/authentik";
   bootstrapPostgresqlDataDir = "${bootstrapRuntimeRoot}/postgresql";
   bootstrapSecretsDir = "${bootstrapRuntimeRoot}/nas-secrets";
-  # These stable compatibility paths are selected at boot: boot-root before
-  # first-run, ZFS thereafter. Services never write directly to the selector.
   authentikDataDir = "/var/lib/authentik";
   copypartyDataDir = "${cfg.zfsRoot}/copyparty";
   copypartyUserConfigDir = "${copypartyDataDir}/user.d";
@@ -34,7 +32,6 @@ let
   # Core appliance integration constants. Managed Services V2 owns the
   # service/route model; Authentik and Cockpit are platform substrate.
   authentikPort = 9000;
-  authentikOutpostPort = cfg.identity.authentikOutpostPort;
   authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
   cockpitPort = 9092;
 
@@ -47,7 +44,6 @@ let
   observabilitySecretDir = "${secretRoot}/observability";
   powerSecretDir = "${secretRoot}/power";
   zfsKeyPath = "${zfsSecretDir}/dataset-key";
-  zfsKeyFingerprintProperty = "org.nixos:keystore-sha256";
   caddyInternalCaPath = "/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt";
   caddyCaExportDir = "/run/nas-caddy-ca";
   caddyCaExportPath = "${caddyCaExportDir}/ca-bundle.crt";
@@ -74,18 +70,12 @@ let
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";
 
-  # These are host/request-routing substrate that Caddy may require directly.
-  # Application backends whose lifecycle is managed by V2 must not appear here:
-  # the finite V2 reconcile transaction starts/stops those from services.yaml.
   caddyBackendUnits = [
     "authentik.service"
     "authentik-worker.service"
     "nas-cockpit-sso.service"
   ];
 
-  # Secret activation owns only host/security substrate. In particular, do not
-  # add V2-managed application services or V2 jobs here: Requires= on this
-  # target would bypass their mutable services.yaml lifecycle state.
   protectedServiceUnits = [
     "nas-zfs-mount-guard.service"
     "postgresql.service"
@@ -112,7 +102,6 @@ let
     authentikPort
     cockpitPort
   ]
-  ++ lib.optional (authentikOutpostPort != authentikPort) authentikOutpostPort
   ++ lib.optional cfg.syncthing.enable syncthingGuiPort
   ++ lib.optional cfg.vaultwarden.enable vaultwardenPort
   ++ managementPorts
@@ -137,11 +126,11 @@ in
     authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile
     authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
-    authentikOutpostPort authentikOutpostPath
+    authentikOutpostPath
     bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
-    zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
+    zfsKeyPath vaultwardenBackupDir caddyInternalCaPath
     caddyCaExportDir caddyCaExportPath vaultwardenOidcClientId vaultwardenOidcAuthority
     vaultwardenOidcCallback shareRoot aiStorageRoot copypartyMountRoot tftpMountRoot
     vmStoragePath upsUsesLocalDriver upsMonitorSystem syncthingDataDir syncthingConfigDir

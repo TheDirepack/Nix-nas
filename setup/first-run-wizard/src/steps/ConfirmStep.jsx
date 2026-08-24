@@ -1,15 +1,29 @@
 import React from 'react';
 import { Alert, Button } from '@patternfly/react-core';
 
-const validate = (administrator, keePassPassword, plan, allowDestructive) => {
+const validate = (
+  administrator,
+  keePassPassword,
+  keePassPasswordConfirm,
+  authentikAdministratorPassword,
+  authentikAdministratorPasswordConfirm,
+  plan,
+  allowDestructive,
+) => {
   if (!administrator.username || !administrator.name || !administrator.email) {
     return 'Complete the administrator account details.';
   }
   if (!administrator.password || administrator.password !== administrator.confirm) {
-    return 'Enter and confirm the administrator password.';
+    return 'Enter and confirm the Linux administrator password.';
   }
-  if (!keePassPassword) {
-    return 'Enter the KeePassXC database password.';
+  if (!keePassPassword || keePassPassword !== keePassPasswordConfirm) {
+    return 'Enter and confirm the KeePassXC master password.';
+  }
+  if (
+    !authentikAdministratorPassword ||
+    authentikAdministratorPassword !== authentikAdministratorPasswordConfirm
+  ) {
+    return 'Enter and confirm the Authentik administrator password.';
   }
   if (!plan || !/^[0-9a-f]{64}$/.test(plan.planDigest || '')) {
     return 'The storage plan has not loaded yet.';
@@ -20,7 +34,15 @@ const validate = (administrator, keePassPassword, plan, allowDestructive) => {
   return '';
 };
 
-const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan }) => {
+const ConfirmStep = ({
+  administrator,
+  keePassPassword,
+  keePassPasswordConfirm,
+  authentikAdministratorPassword,
+  authentikAdministratorPasswordConfirm,
+  allowDestructive,
+  plan,
+}) => {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [job, setJob] = React.useState(null);
@@ -32,7 +54,7 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
   React.useEffect(() => {
     if (!jobId || ['complete', 'failed'].includes(jobStatus)) return undefined;
     const timer = window.setInterval(() => {
-      fetch(`api/first-start/job/${jobId}`)
+      fetch(`api/first-start/job/${jobId}`, { cache: 'no-store' })
         .then((response) => response.json())
         .then((value) => {
           if (value && value.jobId === jobId) setJob(value);
@@ -43,7 +65,15 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
   }, [jobId, jobStatus]);
 
   const submit = async () => {
-    const problem = validate(administrator, keePassPassword, plan, allowDestructive);
+    const problem = validate(
+      administrator,
+      keePassPassword,
+      keePassPasswordConfirm,
+      authentikAdministratorPassword,
+      authentikAdministratorPasswordConfirm,
+      plan,
+      allowDestructive,
+    );
     if (problem) {
       setError(problem);
       return;
@@ -54,8 +84,10 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
       const response = await fetch('api/first-run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
         body: JSON.stringify({
           password: keePassPassword,
+          authentikAdministratorPassword,
           administrator: {
             username: administrator.username,
             name: administrator.name,
@@ -69,8 +101,8 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
         }),
       });
       const value = await response.json();
-      if (value.error) {
-        setError(value.error);
+      if (!response.ok || value.error) {
+        setError(value.error || `Setup request failed with HTTP ${response.status}`);
       } else if (value.status === 'complete' || value.status === 'complete-unverified') {
         setJob({ jobId: '', status: 'complete' });
       } else {
@@ -86,9 +118,9 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
   const reboot = async () => {
     setRebooting(true);
     try {
-      const response = await fetch('api/reboot', { method: 'POST' });
+      const response = await fetch('api/reboot', { method: 'POST', cache: 'no-store' });
       const value = await response.json();
-      if (value.error) setError(value.error);
+      if (!response.ok || value.error) setError(value.error || `Reboot request failed with HTTP ${response.status}`);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -100,13 +132,12 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
   return (
     <div>
       <p>
-        Finishing setup applies the reviewed plan: it creates the storage,
-        initializes the KeePassXC database and secrets, creates the configured
-        accounts plus your administrator, and verifies the stack. The appliance
-        reboots afterwards.
+        Finishing setup creates the permanent KeePassXC database and fresh machine secrets, creates
+        encrypted storage with the permanent ZFS key, creates the Linux and Authentik administrators,
+        retires bootstrap authority, and verifies the resulting stack.
       </p>
       <ul>
-        <li>Administrator: {administrator.username || '(unset)'}</li>
+        <li>Linux administrator: {administrator.username || '(unset)'}</li>
         <li>Pool: {storage.pool || '(plan pending)'}</li>
         <li>Devices: {Array.isArray(storage.devices) ? storage.devices.join(' ') : ''}</li>
       </ul>
@@ -122,7 +153,7 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
       )}
       {jobStatus === 'complete' && (
         <Alert variant="success" isInline title="Setup completed">
-          <p>Reboot the appliance to start the full service stack with the new accounts.</p>
+          <p>Reboot the appliance to start the full service stack with the permanent trust domain.</p>
         </Alert>
       )}
       {!job && (

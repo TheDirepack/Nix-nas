@@ -16,7 +16,6 @@ let
   backupInventoryPath = "/run/nas-control/backup-resources.json";
   resticPathsPath = "/run/nas-control/restic-v2-paths";
   quadletRuntimePath = "/run/containers/systemd";
-  authentikOutpostPort = nasInternal.authentikOutpostPort;
   v2Source = ../../../services;
   v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
     defusedxml
@@ -54,6 +53,9 @@ let
   seedDesiredState = pkgs.writeShellScript "nas-managed-services-v2-seed" ''
     set -euo pipefail
 
+    # This path is the mutable desired-state authority. The unit itself is
+    # ordered after nas-zfs-mount-guard so these directories can never be
+    # created on the boot filesystem as an accidental fallback authority.
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}/apps
 
@@ -76,8 +78,6 @@ in
   config = {
     systemd.tmpfiles.rules = [
       "L+ /var/lib/nas-control - - - - ${zfsControlRoot}"
-      "d ${zfsControlRoot} 0750 root nas-operations -"
-      "d ${zfsControlRoot}/apps 0750 root nas-operations -"
       "d /run/nas-control 0755 root root -"
       "d /run/containers 0755 root root -"
       "d /run/containers/systemd 0755 root root -"
@@ -100,7 +100,10 @@ in
     systemd.services.nas-managed-services-seed = {
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
       before = [ "nas-managed-services-reconcile.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
@@ -113,9 +116,6 @@ in
       };
     };
 
-    # This unit is intentionally only the finite compile entry point. Native
-    # subsystem activation/rollback belongs to managed-services-transactions;
-    # generation publication belongs to managed-services-generations.
     systemd.services.nas-managed-services-reconcile = {
       description = "Compile and activate Managed Services V2 desired state";
       wantedBy = [ "multi-user.target" ];
@@ -142,7 +142,7 @@ in
         NAS_V2_RESTIC_PATHS = resticPathsPath;
         NAS_V2_FIREWALLD = firewalldProjectionPath;
         NAS_V2_CADDY_BIN = "${pkgs.caddy}/bin/caddy";
-        NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";
+        NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString nasInternal.authentikPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
         NAS_V2_AUTHENTIK_PUBLIC_HOST = cfg.identity.publicHost;
@@ -180,7 +180,6 @@ in
           quadletRuntimePath
         ];
       };
-      environment.NAS_AUTHENTIK_OUTPOST_PORT = toString authentikOutpostPort;
     };
 
     systemd.paths.nas-managed-services-reconcile = {
@@ -192,8 +191,6 @@ in
       };
     };
 
-    # The concrete Authentik implementation is supplied by the blueprint
-    # adapter module. Keep only lifecycle/hardening shared by that finite job.
     systemd.services.nas-managed-services-authentik-reconcile = {
       description = "Apply Managed Services V2 Authentik projection";
       wantedBy = [ "nas-protected-services.target" ];
@@ -233,8 +230,6 @@ in
       };
     };
 
-    # Reconciliation is optional during bootstrap. Caddy cannot require it:
-    # managed services may need Caddy's CA before their state is available.
     systemd.services.caddy.wants = [
       "nas-managed-services-reconcile.service"
       "nas-managed-services-authentik-reconcile.service"
