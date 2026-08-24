@@ -20,8 +20,6 @@ let
   bootstrapAuthentikDataDir = "${bootstrapRuntimeRoot}/authentik";
   bootstrapPostgresqlDataDir = "${bootstrapRuntimeRoot}/postgresql";
   bootstrapSecretsDir = "${bootstrapRuntimeRoot}/nas-secrets";
-  # These stable compatibility paths are selected at boot: boot-root before
-  # first-run, ZFS thereafter. Services never write directly to the selector.
   authentikDataDir = "/var/lib/authentik";
   copypartyDataDir = "${cfg.zfsRoot}/copyparty";
   copypartyUserConfigDir = "${copypartyDataDir}/user.d";
@@ -47,7 +45,6 @@ let
   observabilitySecretDir = "${secretRoot}/observability";
   powerSecretDir = "${secretRoot}/power";
   zfsKeyPath = "${zfsSecretDir}/dataset-key";
-  zfsKeyFingerprintProperty = "org.nixos:keystore-sha256";
   caddyInternalCaPath = "/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt";
   caddyCaExportDir = "/run/nas-caddy-ca";
   caddyCaExportPath = "${caddyCaExportDir}/ca-bundle.crt";
@@ -61,8 +58,7 @@ let
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
   upsMonitorSystem =
-    if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
-    else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
+    if cfg.power.ups.monitorSystem != "" then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
   syncthingDataDir = "${cfg.zfsRoot}/syncthing";
   syncthingConfigDir = "${syncthingDataDir}/.config/syncthing";
@@ -74,18 +70,12 @@ let
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";
 
-  # These are host/request-routing substrate that Caddy may require directly.
-  # Application backends whose lifecycle is managed by V2 must not appear here:
-  # the finite V2 reconcile transaction starts/stops those from services.yaml.
   caddyBackendUnits = [
     "authentik.service"
     "authentik-worker.service"
     "nas-cockpit-sso.service"
   ];
 
-  # Secret activation owns only host/security substrate. In particular, do not
-  # add V2-managed application services or V2 jobs here: Requires= on this
-  # target would bypass their mutable services.yaml lifecycle state.
   protectedServiceUnits = [
     "nas-zfs-mount-guard.service"
     "postgresql.service"
@@ -141,7 +131,7 @@ in
     bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
-    zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
+    zfsKeyPath vaultwardenBackupDir caddyInternalCaPath
     caddyCaExportDir caddyCaExportPath vaultwardenOidcClientId vaultwardenOidcAuthority
     vaultwardenOidcCallback shareRoot aiStorageRoot copypartyMountRoot tftpMountRoot
     vmStoragePath upsUsesLocalDriver upsMonitorSystem syncthingDataDir syncthingConfigDir
