@@ -311,21 +311,13 @@ def reconcile_route_apps(
     api_root = _api_root(authentik_url)
     desired_apps = desired_route_apps(effective, public_host=public_host)
 
-    providers = _list_objects(
-        url=f"{api_root}/providers/proxy/?page_size=100", token=token, label="proxy provider"
-    )
+    providers = _list_objects(url=f"{api_root}/providers/proxy/?page_size=100", token=token, label="proxy provider")
     provider_by_name = {p.get("name"): p for p in providers if isinstance(p.get("name"), str)}
-    applications = _list_objects(
-        url=f"{api_root}/core/applications/?page_size=100", token=token, label="application"
-    )
+    applications = _list_objects(url=f"{api_root}/core/applications/?page_size=100", token=token, label="application")
     app_by_slug = {a.get("slug"): a for a in applications if isinstance(a.get("slug"), str)}
 
-    outposts = _list_objects(
-        url=f"{api_root}/outposts/instances/?page_size=100", token=token, label="outpost"
-    )
-    outpost = next(
-        (o for o in outposts if o.get("managed") == "goauthentik.io/outposts/embedded"), None
-    )
+    outposts = _list_objects(url=f"{api_root}/outposts/instances/?page_size=100", token=token, label="outpost")
+    outpost = next((o for o in outposts if o.get("managed") == "goauthentik.io/outposts/embedded"), None)
     outpost_pk = outpost.get("pk") if isinstance(outpost, dict) else None
 
     flows = _list_objects(url=f"{api_root}/flows/instances/?page_size=100", token=token, label="flow")
