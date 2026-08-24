@@ -10,15 +10,14 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.head_commit.message == 'chore: apply guarded setup source cleanup'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: agent/managed-services-v2-simplify-v2
       - name: Apply guarded source cleanup
-        shell: python
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path("services/nas_setup.py")
@@ -31,14 +30,15 @@ jobs:
               raise SystemExit("expected exactly two duplicated setup application declarations")
           text = text.replace(bad, good, 1)
 
-          first = text.index('# Explicit setup application for first run.')
-          second = text.index('# Explicit setup application for first run.', first + 1)
+          first = text.index("# Explicit setup application for first run.")
+          second = text.index("# Explicit setup application for first run.", first + 1)
           end = text.index('BOOTSTRAP_ADMIN_USER = "nas-bootstrap"', second)
           text = text[:second] + text[end:]
           if text.count('SETUP_APPLICATION_SLUG = "nas-setup"') != 1:
               raise SystemExit("setup application declaration was not deduplicated")
           path.write_text(text, encoding="utf-8")
           Path(".github/workflows/one-shot-nas-setup-fix.yml").unlink()
+          PY
       - name: Commit source cleanup
         run: |
           git config user.name github-actions[bot]
