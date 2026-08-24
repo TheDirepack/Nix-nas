@@ -59,16 +59,26 @@ let
     set -euo pipefail
     export PYTHONPATH=${lib.escapeShellArg (toString v2Source)}
 
+    # If this is the immediate OnFailure path, disarm the timer for the failed
+    # desired revision before creating the rollback commit. If the timer itself
+    # invoked this script, stopping its timer is harmless.
+    failed_head="$(${pkgs.git}/bin/git --git-dir=${lib.escapeShellArg historyRepoPath} rev-parse --verify HEAD 2>/dev/null || true)"
+    if [ -n "$failed_head" ]; then
+      suffix="$(printf '%s' "$failed_head" | ${pkgs.coreutils}/bin/cut -c1-12)"
+      ${pkgs.systemd}/bin/systemctl stop "nas-v2-apply-rollback-$suffix.timer" >/dev/null 2>&1 || true
+    fi
+
     if ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} restore-applied; then
-      # services.yaml changed under the active path unit. Queue a fresh finite
-      # reconciliation from the known-good Git revision. If the failed apply is
-      # still running, restart also terminates it instead of waiting forever.
+      # Reconcile from the known-good Git revision. restore-applied records a
+      # new rollback commit, so the next guard gets a different transient unit
+      # name and cannot collide with the failed attempt's rollback service.
       ${pkgs.systemd}/bin/systemctl restart nas-managed-services-reconcile.service
       exit 0
     fi
 
     # First boot has no refs/nas/applied yet. The immutable Nix firewall
-    # baseline is the only safe fallback: remove the V2 namespace and reload it.
+    # baseline is the only safe runtime fallback. There is no older mutable
+    # desired state to restore in this case.
     ${lib.optionalString firewalldEnabled ''
     ${pkgs.findutils}/bin/find \
       ${lib.escapeShellArg "${firewalldSystemConfig}/zones"} \
@@ -79,49 +89,45 @@ let
     ''}
     exit 1
   '';
-  guardArmArgs = [
-    "${v2Source}/nas_guarded_apply.py"
-    "--unit"
-    "nas-v2-apply-rollback"
-    "--systemctl"
-    "${pkgs.systemd}/bin/systemctl"
-    "arm"
-    "--timeout"
-    "60"
-    "--systemd-run"
-    "${pkgs.systemd}/bin/systemd-run"
-    "--"
-    rollbackToApplied
-  ];
-  guardCancelArgs = [
-    "${v2Source}/nas_guarded_apply.py"
-    "--unit"
-    "nas-v2-apply-rollback"
-    "--systemctl"
-    "${pkgs.systemd}/bin/systemctl"
-    "cancel"
-  ];
+  guardUnitShell = ''
+    desired_head="$(${pkgs.git}/bin/git --git-dir=${lib.escapeShellArg historyRepoPath} rev-parse --verify HEAD)"
+    guard_suffix="$(printf '%s' "$desired_head" | ${pkgs.coreutils}/bin/cut -c1-12)"
+    guard_unit="nas-v2-apply-rollback-$guard_suffix"
+  '';
 in
 {
   config = {
-    # Record the exact desired-state text before compilation. Git tracks only
-    # services.yaml; generated projections and runtime state stay out of history.
+    # Commit and arm rollback before compilation. This covers schema/compiler
+    # failures as well as failures in runtime projection activation.
     systemd.services.nas-managed-services-reconcile.preStart = lib.mkBefore ''
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} record
+      ${guardUnitShell}
+      ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
+        --unit "$guard_unit" \
+        --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
+        arm \
+        --timeout 60 \
+        --systemd-run ${lib.escapeShellArg "${pkgs.systemd}/bin/systemd-run"} \
+        -- ${rollbackToApplied}
     '';
 
+    # A normal failure gets the same rollback immediately; the transient timer
+    # remains the crash/deadlock fallback when systemd never reaches OnFailure.
+    systemd.services.nas-managed-services-reconcile.onFailure = lib.mkAfter [
+      "nas-v2-apply-failed.service"
+    ];
+    systemd.services.nas-v2-apply-failed = {
+      description = "Restore the last applied Managed Services V2 desired state";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = rollbackToApplied;
+      };
+    };
+
     # Replace the old firewall-specific deadman/ack sequence with one generic
-    # apply guard around all core runtime mutation. Native subsystem rollback can
-    # still happen inside an adapter; this guard covers process crashes and
-    # cross-subsystem failures by restoring refs/nas/applied.
+    # apply guard around the complete compiler + core runtime transaction.
     systemd.services.nas-managed-services-reconcile.postStart = lib.mkForce ''
       set -euo pipefail
-      ${v2Python}/bin/python ${lib.escapeShellArgs guardArmArgs}
-
-      rollback_desired() {
-        ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} restore-applied >/dev/null 2>&1 || true
-      }
-      trap rollback_desired ERR
 
       ${lib.optionalString firewalldEnabled ''
       ${v2Python}/bin/python ${lib.escapeShellArgs statelessFirewalldArgs}
@@ -131,8 +137,11 @@ in
       # The core runtime projection has now been applied and verified. Keep this
       # as a dedicated ref instead of inferring success from Git HEAD.
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} mark-applied
-      ${v2Python}/bin/python ${lib.escapeShellArgs guardCancelArgs}
-      trap - ERR
+      ${guardUnitShell}
+      ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
+        --unit "$guard_unit" \
+        --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
+        cancel
     '';
 
     # The original per-firewall acknowledgement protocol is superseded by the
