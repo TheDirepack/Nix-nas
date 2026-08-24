@@ -59,11 +59,11 @@ class V2StatelessFirewalldTests(unittest.TestCase):
                 root / "firewall-cmd",
                 f'printf "%s\\n" "$*" >> {log}\n'
                 'case "$1" in\n'
-                '  --state) echo running ;;\n'
+                "  --state) echo running ;;\n"
                 '  --get-zones) echo "nas-lan nv2z0123456789ab" ;;\n'
                 '  --get-policies) echo "" ;;\n'
-                'esac\n'
-                'exit 0\n',
+                "esac\n"
+                "exit 0\n",
             )
 
             result = firewalld.reconcile(
@@ -94,11 +94,11 @@ class V2StatelessFirewalldTests(unittest.TestCase):
             firewall_cmd = self.executable(
                 root / "firewall-cmd",
                 'case "$1" in\n'
-                '  --state) echo running ;;\n'
+                "  --state) echo running ;;\n"
                 '  --get-zones) echo "nas-lan" ;;\n'
                 '  --get-policies) echo "" ;;\n'
-                'esac\n'
-                'exit 0\n',
+                "esac\n"
+                "exit 0\n",
             )
             with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "omitted projected objects"):
                 firewalld.reconcile(
