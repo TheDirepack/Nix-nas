@@ -5,9 +5,10 @@ let
   zfsControlRoot = "${cfg.zfsRoot}/nas-control";
   desiredPath = "/var/lib/nas-control/services.yaml";
   effectivePath = "/run/nas-control/effective.json";
-  historyRepoPath = "${zfsControlRoot}/config-history.git";
   planPath = "/run/nas-control/plan.json";
   reconcilePendingPath = "/run/nas-control/reconcile.pending";
+  caddyActivePath = "/run/nas-control/caddy-active.conf";
+  historyRepoPath = "${zfsControlRoot}/config-history.git";
   systemdProjectionPath = "/run/nas-control/systemd";
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
@@ -23,6 +24,7 @@ let
   networkingEnabled = cfg.networking.enable;
   firewalldEnabled = cfg.networking.enable && cfg.networking.firewall.enable;
   firewalldPackage = config.services.firewalld.package;
+  caddyPackage = config.services.caddy.package;
   historyArgs = [
     "${v2Source}/nas_v2_history.py"
     "--authority"
@@ -96,8 +98,7 @@ let
     if ${v2Python}/bin/python "''${restore_args[@]}"; then
       # restore-applied refuses to overwrite a newer desired edit. In either
       # case, restart once: restored state needs reprojection, while a newer
-      # edit needs its own finite transaction. nmstate/firewalld/systemd are all
-      # regenerated from that restored/current authority on the next run.
+      # edit needs its own finite transaction.
       ${pkgs.systemd}/bin/systemctl restart nas-managed-services-reconcile.service
       exit 0
     fi
@@ -193,7 +194,8 @@ in
 
     # Native subsystem projections participate in one guarded finite apply.
     # nmstate owns host VLAN/VRF state, firewalld owns its permanent policy
-    # objects, and systemd/Quadlet own process/container activation.
+    # objects, systemd/Quadlet own process/container activation, and Caddy's
+    # own Admin API transaction owns live route replacement.
     systemd.services.nas-managed-services-reconcile.postStart = lib.mkForce ''
       set -euo pipefail
 
@@ -208,6 +210,17 @@ in
       ${v2Python}/bin/python ${lib.escapeShellArgs statelessFirewalldArgs}
       ''}
       ${v2Python}/bin/python ${lib.escapeShellArgs systemdReconcileArgs}
+
+      # When Caddy is already running, load the complete current active config
+      # directly through Caddy's native Admin API client. If Caddy has not
+      # started yet (bootstrap), it will read the newly generated import when it
+      # starts, so no deferred V2 reload unit is necessary.
+      if ${pkgs.systemd}/bin/systemctl is-active --quiet caddy.service; then
+        ${caddyPackage}/bin/caddy reload \
+          --config ${lib.escapeShellArg caddyActivePath} \
+          --adapter caddyfile \
+          --force
+      fi
 
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} mark-applied --commit "$desired_head"
 
@@ -225,9 +238,10 @@ in
         cancel
     '';
 
-    # The original per-firewall acknowledgement protocol is superseded by the
-    # generic transaction guard above.
+    # Superseded by the generic transaction and direct native Caddy reload.
     systemd.services.nas-v2-firewall-rollback.enable = lib.mkForce false;
     systemd.timers.nas-v2-firewall-rollback.enable = lib.mkForce false;
+    systemd.services.nas-managed-services-caddy-reload.enable = lib.mkForce false;
+    systemd.paths.nas-managed-services-caddy-reload.enable = lib.mkForce false;
   };
 }
