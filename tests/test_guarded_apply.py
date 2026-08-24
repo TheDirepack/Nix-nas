@@ -26,9 +26,7 @@ class GuardedApplyTests(unittest.TestCase):
             log = root / "log"
             systemctl = self.executable(
                 root / "systemctl",
-                f'printf "systemctl:%s\\n" "$*" >> {log}\n'
-                'if [ "$1" = "is-active" ]; then exit 3; fi\n'
-                "exit 0\n",
+                f'printf "systemctl:%s\\n" "$*" >> {log}\nif [ "$1" = "is-active" ]; then exit 3; fi\nexit 0\n',
             )
             systemd_run = self.executable(
                 root / "systemd-run",
@@ -56,9 +54,7 @@ class GuardedApplyTests(unittest.TestCase):
             log = root / "log"
             systemctl = self.executable(
                 root / "systemctl",
-                f'printf "%s\\n" "$*" >> {log}\n'
-                'if [ "$1" = "is-active" ]; then exit 3; fi\n'
-                "exit 0\n",
+                f'printf "%s\\n" "$*" >> {log}\nif [ "$1" = "is-active" ]; then exit 3; fi\nexit 0\n',
             )
             result = guarded.cancel(unit="nas-test-rollback", systemctl=str(systemctl))
             self.assertFalse(result["armed"])
