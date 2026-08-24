@@ -724,7 +724,9 @@ def _remove_setup_application() -> dict[str, Any]:
     """
     token_paths = [
         pathlib.Path(os.environ.get("NAS_AUTHENTIK_TOKEN_FILE", "/run/nas-secrets/authentik/api-token")),
-        pathlib.Path(os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")),
+        pathlib.Path(
+            os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")
+        ),
         pathlib.Path("/run/nas-authentik/api-token"),
         pathlib.Path("/var/lib/nas-bootstrap/authentik/api-token"),
     ]
