@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import pathlib
-import stat
 import sys
-import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -12,6 +10,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_network as network  # noqa: E402
+import nas_v2_podman_network as podman_network  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
 import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
@@ -20,6 +19,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
     def service(self, *, policy: dict | None = None) -> tuple[dict, dict]:
         service = {
             "managed": True,
+            "enabled": True,
             "workload": {"kind": "daemon", "activation": "persistent"},
             "runtime": {
                 "type": "oci",
@@ -49,32 +49,14 @@ class V2PodmanNetworkTests(unittest.TestCase):
         }
         return effective, service
 
-    def fake_nmcli(self, root: pathlib.Path) -> str:
-        script = root / "nmcli"
-        script.write_text(
-            "#!/bin/sh\n"
-            'case " $* " in\n'
-            "  *\" --offline \"*) printf '[connection]\\nid=fake\\n' ;;\n"
-            "  *) exit 0 ;;\n"
-            "esac\n",
-            encoding="utf-8",
-        )
-        script.chmod(script.stat().st_mode | stat.S_IXUSR)
-        return str(script)
-
-    def project_vlan(
-        self, effective: dict, output: pathlib.Path, *, nmcli: str
-    ) -> tuple[dict[pathlib.Path, bytes], dict]:
+    def project(self, effective: dict) -> tuple[dict[pathlib.Path, bytes], dict]:
         files: dict[pathlib.Path, bytes] = {}
         manifest = {"quadletLinks": [], "links": [], "ownedUnits": [], "startUnits": []}
-        network.augment_projection(
+        podman_network.augment_projection(
             effective,
-            output_dir=output,
+            output_dir=pathlib.Path("/run/nas-control/systemd"),
             files=files,
             manifest=manifest,
-            nmcli_bin=nmcli,
-            install_bin="/bin/install",
-            rm_bin="/bin/rm",
         )
         return files, manifest
 
@@ -85,11 +67,8 @@ class V2PodmanNetworkTests(unittest.TestCase):
             "nas-v2-net-demo.network",
         )
 
-        files: dict[pathlib.Path, bytes] = {}
-        manifest = {"quadletLinks": []}
+        files, manifest = self.project(effective)
         output = pathlib.Path("/run/nas-control/systemd")
-        network.augment_projection(effective, output_dir=output, files=files, manifest=manifest)
-
         source = output / "quadlet/nas-v2-net-demo.network"
         rendered = files[source].decode()
         self.assertIn("PartOf=nas-v2-demo.service", rendered)
@@ -103,7 +82,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
             [{"target": "nas-v2-net-demo.network", "source": str(source)}],
         )
 
-    def test_isolated_vlan_uses_shared_vrf_and_networkmanager_uplink(self):
+    def test_isolated_vlan_references_nmstate_owned_vrf_without_host_unit(self):
         effective, service = self.service(
             policy={
                 "mode": "isolated",
@@ -117,29 +96,20 @@ class V2PodmanNetworkTests(unittest.TestCase):
         )
         vlan = network.vlan_binding(service["network"])
         assert vlan is not None
-        with tempfile.TemporaryDirectory() as raw:
-            nmcli = self.fake_nmcli(pathlib.Path(raw))
-            output = pathlib.Path("/run/nas-control/systemd")
-            files, manifest = self.project_vlan(effective, output, nmcli=nmcli)
+        files, manifest = self.project(effective)
+        output = pathlib.Path("/run/nas-control/systemd")
 
         rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
         self.assertIn("Driver=bridge", rendered)
         self.assertIn("Options=isolate=strict", rendered)
         self.assertIn(f"Options=vrf={vlan['vrfInterface']}", rendered)
-        self.assertIn(f"Requires={vlan['unit']}", rendered)
+        self.assertNotIn(f"Requires={vlan['unit']}", rendered)
         self.assertNotIn("Options=vlan=42", rendered)
+        self.assertNotIn(vlan["unit"], manifest["ownedUnits"])
+        self.assertFalse(any("networkmanager" in str(path) for path in files))
+        self.assertFalse(any(path.name == vlan["unit"] for path in files))
 
-        vlan_unit = files[output / "units" / vlan["unit"]].decode()
-        self.assertIn("Requires=NetworkManager.service", vlan_unit)
-        self.assertIn("StopWhenUnneeded=yes", vlan_unit)
-        self.assertIn(f"connection up id {vlan['vrfProfile']}", vlan_unit)
-        self.assertIn(f"connection up id {vlan['vlanProfile']}", vlan_unit)
-        self.assertIn(vlan["unit"], manifest["ownedUnits"])
-        self.assertNotIn(vlan["unit"], manifest["startUnits"])
-        self.assertIn(output / "networkmanager" / f"{vlan['vrfProfile']}.nmconnection", files)
-        self.assertIn(output / "networkmanager" / f"{vlan['vlanProfile']}.nmconnection", files)
-
-    def test_network_profile_can_supply_physical_vlan(self):
+    def test_network_profile_can_supply_nmstate_owned_physical_vlan(self):
         effective, service = self.service()
         service.pop("network")
         service["networkProfile"] = "media"
@@ -156,14 +126,11 @@ class V2PodmanNetworkTests(unittest.TestCase):
         }
         vlan = network.vlan_binding(effective["networkProfiles"]["media"])
         assert vlan is not None
-        with tempfile.TemporaryDirectory() as raw:
-            nmcli = self.fake_nmcli(pathlib.Path(raw))
-            output = pathlib.Path("/run/nas-control/systemd")
-            files, _manifest = self.project_vlan(effective, output, nmcli=nmcli)
-        rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
+        files, _manifest = self.project(effective)
+        rendered = files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-demo.network")].decode()
         self.assertIn(f"Options=vrf={vlan['vrfInterface']}", rendered)
 
-    def test_services_share_same_vlan_uplink_resource(self):
+    def test_services_sharing_vlan_reference_same_nmstate_vrf(self):
         policy = {
             "mode": "isolated",
             "vlanId": 55,
@@ -174,20 +141,22 @@ class V2PodmanNetworkTests(unittest.TestCase):
             "allowedEgress": [],
         }
         effective, first = self.service(policy=policy)
-        second = {**first, "name": "second"}
+        second = {
+            **first,
+            "network": dict(policy),
+            "runtime": dict(first["runtime"]),
+            "name": "second",
+        }
         effective["services"]["second"] = second
         effective["derived"]["runtime"]["second"] = {"ownerUnit": "nas-v2-second.service"}
         vlan = network.vlan_binding(policy)
         assert vlan is not None
-        with tempfile.TemporaryDirectory() as raw:
-            nmcli = self.fake_nmcli(pathlib.Path(raw))
-            output = pathlib.Path("/run/nas-control/systemd")
-            _files, manifest = self.project_vlan(effective, output, nmcli=nmcli)
-        self.assertEqual(manifest["ownedUnits"].count(vlan["unit"]), 1)
-        self.assertEqual(
-            sum(1 for item in manifest["links"] if item["target"] == vlan["unit"]),
-            1,
-        )
+        files, manifest = self.project(effective)
+        vrf_line = f"Options=vrf={vlan['vrfInterface']}"
+        self.assertIn(vrf_line, files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-demo.network")].decode())
+        self.assertIn(vrf_line, files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-second.network")].decode())
+        self.assertEqual(len(manifest["quadletLinks"]), 2)
+        self.assertNotIn(vlan["unit"], manifest["ownedUnits"])
 
     def test_vlan_pair_is_required_and_validated_defensively(self):
         invalid = [
@@ -232,14 +201,7 @@ class V2PodmanNetworkTests(unittest.TestCase):
         service["listeners"] = {
             "web": {"protocol": "tcp", "exposure": {"port": 8080}, "firewall": True},
         }
-        files: dict[pathlib.Path, bytes] = {}
-        manifest = {"quadletLinks": []}
-        network.augment_projection(
-            effective,
-            output_dir=pathlib.Path("/run/nas-control/systemd"),
-            files=files,
-            manifest=manifest,
-        )
+        files, manifest = self.project(effective)
         self.assertFalse(network.requires_firewalld(effective))
         self.assertEqual({}, files)
         self.assertEqual([], manifest["quadletLinks"])
@@ -348,16 +310,12 @@ class V2PodmanNetworkTests(unittest.TestCase):
         self.assertTrue(network._deny_egress_needs_firewalld(policy))
         with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
             network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
-        # with firewalld enabled it succeeds and Internal is false
         self.assertEqual(
             network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=True),
             "nas-v2-net-demo.network",
         )
-        files: dict[pathlib.Path, bytes] = {}
-        manifest = {"quadletLinks": []}
-        output = pathlib.Path("/run/nas-control/systemd")
-        network.augment_projection(effective, output_dir=output, files=files, manifest=manifest)
-        rendered = files[output / "quadlet/nas-v2-net-demo.network"].decode()
+        files, _manifest = self.project(effective)
+        rendered = files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-demo.network")].decode()
         self.assertIn("Internal=false", rendered)
 
     def test_isolated_listener_firewall_false_still_requires_firewalld(self):
