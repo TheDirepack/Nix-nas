@@ -43,9 +43,8 @@ registerHooks({
   },
 });
 
-const {managedServiceUnitNames, mergeSystemdState, readSystemdState} = await import(
-  "../../cockpit/src/systemd.js"
-);
+const {managedServiceUnitNames, mergeSystemdState, readSystemdState} =
+  await import("../../cockpit/src/systemd.js");
 
 const unitRow = (unit, activeState = "active", subState = "running", loadState = "loaded") => [
   unit,
@@ -101,11 +100,13 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
     assert.deepEqual(byName("ListUnitsByNames").args, [["nas-ai.service"]]);
     assert.ok(byName("ListUnitsByPatterns"), "failed unit query missing");
     assert.deepEqual(byName("ListUnitsByPatterns").args, [["failed"], []]);
-    assert.ok(calls.some((call) => call.closed), "client must be closed");
-    assert.deepEqual(
-      state.failedUnits,
-      ["broken.service failed failed failed broken.service description"],
+    assert.ok(
+      calls.some((call) => call.closed),
+      "client must be closed",
     );
+    assert.deepEqual(state.failedUnits, [
+      "broken.service failed failed failed broken.service description",
+    ]);
     const unit = state.units["nas-ai.service"];
     assert.equal(unit.active, true);
     assert.equal(unit.memoryBytes, 2048);
@@ -137,7 +138,12 @@ test("mergeSystemdState projects unit state into service health", () => {
     managedServices: {
       services: [
         {name: "always-on", effective: true, effectiveMode: "always", units: [{unit: "a.service"}]},
-        {name: "on-demand", effective: true, effectiveMode: "on-demand", units: [{unit: "b.service"}]},
+        {
+          name: "on-demand",
+          effective: true,
+          effectiveMode: "on-demand",
+          units: [{unit: "b.service"}],
+        },
         {name: "broken", effective: false, effectiveMode: "always", units: []},
       ],
     },
