@@ -24,6 +24,7 @@ _DROPIN = re.compile(r"^([A-Za-z0-9_.@:-]+\.(?:service|timer|target))\.d/50-nas-
 _QUADLET_CONTAINER = re.compile(r"^nas-v2-([a-z][a-z0-9-]{0,63})\.container$")
 _QUADLET_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
+_ACTIVATED_DIR = ".activated"
 
 
 def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
@@ -74,12 +75,92 @@ def _source_under(root: pathlib.Path, value: str) -> pathlib.Path:
     return resolved
 
 
+def _state_source_under(root: pathlib.Path, value: str) -> pathlib.Path:
+    """Validate a prior source path even when apply removed the file."""
+    source = pathlib.Path(value)
+    if not source.is_absolute():
+        raise SystemdReconcileError(f"previous generated source is not absolute: {value}")
+    try:
+        root_resolved = root.resolve(strict=True)
+        parent = source.parent.resolve(strict=True)
+        candidate = parent / source.name
+        candidate.relative_to(root_resolved)
+    except (OSError, ValueError) as exc:
+        raise SystemdReconcileError(f"previous generated source escapes projection root: {value}") from exc
+    return candidate
+
+
 def _hash_file(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _fsync_directory(directory: pathlib.Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_bytes(path: pathlib.Path, data: bytes, *, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp = pathlib.Path(raw_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+        _fsync_directory(path.parent)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _snapshot_source(root: pathlib.Path, source: pathlib.Path, digest: str) -> pathlib.Path:
+    """Persist immutable rollback bytes outside apply-owned projection subtrees."""
+    snapshot_dir = root / _ACTIVATED_DIR
+    try:
+        snapshot_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
+            raise SystemdReconcileError(f"invalid activation snapshot directory {snapshot_dir}")
+        snapshot_dir.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, SystemdReconcileError):
+            raise
+        raise SystemdReconcileError(f"unable to prepare activation snapshot directory {snapshot_dir}: {exc}") from exc
+
+    snapshot = snapshot_dir / digest
+    try:
+        if snapshot.exists() or snapshot.is_symlink():
+            if snapshot.is_symlink() or not snapshot.is_file() or _hash_file(snapshot) != digest:
+                raise SystemdReconcileError(f"invalid activation snapshot {snapshot}")
+            return snapshot.resolve(strict=True)
+        data = source.read_bytes()
+    except OSError as exc:
+        raise SystemdReconcileError(f"unable to snapshot generated source {source}: {exc}") from exc
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise SystemdReconcileError(f"generated source changed while being snapshotted: {source}")
+    _atomic_bytes(snapshot, data)
+    return snapshot.resolve(strict=True)
+
+
+def _validated_snapshot(root: pathlib.Path, value: str, digest: str) -> pathlib.Path:
+    snapshot = pathlib.Path(value)
+    try:
+        activated_root = (root / _ACTIVATED_DIR).resolve(strict=True)
+        resolved = snapshot.resolve(strict=True)
+        resolved.relative_to(activated_root)
+    except (OSError, ValueError) as exc:
+        raise SystemdReconcileError(f"rollback snapshot escapes activation store: {value}") from exc
+    if resolved.is_symlink() or not resolved.is_file() or _hash_file(resolved) != digest:
+        raise SystemdReconcileError(f"rollback snapshot is missing or corrupted: {value}")
+    return resolved
 
 
 def _run_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -109,11 +190,7 @@ def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.chmod(temp, 0o600)
         os.replace(temp, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _fsync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -221,6 +298,14 @@ def reconcile(
         runtime_root=quadlet_runtime_dir,
         quadlet=True,
     )
+    current_link_snapshots = {
+        target: str(_snapshot_source(projection_root, source, current_hashes[target]))
+        for target, source in sorted(links.items())
+    }
+    current_quadlet_snapshots = {
+        target: str(_snapshot_source(projection_root, source, current_quadlet_hashes[target]))
+        for target, source in sorted(quadlet_links.items())
+    }
 
     def string_set(key: str, source: dict[str, Any]) -> set[str]:
         value = source.get(key, [])
@@ -239,20 +324,52 @@ def reconcile(
     previous_stop = string_set("stopUnits", previous) if previous else set()
     previous_links_raw = previous.get("links", {}) if previous else {}
     previous_hashes = previous.get("linkHashes", {}) if previous else {}
+    previous_link_snapshots_raw = previous.get("linkSnapshots", {}) if previous else {}
     previous_quadlet_links_raw = previous.get("quadletLinks", {}) if previous else {}
     previous_quadlet_hashes = previous.get("quadletHashes", {}) if previous else {}
+    previous_quadlet_snapshots_raw = previous.get("quadletSnapshots", {}) if previous else {}
     previous_fingerprints = previous.get("fingerprints", {}) if previous else {}
     if not all(
         isinstance(value, dict)
         for value in (
             previous_links_raw,
             previous_hashes,
+            previous_link_snapshots_raw,
             previous_quadlet_links_raw,
             previous_quadlet_hashes,
+            previous_quadlet_snapshots_raw,
             previous_fingerprints,
         )
     ):
         raise SystemdReconcileError("previous systemd reconcile state is malformed")
+
+    previous_link_snapshots: dict[str, pathlib.Path] = {}
+    previous_quadlet_snapshots: dict[str, pathlib.Path] = {}
+    if previous:
+        for target_rel, source_value in previous_links_raw.items():
+            if not isinstance(target_rel, str) or not isinstance(source_value, str):
+                raise SystemdReconcileError("previous systemd link state is malformed")
+            _safe_target(systemd_runtime_dir, target_rel)
+            _state_source_under(projection_root, source_value)
+            digest = previous_hashes.get(target_rel)
+            snapshot_value = previous_link_snapshots_raw.get(target_rel)
+            if not isinstance(digest, str) or not isinstance(snapshot_value, str):
+                raise SystemdReconcileError(
+                    "previous systemd reconcile state lacks rollback snapshots; rebuild the VM state before retrying"
+                )
+            previous_link_snapshots[target_rel] = _validated_snapshot(projection_root, snapshot_value, digest)
+        for target_rel, source_value in previous_quadlet_links_raw.items():
+            if not isinstance(target_rel, str) or not isinstance(source_value, str):
+                raise SystemdReconcileError("previous Quadlet link state is malformed")
+            _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+            _state_source_under(projection_root, source_value)
+            digest = previous_quadlet_hashes.get(target_rel)
+            snapshot_value = previous_quadlet_snapshots_raw.get(target_rel)
+            if not isinstance(digest, str) or not isinstance(snapshot_value, str):
+                raise SystemdReconcileError(
+                    "previous systemd reconcile state lacks rollback snapshots; rebuild the VM state before retrying"
+                )
+            previous_quadlet_snapshots[target_rel] = _validated_snapshot(projection_root, snapshot_value, digest)
 
     fingerprints = manifest.get("fingerprints", {})
     if not isinstance(fingerprints, dict):
@@ -300,8 +417,6 @@ def reconcile(
         except Exception:
             return None
 
-    # Snapshot active state for every unit that may be mutated, so rollback
-    # can restore the previous running state, not just files.
     all_units = (
         set(previous_owned)
         | set(owned)
@@ -333,7 +448,18 @@ def reconcile(
             except Exception:
                 continue
 
+    def _restore_previous_source_bytes() -> None:
+        for target_rel, source_value in previous_links_raw.items():
+            source = _state_source_under(projection_root, source_value)
+            snapshot = previous_link_snapshots[target_rel]
+            _atomic_bytes(source, snapshot.read_bytes())
+        for target_rel, source_value in previous_quadlet_links_raw.items():
+            source = _state_source_under(projection_root, source_value)
+            snapshot = previous_quadlet_snapshots[target_rel]
+            _atomic_bytes(source, snapshot.read_bytes())
+
     def _rollback_projection() -> None:
+        _restore_previous_source_bytes()
         for target_rel, source in links.items():
             if target_rel not in previous_links_raw:
                 target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
@@ -438,8 +564,10 @@ def reconcile(
             "schemaVersion": 1,
             "links": current_links,
             "linkHashes": current_hashes,
+            "linkSnapshots": current_link_snapshots,
             "quadletLinks": current_quadlet_links,
             "quadletHashes": current_quadlet_hashes,
+            "quadletSnapshots": current_quadlet_snapshots,
             "ownedUnits": sorted(owned),
             "startUnits": sorted(start),
             "stopUnits": sorted(stop),
