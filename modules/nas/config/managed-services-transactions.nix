@@ -4,6 +4,7 @@ let
   cfg = config.nas;
   zfsControlRoot = "${cfg.zfsRoot}/nas-control";
   desiredPath = "/var/lib/nas-control/services.yaml";
+  effectivePath = "/run/nas-control/effective.json";
   historyRepoPath = "${zfsControlRoot}/config-history.git";
   planPath = "/run/nas-control/plan.json";
   reconcilePendingPath = "/run/nas-control/reconcile.pending";
@@ -12,7 +13,6 @@ let
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
   firewalldProjectionPath = "/run/nas-control/firewalld";
   firewalldManifestPath = "${firewalldProjectionPath}/manifest.json";
-  firewalldSystemConfig = "/var/lib/nas-firewall/firewalld";
   quadletRuntimePath = "/run/containers/systemd";
   v2Source = ../../../services;
   v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
@@ -20,6 +20,7 @@ let
     jsonschema
     ruamel-yaml
   ]);
+  networkingEnabled = cfg.networking.enable;
   firewalldEnabled = cfg.networking.enable && cfg.networking.firewall.enable;
   firewalldPackage = config.services.firewalld.package;
   historyArgs = [
@@ -31,14 +32,22 @@ let
     "--git-bin"
     "${pkgs.git}/bin/git"
   ];
+  nmstateArgs = [
+    "${v2Source}/nas_v2_nmstate.py"
+    "--effective"
+    effectivePath
+    "--nmstatectl"
+    "${pkgs.nmstate}/bin/nmstatectl"
+  ] ++ lib.optionals (cfg.networking.applicationVlanParent != null) [
+    "--vlan-parent"
+    cfg.networking.applicationVlanParent
+  ];
   statelessFirewalldArgs = [
     "${v2Source}/nas_v2_firewalld_reconcile.py"
     "--manifest"
     firewalldManifestPath
     "--projection-root"
     firewalldProjectionPath
-    "--system-config"
-    firewalldSystemConfig
     "--firewall-cmd"
     "${firewalldPackage}/bin/firewall-cmd"
   ];
@@ -87,19 +96,26 @@ let
     if ${v2Python}/bin/python "''${restore_args[@]}"; then
       # restore-applied refuses to overwrite a newer desired edit. In either
       # case, restart once: restored state needs reprojection, while a newer
-      # edit needs its own finite transaction.
+      # edit needs its own finite transaction. nmstate/firewalld/systemd are all
+      # regenerated from that restored/current authority on the next run.
       ${pkgs.systemd}/bin/systemctl restart nas-managed-services-reconcile.service
       exit 0
     fi
 
-    # First boot has no refs/nas/applied yet. The immutable Nix firewall
-    # baseline is the only safe runtime fallback. There is no older mutable
-    # desired state to restore in this case.
+    # First boot has no refs/nas/applied yet. There is no older mutable desired
+    # state to restore. Drop only the V2-owned native firewalld namespace and
+    # leave the immutable Nix management baseline intact.
     ${lib.optionalString firewalldEnabled ''
-    ${pkgs.findutils}/bin/find \
-      ${lib.escapeShellArg "${firewalldSystemConfig}/zones"} \
-      ${lib.escapeShellArg "${firewalldSystemConfig}/policies"} \
-      -maxdepth 1 -type f -name 'nv2*.xml' -delete
+    for policy in $(${firewalldPackage}/bin/firewall-cmd --permanent --get-policies); do
+      if [[ "$policy" =~ ^nv2[zhwlrima][0-9a-f]{12}$ ]]; then
+        ${firewalldPackage}/bin/firewall-cmd --permanent --delete-policy="$policy"
+      fi
+    done
+    for zone in $(${firewalldPackage}/bin/firewall-cmd --permanent --get-zones); do
+      if [[ "$zone" =~ ^nv2[zhwlrima][0-9a-f]{12}$ ]]; then
+        ${firewalldPackage}/bin/firewall-cmd --permanent --delete-zone="$zone"
+      fi
+    done
     ${firewalldPackage}/bin/firewall-cmd --check-config
     ${firewalldPackage}/bin/firewall-cmd --reload
     ''}
@@ -175,8 +191,9 @@ in
       };
     };
 
-    # Replace the old firewall-specific deadman/ack sequence with one generic
-    # apply guard around the complete compiler + core runtime transaction.
+    # Native subsystem projections participate in one guarded finite apply.
+    # nmstate owns host VLAN/VRF state, firewalld owns its permanent policy
+    # objects, and systemd/Quadlet own process/container activation.
     systemd.services.nas-managed-services-reconcile.postStart = lib.mkForce ''
       set -euo pipefail
 
@@ -184,6 +201,9 @@ in
       # might become after the compiler releases the authority lock.
       desired_head="$(${pkgs.jq}/bin/jq -er '.desiredRevision | select(type == "string" and length > 0)' ${lib.escapeShellArg planPath})"
 
+      ${lib.optionalString networkingEnabled ''
+      ${v2Python}/bin/python ${lib.escapeShellArgs nmstateArgs}
+      ''}
       ${lib.optionalString firewalldEnabled ''
       ${v2Python}/bin/python ${lib.escapeShellArgs statelessFirewalldArgs}
       ''}
@@ -206,8 +226,7 @@ in
     '';
 
     # The original per-firewall acknowledgement protocol is superseded by the
-    # generic transaction guard above. Keep the old definitions inert until the
-    # remaining dead code is deleted from managed-services.nix/nas_v2_network.py.
+    # generic transaction guard above.
     systemd.services.nas-v2-firewall-rollback.enable = lib.mkForce false;
     systemd.timers.nas-v2-firewall-rollback.enable = lib.mkForce false;
   };
