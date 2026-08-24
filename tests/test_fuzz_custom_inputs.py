@@ -45,6 +45,7 @@ else:
     import nas_syncthing_devices as syncthing
     import nas_v2_accelerator as accelerator
     import nas_v2_authentik as authentik
+    import nas_v2_authentik_blueprint as authentik_blueprint
     import nas_v2_caddy as caddy
     import nas_v2_compose as compose
     import nas_v2_network as network
@@ -75,6 +76,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_accelerator",
         "nas_v2_apply",
         "nas_v2_authentik",
+        "nas_v2_authentik_blueprint",
         "nas_v2_backup",
         "nas_v2_bootstrap",
         "nas_v2_caddy",
@@ -175,6 +177,7 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(quadlet._safe_path, value, field="fuzz field")
             expected_boundary_error(authentik._api_root, value)
             expected_boundary_error(authentik.desired_capabilities, {"services": {}})
+            expected_boundary_error(authentik_blueprint._q, value)
             expected_boundary_error(network.bridge_interface_name, value)
             expected_boundary_error(network.podman_network_name, value, {})
             expected_boundary_error(network.vlan_binding, {"vlanId": value, "vlanParent": value})
@@ -196,6 +199,7 @@ if HAS_HYPOTHESIS:
             v2_spec.CAPABILITY_ID_RE.fullmatch(value)
             v2_spec.SYSTEMD_UNIT_RE.fullmatch(value)
             authentik.CAPABILITY_RE.fullmatch(value)
+            authentik_blueprint.CAPABILITY_RE.fullmatch(value)
             accelerator.is_cdi_selector(value)
 
         @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
