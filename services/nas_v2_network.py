@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Combined V2 network policy: Podman networks, firewalld XML and reconciliation."""
+"""Compile Managed Services V2 network policy for native runtimes.
+
+Host VLAN/VRF topology is reconciled by nmstate, Podman bridge networks are
+owned by Quadlet, and firewalld activation is handled by
+``nas_v2_firewalld_reconcile``. This module contains only the shared network
+policy helpers and the validated firewalld projection compiler.
+"""
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import ipaddress
 import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
-import sys
 import tempfile
-import time
-import uuid
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
@@ -28,18 +29,7 @@ class FirewalldProjectionError(RuntimeError):
     pass
 
 
-class FirewalldReconcileError(RuntimeError):
-    """Raised when V2 firewalld state cannot be reconciled safely."""
-
-
-class FirewallDeadmanError(FirewalldReconcileError):
-    """Raised when firewall deadman acknowledgement or rollback fails."""
-
-
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
-_NM_RUNTIME_DIR = pathlib.PurePosixPath("/run/NetworkManager/system-connections")
-_UUID_NAMESPACE = uuid.UUID("c3c4a6a8-fad7-4e36-8d65-1dc57bcae2ab")
-_OWNED_FILE = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}\.xml$")
 
 
 def bridge_interface_name(service_id: str) -> str:
@@ -62,7 +52,13 @@ def network_policy(effective: dict[str, Any], service: dict[str, Any]) -> dict[s
     policy = service.get("network")
     if isinstance(policy, dict):
         return policy
-    return {"mode": "host", "outboundDefault": "allow", "lanAccess": False, "allowedHostPorts": [], "allowedEgress": []}
+    return {
+        "mode": "host",
+        "outboundDefault": "allow",
+        "lanAccess": False,
+        "allowedHostPorts": [],
+        "allowedEgress": [],
+    }
 
 
 def vlan_binding(policy: dict[str, Any]) -> dict[str, Any] | None:
@@ -91,13 +87,15 @@ def vlan_binding(policy: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _has_listeners(service: dict[str, Any]) -> bool:
-    ls = service.get("listeners", {})
-    return isinstance(ls, dict) and bool(ls)
+    listeners = service.get("listeners", {})
+    return isinstance(listeners, dict) and bool(listeners)
 
 
 def _listener_firewall_requested(service: dict[str, Any]) -> bool:
-    ls = service.get("listeners", {})
-    return isinstance(ls, dict) and any(isinstance(v, dict) and v.get("firewall", True) for v in ls.values())
+    listeners = service.get("listeners", {})
+    return isinstance(listeners, dict) and any(
+        isinstance(value, dict) and value.get("firewall", True) for value in listeners.values()
+    )
 
 
 def _external_egress(policy: dict[str, Any]) -> bool:
@@ -127,35 +125,41 @@ def requires_firewalld(effective: dict[str, Any]) -> bool:
     services = effective.get("services")
     if not isinstance(services, dict):
         raise PodmanNetworkProjectionError("compiled effective state is missing services")
-    for svc in services.values():
-        if not isinstance(svc, dict) or not svc.get("enabled", True):
+    for service in services.values():
+        if not isinstance(service, dict) or not service.get("enabled", True):
             continue
-        policy = network_policy(effective, svc)
+        policy = network_policy(effective, service)
         mode = policy.get("mode", "host")
-        if mode == "isolated" and svc.get("managed", True) and _needs_isolated_firewalld(svc, policy):
+        if mode == "isolated" and service.get("managed", True) and _needs_isolated_firewalld(service, policy):
             return True
-        if mode == "host" and _listener_firewall_requested(svc):
+        if mode == "host" and _listener_firewall_requested(service):
             return True
     return False
 
 
 def _isolated_supported(
-    service_id: str, service: dict[str, Any], policy: dict[str, Any], *, firewalld_enabled: bool
+    service_id: str,
+    service: dict[str, Any],
+    policy: dict[str, Any],
+    *,
+    firewalld_enabled: bool,
 ) -> None:
     runtime = service.get("runtime")
-    rtype = runtime.get("type") if isinstance(runtime, dict) else None
+    runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
     vlan_binding(policy)
-    if rtype not in {"oci", "quadlet", "compose"}:
+    if runtime_type not in {"oci", "quadlet", "compose"}:
         raise PodmanNetworkProjectionError(
-            f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; runtime {rtype!r} is not implemented yet"
+            f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; "
+            f"runtime {runtime_type!r} is not implemented yet"
         )
-    if service.get("workload", {}).get("kind") == "session" and rtype != "oci":
+    if service.get("workload", {}).get("kind") == "session" and runtime_type != "oci":
         raise PodmanNetworkProjectionError(
             f"session service {service_id!r} currently requires direct OCI runtime for per-instance execution"
         )
     if service.get("workload", {}).get("kind") == "session" and (service.get("routes") or service.get("listeners")):
         raise PodmanNetworkProjectionError(
-            f"session service {service_id!r} cannot expose fixed routes/listeners because concurrent instances require per-instance endpoints"
+            f"session service {service_id!r} cannot expose fixed routes/listeners because concurrent instances "
+            "require per-instance endpoints"
         )
     if _needs_isolated_firewalld(service, policy) and not firewalld_enabled:
         raise PodmanNetworkProjectionError(
@@ -164,7 +168,11 @@ def _isolated_supported(
 
 
 def quadlet_network_reference(
-    effective: dict[str, Any], service_id: str, service: dict[str, Any], *, firewalld_enabled: bool = True
+    effective: dict[str, Any],
+    service_id: str,
+    service: dict[str, Any],
+    *,
+    firewalld_enabled: bool = True,
 ) -> str:
     policy = network_policy(effective, service)
     mode = policy.get("mode", "host")
@@ -194,276 +202,9 @@ def quadlet_network_reference(
     return f"{prefix}-{service_id}.network"
 
 
-def _network_source(service_id: str, owner_unit: str, policy: dict[str, Any], *, network_name: str) -> bytes:
-    vlan = vlan_binding(policy)
-    lines = [
-        "[Unit]",
-        f"Description=Managed Services V2 isolated network for {service_id}",
-        f"PartOf={owner_unit}",
-    ]
-    if vlan is not None:
-        lines.extend([f"Requires={vlan['unit']}", f"After={vlan['unit']}"])
-    lines.extend(
-        [
-            "",
-            "[Network]",
-            f"NetworkName={network_name}",
-            f"InterfaceName={bridge_interface_name(service_id)}",
-            "Driver=bridge",
-            f"Internal={'false' if _external_egress(policy) else 'true'}",
-            "Options=isolate=strict",
-        ]
-    )
-    if vlan is not None:
-        lines.append(f"Options=vrf={vlan['vrfInterface']}")
-    lines.extend(["NetworkDeleteOnStop=true", ""])
-    return "\n".join(lines).encode()
-
-
-def _nmcli_offline_profile(nmcli_bin: str, arguments: list[str], *, label: str) -> bytes:
-    try:
-        result = subprocess.run(
-            [nmcli_bin, "--offline", "connection", "add", *arguments],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise PodmanNetworkProjectionError(f"unable to generate {label} NetworkManager profile: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()[:4000]
-        raise PodmanNetworkProjectionError(f"NetworkManager rejected {label} profile: {detail}")
-    if not result.stdout:
-        raise PodmanNetworkProjectionError(f"NetworkManager generated an empty {label} profile")
-    return result.stdout
-
-
-def _vlan_profile_sources(vlan: dict[str, Any], *, nmcli_bin: str) -> tuple[bytes, bytes]:
-    vrf_uuid = str(uuid.uuid5(_UUID_NAMESPACE, f"vrf:{vlan['key']}"))
-    vlan_uuid = str(uuid.uuid5(_UUID_NAMESPACE, f"vlan:{vlan['key']}"))
-    vrf = _nmcli_offline_profile(
-        nmcli_bin,
-        [
-            "connection.type",
-            "vrf",
-            "connection.id",
-            vlan["vrfProfile"],
-            "connection.uuid",
-            vrf_uuid,
-            "connection.interface-name",
-            vlan["vrfInterface"],
-            "connection.autoconnect",
-            "yes",
-            "vrf.table",
-            str(vlan["table"]),
-            "ipv4.method",
-            "disabled",
-            "ipv6.method",
-            "disabled",
-        ],
-        label=f"VLAN {vlan['id']} VRF",
-    )
-    tagged = _nmcli_offline_profile(
-        nmcli_bin,
-        [
-            "connection.type",
-            "vlan",
-            "connection.id",
-            vlan["vlanProfile"],
-            "connection.uuid",
-            vlan_uuid,
-            "connection.interface-name",
-            vlan["vlanInterface"],
-            "connection.controller",
-            vlan["vrfInterface"],
-            "connection.port-type",
-            "vrf",
-            "connection.autoconnect",
-            "yes",
-            "vlan.parent",
-            vlan["parent"],
-            "vlan.id",
-            str(vlan["id"]),
-            "ipv4.method",
-            "auto",
-            "ipv4.route-table",
-            str(vlan["table"]),
-            "ipv4.ignore-auto-dns",
-            "yes",
-            "ipv6.method",
-            "auto",
-            "ipv6.route-table",
-            str(vlan["table"]),
-            "ipv6.ignore-auto-dns",
-            "yes",
-        ],
-        label=f"VLAN {vlan['id']} uplink",
-    )
-    return vrf, tagged
-
-
-def _vlan_service_source(
-    vlan: dict[str, Any],
-    *,
-    vrf_source: pathlib.Path,
-    vlan_source: pathlib.Path,
-    nmcli_bin: str,
-    install_bin: str,
-    rm_bin: str,
-) -> bytes:
-    vrf_target = _NM_RUNTIME_DIR / f"{vlan['vrfProfile']}.nmconnection"
-    vlan_target = _NM_RUNTIME_DIR / f"{vlan['vlanProfile']}.nmconnection"
-    return "\n".join(
-        [
-            "[Unit]",
-            f"Description=Managed Services V2 VLAN {vlan['id']} uplink on {vlan['parent']}",
-            "Requires=NetworkManager.service",
-            "After=NetworkManager.service network-pre.target",
-            "StopWhenUnneeded=yes",
-            "",
-            "[Service]",
-            "Type=oneshot",
-            "RemainAfterExit=yes",
-            f"ExecStartPre={install_bin} -D -m 0600 {vrf_source} {vrf_target}",
-            f"ExecStartPre={install_bin} -D -m 0600 {vlan_source} {vlan_target}",
-            f"ExecStart={nmcli_bin} connection load {vrf_target} {vlan_target}",
-            f"ExecStart={nmcli_bin} --wait 30 connection up id {vlan['vrfProfile']}",
-            f"ExecStart={nmcli_bin} --wait 30 connection up id {vlan['vlanProfile']}",
-            f"ExecStop=-{nmcli_bin} --wait 10 connection down id {vlan['vlanProfile']}",
-            f"ExecStop=-{nmcli_bin} --wait 10 connection down id {vlan['vrfProfile']}",
-            f"ExecStop=-{nmcli_bin} connection delete id {vlan['vlanProfile']}",
-            f"ExecStop=-{nmcli_bin} connection delete id {vlan['vrfProfile']}",
-            f"ExecStopPost=-{rm_bin} -f {vlan_target} {vrf_target}",
-            "",
-        ]
-    ).encode()
-
-
-def _attach_compose_dependency(
-    *, service_id: str, owner: str, reference: str, files: dict[pathlib.Path, bytes], manifest: dict[str, Any]
-) -> None:
-    links = manifest.get("links")
-    if not isinstance(links, list):
-        raise PodmanNetworkProjectionError("systemd projection manifest is missing links")
-    src = next(
-        (
-            pathlib.Path(i["source"])
-            for i in links
-            if isinstance(i, dict) and i.get("target") == owner and isinstance(i.get("source"), str)
-        ),
-        None,
-    )
-    if src is None or src not in files:
-        raise PodmanNetworkProjectionError(
-            f"isolated Compose service {service_id!r} is missing its generated systemd owner source"
-        )
-    svc = reference.removesuffix(".network") + "-network.service"
-    files[src] += f"\n[Unit]\nRequires={svc}\nAfter={svc}\n".encode()
-
-
-def _ensure_vlan_resource(
-    vlan: dict[str, Any],
-    *,
-    output_dir: pathlib.Path,
-    files: dict[pathlib.Path, bytes],
-    manifest: dict[str, Any],
-    nmcli_bin: str | None,
-    install_bin: str | None,
-    rm_bin: str | None,
-) -> None:
-    links = manifest.get("links")
-    owned = manifest.get("ownedUnits")
-    if not isinstance(links, list) or not isinstance(owned, list):
-        raise PodmanNetworkProjectionError("systemd projection manifest is missing V2 ownership metadata")
-    if any(isinstance(i, dict) and i.get("target") == vlan["unit"] for i in links):
-        return
-    if not nmcli_bin or not install_bin or not rm_bin:
-        raise PodmanNetworkProjectionError(
-            "VLAN-backed application networking requires nmcli, install, and rm projection binaries"
-        )
-    vrf_src = output_dir / "networkmanager" / f"{vlan['vrfProfile']}.nmconnection"
-    vlan_src = output_dir / "networkmanager" / f"{vlan['vlanProfile']}.nmconnection"
-    vrf_prof, vlan_prof = _vlan_profile_sources(vlan, nmcli_bin=nmcli_bin)
-    files[vrf_src] = vrf_prof
-    files[vlan_src] = vlan_prof
-    unit_src = output_dir / "units" / vlan["unit"]
-    files[unit_src] = _vlan_service_source(
-        vlan, vrf_source=vrf_src, vlan_source=vlan_src, nmcli_bin=nmcli_bin, install_bin=install_bin, rm_bin=rm_bin
-    )
-    links.append({"target": vlan["unit"], "source": str(unit_src)})
-    if vlan["unit"] not in owned:
-        owned.append(vlan["unit"])
-
-
-def augment_projection(
-    effective: dict[str, Any],
-    *,
-    output_dir: pathlib.Path,
-    files: dict[pathlib.Path, bytes],
-    manifest: dict[str, Any],
-    firewalld_enabled: bool = True,
-    nmcli_bin: str | None = None,
-    install_bin: str | None = None,
-    rm_bin: str | None = None,
-) -> None:
-    qlinks = manifest.get("quadletLinks")
-    if not isinstance(qlinks, list):
-        raise PodmanNetworkProjectionError("systemd projection manifest is missing quadletLinks")
-    known = {i.get("target") for i in qlinks if isinstance(i, dict)}
-    services = effective.get("services")
-    if not isinstance(services, dict):
-        raise PodmanNetworkProjectionError("compiled effective state is missing services")
-    for sid in sorted(services):
-        svc = services[sid]
-        if not isinstance(svc, dict):
-            raise PodmanNetworkProjectionError(f"compiled service {sid!r} is invalid")
-        rtype = svc.get("runtime", {}).get("type") if isinstance(svc.get("runtime"), dict) else None
-        if not svc.get("managed", True) or not svc.get("enabled", True) or rtype not in {"oci", "quadlet", "compose"}:
-            continue
-        ref = quadlet_network_reference(effective, sid, svc, firewalld_enabled=firewalld_enabled)
-        if not ref.endswith(".network"):
-            continue
-        if ref in known:
-            raise PodmanNetworkProjectionError(f"duplicate Quadlet network target {ref!r}")
-        if svc.get("workload", {}).get("kind") == "session":
-            owner = f"nas-v2-session-{sid}.target"
-        else:
-            rt = effective.get("derived", {}).get("runtime", {})
-            entry = rt.get(sid) if isinstance(rt, dict) else None
-            owner = entry.get("ownerUnit") if isinstance(entry, dict) else None
-        if not isinstance(owner, str) or not owner.endswith((".service", ".target")):
-            raise PodmanNetworkProjectionError(f"isolated container service {sid!r} has an invalid owner unit")
-        policy = network_policy(effective, svc)
-        vlan = vlan_binding(policy)
-        if vlan is not None:
-            _ensure_vlan_resource(
-                vlan,
-                output_dir=output_dir,
-                files=files,
-                manifest=manifest,
-                nmcli_bin=nmcli_bin,
-                install_bin=install_bin,
-                rm_bin=rm_bin,
-            )
-        src = output_dir / "quadlet" / ref
-        files[src] = _network_source(sid, owner, policy, network_name=podman_network_name(sid, svc))
-        qlinks.append({"target": ref, "source": str(src)})
-        known.add(ref)
-        if rtype == "compose":
-            _attach_compose_dependency(service_id=sid, owner=owner, reference=ref, files=files, manifest=manifest)
-    qlinks.sort(key=lambda i: i["target"])
-    links = manifest.get("links")
-    owned = manifest.get("ownedUnits")
-    if isinstance(links, list):
-        links.sort(key=lambda i: i["target"])
-    if isinstance(owned, list):
-        owned.sort()
-
-
-# ---------------------------------------------------------------------------
-# firewalld XML projection
-# ---------------------------------------------------------------------------
+def _write_line(lines: list[str], key: str, value: Any) -> None:
+    if value is not None and value != "":
+        lines.append(f"{key}={value}")
 
 
 def _digest(service_id: str) -> str:
@@ -515,25 +256,18 @@ def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 int
 
 _REMOTE_ADMIN_PORTS: list[tuple[str, str]] = _remote_admin_ports()
 
-# Deadman contract: default 60s acknowledgement window, native systemd timer.
-_DEFAULT_DEADMAN_WINDOW = 60
-_DEADMAN_PENDING = "pending.json"
-_DEADMAN_ACK = "ack.json"
-_DEADMAN_ROLLBACK_DIR = "previous"
-_DEADMAN_TIMER_UNIT = "nas-v2-firewall-rollback.timer"
-
 
 def _xml_document(lines: list[str]) -> bytes:
     return ('<?xml version="1.0" encoding="utf-8"?>\n' + "\n".join(lines) + "\n").encode()
 
 
 def _zone_xml(service_id: str) -> bytes:
-    n = escape(service_id)
+    name = escape(service_id)
     return _xml_document(
         [
             "<zone>",
-            f"  <short>V2 {n}</short>",
-            f"  <description>Managed Services V2 isolated network for {n}</description>",
+            f"  <short>V2 {name}</short>",
+            f"  <description>Managed Services V2 isolated network for {name}</description>",
             f"  <interface name={quoteattr(bridge_interface_name(service_id))}/>",
             "</zone>",
         ]
@@ -558,16 +292,22 @@ def _policy_xml(
     ]
     if extra:
         lines.extend(extra)
-    for port, proto in ports or []:
-        lines.append(f"  <port port={quoteattr(port)} protocol={quoteattr(proto)}/>")
-    for port, proto, tport in forward_ports or []:
-        lines.append(f"  <forward-port port={quoteattr(port)} protocol={quoteattr(proto)} to-port={quoteattr(tport)}/>")
+    for port, protocol in ports or []:
+        lines.append(f"  <port port={quoteattr(port)} protocol={quoteattr(protocol)}/>")
+    for port, protocol, target_port in forward_ports or []:
+        lines.append(
+            f"  <forward-port port={quoteattr(port)} protocol={quoteattr(protocol)} to-port={quoteattr(target_port)}/>"
+        )
     lines.append("</policy>")
     return _xml_document(lines)
 
 
 def _host_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
-    ports = [(str(p), proto) for p in sorted(set(policy.get("allowedHostPorts", []))) for proto in ("tcp", "udp")]
+    ports = [
+        (str(port), protocol)
+        for port in sorted(set(policy.get("allowedHostPorts", [])))
+        for protocol in ("tcp", "udp")
+    ]
     return _policy_xml("DROP", "-50", zone_name(service_id), "HOST", f"V2 host {escape(service_id)}", ports=ports)
 
 
@@ -585,25 +325,25 @@ def _egress_rule_xml(rule: dict[str, Any]) -> list[str]:
     except ValueError as exc:
         raise FirewalldProjectionError(f"invalid allowedEgress CIDR {raw!r}: {exc}") from exc
     cidr = str(network)
-    fam = "ipv4" if network.version == 4 else "ipv6"
+    family = "ipv4" if network.version == 4 else "ipv6"
     ports = rule.get("ports", [])
-    if not isinstance(ports, list) or any(not isinstance(p, int) or isinstance(p, bool) for p in ports):
+    if not isinstance(ports, list) or any(not isinstance(port, int) or isinstance(port, bool) for port in ports):
         raise FirewalldProjectionError(f"allowedEgress ports for {raw!r} are invalid")
     if not ports:
         return [
-            f'  <rule family={quoteattr(fam)} priority="-10">',
+            f'  <rule family={quoteattr(family)} priority="-10">',
             f"    <destination address={quoteattr(cidr)}/>",
             "    <accept/>",
             "  </rule>",
         ]
     out: list[str] = []
-    for p in sorted(set(ports)):
-        for proto in ("tcp", "udp"):
+    for port in sorted(set(ports)):
+        for protocol in ("tcp", "udp"):
             out.extend(
                 [
-                    f'  <rule family={quoteattr(fam)} priority="-10">',
+                    f'  <rule family={quoteattr(family)} priority="-10">',
                     f"    <destination address={quoteattr(cidr)}/>",
-                    f"    <port port={quoteattr(str(p))} protocol={quoteattr(proto)}/>",
+                    f"    <port port={quoteattr(str(port))} protocol={quoteattr(protocol)}/>",
                     "    <accept/>",
                     "  </rule>",
                 ]
@@ -618,7 +358,14 @@ def _world_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
         if not isinstance(rule, dict):
             raise FirewalldProjectionError("allowedEgress entries must be objects")
         extra.extend(_egress_rule_xml(rule))
-    return _policy_xml(target, "0", zone_name(service_id), "ANY", f"V2 egress {escape(service_id)}", extra=extra)
+    return _policy_xml(
+        target,
+        "0",
+        zone_name(service_id),
+        "ANY",
+        f"V2 egress {escape(service_id)}",
+        extra=extra,
+    )
 
 
 def _exposure_port(exposure: dict[str, Any]) -> str:
@@ -629,48 +376,48 @@ def _exposure_port(exposure: dict[str, Any]) -> str:
     raise FirewalldProjectionError("compiled listener exposure is invalid")
 
 
-def _iter_listeners(service: dict[str, Any]):
+def _iter_listeners(service: dict[str, Any]) -> list[dict[str, Any]]:
     listeners = service.get("listeners", {})
     if not isinstance(listeners, dict):
         return []
-    out = []
-    for lst in listeners.values():
-        if not isinstance(lst, dict) or lst.get("firewall", True) is not True:
+    out: list[dict[str, Any]] = []
+    for listener in listeners.values():
+        if not isinstance(listener, dict) or listener.get("firewall", True) is not True:
             continue
-        proto = lst.get("protocol")
-        exp = lst.get("exposure")
-        if proto not in {"tcp", "udp"} or not isinstance(exp, dict):
+        protocol = listener.get("protocol")
+        exposure = listener.get("exposure")
+        if protocol not in {"tcp", "udp"} or not isinstance(exposure, dict):
             raise FirewalldProjectionError("compiled listener is invalid")
-        out.append(lst)
+        out.append(listener)
     return out
 
 
 def _listener_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
     entries: set[tuple[str, str]] = set()
-    for lst in _iter_listeners(service):
-        if "targetPort" in lst:
+    for listener in _iter_listeners(service):
+        if "targetPort" in listener:
             raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
-        entries.add((_exposure_port(lst["exposure"]), lst["protocol"]))
+        entries.add((_exposure_port(listener["exposure"]), listener["protocol"]))
     return sorted(entries)
 
 
 def _host_listener_rules(service: dict[str, Any]) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
     ports: set[tuple[str, str]] = set()
     forwards: set[tuple[str, str, str]] = set()
-    for lst in _iter_listeners(service):
-        proto = lst["protocol"]
-        exp = lst["exposure"]
-        tport = lst.get("targetPort")
-        if tport is not None:
-            eport = exp.get("port")
-            if not isinstance(eport, int):
+    for listener in _iter_listeners(service):
+        protocol = listener["protocol"]
+        exposure = listener["exposure"]
+        target_port = listener.get("targetPort")
+        if target_port is not None:
+            exposed_port = exposure.get("port")
+            if not isinstance(exposed_port, int):
                 raise FirewalldProjectionError("listener targetPort is valid only with a single exposed port")
-            if not isinstance(tport, int) or isinstance(tport, bool) or not 1 <= tport <= 65535:
+            if not isinstance(target_port, int) or isinstance(target_port, bool) or not 1 <= target_port <= 65535:
                 raise FirewalldProjectionError("listener targetPort is invalid")
-            if tport != eport:
-                forwards.add((str(eport), proto, str(tport)))
+            if target_port != exposed_port:
+                forwards.add((str(exposed_port), protocol, str(target_port)))
                 continue
-        ports.add((_exposure_port(exp), proto))
+        ports.add((_exposure_port(exposure), protocol))
     return sorted(ports), sorted(forwards)
 
 
@@ -679,15 +426,15 @@ def _route_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
     if not isinstance(routes, dict):
         return []
     ports: set[tuple[str, str]] = set()
-    for rid, route in routes.items():
-        tgt = route.get("target") if isinstance(route, dict) else None
-        if not isinstance(tgt, dict):
-            raise FirewalldProjectionError(f"compiled route {rid!r} is invalid")
-        if tgt.get("type") == "unix-http":
-            raise FirewalldProjectionError(f"isolated container route {rid!r} cannot use a host Unix-socket target")
-        port = tgt.get("port")
+    for route_id, route in routes.items():
+        target = route.get("target") if isinstance(route, dict) else None
+        if not isinstance(target, dict):
+            raise FirewalldProjectionError(f"compiled route {route_id!r} is invalid")
+        if target.get("type") == "unix-http":
+            raise FirewalldProjectionError(f"isolated container route {route_id!r} cannot use a host Unix-socket target")
+        port = target.get("port")
         if not isinstance(port, int):
-            raise FirewalldProjectionError(f"compiled route {rid!r} is missing a TCP port")
+            raise FirewalldProjectionError(f"compiled route {route_id!r} is missing a TCP port")
         ports.add((str(port), "tcp"))
     return sorted(ports)
 
@@ -724,7 +471,7 @@ def _remote_admin_policy_xml(lan_zone: str) -> bytes:
 
 
 def _validate_lan_zone(lan_zone: str) -> None:
-    if not lan_zone or len(lan_zone) > 17 or not all(c.isalnum() or c in "_-" for c in lan_zone):
+    if not lan_zone or len(lan_zone) > 17 or not all(character.isalnum() or character in "_-" for character in lan_zone):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
 
 
@@ -751,62 +498,80 @@ def compile_application_projection(
     services = effective.get("services")
     if not isinstance(services, dict):
         raise FirewalldProjectionError("compiled effective state is missing services")
-    for sid in sorted(services):
-        svc = services[sid]
-        if not isinstance(svc, dict) or not svc.get("enabled", True):
+    for service_id in sorted(services):
+        service = services[service_id]
+        if not isinstance(service, dict) or not service.get("enabled", True):
             continue
-        policy = network_policy(effective, svc)
+        policy = network_policy(effective, service)
         mode = policy.get("mode", "host")
-        rtype = svc.get("runtime", {}).get("type") if isinstance(svc.get("runtime"), dict) else None
-        gen: dict[str, bytes] = {}
+        runtime_type = (
+            service.get("runtime", {}).get("type") if isinstance(service.get("runtime"), dict) else None
+        )
+        generated: dict[str, bytes] = {}
         if mode == "isolated":
-            listeners = _listener_ports(svc)
-            if not svc.get("managed", True):
+            listeners = _listener_ports(service)
+            if not service.get("managed", True):
                 raise FirewalldProjectionError(
-                    f"unmanaged isolated service {sid!r} has no V2-owned bridge to receive firewalld policy"
+                    f"unmanaged isolated service {service_id!r} has no V2-owned bridge to receive firewalld policy"
                 )
-            if rtype not in {"oci", "quadlet", "compose"}:
+            if runtime_type not in {"oci", "quadlet", "compose"}:
                 raise FirewalldProjectionError(
-                    f"isolated service {sid!r} requires a runtime with a stable V2 bridge; runtime {rtype!r} is not implemented yet"
+                    f"isolated service {service_id!r} requires a runtime with a stable V2 bridge; "
+                    f"runtime {runtime_type!r} is not implemented yet"
                 )
-            z = zone_name(sid)
-            gen.update(
+            zone = zone_name(service_id)
+            generated.update(
                 {
-                    f"zones/{z}.xml": _zone_xml(sid),
-                    f"policies/{host_policy_name(sid)}.xml": _host_policy_xml(sid, policy),
-                    f"policies/{lan_policy_name(sid)}.xml": _lan_policy_xml(sid, policy, lan_zone=lan_zone),
-                    f"policies/{world_policy_name(sid)}.xml": _world_policy_xml(sid, policy),
+                    f"zones/{zone}.xml": _zone_xml(service_id),
+                    f"policies/{host_policy_name(service_id)}.xml": _host_policy_xml(service_id, policy),
+                    f"policies/{lan_policy_name(service_id)}.xml": _lan_policy_xml(
+                        service_id, policy, lan_zone=lan_zone
+                    ),
+                    f"policies/{world_policy_name(service_id)}.xml": _world_policy_xml(service_id, policy),
                 }
             )
-            routes = _route_ports(svc)
+            routes = _route_ports(service)
             if routes:
-                gen[f"policies/{route_policy_name(sid)}.xml"] = _allow_policy_xml(
-                    sid, ingress_zone="HOST", egress_zone=z, ports=routes, label="route"
+                generated[f"policies/{route_policy_name(service_id)}.xml"] = _allow_policy_xml(
+                    service_id,
+                    ingress_zone="HOST",
+                    egress_zone=zone,
+                    ports=routes,
+                    label="route",
                 )
             if listeners:
-                gen[f"policies/{listener_policy_name(sid)}.xml"] = _allow_policy_xml(
-                    sid, ingress_zone=lan_zone, egress_zone=z, ports=listeners, label="listener"
+                generated[f"policies/{listener_policy_name(service_id)}.xml"] = _allow_policy_xml(
+                    service_id,
+                    ingress_zone=lan_zone,
+                    egress_zone=zone,
+                    ports=listeners,
+                    label="listener",
                 )
         elif mode == "host":
-            hports, fports = _host_listener_rules(svc)
-            if hports or fports:
-                gen[f"policies/{listener_policy_name(sid)}.xml"] = _allow_policy_xml(
-                    sid, ingress_zone=lan_zone, egress_zone="HOST", ports=hports, forward_ports=fports, label="listener"
+            host_ports, forward_ports = _host_listener_rules(service)
+            if host_ports or forward_ports:
+                generated[f"policies/{listener_policy_name(service_id)}.xml"] = _allow_policy_xml(
+                    service_id,
+                    ingress_zone=lan_zone,
+                    egress_zone="HOST",
+                    ports=host_ports,
+                    forward_ports=forward_ports,
+                    label="listener",
                 )
         elif mode == "none":
-            if _listener_ports(svc):
-                raise FirewalldProjectionError(f"network=none service {sid!r} cannot expose listeners")
+            if _listener_ports(service):
+                raise FirewalldProjectionError(f"network=none service {service_id!r} cannot expose listeners")
         else:
             raise FirewalldProjectionError(f"unsupported network mode {mode!r}")
-        for tgt, content in gen.items():
-            if tgt in files:
-                raise FirewalldProjectionError(f"duplicate generated firewalld target {tgt!r}")
-            files[tgt] = content
-            owners.append({"service": sid, "target": tgt})
+        for target, content in generated.items():
+            if target in files:
+                raise FirewalldProjectionError(f"duplicate generated firewalld target {target!r}")
+            files[target] = content
+            owners.append({"service": service_id, "target": target})
     manifest: dict[str, Any] = {
         "schemaVersion": 1,
-        "files": [{"target": t, "sha256": hashlib.sha256(files[t]).hexdigest()} for t in sorted(files)],
-        "owners": sorted(owners, key=lambda i: (i["service"], i["target"])),
+        "files": [{"target": target, "sha256": hashlib.sha256(files[target]).hexdigest()} for target in sorted(files)],
+        "owners": sorted(owners, key=lambda item: (item["service"], item["target"])),
     }
     return files, manifest
 
@@ -814,24 +579,16 @@ def compile_application_projection(
 def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dict[str, bytes], dict[str, Any]]:
     _validate_lan_zone(lan_zone)
     remote_files, remote_manifest = compile_remote_admin_projection(lan_zone=lan_zone)
-    try:
-        app_files, app_manifest = compile_application_projection(effective, lan_zone=lan_zone)
-    except FirewalldProjectionError:
-        # Remote-admin baseline is valid even when one application policy is malformed.
-        # Callers that need isolation should use compile_remote_admin_projection
-        # and compile_application_projection separately.
-        raise
+    app_files, app_manifest = compile_application_projection(effective, lan_zone=lan_zone)
     files = {**remote_files, **app_files}
-    # Merge manifests — remote admin first, then sorted app owners/files.
     combined_files = remote_manifest["files"] + app_manifest["files"]
     combined_owners = remote_manifest["owners"] + app_manifest["owners"]
     manifest: dict[str, Any] = {
         "schemaVersion": 1,
-        "files": sorted(combined_files, key=lambda e: e["target"]),
-        "owners": sorted(combined_owners, key=lambda i: (i["service"], i["target"])),
+        "files": sorted(combined_files, key=lambda entry: entry["target"]),
+        "owners": sorted(combined_owners, key=lambda item: (item["service"], item["target"])),
     }
-    # Validate no duplicate targets (remote vs app should never collide by construction).
-    if len({e["target"] for e in combined_files}) != len(combined_files):
+    if len({entry["target"] for entry in combined_files}) != len(combined_files):
         raise FirewalldProjectionError(
             "duplicate generated firewalld target across remote-admin and application policies"
         )
@@ -843,36 +600,34 @@ def validate_projection(files: dict[str, bytes], *, firewall_offline_cmd: str) -
         return
     with tempfile.TemporaryDirectory(prefix="nas-v2-firewalld-") as raw:
         root = pathlib.Path(raw)
-        for rel, content in files.items():
-            dst = root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(content)
-        # firewall-offline-cmd expects a full firewalld config; provide minimal
-        # firewalld.conf and ensure referenced zones exist for offline validation.
+        for relative, content in files.items():
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
         firewalld_conf = root / "firewalld.conf"
         if not firewalld_conf.exists():
             try:
-                src = pathlib.Path("/etc/firewalld/firewalld.conf")
-                if src.is_file():
-                    firewalld_conf.write_bytes(src.read_bytes())
+                source = pathlib.Path("/etc/firewalld/firewalld.conf")
+                if source.is_file():
+                    firewalld_conf.write_bytes(source.read_bytes())
                 else:
                     firewalld_conf.write_text("[firewalld]\nDefaultZone=public\n", encoding="utf-8")
             except OSError:
                 firewalld_conf.write_text("[firewalld]\nDefaultZone=public\n", encoding="utf-8")
         zones_dir = root / "zones"
         zones_dir.mkdir(parents=True, exist_ok=True)
-        for zone_name in ("trusted", "public", "drop"):
-            src = pathlib.Path(f"/etc/firewalld/zones/{zone_name}.xml")
-            dst = zones_dir / f"{zone_name}.xml"
-            if not dst.exists() and src.is_file():
+        for native_zone in ("trusted", "public", "drop"):
+            source = pathlib.Path(f"/etc/firewalld/zones/{native_zone}.xml")
+            destination = zones_dir / f"{native_zone}.xml"
+            if not destination.exists() and source.is_file():
                 try:
-                    dst.write_bytes(src.read_bytes())
+                    destination.write_bytes(source.read_bytes())
                 except OSError:
                     pass
-        nas_lan_dst = zones_dir / "nas-lan.xml"
-        if not nas_lan_dst.exists():
+        nas_lan = zones_dir / "nas-lan.xml"
+        if not nas_lan.exists():
             try:
-                nas_lan_dst.write_text(
+                nas_lan.write_text(
                     '<?xml version="1.0" encoding="utf-8"?><zone><short>nas-lan</short><description>NAS LAN</description></zone>',
                     encoding="utf-8",
                 )
@@ -895,700 +650,46 @@ def validate_projection(files: dict[str, bytes], *, firewall_offline_cmd: str) -
 
 
 def materialize_projection(
-    effective: dict[str, Any], *, output_dir: pathlib.Path, lan_zone: str, firewall_offline_cmd: str
+    effective: dict[str, Any],
+    *,
+    output_dir: pathlib.Path,
+    lan_zone: str,
+    firewall_offline_cmd: str,
 ) -> list[tuple[pathlib.Path, bytes, int]]:
     files, manifest = compile_projection(effective, lan_zone=lan_zone)
     validate_projection(files, firewall_offline_cmd=firewall_offline_cmd)
-    out: list[tuple[pathlib.Path, bytes, int]] = [(output_dir / rel, c, 0o640) for rel, c in sorted(files.items())]
-    out.append((output_dir / "manifest.json", (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(), 0o640))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# firewalld reconciliation
-# ---------------------------------------------------------------------------
-
-
-def _read_manifest(path: pathlib.Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise FirewalldReconcileError(f"unable to read firewalld manifest {path}: {exc}") from exc
-    if not isinstance(value, dict) or value.get("schemaVersion") != 1 or not isinstance(value.get("files"), list):
-        raise FirewalldReconcileError("firewalld projection manifest is invalid")
-    return value
-
-
-def _safe_target(relative: str) -> pathlib.PurePosixPath:
-    target = pathlib.PurePosixPath(relative)
-    if len(target.parts) != 2 or target.parts[0] not in {"zones", "policies"}:
-        raise FirewalldReconcileError(f"unsafe firewalld target {relative!r}")
-    if not _OWNED_FILE.fullmatch(target.name):
-        raise FirewalldReconcileError(f"firewalld target {relative!r} is outside the V2 ownership namespace")
-    return target
-
-
-def _sha256(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _reconcile_run(command: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+    output: list[tuple[pathlib.Path, bytes, int]] = [
+        (output_dir / relative, content, 0o640) for relative, content in sorted(files.items())
+    ]
+    output.append(
+        (
+            output_dir / "manifest.json",
+            (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+            0o640,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise FirewalldReconcileError(f"unable to execute {command[0]}: {exc}") from exc
-
-
-def _atomic_copy(source: pathlib.Path, destination: pathlib.Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, raw_temp = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
-    temp = pathlib.Path(raw_temp)
-    replaced = False
-    try:
-        with source.open("rb") as reader, os.fdopen(fd, "wb") as writer:
-            shutil.copyfileobj(reader, writer)
-            writer.flush()
-            os.fsync(writer.fileno())
-        os.chmod(temp, 0o600)
-        os.replace(temp, destination)
-        replaced = True
-    finally:
-        if not replaced:
-            temp.unlink(missing_ok=True)
-
-
-def _fsync(directory: pathlib.Path) -> None:
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-# ---------------------------------------------------------------------------
-# firewall deadman helpers (PR35)
-# ---------------------------------------------------------------------------
-
-
-def _deadman_pending_path(state_dir: pathlib.Path) -> pathlib.Path:
-    return state_dir / _DEADMAN_PENDING
-
-
-def _deadman_ack_path(state_dir: pathlib.Path) -> pathlib.Path:
-    return state_dir / _DEADMAN_ACK
-
-
-def _deadman_rollback_root(state_dir: pathlib.Path) -> pathlib.Path:
-    return state_dir / _DEADMAN_ROLLBACK_DIR
-
-
-def _deadman_token_for_manifest(manifest: dict[str, Any]) -> str:
-    raw = json.dumps(manifest, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:16]
-
-
-def _deadman_validate_token(token: str) -> None:
-    if not isinstance(token, str) or not token or len(token) > 128 or "/" in token or "\x00" in token:
-        raise FirewallDeadmanError(f"malformed acknowledgement token {token!r}")
-    if token.strip() != token:
-        raise FirewallDeadmanError(f"malformed acknowledgement token {token!r}")
-    # Allow hex or uuid-ish tokens; reject obvious path traversal
-    if ".." in token or token.startswith("."):
-        raise FirewallDeadmanError(f"malformed acknowledgement token {token!r}")
-
-
-def _deadman_systemd_run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            command,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise FirewallDeadmanError(f"unable to execute {command[0]}: {exc}") from exc
-
-
-def _deadman_save_previous(state_dir: pathlib.Path, backups: dict[pathlib.PurePosixPath, bytes | None]) -> None:
-    rollback_root = _deadman_rollback_root(state_dir)
-    # Clean previous rollback state atomically
-    if rollback_root.exists():
-        shutil.rmtree(rollback_root)
-    rollback_root.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(rollback_root, 0o700)
-    except OSError:
-        pass
-    for rel, prev in backups.items():
-        if prev is None:
-            continue
-        dest = rollback_root / str(rel)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        fd, raw_tmp = tempfile.mkstemp(prefix=f".{dest.name}.save.", dir=str(dest.parent))
-        tmp = pathlib.Path(raw_tmp)
-        replaced = False
-        try:
-            with os.fdopen(fd, "wb") as writer:
-                writer.write(prev)
-                writer.flush()
-                os.fsync(writer.fileno())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, dest)
-            replaced = True
-        finally:
-            if not replaced:
-                tmp.unlink(missing_ok=True)
-    index = {str(rel): (prev is not None) for rel, prev in backups.items()}
-    idx_path = rollback_root / "index.json"
-    # atomic write index
-    fd, raw_tmp = tempfile.mkstemp(prefix=".index.json.", dir=str(rollback_root))
-    tmp = pathlib.Path(raw_tmp)
-    replaced = False
-    try:
-        with os.fdopen(fd, "wb") as writer:
-            writer.write((json.dumps(index, sort_keys=True) + "\n").encode("utf-8"))
-            writer.flush()
-            os.fsync(writer.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, idx_path)
-        replaced = True
-    finally:
-        if not replaced:
-            tmp.unlink(missing_ok=True)
-    _fsync(rollback_root)
-    try:
-        _fsync(state_dir)
-    except OSError:
-        pass
-
-
-def _deadman_write_pending(state_dir: pathlib.Path, token: str, manifest: dict[str, Any], window: int) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(state_dir, 0o700)
-    except OSError:
-        pass
-    pending_path = _deadman_pending_path(state_dir)
-    payload = {
-        "token": token,
-        "window": window,
-        "created": time.time(),
-        "manifestSha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
-    }
-    fd, raw_tmp = tempfile.mkstemp(prefix=".pending.json.", dir=str(state_dir))
-    tmp = pathlib.Path(raw_tmp)
-    replaced = False
-    try:
-        with os.fdopen(fd, "wb") as writer:
-            writer.write((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-            writer.flush()
-            os.fsync(writer.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, pending_path)
-        replaced = True
-    finally:
-        if not replaced:
-            tmp.unlink(missing_ok=True)
-    _fsync(state_dir)
-
-
-def _deadman_read_pending(state_dir: pathlib.Path) -> dict[str, Any]:
-    pending_path = _deadman_pending_path(state_dir)
-    try:
-        raw = pending_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise FirewallDeadmanError(f"unable to read deadman pending state: {exc}") from exc
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise FirewallDeadmanError(f"malformed deadman pending state: {exc}") from exc
-    if not isinstance(value, dict) or not isinstance(value.get("token"), str) or not value["token"]:
-        raise FirewallDeadmanError("malformed deadman pending state: missing token")
-    if not isinstance(value.get("window"), int) or value["window"] <= 0:
-        raise FirewallDeadmanError("malformed deadman pending state: invalid window")
-    _deadman_validate_token(value["token"])
-    return value
-
-
-def _deadman_arm(systemd_bin: str, window: int) -> None:
-    # Ensure a second unacknowledged change resets the deadline: explicitly stop
-    # before start so OnActiveSec restarts from now.
-    try:
-        # Best-effort stop to reset any active timer; ignore failure if not running.
-        _deadman_systemd_run([systemd_bin, "stop", _DEADMAN_TIMER_UNIT])
-        _deadman_systemd_run([systemd_bin, "reset-failed", _DEADMAN_TIMER_UNIT])
-    except Exception:
-        pass
-    # Prefer systemd-run transient timer with explicit window; fall back to systemctl timer
-    # First try systemd-run for precise window; if not available, use timer unit.
-    # We attempt systemd-run --on-active; if it fails, try systemctl start.
-    # For tests, systemd_bin may be a mock script that expects "start" or "systemd-run" call.
-    # Attempt systemctl start first (native timer with OnActiveSec=60, but we also support window)
-    # To respect custom window, we try systemd-run if window != default.
-    if window != _DEFAULT_DEADMAN_WINDOW:
-        result = _deadman_systemd_run(
-            [
-                systemd_bin,
-                "run",
-                "--unit=nas-v2-firewall-rollback",
-                f"--on-active={window}s",
-                "--timer-property=AccuracySec=1s",
-                "true",
-            ]
-        )
-        # If systemd-run not supported (mock expects start), fall back
-        if result.returncode == 0:
-            return
-    result = _deadman_systemd_run([systemd_bin, "start", _DEADMAN_TIMER_UNIT])
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()[:4000]
-        raise FirewallDeadmanError(f"deadman timer activation failed: {detail}")
-
-
-def _deadman_cancel(systemd_bin: str) -> None:
-    result = _deadman_systemd_run([systemd_bin, "stop", _DEADMAN_TIMER_UNIT])
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()[:4000]
-        raise FirewallDeadmanError(f"failed to cancel deadman timer: {detail}")
-    # Best-effort reset-failed, ignore failure
-    _deadman_systemd_run([systemd_bin, "reset-failed", _DEADMAN_TIMER_UNIT])
-
-
-def _deadman_cleanup(state_dir: pathlib.Path) -> None:
-    pending_path = _deadman_pending_path(state_dir)
-    ack_path = _deadman_ack_path(state_dir)
-    rollback_root = _deadman_rollback_root(state_dir)
-    # Remove pending and ack; remove rollback dir. Each operation must succeed or raise.
-    # We attempt all, but on first failure raise to signal cleanup failure.
-    try:
-        pending_path.unlink(missing_ok=True)
-    except OSError as exc:
-        raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
-    try:
-        ack_path.unlink(missing_ok=True)
-    except OSError as exc:
-        raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
-    if rollback_root.exists():
-        try:
-            shutil.rmtree(rollback_root)
-        except OSError as exc:
-            raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
-    try:
-        _fsync(state_dir) if state_dir.exists() else None
-    except OSError as exc:
-        raise FirewallDeadmanError(f"deadman cleanup failed: {exc}") from exc
-
-
-def acknowledge_firewall(
-    *,
-    deadman_state_dir: pathlib.Path,
-    token: str,
-    systemd_bin: str = "systemctl",
-) -> dict[str, Any]:
-    _deadman_validate_token(token)
-    pending = _deadman_read_pending(deadman_state_dir)
-    if pending.get("token") != token:
-        raise FirewallDeadmanError("acknowledgement token is invalid or mismatched")
-    # Optionally write ack file for timer to observe (best-effort)
-    ack_path = _deadman_ack_path(deadman_state_dir)
-    try:
-        ack_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, raw_tmp = tempfile.mkstemp(prefix=".ack.json.", dir=str(ack_path.parent))
-        tmp = pathlib.Path(raw_tmp)
-        replaced = False
-        try:
-            with os.fdopen(fd, "wb") as writer:
-                writer.write((json.dumps({"token": token}, sort_keys=True) + "\n").encode())
-                writer.flush()
-                os.fsync(writer.fileno())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, ack_path)
-            replaced = True
-        finally:
-            if not replaced:
-                tmp.unlink(missing_ok=True)
-        _fsync(ack_path.parent)
-    except OSError as exc:
-        raise FirewallDeadmanError(f"deadman ack write failed: {exc}") from exc
-    _deadman_cancel(systemd_bin)
-    _deadman_cleanup(deadman_state_dir)
-    return {"ok": True, "acknowledged": True, "token": token}
-
-
-def handle_deadman_rollback(
-    *,
-    deadman_state_dir: pathlib.Path,
-    system_config: pathlib.Path,
-    firewall_cmd: str,
-    firewall_offline_cmd: str,
-    systemd_bin: str = "systemctl",
-) -> dict[str, Any]:
-    pending_path = _deadman_pending_path(deadman_state_dir)
-    if not pending_path.is_file():
-        return {"ok": True, "deadman": "no-pending"}
-    try:
-        pending = _deadman_read_pending(deadman_state_dir)
-    except FirewallDeadmanError as exc:
-        # Malformed pending -> treat as not acked, proceed to rollback but preserve error info
-        pending = None
-        pending_error = str(exc)
-    else:
-        pending_error = None
-    ack_path = _deadman_ack_path(deadman_state_dir)
-    acked = False
-    if pending is not None and ack_path.is_file():
-        try:
-            ack_raw = ack_path.read_text(encoding="utf-8")
-            ack_val = json.loads(ack_raw)
-            if isinstance(ack_val, dict) and ack_val.get("token") == pending.get("token"):
-                acked = True
-        except (OSError, json.JSONDecodeError):
-            acked = False
-    if acked:
-        _deadman_cleanup(deadman_state_dir)
-        return {"ok": True, "acked": True}
-    if pending is None:
-        # Malformed pending still requires rollback of previous state if possible; cleanup then error
-        rollback_root = _deadman_rollback_root(deadman_state_dir)
-        if rollback_root.exists():
-            # attempt restore even if pending malformed
-            try:
-                _deadman_restore_previous(deadman_state_dir, system_config, firewall_cmd, firewall_offline_cmd)
-            except Exception:
-                pass
-            try:
-                _deadman_cleanup(deadman_state_dir)
-            except Exception:
-                pass
-        raise FirewallDeadmanError(f"malformed deadman pending state: {pending_error}")
-    # Timer has fired (OnActiveSec elapsed); restore previous regardless of window clock.
-    # The 60s window is enforced by the systemd timer itself, not by checking time here,
-    # so tests can trigger rollback immediately without waiting.
-    _deadman_restore_previous(deadman_state_dir, system_config, firewall_cmd, firewall_offline_cmd)
-    _deadman_cleanup(deadman_state_dir)
-    return {"ok": True, "rolled_back": True, "reason": "deadman timeout without acknowledgement"}
-
-
-def _deadman_restore_previous(
-    state_dir: pathlib.Path,
-    system_config: pathlib.Path,
-    firewall_cmd: str,
-    firewall_offline_cmd: str,
-) -> None:
-    rollback_root = _deadman_rollback_root(state_dir)
-    index_path = rollback_root / "index.json"
-    try:
-        index_raw = index_path.read_text(encoding="utf-8")
-        index = json.loads(index_raw)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise FirewallDeadmanError(f"unable to read deadman rollback index: {exc}") from exc
-    if not isinstance(index, dict):
-        raise FirewallDeadmanError("malformed deadman rollback index")
-    # Restore each entry
-    for rel_str, had_previous in index.items():
-        if not isinstance(rel_str, str) or not isinstance(had_previous, bool):
-            raise FirewallDeadmanError("malformed deadman rollback index entry")
-        rel = _safe_target(rel_str)
-        dest = system_config / str(rel)
-        if not had_previous:
-            try:
-                dest.unlink(missing_ok=True)
-            except OSError as exc:
-                raise FirewallDeadmanError(f"deadman rollback unlink failed {dest}: {exc}") from exc
-            continue
-        src = rollback_root / str(rel)
-        if not src.is_file():
-            raise FirewallDeadmanError(f"deadman rollback source missing: {src}")
-        # atomic restore
-        fd, raw_tmp = tempfile.mkstemp(prefix=f".{dest.name}.rollback.", dir=str(dest.parent))
-        tmp = pathlib.Path(raw_tmp)
-        replaced = False
-        try:
-            with src.open("rb") as reader, os.fdopen(fd, "wb") as writer:
-                shutil.copyfileobj(reader, writer)
-                writer.flush()
-                os.fsync(writer.fileno())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, dest)
-            replaced = True
-        finally:
-            if not replaced:
-                tmp.unlink(missing_ok=True)
-    # Remove any V2 files that exist in system_config but not in index (should not happen, but be safe)
-    # We rely on index covering all touched; no extra deletion.
-    for dname in ("zones", "policies"):
-        try:
-            _fsync(system_config / dname)
-        except OSError:
-            pass
-    checked = _reconcile_run([firewall_offline_cmd, f"--system-config={system_config}", "--check-config"])
-    if checked.returncode != 0:
-        detail = (checked.stderr or checked.stdout).strip()[:4000]
-        raise FirewallDeadmanError(f"deadman rollback combined configuration is invalid: {detail}")
-    reloaded = _reconcile_run([firewall_cmd, "--reload"])
-    if reloaded.returncode != 0:
-        detail = (reloaded.stderr or reloaded.stdout).strip()[:4000]
-        raise FirewallDeadmanError(f"deadman rollback reload failed: {detail}")
-
-
-def reconcile(
-    *,
-    manifest_path: pathlib.Path,
-    projection_root: pathlib.Path,
-    system_config: pathlib.Path,
-    firewall_cmd: str,
-    firewall_offline_cmd: str,
-    deadman_state_dir: pathlib.Path | None = None,
-    deadman_window: int = _DEFAULT_DEADMAN_WINDOW,
-    systemd_bin: str = "systemctl",
-) -> dict[str, Any]:
-    manifest = _read_manifest(manifest_path)
-    desired: dict[pathlib.PurePosixPath, tuple[pathlib.Path, str]] = {}
-    for entry in manifest["files"]:
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("target"), str)
-            or not isinstance(entry.get("sha256"), str)
-        ):
-            raise FirewalldReconcileError("firewalld manifest file entry is invalid")
-        relative = _safe_target(entry["target"])
-        source = projection_root / str(relative)
-        try:
-            source.relative_to(projection_root)
-        except ValueError as exc:
-            raise FirewalldReconcileError(f"projection source escapes root: {source}") from exc
-        if not source.is_file() or _sha256(source) != entry["sha256"]:
-            raise FirewalldReconcileError(f"projected firewalld file is missing or changed: {source}")
-        desired[relative] = (source, entry["sha256"])
-
-    current: set[pathlib.PurePosixPath] = set()
-    for directory_name in ("zones", "policies"):
-        directory = system_config / directory_name
-        directory.mkdir(parents=True, exist_ok=True)
-        for path in directory.iterdir():
-            if path.is_file() and _OWNED_FILE.fullmatch(path.name):
-                current.add(pathlib.PurePosixPath(directory_name) / path.name)
-
-    changed = False
-    backups: dict[pathlib.PurePosixPath, bytes | None] = {}
-    touched = sorted(current | set(desired), key=str)
-    for relative in touched:
-        destination = system_config / str(relative)
-        backups[relative] = destination.read_bytes() if destination.exists() else None
-
-    # Deadman: save previous projection before any mutation, if requested.
-    if deadman_state_dir is not None:
-        if not isinstance(deadman_window, int) or deadman_window <= 0:
-            raise FirewallDeadmanError(f"deadman window must be positive integer, got {deadman_window!r}")
-        try:
-            deadman_state_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                os.chmod(deadman_state_dir, 0o700)
-            except OSError:
-                pass
-            _deadman_save_previous(deadman_state_dir, backups)
-        except FirewallDeadmanError:
-            raise
-        except Exception as exc:
-            raise FirewallDeadmanError(f"unable to save deadman previous state: {exc}") from exc
-
-    try:
-        for relative in sorted(current - set(desired), key=str):
-            (system_config / str(relative)).unlink()
-            changed = True
-        for relative, (source, expected_hash) in sorted(desired.items(), key=lambda item: str(item[0])):
-            destination = system_config / str(relative)
-            try:
-                same = destination.is_file() and _sha256(destination) == expected_hash
-            except OSError:
-                same = False
-            if same:
-                continue
-            if destination.exists() and not _OWNED_FILE.fullmatch(destination.name):
-                raise FirewalldReconcileError(f"refusing to overwrite non-V2 firewalld file {destination}")
-            _atomic_copy(source, destination)
-            changed = True
-        if not changed:
-            # No change: clean any stale deadman pending (best-effort) and return
-            if deadman_state_dir is not None:
-                try:
-                    _deadman_cleanup(deadman_state_dir)
-                except FirewallDeadmanError:
-                    pass
-            return {"ok": True, "changed": False, "files": sorted(str(item) for item in desired)}
-
-        for directory_name in ("zones", "policies"):
-            _fsync(system_config / directory_name)
-
-        checked = _reconcile_run([firewall_offline_cmd, f"--system-config={system_config}", "--check-config"])
-        if checked.returncode != 0:
-            detail = (checked.stderr or checked.stdout).strip()[:4000]
-            raise FirewalldReconcileError(f"combined firewalld configuration is invalid: {detail}")
-        reloaded = _reconcile_run([firewall_cmd, "--reload"])
-        if reloaded.returncode != 0:
-            detail = (reloaded.stderr or reloaded.stdout).strip()[:4000]
-            raise FirewalldReconcileError(f"firewalld reload failed: {detail}")
-
-        # Arm deadman timer after successful reload, if requested.
-        if deadman_state_dir is not None:
-            token = _deadman_token_for_manifest(manifest)
-            _deadman_write_pending(deadman_state_dir, token, manifest, deadman_window)
-            _deadman_arm(systemd_bin, deadman_window)
-            return {
-                "ok": True,
-                "changed": True,
-                "files": sorted(str(item) for item in desired),
-                "deadman": {
-                    "token": token,
-                    "window": deadman_window,
-                    "pending": str(_deadman_pending_path(deadman_state_dir)),
-                    "rollbackDir": str(_deadman_rollback_root(deadman_state_dir)),
-                },
-            }
-    except Exception as original:
-        rollback_error: Exception | None = None
-        try:
-            for relative, previous in backups.items():
-                destination = system_config / str(relative)
-                if previous is None:
-                    destination.unlink(missing_ok=True)
-                    continue
-                fd, raw_temp = tempfile.mkstemp(prefix=f".{destination.name}.rollback.", dir=destination.parent)
-                temp = pathlib.Path(raw_temp)
-                replaced = False
-                try:
-                    with os.fdopen(fd, "wb") as writer:
-                        writer.write(previous)
-                        writer.flush()
-                        os.fsync(writer.fileno())
-                    os.chmod(temp, 0o600)
-                    os.replace(temp, destination)
-                    replaced = True
-                finally:
-                    if not replaced:
-                        temp.unlink(missing_ok=True)
-            for directory_name in ("zones", "policies"):
-                _fsync(system_config / directory_name)
-            rollback = _reconcile_run([firewall_cmd, "--reload"])
-            if rollback.returncode != 0:
-                raise FirewalldReconcileError((rollback.stderr or rollback.stdout).strip()[:4000])
-        except Exception as exc:  # noqa: BLE001
-            rollback_error = exc
-        # Best-effort deadman cleanup on immediate failure (no pending yet, but rollback dir may exist)
-        if deadman_state_dir is not None:
-            try:
-                _deadman_cleanup(deadman_state_dir)
-            except FirewallDeadmanError:
-                # Preserve original failure but record cleanup issue if rollback also failed
-                if rollback_error is None:
-                    rollback_error = FirewallDeadmanError("deadman cleanup failed after activation failure")
-        if rollback_error is not None:
-            raise FirewalldReconcileError(
-                f"firewalld activation failed and rollback reload also failed: original={original}; rollback={rollback_error}"
-            ) from original
-        if isinstance(original, FirewalldReconcileError):
-            raise
-        raise FirewalldReconcileError(str(original)) from original
-
-    return {"ok": True, "changed": True, "files": sorted(str(item) for item in desired)}
-
-
-def reconcile_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Activate V2-owned firewalld files with rollback and one native reload."
     )
-    parser.add_argument("--manifest", required=False, default=None)
-    parser.add_argument("--projection-root", required=False, default=None)
-    parser.add_argument("--system-config", required=False, default=None)
-    parser.add_argument("--firewall-cmd", default="firewall-cmd")
-    parser.add_argument("--firewall-offline-cmd", default="firewall-offline-cmd")
-    parser.add_argument("--deadman-state-dir", default=None, help="directory for deadman pending/rollback state")
-    parser.add_argument(
-        "--deadman-window", type=int, default=_DEFAULT_DEADMAN_WINDOW, help="deadman acknowledgement window in seconds"
-    )
-    parser.add_argument("--systemd-bin", default="systemctl", help="systemd binary for timer control")
-    parser.add_argument("--acknowledge", default=None, help="acknowledge deadman with token")
-    parser.add_argument("--deadman-rollback", action="store_true", help="run deadman rollback check (as timer service)")
-    args = parser.parse_args(argv)
-    try:
-        if args.acknowledge is not None:
-            if not args.deadman_state_dir:
-                raise FirewalldReconcileError("--deadman-state-dir is required for --acknowledge")
-            result = acknowledge_firewall(
-                deadman_state_dir=pathlib.Path(args.deadman_state_dir),
-                token=args.acknowledge,
-                systemd_bin=args.systemd_bin,
-            )
-        elif args.deadman_rollback:
-            if not args.deadman_state_dir or not args.system_config:
-                raise FirewalldReconcileError(
-                    "--deadman-state-dir and --system-config are required for --deadman-rollback"
-                )
-            result = handle_deadman_rollback(
-                deadman_state_dir=pathlib.Path(args.deadman_state_dir),
-                system_config=pathlib.Path(args.system_config),
-                firewall_cmd=args.firewall_cmd,
-                firewall_offline_cmd=args.firewall_offline_cmd,
-                systemd_bin=args.systemd_bin,
-            )
-        else:
-            if not args.manifest or not args.projection_root or not args.system_config:
-                parser.error("--manifest, --projection-root, and --system-config are required for reconcile")
-            deadman_dir = pathlib.Path(args.deadman_state_dir) if args.deadman_state_dir else None
-            result = reconcile(
-                manifest_path=pathlib.Path(args.manifest),
-                projection_root=pathlib.Path(args.projection_root),
-                system_config=pathlib.Path(args.system_config),
-                firewall_cmd=args.firewall_cmd,
-                firewall_offline_cmd=args.firewall_offline_cmd,
-                deadman_state_dir=deadman_dir,
-                deadman_window=args.deadman_window,
-                systemd_bin=args.systemd_bin,
-            )
-    except FirewalldReconcileError as exc:
-        print(f"nas-v2-firewalld-reconcile: {exc}", file=sys.stderr)
-        return 1
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    return output
 
 
 __all__ = [
-    "PodmanNetworkProjectionError",
     "FirewalldProjectionError",
-    "FirewalldReconcileError",
-    "FirewallDeadmanError",
+    "PodmanNetworkProjectionError",
     "bridge_interface_name",
-    "podman_network_name",
-    "network_policy",
-    "vlan_binding",
-    "requires_firewalld",
-    "quadlet_network_reference",
-    "augment_projection",
-    "zone_name",
+    "compile_application_projection",
+    "compile_projection",
+    "compile_remote_admin_projection",
     "host_policy_name",
     "lan_policy_name",
-    "world_policy_name",
-    "route_policy_name",
     "listener_policy_name",
-    "remote_admin_policy_name",
-    "compile_projection",
-    "validate_projection",
     "materialize_projection",
-    "reconcile",
-    "acknowledge_firewall",
-    "handle_deadman_rollback",
-    "reconcile_main",
+    "network_policy",
+    "podman_network_name",
+    "quadlet_network_reference",
+    "remote_admin_policy_name",
+    "requires_firewalld",
+    "route_policy_name",
+    "validate_projection",
+    "vlan_binding",
+    "world_policy_name",
+    "zone_name",
 ]
