@@ -31,6 +31,7 @@
     "services/nas_v2_bootstrap.py": ["tests/test_v2_bootstrap.py"],
     "services/nas_v2_caddy.py": ["tests/test_v2_caddy.py", "tests/test_v2_caddy_validate.py", "tests/test_v2_portal.py"],
     "services/nas_v2_compose.py": ["tests/test_v2_accelerator.py", "tests/test_v2_compose.py", "tests/test_v2_compose_systemd.py"],
+    "services/nas_v2_compose_import.py": ["tests/test_v2_compose_systemd.py"],
     "services/nas_v2_control.py": ["tests/test_v2_control.py", "tests/test_v2_editor.py"],
     "services/nas_v2_editor.py": ["tests/test_v2_control.py", "tests/test_v2_editor.py", "tests/test_v2_editor_single_file.py"],
     "services/nas_v2_entry.py": ["tests/test_v2_boundary.py"],
