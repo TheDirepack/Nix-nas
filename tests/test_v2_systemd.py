@@ -514,3 +514,47 @@ class V2SystemdProjectionTests(unittest.TestCase):
         files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
         unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
         self.assertIn("Restart=always", unit)
+
+    def test_environment_file_credential_references_secret_path_not_value(self):
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "exec", "command": ["/bin/true"]},
+                    "credentials": [{"credential": "env", "use": "environment-file"}],
+                }
+            },
+            credentials={"env": {"path": "/run/nas-secrets/demo/app.env", "required": True}},
+        )
+        files, _manifest = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        self.assertIn('EnvironmentFile="/run/nas-secrets/demo/app.env"', unit)
+        self.assertNotIn("super-secret-value", unit)
+        for line in unit.splitlines():
+            if "app.env" in line:
+                self.assertIn("EnvironmentFile=", line)
+                self.assertNotIn("Environment=", line.replace("EnvironmentFile=", ""))
+
+    def test_systemd_analyze_validation_failure_is_fatal(self):
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon", "activation": "persistent"},
+                    "runtime": {"type": "exec", "command": ["/bin/true"]},
+                }
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            files, _manifest = self.generate(effective, root / "projection")
+            validator = root / "systemd-analyze"
+            validator.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+            validator.chmod(validator.stat().st_mode | stat.S_IXUSR)
+            with self.assertRaisesRegex(systemd.SystemdProjectionError, "rejected"):
+                systemd.validate_projection(files, systemd_analyze_bin=str(validator))
+
+
+if __name__ == "__main__":
+    unittest.main()
