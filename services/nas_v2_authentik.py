@@ -100,18 +100,18 @@ def _request_json(
         raise AuthentikProjectionError("Authentik API returned invalid JSON") from exc
 
 
-def _list_groups(*, api_root: str, token: str) -> list[dict[str, Any]]:
-    url = f"{api_root}/core/groups/?include_users=false&page_size=100"
-    groups: list[dict[str, Any]] = []
+def _list_objects(*, url: str, token: str, label: str) -> list[dict[str, Any]]:
+    """Read every page from one Authentik v3 list endpoint."""
+    objects: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     while url:
         if url in seen_urls:
-            raise AuthentikProjectionError("Authentik group pagination loop detected")
+            raise AuthentikProjectionError(f"Authentik {label} pagination loop detected")
         seen_urls.add(url)
         value = _request_json(url=url, token=token)
         if not isinstance(value, dict) or not isinstance(value.get("results"), list):
-            raise AuthentikProjectionError("Authentik group listing did not return a result list")
-        groups.extend(item for item in value["results"] if isinstance(item, dict))
+            raise AuthentikProjectionError(f"Authentik {label} listing did not return a result list")
+        objects.extend(item for item in value["results"] if isinstance(item, dict))
         pagination = value.get("pagination")
         next_page = pagination.get("next") if isinstance(pagination, dict) else None
         if isinstance(next_page, int) and next_page > 0:
@@ -123,7 +123,15 @@ def _list_groups(*, api_root: str, token: str) -> list[dict[str, Any]]:
             )
         else:
             url = ""
-    return groups
+    return objects
+
+
+def _list_groups(*, api_root: str, token: str) -> list[dict[str, Any]]:
+    return _list_objects(
+        url=f"{api_root}/core/groups/?include_users=false&page_size=100",
+        token=token,
+        label="group",
+    )
 
 
 def desired_capabilities(effective: dict[str, Any]) -> dict[str, str]:
@@ -303,19 +311,25 @@ def reconcile_route_apps(
     api_root = _api_root(authentik_url)
     desired_apps = desired_route_apps(effective, public_host=public_host)
 
-    providers = _request_json(url=f"{api_root}/providers/proxy/?page_size=100", token=token, method="GET")
-    provider_by_name = {p.get("name"): p for p in providers if isinstance(p, dict)}
-    applications = _request_json(url=f"{api_root}/core/applications/?page_size=100", token=token, method="GET")
-    app_by_slug = {a.get("slug"): a for a in applications if isinstance(a, dict)}
+    providers = _list_objects(
+        url=f"{api_root}/providers/proxy/?page_size=100", token=token, label="proxy provider"
+    )
+    provider_by_name = {p.get("name"): p for p in providers if isinstance(p.get("name"), str)}
+    applications = _list_objects(
+        url=f"{api_root}/core/applications/?page_size=100", token=token, label="application"
+    )
+    app_by_slug = {a.get("slug"): a for a in applications if isinstance(a.get("slug"), str)}
 
-    outposts = _request_json(url=f"{api_root}/outposts/instances/?page_size=100", token=token, method="GET")
+    outposts = _list_objects(
+        url=f"{api_root}/outposts/instances/?page_size=100", token=token, label="outpost"
+    )
     outpost = next(
-        (o for o in outposts if isinstance(o, dict) and o.get("managed") == "goauthentik.io/outposts/embedded"), None
+        (o for o in outposts if o.get("managed") == "goauthentik.io/outposts/embedded"), None
     )
     outpost_pk = outpost.get("pk") if isinstance(outpost, dict) else None
 
-    flows = _request_json(url=f"{api_root}/flows/instances/?page_size=100", token=token, method="GET")
-    flow_by_slug = {f.get("slug"): f.get("pk") for f in flows if isinstance(f, dict)}
+    flows = _list_objects(url=f"{api_root}/flows/instances/?page_size=100", token=token, label="flow")
+    flow_by_slug = {f.get("slug"): f.get("pk") for f in flows if isinstance(f.get("slug"), str)}
 
     def _flow(slug: str) -> int:
         pk = flow_by_slug.get(slug)
