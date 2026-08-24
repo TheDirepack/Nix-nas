@@ -49,6 +49,7 @@ else:
     import nas_v2_compose as compose
     import nas_v2_network as network
     import nas_v2_nmstate as nmstate
+    import nas_v2_podman_network as podman_network
     import nas_v2_quadlet as quadlet
     import nas_v2_spec as v2_spec
 
@@ -89,6 +90,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_nmstate",
         "nas_v2_plan",
         "nas_v2_platform_probe",
+        "nas_v2_podman_network",
         "nas_v2_python_prepare",
         "nas_v2_quadlet",
         "nas_v2_readiness",
@@ -177,6 +179,19 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(network.podman_network_name, value, {})
             expected_boundary_error(network.vlan_binding, {"vlanId": value, "vlanParent": value})
             expected_boundary_error(nmstate._bound_policy, {"vlanId": 10}, value)
+            expected_boundary_error(
+                podman_network._network_source,
+                value,
+                "nas-v2-demo.service",
+                {
+                    "mode": "isolated",
+                    "outboundDefault": "deny",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                },
+                network_name="nas-v2-demo",
+            )
             v2_spec.SERVICE_ID_RE.fullmatch(value)
             v2_spec.CAPABILITY_ID_RE.fullmatch(value)
             v2_spec.SYSTEMD_UNIT_RE.fullmatch(value)
