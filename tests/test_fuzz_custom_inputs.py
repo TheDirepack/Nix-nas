@@ -74,6 +74,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_state",
         "nas_syncthing_devices",
         "nas_v2_accelerator",
+        "nas_v2_activation",
         "nas_v2_apply",
         "nas_v2_authentik",
         "nas_v2_authentik_blueprint",
@@ -86,6 +87,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_entry",
         "nas_v2_exec_runner",
         "nas_v2_firewalld_reconcile",
+        "nas_v2_generation",
         "nas_v2_history",
         "nas_v2_libvirt",
         "nas_v2_network",
@@ -93,15 +95,15 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_plan",
         "nas_v2_platform_probe",
         "nas_v2_podman_network",
-        "nas_v2_python_prepare",
         "nas_v2_quadlet",
         "nas_v2_readiness",
         "nas_v2_session",
         "nas_v2_source_watch",
         "nas_v2_spec",
         "nas_v2_systemd",
+        "nas_v2_systemd_attachments",
+        "nas_v2_systemd_native",
         "nas_v2_systemd_reconcile",
-        "nas_v2_wake",
     }
 )
 
