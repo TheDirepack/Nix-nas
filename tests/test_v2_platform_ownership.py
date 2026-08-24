@@ -1,10 +1,12 @@
+"""Consolidated platform_ownership suites (merged from 3 micro-files)."""
+
 from __future__ import annotations
 
-import os
 import pathlib
+import os
+from unittest import mock
 import sys
 import unittest
-from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -13,6 +15,40 @@ if str(SERVICES) not in sys.path:
 
 import nas_v2_apply as apply_v2  # noqa: E402
 from nas_v2_systemd import SystemdProjectionError  # noqa: E402
+
+
+class V2PlatformRuntimeOwnershipTests(unittest.TestCase):
+    def test_libvirt_daemon_is_platform_substrate_not_application_lifecycle(self) -> None:
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'virtualization = platformService ((daemon "libvirtd.service" "libvirt virtual-machine runtime") // {',
+            seed,
+        )
+        self.assertIn('vm-storage = (job "nas-vm-storage.service" "Prepare VM storage") // {', seed)
+        self.assertIn(
+            'vm-storage-pool = (daemon "nas-vm-storage-pool.service" "Activate the ZFS-backed libvirt storage pool") // {',
+            seed,
+        )
+        self.assertNotIn('virtualization = (daemon "libvirtd.service"', seed)
+
+
+class ManagedServicesV2PlatformRouteOwnershipTests(unittest.TestCase):
+    def test_cockpit_console_route_is_seeded_only_through_v2(self) -> None:
+        seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        proxy = (ROOT / "modules" / "nas" / "config" / "reverse-proxy.nix").read_text(encoding="utf-8")
+
+        self.assertIn("platformServices", seed)
+        self.assertIn("cockpit", seed)
+        self.assertIn('paths = [ "/console" ];', seed)
+        self.assertIn('type = "http";', seed)
+        self.assertIn('host = "127.0.0.1";', seed)
+        self.assertIn('capability = "admin";', seed)
+        self.assertIn('title = "System Console";', seed)
+
+        self.assertNotIn("@console", proxy)
+        self.assertNotIn("tls_insecure_skip_verify", proxy)
+        self.assertNotIn("cockpitPort", proxy)
 
 
 class V2VlanPlatformBindingTests(unittest.TestCase):
@@ -72,7 +108,3 @@ class V2VlanPlatformBindingTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"NAS_V2_VLAN_PARENT": "eno2"}, clear=False):
             projection = apply_v2.SystemdProjection(**kwargs)
         self.assertEqual(projection.vlan_parent, "eno2")
-
-
-if __name__ == "__main__":
-    unittest.main()
