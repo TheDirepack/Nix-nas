@@ -39,7 +39,9 @@ class V2TransactionWiringTests(unittest.TestCase):
         self.assertIn("INVOCATION_ID", managed)
         self.assertIn('guard_unit="nas-v2-apply-rollback-$guard_suffix"', managed)
         self.assertIn("systemctl stop 'nas-v2-apply-rollback-*.timer'", managed)
-        self.assertNotIn("rev-parse --verify HEAD", managed)
+        self.assertIn("rev-parse --verify HEAD", managed)
+        post_start = managed.split("postStart = lib.mkForce ''", 1)[1].split("    '';", 1)[0]
+        self.assertNotIn("rev-parse --verify HEAD", post_start)
 
     def test_compiler_owns_git_recording_under_authority_lock(self) -> None:
         apply_source = text("services/nas_v2_apply.py").split("def apply(", 1)[1]
