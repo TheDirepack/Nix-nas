@@ -42,6 +42,7 @@ let
       "nas_alert_router"
       "nas_cockpit_api"
       "nas_doctor"
+      "nas_first_run_api"
       "nas_identity_sync"
       "nas_logging"
       "nas_setup"
@@ -127,9 +128,6 @@ let
     rootMode = null;
   };
 
-  # Ownership is an installation contract, not archive metadata. This lets
-  # disaster recovery recreate an authority that does not yet exist without
-  # guessing root:root ownership from the empty target host.
   stateRegistry = [
     (mkPathAuthority {
       name = "managed-services";
@@ -179,9 +177,9 @@ let
       name = "keepass";
       source = cfg.secrets.keepassDatabase;
       sensitive = true;
-      owner = cfg.adminUser;
-      group = "users";
-      rootMode = "0600";
+      owner = "root";
+      group = "nas-administrators";
+      rootMode = "0660";
     })
     (mkDatabaseAuthority { name = "authentik-database"; source = "postgresql://authentik"; })
   ]
@@ -351,6 +349,10 @@ let
       export NAS_STATE_REGISTRY_FILE=${stateRegistryFile}
       export NAS_STATE_REGISTRY_REQUIRED=1
       export NAS_STATE_RUNTIME_ROOT=/run/nas-state
+      # Automatic restore checkpoints can contain KDBX/AuthentiK material. Keep
+      # them reboot-ephemeral; durable disaster recovery belongs in encrypted
+      # Restic repositories instead of plaintext archives on the boot disk.
+      export NAS_STATE_ROLLBACK_ROOT=/run/nas-state/rollback
       export NAS_STATE_QUIESCE_UNITS_JSON=${lib.escapeShellArg (builtins.toJSON stateQuiesceUnits)}
       export NAS_STATE_RESTORE_UNITS_JSON=${lib.escapeShellArg (builtins.toJSON stateRestoreUnits)}
       export NAS_STATE_SCHEMA=${../../../schemas/state-bundle.schema.json}
@@ -388,9 +390,6 @@ let
 
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''
     mkdir -p "$out/share/authentik/blueprints"
-    # Authentik's worker expects its built-in system/bootstrap blueprint below
-    # the configured root. Preserve that package tree and layer the repository
-    # blueprint into the same immutable runtime bundle.
     cp -a ${pkgs.authentik.src}/blueprints/. "$out/share/authentik/blueprints/"
     chmod -R u+w "$out/share/authentik/blueprints"
     install -m 0444 ${../../../authentik/blueprints/nas-user-settings.yaml} \
@@ -405,7 +404,6 @@ let
       nasPythonApplication nasIdentitySync nasSetup nasUpdate
     ];
     text = ''
-      export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
       export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
       export NAS_CONFIG_DIR=${lib.escapeShellArg cfg.configurationDir}
