@@ -85,7 +85,6 @@
     ],
     "services/nas_v2_network.py": [
       "tests/test_v2_firewalld.py",
-      "tests/test_v2_firewalld_reconcile.py",
       "tests/test_v2_generic_listeners.py",
       "tests/test_v2_podman_network.py",
       "tests/test_v2_vlan_and_direct_listeners.py"
