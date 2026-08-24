@@ -304,9 +304,7 @@ def _policy_xml(
 
 def _host_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
     ports = [
-        (str(port), protocol)
-        for port in sorted(set(policy.get("allowedHostPorts", [])))
-        for protocol in ("tcp", "udp")
+        (str(port), protocol) for port in sorted(set(policy.get("allowedHostPorts", []))) for protocol in ("tcp", "udp")
     ]
     return _policy_xml("DROP", "-50", zone_name(service_id), "HOST", f"V2 host {escape(service_id)}", ports=ports)
 
@@ -431,7 +429,9 @@ def _route_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
         if not isinstance(target, dict):
             raise FirewalldProjectionError(f"compiled route {route_id!r} is invalid")
         if target.get("type") == "unix-http":
-            raise FirewalldProjectionError(f"isolated container route {route_id!r} cannot use a host Unix-socket target")
+            raise FirewalldProjectionError(
+                f"isolated container route {route_id!r} cannot use a host Unix-socket target"
+            )
         port = target.get("port")
         if not isinstance(port, int):
             raise FirewalldProjectionError(f"compiled route {route_id!r} is missing a TCP port")
@@ -471,7 +471,11 @@ def _remote_admin_policy_xml(lan_zone: str) -> bytes:
 
 
 def _validate_lan_zone(lan_zone: str) -> None:
-    if not lan_zone or len(lan_zone) > 17 or not all(character.isalnum() or character in "_-" for character in lan_zone):
+    if (
+        not lan_zone
+        or len(lan_zone) > 17
+        or not all(character.isalnum() or character in "_-" for character in lan_zone)
+    ):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
 
 
@@ -504,9 +508,7 @@ def compile_application_projection(
             continue
         policy = network_policy(effective, service)
         mode = policy.get("mode", "host")
-        runtime_type = (
-            service.get("runtime", {}).get("type") if isinstance(service.get("runtime"), dict) else None
-        )
+        runtime_type = service.get("runtime", {}).get("type") if isinstance(service.get("runtime"), dict) else None
         generated: dict[str, bytes] = {}
         if mode == "isolated":
             listeners = _listener_ports(service)
