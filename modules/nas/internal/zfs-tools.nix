@@ -5,7 +5,6 @@ let
     lib
     nasSecrets
     pkgs
-    zfsKeyFingerprintProperty
     zfsKeyPath
   ;
   zfsCockpitWrapper = pkgs.writeShellApplication {
@@ -90,10 +89,6 @@ let
       expected_root=${lib.escapeShellArg cfg.zfsRoot}
       expected_dataset=${lib.escapeShellArg cfg.zfsDataset}
       real_zfs=${pkgs.zfs}/bin/zfs
-      ${lib.optionalString cfg.zfsEncryption.enable ''
-      expected_key_file=${lib.escapeShellArg zfsKeyPath}
-      fingerprint_property=${lib.escapeShellArg zfsKeyFingerprintProperty}
-      ''}
 
       mountpoint --quiet -- "$expected_root" || {
         echo "$expected_root is not a mount point" >&2
@@ -139,12 +134,6 @@ let
         echo "$expected_dataset encryption key is not loaded" >&2
         exit 1
       }
-      stored_fingerprint="$($real_zfs get -H -o value "$fingerprint_property" "$expected_dataset")"
-      staged_fingerprint="$(sha256sum "$expected_key_file" | cut -d ' ' -f1)"
-      [[ "$stored_fingerprint" == "$staged_fingerprint" ]] || {
-        echo "$expected_dataset does not match the KeePassXC-staged ZFS key fingerprint" >&2
-        exit 1
-      }
       ''}
     '';
   };
@@ -178,13 +167,9 @@ let
         echo "$dataset does not use keyformat=hex" >&2
         exit 1
       }
-      stored_fingerprint="$($real_zfs get -H -o value ${lib.escapeShellArg zfsKeyFingerprintProperty} "$dataset")"
-      staged_fingerprint="$(sha256sum "$key_file" | cut -d ' ' -f1)"
-      [[ "$stored_fingerprint" == "$staged_fingerprint" ]] || {
-        echo "$dataset does not match the KeePassXC-staged key fingerprint" >&2
-        exit 1
-      }
       if [[ "$($real_zfs get -H -o value keystatus "$dataset")" != "available" ]]; then
+        # OpenZFS is the authority for whether the staged key is correct.
+        # A wrong key fails load-key; no parallel key fingerprint is stored.
         $real_zfs load-key -L "file://$key_file" "$dataset"
       fi
       if [[ "$($real_zfs get -H -o value mounted "$dataset")" != "yes" ]]; then
@@ -258,7 +243,7 @@ let
       fi
       actor="$(id -un)"
       [[ "$actor" == ${lib.escapeShellArg cfg.adminUser} || ( "$actor" == root && "''${NAS_SETUP_ALLOW_ROOT:-}" == 1 ) ]] || {
-        echo "Run this as ${cfg.adminUser}; Cockpit may execute it as an explicitly authorized root setup operation." >&2
+        echo "Run this as ${cfg.adminUser}; the authenticated setup service may execute it as root." >&2
         exit 1
       }
       sudo -v
@@ -284,9 +269,6 @@ let
         set +e
         rm -f -- "$local_tmp" || cleanup_failed=true
         if [[ "$rc" -ne 0 && "$created_dataset" == true && "$bootstrap_committed" != true ]]; then
-          # The dataset was created by this invocation and canmount=off kept it
-          # inaccessible to ordinary writers. Remove it rather than leaving an
-          # encryption root whose configured keylocation points at a transient file.
           if sudo "$zfs" list -H "$dataset" >/dev/null 2>&1; then
             if sudo "$zfs" destroy -r "$dataset" >/dev/null 2>&1; then
               created_dataset=false
@@ -311,7 +293,6 @@ let
       chmod 0600 "$local_tmp"
       printf '%s' "$key" > "$local_tmp"
       sudo install -m 0400 -o root -g root "$local_tmp" "$root_tmp"
-      fingerprint="$(sha256sum "$local_tmp" | cut -d ' ' -f1)"
 
       sudo "$zfs" create -p \
         -o encryption="$algorithm" \
@@ -322,9 +303,6 @@ let
         "$dataset"
       created_dataset=true
 
-      # Fault-injection points are disabled unless explicitly enabled by the VM
-      # security test. They make every post-create transition reproducibly testable
-      # without weakening normal execution.
       bootstrap_fault() {
         local step=$1
         if [[ "''${NAS_TEST_FAULT_INJECTION:-}" == 1 && "''${NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER:-}" == "$step" ]]; then
@@ -336,8 +314,6 @@ let
       bootstrap_fault create
       sudo "$zfs" set keylocation="$final_keylocation" "$dataset"
       bootstrap_fault keylocation
-      sudo "$zfs" set ${zfsKeyFingerprintProperty}="$fingerprint" "$dataset"
-      bootstrap_fault fingerprint
       sudo "$zfs" set canmount=on "$dataset"
       bootstrap_fault canmount
       if [[ "$(sudo "$zfs" get -H -o value mounted "$dataset")" == "yes" ]]; then
