@@ -71,7 +71,6 @@ let
   };
   cockpitZfsPlugin = cockpitZfsBase.overrideAttrs (old: {
     passthru = (old.passthru or { }) // {
-      # Override only the rollback command with the checkpoint wrapper.
       cockpitPath =
         [ zfsCockpitWrapper ]
         ++ lib.filter (package: package != pkgs.zfs) (old.passthru.cockpitPath or [ ]);
@@ -168,8 +167,6 @@ let
         exit 1
       }
       if [[ "$($real_zfs get -H -o value keystatus "$dataset")" != "available" ]]; then
-        # OpenZFS is the authority for whether the staged key is correct.
-        # A wrong key fails load-key; no parallel key fingerprint is stored.
         $real_zfs load-key -L "file://$key_file" "$dataset"
       fi
       if [[ "$($real_zfs get -H -o value mounted "$dataset")" != "yes" ]]; then
@@ -242,10 +239,16 @@ let
         exit 1
       fi
       actor="$(id -un)"
-      [[ "$actor" == ${lib.escapeShellArg cfg.adminUser} || ( "$actor" == root && "''${NAS_SETUP_ALLOW_ROOT:-}" == 1 ) ]] || {
-        echo "Run this as ${cfg.adminUser}; the authenticated setup service may execute it as root." >&2
+      actor_groups=" $(id -Gn) "
+      if [[ "$actor" == root ]]; then
+        [[ "''${NAS_SETUP_ALLOW_ROOT:-}" == 1 ]] || {
+          echo "Root may create the managed encryption root only through the authenticated setup service." >&2
+          exit 1
+        }
+      elif [[ "$actor_groups" != *" nas-administrators "* ]]; then
+        echo "Run this as a member of nas-administrators." >&2
         exit 1
-      }
+      fi
       sudo -v
       sudo "$zpool" list -H "$pool" >/dev/null
       if sudo "$zfs" list -H "$dataset" >/dev/null 2>&1; then
@@ -337,8 +340,10 @@ let
       [[ $# -eq 1 ]] || { echo "Usage: nas-zfs-export-recovery-key /absolute/output-file" >&2; exit 2; }
       output="$1"
       [[ "$output" == /* ]] || { echo "The output path must be absolute." >&2; exit 2; }
-      [[ "$(id -un)" == ${lib.escapeShellArg cfg.adminUser} ]] || {
-        echo "Run this as ${cfg.adminUser}; the KeePassXC database password will be requested interactively." >&2
+      actor="$(id -un)"
+      actor_groups=" $(id -Gn) "
+      [[ "$actor" == root || "$actor_groups" == *" nas-administrators "* ]] || {
+        echo "Run this as root or a member of nas-administrators; the KeePassXC database password will be requested interactively." >&2
         exit 1
       }
       if [[ -t 0 ]]; then
