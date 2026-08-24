@@ -129,7 +129,12 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             ):
                 result = control.replace_json_from_source(str(source_path))
         self.assertTrue(result["ok"])
-        replace.assert_called_once_with(source_value, desired_path=desired_path, schema_path=control.SCHEMA_PATH)
+        replace.assert_called_once_with(
+            source_value,
+            desired_path=desired_path,
+            schema_path=control.SCHEMA_PATH,
+            platform_path=None,
+        )
         reconcile.assert_called_once_with()
 
     def test_replace_json_document_rejects_non_object_input(self) -> None:
