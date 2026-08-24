@@ -114,6 +114,8 @@ async function build() {
     entryPoints: [join(source, "index.jsx")],
     assetNames: "assets/[name]-[hash]",
     legalComments: "external",
+    // The cockpit host module is provided by cockpit-ws at runtime.
+    external: ["cockpit"],
     loader: {
       ".js": "jsx", ".jsx": "jsx",
       ".woff": "file", ".woff2": "file", ".svg": "file",

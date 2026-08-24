@@ -68,7 +68,10 @@ in
       description = lib.mkOverride 900 "Apply Managed Services V2 Authentik blueprint";
       unitConfig.ConditionPathExists = lib.mkOverride 900 [ effectivePath authentikEnvironment ];
       environment = {
-        PYTHONPATH = toString v2Source;
+        # mkOverride 900 matches the audited overlay priority above and keeps
+        # this definition winning over the identical base PYTHONPATH without
+        # reintroducing mkForce.
+        PYTHONPATH = lib.mkOverride 900 (toString v2Source);
         AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
       };
       serviceConfig = {

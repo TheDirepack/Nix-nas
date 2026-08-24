@@ -22,6 +22,7 @@ let
     copypartyDataDir
     copypartyUserConfigDir
     lanHost
+    nasCockpitApi
     postgresqlDataDir
     syncthingConfigDir
     syncthingDataDir
@@ -194,6 +195,29 @@ in
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
       };
     };
+    systemd.services.nas-setup-api = {
+      description = "Loopback first-start setup API for the Caddy-served setup wizard";
+      wantedBy = [ "multi-user.target" ];
+      # The wizard submits through this API before secrets exist, so the unit
+      # must not wait for the protected stack. After the first successful
+      # setup the persisted state makes the wizard and its API unnecessary;
+      # keep the setup utility off the next boot to reduce attack surface.
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = [ "!/var/lib/nas-setup/state.json" ];
+      serviceConfig = {
+        ExecStart = "${nasCockpitApi}/bin/nas-cockpit-api serve --bind 127.0.0.1 --port 8980";
+        Restart = "on-failure";
+        RestartSec = "2s";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        # Loopback bind only; Caddy forward-auth gates every external request.
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        ReadWritePaths = [ "/var/lib/nas-setup" ];
+      };
+    };
+
     systemd.services.nas-authentik-proxy-outpost = {
       description = "Dedicated Authentik proxy outpost";
       wantedBy = [ "multi-user.target" ];

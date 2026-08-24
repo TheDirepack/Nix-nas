@@ -45,6 +45,14 @@ https://${lanHost} {
   handle /setup {
     redir /setup /setup/ 308
   }
+  # The wizard's submission API. Authentik-gated like the page itself; the
+  # port must match nas-setup-api.service (application-services.nix).
+  handle /setup/api/* {
+    route {
+      ${caddyForwardAuth}
+      reverse_proxy 127.0.0.1:8980
+    }
+  }
   handle /setup/* {
     route {
       ${caddyForwardAuth}

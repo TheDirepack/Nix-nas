@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import http.server
 import json
 import os
 import pathlib
@@ -13,6 +14,7 @@ import re
 import secrets
 import socket
 import stat
+
 import sys
 import syslog
 import tempfile
@@ -1203,7 +1205,102 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("ai-role-set")
     sub.add_parser("ai-advanced-set")
     sub.add_parser("source-control")
+    serve = sub.add_parser("serve", help="Serve the first-start setup API on loopback for the setup wizard")
+    serve.add_argument("--bind", default="127.0.0.1", help="Loopback address to bind")
+    serve.add_argument("--port", type=int, default=8980, help="Loopback TCP port to bind")
     return parser
+
+
+SETUP_STATE_PATH = pathlib.Path(os.environ.get("NAS_SETUP_STATE", "/var/lib/nas-setup/state.json"))
+SETUP_API_JOB_RE = re.compile(r"^/setup/api/first-start/job/([0-9a-f]{24})$")
+
+
+def _setup_complete() -> bool:
+    try:
+        state = json.loads(SETUP_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}
+
+
+class SetupApiHandler(http.server.BaseHTTPRequestHandler):
+    """Loopback-only JSON API for the first-start setup wizard.
+
+    Exposure is gated by Caddy forward-auth; the handlers reuse the exact
+    validation and job-submission path as the Cockpit first-start page.
+    """
+
+    server_version = "nas-setup-api/1"
+
+    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _api_error(self, exc: Exception) -> None:
+        self._send_json(400, {"error": str(exc)})
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server naming
+        try:
+            if self.path == "/setup/api/first-start":
+                self._send_json(200, first_start_status())
+                return
+            job_match = SETUP_API_JOB_RE.fullmatch(self.path)
+            if job_match:
+                self._send_json(200, first_start_job_status(job_match.group(1)))
+                return
+            self._send_json(404, {"error": "Not found"})
+        except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:
+            self._api_error(exc)
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server naming
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > MAX_JSON_INPUT_BYTES:
+                raise ApiError("JSON request exceeds the input limit")
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                request = json.loads(raw.decode("utf-8") or "{}")
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ApiError("Invalid JSON request") from exc
+            if not isinstance(request, dict):
+                raise ApiError("JSON request must be an object")
+            if self.path == "/setup/api/first-run":
+                self._send_json(200, start_first_start(request))
+                return
+            if self.path == "/setup/api/reboot":
+                if not _setup_complete():
+                    raise ApiError("Reboot is only offered after first-start setup completes")
+                completed = run_command(["systemctl", "reboot"], check=False, timeout_seconds=30)
+                if completed.returncode != 0:
+                    raise ApiError("Unable to schedule the reboot")
+                self._send_json(200, {"rebooting": True})
+                return
+            self._send_json(404, {"error": "Not found"})
+        except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:
+            self._api_error(exc)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
+        syslog.syslog(syslog.LOG_INFO, "nas-setup-api %s" % (format % args))
+
+
+def serve_setup_api(bind: str, port: int) -> int:
+    if not re.fullmatch(r"127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|::1", bind):
+        print("nas-cockpit-api serve refuses non-loopback bind addresses", file=sys.stderr)
+        return 1
+    server = http.server.ThreadingHTTPServer((bind, port), SetupApiHandler)
+    syslog.syslog(syslog.LOG_INFO, f"nas-setup-api listening on {bind}:{port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def main() -> int:
@@ -1242,6 +1339,8 @@ def main() -> int:
             result = set_ai_advanced(_json_input())
         elif args.command == "source-control":
             result = source_control(_json_input())
+        elif args.command == "serve":
+            return serve_setup_api(args.bind, args.port)
         else:  # pragma: no cover
             raise ApiError(f"Unsupported command: {args.command}")
         print(json.dumps(result, indent=2, sort_keys=True))

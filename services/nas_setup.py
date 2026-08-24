@@ -59,6 +59,22 @@ from nas_setup_config import (
 )
 from nas_syncthing_devices import DeviceError, validate_username
 
+# Explicit setup application for first run. The wizard is served at /setup
+# behind Authentik forward-auth as an explicit Authentik Application
+# (nas-setup) so it is discoverable in the launcher during first run. After a
+# successful first run the application self-removes via the best-effort helper
+# below, and the Caddy bootstrap (secretReady + state.json) plus the
+# nas-setup-api ConditionPathExists ensure the wizard no longer serves.
+SETUP_APPLICATION_SLUG = "nas-setup"
+
+# Explicit setup application for first run. The wizard is served at /setup
+# behind Authentik forward-auth as an explicit Authentik Application
+# (nas-setup) so it is visible in the launcher during first run. After a
+# successful first run the application self-removes via the best-effort helper
+# below, and the Caddy bootstrap (secretReady + state.json) plus the
+# nas-setup-api ConditionPathExists ensure the wizard no longer serves.
+SETUP_APPLICATION_SLUG = "nas-setup"
+
 BOOTSTRAP_ADMIN_USER = "nas-bootstrap"
 # Kept as the pre-completion administrator identity for command callers that
 # run before the operator-selected account has been persisted.
@@ -704,6 +720,65 @@ def setup_fingerprint(
     return hashlib.sha256(payload).hexdigest()
 
 
+def _remove_setup_application() -> dict[str, Any]:
+    """Best-effort removal of the explicit first-run setup Authentik application.
+
+    The setup wizard is an explicit application (slug nas-setup) so it is
+    discoverable in Authentik during first run. After a successful run the
+    Caddy bootstrap already hides /setup, but the Authentik object would
+    otherwise remain visible. Deletion is idempotent and never fails setup;
+    the setup API service itself is gated by ConditionPathExists on
+    state.json so the wizard no longer starts on the next boot.
+    """
+    token_paths = [
+        pathlib.Path(os.environ.get("NAS_AUTHENTIK_TOKEN_FILE", "/run/nas-secrets/authentik/api-token")),
+        pathlib.Path(os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")),
+        pathlib.Path("/run/nas-authentik/api-token"),
+        pathlib.Path("/var/lib/nas-bootstrap/authentik/api-token"),
+    ]
+    token: str | None = None
+    for candidate in token_paths:
+        try:
+            value = candidate.read_text(encoding="utf-8").strip()
+            if value:
+                token = value
+                break
+        except OSError:
+            continue
+    if not token:
+        return {"removed": False, "reason": "no-token"}
+
+    # Authentik listens on 127.0.0.1:9000 with the configured path prefix.
+    # Try both the canonical and the bare API path for robustness across
+    # generations.
+    import urllib.error
+    import urllib.request
+
+    bases = [
+        "http://127.0.0.1:9000/identity/api/v3",
+        "http://127.0.0.1:9000/api/v3",
+    ]
+    last_error: str | None = None
+    for base in bases:
+        url = f"{base}/core/applications/{SETUP_APPLICATION_SLUG}/"
+        request = urllib.request.Request(url, method="DELETE", headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                # 204 No Content on successful deletion, 200 is also treated as success.
+                if response.status in (200, 201, 202, 204):
+                    return {"removed": True, "slug": SETUP_APPLICATION_SLUG}
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return {"removed": False, "reason": "not-found"}
+            last_error = f"HTTP {exc.code}"
+            continue
+        except OSError as exc:
+            last_error = str(exc)
+            continue
+    # If all bases failed with a non-404, report it but don't fail setup.
+    return {"removed": False, "reason": last_error or "unknown"}
+
+
 def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
     completed = run_root(coordinated_child(["nas-identity-sync", "bootstrap-runtime-token"]))
     try:
@@ -1102,6 +1177,15 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 journal.fail("Final setup state could not be verified", manual_recovery=True)
                 raise SetupError("Final setup state could not be verified")
             journal.complete(report)
+            # Best-effort removal of the explicit setup application. The Caddy
+            # bootstrap already hides /setup after ready, and the nas-setup-api
+            # service is gated by state.json so the wizard no longer starts on
+            # the next boot. Removing the Authentik object ensures it also
+            # disappears from the launcher.
+            try:
+                _remove_setup_application()
+            except Exception as exc:  # pragma: no cover - best-effort cleanup
+                diagnostic(f"Unable to remove setup application: {exc}")
             publish_first_start_status(
                 {
                     "schemaVersion": SCHEMA_VERSION,

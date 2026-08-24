@@ -1,19 +1,43 @@
 import React from 'react';
-import { FormGroup, Label, TextInput } from '@patternfly/react-core';
+import { FormGroup, Checkbox, Label } from '@patternfly/react-core';
 
-const StorageStep = () => (
-  <div>
-    <p>
-      ZFS pool creation is handled by the setup tooling after this wizard
-      completes. Detected pools are shown read-only below.
-    </p>
-    <FormGroup label="ZFS pool name" fieldId="wizard-pool-name">
-      <TextInput id="wizard-pool-name" placeholder="tank" isDisabled />
-    </FormGroup>
-    <FormGroup label="Pool devices" fieldId="wizard-pool-devices">
-      <TextInput id="wizard-pool-devices" placeholder="/dev/sdb /dev/sdc" isDisabled />
-    </FormGroup>
-  </div>
-);
+const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive }) => {
+  if (planError) {
+    return <p>Unable to load the storage plan: {planError}</p>;
+  }
+  if (!plan) {
+    return <p>Loading the storage plan...</p>;
+  }
+  const storage = plan.storage || {};
+  return (
+    <div>
+      <p>Review the storage plan published by the appliance. Pools are created exactly as reviewed.</p>
+      <FormGroup label="Status" fieldId="wizard-plan-status">
+        <Label color={plan.status === 'ready' ? 'green' : 'orange'}>{plan.status}</Label>
+      </FormGroup>
+      <FormGroup label="Pool" fieldId="wizard-plan-pool">
+        <TextInput id="wizard-plan-pool" value={storage.pool || ''} isDisabled />
+      </FormGroup>
+      <FormGroup label="Dataset" fieldId="wizard-plan-dataset">
+        <TextInput id="wizard-plan-dataset" value={storage.dataset || ''} isDisabled />
+      </FormGroup>
+      <FormGroup label="Devices" fieldId="wizard-plan-devices">
+        <TextInput
+          id="wizard-plan-devices"
+          value={Array.isArray(storage.devices) ? storage.devices.join(' ') : ''}
+          isDisabled
+        />
+      </FormGroup>
+      {plan.requiresDestructiveConfirmation && (
+        <Checkbox
+          id="wizard-destructive"
+          label="I understand the listed devices will be wiped when the new pool is created"
+          isChecked={allowDestructive}
+          onChange={(_event, checked) => onAllowDestructive(checked)}
+        />
+      )}
+    </div>
+  );
+};
 
 export default StorageStep;

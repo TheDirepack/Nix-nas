@@ -395,6 +395,8 @@ let
     chmod -R u+w "$out/share/authentik/blueprints"
     install -m 0444 ${../../../authentik/blueprints/nas-user-settings.yaml} \
       "$out/share/authentik/blueprints/nas-user-settings.yaml"
+    install -m 0444 ${../../../authentik/blueprints/nas-setup.yaml} \
+      "$out/share/authentik/blueprints/nas-setup.yaml"
   '';
 
   nasCockpitApiScript = "${nasPythonApplication}/bin/nas-cockpit-api";

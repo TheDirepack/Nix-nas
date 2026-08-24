@@ -66,12 +66,12 @@ test("wizard step components use exports that exist in react-core 6.1.0", async 
   }
 });
 
-test("admin step gates the KeePassXC master fields behind the shared-password toggle", async () => {
+test("admin step gates the KeePassXC database password behind the shared-password toggle", async () => {
   const admin = await wizard("src/steps/AdminStep.jsx");
   assert.match(admin, /KeePassXC/);
   assert.match(admin, /useSamePassword/);
   assert.match(admin, /wizard-keepass-password/);
-  assert.match(admin, /wizard-keepass-confirm/);
+  assert.match(admin, /wizard-admin-password-confirm/, "administrator password needs a confirm field");
 });
 
 test("wizard shell references only relative, locally served assets", async () => {

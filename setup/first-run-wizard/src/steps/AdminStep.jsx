@@ -1,78 +1,63 @@
 import React from 'react';
-import { FormGroup, Label, TextInput, Checkbox } from '@patternfly/react-core';
+import { FormGroup, TextInput, Checkbox } from '@patternfly/react-core';
 
-const AdminStep = () => {
-  const [adminUsername, setAdminUsername] = React.useState('admin');
-  const [adminEmail, setAdminEmail] = React.useState('');
-  const [adminPassword, setAdminPassword] = React.useState('');
-  const [adminPasswordConfirm, setAdminPasswordConfirm] = React.useState('');
-  const [useSamePassword, setUseSamePassword] = React.useState(true);
-  const [keePassMasterPassword, setKeePassMasterPassword] = React.useState('');
-  const [keePassMasterPasswordConfirm, setKeePassMasterPasswordConfirm] = React.useState('');
+const AdminStep = ({
+  administrator,
+  onAdministrator,
+  useSamePassword,
+  onUseSamePassword,
+  keePassPassword,
+  onKeePassPassword,
+}) => {
+  const update = (field) => (_event, value) => onAdministrator({ ...administrator, [field]: value });
 
   return (
     <div>
       <FormGroup label="Username" fieldId="wizard-admin-username" isRequired>
-        <TextInput
-          id="wizard-admin-username"
-          value={adminUsername}
-          onChange={(_event, value) => setAdminUsername(value)}
-          placeholder="admin"
-        />
+        <TextInput id="wizard-admin-username" value={administrator.username} onChange={update('username')} />
+      </FormGroup>
+      <FormGroup label="Full name" fieldId="wizard-admin-name" isRequired>
+        <TextInput id="wizard-admin-name" value={administrator.name} onChange={update('name')} />
       </FormGroup>
       <FormGroup label="Email" fieldId="wizard-admin-email" isRequired>
         <TextInput
           id="wizard-admin-email"
           type="email"
-          value={adminEmail}
-          onChange={(_event, value) => setAdminEmail(value)}
-          placeholder="admin@example.com"
+          value={administrator.email}
+          onChange={update('email')}
         />
       </FormGroup>
       <FormGroup label="Password" fieldId="wizard-admin-password" isRequired>
         <TextInput
           id="wizard-admin-password"
           type="password"
-          value={adminPassword}
-          onChange={(_event, value) => setAdminPassword(value)}
+          value={administrator.password}
+          onChange={update('password')}
         />
-        <Label htmlFor="wizard-admin-password-confirm">Confirm password</Label>
+      </FormGroup>
+      <FormGroup label="Confirm password" fieldId="wizard-admin-password-confirm" isRequired>
         <TextInput
           id="wizard-admin-password-confirm"
           type="password"
-          value={adminPasswordConfirm}
-          onChange={(_event, value) => setAdminPasswordConfirm(value)}
+          value={administrator.confirm}
+          onChange={update('confirm')}
         />
       </FormGroup>
       <Checkbox
         id="wizard-keepass-same"
-        label="Use the same password for the KeePassXC master key"
+        label="Use the same password for the KeePassXC database"
         isChecked={useSamePassword}
-        onChange={(_event, checked) => setUseSamePassword(checked)}
+        onChange={(_event, checked) => onUseSamePassword(checked)}
       />
       {!useSamePassword && (
-        <>
-          <FormGroup label="KeePassXC master password" fieldId="wizard-keepass-password" isRequired>
-            <TextInput
-              id="wizard-keepass-password"
-              type="password"
-              value={keePassMasterPassword}
-              onChange={(_event, value) => setKeePassMasterPassword(value)}
-            />
-          </FormGroup>
-          <FormGroup
-            label="Confirm KeePassXC master password"
-            fieldId="wizard-keepass-confirm"
-            isRequired
-          >
-            <TextInput
-              id="wizard-keepass-confirm"
-              type="password"
-              value={keePassMasterPasswordConfirm}
-              onChange={(_event, value) => setKeePassMasterPasswordConfirm(value)}
-            />
-          </FormGroup>
-        </>
+        <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
+          <TextInput
+            id="wizard-keepass-password"
+            type="password"
+            value={keePassPassword}
+            onChange={(_event, value) => onKeePassPassword(value)}
+          />
+        </FormGroup>
       )}
     </div>
   );
