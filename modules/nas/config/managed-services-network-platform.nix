@@ -13,11 +13,12 @@ in
       }
     ];
 
+    # nmstate is now the sole V2 adapter for host VLAN/VRF topology. It talks
+    # to NetworkManager through its native provider and performs its own
+    # verify/rollback transaction. Podman bridge networks remain Quadlet-owned.
     systemd.services.nas-managed-services-reconcile.environment = lib.mkIf cfg.networking.enable (
       {
-        NAS_V2_NMCLI_BIN = "${pkgs.networkmanager}/bin/nmcli";
-        NAS_V2_INSTALL_BIN = "${pkgs.coreutils}/bin/install";
-        NAS_V2_RM_BIN = "${pkgs.coreutils}/bin/rm";
+        NAS_V2_NMSTATECTL_BIN = "${pkgs.nmstate}/bin/nmstatectl";
       }
       // lib.optionalAttrs (vlanParent != null) {
         NAS_V2_VLAN_PARENT = vlanParent;
