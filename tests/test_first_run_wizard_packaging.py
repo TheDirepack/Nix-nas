@@ -1,3 +1,5 @@
+"""First-run setup packaging contracts - the served asset must be git-tracked."""
+
 from __future__ import annotations
 
 import unittest
@@ -10,9 +12,12 @@ class FirstRunWizardPackagingTests(unittest.TestCase):
         tools = text("modules/nas/internal/documentation-tools.nix")
         wizard_dist = ROOT / "setup/first-run-wizard/dist"
 
-        self.assertTrue((wizard_dist / "index.html").is_file())
-        self.assertTrue((wizard_dist / "first-run-wizard.js").is_file())
-        self.assertTrue((wizard_dist / "first-run-wizard.css").is_file())
+        self.assertTrue(wizard_dist.is_dir(), "the built wizard bundle must be committed")
+        for asset in ("index.html", "first-run-wizard.js", "first-run-wizard.css"):
+            self.assertTrue(
+                (wizard_dist / asset).is_file(),
+                f"setup/first-run-wizard/dist/{asset} must be tracked",
+            )
         self.assertIn("setup/first-run-wizard/dist", tools)
         self.assertIn("firstRunWizardStatic", tools)
         self.assertIn("first-run-wizard.js", tools)
