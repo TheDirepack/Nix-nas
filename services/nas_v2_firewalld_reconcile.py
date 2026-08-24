@@ -16,6 +16,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as StdElementTree
 from typing import Any, Sequence
 
 from defusedxml import ElementTree
@@ -104,14 +105,14 @@ def _read_projection(
     return desired
 
 
-def _attr(element: ElementTree.Element, name: str, *, label: str) -> str:
+def _attr(element: StdElementTree.Element, name: str, *, label: str) -> str:
     value = element.get(name)
     if not value or any(ch in value for ch in "\r\n\x00"):
         raise FirewalldReconcileError(f"projected {label} is missing safe attribute {name!r}")
     return value
 
 
-def _rich_rule(element: ElementTree.Element) -> str:
+def _rich_rule(element: StdElementTree.Element) -> str:
     family = _attr(element, "family", label="rich rule")
     priority = element.get("priority")
     parts = ["rule", f'family="{family}"']
