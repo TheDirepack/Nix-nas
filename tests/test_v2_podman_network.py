@@ -153,8 +153,12 @@ class V2PodmanNetworkTests(unittest.TestCase):
         assert vlan is not None
         files, manifest = self.project(effective)
         vrf_line = f"Options=vrf={vlan['vrfInterface']}"
-        self.assertIn(vrf_line, files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-demo.network")].decode())
-        self.assertIn(vrf_line, files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-second.network")].decode())
+        self.assertIn(
+            vrf_line, files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-demo.network")].decode()
+        )
+        self.assertIn(
+            vrf_line, files[pathlib.Path("/run/nas-control/systemd/quadlet/nas-v2-net-second.network")].decode()
+        )
         self.assertEqual(len(manifest["quadletLinks"]), 2)
         self.assertNotIn(vlan["unit"], manifest["ownedUnits"])
 
