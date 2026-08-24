@@ -12,7 +12,6 @@ let
     authentikRuntimeApiTokenFile
     authentikApiTokenFile
     authentikPort
-    authentikOutpostPort
     nasAuthentikBlueprints
     cockpitNasPlugin
     cockpitPort
@@ -50,8 +49,6 @@ let
       backend = "file";
       file.path = "${authentikDataDir}/data";
     };
-    # Load the repository-owned NAS blueprint instead of Authentik's immutable
-    # package directory, which is not writable by the service.
     blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";
     avatars = "initials";
     disable_update_check = true;
@@ -76,10 +73,6 @@ let
     Restart = "on-failure";
     RestartSec = "2s";
   };
-  # cockpit's Python bridge dies on sd_bus_attach_event returning EINVAL
-  # (libsystemd variant mismatch under Nix); upstream only tolerates EBUSY.
-  # Tolerating EINVAL turns a fatal shared-session crash into a per-channel
-  # error, keeping the Authentik-gated session alive.
   cockpitPatched = pkgs.cockpit.overrideAttrs (old: {
     postPatch =
       (old.postPatch or "")
@@ -93,9 +86,6 @@ let
     set -euo pipefail
     export PATH="${pkgs.procps}/bin:$PATH"
     # Caddy + Authentik are the only authorization boundary for /console.
-    # cockpit-ws serves the shared no-password --local-session bridge; if the
-    # bridge ever dies, ws alone would fall back to its own PAM login, so the
-    # supervisor kills ws immediately and systemd respawns the whole unit.
     term() {
       [[ -n "''${WSPID:-}" ]] && kill -TERM "''${WSPID}" 2>/dev/null || true
       exit 0
@@ -118,25 +108,6 @@ let
       wait "$WSPID" 2>/dev/null || true
       sleep 1
     done
-  '';
-  authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
-    set -euo pipefail
-    token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
-    outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
-      -H "Authorization: Bearer $token" \
-      http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/outposts/instances/?page_size=100 \
-      | ${pkgs.jq}/bin/jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
-    outpost_token="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
-      -H "Authorization: Bearer $token" \
-      "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/core/tokens/ak-outpost-$outpost-api/view_key/" \
-      | ${pkgs.jq}/bin/jq -er '.key')"
-    exec ${pkgs.util-linux}/bin/runuser --user authentik -- env \
-      AUTHENTIK_HOST="http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}" \
-      AUTHENTIK_HOST_BROWSER="https://${cfg.identity.publicHost}${cfg.identity.authentikPath}" \
-      AUTHENTIK_TOKEN="$outpost_token" \
-      AUTHENTIK_INSECURE=true \
-      AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}" \
-      ${pkgs.authentik-outposts.proxy}/bin/proxy
   '';
 in
 {
@@ -174,13 +145,9 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "nas-first-start.service" ];
       requires = [ "nas-first-start.service" ];
-      # The shared bridge runs unauthenticated-by-design behind the Caddy
-      # Authentik gate; it needs a writable HOME for agent/ssh state.
       environment.HOME = "/var/lib/nas-cockpit-sso";
       serviceConfig = {
         ExecStart = cockpitWebService;
-        # A crashed shared bridge must never degrade into a second login
-        # prompt; restarting ws respawns the local session within seconds.
         Restart = "always";
         RestartSec = "2s";
         NoNewPrivileges = true;
@@ -194,24 +161,6 @@ in
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
       };
     };
-    systemd.services.nas-authentik-proxy-outpost = {
-      description = "Dedicated Authentik proxy outpost";
-      wantedBy = [ "multi-user.target" ];
-      requires = [ "authentik.service" "nas-identity-bootstrap.service" ];
-      after = [ "authentik.service" "nas-identity-bootstrap.service" ];
-      unitConfig.ConditionPathExists = [ authentikRuntimeApiTokenFile ];
-      serviceConfig = {
-        ExecStart = authentikProxyOutpost;
-        Restart = "on-failure";
-        RestartSec = "2s";
-        NoNewPrivileges = false;
-        PrivateTmp = true;
-        ProtectHome = true;
-        ProtectSystem = "strict";
-        ReadOnlyPaths = [ authentikRuntimeApiTokenFile ];
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
-      };
-    };
 
     environment.etc."authentik/config.yml".source = authentikSettings;
     systemd.tmpfiles.rules = [
@@ -220,6 +169,7 @@ in
       "d ${bootstrapAuthentikDataDir}/data 0750 authentik authentik -"
       "d ${bootstrapPostgresqlDataDir} 0700 postgres postgres -"
       "d ${bootstrapSecretsDir} 0700 admin users -"
+      "d /var/lib/nas-operational 0700 root root -"
       "d ${syncthingDataDir} 0700 syncthing copyparty -"
       "d ${syncthingConfigDir} 0700 syncthing copyparty -"
       "L+ /var/lib/syncthing - - - - ${syncthingDataDir}"
@@ -315,8 +265,6 @@ in
         "auth-ord" = "idp";
         usernames = true;
         rproxy = 1;
-        # NixOS's Unix-socket proxy presents to CopyParty from its dedicated
-        # loopback proxy namespace, not from 127.0.0.1 itself.
         "xff-src" = "127.8.0.0/16";
         dedup = true;
         e2dsa = true;
@@ -327,9 +275,6 @@ in
         "idp-store" = 3;
       } // lib.optionalAttrs cfg.tftp.enable {
         tftp = cfg.tftp.internalPort;
-        # The HTTP endpoint is intentionally Unix-socket-only. TFTP is a
-        # separate UDP listener, so bind it to loopback explicitly instead of
-        # inheriting the Unix socket and silently disabling TFTP.
         "tftp-i" = "127.0.0.1";
         "tftp-pr" = "${toString cfg.tftp.responsePortStart}-${toString cfg.tftp.responsePortEnd}";
       };
@@ -416,8 +361,12 @@ in
     };
   };
 
+  # During first boot the temporary Authentik/PostgreSQL/KDBX authorities live
+  # under /var/lib/nas-bootstrap. Once setup has created a fresh permanent
+  # trust domain, switch to a separate empty root-filesystem tree. Nothing is
+  # copied from bootstrap and no identity authority depends on ZFS mounting.
   config.systemd.services.nas-bootstrap-runtime-select = {
-    description = "Select boot-root or ZFS identity runtime storage";
+    description = "Select bootstrap or permanent root-hosted identity runtime storage";
     before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
     wants = [ "nas-bootstrap-authentik-secrets.service" ];
     after = [ "nas-bootstrap-authentik-secrets.service" ];
@@ -427,8 +376,7 @@ in
       ExecStart = pkgs.writeShellScript "nas-bootstrap-runtime-select" ''
         set -euo pipefail
         if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
-          ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.zfsRoot}
-          target=${lib.escapeShellArg cfg.zfsRoot}
+          target=/var/lib/nas-operational
           environment=${lib.escapeShellArg authentikEnvironmentFile}
           api_token=${lib.escapeShellArg authentikApiTokenFile}
         else
