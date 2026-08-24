@@ -48,6 +48,7 @@ else:
     import nas_v2_caddy as caddy
     import nas_v2_compose as compose
     import nas_v2_network as network
+    import nas_v2_nmstate as nmstate
     import nas_v2_quadlet as quadlet
     import nas_v2_spec as v2_spec
 
@@ -85,6 +86,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_history",
         "nas_v2_libvirt",
         "nas_v2_network",
+        "nas_v2_nmstate",
         "nas_v2_plan",
         "nas_v2_platform_probe",
         "nas_v2_python_prepare",
@@ -174,6 +176,7 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(network.bridge_interface_name, value)
             expected_boundary_error(network.podman_network_name, value, {})
             expected_boundary_error(network.vlan_binding, {"vlanId": value, "vlanParent": value})
+            expected_boundary_error(nmstate._bound_policy, {"vlanId": 10}, value)
             v2_spec.SERVICE_ID_RE.fullmatch(value)
             v2_spec.CAPABILITY_ID_RE.fullmatch(value)
             v2_spec.SYSTEMD_UNIT_RE.fullmatch(value)
