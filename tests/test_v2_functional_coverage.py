@@ -432,15 +432,13 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             self.assertIn("nas_v2_libvirt.py", unit)
 
     # --------------------------------------------------------------- Systemd
-    def test_systemd_projection_covers_all_runtimes_and_applies(self) -> None:
+    def test_systemd_projection_covers_native_runtimes_and_applies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             app_root = root / "apps"
-            # need compose + vm sources
-            for sid in ("comp", "vmdemo", "pyapp"):
+            # Compose is an import format and has dedicated Podlet/Quadlet tests.
+            for sid in ("vmdemo", "pyapp"):
                 (app_root / sid).mkdir(parents=True)
-            compose_src = app_root / "comp" / "compose.yaml"
-            compose_src.write_text("services:\n  web:\n    image: example/web:latest\n", encoding="utf-8")
             vm_src = app_root / "vmdemo" / "domain.xml"
             vm_src.write_text(
                 '<domain type="kvm"><name>x</name><os><type>hvm</type></os><devices/></domain>', encoding="utf-8"
@@ -467,11 +465,6 @@ class V2FunctionalCoverageTests(unittest.TestCase):
                             "entrypoint": {"module": "demo.main"},
                         },
                     },
-                    "comp": {
-                        "name": "C",
-                        "workload": {"kind": "daemon"},
-                        "runtime": {"type": "compose", "source": str(compose_src)},
-                    },
                     "vmdemo": {
                         "name": "V",
                         "workload": {"kind": "daemon"},
@@ -494,7 +487,6 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             with (
                 mock.patch.object(spec, "APP_ROOT", pathlib.PurePosixPath(str(app_root))),
                 mock.patch.object(systemd, "APP_ROOT", app_root),
-                mock.patch.object(compose, "APP_ROOT", app_root),
                 mock.patch.object(libvirt, "APP_ROOT", app_root),
             ):
                 eff = _compile(doc, self.schema)
@@ -517,10 +509,6 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             self.assertIn('ExecStart="/nix/store/uv/bin/uv" "run"', python_unit)
             self.assertIn('"--with-requirements"', python_unit)
             self.assertNotIn("nas_v2_python_prepare.py", python_unit)
-            # compose has podman compose up
-            unit_comp = files[out / "units/nas-v2-comp.service"].decode()
-            self.assertIn("compose", unit_comp)
-            self.assertIn("podman", unit_comp)
             # vm has libvirtd
             self.assertIn("libvirtd.service", files[out / "units/nas-v2-vmdemo.service"].decode())
             # oci has quadlet file

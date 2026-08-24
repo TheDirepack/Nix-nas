@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 import tempfile
@@ -13,6 +14,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_compose as compose  # noqa: E402
+import nas_v2_compose_import as compose_import  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
 
@@ -22,26 +24,20 @@ class V2ComposeSystemdTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.schema = v2.load_schema(SCHEMA)
 
-    def fixture(self, root: pathlib.Path, *, activation: str = "persistent") -> tuple[dict, pathlib.Path]:
+    def fixture(self, root: pathlib.Path, *, on_demand: bool = False) -> tuple[dict, pathlib.Path]:
         app_root = root / "apps"
         service_root = app_root / "demo"
         service_root.mkdir(parents=True)
         source = service_root / "compose.yaml"
-        source.write_text(
-            """services:
-  web:
-    image: example.invalid/web:1
-""",
-            encoding="utf-8",
-        )
-        workload: dict[str, object] = {"kind": "daemon", "activation": activation}
+        source.write_text("services:\n  web:\n    image: example.invalid/web:1\n", encoding="utf-8")
+        workload: dict[str, object] = {"kind": "daemon", "activation": "persistent"}
         service: dict[str, object] = {
             "name": "Demo Compose",
             "workload": workload,
             "runtime": {"type": "compose", "source": str(source)},
         }
-        if activation == "on-demand":
-            workload["idleSeconds"] = 120
+        if on_demand:
+            workload.update({"activation": "on-demand", "idleSeconds": 120})
             service["routes"] = {
                 "web": {
                     "target": {"type": "http", "port": 8080},
@@ -49,113 +45,137 @@ class V2ComposeSystemdTests(unittest.TestCase):
                     "auth": {"mode": "public"},
                 }
             }
-        document = {"schemaVersion": 3, "services": {"demo": service}}
         with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
-            effective = v2.compile_document(document, self.schema)
+            effective = v2.compile_document({"schemaVersion": 3, "services": {"demo": service}}, self.schema)
         return effective, source
 
-    def generate(self, effective: dict, output: pathlib.Path) -> tuple[dict[pathlib.Path, bytes], dict]:
-        return systemd.generate_projection(
-            effective,
-            output_dir=output,
-            python_bin="/run/current-system/sw/bin/python3",
-            source_dir=pathlib.Path("/nix/store/v2/services"),
-            systemctl_bin="/run/current-system/sw/bin/systemctl",
-            uv_bin="/nix/store/uv/bin/uv",
-            podman_bin="/nix/store/podman/bin/podman",
-            compose_provider_bin="/nix/store/podman-compose/bin/podman-compose",
-        )
+    def fake_tools(self, root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+        root.mkdir(parents=True, exist_ok=True)
+        provider = root / "podman-compose"
+        provider.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        provider.chmod(0o755)
 
-    def test_compose_project_is_owned_by_finite_systemd_wrapper(self):
+        podman = root / "podman"
+        podman.write_text(
+            """#!/bin/sh
+source_file=""
+next_file=0
+for arg in "$@"; do
+  if [ "$next_file" = 1 ]; then
+    if [ -z "$source_file" ]; then source_file="$arg"; fi
+    next_file=0
+  elif [ "$arg" = "--file" ]; then
+    next_file=1
+  fi
+done
+[ -n "$source_file" ] || exit 2
+cat "$source_file"
+""",
+            encoding="utf-8",
+        )
+        podman.chmod(0o755)
+
+        podlet = root / "podlet"
+        podlet.write_text(
+            """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --file|-f) out="$2"; shift 2 ;;
+    compose) shift; break ;;
+    *) shift ;;
+  esac
+done
+[ -n "$out" ] || exit 2
+mkdir -p "$out"
+printf '%s\n' '# FileName=web' '[Container]' 'Image=example.invalid/web:imported' > "$out/web.container"
+if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_COUNT_FILE"; fi
+""",
+            encoding="utf-8",
+        )
+        podlet.chmod(0o755)
+        return podman, provider, podlet
+
+    def generate(
+        self,
+        effective: dict,
+        root: pathlib.Path,
+        *,
+        count_file: pathlib.Path | None = None,
+    ) -> tuple[dict[pathlib.Path, bytes], dict]:
+        podman, provider, podlet = self.fake_tools(root / "tools")
+        env = {"NAS_V2_PODLET_BIN": str(podlet)}
+        if count_file is not None:
+            env["NAS_V2_PODLET_COUNT_FILE"] = str(count_file)
+        with (
+            mock.patch.object(systemd, "APP_ROOT", root / "apps"),
+            mock.patch.object(compose, "APP_ROOT", root / "apps"),
+            mock.patch.object(compose_import, "APP_ROOT", root / "apps"),
+            mock.patch.dict(os.environ, env, clear=False),
+        ):
+            return systemd.generate_projection(
+                effective,
+                output_dir=root / "projection",
+                python_bin="/run/current-system/sw/bin/python3",
+                source_dir=pathlib.Path("/nix/store/v2/services"),
+                systemctl_bin="/run/current-system/sw/bin/systemctl",
+                uv_bin="/nix/store/uv/bin/uv",
+                podman_bin=str(podman),
+                compose_provider_bin=str(provider),
+            )
+
+    def test_compose_runtime_is_quadlet_not_podman_compose(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            effective, source = self.fixture(root)
-            output = root / "projection"
-            with mock.patch.object(compose, "APP_ROOT", root / "apps"):
-                files, manifest = self.generate(effective, output)
-
-            unit = files[output / "units/nas-v2-demo.service"].decode()
-            override = files[output / "compose/demo.override.yaml"].decode()
-
-        self.assertIn("Type=oneshot", unit)
-        self.assertIn("RemainAfterExit=yes", unit)
-        self.assertIn('Environment="PODMAN_COMPOSE_PROVIDER=/nix/store/podman-compose/bin/podman-compose"', unit)
-        self.assertIn('"/nix/store/podman/bin/podman" compose', unit)
-        self.assertIn(f'--file "{source.resolve()}"', unit)
-        self.assertIn(f'--file "{output / "compose/demo.override.yaml"}"', unit)
-        self.assertIn("up --detach --remove-orphans", unit)
-        self.assertIn("down --remove-orphans", unit)
-        self.assertEqual(override, '{\n  "services": {}\n}\n')
-        self.assertIn("nas-v2-demo.service", manifest["ownedUnits"])
+            effective, _source = self.fixture(root)
+            files, manifest = self.generate(effective, root)
+            owner = files[root / "projection/units/nas-v2-demo.service"].decode()
+            quadlet = files[root / "projection/quadlet/nas-v2-demo-web.container"].decode()
+        self.assertIn("Requires=nas-v2-demo-web.service", owner)
+        self.assertNotIn("podman compose", owner)
+        self.assertNotIn("PODMAN_COMPOSE_PROVIDER", owner)
+        self.assertIn("PartOf=nas-v2-demo.service", quadlet)
+        self.assertIn("nas-v2-demo-web.service", manifest["ownedUnits"])
         self.assertIn("nas-v2-demo.service", manifest["startUnits"])
 
-    def test_on_demand_compose_uses_native_socket_proxy_boundary(self):
+    def test_on_demand_import_uses_socket_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            effective, _source = self.fixture(root, activation="on-demand")
-            output = root / "projection"
-            with mock.patch.object(compose, "APP_ROOT", root / "apps"):
-                files, manifest = self.generate(effective, output)
-            owner = files[output / "units/nas-v2-demo.service"].decode()
-            socket = files[output / "units/nas-v2-activate-demo-web.socket"].decode()
-            proxy = files[output / "units/nas-v2-activate-demo-web.service"].decode()
-
+            effective, _source = self.fixture(root, on_demand=True)
+            files, manifest = self.generate(effective, root)
+            owner = files[root / "projection/units/nas-v2-demo.service"].decode()
+            proxy = files[root / "projection/units/nas-v2-activate-demo-web.service"].decode()
         self.assertIn("StopWhenUnneeded=yes", owner)
-        self.assertIn("ListenStream=/run/nas-control/activate/demo-web.sock", socket)
-        self.assertIn("SocketUser=caddy", socket)
         self.assertIn("systemd-socket-proxyd", proxy)
         self.assertIn("--exit-idle-time=120s", proxy)
         self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
-        self.assertIn("nas-v2-activate-demo-web.socket", manifest["ownedUnits"])
-        self.assertNotIn("nas-v2-lease-demo.target", manifest["ownedUnits"])
-        self.assertNotIn("nas-v2-idle-demo.timer", manifest["ownedUnits"])
 
-    def test_compose_source_content_changes_owner_fingerprint(self):
+    def test_unchanged_import_reuses_podlet_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, _source = self.fixture(root)
+            count = root / "podlet-count"
+            self.generate(effective, root, count_file=count)
+            first = len(count.read_text(encoding="utf-8").splitlines())
+            self.generate(effective, root, count_file=count)
+            second = len(count.read_text(encoding="utf-8").splitlines())
+        self.assertEqual(first, second)
+
+    def test_source_change_invalidates_import_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             effective, source = self.fixture(root)
-            output = root / "projection"
-            with mock.patch.object(compose, "APP_ROOT", root / "apps"):
-                _files1, manifest1 = self.generate(effective, output)
-                source.write_text(
-                    """services:
-  web:
-    image: example.invalid/web:2
-""",
-                    encoding="utf-8",
-                )
-                _files2, manifest2 = self.generate(effective, output)
-
+            _files1, manifest1 = self.generate(effective, root)
+            source.write_text("services:\n  web:\n    image: example.invalid/web:2\n", encoding="utf-8")
+            _files2, manifest2 = self.generate(effective, root)
         self.assertNotEqual(
             manifest1["fingerprints"]["nas-v2-demo.service"],
             manifest2["fingerprints"]["nas-v2-demo.service"],
         )
 
-    def test_compose_runtime_requires_absolute_runtime_binaries(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            effective, _source = self.fixture(root)
-            with (
-                mock.patch.object(compose, "APP_ROOT", root / "apps"),
-                self.assertRaisesRegex(systemd.SystemdProjectionError, "Podman binary must be an absolute safe path"),
-            ):
-                systemd.generate_projection(
-                    effective,
-                    output_dir=root / "projection",
-                    python_bin="/run/current-system/sw/bin/python3",
-                    source_dir=pathlib.Path("/nix/store/v2/services"),
-                    systemctl_bin="/run/current-system/sw/bin/systemctl",
-                    uv_bin="/nix/store/uv/bin/uv",
-                    podman_bin="podman",
-                    compose_provider_bin="podman-compose",
-                )
-
-    def test_nix_runtime_module_pins_podman_and_provider_store_paths(self):
-        module = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
-        self.assertIn('NAS_V2_PODMAN_BIN = "${pkgs.podman}/bin/podman";', module)
-        self.assertIn('NAS_V2_COMPOSE_PROVIDER_BIN = "${pkgs.podman-compose}/bin/podman-compose";', module)
-        self.assertNotIn('"--podman-bin"', module)
-        self.assertNotIn('"--compose-provider-bin"', module)
+    def test_nix_module_pins_podlet(self) -> None:
+        module = (ROOT / "modules/nas/config/managed-services-compose-import.nix").read_text(encoding="utf-8")
+        self.assertIn('"${pkgs.podlet}/bin/podlet"', module)
 
 
 if __name__ == "__main__":

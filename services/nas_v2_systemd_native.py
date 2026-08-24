@@ -23,7 +23,6 @@ from nas_v2_activation import (
     socket_path,
     socket_unit,
 )
-from nas_v2_compose import ComposeProjectionError, render_compose_override
 from nas_v2_libvirt import LibvirtProjectionError, render_domain_xml, validate_domain_xml
 from nas_v2_quadlet import QuadletProjectionError, render_quadlet, validate_quadlets
 from nas_v2_systemd_attachments import SystemdAttachmentError, attachment_lines
@@ -339,31 +338,6 @@ def _quadlet_source(effective: dict[str, Any], service_id: str, service: dict[st
         raise SystemdProjectionError(str(exc)) from exc
 
 
-def _compose_unit(
-    effective: dict[str, Any],
-    service_id: str,
-    service: dict[str, Any],
-    *,
-    source_path: pathlib.Path,
-    override_path: pathlib.Path,
-    podman_bin: str,
-    compose_provider_bin: str,
-) -> bytes:
-    _absolute_binary(podman_bin, field=f"Compose service {service_id!r} Podman binary")
-    _absolute_binary(compose_provider_bin, field=f"Compose service {service_id!r} provider binary")
-    project = f"nas-v2-{service_id}"
-    common = [
-        _quote(podman_bin), "compose", "--project-name", _quote(project), "--file", _quote(str(source_path)), "--file", _quote(str(override_path))
-    ]
-    return ("\n".join([
-        "[Unit]", *_unit_header(effective, service), "", "[Service]", "Type=oneshot", "RemainAfterExit=yes",
-        "Environment=" + _quote(f"PODMAN_COMPOSE_PROVIDER={compose_provider_bin}"),
-        "ExecStart=" + " ".join([*common, "up", "--detach", "--remove-orphans"]),
-        "ExecStop=" + " ".join([*common, "down", "--remove-orphans"]),
-        "TimeoutStartSec=0", "",
-    ])).encode()
-
-
 def _vm_unit(
     effective: dict[str, Any],
     service: dict[str, Any],
@@ -502,7 +476,6 @@ def generate_projection(
     unit_dir = output_dir / "units"
     descriptor_dir = output_dir / "descriptors"
     quadlet_dir = output_dir / "quadlet"
-    compose_dir = output_dir / "compose"
     vm_dir = output_dir / "vm"
 
     for service_id in sorted(effective["services"]):
@@ -522,17 +495,6 @@ def generate_projection(
             upath = unit_dir / owner
             files[upath], requirements_hash = _python_unit(effective, service_id, service, uv_bin=uv_bin)
             links[owner] = str(upath)
-        elif runtime["type"] == "compose":
-            try:
-                source_path, override = render_compose_override(effective, service_id, service)
-            except ComposeProjectionError as exc:
-                raise SystemdProjectionError(str(exc)) from exc
-            opath = compose_dir / f"{service_id}.override.yaml"
-            files[opath] = override
-            upath = unit_dir / owner
-            files[upath] = _compose_unit(effective, service_id, service, source_path=source_path, override_path=opath, podman_bin=podman_bin, compose_provider_bin=compose_provider_bin)
-            links[owner] = str(upath)
-            source_hash = _sha256_file(source_path)
         elif runtime["type"] == "vm":
             _absolute_binary(virsh_bin, field=f"VM service {service_id!r} virsh binary")
             try:
