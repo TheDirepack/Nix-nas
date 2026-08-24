@@ -61,6 +61,26 @@ class V2NetworkSemanticTests(unittest.TestCase):
         effective = self.compile({"schemaVersion": 3, "services": {"example": candidate}})
         self.assertEqual(effective["services"]["example"]["listeners"]["web"]["targetPort"], 9443)
 
+    def test_isolated_network_rejects_runtime_without_stable_v2_bridge(self):
+        candidate = service(runtime={"type": "exec", "command": ["/bin/true"]})
+        candidate["network"] = {"mode": "isolated"}
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "stable V2 bridge") as raised:
+            self.compile({"schemaVersion": 3, "services": {"example": candidate}})
+        self.assertEqual(raised.exception.code, "network-isolated-runtime")
+
+    def test_isolated_session_requires_direct_oci_runtime(self):
+        candidate = service(
+            runtime={
+                "type": "compose",
+                "source": "/var/lib/nas-control/apps/example/compose.yaml",
+            }
+        )
+        candidate["workload"] = {"kind": "session"}
+        candidate["network"] = {"mode": "isolated"}
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "direct OCI") as raised:
+            self.compile({"schemaVersion": 3, "services": {"example": candidate}})
+        self.assertEqual(raised.exception.code, "network-session-runtime")
+
     def test_vlan_requires_isolated_network_mode(self):
         candidate = service()
         candidate["network"] = {
