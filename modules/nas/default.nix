@@ -20,6 +20,7 @@
     ./config/caddy-bootstrap.nix
     ./config/observability.nix
     ./config/storage-monitoring.nix
+    ./config/backup-domains.nix
     ./config/systemd-services.nix
     ./config/schedules.nix
     ./config/system.nix
