@@ -108,7 +108,21 @@ let
     plugin // {
       passthru.cockpitPath = [ plugin ];
     };
+
+  firstRunWizardStatic =
+    pkgs.runCommand "first-run-wizard-static" { } ''
+      wizard_dist=${../../../setup/first-run-wizard/dist}
+      for asset in index.html first-run-wizard.js first-run-wizard.css; do
+        test -s "$wizard_dist/$asset" || {
+          printf 'First-run wizard bundle is missing %s. Run npm ci and node build.js in setup/first-run-wizard/.\n' "$asset" >&2
+          exit 1
+        }
+      done
+      install -d "$out/share/nas-portal-wizard"
+      cp -R "$wizard_dist/." "$out/share/nas-portal-wizard/"
+      chmod -R u+w "$out/share/nas-portal-wizard"
+    '';
 in
 {
-  inherit nasDocumentation cockpitNasPlugin;
+  inherit nasDocumentation cockpitNasPlugin firstRunWizardStatic;
 }

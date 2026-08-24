@@ -182,7 +182,7 @@ ALLOWED_ROOT_MARKDOWN = {"AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "README
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9][A-Za-z0-9.-]*)?$")
 STATIC_NIX_PATH_RE = re.compile(r"\$\{(\.\./[^}]+)\}")
 FORBIDDEN_DIR_NAMES = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__", "node_modules", "build", "dist"}
-ALLOWED_GENERATED_DIRS = {ROOT / "cockpit" / "dist"}
+ALLOWED_GENERATED_DIRS = {ROOT / "cockpit" / "dist", ROOT / "setup" / "first-run-wizard" / "dist"}
 FORBIDDEN_FILE_NAMES = {".coverage", "coverage.json"}
 
 

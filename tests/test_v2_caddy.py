@@ -114,7 +114,7 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
     def test_forward_auth_sends_forwarded_trio_and_does_not_rewrite_locations(self):
         helpers = (ROOT / "modules/nas/internal/caddy-helpers.nix").read_text(encoding="utf-8")
         self.assertIn("header_up X-Forwarded-Proto {scheme}", helpers)
-        self.assertIn("header_up X-Forwarded-Host {host}", helpers)
+        self.assertIn("header_up X-Forwarded-Host {http.request.hostport}", helpers)
         self.assertIn("header_up X-Forwarded-Uri {uri}", helpers)
         self.assertIn("X-Original-URL", helpers)
         self.assertNotIn("header_down Location", helpers)

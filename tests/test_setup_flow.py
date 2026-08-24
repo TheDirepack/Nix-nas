@@ -46,11 +46,12 @@ class TestCaddyConfig(unittest.TestCase):
                 end = content.index("\n  }", start)
                 self.assertNotIn("${caddyForwardAuth}", content[start:end])
 
-        for route in ("handle /setup {", "handle /setup/* {"):
-            with self.subTest(route=route):
-                start = content.index(route)
-                end = content.find("\n  }", start)
-                self.assertIn("${caddyForwardAuth}", content[start:end], f"{route} must require Authentik")
+        canonical = content[content.index("handle /setup {") : content.index("handle /setup/* {")]
+        self.assertIn("redir /setup /setup/ 308", canonical)
+
+        setup_start = content.index("handle /setup/* {")
+        setup_end = content.find("\n  }\n", setup_start)
+        self.assertIn("${caddyForwardAuth}", content[setup_start:setup_end], "/setup/* must require Authentik")
 
         console_start = content.index("handle /console* {")
         console_end = content.find("\n  }\n", console_start)

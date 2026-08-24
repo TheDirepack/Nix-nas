@@ -17,9 +17,11 @@ let
       # The outpost's Caddy handler needs this exact trio to detect the
       # original request and build the authorize redirect.
       header_up X-Forwarded-Proto {scheme}
-      header_up X-Forwarded-Host {host}
+      # {http.request.hostport} keeps a non-standard external port
+      # (QEMU forwards :8443); on a 443 deployment it equals {host}.
+      header_up X-Forwarded-Host {http.request.hostport}
       header_up X-Forwarded-Uri {uri}
-      header_up X-Original-URL {http.request.scheme}://{http.request.host}{http.request.orig_uri}
+      header_up X-Original-URL {http.request.scheme}://{http.request.hostport}{http.request.orig_uri}
       copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements X-Authentik-Name X-Authentik-Email X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
     }
     @missingAuthentikIdentity not header X-Authentik-Username *

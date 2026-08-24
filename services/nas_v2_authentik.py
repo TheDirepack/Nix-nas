@@ -16,6 +16,7 @@ import re
 import sys
 import urllib.error
 import urllib.parse
+import os
 import urllib.request
 from typing import Any
 
@@ -211,55 +212,82 @@ def reconcile_capabilities(
     }
 
 
-def desired_route_apps(effective: dict[str, Any]) -> list[dict[str, Any]]:
-    """Collect Authentik proxy applications for identity-gated hostname routes.
+def desired_route_apps(effective: dict[str, Any], *, public_host: str) -> list[dict[str, Any]]:
+    """Collect Authentik applications that make V2 web apps visible in the launcher.
 
-    Every V2 route exposed on its own hostname (sub- or sub-sub-domain) shares
-    the same Caddy forward-auth boundary; this projection only ensures each
-    such host has a matching Authentik application so the outpost can authorize
-    and redirect for it.
+    The Authentik user library is the appliance home page. Every portal-visible
+    identity-gated route becomes an application tile there:
+
+    - hostname-exposed routes get a forward_single proxy provider so the
+      outpost can authorize and redirect for their dedicated host;
+    - path-exposed routes get a provider-less application whose launch URL is
+      the public path — Caddy's forward_auth (NAS Portal provider plus the
+      capability check) already enforces authentication on those paths.
     """
     apps: list[dict[str, Any]] = []
     seen: set[str] = set()
-    services = effective.get("services")
-    if not isinstance(services, dict):
+    derived = effective.get("derived") or {}
+    routes = derived.get("routes") if isinstance(derived, dict) else None
+    if not isinstance(routes, list):
         return apps
-    for service_id, service in sorted(services.items()):
-        if not isinstance(service, dict):
+    for entry in sorted(routes, key=lambda r: (str(r.get("service")), str(r.get("route")))):
+        if not isinstance(entry, dict):
             continue
-        routes = service.get("routes")
-        if not isinstance(routes, dict):
+        service_id = entry.get("service")
+        route_id = entry.get("route")
+        if not service_id or not route_id:
             continue
-        runtime = service.get("runtime") or {}
-        unit = runtime.get("unit") if isinstance(runtime, dict) else None
-        for route_id, route in sorted(routes.items()):
-            if not isinstance(route, dict) or route.get("enabled") is False:
-                continue
-            authz = route.get("auth") or {}
-            if authz.get("mode") != "identity":
-                continue
-            exposure = route.get("exposure") or {}
-            if exposure.get("type") != "hostname":
-                continue
-            target = route.get("target") or {}
+        slug = f"v2-{service_id}-{route_id}"
+        if slug in seen:
+            continue
+        if entry.get("authMode") != "identity":
+            continue
+        portal = entry.get("portal") or {}
+        if not isinstance(portal, dict) or portal.get("visible") is not True:
+            continue
+        exposure = entry.get("exposure") or {}
+        exposure_type = exposure.get("type")
+        title = portal.get("title")
+        name = title if isinstance(title, str) and title else f"NAS {service_id} ({route_id})"
+        if exposure_type == "hostname":
+            target = entry.get("target") or {}
             host = target.get("host", "127.0.0.1")
             port = target.get("port")
             internal = f"http://{host}:{port}" if isinstance(port, int) else None
+            if internal is None:
+                continue
             for hostname in exposure.get("hostnames") or []:
-                key = f"{service_id}/{route_id}/{hostname}"
-                if key in seen or not isinstance(internal, str):
+                key = f"{slug}/{hostname}"
+                if key in seen:
                     continue
                 seen.add(key)
                 apps.append(
                     {
-                        "slug": f"v2-{service_id}-{route_id}",
-                        "name": f"NAS {service_id} ({route_id})",
-                        "hostname": hostname,
+                        "slug": slug,
+                        "name": name,
+                        "hostname": str(hostname),
                         "internalHost": internal,
                         "launchUrl": f"https://{hostname}/",
-                        "unit": unit if isinstance(unit, str) else "",
+                        "providerless": False,
                     }
                 )
+        elif exposure_type == "path":
+            paths = exposure.get("paths") or []
+            first = next((pth for pth in paths if isinstance(pth, str) and pth.startswith("/")), None)
+            if first is None:
+                continue
+            launch_path = first if first.endswith("/") else first + "/"
+            seen.add(slug)
+            apps.append(
+                {
+                    "slug": slug,
+                    "name": name,
+                    "hostname": "",
+                    "internalHost": "",
+                    "launchUrl": f"https://{public_host}{launch_path}",
+                    "providerless": True,
+                }
+            )
     return apps
 
 
@@ -268,11 +296,12 @@ def reconcile_route_apps(
     *,
     token: str,
     authentik_url: str,
+    public_host: str,
     public_authentik_path: str = "/identity/",
 ) -> dict[str, Any]:
-    """Ensure one forward_single proxy provider + application per hostname route."""
+    """Ensure launcher applications exist for every portal-visible V2 route."""
     api_root = _api_root(authentik_url)
-    desired_apps = desired_route_apps(effective)
+    desired_apps = desired_route_apps(effective, public_host=public_host)
 
     providers = _request_json(url=f"{api_root}/providers/proxy/?page_size=100", token=token, method="GET")
     provider_by_name = {p.get("name"): p for p in providers if isinstance(p, dict)}
@@ -299,6 +328,30 @@ def reconcile_route_apps(
     for app in desired_apps:
         name = app["name"]
         external_host = f"https://{app['hostname']}"
+        application_payload = {
+            "name": name,
+            "slug": app["slug"],
+            "meta_launch_url": app["launchUrl"],
+        }
+        if app.get("providerless"):
+            application_payload["provider"] = None
+            existing_app = app_by_slug.get(app["slug"])
+            if existing_app is None:
+                _request_json(
+                    url=f"{api_root}/core/applications/", token=token, method="POST", body=application_payload
+                )
+            else:
+                _request_json(
+                    url=f"{api_root}/core/applications/{app['slug']}/",
+                    token=token,
+                    method="PATCH",
+                    body=application_payload,
+                )
+            if existing_app is None:
+                created.append(app["slug"])
+            else:
+                updated.append(app["slug"])
+            continue
         provider_body = {
             "name": name,
             "mode": "forward_single",
@@ -325,12 +378,7 @@ def reconcile_route_apps(
         if provider_pk is None:
             raise AuthentikProjectionError(f"provider for {name!r} has no primary key")
 
-        application_payload = {
-            "name": name,
-            "slug": app["slug"],
-            "provider": provider_pk,
-            "meta_launch_url": app["launchUrl"],
-        }
+        application_payload.update({"provider": provider_pk})
         existing_app = app_by_slug.get(app["slug"])
         if existing_app is None:
             _request_json(url=f"{api_root}/core/applications/", token=token, method="POST", body=application_payload)
@@ -379,6 +427,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=pathlib.Path("/run/nas-secrets/authentik/api-token"),
     )
     parser.add_argument("--authentik-url", default="http://127.0.0.1:9000/identity")
+    parser.add_argument(
+        "--public-host",
+        default=os.environ.get("NAS_V2_AUTHENTIK_PUBLIC_HOST", ""),
+        help="Public appliance host[:port] used for launcher URLs of path routes",
+    )
     return parser
 
 
@@ -395,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             effective_state,
             token=_read_token(args.token_file),
             authentik_url=args.authentik_url,
+            public_host=args.public_host,
         )
     except AuthentikProjectionError as exc:
         print(f"nas-v2-authentik: {exc}", file=sys.stderr)

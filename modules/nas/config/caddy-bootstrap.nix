@@ -7,8 +7,8 @@ let
     caddyForwardAuth
     cfg
     cockpitPort
+    firstRunWizardStatic
     lanHost
-    nasPortalStatic
     secretRoot
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
@@ -40,22 +40,20 @@ https://${lanHost} {
   handle / {
     redir * ${cfg.identity.authentikPath}if/user/ 303
   }
+  # /setup without the slash would make the wizard's relative asset URLs
+  # resolve against /, so canonicalise to /setup/ before serving.
   handle /setup {
-    route {
-      ${caddyForwardAuth}
-      @post method POST
-      handle @post {
-        redir * /setup 303
-      }
-      root * ${nasPortalStatic}/share/nas-portal
-      rewrite * /setup.html
-      file_server
-    }
+    redir /setup /setup/ 308
   }
   handle /setup/* {
     route {
       ${caddyForwardAuth}
-      root * ${nasPortalStatic}/share/nas-portal
+      @post method POST
+      handle @post {
+        redir * /setup/ 303
+      }
+      uri strip_prefix /setup
+      root * ${firstRunWizardStatic}/share/nas-portal-wizard
       file_server
     }
   }

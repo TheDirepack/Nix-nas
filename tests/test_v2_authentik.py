@@ -185,8 +185,21 @@ class V2AuthentikTests(unittest.TestCase):
                 }
             },
         }
-        apps = authentik.desired_route_apps(effective)
+        effective["derived"] = {
+            "routes": [
+                {
+                    "service": "media",
+                    "route": "web",
+                    "authMode": "identity",
+                    "exposure": {"type": "hostname", "hostnames": ["media.nas.local"], "path": "/"},
+                    "target": {"type": "http", "host": "127.0.0.1", "port": 8096},
+                    "portal": {"visible": True, "title": "Media Library"},
+                }
+            ]
+        }
+        apps = authentik.desired_route_apps(effective, public_host="nas.local")
         self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0]["name"], "Media Library")
         self.assertEqual(apps[0]["slug"], "v2-media-web")
         self.assertEqual(apps[0]["hostname"], "media.nas.local")
         self.assertEqual(apps[0]["internalHost"], "http://127.0.0.1:8096")
@@ -194,3 +207,34 @@ class V2AuthentikTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_desired_route_apps_projects_portal_visible_path_routes_as_providerless(self):
+        effective = {
+            "schemaVersion": 3,
+            "derived": {
+                "routes": [
+                    {
+                        "service": "vaultwarden",
+                        "route": "web",
+                        "authMode": "identity",
+                        "exposure": {"type": "path", "paths": ["/vault"]},
+                        "portal": {"visible": True, "title": "Vault"},
+                        "target": {"type": "http", "host": "127.0.0.1", "port": 8222},
+                    },
+                    {
+                        "service": "metrics",
+                        "route": "grafana",
+                        "authMode": "identity",
+                        "exposure": {"type": "path", "paths": ["/metrics/"]},
+                        "portal": {"visible": False},
+                        "target": {"type": "http", "host": "127.0.0.1", "port": 3000},
+                    },
+                ]
+            },
+        }
+        apps = authentik.desired_route_apps(effective, public_host="nas.local:8443")
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0]["slug"], "v2-vaultwarden-web")
+        self.assertEqual(apps[0]["name"], "Vault")
+        self.assertTrue(apps[0]["providerless"])
+        self.assertEqual(apps[0]["launchUrl"], "https://nas.local:8443/vault/")
