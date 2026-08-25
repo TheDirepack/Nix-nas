@@ -5,6 +5,11 @@ Caddy owns public TLS and Authentik authentication. This process has no network
 listener and performs no appliance mutation directly: it validates a reviewed
 plan and human credentials, writes one-shot root-only job files under /run, and
 starts the finite hardened first-start job.
+
+The bootstrap Authentik database is intentionally replaced during setup. An
+already-authenticated submission therefore receives a random per-job capability
+for status polling and the final reboot. The capability is kept only in /run,
+never appears in a URL, and cannot submit or alter a setup plan.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ MAX_BODY_BYTES = 64 * 1024
 MAX_PASSWORD_LENGTH = 256
 BOOTSTRAP_IDENTITY = "akadmin"
 ADMIN_GROUP = "nas_admin"
+JOB_CAPABILITY_HEADER = "X-NAS-Setup-Job-Token"
 FIRST_START_CONFLICTS = (
     "appliance",
     "first-start",
@@ -108,9 +114,14 @@ def _read_root_json(path: pathlib.Path, label: str, *, max_bytes: int = 256 * 10
     return value
 
 
-def job_status(job_id: str) -> dict[str, Any]:
+def _validate_job_id(job_id: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{24}", job_id):
         raise RequestError(400, "Invalid first-run job identifier")
+    return job_id
+
+
+def job_status(job_id: str) -> dict[str, Any]:
+    job_id = _validate_job_id(job_id)
     try:
         value = _read_root_json(RESULT_ROOT / f"{job_id}.json", "First-run job status")
     except FileNotFoundError:
@@ -118,6 +129,25 @@ def job_status(job_id: str) -> dict[str, Any]:
     if value.get("jobId") != job_id:
         raise RequestError(500, "First-run job status does not match its identifier")
     return value
+
+
+def _capability_path(job_id: str) -> pathlib.Path:
+    return JOB_ROOT / f"{_validate_job_id(job_id)}.capability.json"
+
+
+def require_job_capability(job_id: str, presented: Any) -> None:
+    job_id = _validate_job_id(job_id)
+    if not isinstance(presented, str) or not (32 <= len(presented) <= 128) or any(
+        character in presented for character in ("\x00", "\n", "\r")
+    ):
+        raise RequestError(401, "Valid setup job capability required")
+    try:
+        value = _read_root_json(_capability_path(job_id), "Setup job capability", max_bytes=2048)
+    except FileNotFoundError as exc:
+        raise RequestError(401, "Setup job capability is unavailable") from exc
+    expected = value.get("token")
+    if value.get("jobId") != job_id or not isinstance(expected, str) or not secrets.compare_digest(expected, presented):
+        raise RequestError(403, "Setup job capability is invalid")
 
 
 def _single_line(value: Any, label: str, *, maximum: int = MAX_PASSWORD_LENGTH) -> str:
@@ -179,7 +209,6 @@ def _require_password(password: str, label: str, user_inputs: list[str]) -> dict
 
 
 def _ensure_private_root_directory(path: pathlib.Path) -> None:
-    """Create or verify a root-only transient directory without following its final component."""
     try:
         parent = path.parent.lstat()
     except OSError as exc:
@@ -309,6 +338,7 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
 
     _ensure_private_root_directory(JOB_ROOT)
     job_id = secrets.token_hex(12)
+    job_token = secrets.token_urlsafe(48)
     try:
         reservation = reserve_operation("first-start-v3", FIRST_START_CONFLICTS, ttl_seconds=3600)
     except OperationBusyError as exc:
@@ -316,6 +346,7 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
 
     request_path = JOB_ROOT / f"{job_id}.json"
     password_path = JOB_ROOT / f"{job_id}.password"
+    capability_path = _capability_path(job_id)
     request = {
         "schemaVersion": 1,
         "jobId": job_id,
@@ -334,6 +365,7 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         _write_private_new(request_path, request)
         _write_private_new(password_path, secret_request)
+        _write_private_new(capability_path, {"schemaVersion": 1, "jobId": job_id, "token": job_token})
         command = [
             "systemd-run",
             "--unit",
@@ -343,9 +375,6 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
             "--property=User=root",
             "--property=Group=root",
             "--property=UMask=0077",
-            # This authenticated finite job deliberately creates accounts,
-            # changes /etc, operates block devices, mounts ZFS, and performs
-            # controlled uid transitions. The long-running API remains NNP.
             "--property=NoNewPrivileges=no",
             "--property=PrivateTmp=yes",
             "--property=ProtectSystem=full",
@@ -367,28 +396,34 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "schemaVersion": 1,
             "jobId": job_id,
+            "jobToken": job_token,
             "status": "submitted",
             "breachCheckUnavailable": unavailable,
         }
     except Exception:
         request_path.unlink(missing_ok=True)
         password_path.unlink(missing_ok=True)
+        capability_path.unlink(missing_ok=True)
         cancel_reservation(reservation.token)
         raise
     finally:
         linux_password = ""
         keepass_password = ""
         authentik_password = ""
+        job_token = ""
         secret_request.clear()
         context.clear()
 
 
-def request_reboot() -> dict[str, Any]:
-    if not setup_complete():
-        raise RequestError(409, "Reboot is only available after first-run setup completes")
+def request_reboot(job_id: str, job_token: str) -> dict[str, Any]:
+    require_job_capability(job_id, job_token)
+    status = job_status(job_id)
+    if status.get("status") != "complete" or not setup_complete():
+        raise RequestError(409, "Reboot is only available after this first-run setup job completes")
     completed = subprocess.run(["systemctl", "reboot"], text=True, capture_output=True, check=False, timeout=30)
     if completed.returncode != 0:
         raise RequestError(500, "Unable to schedule reboot")
+    _capability_path(job_id).unlink(missing_ok=True)
     return {"schemaVersion": 1, "rebooting": True}
 
 
@@ -396,8 +431,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "nas-first-run-api"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-        # BaseHTTPRequestHandler logs only request metadata; never bodies or
-        # identity/authorization headers.
         print(f"nas-first-run-api: {format % args}", file=sys.stderr)
 
     def _identity(self) -> str:
@@ -456,13 +489,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _dispatch(self) -> tuple[int, dict[str, Any]]:
-        self._require_authorized_identity()
         path = self.path.split("?", 1)[0]
-        if self.command == "GET" and path in {"/status", "/first-start"}:
-            return 200, setup_status()
+
         if self.command == "GET" and (path.startswith("/jobs/") or path.startswith("/first-start/job/")):
             job_id = path.rsplit("/", 1)[-1]
+            require_job_capability(job_id, self.headers.get(JOB_CAPABILITY_HEADER))
             return 200, job_status(job_id)
+
+        if self.command == "POST" and path == "/reboot":
+            self._require_same_origin()
+            request = self._read_json()
+            if set(request) != {"jobId"}:
+                raise RequestError(400, "Reboot request contract is invalid")
+            job_id = _single_line(request.get("jobId"), "Job identifier", maximum=24)
+            return 202, request_reboot(job_id, self.headers.get(JOB_CAPABILITY_HEADER, ""))
+
+        self._require_authorized_identity()
+        if self.command == "GET" and path in {"/status", "/first-start"}:
+            return 200, setup_status()
         if self.command == "POST":
             self._require_same_origin()
         if self.command == "POST" and path == "/password-quality":
@@ -480,8 +524,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 inputs.clear()
         if self.command == "POST" and path in {"/apply", "/first-run"}:
             return 202, submit_setup(self._read_json())
-        if self.command == "POST" and path == "/reboot":
-            return 202, request_reboot()
         raise RequestError(404, "Unknown setup API endpoint")
 
     def do_GET(self) -> None:  # noqa: N802
