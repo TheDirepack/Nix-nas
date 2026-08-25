@@ -146,6 +146,8 @@ Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, 
 
 CI records branch coverage over the control-plane services and applies both an aggregate floor and service-specific floors with `scripts/check-coverage.py`. Every service module has an explicit floor, including alert routing, diagnostics, structured logging, state migration, and operation locking. Floors are regression guards rather than quality scores: raising them should follow added behavioral coverage, not exclusion of difficult branches.
 
+`tests/test_e2e_v2_lifecycle.py` is the single deterministic E2E that proves the full V2 pipeline (YAML -> effective -> plan -> Caddy/systemd/network/backup/authentik) for all runtimes (systemd, exec, quadlet, compose, vm, job, session) in one place. It complements the per-adapter unit tests and the VM guest suite (`tests/vm/guest-test.sh`) which validates the live appliance.
+
 ```bash
 ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4
 python3 scripts/check-coverage.py coverage.json
