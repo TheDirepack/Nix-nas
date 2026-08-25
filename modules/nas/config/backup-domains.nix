@@ -59,7 +59,11 @@ in
             "/tmp"
             "/var/tmp"
             "/var/cache"
+            # PostgreSQL is backed up through the consistent custom-format dump
+            # below. Exclude both the stable link and its real root-hosted
+            # permanent backing directory so Restic cannot capture live DB pages.
             "/var/lib/postgresql"
+            "/var/lib/nas-operational/postgresql"
             restoreVerifyPath
             cfg.zfsRoot
           ]
