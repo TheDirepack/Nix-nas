@@ -25,7 +25,6 @@ FLOORS = {
     "services/nas_syncthing_devices.py": 76.0,
     "services/nas_v2_accelerator.py": 77.0,
     "services/nas_v2_apply.py": 61.0,
-    "services/nas_v2_authentik.py": 61.0,
     "services/nas_v2_backup.py": 72.0,
     "services/nas_v2_bootstrap.py": 62.0,
     "services/nas_v2_caddy.py": 84.0,

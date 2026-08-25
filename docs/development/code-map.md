@@ -11,7 +11,7 @@
 | Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `config/caddy-bootstrap.nix`, `internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary. `caddy-bootstrap.nix` selects static setup guidance before activation and the managed configuration after it; app routes are data in `services.yaml`, not Caddy branches. |
 | Storage | `modules/nas/config/storage-monitoring.nix`, `internal/zfs-tools.nix` | ZFS, snapshots, restore verification, replication, and Restic integration. |
 | Observability | `modules/nas/config/observability.nix` | VictoriaMetrics, Telegraf, vmalert, NAS alert router, optional Grafana/ntfy. |
-| Identity/capability policy | `services/nas_v2_authentik.py`, `schemas/managed-services-v3.schema.json` | Appliance identity capability/group contract; V2 creates `application.<service>.<capability>` objects, never assignments. |
+| Identity/capability policy | `services/nas_v2_authentik_blueprint.py`, `schemas/managed-services-v3.schema.json` | Appliance identity capability/group contract; V2 creates `application.<service>.<capability>` objects, never assignments. |
 | Command packaging | `modules/nas/internal/account-tools.nix` | Installs Python tools (`nas-managed-services`, `nas-managed-services-control`), finite V2 control aliases, portal assets, and Authentik blueprint. |
 | Documentation/UI packaging | `modules/nas/internal/documentation-tools.nix` | Builds mdBook references and the Cockpit plugin. |
 
@@ -48,8 +48,8 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_v2_session.py` | Finite transient-session launch plus descriptor/resource/network projection; Podman is the direct systemd exec process (`ExecStopPost` cleanup, no supervisor process) | `test_v2_session.py`, `test_v2_session_projection.py` |
 | `nas_v2_accelerator.py` | Generic accelerator resolution for device nodes, CDI, Compose targets, and VM passthrough (candidate for `hardware.nvidia` + CDI) | `test_v2_accelerator.py` |
 | `nas_v2_network.py` | Combined V2 network policy: isolated Podman networks and firewalld policy projection (candidate for static `networking.firewall` absorption) | `test_v2_podman_network.py`, `test_v2_firewalld.py` |
-| `nas_v2_authentik.py` | Ensures stable `application.<service>.<capability>` objects without owning assignments | `test_v2_authentik.py` |
-| `nas_v2_caddy.py`, `nas_v2_wake.py` | Request-time routing/auth projection (generic `proxy.*`, `requireHeaders`, `stripPrefix`, `onDemandWake`) and authorization-free post-auth wake | `test_v2_caddy.py`, `test_v2_wake.py` |
+| `nas_v2_authentik_blueprint.py` | Generates stable `application.<service>.<capability>` objects without owning assignments | `test_v2_authentik_blueprint.py` |
+| `nas_v2_caddy.py` | Request-time routing/auth projection (generic `proxy.*`, `requireHeaders`, `stripPrefix`, `onDemandWake`) | `test_v2_caddy.py` |
 | `nas_v2_backup.py` | Resource-oriented backup inventory and finite preparation/cleanup jobs (freshness via stale-clear); absorbs the former runtime/native-dump modules | `test_v2_backup.py`, `test_v2_backup_runtime.py`, `test_v2_native_dump.py` |
 
 There is no `nas_feature_control.py` implementation and no installed `nas-feature-control` command; tests assert their absence. Do not restore the deleted gate/controller/reaper architecture to satisfy old tests or documentation.

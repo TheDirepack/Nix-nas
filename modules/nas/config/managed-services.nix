@@ -145,7 +145,6 @@ in
         NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
-        NAS_V2_AUTHENTIK_PUBLIC_HOST = cfg.identity.publicHost;
         NAS_V2_SYSTEMD_ANALYZE_BIN = "${pkgs.systemd}/bin/systemd-analyze";
         NAS_V2_SYSTEMCTL_BIN = "${pkgs.systemd}/bin/systemctl";
         NAS_V2_PYTHON_BIN = "${v2Python}/bin/python";

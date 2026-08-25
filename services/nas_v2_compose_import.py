@@ -40,6 +40,15 @@ _EXPLICIT_SERVICE_NAME = re.compile(r"(?mi)^\s*ServiceName\s*=")
 _EXPLICIT_CONTAINER_NAME = re.compile(r"(?mi)^\s*ContainerName\s*=")
 _UNIT_HEADER = re.compile(r"(?mi)^\s*\[Unit\]\s*$")
 _SECTION = re.compile(r"(?m)^\s*\[[^]]+\]\s*$")
+_ASSIGNMENT = re.compile(
+    r"^(?P<prefix>\s*)(?P<key>[A-Za-z][A-Za-z0-9+_-]*)(?P<equals>=)(?P<value>[^\r\n]*)(?P<newline>\r?\n?)$"
+)
+
+# These are the Quadlet relationship properties emitted by Podlet.  Values in
+# unrelated systemd properties (Environment=, Exec=, Description=, and so on)
+# are opaque strings and must never be rewritten merely because they contain a
+# generated filename.
+_REFERENCE_FIELDS = frozenset({"Build", "Container", "Image", "Kube", "Network", "Pod", "Volume"})
 
 
 def _absolute_binary(value: str, *, label: str) -> str:
@@ -175,6 +184,60 @@ def _inject_part_of(text: str, owner_unit: str) -> str:
     return prefix + text if first_section is not None else prefix + text
 
 
+def _rewrite_reference_token(token: str, mapping: dict[str, str], *, volume: bool = False) -> str:
+    if volume:
+        separator = token.find(":")
+        reference, suffix = (token, "") if separator < 0 else (token[:separator], token[separator:])
+        return mapping.get(reference, reference) + suffix
+    return mapping.get(token, token)
+
+
+def _rewrite_reference_value(value: str, mapping: dict[str, str], *, volume: bool = False) -> str:
+    """Rewrite only complete Quadlet relationship tokens.
+
+    Podlet emits whitespace-separated relationship values.  Keeping the
+    transformation at the parsed field/value boundary avoids changing an
+    image tag, an environment URL, an executable argument, or a comment that
+    happens to contain a generated filename.
+    """
+    return re.sub(
+        r"\S+",
+        lambda match: _rewrite_reference_token(match.group(0), mapping, volume=volume),
+        value,
+    )
+
+
+def _namespace_quadlet_text(text: str, mapping: dict[str, str]) -> str:
+    section: str | None = None
+    output: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            output.append(line)
+            continue
+        match = _ASSIGNMENT.match(line)
+        if match is None:
+            output.append(line)
+            continue
+        key = match.group("key")
+        base_key = key.removesuffix("+")
+        if base_key not in _REFERENCE_FIELDS:
+            output.append(line)
+            continue
+        value = match.group("value")
+        # Container relationship keys are valid in the [Container], [Pod],
+        # [Kube], [Build], and [Image] sections.  Restricting the transform to
+        # Quadlet sections prevents an arbitrary systemd drop-in from being
+        # interpreted as a container reference.
+        if section not in {"Build", "Container", "Image", "Kube", "Network", "Pod", "Volume"}:
+            output.append(line)
+            continue
+        rewritten = _rewrite_reference_value(value, mapping, volume=base_key == "Volume")
+        output.append(f"{match.group('prefix')}{key}{match.group('equals')}{rewritten}{match.group('newline')}")
+    return "".join(output)
+
+
 def _namespace_bundle(
     service_id: str,
     generated_dir: pathlib.Path,
@@ -201,11 +264,10 @@ def _namespace_bundle(
     mapping = {name: f"nas-v2-{service_id}-{name}" for name in raw_files}
     output: dict[str, bytes] = {}
     entry_units: list[str] = []
-    # References between generated Quadlets use their filenames.  Prefix every
-    # generated filename and rewrite exact filename references as one closed
+    # References between generated Quadlets use their filenames. Prefix every
+    # generated filename and rewrite only relationship fields as one closed
     # namespace so common Compose names such as web/data/default cannot collide
     # across managed applications.
-    replacements = sorted(mapping.items(), key=lambda item: len(item[0]), reverse=True)
     for old_name, text in raw_files.items():
         if _EXPLICIT_SERVICE_NAME.search(text):
             raise ComposeImportError(
@@ -215,8 +277,7 @@ def _namespace_bundle(
             raise ComposeImportError(
                 f"Compose source for {service_id!r} sets container_name; remove it so V2 can provide collision-free native names"
             )
-        for old_ref, new_ref in replacements:
-            text = text.replace(old_ref, new_ref)
+        text = _namespace_quadlet_text(text, mapping)
         new_name = mapping[old_name]
         if pathlib.Path(new_name).suffix in {".container", ".pod", ".kube"}:
             text = _inject_part_of(text, owner_unit)

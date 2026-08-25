@@ -85,7 +85,7 @@ class V2ReferenceTests(unittest.TestCase):
         }
         schema = spec.load_schema(SCHEMA)
         effective = spec.compile_document(example, schema)
-        rendered = caddy.generate_caddyfile(effective, wake_socket="/run/nas-control/wake.sock")
+        rendered = caddy.generate_caddyfile(effective)
         # Longest-path-first: /ai/runtime and /ai/v1 must appear before /ai/
         # Use specific path patterns to avoid substring matches
         self.assertLess(rendered.index('"/ai/runtime/"'), rendered.index('"/ai/" "/ai/*"'))

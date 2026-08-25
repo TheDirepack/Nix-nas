@@ -192,6 +192,47 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
             manifest2["fingerprints"]["nas-v2-demo.target"],
         )
 
+    def test_compose_namespacing_rewrites_relationship_fields_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            generated = pathlib.Path(tmp) / "quadlet"
+            generated.mkdir()
+            (generated / "web.container").write_text(
+                """[Container]
+Image=example.invalid/web:1
+Network=default.network
+Volume=data.volume:/srv/data
+Environment=CONFIG_URL=https://example/default.network/config
+Environment=IMAGE_TAG=data.volume
+Exec=tool --path=/srv/web.container/cache
+Description=web.container is a literal value
+""",
+                encoding="utf-8",
+            )
+            (generated / "default.network").write_text(
+                """[Network]
+NetworkName=default.network
+""",
+                encoding="utf-8",
+            )
+            (generated / "data.volume").write_text(
+                """[Volume]
+VolumeName=data.volume
+""",
+                encoding="utf-8",
+            )
+
+            files, entry_units = compose_import._namespace_bundle("demo", generated, owner_unit="nas-v2-demo.target")
+
+        rendered = files["nas-v2-demo-web.container"].decode()
+        self.assertIn("Network=nas-v2-demo-default.network", rendered)
+        self.assertIn("Volume=nas-v2-demo-data.volume:/srv/data", rendered)
+        self.assertIn("CONFIG_URL=https://example/default.network/config", rendered)
+        self.assertIn("IMAGE_TAG=data.volume", rendered)
+        self.assertIn("--path=/srv/web.container/cache", rendered)
+        self.assertIn("Description=web.container is a literal value", rendered)
+        self.assertEqual(entry_units, ["nas-v2-demo-web.service"])
+        self.assertIn("NetworkName=default.network", files["nas-v2-demo-default.network"].decode())
+
     def test_nix_module_pins_podlet(self) -> None:
         module = (ROOT / "modules/nas/config/managed-services-compose-import.nix").read_text(encoding="utf-8")
         self.assertIn('"${pkgs.podlet}/bin/podlet"', module)

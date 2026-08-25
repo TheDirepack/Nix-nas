@@ -20,6 +20,7 @@ nas-managed-session = "nas_v2_session:main"
 nas-operation-run = "nas_operation_lock:main"
 nas-setup = "nas_setup:main"
 nas-state = "nas_state:main"
+nas-v2 = "nas_v2_cli:main"
 
 [tool.setuptools.dynamic]
 version = {file = ["VERSION"]}
@@ -46,11 +47,11 @@ py-modules = [
   "nas_v2_accelerator",
   "nas_v2_activation",
   "nas_v2_apply",
-  "nas_v2_authentik",
   "nas_v2_authentik_blueprint",
   "nas_v2_backup",
   "nas_v2_bootstrap",
   "nas_v2_caddy",
+  "nas_v2_cli",
   "nas_v2_compose",
   "nas_v2_control",
   "nas_v2_editor",

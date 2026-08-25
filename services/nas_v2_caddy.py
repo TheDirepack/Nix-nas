@@ -103,7 +103,6 @@ def _render_identity_auth(
     required_capability: str,
     authentik_upstream: str,
     authentik_path: str,
-    authentik_public_host: str,
     indent: str,
 ) -> None:
     if _ctl(authentik_upstream) or "{" in authentik_upstream or "}" in authentik_upstream:
@@ -213,7 +212,6 @@ def _render_handler(
     route: dict[str, Any],
     authentik_upstream: str,
     authentik_path: str,
-    authentik_public_host: str,
     indent: str,
 ) -> None:
     service_id = route["service"]
@@ -244,7 +242,6 @@ def _render_handler(
             required_capability=capability,
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
-            authentik_public_host=authentik_public_host,
             indent=inner,
         )
     elif route["authMode"] not in {"public", "upstream"}:
@@ -259,17 +256,9 @@ def generate_caddyfile(
     authentik_upstream: str = "127.0.0.1:9010",
     authentik_path: str = "/identity/",
     lan_host: str = "nas.local",
-    authentik_public_host: str | None = None,
-    wake_socket: str | None = None,
 ) -> str:
-    # wake_socket is retained for one compatibility release; native socket
-    # activation no longer calls a V2 HTTP wake service.
-    del wake_socket
     if not HOSTNAME_RE.fullmatch(lan_host):
         raise CaddyProjectionError(f"Invalid appliance hostname {lan_host!r}")
-    public_host = authentik_public_host or lan_host
-    if _ctl(public_host) or "/" in public_host or "{" in public_host or "}" in public_host:
-        raise CaddyProjectionError(f"Invalid Authentik public host {public_host!r}")
     services = effective.get("services")
     derived = effective.get("derived")
     if not isinstance(services, dict) or not isinstance(derived, dict) or not isinstance(derived.get("routes"), list):
@@ -325,7 +314,6 @@ def generate_caddyfile(
             route=route,
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
-            authentik_public_host=public_host,
             indent="    ",
         )
         lines.append("  }")
@@ -340,7 +328,6 @@ def generate_caddyfile(
             route=route,
             authentik_upstream=authentik_upstream,
             authentik_path=authentik_path,
-            authentik_public_host=public_host,
             indent="    ",
         )
         lines.extend(["  }", "}", ""])

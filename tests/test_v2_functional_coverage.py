@@ -24,7 +24,7 @@ import nas_v2_spec as spec  # noqa: E402
 import nas_v2_systemd as systemd  # noqa: E402
 import nas_v2_systemd as attachments  # noqa: E402
 import nas_v2_backup as backup  # noqa: E402
-import nas_v2_authentik as authentik  # noqa: E402
+import nas_v2_authentik_blueprint as authentik  # noqa: E402
 
 
 def _compile(doc: dict, schema: dict) -> dict:
@@ -549,9 +549,7 @@ class V2FunctionalCoverageTests(unittest.TestCase):
             },
         }
         eff = _compile(doc, self.schema)
-        cf = caddy.generate_caddyfile(
-            eff, authentik_upstream="127.0.0.1:9000", authentik_path="/auth/", wake_socket="/run/wake.sock"
-        )
+        cf = caddy.generate_caddyfile(eff, authentik_upstream="127.0.0.1:9000", authentik_path="/auth/")
         self.assertIn("forward_auth 127.0.0.1:9000", cf)
         self.assertIn("X-Authentik-Username", cf)
         self.assertIn("Remote-User", cf)

@@ -23,6 +23,7 @@ class GenerationError(RuntimeError):
 
 
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_GENERATION_NAME_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?(?:-[2-9][0-9]*)?$")
 
 
 def validate_revision(revision: str) -> str:
@@ -148,6 +149,47 @@ def publish_generation(
     return generation
 
 
+def prune_generations(
+    generation_root: pathlib.Path,
+    *,
+    current_link: pathlib.Path,
+    retain: int = 3,
+) -> list[pathlib.Path]:
+    """Remove old immutable generations without ever deleting the active one."""
+    if retain < 1:
+        raise GenerationError("generation retention must be at least one")
+    if not generation_root.exists():
+        return []
+    try:
+        current = current_link.resolve(strict=True)
+        current.relative_to(generation_root.resolve())
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise GenerationError("current generation link does not resolve beneath the generation root") from exc
+
+    candidates = [
+        path
+        for path in generation_root.iterdir()
+        if path.is_dir() and not path.is_symlink() and _GENERATION_NAME_RE.fullmatch(path.name)
+    ]
+    candidates.sort(key=lambda path: (path.stat().st_mtime_ns, path.name), reverse=True)
+    keep = {current}
+    for path in candidates:
+        if len(keep) >= retain:
+            break
+        keep.add(path)
+
+    removed: list[pathlib.Path] = []
+    for path in candidates:
+        if path in keep:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            raise GenerationError(f"unable to prune old generation {path}: {exc}") from exc
+        removed.append(path)
+    return removed
+
+
 def discard_generation(path: pathlib.Path) -> None:
     """Best-effort cleanup of one unpublished generation."""
     try:
@@ -168,5 +210,6 @@ __all__ = [
     "allocate_generation",
     "discard_generation",
     "publish_generation",
+    "prune_generations",
     "validate_revision",
 ]

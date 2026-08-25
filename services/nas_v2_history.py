@@ -22,6 +22,7 @@ DEFAULT_AUTHORITY = pathlib.Path("/var/lib/nas-control/services.yaml")
 DEFAULT_REPOSITORY = pathlib.Path("/var/lib/nas-control/config-history.git")
 APPLIED_REF = "refs/nas/applied"
 DESIRED_REF = "refs/heads/main"
+_BOOTSTRAP_BASELINE = b"schemaVersion: 3\nservices: {}\n"
 
 
 class DesiredStateHistoryError(RuntimeError):
@@ -33,16 +34,20 @@ def _run(
     *,
     check: bool = True,
     timeout: int = 30,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
-            list(command),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        run_kwargs: dict[str, Any] = {
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+            "check": False,
+        }
+        if input_text is None:
+            run_kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            run_kwargs["input"] = input_text
+        result = subprocess.run(list(command), **run_kwargs)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise DesiredStateHistoryError(f"unable to execute {command[0]}: {exc}") from exc
     if check and result.returncode != 0:
@@ -89,6 +94,68 @@ def ensure_repository(
         os.chmod(repository, 0o750)
     except OSError:
         pass
+
+
+def _bootstrap_baseline_locked(
+    *,
+    authority: pathlib.Path,
+    repository: pathlib.Path,
+    git_bin: str,
+) -> dict[str, Any]:
+    """Create the truthful empty V2 state used before the first mutation.
+
+    A first desired revision cannot be its own rollback target: doing so would
+    simply compile the failed configuration again.  The empty V3 document is
+    the native V2 baseline before any managed application/network/firewall
+    projection exists, so it is committed as the parent of the first desired
+    revision and selected as ``refs/nas/applied``.
+    """
+    ensure_repository(authority=authority, repository=repository, git_bin=git_bin)
+    if _rev_parse(repository, authority, git_bin, APPLIED_REF) is not None:
+        return {"ok": True, "created": False, "applied": _rev_parse(repository, authority, git_bin, APPLIED_REF)}
+    if _rev_parse(repository, authority, git_bin, DESIRED_REF) is not None:
+        raise DesiredStateHistoryError(
+            "history has desired revisions but no applied revision; refusing to invent a first-boot rollback target"
+        )
+
+    blob = _run(
+        [git_bin, f"--git-dir={repository}", "hash-object", "-w", "--stdin"],
+        input_text=_BOOTSTRAP_BASELINE.decode("utf-8"),
+    ).stdout.strip()
+    tree = _run(
+        [git_bin, f"--git-dir={repository}", "mktree"],
+        input_text=f"100640 blob {blob}\t{authority.name}\n",
+    ).stdout.strip()
+    commit = _run(
+        [
+            git_bin,
+            "-c",
+            "user.name=Nix NAS",
+            "-c",
+            "user.email=nix-nas@localhost",
+            f"--git-dir={repository}",
+            "commit-tree",
+            tree,
+            "-m",
+            "Managed Services V2 bootstrap baseline",
+        ],
+    ).stdout.strip()
+    if not commit:
+        raise DesiredStateHistoryError("Git did not return a bootstrap baseline revision")
+    _git(repository, authority, git_bin, "update-ref", DESIRED_REF, commit)
+    _git(repository, authority, git_bin, "update-ref", APPLIED_REF, commit)
+    return {"ok": True, "created": True, "applied": commit}
+
+
+def ensure_bootstrap_applied(
+    *,
+    authority: pathlib.Path = DEFAULT_AUTHORITY,
+    repository: pathlib.Path = DEFAULT_REPOSITORY,
+    git_bin: str = "git",
+) -> dict[str, Any]:
+    """Ensure first-ever reconciliation has an actual pre-mutation target."""
+    with authority_lock(authority):
+        return _bootstrap_baseline_locked(authority=authority, repository=repository, git_bin=git_bin)
 
 
 def _rev_parse(
@@ -416,6 +483,7 @@ __all__ = [
     "DesiredStateHistoryError",
     "acknowledge_pending",
     "authority_matches_commit",
+    "ensure_bootstrap_applied",
     "ensure_repository",
     "history_status",
     "mark_applied",

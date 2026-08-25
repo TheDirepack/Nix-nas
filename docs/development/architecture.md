@@ -51,7 +51,7 @@ A new feature should extend an existing authority whenever possible. It should n
 
 Authentik authenticates users and owns group membership. Caddy removes client-supplied identity headers, performs forward authentication, and applies generated capability checks at the edge. Applications keep their own native authorization where applicable. Browser visibility is convenience only; server-side policy is the security boundary.
 
-Capability definitions come from V2 `application.<service>.<capability>` objects (ensured by `nas_v2_authentik.py`, never assigned by V2) and fail closed when a protected route references an unknown capability. Caddy strips forged `Remote-*` / `X-Authentik-*` headers, forward-authenticates to Authentik, then checks `X-Authentik-Groups` for `nas_admin` or `application.<service>.<capability>`.
+Capability definitions come from V2 `application.<service>.<capability>` objects (generated in the native Authentik blueprint, never assigned by V2) and fail closed when a protected route references an unknown capability. Caddy strips forged `Remote-*` / `X-Authentik-*` headers, forward-authenticates to Authentik, then checks `X-Authentik-Groups` for `nas_admin` or `application.<service>.<capability>`.
 
 ## Locked boot and secrets
 

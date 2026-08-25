@@ -64,6 +64,45 @@ class V2HistoryTests(unittest.TestCase):
             self.assertFalse(second["changed"])
             self.assertEqual(second["head"], first["head"])
 
+    def test_bootstrap_baseline_is_parent_of_first_desired_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_authority(
+                root,
+                "schemaVersion: 3\nservices:\n  demo:\n    name: Demo\n    workload: {kind: daemon}\n    runtime: {type: systemd, unit: demo.service}\n",
+            )
+            repository = root / "history.git"
+
+            baseline = history.ensure_bootstrap_applied(authority=authority, repository=repository)
+            desired = history.record_desired(authority=authority, repository=repository)
+
+            self.assertTrue(baseline["created"])
+            self.assertEqual(
+                history.history_status(authority=authority, repository=repository)["applied"], baseline["applied"]
+            )
+            self.assertNotEqual(desired["head"], baseline["applied"])
+            parent = subprocess.check_output(
+                ["git", f"--git-dir={repository}", "rev-parse", f"{desired['head']}^"], text=True
+            ).strip()
+            self.assertEqual(parent, baseline["applied"])
+
+            restored = history.restore_applied(
+                authority=authority,
+                repository=repository,
+                failed_commit=desired["head"],
+            )
+            self.assertTrue(restored["changed"])
+            self.assertEqual(authority.read_text(encoding="utf-8"), "schemaVersion: 3\nservices: {}\n")
+
+    def test_bootstrap_refuses_an_existing_unapplied_history(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_authority(root, "schemaVersion: 3\nservices: {}\n")
+            repository = root / "history.git"
+            history.record_desired(authority=authority, repository=repository)
+            with self.assertRaisesRegex(history.DesiredStateHistoryError, "no applied revision"):
+                history.ensure_bootstrap_applied(authority=authority, repository=repository)
+
     def test_restore_applied_preserves_failed_attempt_in_history(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

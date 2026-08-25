@@ -20,6 +20,8 @@ Depending on installed services, Cockpit can run health checks, identity validat
 
 For direct diagnosis, use the generated command reference and systemd journal rather than bypassing the fixed action boundary. Use `nas-managed-services-control status` to compare V2 requested/effective lifecycle state with native unit state.
 
+For offline checks before installation or while debugging, use `nas-v2 validate`, `nas-v2 effective`, and `nas-v2 plan` with `--spec`, `--schema`, and `--platform` overrides as needed. `nas-v2 apply` delegates to the same finite reconciliation entry point used by systemd.
+
 ## Updates
 
 `nas-update` separates review/validation from deployment. It validates the candidate checkout, tests and builds the target generation, records update state, and retains NixOS rollback behavior.

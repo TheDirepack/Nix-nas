@@ -44,8 +44,8 @@ else:
     import nas_state as state
     import nas_syncthing_devices as syncthing
     import nas_v2_accelerator as accelerator
-    import nas_v2_authentik as authentik
     import nas_v2_authentik_blueprint as authentik_blueprint
+    import nas_v2_cli
     import nas_v2_caddy as caddy
     import nas_v2_compose as compose
     import nas_v2_compose_import as compose_import
@@ -77,8 +77,8 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_accelerator",
         "nas_v2_activation",
         "nas_v2_apply",
-        "nas_v2_authentik",
         "nas_v2_authentik_blueprint",
+        "nas_v2_cli",
         "nas_v2_backup",
         "nas_v2_bootstrap",
         "nas_v2_caddy",
@@ -155,6 +155,7 @@ if HAS_HYPOTHESIS:
         @settings(max_examples=350, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(HOSTILE_TEXT)
         def test_text_protocol_and_shell_boundaries(self, value: str) -> None:
+            self.assertEqual(nas_v2_cli._parser().prog, "nas-v2")
             expected_boundary_error(ai_config.validate_provider_id, value)
             expected_boundary_error(ai_config.validate_proxy_url, value)
             expected_boundary_error(ai_config.validate_model_id, value)
@@ -179,7 +180,7 @@ if HAS_HYPOTHESIS:
             expected_boundary_error(quadlet._reject_control, value, "fuzz field")
             expected_boundary_error(quadlet._single_line, value, field="fuzz field")
             expected_boundary_error(quadlet._safe_path, value, field="fuzz field")
-            expected_boundary_error(authentik.desired_capabilities, {"services": {}})
+            expected_boundary_error(authentik_blueprint.desired_capabilities, {"services": {}})
             expected_boundary_error(authentik_blueprint._q, value)
             expected_boundary_error(compose_import._absolute_binary, value, label="fuzz binary")
             expected_boundary_error(network.bridge_interface_name, value)

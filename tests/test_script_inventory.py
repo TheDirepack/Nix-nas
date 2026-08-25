@@ -23,6 +23,7 @@ class ScriptInventoryTests(unittest.TestCase):
         commands = [
             [sys.executable, "services/nas_doctor.py", "--help"],
             [sys.executable, "services/nas_v2_control.py", "--help"],
+            [sys.executable, "services/nas_v2_cli.py", "--help"],
             [sys.executable, "services/nas_identity_sync.py", "--help"],
             [sys.executable, "services/nas_setup.py", "--help"],
             [sys.executable, "services/nas_state.py", "--help"],

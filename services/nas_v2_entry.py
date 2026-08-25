@@ -23,8 +23,14 @@ from nas_v2_apply import (
     SystemdProjection,
     apply,
 )
-from nas_v2_generation import GenerationError, allocate_generation, discard_generation, publish_generation
-from nas_v2_history import record_desired
+from nas_v2_generation import (
+    GenerationError,
+    allocate_generation,
+    discard_generation,
+    publish_generation,
+    prune_generations,
+)
+from nas_v2_history import ensure_bootstrap_applied, record_desired
 
 
 def _relative(runtime_root: pathlib.Path, path: pathlib.Path) -> pathlib.PurePosixPath:
@@ -76,9 +82,6 @@ def main() -> int:
         authentik_upstream=os.environ.get("NAS_V2_AUTHENTIK_UPSTREAM", "127.0.0.1:9010"),
         authentik_path=os.environ.get("NAS_V2_AUTHENTIK_PATH", "/identity/"),
         lan_host=os.environ.get("NAS_V2_LAN_HOST", "nas.local"),
-        authentik_public_host=os.environ.get("NAS_V2_AUTHENTIK_PUBLIC_HOST")
-        or os.environ.get("NAS_V2_LAN_HOST", "nas.local"),
-        wake_socket=None,
     )
     systemd = SystemdProjection(
         output_dir=systemd_output,
@@ -134,6 +137,12 @@ def main() -> int:
             firewalld_output: _relative(runtime_root, firewalld_output),
         }
 
+        # Establish the pre-mutation V2 baseline before recording the first
+        # desired revision.  Without this, a first-boot failure has no truthful
+        # authority revision to restore and would leave native projections
+        # from the failed transaction in place.
+        ensure_bootstrap_applied(authority=desired, repository=history_repository, git_bin=git_bin)
+
         # A services.yaml edit can race the initial history read.  Nothing is
         # published until apply() reports the same revision, so retry a bounded
         # number of times instead of ever exposing a mixed generation.
@@ -179,6 +188,7 @@ def main() -> int:
                     current_link=current_link,
                     compatibility_paths=stable_paths,
                 )
+                prune_generations(generation_root, current_link=current_link, retain=3)
                 return 0
             except Exception:
                 discard_generation(generation)

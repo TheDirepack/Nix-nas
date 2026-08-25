@@ -229,11 +229,9 @@ def reconcile(
     *,
     manifest_path: pathlib.Path,
     projection_root: pathlib.Path,
-    system_config: pathlib.Path | None = None,
     firewall_cmd: str = "firewall-cmd",
 ) -> dict[str, Any]:
     """Replace the complete V2 native namespace, reload firewalld, and verify it."""
-    del system_config  # retained as a no-op CLI compatibility argument during migration
     desired = _read_projection(manifest_path, projection_root)
     current_zones, current_policies = _current_owned(firewall_cmd)
 
@@ -267,14 +265,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Activate and verify the complete V2-owned firewalld namespace")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--projection-root", required=True)
-    parser.add_argument("--system-config", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--firewall-cmd", default="firewall-cmd")
     args = parser.parse_args(argv)
     try:
         result = reconcile(
             manifest_path=pathlib.Path(args.manifest),
             projection_root=pathlib.Path(args.projection_root),
-            system_config=None if args.system_config is None else pathlib.Path(args.system_config),
             firewall_cmd=args.firewall_cmd,
         )
     except FirewalldReconcileError as exc:

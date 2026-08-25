@@ -291,7 +291,7 @@ class CaddyGapTests(unittest.TestCase):
                 }
             },
         }
-        rendered = caddy.generate_caddyfile(self._eff(svc), wake_socket=None)
+        rendered = caddy.generate_caddyfile(self._eff(svc))
         self.assertIn("reverse_proxy unix//run/nas-control/activate/demo-w.sock", rendered)
         self.assertNotIn("/wake?service=", rendered)
         self.assertNotIn("nas_v2_wake", rendered)
@@ -309,7 +309,7 @@ class CaddyGapTests(unittest.TestCase):
             },
         }
         with self.assertRaises(caddy.CaddyProjectionError):
-            caddy.generate_caddyfile(self._eff(svc2), wake_socket=None)
+            caddy.generate_caddyfile(self._eff(svc2))
 
     def test_generate_caddyfile_hostname_validation(self):
         svc = {
@@ -718,7 +718,6 @@ class NetworkGapTests(unittest.TestCase):
                 fwrec.reconcile(
                     manifest_path=t / "missing.json",
                     projection_root=t,
-                    system_config=t / "sys",
                     firewall_cmd="true",
                 )
             with self.assertRaises(fwrec.FirewalldReconcileError):

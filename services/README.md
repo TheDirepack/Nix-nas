@@ -20,6 +20,7 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_v2_plan.py` | Deterministic reconciliation plan generation |
 | `nas_v2_apply.py` | Finite compile/apply orchestration and projection staging |
 | `nas_v2_entry.py` | V2 command-surface entry/import boundary |
+| `nas_v2_cli.py` | Thin offline `validate`/`effective`/`plan` frontend and normal `apply` delegate |
 | `nas_v2_control.py` | Finite status/document/edit/reconcile surface used by Cockpit and operators |
 | `nas_v2_editor.py` | Comment-preserving atomic `services.yaml` editing |
 | `nas_v2_systemd.py` | Unified systemd projection for cross-runtime lifecycle, jobs, readiness, dependencies, and on-demand lease/idle units |
@@ -28,9 +29,8 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_v2_libvirt.py` | Libvirt/QEMU runtime projection |
 | `nas_v2_session.py` | Finite transient-session launcher plus session descriptors, lifecycle targets, and resource/device/network lowering |
 | `nas_v2_network.py` | Combined network projection: native Podman isolated networks and firewalld policy for compiled network intent |
-| `nas_v2_authentik.py` | Ensures stable V2 application/capability objects without owning assignments |
+| `nas_v2_authentik_blueprint.py` | Generates the native Authentik blueprint for V2 capability/application objects; Authentik owns assignments |
 | `nas_v2_caddy.py` | Caddy routing and Authentik request-time authorization projection |
-| `nas_v2_wake.py` | Authorization-free socket-activated wake plumbing after Caddy authorization |
 | `nas_v2_backup.py` | Resource-oriented backup inventory compilation plus finite preparation/cleanup from compiled inventory |
 
 ## Dependency direction

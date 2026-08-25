@@ -110,7 +110,7 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
             'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString nasInternal.authentikPort}";',
             config,
         )
-        self.assertIn("NAS_V2_AUTHENTIK_PUBLIC_HOST = cfg.identity.publicHost;", config)
+        self.assertNotIn("NAS_V2_AUTHENTIK_PUBLIC_HOST", config)
 
     def test_forward_auth_sends_forwarded_trio_and_does_not_rewrite_locations(self):
         helpers = (ROOT / "modules/nas/internal/caddy-helpers.nix").read_text(encoding="utf-8")

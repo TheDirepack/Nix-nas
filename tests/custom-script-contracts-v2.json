@@ -1,5 +1,11 @@
 {
   "executables": {
+    "nas-v2": {
+      "fuzzStrategy": "unknown-argv",
+      "source": "services/nas_v2_cli.py",
+      "systemTest": "tests/test_v2_cli.py",
+      "tests": ["tests/test_v2_cli.py"]
+    },
     "nas-managed-services-control": {
       "fuzzStrategy": "feature-id",
       "source": "services/nas_v2_control.py",
@@ -21,11 +27,11 @@
     }
   },
   "pythonModules": {
+    "services/nas_v2_cli.py": ["tests/test_v2_cli.py"],
     "services/nas_guarded_apply.py": ["tests/test_guarded_apply.py"],
     "services/nas_v2_accelerator.py": ["tests/test_v2_accelerator.py"],
     "services/nas_v2_activation.py": ["tests/test_v2_caddy.py", "tests/test_v2_systemd.py"],
     "services/nas_v2_apply.py": ["tests/test_v2_accelerator.py", "tests/test_v2_backup.py", "tests/test_v2_firewalld.py", "tests/test_v2_plan_apply.py", "tests/test_v2_platform_ownership.py", "tests/test_v2_podman_network.py", "tests/test_v2_session_projection.py", "tests/test_v2_source_watch.py"],
-    "services/nas_v2_authentik.py": ["tests/test_v2_functional_coverage.py"],
     "services/nas_v2_authentik_blueprint.py": ["tests/test_v2_authentik_blueprint.py"],
     "services/nas_v2_backup.py": ["tests/test_v2_backup.py", "tests/test_v2_backup_runtime.py", "tests/test_v2_backup_verify.py", "tests/test_v2_native_dump.py"],
     "services/nas_v2_bootstrap.py": ["tests/test_v2_bootstrap.py"],
