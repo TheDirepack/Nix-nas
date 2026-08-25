@@ -149,21 +149,24 @@ in
 
     authentik-migrate = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      # The first-boot Authentik runtime exists before protected secrets are
+      # activated. Enable the bootstrap transaction directly so it cannot be
+      # skipped when Caddy is already running during a generation switch.
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };
 
     authentik-worker = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };
 
     authentik = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };

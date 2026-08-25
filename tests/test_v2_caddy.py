@@ -81,6 +81,30 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn('ExecStartPost = pkgs.writeShellScript "authentik-ready"', applications)
         self.assertIn('after = [ "authentik.service" ];', services)
 
+    def test_bootstrap_authentik_services_are_directly_enabled(self):
+        services = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
+        for unit in ("authentik-migrate", "authentik-worker", "authentik"):
+            with self.subTest(unit=unit):
+                stanza = services.split(f"    {unit} = {{", 1)[1].split("\n    };", 1)[0]
+                self.assertIn('wantedBy = lib.mkOverride 90 [ "multi-user.target" ];', stanza)
+
+    def test_runtime_selector_starts_identity_stack_after_creating_runtime_files(self):
+        applications = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        selector = applications.split("config.systemd.services.nas-bootstrap-runtime-select = {", 1)[1].split(
+            "config.systemd.services.nas-bootstrap-authentik-secrets = {", 1
+        )[0]
+        for unit in ("authentik-migrate.service", "authentik-worker.service", "authentik.service"):
+            self.assertIn(f'"{unit}"', selector)
+
+    def test_v2_blueprint_root_preserves_native_nested_blueprints(self):
+        blueprint = (ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix").read_text(encoding="utf-8")
+        self.assertIn("cp -a --no-preserve=ownership,mode", blueprint)
+        self.assertIn("nas-authentik-blueprints.service", blueprint)
+        self.assertIn(
+            'before = [ "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];',
+            blueprint,
+        )
+
     def test_authentik_login_flow_routes_rewrite_to_the_prefixed_ui(self):
         for relative_path in (
             "modules/nas/config/caddy-bootstrap.nix",

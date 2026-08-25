@@ -443,7 +443,15 @@ in
   config.systemd.services.nas-bootstrap-runtime-select = {
     description = "Select boot-root or ZFS identity runtime storage";
     before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
-    wants = [ "nas-bootstrap-authentik-secrets.service" ];
+    # Pull the identity stack from the selector itself. The runtime files are
+    # created by this unit, so multi-user.target may evaluate the dependent
+    # ConditionPathExists checks too early and permanently skip them.
+    wants = [
+      "nas-bootstrap-authentik-secrets.service"
+      "authentik-migrate.service"
+      "authentik-worker.service"
+      "authentik.service"
+    ];
     after = [ "nas-bootstrap-authentik-secrets.service" ];
     serviceConfig = {
       Type = "oneshot";

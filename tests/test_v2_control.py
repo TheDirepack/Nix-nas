@@ -124,6 +124,7 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             source_path.write_text(json.dumps(source_value), encoding="utf-8")
             with (
                 mock.patch.object(control, "DESIRED_PATH", desired_path),
+                mock.patch.object(control, "PLATFORM_PATH", root / "platform-capabilities.json"),
                 mock.patch.object(control, "replace_document_value", return_value={"ok": True}) as replace,
                 mock.patch.object(control, "_reconcile") as reconcile,
             ):
