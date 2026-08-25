@@ -131,6 +131,23 @@ class V2HistoryTests(unittest.TestCase):
             self.assertTrue(json.loads(output.getvalue())["created"])
             self.assertIsNotNone(history.history_status(authority=authority, repository=repository)["applied"])
 
+    def test_restore_is_idempotent_when_failure_happens_before_first_desired_record(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_authority(root, "schemaVersion: 3\nservices: {}\n")
+            repository = root / "history.git"
+            baseline = history.ensure_bootstrap_applied(authority=authority, repository=repository)["applied"]
+
+            restored = history.restore_applied(
+                authority=authority,
+                repository=repository,
+                failed_commit=baseline,
+            )
+
+            self.assertFalse(restored["changed"])
+            self.assertEqual(restored["restoredFrom"], baseline)
+            self.assertEqual(history.history_status(authority=authority, repository=repository)["applied"], baseline)
+
     def test_rollback_after_mark_applied_uses_the_previous_revision(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

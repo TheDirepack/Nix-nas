@@ -184,15 +184,35 @@ def _authority_matches_commit_locked(
     if verified is None:
         raise DesiredStateHistoryError(f"unknown desired-state Git revision: {commit}")
     relative = authority.name
-    result = _git(
-        repository, authority, git_bin, "diff", "--quiet", "--exit-code", verified, "--", relative, check=False
-    )
-    if result.returncode == 0:
-        return True
-    if result.returncode == 1:
+    try:
+        current = authority.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return False
-    detail = (result.stderr or result.stdout).strip()[:4000]
-    raise DesiredStateHistoryError(f"unable to compare authority with {verified}: {detail}")
+    except OSError as exc:
+        raise DesiredStateHistoryError(f"unable to read desired-state authority {authority}: {exc}") from exc
+    result = _run(
+        [git_bin, f"--git-dir={repository}", "show", f"{verified}:{relative}"],
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:4000]
+        raise DesiredStateHistoryError(f"unable to read committed authority {verified}: {detail}")
+    return result.stdout == current
+
+
+def _is_bootstrap_revision_locked(
+    *,
+    authority: pathlib.Path,
+    repository: pathlib.Path,
+    git_bin: str,
+    commit: str,
+) -> bool:
+    """Return whether a revision is the immutable pre-first-apply baseline."""
+    result = _run(
+        [git_bin, f"--git-dir={repository}", "show", f"{commit}:{authority.name}"],
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout == _BOOTSTRAP_BASELINE.decode("utf-8")
 
 
 def authority_matches_commit(
@@ -374,9 +394,19 @@ def restore_applied(
         if failed_commit is not None and failed_commit == applied:
             rollback_target = _rev_parse(repository, authority, git_bin, PREVIOUS_APPLIED_REF)
             if rollback_target is None:
-                raise DesiredStateHistoryError(
-                    "applied revision matches the failed transaction but no previous rollback target exists"
-                )
+                if not _is_bootstrap_revision_locked(
+                    authority=authority,
+                    repository=repository,
+                    git_bin=git_bin,
+                    commit=applied,
+                ):
+                    raise DesiredStateHistoryError(
+                        "applied revision matches the failed transaction but no previous rollback target exists"
+                    )
+                # Before the first desired revision is recorded, the empty
+                # bootstrap commit is both HEAD and the applied baseline. It
+                # is already the truthful rollback target.
+                rollback_target = applied
 
         relative = authority.name
         _git(
