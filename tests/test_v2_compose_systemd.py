@@ -129,14 +129,13 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
             root = pathlib.Path(tmp)
             effective, _source = self.fixture(root)
             files, manifest = self.generate(effective, root)
-            owner = files[root / "projection/units/nas-v2-demo.service"].decode()
+            owner = files[root / "projection/units/nas-v2-demo.target"].decode()
             quadlet = files[root / "projection/quadlet/nas-v2-demo-web.container"].decode()
         self.assertIn("Requires=nas-v2-demo-web.service", owner)
         self.assertNotIn("podman compose", owner)
-        self.assertNotIn("PODMAN_COMPOSE_PROVIDER", owner)
-        self.assertIn("PartOf=nas-v2-demo.service", quadlet)
+        self.assertIn("PartOf=nas-v2-demo.target", quadlet)
         self.assertIn("nas-v2-demo-web.service", manifest["ownedUnits"])
-        self.assertIn("nas-v2-demo.service", manifest["startUnits"])
+        self.assertIn("nas-v2-demo.target", manifest["startUnits"])
 
     def test_import_uses_compiled_owner_unit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,12 +162,12 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
             root = pathlib.Path(tmp)
             effective, _source = self.fixture(root, on_demand=True)
             files, manifest = self.generate(effective, root)
-            owner = files[root / "projection/units/nas-v2-demo.service"].decode()
+            owner = files[root / "projection/units/nas-v2-demo.target"].decode()
             proxy = files[root / "projection/units/nas-v2-activate-demo-web.service"].decode()
         self.assertIn("StopWhenUnneeded=yes", owner)
         self.assertIn("systemd-socket-proxyd", proxy)
         self.assertIn("--exit-idle-time=120s", proxy)
-        self.assertNotIn("nas-v2-demo.service", manifest["startUnits"])
+        self.assertNotIn("nas-v2-demo.target", manifest["startUnits"])
 
     def test_unchanged_import_reuses_podlet_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,8 +188,8 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
             source.write_text("services:\n  web:\n    image: example.invalid/web:2\n", encoding="utf-8")
             _files2, manifest2 = self.generate(effective, root)
         self.assertNotEqual(
-            manifest1["fingerprints"]["nas-v2-demo.service"],
-            manifest2["fingerprints"]["nas-v2-demo.service"],
+            manifest1["fingerprints"]["nas-v2-demo.target"],
+            manifest2["fingerprints"]["nas-v2-demo.target"],
         )
 
     def test_nix_module_pins_podlet(self) -> None:

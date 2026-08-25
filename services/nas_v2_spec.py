@@ -969,6 +969,10 @@ def build_effective(document: dict[str, Any]) -> dict[str, Any]:
         runtime = service["runtime"]
         if runtime["type"] == "systemd":
             owner_unit = runtime["unit"]
+        elif runtime["type"] == "compose":
+            # Compose aggregates several generated inner units; systemd
+            # targets are the native aggregate owner for that shape.
+            owner_unit = f"nas-v2-{service_id}.target"
         else:
             owner_unit = f"nas-v2-{service_id}.service"
         derived_runtime[service_id] = {
