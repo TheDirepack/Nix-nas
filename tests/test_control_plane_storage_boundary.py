@@ -24,7 +24,7 @@ class ControlPlaneStorageBoundaryTests(unittest.TestCase):
         self.assertNotIn("nas-authentik-proxy-outpost", services)
         self.assertNotIn("authentik-outposts.proxy", services)
         self.assertNotIn("view_key", services)
-        self.assertIn("authentikOutpostPort = authentikPort;", base)
+        self.assertNotIn("authentikOutpostPort", base)
 
 
 if __name__ == "__main__":
