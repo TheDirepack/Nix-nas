@@ -28,10 +28,8 @@ def _bootstrap_argv(arguments: list[str]) -> list[str]:
     mapped = _BOOTSTRAP_COMMANDS[command]
     tail = arguments[1:]
     if command == "apply-accounts":
-        # The historical identity CLI accepted a JSON source argument; the
-        # setup-only helper deliberately accepts only stdin so account passwords
-        # never need a persistent plan file. Preserve only the explicit resume
-        # confirmation flag.
+        # Setup account plans are accepted only on stdin so passwords never need
+        # a persistent plan file. Preserve only the explicit resume confirmation.
         tail = [item for item in tail if item != "-"]
         if any(item != "--confirm-password-reapply" for item in tail):
             raise SystemExit("nas-identity-sync: setup account plans must be supplied on stdin")
