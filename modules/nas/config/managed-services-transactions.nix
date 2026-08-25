@@ -103,23 +103,9 @@ let
       exit 0
     fi
 
-    # First boot has no refs/nas/applied yet. There is no older mutable desired
-    # state to restore. Drop only the V2-owned native firewalld namespace and
-    # leave the immutable Nix management baseline intact.
-    ${lib.optionalString firewalldEnabled ''
-    for policy in $(${firewalldPackage}/bin/firewall-cmd --permanent --get-policies); do
-      if [[ "$policy" =~ ^nv2[zhwlrima][0-9a-f]{12}$ ]]; then
-        ${firewalldPackage}/bin/firewall-cmd --permanent --delete-policy="$policy"
-      fi
-    done
-    for zone in $(${firewalldPackage}/bin/firewall-cmd --permanent --get-zones); do
-      if [[ "$zone" =~ ^nv2[zhwlrima][0-9a-f]{12}$ ]]; then
-        ${firewalldPackage}/bin/firewall-cmd --permanent --delete-zone="$zone"
-      fi
-    done
-    ${firewalldPackage}/bin/firewall-cmd --check-config
-    ${firewalldPackage}/bin/firewall-cmd --reload
-    ''}
+    # A missing applied revision is an unsafe history state, not a reason to
+    # guess at native cleanup. Bootstrap creation above makes this unreachable
+    # for a valid first transaction; leave all state untouched and fail closed.
     exit 1
   '';
   guardUnitShell = ''
@@ -169,6 +155,10 @@ in
     # failed revision.
     systemd.services.nas-managed-services-reconcile.preStart = lib.mkBefore ''
       ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg planPath}
+      # Establish a real pre-mutation applied revision before the guard can
+      # observe a first-boot failure. The Python entrypoint repeats this check
+      # under the authority lock before committing the desired revision.
+      ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} bootstrap
       ${guardUnitShell}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
@@ -236,6 +226,7 @@ in
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         cancel
+      ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} clear-previous-applied
     '';
 
     # Superseded by the generic transaction and direct native Caddy reload.

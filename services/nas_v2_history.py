@@ -21,6 +21,7 @@ from nas_v2_editor import authority_lock
 DEFAULT_AUTHORITY = pathlib.Path("/var/lib/nas-control/services.yaml")
 DEFAULT_REPOSITORY = pathlib.Path("/var/lib/nas-control/config-history.git")
 APPLIED_REF = "refs/nas/applied"
+PREVIOUS_APPLIED_REF = "refs/nas/previous-applied"
 DESIRED_REF = "refs/heads/main"
 _BOOTSTRAP_BASELINE = b"schemaVersion: 3\nservices: {}\n"
 
@@ -290,11 +291,28 @@ def mark_applied(
     if verified is None:
         raise DesiredStateHistoryError(f"cannot mark unknown Git object as applied: {desired}")
     old = _rev_parse(repository, authority, git_bin, APPLIED_REF)
+    if old is not None:
+        _git(repository, authority, git_bin, "update-ref", PREVIOUS_APPLIED_REF, old)
+    else:
+        _git(repository, authority, git_bin, "update-ref", "-d", PREVIOUS_APPLIED_REF, check=False)
     command = ["update-ref", APPLIED_REF, verified]
     if old is not None:
         command.append(old)
     _git(repository, authority, git_bin, *command)
     return {"ok": True, "applied": verified, "previousApplied": old}
+
+
+def clear_previous_applied(
+    *,
+    authority: pathlib.Path = DEFAULT_AUTHORITY,
+    repository: pathlib.Path = DEFAULT_REPOSITORY,
+    git_bin: str = "git",
+) -> dict[str, Any]:
+    """Remove the transient rollback target after the guard is canceled."""
+    ensure_repository(authority=authority, repository=repository, git_bin=git_bin)
+    previous = _rev_parse(repository, authority, git_bin, PREVIOUS_APPLIED_REF)
+    _git(repository, authority, git_bin, "update-ref", "-d", PREVIOUS_APPLIED_REF, check=False)
+    return {"ok": True, "cleared": previous}
 
 
 def acknowledge_pending(
@@ -352,13 +370,21 @@ def restore_applied(
                 "head": _rev_parse(repository, authority, git_bin, "HEAD"),
             }
 
+        rollback_target = applied
+        if failed_commit is not None and failed_commit == applied:
+            rollback_target = _rev_parse(repository, authority, git_bin, PREVIOUS_APPLIED_REF)
+            if rollback_target is None:
+                raise DesiredStateHistoryError(
+                    "applied revision matches the failed transaction but no previous rollback target exists"
+                )
+
         relative = authority.name
         _git(
             repository,
             authority,
             git_bin,
             "restore",
-            f"--source={applied}",
+            f"--source={rollback_target}",
             "--staged",
             "--worktree",
             "--",
@@ -385,13 +411,16 @@ def restore_applied(
                 "--",
                 relative,
             )
+        if rollback_target != applied:
+            _git(repository, authority, git_bin, "update-ref", APPLIED_REF, rollback_target, applied)
+        clear_previous_applied(authority=authority, repository=repository, git_bin=git_bin)
         head = _rev_parse(repository, authority, git_bin, "HEAD")
     return {
         "ok": True,
         "changed": changed,
         "superseded": False,
         "failedCommit": failed_commit,
-        "restoredFrom": applied,
+        "restoredFrom": rollback_target,
         "head": head,
     }
 
@@ -421,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repository", default=str(DEFAULT_REPOSITORY))
     parser.add_argument("--git-bin", default="git")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("bootstrap", help="Create the truthful pre-mutation baseline revision")
     record = subparsers.add_parser("record")
     record.add_argument("--message", default="Update Managed Services V2 desired state")
     applied = subparsers.add_parser("mark-applied")
@@ -431,13 +461,26 @@ def main(argv: list[str] | None = None) -> int:
     acknowledge = subparsers.add_parser("ack-pending")
     acknowledge.add_argument("--commit", required=True)
     acknowledge.add_argument("--pending", required=True)
+    subparsers.add_parser("clear-previous-applied")
     subparsers.add_parser("status")
     args = parser.parse_args(argv)
 
     authority = pathlib.Path(args.authority)
     repository = pathlib.Path(args.repository)
     try:
-        if args.command == "record":
+        if args.command == "bootstrap":
+            result = ensure_bootstrap_applied(
+                authority=authority,
+                repository=repository,
+                git_bin=args.git_bin,
+            )
+        elif args.command == "clear-previous-applied":
+            result = clear_previous_applied(
+                authority=authority,
+                repository=repository,
+                git_bin=args.git_bin,
+            )
+        elif args.command == "record":
             result = record_desired(
                 authority=authority,
                 repository=repository,
@@ -481,8 +524,10 @@ __all__ = [
     "DEFAULT_AUTHORITY",
     "DEFAULT_REPOSITORY",
     "DesiredStateHistoryError",
+    "PREVIOUS_APPLIED_REF",
     "acknowledge_pending",
     "authority_matches_commit",
+    "clear_previous_applied",
     "ensure_bootstrap_applied",
     "ensure_repository",
     "history_status",

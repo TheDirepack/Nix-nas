@@ -512,10 +512,9 @@ in
       # selector (nas-caddy-bootstrap.service) synchronously ensures reconcile
       # is fresh post-secrets. Do not require reconcile here: pre-secrets it
       # cannot run (ZFS mount guard) and would permanently block Caddy.
-      requires = [ "nas-caddy-bootstrap.service" "nas-managed-services-wake.socket" ];
+      requires = [ "nas-caddy-bootstrap.service" ];
       after = caddyBackendUnits ++ [
         "nas-caddy-bootstrap.service"
-        "nas-managed-services-wake.socket"
       ];
     };
 

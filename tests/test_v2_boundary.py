@@ -71,6 +71,15 @@ class ManagedServicesV2BoundaryTests(unittest.TestCase):
         self.assertFalse((ROOT / "modules" / "nas" / "internal" / "capability-registry.nix").exists())
         self.assertFalse((ROOT / "modules" / "nas" / "internal" / "service-registry.nix").exists())
 
+    def test_transaction_bootstraps_before_the_rollback_guard_and_has_no_wake_dependency(self):
+        transactions = (ROOT / "modules" / "nas" / "config" / "managed-services-transactions.nix").read_text(
+            encoding="utf-8"
+        )
+        systemd_services = (ROOT / "modules" / "nas" / "config" / "systemd-services.nix").read_text(encoding="utf-8")
+        self.assertIn("historyArgs} bootstrap", transactions)
+        self.assertIn("A missing applied revision is an unsafe history state", transactions)
+        self.assertNotIn("nas-managed-services-wake.socket", systemd_services)
+
 
 if __name__ == "__main__":
     unittest.main()
