@@ -32,6 +32,19 @@ export const submitFirstStart = (payload) =>
     body: JSON.stringify(payload),
   });
 
-export const firstStartJob = (jobId) => request(`api/first-start/job/${encodeURIComponent(jobId)}`);
+const jobHeaders = (jobToken) => ({ 'X-NAS-Setup-Job-Token': jobToken });
 
-export const rebootAfterSetup = () => request('api/reboot', { method: 'POST' });
+export const firstStartJob = (jobId, jobToken) =>
+  request(`api/first-start/job/${encodeURIComponent(jobId)}`, {
+    headers: jobHeaders(jobToken),
+  });
+
+export const rebootAfterSetup = (jobId, jobToken) =>
+  request('api/reboot', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...jobHeaders(jobToken),
+    },
+    body: JSON.stringify({ jobId }),
+  });
