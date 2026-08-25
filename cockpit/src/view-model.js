@@ -8,7 +8,6 @@ export const LINK_LABELS = {
   identity: "Identity (Authentik)",
   accountSettings: "My account settings",
   docs: "NAS help",
-  copypartyConfig: "CopyParty settings",
   storage: "ZFS storage",
   containers: "Containers",
   virtualMachines: "Virtual machines",
@@ -20,19 +19,7 @@ export const LINK_LABELS = {
   scheduler: "Schedules",
 };
 
-export const OPERATIONS = [
-  ["identity-sync", "Validate identity model"],
-  ["health", "Run system health checks"],
-  ["snapshot", "Create ZFS snapshot"],
-  ["zfs-scrub", "Start ZFS scrub"],
-  ["backup", "Run system backup"],
-  ["replicate", "Replicate ZFS now"],
-  ["syncthing-sync", "Reconcile Syncthing"],
-  ["update-preview", "Preview approved updates"],
-  ["update-sync", "Sync approved updates"],
-  ["update-apply", "Apply validated update"],
-  ["protected-restart", "Restart protected services"],
-];
+export const HOST_OPERATIONS = [["protected-restart", "Restart protected services"]];
 
 export function managedServiceMap(data = {}) {
   const services = Array.isArray(data?.managedServices?.services)
@@ -224,13 +211,10 @@ export function managedServiceOperationsBusy(data = {}) {
 
 export function visibleOperations(data = {}) {
   const services = managedServiceMap(data);
-  return OPERATIONS.filter(([id]) => {
-    if (id === "backup")
-      return Boolean(services.backups?.available ?? services.backup?.available ?? true);
-    if (id === "replicate") return data?.zfsReplicationInstalled === true;
-    if (id === "syncthing-sync") return Boolean(services.syncthing?.available ?? true);
-    return true;
-  });
+  const jobs = Object.values(services)
+    .filter((service) => service?.managed === true && service?.workloadKind === "job" && service?.effective === true)
+    .map((service) => [service.id, service.label || service.id]);
+  return [...jobs, ...HOST_OPERATIONS];
 }
 
 export function mib(bytes) {

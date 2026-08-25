@@ -24,16 +24,6 @@ import {visibleOperations} from "../view-model.js";
 
 export function OperationsPage({data, mutate, busy}) {
   const operations = visibleOperations(data || {});
-  const confirmationRequired = new Set([
-    "health",
-    "snapshot",
-    "zfs-scrub",
-    "backup",
-    "replicate",
-    "update-sync",
-    "update-apply",
-    "protected-restart",
-  ]);
   const [pending, setPending] = useState(null);
   const [lastResult, setLastResult] = useState(null);
   const remote = data?.backupRemote || {};
@@ -70,7 +60,7 @@ export function OperationsPage({data, mutate, busy}) {
           <Button
             key={id}
             variant="secondary"
-            onClick={() => (confirmationRequired.has(id) ? setPending({id, label}) : run(id))}
+            onClick={() => setPending({id, label})}
             isDisabled={busy}
           >
             {label}

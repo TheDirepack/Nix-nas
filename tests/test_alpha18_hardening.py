@@ -52,19 +52,12 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertNotIn("nas-feature-apply", tree)
         self.assertFalse((ROOT / "modules/nas/config/managed-services-legacy-disable.nix").exists())
 
-    def test_cockpit_mutations_dispatch_through_systemd_units(self) -> None:
+    def test_cockpit_mutations_dispatch_through_compiled_v2_owner_units(self) -> None:
         source = text("services/nas_cockpit_api.py")
-        action_block = source.split("ACTIONS:", 1)[1].split("\n\n\ndef diagnostic", 1)[0]
-        for unit in (
-            "nas-zfs-manual-snapshot.service",
-            "nas-zfs-manual-scrub.service",
-            "nas-update-preview.service",
-            "nas-update-sync.service",
-            "nas-update-apply.service",
-        ):
-            self.assertIn(unit, action_block)
-        self.assertNotIn('("zpool",', action_block)
-        self.assertNotIn('("nas-update",', action_block)
+        self.assertIn('row.get("workloadKind") != "job"', source)
+        self.assertIn('unit.get("role") == "owner"', source)
+        self.assertNotIn("nas-zfs-manual-snapshot.service", source)
+        self.assertNotIn("nas-update-apply.service", source)
 
     def test_setup_and_account_inputs_have_closed_schemas(self) -> None:
         validation = text("scripts/validate-repository-data.py")

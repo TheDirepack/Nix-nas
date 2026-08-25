@@ -13,16 +13,16 @@ Nix OS NAS <display-version> source.zip
 For the current version:
 
 ```text
-VERSION:                         0.1
-source archive filename:        Nix OS NAS 0.1 source.zip
+VERSION:                         0.1.0
+source archive filename:        Nix OS NAS 0.1.0 source.zip
 ```
 
-For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.MINOR.N`. For simple `MAJOR.MINOR` baselines such as `0.1`, the display version equals `VERSION`. This keeps archives short and readable without changing `VERSION` or creating a new software release merely to repackage the same source.
+For prereleases matching `MAJOR.MINOR.0-alpha.N`, the display version is `MAJOR.MINOR.N`. For stable SemVer versions, the display version equals `VERSION`.
 
 The ZIP keeps a canonical internal root directory containing the full repository version and qualification state, for example:
 
 ```text
-nixos-nas-0.1-source-only-unverified/
+nixos-nas-0.1.0-source-only-unverified/
 ```
 
 That internal name, `VERSION`, `README.md`, `CHANGELOG.md`, and the provenance JSON remain authoritative when exact release identity matters.
@@ -57,4 +57,4 @@ Nix OS NAS 2.2.6 source.provenance.json
 - **Every code change requires a new version number.** Any change to executable code, Nix configuration/module logic, scripts, service definitions, UI code, tests that alter executable qualification behavior, release tooling, generated-runtime configuration, or other non-documentation source must bump `VERSION` before it is published.
 - A packaging-script change is a code change and therefore requires a version bump; only rerunning the unchanged packaging code does not.
 
-For the `0.1` baseline, increment the patch or minor component (`0.1.0` -> `0.1.1` or `0.2.0`) for the next code-bearing revision; prereleases may use `0.1.1-alpha.1` style suffixes. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`. The previous `2.2.0-alpha.x` line used `alpha.N` increments.
+For the `0.1.0` baseline, increment the patch or minor component (`0.1.0` -> `0.1.1` or `0.2.0`) for the next code-bearing revision; prereleases may use `0.1.1-alpha.1` style suffixes. Keep `CHANGELOG.md`, Cockpit package metadata, flake-visible version text, provenance, and the human-facing display version mapping synchronized with `VERSION`. The previous `2.2.0-alpha.x` line used `alpha.N` increments.

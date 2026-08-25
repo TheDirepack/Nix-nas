@@ -1,5 +1,13 @@
 {
   "executables": {
+    "scripts/check-architecture-boundary.py": {
+      "source": "scripts/check-architecture-boundary.py",
+      "sourceFuzzStrategy": "source-check",
+      "systemTest": "tests/test_architecture_boundary.py",
+      "tests": [
+        "tests/test_architecture_boundary.py"
+      ]
+    },
     "cockpit/build.js": {
       "source": "cockpit/build.js",
       "sourceFuzzStrategy": "source-check",

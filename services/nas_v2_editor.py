@@ -270,6 +270,7 @@ def status(
                 "available": True,
                 "runtimeAvailable": True,
                 "managed": service.get("managed", True) is not False,
+                "workloadKind": workload.get("kind") if isinstance(workload, dict) else None,
                 "allowedModes": _allowed_modes(service),
                 "idleSeconds": workload.get("idleSeconds") if isinstance(workload, dict) else None,
                 "units": _status_units(service_id, effective_service),

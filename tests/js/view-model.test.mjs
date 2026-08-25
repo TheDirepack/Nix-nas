@@ -20,7 +20,7 @@ test("managed service and application link models follow V2 state", () => {
   const data = {
     managedServices: {
       services: [
-        {id: "syncthing", available: true, effectiveMode: "always"},
+        {id: "snapshot", label: "Create snapshot", managed: true, workloadKind: "job", effective: true, available: true, effectiveMode: "always"},
         {id: "vaultwarden", available: true, effectiveMode: "off"},
       ],
     },
@@ -30,7 +30,7 @@ test("managed service and application link models follow V2 state", () => {
     ],
     links: {accountSettings: "/settings/", identity: "/identity/if/user/"},
   };
-  assert.equal(managedServiceMap(data).syncthing.effectiveMode, "always");
+  assert.equal(managedServiceMap(data).snapshot.effectiveMode, "always");
   assert.deepEqual(
     managedApplicationLinks(data).map((entry) => entry.id),
     ["files.web", "syncthing.web"],
@@ -42,7 +42,7 @@ test("managed service and application link models follow V2 state", () => {
     ["accountSettings", "identity"],
   );
   assert.equal(
-    visibleOperations(data).some(([id]) => id === "syncthing-sync"),
+    visibleOperations(data).some(([id]) => id === "snapshot"),
     true,
   );
 });

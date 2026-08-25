@@ -35,9 +35,6 @@ ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
 CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas"))
 PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
-BACKUP_INSTALLED = os.environ.get("NAS_BACKUP_ENABLE", "0") == "1"
-ZFS_REPLICATION_INSTALLED = os.environ.get("NAS_ZFS_REPLICATION_ENABLE", "0") == "1"
-SYNCTHING_INSTALLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
 MAX_PASSWORD_LENGTH = 4096
 MAX_ARGUMENT_LENGTH = 128
@@ -65,9 +62,6 @@ class ActionSpec:
     commands: tuple[tuple[str, ...], ...]
     timeout_seconds: int = 300
     conflicts: tuple[str, ...] = ("runtime",)
-    requires_backup: bool = False
-    requires_replication: bool = False
-    requires_syncthing: bool = False
     worker_owns_operation: bool = False
 
 
@@ -80,70 +74,10 @@ class PrivateFileSnapshot:
     gid: int = 0
 
 
-ACTIONS: dict[str, ActionSpec] = {
-    "identity-sync": ActionSpec(
-        (("systemctl", "start", "nas-identity-sync.service"),),
-        conflicts=("identity",),
-        worker_owns_operation=True,
-    ),
-    "health": ActionSpec(
-        (
-            (
-                "systemctl",
-                "start",
-                "nas-zfs-pool-health.service",
-                "nas-zfs-capacity-health.service",
-                "nas-zfs-snapshot-health.service",
-            ),
-        ),
-        conflicts=("storage",),
-    ),
-    "snapshot": ActionSpec(
-        (("systemctl", "start", "nas-zfs-manual-snapshot.service"),),
-        conflicts=("storage",),
-    ),
-    "zfs-scrub": ActionSpec(
-        (("systemctl", "start", "nas-zfs-manual-scrub.service"),),
-        conflicts=("storage",),
-    ),
-    "backup": ActionSpec(
-        (("systemctl", "start", "restic-backups-nas-boot-system.service"),),
-        conflicts=("storage",),
-        requires_backup=True,
-    ),
-    "replicate": ActionSpec(
-        (("systemctl", "start", "nas-syncoid.service"),),
-        conflicts=("storage",),
-        requires_replication=True,
-    ),
-    "update-preview": ActionSpec(
-        (("systemctl", "start", "nas-update-preview.service"),),
-        timeout_seconds=600,
-        conflicts=("update",),
-        worker_owns_operation=True,
-    ),
-    "update-sync": ActionSpec(
-        (("systemctl", "start", "nas-update-sync.service"),),
-        timeout_seconds=21600,
-        conflicts=("update",),
-        worker_owns_operation=True,
-    ),
-    "update-apply": ActionSpec(
-        (("systemctl", "start", "nas-update-apply.service"),),
-        timeout_seconds=21600,
-        conflicts=("identity", "runtime", "storage", "update"),
-        worker_owns_operation=True,
-    ),
+HOST_ACTIONS: dict[str, ActionSpec] = {
     "protected-restart": ActionSpec(
         (("systemctl", "start", "nas-protected-restart.service"),),
         conflicts=("identity", "runtime"),
-        worker_owns_operation=True,
-    ),
-    "syncthing-sync": ActionSpec(
-        (("systemctl", "start", "nas-syncthing-sync.service"),),
-        conflicts=("identity",),
-        requires_syncthing=True,
-        worker_owns_operation=True,
     ),
 }
 
@@ -282,7 +216,10 @@ def service_states(units: list[str]) -> dict[str, dict[str, Any]]:
 
 
 def managed_services_status() -> dict[str, Any]:
-    result = run(["nas-managed-services-control", "status"], check=False, timeout_seconds=120)
+    try:
+        result = run(["nas-managed-services-control", "status"], check=False, timeout_seconds=120)
+    except OSError as exc:
+        return {"ok": False, "error": f"Managed Services V2 status is unavailable: {exc}", "services": []}
     if result.returncode != 0:
         return {
             "ok": False,
@@ -325,7 +262,6 @@ def portal_entries() -> list[dict[str, Any]]:
 def static_links() -> dict[str, str]:
     return {
         "identity": os.environ.get("NAS_IDENTITY_URL", "/identity/if/user/"),
-        "copypartyConfig": os.environ.get("NAS_COPYPARTY_CONFIG_URL", "/shares/admin/copyparty-config/"),
         "scheduler": "/console/system/services#/timers",
         "virtualMachines": "/console/@localhost/machines",
         "containers": "/console/podman",
@@ -384,15 +320,44 @@ def operation_state() -> dict[str, Any]:
     except OSError as exc:
         value = {"busyClasses": [], "active": [], "error": str(exc)}
     busy = set(value.get("busyClasses", []))
+    job_rows = managed_job_rows()
     value.update(
         {
-            "conflictsByAction": {name: list(spec.conflicts) for name, spec in ACTIONS.items()},
-            "workerOwnedActions": [name for name, spec in ACTIONS.items() if spec.worker_owns_operation],
+            "conflictsByAction": {
+                **{name: list(spec.conflicts) for name, spec in HOST_ACTIONS.items()},
+                **{str(row["id"]): ["runtime"] for row in job_rows},
+            },
+            "workerOwnedActions": [name for name, spec in HOST_ACTIONS.items() if spec.worker_owns_operation],
+            "managedJobs": [
+                {"id": row["id"], "label": row["label"], "description": row.get("description", "")} for row in job_rows
+            ],
             "managedServicesConflicts": sorted(busy & {"runtime", "appliance", "first-start"}),
             "firstStartConflicts": list(FIRST_START_CONFLICTS),
         }
     )
     return value
+
+
+def managed_job_rows() -> list[dict[str, Any]]:
+    """Return enabled V2 jobs that Cockpit may launch through their owner unit."""
+    status = managed_services_status()
+    rows = status.get("services") if isinstance(status, dict) else None
+    if not isinstance(rows, list):
+        return []
+    jobs: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("workloadKind") != "job":
+            continue
+        if row.get("managed") is not True or row.get("effective") is not True:
+            continue
+        units = row.get("units")
+        if not isinstance(units, list) or not any(
+            isinstance(unit, dict) and unit.get("role") == "owner" and isinstance(unit.get("unit"), str)
+            for unit in units
+        ):
+            continue
+        jobs.append(row)
+    return sorted(jobs, key=lambda row: str(row.get("id", "")))
 
 
 def first_start_status() -> dict[str, Any]:
@@ -581,18 +546,29 @@ def operation_guard(action: str, conflicts: tuple[str, ...]):
 
 
 def run_action(name: str) -> dict[str, Any]:
-    spec = ACTIONS.get(name)
+    spec = HOST_ACTIONS.get(name)
+    managed_job = False
     if spec is None:
-        raise ApiError(f"Unknown action: {name}")
-    if spec.requires_backup and not BACKUP_INSTALLED:
-        raise ApiError("Backup support is not installed in this NixOS generation.")
-    if spec.requires_replication and not ZFS_REPLICATION_INSTALLED:
-        raise ApiError("Replication support is not installed in this NixOS generation.")
-    if spec.requires_syncthing and not SYNCTHING_INSTALLED:
-        raise ApiError("Syncthing support is not installed in this NixOS generation.")
+        if not SERVICE_ID_RE.fullmatch(name):
+            raise ApiError("Unknown action: invalid V2 job identifier")
+        row = next((candidate for candidate in managed_job_rows() if candidate.get("id") == name), None)
+        if row is None:
+            raise ApiError(f"Unknown action: {name}")
+        owner = next(
+            (
+                unit.get("unit")
+                for unit in row.get("units", [])
+                if isinstance(unit, dict) and unit.get("role") == "owner" and isinstance(unit.get("unit"), str)
+            ),
+            None,
+        )
+        if owner is None:
+            raise ApiError(f"V2 job {name} has no compiled owner unit")
+        spec = ActionSpec((("systemctl", "start", owner),), timeout_seconds=21600)
+        managed_job = True
 
     outputs: list[dict[str, Any]] = []
-    guard = contextlib.nullcontext() if spec.worker_owns_operation else operation_guard(name, spec.conflicts)
+    guard = contextlib.nullcontext() if managed_job else operation_guard(name, spec.conflicts)
     with guard:
         for command in spec.commands:
             result = run(command, check=False, timeout_seconds=spec.timeout_seconds)
@@ -1046,13 +1022,10 @@ def overview() -> dict[str, Any]:
         "postgresql.service",
         "authentik.service",
         "authentik-worker.service",
-        "copyparty.service",
         "cockpit.socket",
         "caddy.service",
         "sanoid.service",
     ]
-    if ZFS_REPLICATION_INSTALLED:
-        units.append("nas-syncoid.service")
     rows = managed.get("services", []) if isinstance(managed.get("services"), list) else []
     for service in rows:
         if not isinstance(service, dict):
@@ -1097,7 +1070,6 @@ def overview() -> dict[str, Any]:
     return {
         "host": socket.gethostname(),
         "protectedReady": pathlib.Path("/run/nas-secrets/ready").exists(),
-        "zfsReplicationInstalled": ZFS_REPLICATION_INSTALLED,
         "authentikTokenWarning": read_optional_text(pathlib.Path("/run/nas-secrets/authentik-token-warning")),
         "setup": results["setup"],
         "identity": results["identity"],
@@ -1194,7 +1166,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("first-start")
     sub.add_parser("first-start-reconcile")
     action = sub.add_parser("action")
-    action.add_argument("name", choices=sorted(ACTIONS))
+    action.add_argument("name", help="Host action or enabled Managed Services V2 job identifier")
     managed = sub.add_parser("managed-service")
     managed.add_argument("service")
     managed.add_argument("mode", choices=["off", "on-demand", "always"])

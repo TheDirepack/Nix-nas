@@ -36,33 +36,5 @@ in
         ];
       };
     }
-
-    (lib.mkIf config.nas.syncthing.enable {
-      nas-syncthing-sync = {
-        # Authentik is platform substrate. Syncthing itself is V2-managed, so its
-        # lifecycle edge is generated from the service dependency in services.yaml.
-        requires = lib.mkOverride 90 [ "authentik.service" ];
-        after = lib.mkOverride 90 [ "authentik.service" ];
-      };
-    })
-
-    (lib.mkIf (config.nas.observability.enable && config.nas.alerting.enable) {
-      vmalert-nas = {
-        # VictoriaMetrics and the alert router are V2-managed applications. Their
-        # dependency edges belong to the finite V2 systemd projection, not static
-        # NixOS configuration that could bypass a desired `off` state.
-        requires = lib.mkOverride 90 [ ];
-        after = lib.mkOverride 90 [ ];
-      };
-    })
-
-    (lib.mkIf config.nas.observability.ntfy.enable {
-      "nas-health-alert@" = {
-        # ntfy is a V2-managed application. A host health failure must not bypass
-        # an explicit notifications=off desired state by pulling ntfy into service.
-        wants = lib.mkOverride 90 [ ];
-        after = lib.mkOverride 90 [ ];
-      };
-    })
   ];
 }

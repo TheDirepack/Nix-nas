@@ -29,6 +29,7 @@ APPLICATION_NAMES = (
 GENERIC_PATHS = (
     *sorted((ROOT / "services").glob("nas_v2_*.py")),
     ROOT / "modules/nas/config/managed-services.nix",
+    ROOT / "modules/nas/config/managed-services-lifecycle.nix",
     ROOT / "modules/nas/config/managed-services-transactions.nix",
     ROOT / "modules/nas/config/managed-services-network-platform.nix",
     ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix",
@@ -38,8 +39,7 @@ GENERIC_PATHS = (
 
 def violations(paths: tuple[pathlib.Path, ...] = GENERIC_PATHS) -> list[tuple[pathlib.Path, str, int]]:
     patterns = {
-        name: re.compile(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", re.IGNORECASE)
-        for name in APPLICATION_NAMES
+        name: re.compile(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", re.IGNORECASE) for name in APPLICATION_NAMES
     }
     result: list[tuple[pathlib.Path, str, int]] = []
     for path in paths:

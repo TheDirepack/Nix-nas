@@ -412,14 +412,8 @@ let
       export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
       export NAS_CONFIG_DIR=${lib.escapeShellArg cfg.configurationDir}
       export NAS_IDENTITY_URL=${lib.escapeShellArg cfg.identity.authentikPath}
-      export NAS_COPYPARTY_CONFIG_URL=/shares/admin/copyparty-config/
-      export NAS_BACKUP_ENABLE=${if cfg.backup.enable then "1" else "0"}
-      export NAS_ZFS_REPLICATION_ENABLE=${if cfg.zfsReplication.enable then "1" else "0"}
-      export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
-      export NAS_AI_MODEL_ROOT=${lib.escapeShellArg aiStorageRoot}
-      export NAS_LLAMA_SERVER=${lib.escapeShellArg "${llamaCppPackage}/bin/llama-server"}
       exec ${nasCockpitApiScript} "$@"
     '';
   };

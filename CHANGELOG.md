@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.1 — 2026-08-25
+## 0.1.0 — 2026-08-25
 
 ### Added
 
@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Reset versioning to `0.1` as the new baseline; previous `2.2.0-alpha.x` history has been archived in git history.
+- Established `0.1.0` as the canonical SemVer baseline; previous `2.2.0-alpha.x` history has been archived in git history.
 - Documentation audit: removed obsolete bootstrap plan and stale Pi design draft, corrected `code-map.md` to match the current module/service layout, aligned `SECURITY.md` locked-state boundary with ADR-0001 (out-of-band recovery only), and trimmed supporting records to one explanation per concern.
 - Build/validation: made `validate-structure.py` ignore `.opencode` and other ignored cache directories so local agent artifacts do not fail preflight.
 
@@ -23,4 +23,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Preflight now passes on hosts with `.opencode/node_modules` present.
 - Security docs no longer claim browser Cockpit recovery while locked.
-

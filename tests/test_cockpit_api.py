@@ -81,22 +81,43 @@ class CockpitApiTests(unittest.TestCase):
         self.assertEqual(value["managedServicesConflicts"], ["runtime"])
 
     def test_unknown_action_fails_before_subprocess(self) -> None:
-        with mock.patch.object(api, "run") as run:
+        with (
+            mock.patch.object(api, "managed_services_status", return_value={"services": []}),
+            mock.patch.object(api, "run") as run,
+        ):
             with self.assertRaisesRegex(api.ApiError, "Unknown action"):
                 api.run_action("reboot")
         run.assert_not_called()
 
-    def test_optional_actions_fail_before_spawning_when_disabled(self) -> None:
-        cases = [
-            ("backup", "BACKUP_INSTALLED", "Backup"),
-            ("replicate", "ZFS_REPLICATION_INSTALLED", "Replication"),
-            ("syncthing-sync", "SYNCTHING_INSTALLED", "Syncthing"),
-        ]
-        for action, flag, message in cases:
-            with self.subTest(action=action), mock.patch.object(api, flag, False), mock.patch.object(api, "run") as run:
-                with self.assertRaisesRegex(api.ApiError, message):
-                    api.run_action(action)
-                run.assert_not_called()
+    def test_v2_jobs_are_discovered_and_started_through_the_compiled_owner_unit(self) -> None:
+        with (
+            mock.patch.object(
+                api,
+                "managed_services_status",
+                return_value={
+                    "services": [
+                        {
+                            "id": "snapshot",
+                            "label": "Create snapshot",
+                            "description": "",
+                            "managed": True,
+                            "effective": True,
+                            "workloadKind": "job",
+                            "units": [{"unit": "nas-zfs-manual-snapshot.service", "role": "owner"}],
+                        }
+                    ]
+                },
+            ),
+            mock.patch.object(api, "run", return_value=self.completed(stdout="started")) as run,
+        ):
+            self.assertEqual(api.managed_job_rows()[0]["id"], "snapshot")
+            result = api.run_action("snapshot")
+        self.assertTrue(result["ok"])
+        run.assert_called_once_with(
+            ("systemctl", "start", "nas-zfs-manual-snapshot.service"),
+            check=False,
+            timeout_seconds=21600,
+        )
 
     def test_first_start_request_validates_plan_and_duplicate_devices_before_reservation(self) -> None:
         request = {

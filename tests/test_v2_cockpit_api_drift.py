@@ -86,11 +86,29 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(result["codingRoles"], {})
 
     def test_operation_state_adds_action_conflicts_and_handles_io_error(self) -> None:
-        with mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": ["runtime"], "active": []}):
+        with (
+            mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": ["runtime"], "active": []}),
+            mock.patch.object(
+                api,
+                "managed_services_status",
+                return_value={
+                    "services": [
+                        {
+                            "id": "identity-sync",
+                            "label": "Identity sync",
+                            "managed": True,
+                            "effective": True,
+                            "workloadKind": "job",
+                            "units": [{"unit": "nas-identity-sync.service", "role": "owner"}],
+                        }
+                    ]
+                },
+            ),
+        ):
             result = api.operation_state()
-        self.assertEqual(result["conflictsByAction"]["identity-sync"], ["identity"])
+        self.assertEqual(result["conflictsByAction"]["identity-sync"], ["runtime"])
         self.assertEqual(result["managedServicesConflicts"], ["runtime"])
-        self.assertIn("identity-sync", result["workerOwnedActions"])
+        self.assertNotIn("identity-sync", result["workerOwnedActions"])
         with mock.patch.object(api, "shared_operation_state", side_effect=OSError("denied")):
             result = api.operation_state()
         self.assertEqual(result["busyClasses"], [])
@@ -266,32 +284,46 @@ class CockpitApiDriftTests(unittest.TestCase):
                 with api.operation_guard("x", ("runtime",)):
                     pass
 
-    def test_run_action_dependency_guards_unknown_and_worker_owned_action(self) -> None:
-        with self.assertRaisesRegex(api.ApiError, "Unknown action"):
-            api.run_action("missing")
-        with mock.patch.object(api, "BACKUP_INSTALLED", False):
-            with self.assertRaisesRegex(api.ApiError, "Backup support"):
-                api.run_action("backup")
-        with mock.patch.object(api, "ZFS_REPLICATION_INSTALLED", False):
-            with self.assertRaisesRegex(api.ApiError, "Replication support"):
-                api.run_action("replicate")
-        with mock.patch.object(api, "SYNCTHING_INSTALLED", False):
-            with self.assertRaisesRegex(api.ApiError, "Syncthing support"):
-                api.run_action("syncthing-sync")
-        with mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run:
+    def test_run_action_discovers_v2_jobs_and_rejects_unknown_actions(self) -> None:
+        with mock.patch.object(api, "managed_services_status", return_value={"services": []}):
+            with self.assertRaisesRegex(api.ApiError, "Unknown action"):
+                api.run_action("missing")
+        with (
+            mock.patch.object(
+                api,
+                "managed_services_status",
+                return_value={
+                    "services": [
+                        {
+                            "id": "identity-sync",
+                            "label": "Identity sync",
+                            "managed": True,
+                            "effective": True,
+                            "workloadKind": "job",
+                            "units": [{"unit": "nas-identity-sync.service", "role": "owner"}],
+                        }
+                    ]
+                },
+            ),
+            mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
+        ):
             result = api.run_action("identity-sync")
         self.assertTrue(result["ok"])
         self.assertEqual(result["commands"][0]["stdout"], "ok")
-        run.assert_called_once()
+        run.assert_called_once_with(
+            ("systemctl", "start", "nas-identity-sync.service"),
+            check=False,
+            timeout_seconds=21600,
+        )
 
-    def test_run_action_uses_guard_and_stops_on_failure(self) -> None:
+    def test_host_action_uses_guard_and_stops_on_failure(self) -> None:
         with (
             mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()) as guard,
             mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")),
         ):
             with self.assertRaises(api.ApiError):
-                api.run_action("health")
-        guard.assert_called_once_with("health", ("storage",))
+                api.run_action("protected-restart")
+        guard.assert_called_once_with("protected-restart", ("identity", "runtime"))
 
     def test_set_managed_service_validates_and_propagates_coordination(self) -> None:
         with self.assertRaisesRegex(api.ApiError, "service identifier"):
@@ -522,14 +554,12 @@ class CockpitApiDriftTests(unittest.TestCase):
             mock.patch.object(api, "read_optional_text", return_value=None),
             mock.patch.object(api.socket, "gethostname", return_value="nas-host"),
             mock.patch.object(pathlib.Path, "exists", return_value=True),
-            mock.patch.object(api, "ZFS_REPLICATION_INSTALLED", True),
         ):
             result = api.overview()
         self.assertEqual(result["host"], "nas-host")
         self.assertTrue(result["zfs"]["healthy"])
         self.assertEqual(result["managedServices"], managed)
         self.assertIn("demo.service", states.call_args.args[0])
-        self.assertIn("nas-syncoid.service", states.call_args.args[0])
 
         with (
             mock.patch.object(api, "managed_services_status", return_value={"services": []}),

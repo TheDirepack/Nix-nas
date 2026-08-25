@@ -6,7 +6,9 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-_SPEC = importlib.util.spec_from_file_location("check_architecture_boundary", SCRIPTS / "check-architecture-boundary.py")
+_SPEC = importlib.util.spec_from_file_location(
+    "check_architecture_boundary", SCRIPTS / "check-architecture-boundary.py"
+)
 assert _SPEC is not None and _SPEC.loader is not None
 boundary = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(boundary)
@@ -24,7 +26,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             found = boundary.violations((source,))
         finally:
             source.write_text(original, encoding="utf-8")
-        self.assertEqual([(path, name) for path, name, _line in found], [(pathlib.Path("services/nas_v2_systemd_native.py"), "syncthing")])
+        self.assertEqual(
+            [(path, name) for path, name, _line in found],
+            [(pathlib.Path("services/nas_v2_systemd_native.py"), "syncthing")],
+        )
 
 
 if __name__ == "__main__":

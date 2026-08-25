@@ -70,41 +70,5 @@ in
       assertion = lib.elem "nas-identity-bootstrap.service" config.systemd.services.nas-managed-services-authentik-reconcile.after;
       message = "The Authentik capability projection must run after the first-boot identity bootstrap.";
     }
-    {
-      assertion =
-        !config.nas.syncthing.enable
-        || config.systemd.services.nas-syncthing-sync.requires == [ "authentik.service" ];
-      message = "Syncthing identity reconciliation must not statically start the V2-managed Syncthing application.";
-    }
-    {
-      assertion =
-        !config.nas.syncthing.enable
-        || config.systemd.services.nas-syncthing-sync.after == [ "authentik.service" ];
-      message = "Syncthing identity reconciliation must get its Syncthing ordering edge only from the V2 dependency projection.";
-    }
-    {
-      assertion =
-        !(config.nas.observability.enable && config.nas.alerting.enable)
-        || config.systemd.services.vmalert-nas.requires == [ ];
-      message = "vmalert must not statically start V2-managed observability application dependencies.";
-    }
-    {
-      assertion =
-        !(config.nas.observability.enable && config.nas.alerting.enable)
-        || config.systemd.services.vmalert-nas.after == [ ];
-      message = "vmalert ordering on V2-managed application dependencies must come from the V2 systemd projection.";
-    }
-    {
-      assertion =
-        !config.nas.observability.ntfy.enable
-        || config.systemd.services."nas-health-alert@".wants == [ ];
-      message = "Host health alerts must not statically start the V2-managed notification application.";
-    }
-    {
-      assertion =
-        !config.nas.observability.ntfy.enable
-        || config.systemd.services."nas-health-alert@".after == [ ];
-      message = "Health-alert ordering on the notification application must remain under V2 lifecycle authority.";
-    }
   ];
 }
