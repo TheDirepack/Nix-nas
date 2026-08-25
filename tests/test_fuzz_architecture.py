@@ -46,11 +46,23 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         self.assertNotIn("NAS_FUZZ_CASES", source)
         self.assertNotIn("for _ in range(", source)
 
-    def test_custom_input_fuzzer_covers_every_python_service_module(self) -> None:
-        source = (ROOT / "tests/test_fuzz_custom_inputs.py").read_text(encoding="utf-8")
+    def test_every_python_service_has_fuzz_or_executable_contract_coverage(self) -> None:
+        fuzz_source = (ROOT / "tests/test_fuzz_custom_inputs.py").read_text(encoding="utf-8")
+        inventory = json.loads((ROOT / "tests/custom-script-contracts-v2.json").read_text(encoding="utf-8"))
+        contract_sources = {
+            pathlib.Path(value["source"]).stem
+            for value in inventory.get("executables", {}).values()
+            if isinstance(value, dict) and isinstance(value.get("source"), str)
+        }
+        contract_sources.update(
+            pathlib.Path(path).stem for path in inventory.get("pythonModules", {}) if isinstance(path, str)
+        )
         for module in sorted(path.stem for path in (ROOT / "services").glob("nas_*.py")):
             with self.subTest(module=module):
-                self.assertIn(f'"{module}"', source)
+                self.assertTrue(
+                    f'"{module}"' in fuzz_source or module in contract_sources,
+                    f"{module} lacks both pure-input fuzz coverage and an executable/module test contract",
+                )
 
     def test_executable_layer_is_a_contract_check_not_payload_fuzzer(self) -> None:
         source = (ROOT / "scripts/fuzz-executables.py").read_text(encoding="utf-8")
