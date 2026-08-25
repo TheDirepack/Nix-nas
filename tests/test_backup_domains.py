@@ -19,15 +19,17 @@ class BackupDomainArchitectureTests(unittest.TestCase):
         self.assertIn('"--tag=root-control-plane"', module)
         self.assertIn("cfg.zfsRoot", module)
         self.assertIn('"/var/lib/postgresql"', module)
+        self.assertIn('"/var/lib/nas-operational/postgresql"', module)
         self.assertNotIn("nas_v2_backup.py", module)
         self.assertNotIn("backup-resources.json", module)
 
-    def test_root_backup_uses_native_postgresql_dump(self) -> None:
+    def test_root_backup_uses_native_postgresql_dump_instead_of_live_pages(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
         self.assertIn("pg_dump --format=custom authentik", module)
         self.assertIn("root-control/authentik.pgdump", module)
         self.assertIn("pg_restore --list", module)
         self.assertIn("cfg.secrets.keepassDatabase", module)
+        self.assertIn('"/var/lib/nas-operational/postgresql"', module)
 
     def test_encrypted_zfs_domain_uses_raw_syncoid_send(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
