@@ -7,10 +7,8 @@ copy, promote, or otherwise consume bootstrap KDBX entries. Its first mutation
 is the switch to a fresh root-hosted permanent runtime; all permanent secrets
 are then generated in the new user-password-protected NAS.kdbx.
 
-``nas_setup`` remains the library of finite setup primitives. The legacy
-interactive first-run function is intentionally bypassed here so the standalone
-wizard has one security-focused orchestration path while its older CLI surface
-is removed incrementally.
+``nas_setup`` remains the library of finite setup primitives. The dedicated
+standalone wizard uses this single security-focused orchestration path.
 """
 
 from __future__ import annotations
@@ -74,16 +72,30 @@ def select_permanent_runtime() -> dict[str, Any]:
 
 
 def remove_setup_application() -> dict[str, Any]:
-    """Best-effort launcher cleanup using the still-valid permanent bootstrap token."""
-    try:
-        import nas_identity_sync as identity
+    """Remove the temporary setup launcher and verify that it is gone.
 
+    The operation is intentionally idempotent so a crash after Authentik accepts
+    the DELETE but before the journal records the stage can resume safely. Any
+    API failure remains fatal: first-run must never be marked complete while the
+    setup application may still be reachable.
+    """
+    import nas_identity_sync as identity
+
+    try:
         token = identity.authentik_token(bootstrap=True)
+        applications = identity.authentik_list(token, "core/applications/?slug=nas-setup")
+        matches = [item for item in applications if item.get("slug") == "nas-setup"]
+        if not matches:
+            return {"removed": True, "resumed": True}
         identity.authentik_request(token, "core/applications/nas-setup/", method="DELETE")
-        return {"removed": True}
-    except Exception as exc:  # cleanup must not invalidate a fully verified appliance
-        setup.progress(f"warning: unable to remove setup application: {type(exc).__name__}")
-        return {"removed": False, "reason": type(exc).__name__}
+        remaining = identity.authentik_list(token, "core/applications/?slug=nas-setup")
+        if any(item.get("slug") == "nas-setup" for item in remaining):
+            raise setup.SetupError("Authentik NAS Setup application still exists after retirement")
+        return {"removed": True, "resumed": False}
+    except setup.SetupError:
+        raise
+    except Exception as exc:
+        raise setup.SetupError("Unable to retire the temporary Authentik NAS Setup application") from exc
 
 
 def secure_first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
@@ -244,6 +256,8 @@ def secure_first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 journal,
                 "setup-application-retirement",
                 remove_setup_application,
+                manual_recovery_on_failure=True,
+                postcondition=lambda result: isinstance(result, Mapping) and result.get("removed") is True,
             )
             setup.run_setup_stage(
                 journal,
@@ -386,7 +400,8 @@ def main() -> int:
     args = parser.parse_args()
 
     # Reuse the hardened request-file parser/cleanup and operation reservation
-    # code, but replace the legacy setup sequencing for this dedicated entrypoint.
+    # code while keeping the standalone first-run job as the sole web setup
+    # orchestration entrypoint.
     original = setup._first_run_locked
     setup._first_run_locked = secure_first_run_locked
     try:
