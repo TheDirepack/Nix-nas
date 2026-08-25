@@ -54,6 +54,7 @@ let
   seedDesiredState = pkgs.writeShellScript "nas-managed-services-v2-seed" ''
     set -euo pipefail
 
+    ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.zfsRoot}
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}
     ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}/apps
 
@@ -100,7 +101,13 @@ in
     systemd.services.nas-managed-services-seed = {
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
       before = [ "nas-managed-services-reconcile.service" ];
+      unitConfig = {
+        RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
+        ConditionPathIsMountPoint = cfg.zfsRoot;
+      };
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
@@ -113,9 +120,6 @@ in
       };
     };
 
-    # This unit is intentionally only the finite compile entry point. Native
-    # subsystem activation/rollback belongs to managed-services-transactions;
-    # generation publication belongs to managed-services-generations.
     systemd.services.nas-managed-services-reconcile = {
       description = "Compile and activate Managed Services V2 desired state";
       wantedBy = [ "multi-user.target" ];
@@ -142,8 +146,6 @@ in
         NAS_V2_RESTIC_PATHS = resticPathsPath;
         NAS_V2_FIREWALLD = firewalldProjectionPath;
         NAS_V2_CADDY_BIN = "${pkgs.caddy}/bin/caddy";
-        # Authentik's embedded outpost is served by the main loopback listener;
-        # a second proxy-outpost daemon/listener only duplicated Authentik.
         NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
@@ -192,8 +194,6 @@ in
       };
     };
 
-    # The concrete Authentik implementation is supplied by the blueprint
-    # adapter module. Keep only lifecycle/hardening shared by that finite job.
     systemd.services.nas-managed-services-authentik-reconcile = {
       description = "Apply Managed Services V2 Authentik projection";
       wantedBy = [ "nas-protected-services.target" ];
@@ -233,8 +233,6 @@ in
       };
     };
 
-    # Reconciliation is optional during bootstrap. Caddy cannot require it:
-    # managed services may need Caddy's CA before their state is available.
     systemd.services.caddy.wants = [
       "nas-managed-services-reconcile.service"
       "nas-managed-services-authentik-reconcile.service"
