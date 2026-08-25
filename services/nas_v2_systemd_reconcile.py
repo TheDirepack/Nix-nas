@@ -28,6 +28,9 @@ class SystemdReconcileError(RuntimeError):
 
 _UNIT = re.compile(r"^[A-Za-z0-9_.@:-]+\.(?:service|timer|target|path|socket)$")
 _DROPIN = re.compile(r"^([A-Za-z0-9_.@:-]+\.(?:service|timer|target))\.d/50-nas-v2\.conf$")
+_QUADLET_DIRECT_CONTAINER = re.compile(r"^nas-v2-([a-z][a-z0-9-]{0,63})\.container$")
+_QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.network$")
+_QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 
 
@@ -55,6 +58,15 @@ def _safe_target(root: pathlib.Path, relative: str) -> tuple[pathlib.Path, str]:
 
 
 def _safe_quadlet_target(root: pathlib.Path, relative: str) -> tuple[pathlib.Path, str]:
+    direct_container = _QUADLET_DIRECT_CONTAINER.fullmatch(relative)
+    if direct_container:
+        return root / relative, f"nas-v2-{direct_container.group(1)}.service"
+    direct_network = _QUADLET_DIRECT_NETWORK.fullmatch(relative)
+    if direct_network:
+        return root / relative, f"nas-v2-{direct_network.group(1)}.service"
+    session_network = _QUADLET_SESSION_NETWORK.fullmatch(relative)
+    if session_network:
+        return root / relative, f"nas-v2-session-{session_network.group(1)}.target"
     if _QUADLET.fullmatch(relative) is None:
         raise SystemdReconcileError(f"unsafe generated Quadlet target {relative!r}")
     path = pathlib.Path(relative)
@@ -111,14 +123,7 @@ def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
 
 
 def _projection_roots(projection_root: pathlib.Path) -> tuple[pathlib.Path, ...]:
-    """Return directories allowed to back V2 runtime symlinks.
-
-    Production passes the stable ``/run/nas-control/systemd`` compatibility
-    symlink. Its current target is one immutable generation while live runtime
-    links may still target the previous sibling generation until activation
-    succeeds. Developer/test invocations without generations keep the direct
-    projection-root behavior.
-    """
+    """Return systemd generation roots allowed to back V2 runtime symlinks."""
     try:
         current = projection_root.resolve(strict=True)
     except OSError as exc:
@@ -127,7 +132,12 @@ def _projection_roots(projection_root: pathlib.Path) -> tuple[pathlib.Path, ...]
     generations = projection_root.parent / "generations"
     try:
         if generations.is_dir() and not generations.is_symlink():
-            roots.append(generations.resolve(strict=True))
+            for generation in generations.iterdir():
+                candidate = generation / "systemd"
+                if candidate.is_dir() and not candidate.is_symlink():
+                    resolved = candidate.resolve(strict=True)
+                    if resolved not in roots:
+                        roots.append(resolved)
     except OSError:
         pass
     return tuple(roots)
@@ -144,7 +154,7 @@ def _is_under(path: pathlib.Path, roots: tuple[pathlib.Path, ...], *, strict: bo
             return resolved
         except ValueError:
             continue
-    raise SystemdReconcileError(f"generated source is outside V2 generation roots: {path}")
+    raise SystemdReconcileError(f"generated source is outside V2 systemd generation roots: {path}")
 
 
 def _source_under_current(projection_root: pathlib.Path, value: str) -> pathlib.Path:
@@ -167,7 +177,7 @@ def _read_owned_link(target: pathlib.Path, projection_roots: tuple[pathlib.Path,
             raise SystemdReconcileError(f"V2 runtime link does not target a generated file: {target}")
         return resolved
     if target.exists():
-        raise SystemdReconcileError(f"refusing to manage non-V2 generated file {target}")
+        raise SystemdReconcileError(f"refusing to overwrite non-V2 generated file {target}")
     return None
 
 
@@ -215,11 +225,7 @@ def _parse_links(
         ):
             raise SystemdReconcileError(f"invalid systemd projection {key} entry")
         target_rel = item["target"]
-        target_path, affected = (
-            _safe_quadlet_target(runtime_root, target_rel)
-            if quadlet
-            else _safe_target(runtime_root, target_rel)
-        )
+        target_path, affected = _safe_quadlet_target(runtime_root, target_rel) if quadlet else _safe_target(runtime_root, target_rel)
         source = _source_under_current(projection_root, item["source"])
         if target_rel in links:
             raise SystemdReconcileError(f"duplicate generated target {target_rel!r}")
