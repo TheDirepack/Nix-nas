@@ -31,9 +31,8 @@ class SecureFirstStartTests(unittest.TestCase):
         self.assertNotIn("password =", bootstrap_block)
         self.assertIn("NAS.kdbx", bootstrap_block)
         self.assertIn("kdbx-password", bootstrap_block)
-        self.assertIn("selecting a fresh root-hosted permanent trust domain", source)
-        self.assertLess(source.index("permanent-runtime-selection"), source.index("permanent-keepass-database"))
-        self.assertLess(source.index("permanent-keepass-database"), source.index("permanent-secret-initialization"))
+        self.assertLess(source.index('"permanent-runtime-selection"'), source.index('"permanent-keepass-database"'))
+        self.assertLess(source.index('"permanent-keepass-database"'), source.index('"permanent-secret-initialization"'))
 
     def test_no_bootstrap_secret_promotion_stage_exists(self) -> None:
         source = SECURE.read_text(encoding="utf-8")
@@ -42,13 +41,27 @@ class SecureFirstStartTests(unittest.TestCase):
         self.assertNotIn("bootstrap-keepass-database", source)
         self.assertIn("bootstrap-authority-ready", source)
 
-    def test_bootstrap_retirement_precedes_completion_state(self) -> None:
+    def test_bootstrap_retirement_is_after_permanent_verification_and_before_completion(self) -> None:
         source = SECURE.read_text(encoding="utf-8")
-        retirement = source.index('"bootstrap-account-retirement"')
+        verification = source.index('"permanent-control-plane-verification"')
+        setup_app = source.index('"setup-application-retirement"')
+        authority = source.index('"bootstrap-authority-retirement"')
+        account = source.index('"bootstrap-account-retirement"')
         final_state = source.index('"final-state"')
         complete = source.index("journal.complete(report)")
-        self.assertLess(retirement, final_state)
+        self.assertLess(verification, setup_app)
+        self.assertLess(setup_app, authority)
+        self.assertLess(authority, account)
+        self.assertLess(account, final_state)
         self.assertLess(final_state, complete)
+
+    def test_requested_service_work_finishes_before_bootstrap_is_destroyed(self) -> None:
+        source = SECURE.read_text(encoding="utf-8")
+        retirement = source.index('"setup-application-retirement"')
+        for stage in ('"share-directories"', '"managed-services-policy"', '"verification"'):
+            with self.subTest(stage=stage):
+                self.assertLess(source.index(stage), retirement)
+        self.assertLess(source.index("if preflight_ran:"), retirement)
 
     def test_permanent_machine_secrets_are_generated_after_fresh_kdbx(self) -> None:
         source = SECURE.read_text(encoding="utf-8")
