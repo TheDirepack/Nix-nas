@@ -17,7 +17,7 @@ nas-doctor = "nas_doctor:main"
 nas-first-run-api = "nas_first_run_api:main"
 nas-first-start-job = "nas_first_start:main"
 nas-identity-bootstrap = "nas_identity_bootstrap:main"
-nas-identity-sync = "nas_identity_sync:main"
+nas-identity-sync = "nas_identity_dispatch:main"
 nas-managed-services-control = "nas_v2_control:main"
 nas-managed-session = "nas_v2_session:main"
 nas-operation-run = "nas_operation_lock:main"
@@ -40,6 +40,7 @@ py-modules = [
   "nas_first_run_api",
   "nas_first_start",
   "nas_identity_bootstrap",
+  "nas_identity_dispatch",
   "nas_identity_model",
   "nas_identity_sync",
   "nas_logging",
