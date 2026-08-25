@@ -45,12 +45,16 @@ in
     # mount or consume V2 per-application backup inventories.
     (lib.mkIf cfg.backup.enable {
       services.restic.backups.nas-boot-system = {
-        paths = lib.mkForce [
+        # These are deliberate replacements for the legacy per-application
+        # Restic inventory, but they do not need mkForce. A low-priority-number
+        # override remains explicit while preserving the repository's mkForce
+        # policy and making conflicts easier to diagnose.
+        paths = lib.mkOverride 40 [
           "/"
           "/boot"
         ];
-        dynamicFilesFrom = lib.mkForce null;
-        exclude = lib.mkForce (
+        dynamicFilesFrom = lib.mkOverride 40 null;
+        exclude = lib.mkOverride 40 (
           [
             "/dev"
             "/proc"
@@ -73,7 +77,7 @@ in
           "--one-file-system"
           "--tag=root-control-plane"
         ];
-        backupPrepareCommand = lib.mkForce ''
+        backupPrepareCommand = lib.mkOverride 40 ''
           #!${pkgs.runtimeShell}
           set -euo pipefail
           artifact_dir=${lib.escapeShellArg rootControlArtifactDir}
@@ -91,7 +95,7 @@ in
           install -d -m 0700 ${lib.escapeShellArg localResticRepository}
           ''}
         '';
-        backupCleanupCommand = lib.mkForce ''
+        backupCleanupCommand = lib.mkOverride 40 ''
           #!${pkgs.runtimeShell}
           set -euo pipefail
           rm -f -- ${lib.escapeShellArg rootControlDatabaseDump}
@@ -99,7 +103,7 @@ in
       };
 
       systemd.services.nas-backup-restore-verify = lib.mkIf cfg.backup.restoreVerification.enable {
-        script = lib.mkForce ''
+        script = lib.mkOverride 40 ''
           set -euo pipefail
           verify_root=${lib.escapeShellArg restoreVerifyPath}
           restore_root="$verify_root/restored"
@@ -139,7 +143,7 @@ in
     # only Syncoid's command line so operator tuning remains available while
     # --sendoptions cannot disable raw encrypted sends.
     (lib.mkIf cfg.zfsReplication.enable {
-      systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkForce (
+      systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkOverride 40 (
         "${pkgs.sanoid}/bin/syncoid ${lib.escapeShellArgs reviewedSyncoidArgs}"
       );
     })
