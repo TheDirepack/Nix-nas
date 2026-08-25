@@ -62,8 +62,7 @@ Authentik-only browser-login requirement.
 
 - Local PAM accounts remain a recovery authority, but never a network browser login
   authority.
-- `docs/development/caddy-first-boot-bootstrap-plan.md` is superseded where it
-  describes `/console` or an HTTPS bootstrap recovery surface.
+- Earlier bootstrap plans that described `/console` as an HTTPS recovery surface are superseded.
 
 ## Alternatives considered
 

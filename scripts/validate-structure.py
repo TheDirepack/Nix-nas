@@ -185,7 +185,7 @@ FORBIDDEN_V1_FILES = {
 }
 
 ALLOWED_ROOT_MARKDOWN = {"AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "README.md", "SECURITY.md"}
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9][A-Za-z0-9.-]*)?$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[.-][A-Za-z0-9][A-Za-z0-9.-]*)?$")
 STATIC_NIX_PATH_RE = re.compile(r"\$\{(\.\./[^}]+)\}")
 FORBIDDEN_DIR_NAMES = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__", "node_modules", "build", "dist"}
 ALLOWED_GENERATED_DIRS = {ROOT / "cockpit" / "dist", ROOT / "setup" / "first-run-wizard" / "dist"}
@@ -215,10 +215,14 @@ def main() -> int:
     if unexpected:
         fail("root documentation must be grouped under docs/: " + ", ".join(unexpected))
 
+    ignored_dir_parts = {".git", ".opencode", ".direnv", ".venv"}
     forbidden_dirs = sorted(
         str(path.relative_to(ROOT))
         for path in ROOT.rglob("*")
-        if path.is_dir() and path.name in FORBIDDEN_DIR_NAMES and path not in ALLOWED_GENERATED_DIRS
+        if path.is_dir()
+        and path.name in FORBIDDEN_DIR_NAMES
+        and path not in ALLOWED_GENERATED_DIRS
+        and not any(part in ignored_dir_parts for part in path.parts)
     )
     if forbidden_dirs:
         fail("generated/cache directories are present: " + ", ".join(forbidden_dirs))
@@ -228,6 +232,7 @@ def main() -> int:
         for path in ROOT.rglob("*")
         if path.is_file()
         and (path.name in FORBIDDEN_FILE_NAMES or any(part.endswith(".egg-info") for part in path.parts))
+        and not any(part in ignored_dir_parts for part in path.parts)
     )
     if generated_files:
         fail("generated files are present: " + ", ".join(generated_files))

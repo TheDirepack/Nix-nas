@@ -13,6 +13,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.
+- [Design system](../../.interface-design/system.md) — Cockpit UI direction, PatternFly authority, and component rules.
 
 Historical context lives in [decision history](history.md). Release-specific implementation records are evidence, not design documents.
 
@@ -63,3 +64,7 @@ Useful supporting records:
 
 - [External validation](external-validation.md)
 - [Privileged-service audit](root-service-audit.md)
+- [QEMU and installer validation](vm-testing.md)
+- [Artifact naming](artifact-naming.md)
+- [Coding agent operator guide](../../docs/src/admin/coding-agent.md) (operator-facing)
+- [Managed Services V2 spec](managed-services-v2-spec.md) is the single V2 authority; historical V2 drafts and superseded bootstrap plans have been removed.

@@ -44,9 +44,9 @@ The bundled flow writes `attributes.nasSyncthingDevices` for the authenticated a
 - Backend listeners remain loopback/Unix-socket scoped where practical.
 - Caddy route authorization and upstream application authorization remain independent layers.
 
-## Feature controller
+## Managed Services V2 authorization
 
-The feature controller accepts only catalog-defined features/units, validates parent graphs, rejects malformed persisted modes, uses a root-owned Unix socket, and checks caller identity/capability before wake operations.
+Managed Services V2 compiles desired state from `/var/lib/nas-control/services.yaml` into native systemd, Caddy, Authentik capability objects, and firewall policy. There is no resident feature controller, feature database, or V1 `nas-feature-control` command. Caddy + Authentik enforce request-time capability checks; V2 only ensures the required `application.<service>.<capability>` objects exist and never assigns users to them.
 
 ## Deployment safety
 
@@ -69,6 +69,8 @@ A Restic repository on the same ZFS pool is not an independent disaster backup. 
 
 ## Locked-state recovery boundary
 
-Cockpit remains reachable on the trusted-interface TLS port while the protected stack is locked. Cockpit authenticates through the local PAM stack and uses its native privilege-escalation path. The unlock form starts the allow-listed `nas-secrets activate-stdin` command and writes the KeePass password only to the child process stdin. The field is cleared after submission and is never persisted by the application.
+While the protected stack is locked, no browser management endpoint is exposed. Caddy may serve static setup guidance at the trusted-interface HTTPS port, but Cockpit, Authentik, CopyParty, and managed applications remain unavailable until `nas-secrets activate` succeeds. Recovery uses the local console, SSH with a provisioned recovery key, or hardware KVM.
 
-Caddy/Authentik are deliberately not dependencies of this path. Authentik `nas_admin` membership does not create a host account, which prevents a compromise of the identity database from automatically becoming cold-boot shell/unlock authority.
+`nas-secrets activate` reads the KeePass password from standard input and never stores it in a URL, argument, environment variable, Nix store path, browser storage, or disk file. The Cockpit privileged API allow-list exposes only `activate-stdin` for this purpose after browser authorization, and only when the protected stack requires it.
+
+Caddy/Authentik are deliberately not dependencies of this path. Authentik `nas_admin` membership does not create a host account, which prevents a compromise of the identity database from automatically becoming cold-boot shell/unlock authority. See [ADR-0001](docs/development/adr-0001-authentik-only-browser-access.md) and [Locked-state unlock](docs/src/locked-unlock.md).
