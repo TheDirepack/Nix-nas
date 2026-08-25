@@ -156,6 +156,11 @@ class BrowserAuthzInputTests(unittest.TestCase):
         )
         launcher_console.assert_called_once_with("https://nas-test.local:8443", "akadmin", "bootstrap-secret")
 
+    def test_callback_return_accepts_caddys_canonical_trailing_slash(self) -> None:
+        self.assertTrue(self.authz.callback_return_matches("/setup", "/setup/"))
+        self.assertTrue(self.authz.callback_return_matches("/console/", "/console/"))
+        self.assertFalse(self.authz.callback_return_matches("/setup", "/console/"))
+
     def test_secret_reader_rejects_symlink_and_permissive_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -224,6 +229,16 @@ class BrowserAuthzInputTests(unittest.TestCase):
             self.authz.safe_browser_url("https://nas.example/console/?token=secret#auth-code"),
             "https://nas.example/console/",
         )
+
+    def test_login_discards_pre_authentication_browser_diagnostics(self) -> None:
+        driver = mock.Mock()
+        self.authz.discard_browser_log(driver)
+        driver.get_log.assert_called_once_with("browser")
+
+    def test_discard_browser_log_ignores_unavailable_log(self) -> None:
+        driver = mock.Mock()
+        driver.get_log.side_effect = ValueError("log unavailable")
+        self.authz.discard_browser_log(driver)
 
     def test_allowed_settings_route_accepts_its_authentik_flow_redirect(self) -> None:
         expectation = self.authz.RouteExpectation("/settings/syncthing", True, "/identity/if/flow/nas-user-settings/")

@@ -57,6 +57,9 @@ class VmPreflightScopeTests(unittest.TestCase):
         self.assertIn('source "$repo/scripts/lib/nas-vm-cleanup.sh"', full_suite)
         self.assertIn("nas_vm_cleanup_add cleanup_work", full_suite)
         self.assertIn("nas_vm_cleanup_add nas_vm_js_deps_cleanup", full_suite)
+        self.assertIn('nas_vm_cockpit_js_deps_prepare "$repo"', full_suite)
+        self.assertIn("NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES=1", full_suite)
+        self.assertIn("NAS_UNIT_TEST_TIMEOUT=300", full_suite)
         self.assertIn("trap nas_vm_cleanup_trap EXIT", full_suite)
         self.assertNotIn('nas_vm_js_deps_cleanup "$status" || :', full_suite)
 

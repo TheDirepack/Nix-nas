@@ -175,6 +175,9 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "nas-first-start.service" ];
       requires = [ "nas-first-start.service" ];
+      # NixOS activation restarts first-start while switching generations;
+      # propagate that restart so the shared Cockpit bridge is not left dead.
+      partOf = [ "nas-first-start.service" ];
       # The shared bridge runs unauthenticated-by-design behind the Caddy
       # Authentik gate; it needs a writable HOME for agent/ssh state.
       environment.HOME = "/var/lib/nas-cockpit-sso";

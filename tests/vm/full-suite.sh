@@ -88,6 +88,14 @@ run_appliance() {
 }
 
 printf '\n==> Complete source preflight and unit suite\n'
+printf '\n==> Installing the lockfile-pinned Cockpit dependencies in the VM\n'
+nas_vm_cockpit_js_deps_prepare "$repo"
+export NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES=1
+# The two-CPU appliance VM can take longer to run the intentionally expensive
+# custom-input fuzz contract than the host/CI default per-file budget. Keep
+# the test and its assertions unchanged while giving the VM enough scheduling
+# headroom.
+export NAS_UNIT_TEST_TIMEOUT=300
 NAS_PREFLIGHT_REQUIRE_COMPLETE=1 ./scripts/preflight.sh
 
 if [[ "${NAS_FULL_SUITE_SKIP_FUZZ:-0}" == "1" ]]; then

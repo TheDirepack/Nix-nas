@@ -20,7 +20,15 @@ test("managed service and application link models follow V2 state", () => {
   const data = {
     managedServices: {
       services: [
-        {id: "snapshot", label: "Create snapshot", managed: true, workloadKind: "job", effective: true, available: true, effectiveMode: "always"},
+        {
+          id: "snapshot",
+          label: "Create snapshot",
+          managed: true,
+          workloadKind: "job",
+          effective: true,
+          available: true,
+          effectiveMode: "always",
+        },
         {id: "vaultwarden", available: true, effectiveMode: "off"},
       ],
     },

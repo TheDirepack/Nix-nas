@@ -10,6 +10,8 @@ TEST_TIMEOUT="${NAS_TEST_TIMEOUT:-$(nas_vm_ordinary_wait_seconds)}"
 AUTHENTIK_OUTPOST_PORT="${NAS_AUTHENTIK_OUTPOST_PORT:-9010}"
 AUTHENTIK_OUTPOST_PID=""
 AUTHENTIK_OUTPOST_LOG="/run/nas-authentik-vm-outpost.log"
+BROWSER_PORT_FORWARD_PID=""
+BROWSER_PORT_FORWARD_LOG="/run/nas-browser-port-forward.log"
 authz_secret_dir=""
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -33,6 +35,58 @@ stop_authentik_vm_outpost() {
     ((cleanup_status != 0)) || cleanup_status=$remove_status
   fi
   return "$cleanup_status"
+}
+
+stop_browser_port_forward() {
+  local cleanup_status=0
+  if [[ -n "$BROWSER_PORT_FORWARD_PID" ]] && kill -0 "$BROWSER_PORT_FORWARD_PID" >/dev/null 2>&1; then
+    if nas_vm_stop_process "$BROWSER_PORT_FORWARD_PID" "$(nas_vm_kill_after_seconds)"; then
+      :
+    else
+      cleanup_status=$?
+    fi
+  fi
+  BROWSER_PORT_FORWARD_PID=""
+  if rm -f -- "$BROWSER_PORT_FORWARD_LOG"; then
+    :
+  else
+    local remove_status=$?
+    ((cleanup_status != 0)) || cleanup_status=$remove_status
+  fi
+  return "$cleanup_status"
+}
+
+start_browser_port_forward() {
+  local public_host public_address public_port systemd_path systemd_root activate_path proxy_path
+  if [[ ! "$AUTHENTIK_PUBLIC_HOST" =~ :([0-9]+)$ ]]; then
+    return 0
+  fi
+  public_host="${AUTHENTIK_PUBLIC_HOST%:*}"
+  public_port="${BASH_REMATCH[1]}"
+  [[ "$public_port" != 443 ]] || return 0
+  public_address="$(getent ahostsv4 "$public_host" | awk 'NR == 1 { print $1; exit }')"
+  [[ -n "$public_address" ]] || fail "could not resolve the Authentik public host $public_host inside the VM"
+  systemd_path="$(command -v systemctl)"
+  systemd_root="$(dirname "$(dirname "$(readlink -f "$systemd_path")")")"
+  activate_path="$systemd_root/bin/systemd-socket-activate"
+  proxy_path="$systemd_root/lib/systemd/systemd-socket-proxyd"
+  [[ -x "$activate_path" ]] || fail "systemd-socket-activate is missing at $activate_path"
+  [[ -x "$proxy_path" ]] || fail "systemd-socket-proxyd is missing at $proxy_path"
+  rm -f -- "$BROWSER_PORT_FORWARD_LOG"
+  # The browser flow can spend several minutes in Authentik between callback
+  # requests. This process is test-owned and cleaned up explicitly, so do not
+  # let the proxy's idle timeout remove the listener mid-flow.
+  "$activate_path" --listen "$public_address:$public_port" \
+    "$proxy_path" 127.0.0.1:443 >"$BROWSER_PORT_FORWARD_LOG" 2>&1 &
+  BROWSER_PORT_FORWARD_PID=$!
+  nas_vm_cleanup_add stop_browser_port_forward
+  if ! timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TEST_TIMEOUT" bash -c \
+    'until ss -tln | grep -Eq "'"$public_address"':'"$public_port"'[[:space:]]"; do sleep 1; done'; then
+    cat "$BROWSER_PORT_FORWARD_LOG" >&2 || true
+    fail "timed out waiting for the browser callback port $public_port"
+  fi
+  pass "browser callback port $public_address:$public_port forwards to guest HTTPS"
 }
 
 on_error() {
@@ -105,10 +159,10 @@ assert_no_502_authentik_redirect() {
     --connect-timeout 3 --max-time 20 \
     --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST$path" || true)"
   case "$response" in
-    301\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|302\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|303\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|307\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|308\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*)
+    301\ https://"$PUBLIC_HOST"/identity/*|302\ https://"$PUBLIC_HOST"/identity/*|303\ https://"$PUBLIC_HOST"/identity/*|307\ https://"$PUBLIC_HOST"/identity/*|308\ https://"$PUBLIC_HOST"/identity/*|301\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|302\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|303\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|307\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|308\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*)
       pass "$description redirects to Authentik ($response)"
       ;;
-    *) fail "$description returned an unavailable or non-Authentik response instead of redirecting to https://$AUTHENTIK_PUBLIC_HOST/identity/ ($response)" ;;
+    *) fail "$description returned an unavailable or non-Authentik response instead of redirecting to the configured Authentik origin ($response)" ;;
   esac
 }
 
@@ -159,31 +213,43 @@ authentik_api() {
 }
 
 verify_bootstrap_authentik_proxy() {
-  local provider_id outpost_id code
-  provider_id="$(authentik_api GET 'providers/proxy/?page_size=100' | jq -er '.results[] | select(.name == "NAS Portal") | .pk')"
-  authentik_api GET 'providers/proxy/?page_size=100' | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
-    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null
-  authentik_api GET 'core/applications/?page_size=100' | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
-    '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null
-  authentik_api GET 'core/groups/?include_users=true&page_size=100' | jq -e \
-    '.results[] | select(.name == "nas_admin") | (.users_obj // .users // []) | any(.username == "akadmin")' >/dev/null
-  outpost_id="$(authentik_api GET 'outposts/instances/?page_size=100' | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
-  authentik_api GET "outposts/instances/$outpost_id/" | jq -e --arg provider "$provider_id" \
-    '(.providers | map(tostring) | index($provider)) != null' >/dev/null
-  authentik_api GET "outposts/instances/$outpost_id/" | jq -e \
-    --arg host 'http://127.0.0.1:9000/identity/' \
+  local provider_id outpost_id code provider_response application_response group_response outpost_response
+  provider_response="$(authentik_api GET 'providers/proxy/?page_size=100')" || fail 'Authentik provider API was not ready'
+  provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Portal") | .pk')" || \
+    fail 'Authentik bootstrap portal provider was not present'
+  printf '%s' "$provider_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
+    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || \
+    fail 'Authentik bootstrap portal provider has unexpected settings'
+  application_response="$(authentik_api GET 'core/applications/?page_size=100')" || fail 'Authentik application API was not ready'
+  printf '%s' "$application_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
+    '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
+    fail 'Authentik bootstrap portal application was not present'
+  group_response="$(authentik_api GET 'core/groups/?include_users=true&page_size=100')" || fail 'Authentik group API was not ready'
+  printf '%s' "$group_response" | jq -e \
+    '.results[] | select(.name == "nas_admin") | (.users_obj // .users // []) | any(.username == "akadmin")' >/dev/null || \
+    fail 'Authentik bootstrap administrator membership was not present'
+  outpost_response="$(authentik_api GET 'outposts/instances/?page_size=100')" || fail 'Authentik outpost API was not ready'
+  outpost_id="$(printf '%s' "$outpost_response" | jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')" || \
+    fail 'Authentik embedded outpost was not present'
+  outpost_response="$(authentik_api GET "outposts/instances/$outpost_id/")" || fail 'Authentik embedded outpost API was not ready'
+  printf '%s' "$outpost_response" | jq -e --arg provider "$provider_id" \
+    '(.providers | map(tostring) | index($provider)) != null' >/dev/null || \
+    fail 'Authentik embedded outpost was not assigned the portal provider'
+  printf '%s' "$outpost_response" | jq -e \
+    --arg host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
     --arg browser_host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
-    '.config.authentik_host == $host and .config.authentik_host_browser == $browser_host' >/dev/null
+    '.config.authentik_host == $host and .config.authentik_host_browser == $browser_host' >/dev/null || \
+    fail 'Authentik embedded outpost has unexpected host settings'
   code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
   [[ "$code" == 204 ]] || fail "Authentik bootstrap proxy outpost did not become reachable (HTTP ${code:-none})"
   pass 'bootstrap Authentik portal provider, application, and outpost assignment are ready'
 }
 
 require_commands \
-  curl findmnt firewall-cmd git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-managed-services-control \
+  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-managed-services-control \
   nas-identity-sync nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
-  nas-zfs-mount-check nas-zfs-unlock proxy python3 ss systemctl zfs zpool
+  nas-zfs-mount-check nas-zfs-unlock proxy python3 readlink ss systemctl zfs zpool
 
 nas-managed-services-control status >/dev/null
 pass "nas-managed-services-control status reports the V2 authority"
@@ -209,6 +275,7 @@ wait_active authentik.service
 [[ "$(systemctl show nas-identity-bootstrap.service --property=NRestarts --value)" == 0 ]] || \
   fail "identity bootstrap retried before Authentik's default flows were ready"
 wait_active nas-authentik-proxy-outpost.service
+wait_http http://127.0.0.1:9000/identity/-/health/ready/
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
 verify_bootstrap_authentik_proxy
 [[ -f /var/lib/nas-bootstrap/authentik/environment ]] || fail "first-boot Authentik environment is missing"
@@ -218,6 +285,7 @@ verify_bootstrap_authentik_proxy
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 assert_no_502_authentik_redirect / "locked base route"
 assert_no_502_authentik_redirect /console "locked console route"
+start_browser_port_forward
 bootstrap_authz_secret_dir=$(mktemp -d /run/nas-bootstrap-authz-test.XXXXXX)
 cleanup_bootstrap_authz_secrets() {
   [[ -n "${bootstrap_authz_secret_dir:-}" ]] || return 0

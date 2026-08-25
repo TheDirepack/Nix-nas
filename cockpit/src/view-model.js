@@ -212,7 +212,10 @@ export function managedServiceOperationsBusy(data = {}) {
 export function visibleOperations(data = {}) {
   const services = managedServiceMap(data);
   const jobs = Object.values(services)
-    .filter((service) => service?.managed === true && service?.workloadKind === "job" && service?.effective === true)
+    .filter(
+      (service) =>
+        service?.managed === true && service?.workloadKind === "job" && service?.effective === true,
+    )
     .map((service) => [service.id, service.label || service.id]);
   return [...jobs, ...HOST_OPERATIONS];
 }

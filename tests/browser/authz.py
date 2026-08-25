@@ -108,6 +108,14 @@ def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
     )
 
 
+def discard_browser_log(driver: webdriver.Chrome) -> None:
+    """Discard diagnostics produced by the unauthenticated login shell."""
+    try:
+        driver.get_log("browser")
+    except (WebDriverException, ValueError):
+        pass
+
+
 def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
     failures: list[dict[str, Any]] = []
     for width, height in VIEWPORTS:
@@ -180,6 +188,10 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str, p
             ],
         )
     )
+    # Authentik probes its current-user endpoint while the login shell is
+    # unauthenticated. That expected 403 must not be carried into the
+    # authenticated portal rendering assertions below.
+    discard_browser_log(driver)
     username_input.clear()
     username_input.send_keys(username)
     first(driver, ['button[type="submit"]', 'input[type="submit"]']).click()
@@ -220,13 +232,19 @@ def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password
     )
 
 
+def callback_return_matches(expected_path: str, returned_path: str) -> bool:
+    """Allow the portal's canonical trailing-slash redirect after login."""
+    canonical_path = expected_path if expected_path.endswith("/") else expected_path + "/"
+    return returned_path in {expected_path, canonical_path}
+
+
 def verify_callback_return_paths(origin: str, username: str, password: str, paths: list[str]) -> None:
     for path in paths:
         driver = browser()
         try:
             browser_step(driver, f"Callback return ({path})", lambda: login(driver, origin, username, password, path))
             returned_path = urllib.parse.urlsplit(driver.current_url).path
-            if returned_path != path:
+            if not callback_return_matches(path, returned_path):
                 raise RuntimeError(f"Authentik callback returned {returned_path!r}, expected {path!r}")
         finally:
             driver.quit()

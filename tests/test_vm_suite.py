@@ -11,6 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
+GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
 
 
@@ -50,6 +51,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         installer = (ROOT / "tests" / "vm" / "install-system.sh").read_text(encoding="utf-8")
         install_expect = (ROOT / "tests" / "vm" / "install.expect").read_text(encoding="utf-8")
         guest_suite = GUEST_SUITE.read_text(encoding="utf-8")
+        guest_test = GUEST_TEST.read_text(encoding="utf-8")
         for mode in (
             "persistent-start",
             "persistent-test",
@@ -90,10 +92,29 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("selected.extend(", qemu)
         self.assertIn('policy = "git-tracked-and-worktree"', qemu)
         self.assertIn('tar --exclude=./.nas-source-selection.json -C "$source_stage" -cf - .', qemu)
+        self.assertIn("git -C /var/lib/nas-test/repo config gc.auto 0", qemu)
         self.assertIn("nix develop path:/var/lib/nas-test/repo#test", qemu)
+        self.assertIn(
+            "systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service",
+            qemu,
+        )
+        self.assertIn(
+            "systemctl start nas-authentik-proxy-outpost.service || true",
+            qemu,
+        )
+        self.assertIn(
+            "until systemctl is-active --quiet nas-authentik-proxy-outpost.service",
+            qemu,
+        )
         self.assertIn("./scripts/preflight.sh", guest_suite)
         self.assertIn("./scripts/run-fuzz.py", guest_suite)
         self.assertIn("nas-vm-guest-test /dev/vdb", guest_suite)
+        self.assertIn("systemd-socket-activate", guest_test)
+        self.assertIn("systemd-socket-proxyd", guest_test)
+        self.assertIn('public_address="$(getent ahostsv4 "$public_host"', guest_test)
+        self.assertIn('"$activate_path" --listen "$public_address:$public_port"', guest_test)
+        self.assertNotIn('"$activate_path" --accept --listen', guest_test)
+        self.assertNotIn("--exit-idle-time=300s", guest_test)
 
     def test_persistent_controls_are_additive_to_existing_ci_modes(self) -> None:
         qemu = QEMU.read_text(encoding="utf-8")

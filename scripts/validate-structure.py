@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import os
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -217,12 +218,15 @@ def main() -> int:
         fail("root documentation must be grouped under docs/: " + ", ".join(unexpected))
 
     ignored_dir_parts = {".git", ".opencode", ".direnv", ".venv"}
+    allowed_generated_dirs = set(ALLOWED_GENERATED_DIRS)
+    if os.environ.get("NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES") == "1":
+        allowed_generated_dirs.add(ROOT / "cockpit" / "node_modules")
     forbidden_dirs = sorted(
         str(path.relative_to(ROOT))
         for path in ROOT.rglob("*")
         if path.is_dir()
         and path.name in FORBIDDEN_DIR_NAMES
-        and path not in ALLOWED_GENERATED_DIRS
+        and not any(path == allowed or allowed in path.parents for allowed in allowed_generated_dirs)
         and not any(part in ignored_dir_parts for part in path.parts)
     )
     if forbidden_dirs:

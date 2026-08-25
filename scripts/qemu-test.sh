@@ -431,6 +431,7 @@ sync_source_to_guest() {
        sudo -n git -C /var/lib/nas-test/repo init -q &&
        sudo -n git -C /var/lib/nas-test/repo config user.name "NixOS NAS VM" &&
        sudo -n git -C /var/lib/nas-test/repo config user.email "vm-test@nas.local" &&
+       sudo -n git -C /var/lib/nas-test/repo config gc.auto 0 &&
        sudo -n git -C /var/lib/nas-test/repo add -A &&
        sudo -n git -C /var/lib/nas-test/repo commit -q -m "VM test source"'
   local -a pipeline_status=("${PIPESTATUS[@]}")
@@ -655,6 +656,9 @@ run_installer() {
            sudo -n systemctl reset-failed &&
            sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1; sleep 1; done' &&
            sudo -n nas-secrets stop &&
+           sudo -n systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service &&
+           (sudo -n systemctl start nas-authentik-proxy-outpost.service || true) &&
+           sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do sleep 1; done' &&
            sudo -n env NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
              nix develop path:/var/lib/nas-test/repo#test -c \
              bash /var/lib/nas-test/repo/tests/vm/full-suite.sh"
