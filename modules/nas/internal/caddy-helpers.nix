@@ -20,13 +20,16 @@ let
     request_header -X-Authentik-Meta-Provider
     request_header -X-Authentik-Meta-App
     request_header -X-Authentik-Meta-Version
+    request_header -X-Authentik-Meta-User
+    request_header -X-Authentik-Meta-Is-Superuser
+    request_header -X-Authentik-Role
     forward_auth 127.0.0.1:${toString authentikPort} {
       uri ${authentikOutpostPath}
       header_up X-Forwarded-Proto {scheme}
       header_up X-Forwarded-Host {http.request.hostport}
       header_up X-Forwarded-Uri {uri}
       header_up X-Original-URL {http.request.scheme}://{http.request.hostport}{http.request.orig_uri}
-      copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Entitlements X-Authentik-Name X-Authentik-Email X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
+      copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Name X-Authentik-Email X-Authentik-Uid
     }
     @missingAuthentikIdentity not header X-Authentik-Username *
     respond @missingAuthentikIdentity 403
