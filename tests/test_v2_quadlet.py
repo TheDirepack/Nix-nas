@@ -16,7 +16,7 @@ if str(SERVICES) not in sys.path:
 import nas_v2_accelerator as accelerator  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
-import nas_v2_systemd as systemd  # noqa: E402
+import nas_v2_systemd_native as systemd  # noqa: E402
 
 
 class V2QuadletTests(unittest.TestCase):

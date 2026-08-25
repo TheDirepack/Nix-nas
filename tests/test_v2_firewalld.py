@@ -14,7 +14,7 @@ if str(SERVICES) not in sys.path:
 import nas_v2_apply as apply_mod  # noqa: E402
 import nas_v2_network as firewalld  # noqa: E402
 from nas_v2_network import requires_firewalld  # noqa: E402
-from nas_v2_systemd import SystemdProjectionError  # noqa: E402
+from nas_v2_systemd_native import SystemdProjectionError  # noqa: E402
 
 
 class V2FirewalldTests(unittest.TestCase):

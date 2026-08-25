@@ -118,7 +118,7 @@ class RunnerAccountingTests(unittest.TestCase):
     def test_managed_services_v2_has_runtime_and_property_contracts(self):
         v2_contracts = {
             "test_v2_caddy.py": ("nas_v2_caddy", "missing_capability"),
-            "test_v2_systemd.py": ("nas_v2_systemd", "idle"),
+            "test_v2_systemd.py": ("nas_v2_systemd_native", "idle"),
             "test_v2_session.py": ("nas_v2_session", "volume"),
             "test_v2_podman_network.py": ("nas_v2_network", "isolated"),
         }

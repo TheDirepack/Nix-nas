@@ -14,7 +14,7 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_apply as apply_v2  # noqa: E402
-from nas_v2_systemd import SystemdProjectionError  # noqa: E402
+from nas_v2_systemd_native import SystemdProjectionError  # noqa: E402
 
 
 class V2PlatformRuntimeOwnershipTests(unittest.TestCase):

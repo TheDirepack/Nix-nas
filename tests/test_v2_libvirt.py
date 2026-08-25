@@ -17,8 +17,9 @@ if str(SERVICES) not in sys.path:
 
 import nas_v2_libvirt as libvirt  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
-import nas_v2_systemd as systemd  # noqa: E402
 import nas_v2_systemd_native as systemd_native  # noqa: E402
+
+systemd = systemd_native
 
 
 def required(element: ET.Element | None) -> ET.Element:

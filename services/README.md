@@ -23,7 +23,7 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_v2_cli.py` | Thin offline `validate`/`effective`/`plan` frontend and normal `apply` delegate |
 | `nas_v2_control.py` | Finite status/document/edit/reconcile surface used by Cockpit and operators |
 | `nas_v2_editor.py` | Comment-preserving atomic `services.yaml` editing |
-| `nas_v2_systemd.py` | Unified systemd projection for cross-runtime lifecycle, jobs, readiness, dependencies, and on-demand lease/idle units |
+| `nas_v2_systemd_native.py` | Unified systemd projection for cross-runtime lifecycle, Compose imports, jobs, readiness, dependencies, and native on-demand activation |
 | `nas_v2_quadlet.py` | Direct OCI/Quadlet projection |
 | `nas_v2_compose.py` | Compose override projection for V2-owned cross-cutting policy |
 | `nas_v2_libvirt.py` | Libvirt/QEMU runtime projection |

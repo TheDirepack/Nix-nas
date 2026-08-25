@@ -42,7 +42,7 @@ FLOORS = {
     "services/nas_v2_session.py": 58.0,
     "services/nas_v2_source_watch.py": 83.0,
     "services/nas_v2_spec.py": 89.0,
-    "services/nas_v2_systemd.py": 80.0,
+    "services/nas_v2_systemd_native.py": 80.0,
     "services/nas_v2_systemd_reconcile.py": 68.0,
 }
 TOTAL_FLOOR = 66.0

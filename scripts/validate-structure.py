@@ -83,7 +83,6 @@ REQUIRED_FILES = {
     "services/nas_v2_cli.py",
     "services/nas_v2_control.py",
     "services/nas_v2_editor.py",
-    "services/nas_v2_systemd.py",
     "services/nas_v2_systemd_native.py",
     "services/nas_v2_systemd_attachments.py",
     "services/nas_v2_activation.py",

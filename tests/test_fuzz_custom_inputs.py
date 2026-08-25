@@ -102,7 +102,6 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_v2_session",
         "nas_v2_source_watch",
         "nas_v2_spec",
-        "nas_v2_systemd",
         "nas_v2_systemd_attachments",
         "nas_v2_systemd_native",
         "nas_v2_systemd_reconcile",

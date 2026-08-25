@@ -8,8 +8,10 @@ runtime descriptors for adapters that genuinely need structured argv.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -23,6 +25,7 @@ from nas_v2_activation import (
     socket_path,
     socket_unit,
 )
+from nas_v2_compose_import import ComposeImportError, import_compose
 from nas_v2_libvirt import LibvirtProjectionError, render_domain_xml, validate_domain_xml
 from nas_v2_quadlet import QuadletProjectionError, render_quadlet, validate_quadlets
 from nas_v2_systemd_attachments import SystemdAttachmentError, attachment_lines
@@ -536,6 +539,153 @@ def _timer_unit(service_id: str, owner: str, index: int, schedule: dict[str, Any
     return unit, "\n".join(lines).encode()
 
 
+def _unit_value(value: str, *, label: str) -> str:
+    if _has_ctrl(value):
+        raise SystemdProjectionError(f"{label} contains a forbidden control character")
+    return value.replace("%", "%%")
+
+
+def _compose_native_view(effective: dict[str, Any]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Lower Compose imports through the native projector's aggregate units."""
+    native = copy.deepcopy(effective)
+    imports: dict[str, dict[str, Any]] = {}
+    for service_id, original in effective.get("services", {}).items():
+        if not isinstance(original, dict) or original.get("runtime", {}).get("type") != "compose":
+            continue
+        imports[service_id] = original
+        service = native["services"][service_id]
+        owner = effective["derived"]["runtime"][service_id]["ownerUnit"]
+        # The aggregate unit keeps V2 lifecycle/readiness semantics while the
+        # imported Quadlet units own container-local runtime policy.
+        service["runtime"] = {"type": "systemd", "unit": owner}
+        service["dependencies"] = []
+        service["resources"] = {"accelerators": []}
+        service["sandbox"] = {"mode": "inherit"}
+        service["storage"] = []
+        service["credentials"] = []
+    return native, imports
+
+
+def _dependency_units(effective: dict[str, Any], service: dict[str, Any]) -> tuple[set[str], set[str]]:
+    requires: set[str] = set()
+    after: set[str] = set()
+    for dependency in service.get("dependencies", []):
+        target = dependency["service"]
+        owner = effective["derived"]["runtime"][target]["ownerUnit"]
+        requires.add(owner)
+        after.add(owner)
+        if dependency["condition"] == "ready":
+            ready = f"nas-v2-ready-{target}.service"
+            requires.add(ready)
+            after.add(ready)
+    return requires, after
+
+
+def _aggregate_unit(
+    effective: dict[str, Any],
+    service: dict[str, Any],
+    entry_units: list[str],
+) -> bytes:
+    requires, after = _dependency_units(effective, service)
+    requires.update(entry_units)
+    after.update(entry_units)
+    lines = [
+        "[Unit]",
+        "Description=" + _unit_value(service["name"], label="Compose service name"),
+    ]
+    workload = service["workload"]
+    if service["managed"] and workload["kind"] == "daemon" and workload.get("activation") == "on-demand":
+        lines.append("StopWhenUnneeded=yes")
+    if requires:
+        lines.append("Requires=" + " ".join(sorted(requires)))
+    if after:
+        lines.append("After=" + " ".join(sorted(after)))
+    lines.extend(
+        [
+            "",
+            "[Service]",
+            "Type=oneshot",
+            "ExecStart=/run/current-system/sw/bin/true",
+            "RemainAfterExit=yes",
+            "",
+        ]
+    )
+    return "\n".join(lines).encode("utf-8")
+
+
+def _augment_compose_imports(
+    effective: dict[str, Any],
+    imports: dict[str, dict[str, Any]],
+    *,
+    output_dir: pathlib.Path,
+    files: dict[pathlib.Path, bytes],
+    manifest: dict[str, Any],
+    podlet_bin: str,
+    podman_bin: str,
+    compose_provider_bin: str,
+) -> None:
+    if not imports:
+        return
+    links = {entry["target"]: entry["source"] for entry in manifest.get("links", [])}
+    quadlet_links = {entry["target"]: entry["source"] for entry in manifest.get("quadletLinks", [])}
+    owned = set(manifest.get("ownedUnits", []))
+    stop = set(manifest.get("stopUnits", []))
+    fingerprints = dict(manifest.get("fingerprints", {}))
+    quadlet_dir = output_dir / "quadlet"
+    unit_dir = output_dir / "units"
+
+    for service_id, service in sorted(imports.items()):
+        try:
+            bundle, imported = import_compose(
+                effective,
+                service_id,
+                service,
+                podlet_bin=podlet_bin,
+                podman_bin=podman_bin,
+                compose_provider_bin=compose_provider_bin,
+            )
+        except ComposeImportError as exc:
+            raise SystemdProjectionError(str(exc)) from exc
+        entry_units = imported.get("entryUnits")
+        if (
+            not isinstance(entry_units, list)
+            or not entry_units
+            or any(not isinstance(unit, str) for unit in entry_units)
+        ):
+            raise SystemdProjectionError(f"Compose import for {service_id!r} has no native entry units")
+        for name, content in sorted(bundle.items()):
+            path = quadlet_dir / name
+            files[path] = content
+            quadlet_links[name] = str(path)
+        owner = effective["derived"]["runtime"][service_id]["ownerUnit"]
+        owner_path = unit_dir / owner
+        files[owner_path] = _aggregate_unit(effective, service, entry_units)
+        links[owner] = str(owner_path)
+        owned.update(entry_units)
+        if not service["enabled"]:
+            stop.update(entry_units)
+        fingerprints[owner] = hashlib.sha256(
+            json.dumps(
+                {
+                    "composeImport": imported["fingerprint"],
+                    "dependencies": service["dependencies"],
+                    "workload": service["workload"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    manifest["links"] = [{"target": target, "source": source} for target, source in sorted(links.items())]
+    manifest["quadletLinks"] = [
+        {"target": target, "source": source} for target, source in sorted(quadlet_links.items())
+    ]
+    manifest["ownedUnits"] = sorted(owned)
+    manifest["stopUnits"] = sorted(stop)
+    manifest["fingerprints"] = fingerprints
+    files[output_dir / "manifest.json"] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def generate_projection(
     effective: dict[str, Any],
     *,
@@ -548,6 +698,7 @@ def generate_projection(
     compose_provider_bin: str = "podman-compose",
     virsh_bin: str = "virsh",
 ) -> tuple[dict[pathlib.Path, bytes], dict[str, Any]]:
+    projection_effective, compose_imports = _compose_native_view(effective)
     files: dict[pathlib.Path, bytes] = {}
     links: dict[str, str] = {}
     quadlet_links: dict[str, str] = {}
@@ -560,8 +711,8 @@ def generate_projection(
     quadlet_dir = output_dir / "quadlet"
     vm_dir = output_dir / "vm"
 
-    for service_id in sorted(effective["services"]):
-        service = effective["services"][service_id]
+    for service_id in sorted(projection_effective["services"]):
+        service = projection_effective["services"][service_id]
         runtime = service["runtime"]
         owner = _owner_unit(effective, service_id)
         managed = service["managed"]
@@ -574,17 +725,17 @@ def generate_projection(
             )
             upath = unit_dir / owner
             files[upath] = _exec_unit(
-                effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
+                projection_effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
             )
             links[owner] = str(upath)
         elif runtime["type"] == "python":
             upath = unit_dir / owner
-            files[upath], requirements_hash = _python_unit(effective, service_id, service, uv_bin=uv_bin)
+            files[upath], requirements_hash = _python_unit(projection_effective, service_id, service, uv_bin=uv_bin)
             links[owner] = str(upath)
         elif runtime["type"] == "vm":
             _absolute_binary(virsh_bin, field=f"VM service {service_id!r} virsh binary")
             try:
-                source_path, domain_name, domain_xml = render_domain_xml(effective, service_id, service)
+                source_path, domain_name, domain_xml = render_domain_xml(projection_effective, service_id, service)
             except LibvirtProjectionError as exc:
                 raise SystemdProjectionError(str(exc)) from exc
             xpath = vm_dir / f"{service_id}.xml"
@@ -595,19 +746,19 @@ def generate_projection(
             )
             upath = unit_dir / owner
             files[upath] = _vm_unit(
-                effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
+                projection_effective, service, python_bin=python_bin, source_dir=source_dir, descriptor_path=dpath
             )
             links[owner] = str(upath)
             source_hash = _sha256_file(source_path)
         elif runtime["type"] == "systemd":
-            dropin = _existing_dropin(effective, service)
+            dropin = _existing_dropin(projection_effective, service)
             if dropin is not None:
                 dpath = unit_dir / f"{owner}.d" / "50-nas-v2.conf"
                 files[dpath] = dropin
                 links[f"{owner}.d/50-nas-v2.conf"] = str(dpath)
         elif runtime["type"] in {"oci", "quadlet"}:
             spath = quadlet_dir / f"nas-v2-{service_id}.container"
-            files[spath] = _quadlet_source(effective, service_id, service)
+            files[spath] = _quadlet_source(projection_effective, service_id, service)
             quadlet_links[spath.name] = str(spath)
         else:
             raise SystemdProjectionError(
@@ -637,7 +788,7 @@ def generate_projection(
                 owned_units.add(ready)
 
         for sun, scontent, pun, pcontent in _activation_units(
-            effective, service_id, service, owner, systemctl_bin=systemctl_bin
+            projection_effective, service_id, service, owner, systemctl_bin=systemctl_bin
         ):
             spath = unit_dir / sun
             ppath = unit_dir / pun
@@ -697,6 +848,18 @@ def generate_projection(
         "fingerprints": fingerprints,
     }
     files[output_dir / "manifest.json"] = _json_bytes(manifest)
+    if compose_imports:
+        podlet_bin = os.environ.get("NAS_V2_PODLET_BIN", "podlet")
+        _augment_compose_imports(
+            effective,
+            compose_imports,
+            output_dir=output_dir,
+            files=files,
+            manifest=manifest,
+            podlet_bin=podlet_bin,
+            podman_bin=podman_bin,
+            compose_provider_bin=compose_provider_bin,
+        )
     return files, manifest
 
 
@@ -740,4 +903,11 @@ def validate_projection(
             raise SystemdProjectionError(str(exc)) from exc
 
 
-__all__ = ["APP_ROOT", "SystemdProjectionError", "generate_projection", "validate_projection"]
+__all__ = [
+    "APP_ROOT",
+    "SystemdAttachmentError",
+    "SystemdProjectionError",
+    "attachment_lines",
+    "generate_projection",
+    "validate_projection",
+]

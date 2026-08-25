@@ -67,6 +67,7 @@ class ManagedServicesV2BoundaryTests(unittest.TestCase):
         self.assertFalse((SERVICES / "nas_feature_control.py").exists())
         self.assertFalse((SERVICES / "nas_v2_wake.py").exists())
         self.assertFalse((SERVICES / "nas_v2_python_prepare.py").exists())
+        self.assertFalse((SERVICES / "nas_v2_systemd.py").exists())
         self.assertFalse((ROOT / "modules" / "nas" / "internal" / "feature-catalog.nix").exists())
         self.assertFalse((ROOT / "modules" / "nas" / "internal" / "capability-registry.nix").exists())
         self.assertFalse((ROOT / "modules" / "nas" / "internal" / "service-registry.nix").exists())

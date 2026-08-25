@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "services"))
 import nas_v2_accelerator as accelerator  # noqa: E402
 import nas_v2_platform_probe as platform_probe  # noqa: E402
 import nas_v2_quadlet as quadlet  # noqa: E402
-from nas_v2_systemd import attachment_lines  # noqa: E402
+from nas_v2_systemd_native import attachment_lines  # noqa: E402
 
 
 def service(runtime_type: str, request: dict[str, object]) -> dict[str, object]:

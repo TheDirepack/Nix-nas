@@ -43,8 +43,7 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_v2_entry.py` | V2 command-surface entry/import boundary | `test_v2_boundary.py` |
 | `nas_v2_control.py`, `nas_v2_editor.py` | Finite status/document/edit/reconcile API, revision-safe CAS (sha256), comment-preserving atomic edits | `test_v2_editor.py`, `test_v2_revision.py` |
 | `nas_coding_agent.py` | Workspace-allowlisted `nas-code` session launcher, credential isolation, systemd-run sandbox | `test_coding_agent.py` |
-| `nas_v2_systemd.py` | Unified systemd lowering for cross-runtime lifecycle, dependencies, jobs, readiness, attachments, leases, and idle timers | `test_v2_systemd.py` |
-| `nas_v2_systemd_native.py`, `nas_v2_systemd_attachments.py`, `nas_v2_systemd_reconcile.py`, `nas_v2_activation.py`, `nas_v2_generation.py` | Native systemd unit generation, attachment wiring, reconciliation, activation ordering, and generation bookkeeping | `test_v2_systemd*.py`, `test_v2_generation.py`, `test_v2_restore_wiring.py` |
+| `nas_v2_systemd_native.py`, `nas_v2_systemd_attachments.py`, `nas_v2_systemd_reconcile.py`, `nas_v2_activation.py`, `nas_v2_generation.py` | Native systemd unit generation, Compose import lowering, attachment wiring, reconciliation, activation ordering, and generation bookkeeping | `test_v2_systemd*.py`, `test_v2_generation.py`, `test_v2_restore_wiring.py` |
 | `nas_v2_quadlet.py` | Direct OCI/Quadlet projection | `test_v2_quadlet.py` |
 | `nas_v2_compose.py`, `nas_v2_compose_import.py` | Compose override projection and legacy compose import for V2-owned cross-cutting policy | `test_v2_compose.py`, `test_v2_compose_systemd.py`, `test_v2_compose_projection.py` |
 | `nas_v2_libvirt.py` | Libvirt/QEMU projection and explicit passthrough policy | `test_v2_libvirt.py` |

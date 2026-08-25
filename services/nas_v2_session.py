@@ -27,7 +27,7 @@ from nas_v2_network import (
     podman_network_name,
     quadlet_network_reference,
 )
-from nas_v2_systemd import generate_projection as generate_base_projection
+from nas_v2_systemd_native import generate_projection as generate_base_projection
 
 
 class SessionError(RuntimeError):

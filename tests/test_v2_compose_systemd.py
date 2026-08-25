@@ -16,7 +16,7 @@ if str(SERVICES) not in sys.path:
 import nas_v2_compose as compose  # noqa: E402
 import nas_v2_compose_import as compose_import  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
-import nas_v2_systemd as systemd  # noqa: E402
+import nas_v2_systemd_native as systemd  # noqa: E402
 
 
 class V2ComposeSystemdTests(unittest.TestCase):

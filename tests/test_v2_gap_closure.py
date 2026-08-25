@@ -25,7 +25,7 @@ import nas_v2_network as net  # noqa: E402
 import nas_v2_podman_network as podnet  # noqa: E402
 import nas_v2_session as sess  # noqa: E402
 import nas_v2_spec as spec  # noqa: E402
-import nas_v2_systemd as sysd  # noqa: E402
+import nas_v2_systemd_native as sysd  # noqa: E402
 import nas_v2_systemd_attachments as sysattach  # noqa: E402
 import nas_v2_systemd_reconcile as recon  # noqa: E402
 from nas_v2_accelerator import enabled_capabilities, is_cdi_selector, load_platform_inventory  # noqa: E402

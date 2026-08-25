@@ -41,8 +41,8 @@ from nas_v2_spec import (
     parse_yaml,
     parse_yaml_text,
 )
-from nas_v2_systemd import SystemdProjectionError
-from nas_v2_systemd import validate_projection as validate_systemd_projection
+from nas_v2_systemd_native import SystemdProjectionError
+from nas_v2_systemd_native import validate_projection as validate_systemd_projection
 
 # Base prefixes for per-service ZFS storage. On NixOS these are symlinks
 # from /var/lib/nas-control into ${zfsRoot}/nas-control (see
