@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import stat
 import time
@@ -23,13 +24,49 @@ from typing import Any
 
 import nas_setup as setup
 
+LOCAL_ADMIN_PENDING_PATH = setup.ADMIN_STATE_PATH.with_name("local-administrator-pending.json")
+_REQUIRED_ADMIN_GROUPS = frozenset({"wheel", "nas-administrators", "nas-operations"})
+
 
 def _regular_root_file(path: pathlib.Path) -> bool:
     try:
         info = path.lstat()
     except OSError:
         return False
-    return stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode) and info.st_uid == 0
+    return (
+        stat.S_ISREG(info.st_mode)
+        and not stat.S_ISLNK(info.st_mode)
+        and info.st_uid == 0
+        and not (stat.S_IMODE(info.st_mode) & 0o022)
+    )
+
+
+def _read_private_root_json(path: pathlib.Path) -> dict[str, Any]:
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise setup.SetupError(f"Unable to open setup transaction marker safely: {path}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or metadata.st_size > 16 * 1024
+        ):
+            raise setup.SetupError(f"Setup transaction marker has unsafe ownership or mode: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            value = json.load(handle)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise setup.SetupError(f"Setup transaction marker contains invalid JSON: {path}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not isinstance(value, dict):
+        raise setup.SetupError(f"Setup transaction marker is not a JSON object: {path}")
+    return value
 
 
 def bootstrap_authority_ready() -> dict[str, Any]:
@@ -69,6 +106,94 @@ def select_permanent_runtime() -> dict[str, Any]:
             raise setup.SetupError("Permanent runtime marker exists but stable authority links are inconsistent")
         return {"permanentRuntimeSelected": True, "resumed": True}
     return setup.select_fresh_permanent_runtime()
+
+
+def _local_admin_marker(username: str, fingerprint: str) -> dict[str, Any]:
+    return {"schemaVersion": 1, "username": username, "fingerprint": fingerprint}
+
+
+def _load_matching_local_admin_marker(username: str, fingerprint: str) -> dict[str, Any] | None:
+    try:
+        marker = _read_private_root_json(LOCAL_ADMIN_PENDING_PATH)
+    except setup.SetupError:
+        if not LOCAL_ADMIN_PENDING_PATH.exists() and not LOCAL_ADMIN_PENDING_PATH.is_symlink():
+            return None
+        raise
+    expected = _local_admin_marker(username, fingerprint)
+    if marker != expected:
+        raise setup.SetupError("Pending local-administrator transaction does not match this setup request")
+    return marker
+
+
+def _local_administrator_ready(result: Any) -> bool:
+    if not isinstance(result, Mapping):
+        return False
+    username = result.get("username")
+    if not isinstance(username, str) or not username:
+        return False
+    identity = setup.run_root_noninteractive(["id", "--user", username], check=False)
+    if identity.returncode != 0:
+        return False
+    groups = setup.run_root_noninteractive(["id", "--name", "--groups", username], check=False)
+    if groups.returncode != 0:
+        return False
+    return _REQUIRED_ADMIN_GROUPS.issubset(set(groups.stdout.split()))
+
+
+def create_or_resume_local_administrator(
+    administrator: Mapping[str, Any], password: str, fingerprint: str
+) -> dict[str, Any]:
+    """Create the chosen account, or finish only a transaction this setup owns.
+
+    The marker is written before ``useradd``. A hard crash after account creation
+    therefore cannot make the next run adopt an arbitrary pre-existing account:
+    only the exact username/fingerprint transaction may be resumed. Reapplying
+    the supplied password and groups is safe and finishes partial useradd work.
+    """
+    desired = setup._validated_administrator(administrator)
+    username = desired["username"]
+    marker = _load_matching_local_admin_marker(username, fingerprint)
+    exists = setup.run_root_noninteractive(["id", "--user", username], check=False).returncode == 0
+
+    if marker is None:
+        if exists:
+            raise setup.SetupError(f"Administrator username already exists locally: {username}")
+        setup.atomic_write_json(LOCAL_ADMIN_PENDING_PATH, _local_admin_marker(username, fingerprint), mode=0o600)
+        return setup.create_local_administrator(administrator, password)
+
+    if not exists:
+        return setup.create_local_administrator(administrator, password)
+
+    normalized_password = setup.normalize_secret_line(password, "Administrator password")
+    if ":" in normalized_password:
+        raise setup.SetupError("Administrator password must not contain a colon")
+    setup.run_root(["chpasswd"], input_text=f"{username}:{normalized_password}\n")
+    setup.run_root(
+        [
+            "usermod",
+            "--shell",
+            "/run/current-system/sw/bin/bash",
+            "--append",
+            "--groups",
+            "wheel,nas-administrators,nas-operations",
+            username,
+        ]
+    )
+    if not _local_administrator_ready(desired):
+        raise setup.SetupError("Resumed local-administrator transaction did not reach the required account state")
+    return {**desired, "resumed": True}
+
+
+def commit_local_administrator_transaction(username: str, fingerprint: str) -> None:
+    marker = _load_matching_local_admin_marker(username, fingerprint)
+    if marker is None:
+        return
+    try:
+        LOCAL_ADMIN_PENDING_PATH.unlink()
+    except OSError as exc:
+        raise setup.SetupError("Unable to remove completed local-administrator transaction marker") from exc
+    if LOCAL_ADMIN_PENDING_PATH.exists() or LOCAL_ADMIN_PENDING_PATH.is_symlink():
+        raise setup.SetupError("Completed local-administrator transaction marker still exists")
 
 
 def remove_setup_application() -> dict[str, Any]:
@@ -184,16 +309,11 @@ def secure_first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             local_administrator = setup.run_setup_stage(
                 journal,
                 "local-administrator",
-                lambda: setup.create_local_administrator(administrator, administrator_password),
+                lambda: create_or_resume_local_administrator(administrator, administrator_password, fingerprint),
                 manual_recovery_on_failure=True,
-                postcondition=lambda result: (
-                    isinstance(result, Mapping)
-                    and setup.run_root_noninteractive(
-                        ["id", "--user", str(result.get("username", ""))], check=False
-                    ).returncode
-                    == 0
-                ),
+                postcondition=_local_administrator_ready,
             )
+            commit_local_administrator_transaction(local_administrator["username"], fingerprint)
             account_plan["accounts"].append(
                 {**desired_administrator, "password": authentik_administrator_password}
             )
