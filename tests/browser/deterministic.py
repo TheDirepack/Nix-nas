@@ -66,6 +66,12 @@ globalThis.__nas_xss = 0;
     return promise;
   };
   globalThis.cockpit = {spawn};
+  if (typeof globalThis.require !== "function") {
+    globalThis.require = (name) => {
+      if (name === "cockpit") return globalThis.cockpit;
+      throw new Error(`Unsupported standalone Cockpit module: ${name}`);
+    };
+  }
 })();
 """
 

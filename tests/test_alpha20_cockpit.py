@@ -157,12 +157,17 @@ class Alpha20CockpitContracts(unittest.TestCase):
 
     def test_browser_security_keeps_real_browser_engines_for_browser_semantics(self) -> None:
         config = text("cockpit/e2e/playwright.config.mjs")
+        server = text("cockpit/e2e/deterministic-server.mjs")
+        runtime_stub = text("cockpit/e2e/cockpit-runtime-stub.js")
         deterministic = text("cockpit/e2e/common-xss.spec.mjs")
         security = text("cockpit/e2e/ui-security.spec.mjs")
         vm = text("cockpit/e2e/final-vm.spec.mjs")
         self.assertIn('name: "chromium-final-vm"', config)
         self.assertIn('name: "firefox-final-vm"', config)
         self.assertIn('name: "webkit-final-vm"', config)
+        self.assertIn('command: "node e2e/deterministic-server.mjs"', config)
+        self.assertIn('"/base1/cockpit.js"', server)
+        self.assertIn('name === "cockpit"', runtime_stub)
         for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
             self.assertIn(probe, deterministic)
         self.assertIn("hostile status corpus never creates executable elements", security)
