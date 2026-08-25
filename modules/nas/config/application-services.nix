@@ -168,7 +168,7 @@ in
       "d ${bootstrapAuthentikDataDir} 0750 authentik authentik -"
       "d ${bootstrapAuthentikDataDir}/data 0750 authentik authentik -"
       "d ${bootstrapPostgresqlDataDir} 0700 postgres postgres -"
-      "d ${bootstrapSecretsDir} 0700 root root -"
+      "d ${bootstrapSecretsDir} 0700 admin users -"
       "d /var/lib/nas-operational 0700 root root -"
       "d ${syncthingDataDir} 0700 syncthing copyparty -"
       "d ${syncthingConfigDir} 0700 syncthing copyparty -"
@@ -218,20 +218,219 @@ in
       description = "Authentik background worker";
       requires = [ "authentik-migrate.service" "nas-bootstrap-runtime-select.service" ];
       after = [ "authentik-migrate.service" "nas-bootstrap-runtime-select.service" ];
+      unitConfig.RequiresMountsFor = [ ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
+        RuntimeDirectory = "authentik-worker";
+        RuntimeDirectoryMode = "0750";
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${pkgs.authentik}/bin/ak worker";
       };
     };
     systemd.services.authentik = {
-      description = "Authentik server";
-      wantedBy = [ "multi-user.target" ];
-      requires = [ "authentik-migrate.service" "nas-bootstrap-runtime-select.service" ];
-      after = [ "authentik-migrate.service" "nas-bootstrap-runtime-select.service" ];
+      description = "Authentik identity provider";
+      requires = [ "authentik-migrate.service" "authentik-worker.service" "nas-bootstrap-runtime-select.service" ];
+      after = [ "authentik-migrate.service" "authentik-worker.service" "nas-bootstrap-runtime-select.service" ];
+      unitConfig.RequiresMountsFor = [ ];
       environment = authentikEnvironment;
       serviceConfig = authentikServiceConfig // {
+        RuntimeDirectory = "authentik-server";
+        RuntimeDirectoryMode = "0750";
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${pkgs.authentik}/bin/ak server";
+        ExecStartPost = pkgs.writeShellScript "authentik-ready" ''
+          exec ${pkgs.coreutils}/bin/timeout 90s ${pkgs.curl}/bin/curl \
+            --fail --silent --show-error \
+            --connect-timeout 1 --max-time 2 \
+            --retry 90 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/
+        '';
       };
+    };
+
+    services.copyparty = {
+      enable = true;
+      package = pkgs.copyparty.overridePythonAttrs (old: {
+        dependencies = old.dependencies ++ lib.optional cfg.tftp.enable pkgs.python3Packages.partftpy;
+      });
+      openFilesLimit = 8192;
+      settings = {
+        i = "unix:660:copyparty:/run/copyparty/http.sock";
+        hist = "/var/cache/copyparty";
+        "dav-auth" = true;
+        "vol-or-crash" = true;
+        "no-robots" = true;
+        "idp-h-usr" = "Remote-User";
+        "idp-h-grp" = "Remote-Groups";
+        "auth-ord" = "idp";
+        usernames = true;
+        rproxy = 1;
+        "xff-src" = "127.8.0.0/16";
+        dedup = true;
+        e2dsa = true;
+        e2ts = true;
+        "re-maxage" = 300;
+        shr = "/share";
+        "shr-adm" = "@nas_admin";
+        "idp-store" = 3;
+      } // lib.optionalAttrs cfg.tftp.enable {
+        tftp = cfg.tftp.internalPort;
+        "tftp-i" = "127.0.0.1";
+        "tftp-pr" = "${toString cfg.tftp.responsePortStart}-${toString cfg.tftp.responsePortEnd}";
+      };
+      globalExtraConfig = ''
+        % ${copypartyUserConfigDir}
+      '';
+      accounts = { };
+      groups = { };
+      volumes = { };
+    };
+
+    services.syncthing = lib.mkIf cfg.syncthing.enable {
+      enable = true;
+      group = "copyparty";
+      dataDir = syncthingDataDir;
+      configDir = syncthingConfigDir;
+      guiAddress = "127.0.0.1:${toString syncthingGuiPort}";
+      openDefaultPorts = false;
+      overrideDevices = false;
+      overrideFolders = false;
+      settings = {
+        gui = {
+          insecureAdminAccess = false;
+          theme = "black";
+        };
+        options = {
+          urAccepted = -1;
+          localAnnounceEnabled = true;
+          globalAnnounceEnabled = cfg.syncthing.internetDiscovery;
+          relaysEnabled = cfg.syncthing.internetDiscovery;
+          natEnabled = cfg.syncthing.internetDiscovery;
+        };
+      };
+    };
+
+    services.vaultwarden = lib.mkIf cfg.vaultwarden.enable {
+      enable = true;
+      dbBackend = "sqlite";
+      backupDir = vaultwardenBackupDir;
+      environmentFile = [ "${vaultwardenSecretDir}/environment" ];
+      config = {
+        DOMAIN = "https://${lanHost}/vault";
+        ROCKET_ADDRESS = "127.0.0.1";
+        ROCKET_PORT = vaultwardenPort;
+        ENABLE_WEBSOCKET = true;
+        SIGNUPS_ALLOWED = false;
+        SIGNUPS_DOMAINS_WHITELIST = "";
+        INVITATIONS_ALLOWED = true;
+        SSO_ENABLED = true;
+        SSO_ONLY = cfg.vaultwarden.ssoOnly;
+        SSO_SIGNUPS_MATCH_EMAIL = true;
+        SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION = false;
+        SSO_AUTHORITY = vaultwardenOidcAuthority;
+        SSO_CLIENT_ID = vaultwardenOidcClientId;
+        SSO_SCOPES = "profile email groups offline_access";
+        SSO_PKCE = true;
+        SSO_AUTH_ONLY_NOT_SESSION = false;
+        SSO_CLIENT_CACHE_EXPIRATION = 600;
+        SHOW_PASSWORD_HINT = false;
+        IP_HEADER = "X-Real-IP";
+        IP_HEADER_TRUSTED_PROXIES = "local";
+        LOG_LEVEL = "info";
+      };
+    };
+
+    systemd.services.copyparty = {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
+      serviceConfig = {
+        StateDirectory = lib.mkForce "${cfg.zfsRoot}/copyparty";
+        StateDirectoryMode = lib.mkForce "0750";
+      };
+    };
+    systemd.services.syncthing = lib.mkIf cfg.syncthing.enable {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
+    };
+    systemd.services.vaultwarden = lib.mkIf cfg.vaultwarden.enable {
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
+    };
+  };
+
+  # During first boot the temporary Authentik/PostgreSQL/KDBX authorities live
+  # under /var/lib/nas-bootstrap. Once setup has created a fresh permanent
+  # trust domain, switch to a separate empty root-filesystem tree. Nothing is
+  # copied from bootstrap and no identity authority depends on ZFS mounting.
+  config.systemd.services.nas-bootstrap-runtime-select = {
+    description = "Select bootstrap or permanent root-hosted identity runtime storage";
+    before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
+    wants = [ "nas-bootstrap-authentik-secrets.service" ];
+    after = [ "nas-bootstrap-authentik-secrets.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = pkgs.writeShellScript "nas-bootstrap-runtime-select" ''
+        set -euo pipefail
+        if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
+          target=/var/lib/nas-operational
+          environment=${lib.escapeShellArg authentikEnvironmentFile}
+          api_token=${lib.escapeShellArg authentikApiTokenFile}
+        else
+          target=${lib.escapeShellArg bootstrapRuntimeRoot}
+          environment="$target/authentik/environment"
+          api_token="$target/authentik/api-token"
+        fi
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
+        ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
+        ${pkgs.coreutils}/bin/install -d -m 0700 -o admin -g users "$target/nas-secrets"
+        for name in authentik postgresql nas-secrets; do
+          ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
+          ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
+        done
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik
+        ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
+        ${pkgs.coreutils}/bin/ln -s "$environment" ${lib.escapeShellArg authentikRuntimeEnvironmentFile}
+        ${pkgs.coreutils}/bin/rm -f -- ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+        ${pkgs.coreutils}/bin/ln -s "$api_token" ${lib.escapeShellArg authentikRuntimeApiTokenFile}
+      '';
+      NoNewPrivileges = false;
+    };
+  };
+
+  config.systemd.services.nas-bootstrap-authentik-secrets = {
+    description = "Create the first-boot-only Authentik runtime secrets";
+    unitConfig.ConditionPathExists = [
+      "!/var/lib/nas-setup/operational-runtime-select"
+      "!/var/lib/nas-setup/state.json"
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = pkgs.writeShellScript "nas-bootstrap-authentik-secrets" ''
+        set -euo pipefail
+        environment=${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment"}
+        [[ -e "$environment" ]] && exit 0
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik ${lib.escapeShellArg bootstrapAuthentikDataDir}
+        temporary="$(${pkgs.coreutils}/bin/mktemp ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment.XXXXXX"})"
+        token_file="$temporary.token"
+        trap '${pkgs.coreutils}/bin/rm -f -- "$temporary" "$token_file"' EXIT
+        {
+          token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
+          printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot'
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
+        } > "$temporary"
+        ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"
+        printf '%s' "$token" > "$token_file"
+        ${pkgs.coreutils}/bin/install -m 0400 -o root -g root "$token_file" ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/api-token"}
+        unset token
+      '';
+      UMask = "0077";
     };
   };
 }
