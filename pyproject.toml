@@ -53,6 +53,7 @@ py-modules = [
   "nas_v2_caddy",
   "nas_v2_cli",
   "nas_v2_compose",
+  "nas_v2_compose_import",
   "nas_v2_control",
   "nas_v2_editor",
   "nas_v2_entry",
