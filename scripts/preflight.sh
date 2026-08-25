@@ -51,6 +51,7 @@ PY
 }
 
 step "repository structure" ./scripts/validate-structure.py
+step "V2 architecture boundary" ./scripts/check-architecture-boundary.py
 step "version metadata" ./scripts/check-version.py
 step "mkForce policy" ./scripts/check-mkforce.py
 step "repository data" ./scripts/validate-repository-data.py
