@@ -13,8 +13,8 @@ def read(path: str) -> str:
 class BackupDomainArchitectureTests(unittest.TestCase):
     def test_root_restic_backup_never_traverses_encrypted_zfs(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
-        self.assertIn('paths = lib.mkForce [\n          "/"\n          "/boot"', module)
-        self.assertIn("dynamicFilesFrom = lib.mkForce null;", module)
+        self.assertIn('paths = lib.mkOverride 40 [\n          "/"\n          "/boot"', module)
+        self.assertIn("dynamicFilesFrom = lib.mkOverride 40 null;", module)
         self.assertIn('"--one-file-system"', module)
         self.assertIn('"--tag=root-control-plane"', module)
         self.assertIn("cfg.zfsRoot", module)
@@ -23,20 +23,30 @@ class BackupDomainArchitectureTests(unittest.TestCase):
         self.assertNotIn("nas_v2_backup.py", module)
         self.assertNotIn("backup-resources.json", module)
 
-    def test_root_backup_uses_native_postgresql_dump_instead_of_live_pages(self) -> None:
+    def test_root_backup_uses_consistent_postgresql_dump_instead_of_live_pages(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
+        self.assertIn('rootControlDatabaseDump = "${rootControlArtifactDir}/authentik.pgdump"', module)
         self.assertIn("pg_dump --format=custom authentik", module)
-        self.assertIn("root-control/authentik.pgdump", module)
         self.assertIn("pg_restore --list", module)
         self.assertIn("cfg.secrets.keepassDatabase", module)
         self.assertIn('"/var/lib/nas-operational/postgresql"', module)
+
+    def test_root_recovery_repository_is_independent_by_default(self) -> None:
+        module = read("modules/nas/config/backup-domains.nix")
+        options = read("modules/nas/options/operations.nix")
+        self.assertIn("samePoolRepository", module)
+        self.assertIn("cfg.backup.allowSamePoolRepository", module)
+        self.assertIn("must be stored independently", module)
+        self.assertIn("allowSamePoolRepository", options)
+        self.assertIn("rollback-only", options)
 
     def test_encrypted_zfs_domain_uses_raw_syncoid_send(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
         storage = read("modules/nas/config/storage-monitoring.nix")
         self.assertIn('lib.optional cfg.zfsEncryption.enable "--sendoptions=w"', module)
         self.assertIn('lib.filter (argument: !(lib.hasPrefix "--sendoptions" argument))', module)
-        self.assertIn("systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkForce", module)
+        self.assertIn("systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkOverride 40", module)
+        self.assertIn("!cfg.zfsReplication.enable || cfg.zfsEncryption.enable", module)
         self.assertIn("${pkgs.sanoid}/bin/syncoid", storage)
         self.assertIn("cfg.zfsDataset cfg.zfsReplication.target", storage)
 
