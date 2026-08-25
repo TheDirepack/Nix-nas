@@ -894,10 +894,10 @@ class ReconcileGapTests(unittest.TestCase):
             self.assertTrue(str(pq).endswith(".container"))
             with self.assertRaises(recon.SystemdReconcileError):
                 recon._safe_quadlet_target(runtime, "bad.container")
-            res = recon._source_under(root, str(src))
+            res = recon._source_under_current(root, str(src))
             self.assertEqual(res, src.resolve())
             with self.assertRaises(recon.SystemdReconcileError):
-                recon._source_under(root, "/etc/passwd")
+                recon._source_under_current(root, "/etc/passwd")
 
 
 if __name__ == "__main__":

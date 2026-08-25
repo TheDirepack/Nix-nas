@@ -776,7 +776,9 @@ class V2SystemdFaultInjectionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(sysrec.SystemdReconcileError, "escapes|not a file|is not a file"):
+            with self.assertRaisesRegex(
+                sysrec.SystemdReconcileError, "escapes|not a file|is not a file|unable to resolve generated path"
+            ):
                 sysrec.reconcile(
                     manifest_path=manifest,
                     projection_root=proj,
