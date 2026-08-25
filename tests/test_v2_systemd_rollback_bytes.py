@@ -67,26 +67,33 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 systemctl=str(systemctl),
             )
 
-    def test_restart_failure_restores_previous_projection_bytes(self) -> None:
+    def test_restart_failure_restores_runtime_link_without_mutating_generations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            projection = root / "projection"
-            units = projection / "units"
-            units.mkdir(parents=True)
-            runtime = root / "systemd"
+            control = root / "nas-control"
+            generations = control / "generations"
+            generations.mkdir(parents=True)
+            runtime = root / "systemd-runtime"
             runtime.mkdir()
-            quadlet = root / "quadlet"
+            quadlet = root / "quadlet-runtime"
             quadlet.mkdir()
-            source = units / "nas-v2-demo.service"
+            state = control / "systemd-reconciled.json"
+            projection = control / "systemd"
+
+            old_revision = "1" * 40
+            old_projection = generations / old_revision / "systemd"
+            old_units = old_projection / "units"
+            old_units.mkdir(parents=True)
+            old_source = old_units / "nas-v2-demo.service"
             old_bytes = b"[Service]\nExecStart=/bin/true\n"
-            source.write_bytes(old_bytes)
-            manifest = projection / "manifest.json"
-            self._manifest(manifest, source)
-            state = root / "state.json"
+            old_source.write_bytes(old_bytes)
+            old_manifest = old_projection / "manifest.json"
+            self._manifest(old_manifest, old_source)
+            projection.symlink_to(old_projection)
 
             systemctl, log = self._systemctl(root, fail_restart=False)
             self._run(
-                manifest=manifest,
+                manifest=old_manifest,
                 projection=projection,
                 runtime=runtime,
                 quadlet=quadlet,
@@ -95,14 +102,25 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                 log=log,
             )
             previous_state = state.read_bytes()
+            target = runtime / "nas-v2-demo.service"
+            self.assertEqual(target.resolve(), old_source.resolve())
 
-            # This models nas_v2_apply replacing the staged source at the same
-            # path before native activation is attempted.
-            source.write_bytes(b"[Service]\nExecStart=/bin/false\n")
+            new_revision = "2" * 40
+            new_projection = generations / new_revision / "systemd"
+            new_units = new_projection / "units"
+            new_units.mkdir(parents=True)
+            new_source = new_units / "nas-v2-demo.service"
+            new_bytes = b"[Service]\nExecStart=/bin/false\n"
+            new_source.write_bytes(new_bytes)
+            new_manifest = new_projection / "manifest.json"
+            self._manifest(new_manifest, new_source)
+
+            projection.unlink()
+            projection.symlink_to(new_projection)
             failed_systemctl, failed_log = self._systemctl(root, fail_restart=True)
             with self.assertRaisesRegex(reconcile.SystemdReconcileError, "restart nas-v2-demo.service"):
                 self._run(
-                    manifest=manifest,
+                    manifest=new_manifest,
                     projection=projection,
                     runtime=runtime,
                     quadlet=quadlet,
@@ -111,11 +129,13 @@ class V2SystemdRollbackBytesTests(unittest.TestCase):
                     log=failed_log,
                 )
 
-            self.assertEqual(source.read_bytes(), old_bytes)
+            self.assertEqual(old_source.read_bytes(), old_bytes)
+            self.assertEqual(new_source.read_bytes(), new_bytes)
             self.assertEqual(state.read_bytes(), previous_state)
-            target = runtime / "nas-v2-demo.service"
             self.assertTrue(target.is_symlink())
-            self.assertEqual(target.resolve(), source.resolve())
+            self.assertEqual(target.resolve(), old_source.resolve())
+            self.assertFalse((old_projection / ".activated").exists())
+            self.assertFalse((new_projection / ".activated").exists())
 
 
 if __name__ == "__main__":
