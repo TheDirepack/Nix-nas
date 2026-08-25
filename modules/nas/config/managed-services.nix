@@ -16,7 +16,7 @@ let
   backupInventoryPath = "/run/nas-control/backup-resources.json";
   resticPathsPath = "/run/nas-control/restic-v2-paths";
   quadletRuntimePath = "/run/containers/systemd";
-  authentikOutpostPort = nasInternal.authentikOutpostPort;
+  authentikPort = nasInternal.authentikPort;
   v2Source = ../../../services;
   v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
     defusedxml
@@ -142,7 +142,9 @@ in
         NAS_V2_RESTIC_PATHS = resticPathsPath;
         NAS_V2_FIREWALLD = firewalldProjectionPath;
         NAS_V2_CADDY_BIN = "${pkgs.caddy}/bin/caddy";
-        NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";
+        # Authentik's embedded outpost is served by the main loopback listener;
+        # a second proxy-outpost daemon/listener only duplicated Authentik.
+        NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikPort}";
         NAS_V2_AUTHENTIK_PATH = cfg.identity.authentikPath;
         NAS_V2_LAN_HOST = nasInternal.lanHost;
         NAS_V2_SYSTEMD_ANALYZE_BIN = "${pkgs.systemd}/bin/systemd-analyze";
@@ -179,7 +181,6 @@ in
           quadletRuntimePath
         ];
       };
-      environment.NAS_AUTHENTIK_OUTPOST_PORT = toString authentikOutpostPort;
     };
 
     systemd.paths.nas-managed-services-reconcile = {
