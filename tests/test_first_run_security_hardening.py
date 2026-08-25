@@ -65,6 +65,81 @@ class SetupApplicationRetirementTests(unittest.TestCase):
                 first_start.remove_setup_application()
 
 
+class LocalAdministratorTransactionTests(unittest.TestCase):
+    administrator = {
+        "username": "owner",
+        "name": "NAS Owner",
+        "email": "owner@example.test",
+    }
+    fingerprint = "f" * 64
+
+    @staticmethod
+    def _completed(returncode: int = 0, stdout: str = ""):
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    def test_unclaimed_existing_account_is_never_adopted(self) -> None:
+        with (
+            mock.patch.object(first_start, "_load_matching_local_admin_marker", return_value=None),
+            mock.patch.object(setup, "run_root_noninteractive", return_value=self._completed()),
+            mock.patch.object(setup, "atomic_write_json") as write_marker,
+        ):
+            with self.assertRaisesRegex(setup.SetupError, "already exists"):
+                first_start.create_or_resume_local_administrator(
+                    self.administrator, "correct horse battery staple", self.fingerprint
+                )
+        write_marker.assert_not_called()
+
+    def test_owned_partial_account_is_finished_on_resume(self) -> None:
+        marker = first_start._local_admin_marker("owner", self.fingerprint)
+        calls = [
+            self._completed(),
+            self._completed(),
+            self._completed(stdout="owner wheel nas-administrators nas-operations\n"),
+        ]
+        with (
+            mock.patch.object(first_start, "_load_matching_local_admin_marker", return_value=marker),
+            mock.patch.object(setup, "run_root_noninteractive", side_effect=calls),
+            mock.patch.object(setup, "run_root") as run_root,
+        ):
+            result = first_start.create_or_resume_local_administrator(
+                self.administrator, "correct horse battery staple", self.fingerprint
+            )
+        self.assertEqual(result["username"], "owner")
+        self.assertTrue(result["resumed"])
+        self.assertEqual(run_root.call_args_list[0].args[0], ["chpasswd"])
+        self.assertIn("usermod", run_root.call_args_list[1].args[0])
+
+    def test_new_account_claim_is_persisted_before_user_creation(self) -> None:
+        desired = {
+            "username": "owner",
+            "name": "NAS Owner",
+            "email": "owner@example.test",
+            "active": True,
+            "groups": ["nas_admin"],
+            "attributes": {},
+        }
+        order: list[str] = []
+
+        def record_marker(*_args, **_kwargs):
+            order.append("marker")
+
+        def record_creation(*_args, **_kwargs):
+            order.append("useradd")
+            return desired
+
+        with (
+            mock.patch.object(first_start, "_load_matching_local_admin_marker", return_value=None),
+            mock.patch.object(setup, "run_root_noninteractive", return_value=self._completed(1)),
+            mock.patch.object(setup, "atomic_write_json", side_effect=record_marker),
+            mock.patch.object(setup, "create_local_administrator", side_effect=record_creation),
+        ):
+            result = first_start.create_or_resume_local_administrator(
+                self.administrator, "correct horse battery staple", self.fingerprint
+            )
+        self.assertEqual(result, desired)
+        self.assertEqual(order, ["marker", "useradd"])
+
+
 class FirstRunTransientDirectoryTests(unittest.TestCase):
     @staticmethod
     def _metadata(mode: int, *, uid: int = 0, gid: int = 0):
