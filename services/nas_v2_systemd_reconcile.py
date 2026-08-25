@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Reconcile staged V2 systemd and Quadlet links, then exit."""
+"""Reconcile V2-owned systemd/Quadlet runtime links, then exit.
+
+Generated projection files are immutable generation artifacts. This reconciler
+therefore never copies or rewrites projection bytes. It snapshots only the
+live runtime symlink topology and unit active state before mutation; a failed
+activation restores those native runtime links/states while the outer guarded
+V2 transaction selects the previous desired-state generation.
+"""
 
 from __future__ import annotations
 
@@ -21,10 +28,7 @@ class SystemdReconcileError(RuntimeError):
 
 _UNIT = re.compile(r"^[A-Za-z0-9_.@:-]+\.(?:service|timer|target|path|socket)$")
 _DROPIN = re.compile(r"^([A-Za-z0-9_.@:-]+\.(?:service|timer|target))\.d/50-nas-v2\.conf$")
-_QUADLET_CONTAINER = re.compile(r"^nas-v2-([a-z][a-z0-9-]{0,63})\.container$")
-_QUADLET_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.network$")
-_QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
-_ACTIVATED_DIR = ".activated"
+_QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
 
 
 def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
@@ -51,43 +55,26 @@ def _safe_target(root: pathlib.Path, relative: str) -> tuple[pathlib.Path, str]:
 
 
 def _safe_quadlet_target(root: pathlib.Path, relative: str) -> tuple[pathlib.Path, str]:
-    container = _QUADLET_CONTAINER.fullmatch(relative)
-    if container:
-        return root / relative, f"nas-v2-{container.group(1)}.service"
-    network = _QUADLET_NETWORK.fullmatch(relative)
-    if network:
-        return root / relative, f"nas-v2-{network.group(1)}.service"
-    session_network = _QUADLET_SESSION_NETWORK.fullmatch(relative)
-    if session_network:
-        return root / relative, f"nas-v2-session-{session_network.group(1)}.target"
-    raise SystemdReconcileError(f"unsafe generated Quadlet target {relative!r}")
-
-
-def _source_under(root: pathlib.Path, value: str) -> pathlib.Path:
-    source = pathlib.Path(value)
-    try:
-        resolved = source.resolve(strict=True)
-        resolved.relative_to(root.resolve(strict=True))
-    except (OSError, ValueError) as exc:
-        raise SystemdReconcileError(f"generated source escapes projection root: {value}") from exc
-    if not resolved.is_file():
-        raise SystemdReconcileError(f"generated source is not a file: {value}")
-    return resolved
-
-
-def _state_source_under(root: pathlib.Path, value: str) -> pathlib.Path:
-    """Validate a prior source path even when apply removed the file."""
-    source = pathlib.Path(value)
-    if not source.is_absolute():
-        raise SystemdReconcileError(f"previous generated source is not absolute: {value}")
-    try:
-        root_resolved = root.resolve(strict=True)
-        parent = source.parent.resolve(strict=True)
-        candidate = parent / source.name
-        candidate.relative_to(root_resolved)
-    except (OSError, ValueError) as exc:
-        raise SystemdReconcileError(f"previous generated source escapes projection root: {value}") from exc
-    return candidate
+    if _QUADLET.fullmatch(relative) is None:
+        raise SystemdReconcileError(f"unsafe generated Quadlet target {relative!r}")
+    path = pathlib.Path(relative)
+    name = path.stem
+    suffix = path.suffix
+    if suffix == ".container":
+        affected = f"{name}.service"
+    elif suffix == ".network":
+        affected = f"{name}-network.service"
+    elif suffix == ".pod":
+        affected = f"{name}-pod.service"
+    elif suffix == ".volume":
+        affected = f"{name}-volume.service"
+    elif suffix == ".image":
+        affected = f"{name}-image.service"
+    elif suffix == ".build":
+        affected = f"{name}-build.service"
+    else:
+        affected = f"{name}.service"
+    return root / relative, affected
 
 
 def _hash_file(path: pathlib.Path) -> str:
@@ -104,78 +91,6 @@ def _fsync_directory(directory: pathlib.Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def _atomic_bytes(path: pathlib.Path, data: bytes, *, mode: int = 0o644) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, raw_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temp = pathlib.Path(raw_name)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp, mode)
-        os.replace(temp, path)
-        _fsync_directory(path.parent)
-    finally:
-        temp.unlink(missing_ok=True)
-
-
-def _snapshot_source(root: pathlib.Path, source: pathlib.Path, digest: str) -> pathlib.Path:
-    """Persist immutable rollback bytes outside apply-owned projection subtrees."""
-    snapshot_dir = root / _ACTIVATED_DIR
-    try:
-        snapshot_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
-            raise SystemdReconcileError(f"invalid activation snapshot directory {snapshot_dir}")
-        snapshot_dir.resolve(strict=True).relative_to(root.resolve(strict=True))
-    except (OSError, ValueError) as exc:
-        if isinstance(exc, SystemdReconcileError):
-            raise
-        raise SystemdReconcileError(f"unable to prepare activation snapshot directory {snapshot_dir}: {exc}") from exc
-
-    snapshot = snapshot_dir / digest
-    try:
-        if snapshot.exists() or snapshot.is_symlink():
-            if snapshot.is_symlink() or not snapshot.is_file() or _hash_file(snapshot) != digest:
-                raise SystemdReconcileError(f"invalid activation snapshot {snapshot}")
-            return snapshot.resolve(strict=True)
-        data = source.read_bytes()
-    except OSError as exc:
-        raise SystemdReconcileError(f"unable to snapshot generated source {source}: {exc}") from exc
-    if hashlib.sha256(data).hexdigest() != digest:
-        raise SystemdReconcileError(f"generated source changed while being snapshotted: {source}")
-    _atomic_bytes(snapshot, data)
-    return snapshot.resolve(strict=True)
-
-
-def _validated_snapshot(root: pathlib.Path, value: str, digest: str) -> pathlib.Path:
-    snapshot = pathlib.Path(value)
-    try:
-        activated_root = (root / _ACTIVATED_DIR).resolve(strict=True)
-        resolved = snapshot.resolve(strict=True)
-        resolved.relative_to(activated_root)
-    except (OSError, ValueError) as exc:
-        raise SystemdReconcileError(f"rollback snapshot escapes activation store: {value}") from exc
-    if resolved.is_symlink() or not resolved.is_file() or _hash_file(resolved) != digest:
-        raise SystemdReconcileError(f"rollback snapshot is missing or corrupted: {value}")
-    return resolved
-
-
-def _run_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        [systemctl, *args],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    if check and result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()[:2000]
-        raise SystemdReconcileError(f"systemctl {' '.join(args)} failed: {detail}")
-    return result
 
 
 def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
@@ -195,41 +110,85 @@ def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _unlink_owned(target: pathlib.Path, projection_root: pathlib.Path) -> None:
-    if not target.is_symlink():
-        if target.exists():
-            raise SystemdReconcileError(f"refusing to remove non-V2 generated file {target}")
-        return
-    raw = os.readlink(target)
-    linked = pathlib.Path(raw)
-    if not linked.is_absolute():
-        linked = target.parent / linked
+def _projection_roots(projection_root: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """Return directories allowed to back V2 runtime symlinks.
+
+    Production passes the stable ``/run/nas-control/systemd`` compatibility
+    symlink. Its current target is one immutable generation while live runtime
+    links may still target the previous sibling generation until activation
+    succeeds. Developer/test invocations without generations keep the direct
+    projection-root behavior.
+    """
     try:
-        linked.resolve(strict=False).relative_to(projection_root.resolve(strict=True))
-    except (OSError, ValueError) as exc:
-        raise SystemdReconcileError(f"refusing to remove non-V2 generated symlink {target}") from exc
-    target.unlink()
+        current = projection_root.resolve(strict=True)
+    except OSError as exc:
+        raise SystemdReconcileError(f"projection root is unavailable: {projection_root}: {exc}") from exc
+    roots = [current]
+    generations = projection_root.parent / "generations"
+    try:
+        if generations.is_dir() and not generations.is_symlink():
+            roots.append(generations.resolve(strict=True))
+    except OSError:
+        pass
+    return tuple(roots)
 
 
-def _link_matches(target: pathlib.Path, source: pathlib.Path) -> bool:
-    if not target.is_symlink():
-        return False
-    raw = os.readlink(target)
-    current = pathlib.Path(raw)
-    if not current.is_absolute():
-        current = target.parent / current
-    return current.resolve(strict=False) == source
+def _is_under(path: pathlib.Path, roots: tuple[pathlib.Path, ...], *, strict: bool) -> pathlib.Path:
+    try:
+        resolved = path.resolve(strict=strict)
+    except OSError as exc:
+        raise SystemdReconcileError(f"unable to resolve generated path {path}: {exc}") from exc
+    for root in roots:
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            continue
+    raise SystemdReconcileError(f"generated source is outside V2 generation roots: {path}")
 
 
-def _ensure_link(target: pathlib.Path, source: pathlib.Path, projection_root: pathlib.Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
+def _source_under_current(projection_root: pathlib.Path, value: str) -> pathlib.Path:
+    source = pathlib.Path(value)
+    if not source.is_absolute():
+        raise SystemdReconcileError(f"generated source is not absolute: {value}")
+    current = projection_root.resolve(strict=True)
+    resolved = _is_under(source, (current,), strict=True)
+    if not resolved.is_file() or resolved.is_symlink():
+        raise SystemdReconcileError(f"generated source is not a regular file: {value}")
+    return resolved
+
+
+def _read_owned_link(target: pathlib.Path, projection_roots: tuple[pathlib.Path, ...]) -> pathlib.Path | None:
     if target.is_symlink():
-        if _link_matches(target, source):
-            return
-        _unlink_owned(target, projection_root)
-    elif target.exists():
-        raise SystemdReconcileError(f"refusing to overwrite non-V2 generated file {target}")
-    target.symlink_to(source)
+        raw = pathlib.Path(os.readlink(target))
+        linked = raw if raw.is_absolute() else target.parent / raw
+        resolved = _is_under(linked, projection_roots, strict=True)
+        if not resolved.is_file():
+            raise SystemdReconcileError(f"V2 runtime link does not target a generated file: {target}")
+        return resolved
+    if target.exists():
+        raise SystemdReconcileError(f"refusing to manage non-V2 generated file {target}")
+    return None
+
+
+def _set_link(
+    target: pathlib.Path,
+    source: pathlib.Path | None,
+    *,
+    projection_roots: tuple[pathlib.Path, ...],
+) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    current = _read_owned_link(target, projection_roots)
+    if source is None:
+        if current is not None:
+            target.unlink()
+        return
+    resolved_source = _is_under(source, projection_roots, strict=True)
+    if current == resolved_source:
+        return
+    if current is not None:
+        target.unlink()
+    target.symlink_to(resolved_source)
 
 
 def _parse_links(
@@ -247,6 +206,7 @@ def _parse_links(
     affected_units: dict[str, str] = {}
     hashes: dict[str, str] = {}
     drift = False
+    roots = _projection_roots(projection_root)
     for item in raw_links:
         if (
             not isinstance(item, dict)
@@ -255,19 +215,52 @@ def _parse_links(
         ):
             raise SystemdReconcileError(f"invalid systemd projection {key} entry")
         target_rel = item["target"]
-        if quadlet:
-            target_path, affected = _safe_quadlet_target(runtime_root, target_rel)
-        else:
-            target_path, affected = _safe_target(runtime_root, target_rel)
-        source = _source_under(projection_root, item["source"])
+        target_path, affected = (
+            _safe_quadlet_target(runtime_root, target_rel)
+            if quadlet
+            else _safe_target(runtime_root, target_rel)
+        )
+        source = _source_under_current(projection_root, item["source"])
         if target_rel in links:
             raise SystemdReconcileError(f"duplicate generated target {target_rel!r}")
         links[target_rel] = source
         affected_units[target_rel] = affected
         hashes[target_rel] = _hash_file(source)
-        if not _link_matches(target_path, source):
+        if _read_owned_link(target_path, roots) != source:
             drift = True
     return links, affected_units, hashes, drift
+
+
+def _run_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            [systemctl, *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemdReconcileError(f"unable to execute systemctl {' '.join(args)}: {exc}") from exc
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:2000]
+        raise SystemdReconcileError(f"systemctl {' '.join(args)} failed: {detail}")
+    return result
+
+
+def _string_set(key: str, source: dict[str, Any]) -> set[str]:
+    value = source.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) and _UNIT.fullmatch(item) for item in value):
+        raise SystemdReconcileError(f"manifest field {key} must contain safe unit names")
+    return set(value)
+
+
+def _state_link_keys(key: str, state: dict[str, Any]) -> set[str]:
+    value = state.get(key, {})
+    if not isinstance(value, dict) or not all(isinstance(name, str) for name in value):
+        raise SystemdReconcileError(f"previous systemd reconcile field {key} is malformed")
+    return set(value)
 
 
 def reconcile(
@@ -298,90 +291,47 @@ def reconcile(
         runtime_root=quadlet_runtime_dir,
         quadlet=True,
     )
-    current_link_snapshots = {
-        target: str(_snapshot_source(projection_root, source, current_hashes[target]))
-        for target, source in sorted(links.items())
-    }
-    current_quadlet_snapshots = {
-        target: str(_snapshot_source(projection_root, source, current_quadlet_hashes[target]))
-        for target, source in sorted(quadlet_links.items())
-    }
 
-    def string_set(key: str, source: dict[str, Any]) -> set[str]:
-        value = source.get(key, [])
-        if not isinstance(value, list) or not all(isinstance(item, str) and _UNIT.fullmatch(item) for item in value):
-            raise SystemdReconcileError(f"manifest field {key} must contain safe unit names")
-        return set(value)
-
-    owned = string_set("ownedUnits", manifest)
-    start = string_set("startUnits", manifest)
-    stop = string_set("stopUnits", manifest)
+    owned = _string_set("ownedUnits", manifest)
+    start = _string_set("startUnits", manifest)
+    stop = _string_set("stopUnits", manifest)
     if not start <= owned or not stop <= owned:
         raise SystemdReconcileError("startUnits and stopUnits must be owned units")
 
-    previous_owned = string_set("ownedUnits", previous) if previous else set()
-    previous_start = string_set("startUnits", previous) if previous else set()
-    previous_stop = string_set("stopUnits", previous) if previous else set()
+    previous_owned = _string_set("ownedUnits", previous) if previous else set()
+    previous_start = _string_set("startUnits", previous) if previous else set()
+    previous_stop = _string_set("stopUnits", previous) if previous else set()
     previous_links_raw = previous.get("links", {}) if previous else {}
-    previous_hashes = previous.get("linkHashes", {}) if previous else {}
-    previous_link_snapshots_raw = previous.get("linkSnapshots", {}) if previous else {}
     previous_quadlet_links_raw = previous.get("quadletLinks", {}) if previous else {}
+    previous_hashes = previous.get("linkHashes", {}) if previous else {}
     previous_quadlet_hashes = previous.get("quadletHashes", {}) if previous else {}
-    previous_quadlet_snapshots_raw = previous.get("quadletSnapshots", {}) if previous else {}
     previous_fingerprints = previous.get("fingerprints", {}) if previous else {}
     if not all(
         isinstance(value, dict)
         for value in (
             previous_links_raw,
-            previous_hashes,
-            previous_link_snapshots_raw,
             previous_quadlet_links_raw,
+            previous_hashes,
             previous_quadlet_hashes,
-            previous_quadlet_snapshots_raw,
             previous_fingerprints,
         )
     ):
         raise SystemdReconcileError("previous systemd reconcile state is malformed")
 
-    previous_link_snapshots: dict[str, pathlib.Path] = {}
-    previous_quadlet_snapshots: dict[str, pathlib.Path] = {}
-    if previous:
-        for target_rel, source_value in previous_links_raw.items():
-            if not isinstance(target_rel, str) or not isinstance(source_value, str):
-                raise SystemdReconcileError("previous systemd link state is malformed")
-            _safe_target(systemd_runtime_dir, target_rel)
-            _state_source_under(projection_root, source_value)
-            digest = previous_hashes.get(target_rel)
-            snapshot_value = previous_link_snapshots_raw.get(target_rel)
-            if not isinstance(digest, str) or not isinstance(snapshot_value, str):
-                raise SystemdReconcileError(
-                    "previous systemd reconcile state lacks rollback snapshots; rebuild the VM state before retrying"
-                )
-            previous_link_snapshots[target_rel] = _validated_snapshot(projection_root, snapshot_value, digest)
-        for target_rel, source_value in previous_quadlet_links_raw.items():
-            if not isinstance(target_rel, str) or not isinstance(source_value, str):
-                raise SystemdReconcileError("previous Quadlet link state is malformed")
-            _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            _state_source_under(projection_root, source_value)
-            digest = previous_quadlet_hashes.get(target_rel)
-            snapshot_value = previous_quadlet_snapshots_raw.get(target_rel)
-            if not isinstance(digest, str) or not isinstance(snapshot_value, str):
-                raise SystemdReconcileError(
-                    "previous systemd reconcile state lacks rollback snapshots; rebuild the VM state before retrying"
-                )
-            previous_quadlet_snapshots[target_rel] = _validated_snapshot(projection_root, snapshot_value, digest)
+    previous_link_keys = _state_link_keys("links", previous) if previous else set()
+    previous_quadlet_link_keys = _state_link_keys("quadletLinks", previous) if previous else set()
+    current_links = {target: str(source) for target, source in sorted(links.items())}
+    current_quadlet_links = {target: str(source) for target, source in sorted(quadlet_links.items())}
+    stale_links = previous_link_keys - set(links)
+    stale_quadlet_links = previous_quadlet_link_keys - set(quadlet_links)
 
     fingerprints = manifest.get("fingerprints", {})
     if not isinstance(fingerprints, dict):
         raise SystemdReconcileError("manifest fingerprints must be an object")
     for unit, digest in fingerprints.items():
-        if not isinstance(unit, str) or not _UNIT.fullmatch(unit) or not isinstance(digest, str):
+        if not isinstance(unit, str) or _UNIT.fullmatch(unit) is None or not isinstance(digest, str):
             raise SystemdReconcileError("manifest contains an invalid runtime fingerprint")
 
-    current_links = {target: str(source) for target, source in sorted(links.items())}
-    current_quadlet_links = {target: str(source) for target, source in sorted(quadlet_links.items())}
-    stale_links = set(previous_links_raw) - set(links)
-    stale_quadlet_links = set(previous_quadlet_links_raw) - set(quadlet_links)
     topology_changed = (
         current_links != previous_links_raw
         or current_hashes != previous_hashes
@@ -394,7 +344,6 @@ def reconcile(
     )
     lifecycle_changed = owned != previous_owned or start != previous_start or stop != previous_stop
     fingerprint_changed = fingerprints != previous_fingerprints
-
     if previous and not topology_changed and not lifecycle_changed and not fingerprint_changed:
         return {"stopped": [], "changed": [], "started": [], "noop": True}
 
@@ -410,115 +359,54 @@ def reconcile(
         if previous_fingerprints.get(unit) != digest:
             changed_units.add(unit)
 
-    def _is_active(unit: str) -> bool | None:
+    def is_active(unit: str) -> bool | None:
         try:
             result = _run_systemctl(systemctl, "is-active", unit, check=False)
-            return result.stdout.strip() == "active"
-        except Exception:
+        except SystemdReconcileError:
             return None
+        return result.stdout.strip() == "active"
 
-    all_units = (
-        set(previous_owned)
-        | set(owned)
-        | set(previous_start)
-        | set(start)
-        | set(stop)
-        | set(units_to_stop)
-        | set(changed_units)
-    )
-    active_snapshot: dict[str, bool | None] = {}
-    for unit in sorted(all_units):
-        active_snapshot[unit] = _is_active(unit)
+    all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
+    active_snapshot = {unit: is_active(unit) for unit in sorted(all_units)}
 
-    def _rollback_active_state() -> None:
+    roots = _projection_roots(projection_root)
+    systemd_targets = set(links) | stale_links
+    quadlet_targets = set(quadlet_links) | stale_quadlet_links
+    live_systemd: dict[str, pathlib.Path | None] = {}
+    live_quadlet: dict[str, pathlib.Path | None] = {}
+    for target_rel in sorted(systemd_targets):
+        target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+        live_systemd[target_rel] = _read_owned_link(target_path, roots)
+    for target_rel in sorted(quadlet_targets):
+        target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+        live_quadlet[target_rel] = _read_owned_link(target_path, roots)
+
+    def rollback_links() -> None:
+        for target_rel, source in live_systemd.items():
+            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
+            _set_link(target_path, source, projection_roots=roots)
+            if source is None and target_path.parent != systemd_runtime_dir:
+                try:
+                    target_path.parent.rmdir()
+                except OSError:
+                    pass
+        for target_rel, source in live_quadlet.items():
+            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
+            _set_link(target_path, source, projection_roots=roots)
+        if topology_changed:
+            _run_systemctl(systemctl, "daemon-reload")
+
+    def rollback_active_state() -> None:
         for unit, was_active in active_snapshot.items():
             if was_active is None:
                 continue
-            try:
-                is_active = _is_active(unit)
-            except Exception:
-                continue
-            if is_active is None or is_active == was_active:
+            now_active = is_active(unit)
+            if now_active is None or now_active == was_active:
                 continue
             try:
-                if was_active:
-                    _run_systemctl(systemctl, "start", unit)
-                else:
-                    _run_systemctl(systemctl, "stop", unit)
-            except Exception:
+                _run_systemctl(systemctl, "start" if was_active else "stop", unit)
+            except SystemdReconcileError:
                 continue
-
-    def _restore_previous_source_bytes() -> None:
-        for target_rel, source_value in previous_links_raw.items():
-            source = _state_source_under(projection_root, source_value)
-            snapshot = previous_link_snapshots[target_rel]
-            _atomic_bytes(source, snapshot.read_bytes())
-        for target_rel, source_value in previous_quadlet_links_raw.items():
-            source = _state_source_under(projection_root, source_value)
-            snapshot = previous_quadlet_snapshots[target_rel]
-            _atomic_bytes(source, snapshot.read_bytes())
-
-    def _rollback_projection() -> None:
-        _restore_previous_source_bytes()
-        for target_rel, source in links.items():
-            if target_rel not in previous_links_raw:
-                target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-                if target_path.is_symlink():
-                    _unlink_owned(target_path, projection_root)
-                    if target_path.parent != systemd_runtime_dir:
-                        try:
-                            target_path.parent.rmdir()
-                        except OSError:
-                            pass
-            else:
-                prev_source_str = previous_links_raw[target_rel]
-                prev_source = pathlib.Path(prev_source_str)
-                target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-                if not _link_matches(target_path, prev_source):
-                    if target_path.is_symlink() or not target_path.exists():
-                        _unlink_owned(target_path, projection_root)
-                    else:
-                        raise SystemdReconcileError(f"refusing to remove non-V2 generated file {target_path}")
-                    if prev_source.is_file():
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
-                        target_path.symlink_to(prev_source)
-        for target_rel in sorted(stale_links):
-            prev_source_str = previous_links_raw[target_rel]
-            prev_source = pathlib.Path(prev_source_str)
-            target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-            if not _link_matches(target_path, prev_source):
-                if prev_source.is_file():
-                    _ensure_link(target_path, prev_source, projection_root)
-                elif target_path.is_symlink():
-                    _unlink_owned(target_path, projection_root)
-        for target_rel, source in quadlet_links.items():
-            if target_rel not in previous_quadlet_links_raw:
-                target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-                if target_path.is_symlink():
-                    _unlink_owned(target_path, projection_root)
-            else:
-                prev_source_str = previous_quadlet_links_raw[target_rel]
-                prev_source = pathlib.Path(prev_source_str)
-                target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-                if not _link_matches(target_path, prev_source):
-                    if target_path.is_symlink() or not target_path.exists():
-                        _unlink_owned(target_path, projection_root)
-                    else:
-                        raise SystemdReconcileError(f"refusing to remove non-V2 generated file {target_path}")
-                    if prev_source.is_file():
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
-                        target_path.symlink_to(prev_source)
-        for target_rel in sorted(stale_quadlet_links):
-            prev_source_str = previous_quadlet_links_raw[target_rel]
-            prev_source = pathlib.Path(prev_source_str)
-            target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            if not _link_matches(target_path, prev_source):
-                if prev_source.is_file():
-                    _ensure_link(target_path, prev_source, projection_root)
-                elif target_path.is_symlink():
-                    _unlink_owned(target_path, projection_root)
-        if topology_changed:
-            _run_systemctl(systemctl, "daemon-reload")
 
     try:
         for unit in sorted(units_to_stop):
@@ -526,24 +414,21 @@ def reconcile(
 
         for target_rel, source in links.items():
             target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-            _ensure_link(target_path, source, projection_root)
-
+            _set_link(target_path, source, projection_roots=roots)
         for target_rel, source in quadlet_links.items():
             target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            _ensure_link(target_path, source, projection_root)
-
+            _set_link(target_path, source, projection_roots=roots)
         for target_rel in sorted(stale_links):
             target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-            _unlink_owned(target_path, projection_root)
+            _set_link(target_path, None, projection_roots=roots)
             if target_path.parent != systemd_runtime_dir:
                 try:
                     target_path.parent.rmdir()
                 except OSError:
                     pass
-
         for target_rel in sorted(stale_quadlet_links):
             target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-            _unlink_owned(target_path, projection_root)
+            _set_link(target_path, None, projection_roots=roots)
 
         if topology_changed:
             _run_systemctl(systemctl, "daemon-reload")
@@ -564,10 +449,8 @@ def reconcile(
             "schemaVersion": 1,
             "links": current_links,
             "linkHashes": current_hashes,
-            "linkSnapshots": current_link_snapshots,
             "quadletLinks": current_quadlet_links,
             "quadletHashes": current_quadlet_hashes,
-            "quadletSnapshots": current_quadlet_snapshots,
             "ownedUnits": sorted(owned),
             "startUnits": sorted(start),
             "stopUnits": sorted(stop),
@@ -583,10 +466,10 @@ def reconcile(
     except Exception as exc:
         rollback_error: Exception | None = None
         try:
-            _rollback_projection()
-            _rollback_active_state()
-        except Exception as r_exc:  # noqa: BLE001
-            rollback_error = r_exc
+            rollback_links()
+            rollback_active_state()
+        except Exception as rollback_exc:  # noqa: BLE001
+            rollback_error = rollback_exc
         if rollback_error is not None:
             raise SystemdReconcileError(
                 f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
@@ -601,11 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=pathlib.Path, required=True)
     parser.add_argument("--projection-root", type=pathlib.Path, required=True)
     parser.add_argument("--systemd-runtime-dir", type=pathlib.Path, default=pathlib.Path("/run/systemd/system"))
-    parser.add_argument(
-        "--quadlet-runtime-dir",
-        type=pathlib.Path,
-        default=pathlib.Path("/run/containers/systemd"),
-    )
+    parser.add_argument("--quadlet-runtime-dir", type=pathlib.Path, default=pathlib.Path("/run/containers/systemd"))
     parser.add_argument("--state", type=pathlib.Path, default=pathlib.Path("/run/nas-control/systemd-reconciled.json"))
     parser.add_argument("--systemctl", default="systemctl")
     return parser
