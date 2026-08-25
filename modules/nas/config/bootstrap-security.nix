@@ -2,6 +2,10 @@
 
 let
   inherit (nasInternal)
+    authentikApiTokenFile
+    authentikEnvironmentFile
+    authentikRuntimeApiTokenFile
+    authentikRuntimeEnvironmentFile
     bootstrapAuthentikDataDir
     bootstrapRuntimeRoot
     bootstrapSecretsDir
@@ -24,9 +28,6 @@ let
         }
     fi
 
-    # The bootstrap Linux identity is a lifecycle marker/service identity only.
-    # Network setup authentication is owned by the disposable Authentik/KDBX
-    # trust domain, so this account must never accept a reusable password login.
     ${pkgs.shadow}/bin/passwd --lock nas-bootstrap >/dev/null
     ${pkgs.shadow}/bin/usermod \
       --shell /run/current-system/sw/bin/nologin \
@@ -44,8 +45,6 @@ let
     authentik_dir=${lib.escapeShellArg bootstrapAuthentikDataDir}
     group=${lib.escapeShellArg bootstrapGroup}
 
-    # The permanent runtime has already been selected: bootstrap authority must
-    # not be recreated after this boundary.
     if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
       exit 0
     fi
@@ -112,10 +111,6 @@ let
         | ${pkgs.keepassxc}/bin/keepassxc-cli add --quiet -p "$db" "$group/$key" >/dev/null
     }
 
-    # These credentials belong only to the disposable bootstrap trust domain.
-    # Every permanent secret is generated again after the runtime switch. The
-    # human bootstrap password is installation-unique; there is deliberately no
-    # fleet-wide/default password that can claim a newly installed appliance.
     ensure_entry authentik-secret-key "$(${pkgs.openssl}/bin/openssl rand -hex 64)"
     ensure_entry authentik-bootstrap-token "$(${pkgs.openssl}/bin/openssl rand -hex 32)"
     ensure_entry authentik-bootstrap-password "$(${pkgs.openssl}/bin/openssl rand -hex 16)"
@@ -149,8 +144,6 @@ let
     ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary_environment" "$environment"
     ${pkgs.coreutils}/bin/install -m 0400 -o root -g root "$temporary_token" "$api_token"
 
-    # The console/KVM is the initial ownership channel. Never emit this value to
-    # stdout/stderr or the journal; write it directly to the local console.
     if [[ -w /dev/console ]]; then
       printf '\nNixOS NAS first-run setup\n  user: akadmin\n  password: %s\n\n' "$bootstrap_password" > /dev/console
     else
@@ -162,22 +155,91 @@ let
     ${pkgs.coreutils}/bin/rm -f -- "$temporary_environment" "$temporary_token"
     trap - EXIT
   '';
+
+  runtimeSelector = pkgs.writeShellScript "nas-bootstrap-runtime-select-secure" ''
+    set -euo pipefail
+    umask 0077
+
+    if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
+      target=/var/lib/nas-operational
+      environment=${lib.escapeShellArg authentikEnvironmentFile}
+      api_token=${lib.escapeShellArg authentikApiTokenFile}
+    else
+      target=${lib.escapeShellArg bootstrapRuntimeRoot}
+      environment="$target/authentik/environment"
+      api_token="$target/authentik/api-token"
+    fi
+
+    if [[ -L "$target" ]]; then
+      echo "Refusing symlinked identity runtime root: $target" >&2
+      exit 76
+    fi
+    ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root "$target"
+
+    ensure_runtime_dir() {
+      local path="$1" mode="$2" owner="$3" group="$4"
+      if [[ -L "$path" ]]; then
+        echo "Refusing symlinked identity runtime directory: $path" >&2
+        exit 76
+      fi
+      ${pkgs.coreutils}/bin/install -d -m "$mode" -o "$owner" -g "$group" "$path"
+    }
+    ensure_runtime_dir "$target/authentik" 0750 authentik authentik
+    ensure_runtime_dir "$target/postgresql" 0700 postgres postgres
+    ensure_runtime_dir "$target/nas-secrets" 0770 root nas-administrators
+
+    link_authority() {
+      local name="$1" source="$target/$1" destination="/var/lib/$1"
+      if [[ -L "$destination" ]]; then
+        current="$(${pkgs.coreutils}/bin/readlink -- "$destination")"
+        if [[ "$current" == "$source" ]]; then
+          return 0
+        fi
+        ${pkgs.coreutils}/bin/rm -f -- "$destination"
+      elif [[ -e "$destination" ]]; then
+        if [[ ! -d "$destination" ]]; then
+          echo "Refusing to replace non-directory authority path: $destination" >&2
+          exit 77
+        fi
+        if [[ -n "$(${pkgs.findutils}/bin/find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+          echo "Refusing to replace non-empty authority directory: $destination" >&2
+          exit 77
+        fi
+        ${pkgs.coreutils}/bin/rmdir -- "$destination"
+      fi
+      ${pkgs.coreutils}/bin/ln -s -- "$source" "$destination"
+    }
+
+    link_authority authentik
+    link_authority postgresql
+    link_authority nas-secrets
+
+    ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g authentik /run/nas-authentik
+    for spec in \
+      "${lib.escapeShellArg authentikRuntimeEnvironmentFile}:$environment" \
+      "${lib.escapeShellArg authentikRuntimeApiTokenFile}:$api_token"; do
+      destination="''${spec%%:*}"
+      source="''${spec#*:}"
+      if [[ -e "$destination" && ! -L "$destination" ]]; then
+        echo "Refusing to replace non-symlink runtime credential path: $destination" >&2
+        exit 78
+      fi
+      ${pkgs.coreutils}/bin/rm -f -- "$destination"
+      ${pkgs.coreutils}/bin/ln -s -- "$source" "$destination"
+    done
+  '';
 in
 {
-  # Replace the fixed-password bootstrap Linux account with a locked service
-  # identity. The authenticated web setup path is independent of PAM/Cockpit.
   systemd.services.nas-bootstrap-administrator.serviceConfig.ExecStart = lib.mkOverride 40 bootstrapAdministrator;
 
-  # Keep one temporary KDBX as the bootstrap secret authority. It is deliberately
-  # separate from the user-password-protected permanent NAS.kdbx and is deleted
-  # when first-run retires /var/lib/nas-bootstrap.
   systemd.services.nas-bootstrap-authentik-secrets = {
     path = [ pkgs.coreutils pkgs.gnugrep pkgs.keepassxc pkgs.openssl ];
     serviceConfig.ExecStart = lib.mkOverride 40 bootstrapSecrets;
   };
 
-  # The API calls the hardened finite job directly. No PATH interception or
-  # alternate nas-setup implementation is needed.
+  systemd.services.nas-bootstrap-runtime-select.serviceConfig.ExecStart =
+    lib.mkOverride 40 runtimeSelector;
+
   systemd.services.nas-first-run-api.environment.NAS_FIRST_START_JOB =
     "${nasPythonApplication}/bin/nas-first-start-job";
 }
