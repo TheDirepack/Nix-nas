@@ -101,12 +101,13 @@ class Alpha18HardeningContracts(unittest.TestCase):
     def test_backup_policy_requires_disk_staging_and_independent_recovery(self) -> None:
         options = text("modules/nas/options/operations.nix")
         storage = text("modules/nas/config/storage-monitoring.nix")
-        validation = text("modules/nas/config/validation.nix")
+        domains = text("modules/nas/config/backup-domains.nix")
         self.assertIn('default = "/var/lib/nas-backup/staging";', options)
         self.assertIn("stagingMinFreeBytes", options)
         self.assertIn("backupStage", storage)
         self.assertNotIn("/run/nas-backup-stage", storage)
-        self.assertIn("allowSamePoolRepository", validation)
+        self.assertIn("allowSamePoolRepository", domains)
+        self.assertIn("must be stored independently", domains)
 
     def test_firewall_baseline_is_exact_and_cockpit_fails_closed(self) -> None:
         firewall = text("modules/nas/config/network-firewall.nix")
@@ -120,10 +121,16 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("systemd.sockets.cockpit.enable = false;", system)
         self.assertIn("nas-management-network-guard.service", caddy)
 
-    def test_authentik_has_one_non_secret_config_channel_and_distinct_runtime_dirs(self) -> None:
+    def test_authentik_uses_embedded_outpost_and_one_config_channel(self) -> None:
         services = text("modules/nas/config/application-services.nix")
-        self.assertIn('AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}"', services)
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        self.assertIn('http = "127.0.0.1:${toString authentikPort}";', services)
+        self.assertIn("blueprints_dir", services)
         self.assertNotIn("AUTHENTIK_WEB__", services)
+        self.assertNotIn("nas-authentik-proxy-outpost", services)
+        self.assertNotIn("authentik-outposts.proxy", services)
+        self.assertIn("/outpost.goauthentik.io/*", proxy)
+        self.assertIn("127.0.0.1:${toString authentikPort}", proxy)
         for directory in ("authentik-migrate", "authentik-worker", "authentik-server"):
             self.assertIn(f'RuntimeDirectory = "{directory}";', services)
 
