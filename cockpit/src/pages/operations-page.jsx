@@ -25,6 +25,7 @@ import {visibleOperations} from "../view-model.js";
 export function OperationsPage({data, mutate, busy}) {
   const operations = visibleOperations(data || {});
   const confirmationRequired = new Set([
+    "health",
     "snapshot",
     "zfs-scrub",
     "backup",
@@ -49,9 +50,13 @@ export function OperationsPage({data, mutate, busy}) {
     });
   }, [remote.provider, remote.scope, remote.rcloneRemote]);
   const run = async (id) => {
-    const result = await mutate(() => api(["action", id]));
-    setPending(null);
-    setLastResult(result);
+    try {
+      const result = await mutate(() => api(["action", id]));
+      setPending(null);
+      setLastResult(result);
+    } catch (_reason) {
+      // The shared mutation hook keeps the failed action visible and reports its error.
+    }
   };
   const saveRemote = async () => {
     const result = await mutate(() => apiInput(["backup-remote-set"], remoteDraft));

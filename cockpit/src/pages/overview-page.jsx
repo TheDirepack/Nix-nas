@@ -67,7 +67,14 @@ export function OverviewPage({data, refresh, busy}) {
       title: "Failures",
       body:
         Array.isArray(data?.failedUnits) && data.failedUnits.length ? (
-          <OutputBlock>{data.failedUnits.join("\n")}</OutputBlock>
+          <OutputBlock>
+            {data.failedUnits.map((unit, index) => (
+              <React.Fragment key={`${index}-${String(unit)}`}>
+                <span>{unit}</span>
+                {index < data.failedUnits.length - 1 ? "\n" : null}
+              </React.Fragment>
+            ))}
+          </OutputBlock>
         ) : (
           <p>No failed units reported.</p>
         ),
