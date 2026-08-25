@@ -166,14 +166,14 @@ in
 {
   # Replace the fixed-password bootstrap Linux account with a locked service
   # identity. The authenticated web setup path is independent of PAM/Cockpit.
-  systemd.services.nas-bootstrap-administrator.serviceConfig.ExecStart = lib.mkForce bootstrapAdministrator;
+  systemd.services.nas-bootstrap-administrator.serviceConfig.ExecStart = lib.mkOverride 40 bootstrapAdministrator;
 
   # Keep one temporary KDBX as the bootstrap secret authority. It is deliberately
   # separate from the user-password-protected permanent NAS.kdbx and is deleted
   # when first-run retires /var/lib/nas-bootstrap.
   systemd.services.nas-bootstrap-authentik-secrets = {
     path = [ pkgs.coreutils pkgs.gnugrep pkgs.keepassxc pkgs.openssl ];
-    serviceConfig.ExecStart = lib.mkForce bootstrapSecrets;
+    serviceConfig.ExecStart = lib.mkOverride 40 bootstrapSecrets;
   };
 
   # The API calls the hardened finite job directly. No PATH interception or
