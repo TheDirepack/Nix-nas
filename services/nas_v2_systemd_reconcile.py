@@ -225,7 +225,9 @@ def _parse_links(
         ):
             raise SystemdReconcileError(f"invalid systemd projection {key} entry")
         target_rel = item["target"]
-        target_path, affected = _safe_quadlet_target(runtime_root, target_rel) if quadlet else _safe_target(runtime_root, target_rel)
+        target_path, affected = (
+            _safe_quadlet_target(runtime_root, target_rel) if quadlet else _safe_target(runtime_root, target_rel)
+        )
         source = _source_under_current(projection_root, item["source"])
         if target_rel in links:
             raise SystemdReconcileError(f"duplicate generated target {target_rel!r}")
