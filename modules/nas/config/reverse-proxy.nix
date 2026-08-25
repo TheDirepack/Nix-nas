@@ -25,10 +25,7 @@ in
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
       }
 
-      # Every downstream identity-bearing header is recreated only from the
-      # Authentik forward-auth response. Optional Authentik headers must be
-      # cleared too; otherwise a client value could survive when Authentik omits
-      # that optional response header.
+      # Recreate the complete trusted identity corpus only after Authentik.
       request_header -Remote-User
       request_header -Remote-Groups
       request_header -Remote-Name
@@ -47,6 +44,9 @@ in
       request_header -X-Authentik-Meta-Provider
       request_header -X-Authentik-Meta-App
       request_header -X-Authentik-Meta-Version
+      request_header -X-Authentik-Meta-User
+      request_header -X-Authentik-Meta-Is-Superuser
+      request_header -X-Authentik-Role
 
       log {
         output file ${config.services.caddy.logDir}/access.log {
