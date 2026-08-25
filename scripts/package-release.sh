@@ -24,7 +24,7 @@ done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 version="$(tr -d '[:space:]' < VERSION)"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+$ ]] || { echo "Invalid VERSION: $version" >&2; exit 1; }
+[[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([.-][A-Za-z0-9.-]+)?$ ]] || { echo "Invalid VERSION: $version" >&2; exit 1; }
 
 # VERSION is canonical inside the repository. Human-facing artifact filenames use
 # the shorter documented display form. For M.m.0-alpha.N, that is M.m.N.

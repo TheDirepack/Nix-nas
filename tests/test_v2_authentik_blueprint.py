@@ -42,6 +42,16 @@ def effective(*, hostname: bool = False) -> dict:
 
 
 class V2AuthentikBlueprintTests(unittest.TestCase):
+    def test_empty_effective_state_renders_an_empty_entries_list(self) -> None:
+        state = {
+            "schemaVersion": 3,
+            "services": {},
+            "derived": {"authorization": {}, "routes": []},
+        }
+        rendered, manifest = blueprint.render_blueprint(state, public_host="nas.example.test")
+        self.assertIn("entries: []\n", rendered.decode())
+        self.assertEqual(manifest, {"schemaVersion": 1, "groups": [], "applications": []})
+
     def test_blueprint_uses_providerless_application_and_group_bindings(self) -> None:
         rendered, manifest = blueprint.render_blueprint(effective(), public_host="nas.example.test")
         text = rendered.decode()

@@ -58,13 +58,17 @@ in
       message = "Secret activation must not bypass the Managed Services V2 identity-sync job lifecycle.";
     }
     {
-      assertion = config.systemd.services.nas-managed-services-authentik-reconcile.requires == [ "authentik.service" ];
-      message = "The Authentik capability projection must not directly start the V2-managed identity-sync job.";
+      assertion = config.systemd.services.nas-managed-services-authentik-reconcile.requires == [ "authentik.service" "nas-identity-bootstrap.service" ];
+      message = "The Authentik capability projection must wait for the first-boot identity bootstrap without starting the V2-managed identity-sync job.";
     }
     {
       assertion =
         !lib.elem "nas-identity-sync.service" config.systemd.services.nas-managed-services-authentik-reconcile.after;
-      message = "The Authentik capability projection must not retain a hidden ordering dependency on identity-sync.";
+        message = "The Authentik capability projection must not retain a hidden ordering dependency on identity-sync.";
+    }
+    {
+      assertion = lib.elem "nas-identity-bootstrap.service" config.systemd.services.nas-managed-services-authentik-reconcile.after;
+      message = "The Authentik capability projection must run after the first-boot identity bootstrap.";
     }
     {
       assertion =

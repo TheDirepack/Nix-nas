@@ -182,6 +182,7 @@ def render_blueprint(
         "  name: Managed Services V2 applications",
         "entries:",
     ]
+    entry_count = 0
 
     for group, service_id in sorted(capabilities.items()):
         lines.extend(
@@ -197,6 +198,7 @@ def render_blueprint(
                 f"        nasManagedService: {_q(service_id)}",
             ]
         )
+        entry_count += 1
 
     for slug, app in sorted(applications.items()):
         lines.extend(
@@ -229,6 +231,7 @@ def render_blueprint(
                 "      negate: false",
             ]
         )
+        entry_count += 3
 
     # Removing a file-backed blueprint does not delete objects it created, so
     # explicit state=absent entries are generated from the last successfully
@@ -243,6 +246,7 @@ def render_blueprint(
                 f"      slug: {_q(slug)}",
             ]
         )
+        entry_count += 1
     for group in sorted(previous_groups - set(capabilities)):
         lines.extend(
             [
@@ -252,6 +256,10 @@ def render_blueprint(
                 f"      name: {_q(group)}",
             ]
         )
+        entry_count += 1
+
+    if entry_count == 0:
+        lines[-1] = "entries: []"
 
     manifest = {
         "schemaVersion": 1,

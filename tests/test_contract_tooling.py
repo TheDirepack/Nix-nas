@@ -104,10 +104,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('artifact_name+=" source"', packaging)
         self.assertIn('archive_root="nixos-nas-$version"', packaging)
         version = text("VERSION").strip()
-        match = re.fullmatch(r"(\d+)\.(\d+)\.0-alpha\.(\d+)", version)
-        self.assertIsNotNone(match)
-        assert match is not None
-        display = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+        alpha = re.fullmatch(r"(\d+)\.(\d+)\.0-alpha\.(\d+)", version)
+        if alpha is not None:
+            display = f"{alpha.group(1)}.{alpha.group(2)}.{alpha.group(3)}"
+        else:
+            simple = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:[.-].*)?", version)
+            self.assertIsNotNone(simple, f"VERSION {version!r} does not match expected format")
+            display = version
         self.assertIn(f"Nix OS NAS {display} source.zip", naming)
         self.assertIn("Documentation-only changes do not require a version bump", naming)
         self.assertIn("Every code change requires a new version number", naming)
