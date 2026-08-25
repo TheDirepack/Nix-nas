@@ -9,6 +9,7 @@ let
     lanHost
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
+  firstRunApiSocket = "/run/nas-first-run-api/api.sock";
 in
 {
   config.services.caddy = {
@@ -85,6 +86,19 @@ in
           header_up X-Forwarded-Proto https
           header_up X-Forwarded-For {remote_host}
         }
+      }
+
+      # A setup page already loaded in the browser must be able to observe the
+      # final job result and request its one reboot after Caddy switches to the
+      # permanent configuration. The API itself requires the random per-job
+      # capability; no setup submission or password endpoint is exposed here.
+      handle /setup/api/first-start/job/* {
+        uri strip_prefix /setup/api
+        reverse_proxy unix/${firstRunApiSocket}
+      }
+      handle /setup/api/reboot {
+        uri strip_prefix /setup/api
+        reverse_proxy unix/${firstRunApiSocket}
       }
 
       handle /settings/syncthing {
