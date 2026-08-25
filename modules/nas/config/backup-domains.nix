@@ -31,6 +31,13 @@ let
     && !remoteEnabled
     && lib.hasPrefix "/" localResticRepository
   ) localResticRepository;
+  samePoolRepository =
+    cfg.backup.repositoryFile == ""
+    && !remoteEnabled
+    && (
+      localResticRepository == cfg.zfsRoot
+      || lib.hasPrefix "${cfg.zfsRoot}/" localResticRepository
+    );
   reviewedSyncoidArgs =
     lib.optional cfg.zfsReplication.recursive "--recursive"
     ++ lib.optional cfg.zfsReplication.useExistingSnapshots "--no-sync-snap"
@@ -40,15 +47,30 @@ let
 in
 {
   config = lib.mkMerge [
-    # Restic is deliberately the root/control-plane backup domain. The ZFS data
-    # domain is replicated natively below, so Restic must never traverse the ZFS
-    # mount or consume V2 per-application backup inventories.
+    {
+      assertions = [
+        {
+          assertion = !cfg.backup.enable || !samePoolRepository || cfg.backup.allowSamePoolRepository;
+          message = ''
+            nas.backup root/control-plane recovery must be stored independently of
+            the encrypted ZFS source. Configure an external repository/remote, or
+            set nas.backup.allowSamePoolRepository only for a rollback-only copy
+            that is not considered bare-metal recovery protection.
+          '';
+        }
+        {
+          assertion = !cfg.zfsReplication.enable || cfg.zfsEncryption.enable;
+          message = ''
+            nas.zfsReplication is the complete encrypted ZFS backup domain and
+            therefore requires nas.zfsEncryption.enable so Syncoid can preserve
+            the source encryption with a raw send.
+          '';
+        }
+      ];
+    }
+
     (lib.mkIf cfg.backup.enable {
       services.restic.backups.nas-boot-system = {
-        # These are deliberate replacements for the legacy per-application
-        # Restic inventory, but they do not need mkForce. A low-priority-number
-        # override remains explicit while preserving the repository's mkForce
-        # policy and making conflicts easier to diagnose.
         paths = lib.mkOverride 40 [
           "/"
           "/boot"
@@ -63,9 +85,6 @@ in
             "/tmp"
             "/var/tmp"
             "/var/cache"
-            # PostgreSQL is backed up through the consistent custom-format dump
-            # below. Exclude both the stable link and its real root-hosted
-            # permanent backing directory so Restic cannot capture live DB pages.
             "/var/lib/postgresql"
             "/var/lib/nas-operational/postgresql"
             restoreVerifyPath
@@ -127,9 +146,6 @@ in
           [[ -d "$restore_root/var/lib/authentik" ]]
           [[ -d "$restore_root/etc" ]]
 
-          # The root recovery snapshot may contain the /var/lib/nas-control
-          # symlink itself, but it must never contain a copied mutable V2 authority
-          # from the encrypted ZFS filesystem.
           if [[ -f "$restore_root${cfg.zfsRoot}/nas-control/services.yaml" ]]; then
             echo "Root Restic backup unexpectedly contains the ZFS V2 desired-state authority" >&2
             exit 1
@@ -139,9 +155,6 @@ in
       };
     })
 
-    # Native encrypted replication is the complete ZFS backup domain. Override
-    # only Syncoid's command line so operator tuning remains available while
-    # --sendoptions cannot disable raw encrypted sends.
     (lib.mkIf cfg.zfsReplication.enable {
       systemd.services.nas-syncoid.serviceConfig.ExecStart = lib.mkOverride 40 (
         "${pkgs.sanoid}/bin/syncoid ${lib.escapeShellArgs reviewedSyncoidArgs}"
