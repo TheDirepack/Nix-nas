@@ -3,7 +3,6 @@
 let
   inherit (nasInternal)
     authentikPort
-    authentikOutpostPort
     caddyForwardAuth
     caddyOnDemandTransport
     cfg
@@ -48,11 +47,12 @@ in
       }
 
       # Authentik bootstrap/global routes remain static until Caddy itself moves
-      # behind a non-cyclic V2 bootstrap boundary.
+      # behind a non-cyclic V2 bootstrap boundary. The embedded outpost is
+      # served by the same Authentik listener under the configured prefix.
       @authentikOutpost path /outpost.goauthentik.io/*
       handle @authentikOutpost {
-        reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
-          ${lib.optionalString (authentikOutpostPort == authentikPort) ''uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io''}
+        uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
+        reverse_proxy 127.0.0.1:${toString authentikPort} {
           header_up Host {http.request.host}
           header_up X-Forwarded-Proto https
           header_up X-Forwarded-For {remote_host}

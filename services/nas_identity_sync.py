@@ -76,6 +76,16 @@ PUBLIC_HOST = os.environ.get("NAS_PUBLIC_HOST", "").strip()
 DEFAULT_FLOW_WAIT_SECONDS = 90.0
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Make redirects observable as HTTP errors instead of forwarding credentials."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+
+
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
     explicit = os.environ.get("NAS_SYNCTHING_URL")
     if explicit:
@@ -163,6 +173,7 @@ def http_json(
     body: Any | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 15.0,
+    follow_redirects: bool = True,
 ) -> Any:
     data = None
     request_headers = {"Accept": "application/json"}
@@ -180,7 +191,11 @@ def http_json(
     for attempt in range(1, max_attempts + 1):
         request = urllib.request.Request(url, data=data, headers=request_headers, method=normalized_method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            if follow_redirects:
+                response_context = urllib.request.urlopen(request, timeout=timeout)
+            else:
+                response_context = _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+            with response_context as response:
                 payload = response.read()
             break
         except urllib.error.HTTPError as exc:
@@ -234,9 +249,44 @@ def authentik_token(*, bootstrap: bool = False) -> str:
     return token
 
 
+def _url_origin(parsed: urllib.parse.SplitResult) -> tuple[str, str, int]:
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise SyncError("Authentik API URL contains an invalid port") from exc
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else -1
+    return scheme, host, port
+
+
+def authentik_api_url(path: str) -> str:
+    """Resolve an Authentik API path without allowing the bearer token to change origin."""
+    api_base = f"{AUTHENTIK_URL}/api/v3/"
+    base = urllib.parse.urlsplit(api_base)
+    candidate = urllib.parse.urlsplit(path) if path.startswith(("http://", "https://")) else urllib.parse.urlsplit(
+        api_base + path.lstrip("/")
+    )
+    if candidate.username is not None or candidate.password is not None or candidate.fragment:
+        raise SyncError("Refusing Authentik API URL with credentials or fragment")
+    if _url_origin(candidate) != _url_origin(base):
+        raise SyncError("Refusing Authentik request outside the configured API origin")
+    decoded_path = urllib.parse.unquote(candidate.path)
+    api_prefix = urllib.parse.unquote(base.path)
+    if not decoded_path.startswith(api_prefix) or any(part in {".", ".."} for part in decoded_path.split("/")):
+        raise SyncError("Refusing Authentik request outside the configured API path")
+    return urllib.parse.urlunsplit(candidate)
+
+
 def authentik_request(token: str, path: str, *, method: str = "GET", body: Any | None = None) -> Any:
-    url = path if path.startswith(("http://", "https://")) else f"{AUTHENTIK_URL}/api/v3/{path.lstrip('/')}"
-    return http_json(url, method=method, body=body, headers={"Authorization": f"Bearer {token}"})
+    return http_json(
+        authentik_api_url(path),
+        method=method,
+        body=body,
+        headers={"Authorization": f"Bearer {token}"},
+        follow_redirects=False,
+    )
 
 
 def authentik_list(token: str, path: str) -> list[dict[str, Any]]:

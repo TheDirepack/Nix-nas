@@ -1,63 +1,94 @@
 import React from 'react';
-import { FormGroup, TextInput, Checkbox } from '@patternfly/react-core';
+import { Alert, Checkbox, FormGroup, TextInput } from '@patternfly/react-core';
 
 const AdminStep = ({
   administrator,
   onAdministrator,
-  useSamePassword,
-  onUseSamePassword,
+  reuseLinuxPasswordForKeePass,
+  onReuseLinuxPasswordForKeePass,
   keePassPassword,
   onKeePassPassword,
+  keePassPasswordConfirm,
+  onKeePassPasswordConfirm,
 }) => {
   const update = (field) => (_event, value) => onAdministrator({ ...administrator, [field]: value });
+  const linuxPasswordsMatch = !administrator.confirm || administrator.password === administrator.confirm;
+  const keepassPasswordsMatch = !keePassPasswordConfirm || keePassPassword === keePassPasswordConfirm;
 
   return (
     <div>
-      <FormGroup label="Username" fieldId="wizard-admin-username" isRequired>
-        <TextInput id="wizard-admin-username" value={administrator.username} onChange={update('username')} />
+      <Alert isInline variant="info" title="Choose recovery credentials">
+        The KeePassXC master password protects the permanent secret database and is required for
+        recovery on replacement hardware. Password reuse is optional and disabled by default.
+      </Alert>
+      <FormGroup label="Linux administrator username" fieldId="wizard-admin-username" isRequired>
+        <TextInput
+          id="wizard-admin-username"
+          value={administrator.username}
+          onChange={update('username')}
+          autoComplete="username"
+          placeholder="Choose a new local username"
+        />
       </FormGroup>
       <FormGroup label="Full name" fieldId="wizard-admin-name" isRequired>
         <TextInput id="wizard-admin-name" value={administrator.name} onChange={update('name')} />
       </FormGroup>
-      <FormGroup label="Email" fieldId="wizard-admin-email" isRequired>
+      <FormGroup label="Administrator email" fieldId="wizard-admin-email" isRequired>
         <TextInput
           id="wizard-admin-email"
           type="email"
           value={administrator.email}
           onChange={update('email')}
+          autoComplete="email"
         />
       </FormGroup>
-      <FormGroup label="Password" fieldId="wizard-admin-password" isRequired>
+      <FormGroup label="Linux administrator password" fieldId="wizard-admin-password" isRequired>
         <TextInput
           id="wizard-admin-password"
           type="password"
           value={administrator.password}
           onChange={update('password')}
+          autoComplete="new-password"
         />
       </FormGroup>
-      <FormGroup label="Confirm password" fieldId="wizard-admin-password-confirm" isRequired>
+      <FormGroup label="Confirm Linux administrator password" fieldId="wizard-admin-password-confirm" isRequired>
         <TextInput
           id="wizard-admin-password-confirm"
           type="password"
           value={administrator.confirm}
           onChange={update('confirm')}
+          autoComplete="new-password"
+          validated={linuxPasswordsMatch ? 'default' : 'error'}
         />
       </FormGroup>
       <Checkbox
-        id="wizard-keepass-same"
-        label="Use the same password for the KeePassXC database"
-        isChecked={useSamePassword}
-        onChange={(_event, checked) => onUseSamePassword(checked)}
+        id="wizard-keepass-reuse-linux"
+        label="Reuse the Linux administrator password for KeePassXC"
+        isChecked={reuseLinuxPasswordForKeePass}
+        onChange={(_event, checked) => onReuseLinuxPasswordForKeePass(checked)}
       />
-      {!useSamePassword && (
-        <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
-          <TextInput
-            id="wizard-keepass-password"
-            type="password"
-            value={keePassPassword}
-            onChange={(_event, value) => onKeePassPassword(value)}
-          />
-        </FormGroup>
+      {!reuseLinuxPasswordForKeePass && (
+        <>
+          <FormGroup label="KeePassXC master password" fieldId="wizard-keepass-password" isRequired>
+            <TextInput
+              id="wizard-keepass-password"
+              type="password"
+              value={keePassPassword}
+              onChange={(_event, value) => onKeePassPassword(value)}
+              autoComplete="new-password"
+            />
+          </FormGroup>
+          <FormGroup label="Confirm KeePassXC master password" fieldId="wizard-keepass-password-confirm" isRequired>
+            <TextInput
+              id="wizard-keepass-password-confirm"
+              type="password"
+              value={keePassPasswordConfirm}
+              onChange={(_event, value) => onKeePassPasswordConfirm(value)}
+              autoComplete="new-password"
+              validated={keepassPasswordsMatch ? 'default' : 'error'}
+            />
+          </FormGroup>
+        </>
       )}
     </div>
   );

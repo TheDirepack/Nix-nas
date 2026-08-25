@@ -72,7 +72,7 @@ class ContractTests(unittest.TestCase):
         systemd = text("modules/nas/config/managed-services.nix")
         self.assertIn("nas-managed-services-reconcile", systemd)
 
-    def test_v2_authority_bootstraps_before_first_run_storage(self) -> None:
+    def test_v2_authority_seeds_only_after_encrypted_zfs_is_mounted(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")
         seed = managed.split("systemd.services.nas-managed-services-seed = {", 1)[1].split(
             "systemd.services.nas-managed-services-reconcile = {", 1
@@ -82,14 +82,15 @@ class ContractTests(unittest.TestCase):
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
-        self.assertNotIn("nas-zfs-mount-guard.service", seed)
-        self.assertNotIn("RequiresMountsFor", seed)
+        self.assertIn('requires = [ "nas-zfs-mount-guard.service" ];', seed)
+        self.assertIn('after = [ "nas-zfs-mount-guard.service" ];', seed)
+        self.assertIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
         self.assertIn("RequiresMountsFor", reconcile)
         self.assertIn("postgresql = {", protected)
         self.assertIn('requires = [ "nas-bootstrap-runtime-select.service" ];', protected)
 
-    def test_identity_runtime_reinitializes_on_zfs_and_retires_bootstrap_authorities(self) -> None:
+    def test_identity_runtime_retires_bootstrap_authorities_without_legacy_promotion(self) -> None:
         applications = text("modules/nas/config/application-services.nix")
         services = text("modules/nas/config/systemd-services.nix")
         setup = text("services/nas_setup.py")
@@ -98,7 +99,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("bootstrapAuthentikDataDir", applications)
         self.assertIn("bootstrapPostgresqlDataDir", applications)
         self.assertIn("operational-runtime-select", applications)
-        self.assertIn("promote_bootstrap_runtime", setup)
+        self.assertNotIn("promote_bootstrap_runtime", setup)
+        self.assertIn("retire_bootstrap_runtime", setup)
         self.assertIn("retire-bootstrap", setup)
         self.assertIn("retire-authentik-bootstrap-stdin", setup)
         self.assertNotIn('run_root(["mv", str(source), str(destination)])', setup)
@@ -122,7 +124,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
         self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
         self.assertIn("retire_bootstrap_runtime", setup)
-        self.assertIn('run_root(["rm", "-rf", str(bootstrap_root)])', setup)
+        self.assertIn('run_root(["rm", "-rf", "--", str(bootstrap_root)])', setup)
 
     def test_cockpit_is_isolated_until_authentik_can_authorize_it(self) -> None:
         base = text("modules/nas/internal/base.nix")
@@ -218,6 +220,7 @@ class ContractTests(unittest.TestCase):
         system = text("modules/nas/config/system.nix")
         self.assertIn("NAS_STATE_REGISTRY_REQUIRED=1", account)
         self.assertIn("NAS_STATE_RUNTIME_ROOT=/run/nas-state", account)
+        self.assertIn("NAS_STATE_ROLLBACK_ROOT=/run/nas-state/rollback", account)
         self.assertIn("NAS_STATE_QUIESCE_UNITS_JSON", account)
         self.assertIn('"d /run/nas-state 0700 root root -"', system)
         self.assertNotIn('name = "victoriametrics"; source = "/var/lib/victoriametrics"', account)
