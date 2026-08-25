@@ -168,7 +168,7 @@ in
       "d ${bootstrapAuthentikDataDir} 0750 authentik authentik -"
       "d ${bootstrapAuthentikDataDir}/data 0750 authentik authentik -"
       "d ${bootstrapPostgresqlDataDir} 0700 postgres postgres -"
-      "d ${bootstrapSecretsDir} 0700 admin users -"
+      "d ${bootstrapSecretsDir} 0700 root root -"
       "d /var/lib/nas-operational 0700 root root -"
       "d ${syncthingDataDir} 0700 syncthing copyparty -"
       "d ${syncthingConfigDir} 0700 syncthing copyparty -"
@@ -386,7 +386,7 @@ in
         fi
         ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
-        ${pkgs.coreutils}/bin/install -d -m 0700 -o admin -g users "$target/nas-secrets"
+        ${pkgs.coreutils}/bin/install -d -m 0770 -o root -g nas-administrators "$target/nas-secrets"
         for name in authentik postgresql nas-secrets; do
           ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
           ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
@@ -398,39 +398,6 @@ in
         ${pkgs.coreutils}/bin/ln -s "$api_token" ${lib.escapeShellArg authentikRuntimeApiTokenFile}
       '';
       NoNewPrivileges = false;
-    };
-  };
-
-  config.systemd.services.nas-bootstrap-authentik-secrets = {
-    description = "Create the first-boot-only Authentik runtime secrets";
-    unitConfig.ConditionPathExists = [
-      "!/var/lib/nas-setup/operational-runtime-select"
-      "!/var/lib/nas-setup/state.json"
-    ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      ExecStart = pkgs.writeShellScript "nas-bootstrap-authentik-secrets" ''
-        set -euo pipefail
-        environment=${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment"}
-        [[ -e "$environment" ]] && exit 0
-        ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik ${lib.escapeShellArg bootstrapAuthentikDataDir}
-        temporary="$(${pkgs.coreutils}/bin/mktemp ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/environment.XXXXXX"})"
-        token_file="$temporary.token"
-        trap '${pkgs.coreutils}/bin/rm -f -- "$temporary" "$token_file"' EXIT
-        {
-          token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
-          printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot'
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
-        } > "$temporary"
-        ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"
-        printf '%s' "$token" > "$token_file"
-        ${pkgs.coreutils}/bin/install -m 0400 -o root -g root "$token_file" ${lib.escapeShellArg "${bootstrapAuthentikDataDir}/api-token"}
-        unset token
-      '';
-      UMask = "0077";
     };
   };
 }
