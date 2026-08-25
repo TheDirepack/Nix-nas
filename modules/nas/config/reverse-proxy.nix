@@ -25,16 +25,28 @@ in
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
       }
 
-      # Recreate identity headers only from Authentik forward-auth.
+      # Every downstream identity-bearing header is recreated only from the
+      # Authentik forward-auth response. Optional Authentik headers must be
+      # cleared too; otherwise a client value could survive when Authentik omits
+      # that optional response header.
       request_header -Remote-User
       request_header -Remote-Groups
       request_header -Remote-Name
       request_header -Remote-Email
       request_header -Remote-Role
+      request_header -Remote-UID
       request_header -X-Authentik-Username
       request_header -X-Authentik-Groups
+      request_header -X-Authentik-Entitlements
       request_header -X-Authentik-Name
       request_header -X-Authentik-Email
+      request_header -X-Authentik-Uid
+      request_header -X-Authentik-Jwt
+      request_header -X-Authentik-Meta-Jwks
+      request_header -X-Authentik-Meta-Outpost
+      request_header -X-Authentik-Meta-Provider
+      request_header -X-Authentik-Meta-App
+      request_header -X-Authentik-Meta-Version
 
       log {
         output file ${config.services.caddy.logDir}/access.log {
@@ -46,9 +58,6 @@ in
         format json
       }
 
-      # Authentik bootstrap/global routes remain static until Caddy itself moves
-      # behind a non-cyclic V2 bootstrap boundary. The embedded outpost is
-      # served by the same Authentik listener under the configured prefix.
       @authentikOutpost path /outpost.goauthentik.io/*
       handle @authentikOutpost {
         uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
@@ -77,12 +86,7 @@ in
           header_up X-Forwarded-For {remote_host}
         }
       }
-      # V2 owns all application routes; no app-specific Caddy redirects are needed.
-      # Trailing-slash canonicalization and route handling are defined in the V2
-      # seed (managed-services-seed-v2.nix) and applied via generic Caddy primitives.
 
-      # V2 application routes handle prefix stripping, headers, and lifecycle
-      # without app-specific Caddy branches.
       handle /settings/syncthing {
         route {
           ${caddyForwardAuth}
@@ -95,7 +99,6 @@ in
       }
       redir /settings* ${cfg.identity.authentikPath}if/user/
 
-      # Authentik owns the appliance home page and application launcher.
       handle {
         redir * ${cfg.identity.authentikPath}if/user/ 303
       }
