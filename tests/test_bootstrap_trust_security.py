@@ -20,8 +20,6 @@ class BootstrapTrustSecurityTests(unittest.TestCase):
         self.assertIn("passwd --lock nas-bootstrap", source)
         self.assertIn("/bin/nologin", source)
         self.assertNotIn("nixos-nas-bootstrap", source)
-        # The old declaration may remain as a value overridden with mkForce,
-        # but the effective module must explicitly replace its ExecStart.
         self.assertIn("nas-bootstrap-administrator.serviceConfig.ExecStart = lib.mkForce", source)
 
     def test_bootstrap_kdbx_is_disposable_and_separate(self) -> None:
@@ -45,6 +43,14 @@ class BootstrapTrustSecurityTests(unittest.TestCase):
         self.assertNotIn("authentik-api-token", source)
         self.assertNotIn("llama-swap-api-key", source)
         self.assertNotIn("vaultwarden-oidc-client-secret", source)
+
+    def test_bootstrap_human_password_is_installation_unique_and_console_only(self) -> None:
+        source = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertNotIn("nas-admin-first-boot", source)
+        self.assertIn('ensure_entry authentik-bootstrap-password "$(${pkgs.openssl}/bin/openssl rand -hex 16)"', source)
+        self.assertIn('> /dev/console', source)
+        self.assertNotIn('echo "$bootstrap_password"', source)
+        self.assertNotIn('printf \'%s\\n\' "$bootstrap_password"', source)
 
     def test_bootstrap_secrets_are_not_promoted(self) -> None:
         apps = APPLICATIONS.read_text(encoding="utf-8")
