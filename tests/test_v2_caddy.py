@@ -61,19 +61,15 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn('https = "";', config)
         self.assertNotIn('http = [ "127.0.0.1:${toString authentikPort}" ];', config)
 
-    def test_standalone_authentik_outpost_uses_explicit_proxy_package(self):
-        config = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
-        self.assertIn("systemd.services.nas-authentik-proxy-outpost", config)
-        self.assertIn("${pkgs.authentik-outposts.proxy}/bin/proxy", config)
-        self.assertIn(
-            'AUTHENTIK_HOST="http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}"',
-            config,
-        )
-        self.assertIn(
-            'AUTHENTIK_HOST_BROWSER="https://${cfg.identity.publicHost}${cfg.identity.authentikPath}"', config
-        )
-        self.assertIn('AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}"', config)
-        self.assertIn('after = [ "authentik.service" "nas-identity-bootstrap.service" ];', config)
+    def test_embedded_authentik_outpost_uses_main_listener(self):
+        applications = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        managed = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
+        base = (ROOT / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
+        self.assertNotIn("systemd.services.nas-authentik-proxy-outpost", applications)
+        self.assertNotIn("authentik-outposts.proxy", applications)
+        self.assertNotIn("authentikOutpostPort", base)
+        self.assertNotIn("authentikOutpostPort", managed)
+        self.assertIn('NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikPort}";', managed)
 
     def test_bootstrap_waits_for_authentik_default_flows_before_reconciling(self):
         services = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
@@ -100,16 +96,13 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 self.assertIn("reverse_proxy 127.0.0.1:${toString authentikPort}", flow_handler)
                 self.assertNotIn("${caddyForwardAuth}", flow_handler)
 
-    def test_managed_routes_forward_authenticate_through_the_proxy_outpost(self):
+    def test_managed_routes_forward_authenticate_through_embedded_outpost(self):
         config = (ROOT / "modules/nas/config/managed-services.nix").read_text(encoding="utf-8")
         self.assertIn(
-            'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikOutpostPort}";',
+            'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString authentikPort}";',
             config,
         )
-        self.assertNotIn(
-            'NAS_V2_AUTHENTIK_UPSTREAM = "127.0.0.1:${toString nasInternal.authentikPort}";',
-            config,
-        )
+        self.assertNotIn("NAS_AUTHENTIK_OUTPOST_PORT", config)
         self.assertNotIn("NAS_V2_AUTHENTIK_PUBLIC_HOST", config)
 
     def test_forward_auth_sends_forwarded_trio_and_does_not_rewrite_locations(self):
@@ -134,7 +127,7 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn("header_up X-Forwarded-Uri {uri}", rendered)
         self.assertNotIn("header_down Location", rendered)
 
-    def test_bootstrap_reconciles_the_portal_before_starting_the_outpost(self):
+    def test_bootstrap_reconciles_the_setup_portal_after_authentik(self):
         options = (ROOT / "modules/nas/options/core.nix").read_text(encoding="utf-8")
         services = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
         applications = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
@@ -152,13 +145,9 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         )
         self.assertIn("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;", services)
         self.assertIn("NAS_PUBLIC_HOST = cfg.identity.publicHost;", services)
-        self.assertIn(
-            'ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";',
-            services,
-        )
+        self.assertNotIn("nas-authentik-proxy-outpost", services)
         self.assertIn("\"''${NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE:-", account_tools)
-        self.assertIn('"authentik.service" "nas-identity-bootstrap.service"', applications)
-        self.assertIn('after = [ "authentik.service" "nas-identity-bootstrap.service" ];', applications)
+        self.assertNotIn("nas-authentik-proxy-outpost", applications)
 
     def test_public_and_upstream_routes_do_not_call_authentik(self):
         for mode in ("public", "upstream"):
