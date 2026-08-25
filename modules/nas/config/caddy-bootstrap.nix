@@ -42,18 +42,27 @@ https://${lanHost} {
   handle / {
     redir * ${cfg.identity.authentikPath}if/user/ 303
   }
-  # /setup without the slash would make the wizard's relative asset URLs
-  # resolve against /, so canonicalise to /setup/ before serving.
   handle /setup {
     redir /setup /setup/ 308
+  }
+
+  # Submission and password checking still require the bootstrap Authentik
+  # session. Status polling and the final reboot use the high-entropy per-job
+  # capability minted only after an authenticated submission, because the
+  # bootstrap Authentik database is intentionally replaced mid-job.
+  handle /setup/api/first-start/job/* {
+    uri strip_prefix /setup/api
+    reverse_proxy unix/${firstRunApiSocket}
+  }
+  handle /setup/api/reboot {
+    uri strip_prefix /setup/api
+    reverse_proxy unix/${firstRunApiSocket}
   }
   handle /setup/api/* {
     route {
       ${caddyForwardAuth}
       uri strip_prefix /setup/api
       reverse_proxy unix/${firstRunApiSocket} {
-        # The first-run API accepts identity only from this authenticated Caddy
-        # path. caddyForwardAuth removed any client-supplied Remote-* headers.
         header_up Remote-User {http.request.header.Remote-User}
         header_up Remote-Groups {http.request.header.Remote-Groups}
       }
