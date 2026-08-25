@@ -24,9 +24,9 @@ let
         }
     fi
 
-    # The bootstrap Linux identity exists only so setup subprocesses can run
-    # with a non-root UID. Network setup authentication is owned by Authentik,
-    # so this account must never have a reusable password login.
+    # The bootstrap Linux identity is a lifecycle marker/service identity only.
+    # Network setup authentication is owned by the disposable Authentik/KDBX
+    # trust domain, so this account must never accept a reusable password login.
     ${pkgs.shadow}/bin/passwd --lock nas-bootstrap >/dev/null
     ${pkgs.shadow}/bin/usermod \
       --shell /run/current-system/sw/bin/nologin \
@@ -113,10 +113,12 @@ let
     }
 
     # These credentials belong only to the disposable bootstrap trust domain.
-    # Every permanent secret is generated again after the runtime switch.
+    # Every permanent secret is generated again after the runtime switch. The
+    # human bootstrap password is installation-unique; there is deliberately no
+    # fleet-wide/default password that can claim a newly installed appliance.
     ensure_entry authentik-secret-key "$(${pkgs.openssl}/bin/openssl rand -hex 64)"
     ensure_entry authentik-bootstrap-token "$(${pkgs.openssl}/bin/openssl rand -hex 32)"
-    ensure_entry authentik-bootstrap-password 'nas-admin-first-boot'
+    ensure_entry authentik-bootstrap-password "$(${pkgs.openssl}/bin/openssl rand -hex 16)"
 
     get_entry() {
       printf '%s\n' "$password" \
@@ -130,7 +132,7 @@ let
 
     [[ "$authentik_secret" =~ ^[0-9a-f]{128}$ ]] || exit 74
     [[ "$bootstrap_token" =~ ^[0-9a-f]{64}$ ]] || exit 74
-    [[ -n "$bootstrap_password" ]] || exit 74
+    [[ "$bootstrap_password" =~ ^[0-9a-f]{32}$ ]] || exit 74
 
     environment="$authentik_dir/environment"
     api_token="$authentik_dir/api-token"
@@ -146,6 +148,15 @@ let
     printf '%s' "$bootstrap_token" > "$temporary_token"
     ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary_environment" "$environment"
     ${pkgs.coreutils}/bin/install -m 0400 -o root -g root "$temporary_token" "$api_token"
+
+    # The console/KVM is the initial ownership channel. Never emit this value to
+    # stdout/stderr or the journal; write it directly to the local console.
+    if [[ -w /dev/console ]]; then
+      printf '\nNixOS NAS first-run setup\n  user: akadmin\n  password: %s\n\n' "$bootstrap_password" > /dev/console
+    else
+      echo "First-run credential could not be displayed because /dev/console is unavailable." >&2
+      exit 75
+    fi
 
     unset password authentik_secret bootstrap_token bootstrap_password
     ${pkgs.coreutils}/bin/rm -f -- "$temporary_environment" "$temporary_token"
