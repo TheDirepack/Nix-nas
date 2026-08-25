@@ -1,5 +1,6 @@
 import React from 'react';
 import { Alert, Button } from '@patternfly/react-core';
+import { firstStartJob, rebootAfterSetup, submitFirstStart } from '../api.js';
 
 const validate = (
   administrator,
@@ -49,20 +50,22 @@ const ConfirmStep = ({
   const [rebooting, setRebooting] = React.useState(false);
 
   const jobId = job?.jobId;
+  const jobToken = job?.jobToken;
   const jobStatus = job?.status;
 
   React.useEffect(() => {
-    if (!jobId || ['complete', 'failed'].includes(jobStatus)) return undefined;
+    if (!jobId || !jobToken || ['complete', 'failed'].includes(jobStatus)) return undefined;
     const timer = window.setInterval(() => {
-      fetch(`api/first-start/job/${jobId}`, { cache: 'no-store' })
-        .then((response) => response.json())
+      firstStartJob(jobId, jobToken)
         .then((value) => {
-          if (value && value.jobId === jobId) setJob(value);
+          if (value && value.jobId === jobId) {
+            setJob((current) => ({ ...value, jobToken: current?.jobToken || jobToken }));
+          }
         })
         .catch(() => {});
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [jobId, jobStatus]);
+  }, [jobId, jobToken, jobStatus]);
 
   const submit = async () => {
     const problem = validate(
@@ -81,30 +84,22 @@ const ConfirmStep = ({
     setError('');
     setBusy(true);
     try {
-      const response = await fetch('api/first-run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        body: JSON.stringify({
-          password: keePassPassword,
-          authentikAdministratorPassword,
-          administrator: {
-            username: administrator.username,
-            name: administrator.name,
-            email: administrator.email,
-            password: administrator.password,
-          },
-          planDigest: plan.planDigest,
-          devices: (plan.storage && plan.storage.devices) || [],
-          allowDestructiveStorage: allowDestructive,
-          confirmPasswordReapply: false,
-        }),
+      const value = await submitFirstStart({
+        password: keePassPassword,
+        authentikAdministratorPassword,
+        administrator: {
+          username: administrator.username,
+          name: administrator.name,
+          email: administrator.email,
+          password: administrator.password,
+        },
+        planDigest: plan.planDigest,
+        devices: (plan.storage && plan.storage.devices) || [],
+        allowDestructiveStorage: allowDestructive,
+        confirmPasswordReapply: false,
       });
-      const value = await response.json();
-      if (!response.ok || value.error) {
-        setError(value.error || `Setup request failed with HTTP ${response.status}`);
-      } else if (value.status === 'complete' || value.status === 'complete-unverified') {
-        setJob({ jobId: '', status: 'complete' });
+      if (value.status === 'complete' || value.status === 'complete-unverified') {
+        setJob({ jobId: '', jobToken: '', status: 'complete' });
       } else {
         setJob(value);
       }
@@ -116,11 +111,13 @@ const ConfirmStep = ({
   };
 
   const reboot = async () => {
+    if (!jobId || !jobToken) {
+      setError('The setup completion capability is unavailable. Reboot from the local console.');
+      return;
+    }
     setRebooting(true);
     try {
-      const response = await fetch('api/reboot', { method: 'POST', cache: 'no-store' });
-      const value = await response.json();
-      if (!response.ok || value.error) setError(value.error || `Reboot request failed with HTTP ${response.status}`);
+      await rebootAfterSetup(jobId, jobToken);
     } catch (reason) {
       setError(String(reason));
     } finally {
