@@ -75,10 +75,10 @@ def setup_status() -> dict[str, Any]:
 
 def setup_complete() -> bool:
     try:
-        value = json.loads(SETUP_STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        value = _read_root_json(SETUP_STATE_PATH, "First-run completion state")
+    except (FileNotFoundError, RequestError):
         return False
-    return isinstance(value, dict) and value.get("status") in {"complete", "complete-unverified"}
+    return value.get("status") in {"complete", "complete-unverified"}
 
 
 def _read_root_json(path: pathlib.Path, label: str, *, max_bytes: int = 256 * 1024) -> dict[str, Any]:
@@ -178,6 +178,39 @@ def _require_password(password: str, label: str, user_inputs: list[str]) -> dict
     return result
 
 
+def _ensure_private_root_directory(path: pathlib.Path) -> None:
+    """Create or verify a root-only transient directory without following its final component."""
+    try:
+        parent = path.parent.lstat()
+    except OSError as exc:
+        raise RequestError(500, "First-run transient directory parent is unavailable") from exc
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or stat.S_ISLNK(parent.st_mode)
+        or parent.st_uid != 0
+        or stat.S_IMODE(parent.st_mode) & 0o022
+    ):
+        raise RequestError(500, "First-run transient directory parent is unsafe")
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise RequestError(500, "Unable to create first-run transient directory safely") from exc
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise RequestError(500, "Unable to inspect first-run transient directory") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise RequestError(500, "First-run transient directory has unsafe ownership or mode")
+
+
 def _write_private_new(path: pathlib.Path, value: dict[str, Any]) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
@@ -274,14 +307,13 @@ def submit_setup(payload: dict[str, Any]) -> dict[str, Any]:
     if prepared.get("requiresDestructiveConfirmation") is True and not allow_destructive:
         raise RequestError(409, "Confirm destructive storage creation before continuing")
 
+    _ensure_private_root_directory(JOB_ROOT)
     job_id = secrets.token_hex(12)
     try:
         reservation = reserve_operation("first-start-v3", FIRST_START_CONFLICTS, ttl_seconds=3600)
     except OperationBusyError as exc:
         raise RequestError(409, str(exc)) from exc
 
-    JOB_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(JOB_ROOT, 0o700)
     request_path = JOB_ROOT / f"{job_id}.json"
     password_path = JOB_ROOT / f"{job_id}.password"
     request = {
