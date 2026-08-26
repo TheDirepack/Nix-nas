@@ -76,17 +76,22 @@ class SetupLauncherTransactionTests(unittest.TestCase):
             mock.patch.object(
                 sync,
                 "authentik_request",
-                side_effect=[{"pk": 11}, None, failure, None, None],
+                side_effect=[{"pk": 11}, None, failure, None, None, None],
             ) as request,
         ):
             with self.assertRaisesRegex(sync.SyncError, "injected outpost failure"):
                 sync.ensure_setup_launcher("token")
 
-        rollback = request.call_args_list[-2:]
-        self.assertEqual(rollback[0].args, ("token", "core/applications/nas-setup/"))
-        self.assertEqual(rollback[0].kwargs, {"method": "DELETE"})
-        self.assertEqual(rollback[1].args, ("token", "providers/proxy/11/"))
-        self.assertEqual(rollback[1].kwargs, {"method": "DELETE"})
+        rollback_outpost, rollback_app, rollback_provider = request.call_args_list[-3:]
+        self.assertEqual(rollback_outpost.args, ("token", "outposts/instances/7/"))
+        self.assertEqual(
+            rollback_outpost.kwargs,
+            {"method": "PATCH", "body": {"providers": []}},
+        )
+        self.assertEqual(rollback_app.args, ("token", "core/applications/nas-setup/"))
+        self.assertEqual(rollback_app.kwargs, {"method": "DELETE"})
+        self.assertEqual(rollback_provider.args, ("token", "providers/proxy/11/"))
+        self.assertEqual(rollback_provider.kwargs, {"method": "DELETE"})
 
     def test_outpost_failure_restores_existing_application_and_provider(self) -> None:
         provider = {
@@ -121,13 +126,18 @@ class SetupLauncherTransactionTests(unittest.TestCase):
             mock.patch.object(
                 sync,
                 "authentik_request",
-                side_effect=[{"pk": 11}, None, failure, None, None],
+                side_effect=[{"pk": 11}, None, failure, None, None, None],
             ) as request,
         ):
             with self.assertRaisesRegex(sync.SyncError, "injected outpost failure"):
                 sync.ensure_setup_launcher("token")
 
-        restore_app, restore_provider = request.call_args_list[-2:]
+        rollback_outpost, restore_app, restore_provider = request.call_args_list[-3:]
+        self.assertEqual(rollback_outpost.args, ("token", "outposts/instances/7/"))
+        self.assertEqual(
+            rollback_outpost.kwargs,
+            {"method": "PATCH", "body": {"providers": []}},
+        )
         self.assertEqual(restore_app.args, ("token", "core/applications/nas-setup/"))
         self.assertEqual(restore_app.kwargs, {"method": "PATCH", "body": application})
         self.assertEqual(restore_provider.args, ("token", "providers/proxy/11/"))
