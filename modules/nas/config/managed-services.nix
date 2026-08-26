@@ -54,12 +54,18 @@ let
   seedDesiredState = pkgs.writeShellScript "nas-managed-services-v2-seed" ''
     set -euo pipefail
 
-    ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.zfsRoot}
-    ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}
-    ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}/apps
+    # services.yaml is privileged control-plane state. Keep it on the root
+    # filesystem so first-run can establish and inspect V2 policy before any
+    # user ZFS pool exists. Application data still lives in declared storage
+    # resources and the transaction history remains on ZFS.
+    if [ -L /var/lib/nas-control ]; then
+      echo "refusing legacy symlinked /var/lib/nas-control authority before storage is mounted" >&2
+      exit 1
+    fi
+    ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations /var/lib/nas-control
+    ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations /var/lib/nas-control/apps
 
     if [ ! -e ${lib.escapeShellArg desiredPath} ]; then
-      ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations "$(dirname ${lib.escapeShellArg desiredPath})"
       tmp="$(${pkgs.coreutils}/bin/mktemp "$(dirname ${lib.escapeShellArg desiredPath})/.services.yaml.XXXXXX")"
       trap '${pkgs.coreutils}/bin/rm -f "$tmp"' EXIT
       ${pkgs.coreutils}/bin/cat > "$tmp" <<'YAML'
@@ -76,9 +82,8 @@ in
 {
   config = {
     systemd.tmpfiles.rules = [
-      "L+ /var/lib/nas-control - - - - ${zfsControlRoot}"
-      "d ${zfsControlRoot} 0750 root nas-operations -"
-      "d ${zfsControlRoot}/apps 0750 root nas-operations -"
+      "d /var/lib/nas-control 0750 root nas-operations -"
+      "d /var/lib/nas-control/apps 0750 root nas-operations -"
       "d /run/nas-control 0755 root root -"
       "d /run/containers 0755 root root -"
       "d /run/containers/systemd 0755 root root -"
@@ -101,13 +106,7 @@ in
     systemd.services.nas-managed-services-seed = {
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" ];
       before = [ "nas-managed-services-reconcile.service" ];
-      unitConfig = {
-        RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
-        ConditionPathIsMountPoint = cfg.zfsRoot;
-      };
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
@@ -116,7 +115,7 @@ in
         PrivateTmp = true;
         ProtectHome = true;
         ProtectSystem = "strict";
-        ReadWritePaths = [ zfsControlRoot "/var/lib/nas-control" ];
+        ReadWritePaths = [ "/var/lib/nas-control" ];
       };
     };
 
@@ -131,7 +130,7 @@ in
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
       ] ++ lib.optional firewalldEnabled "firewalld.service";
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot ];
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;
@@ -163,6 +162,9 @@ in
         NAS_V2_FIREWALLD_ENABLED = if firewalldEnabled then "1" else "0";
       };
       preStart = ''
+        # The git transaction journal is encrypted at rest with the ZFS data
+        # domain, but the live authority above is intentionally root-hosted.
+        ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations ${zfsControlRoot}
         ${v2Python}/bin/python ${lib.escapeShellArgs platformProbeArgs}
       '';
       script = ''
