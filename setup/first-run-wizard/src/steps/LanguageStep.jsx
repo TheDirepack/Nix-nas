@@ -182,6 +182,7 @@ const SearchableSelect = ({ id, value, onChange, options, placeholder }) => {
   const toggle = (toggleRef) => (
     <MenuToggle
       ref={toggleRef}
+      className="nas-searchable-select-toggle"
       variant="typeahead"
       isExpanded={isOpen}
       isFullWidth

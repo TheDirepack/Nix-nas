@@ -99,6 +99,7 @@ test("setup uses searchable locale controls and keeps storage configuration acti
   assert.match(language, /Search cities or regions/);
   assert.match(language, /Intl\.supportedValuesOf/);
   assert.match(language, /Current browser time zone/);
+  assert.match(language, /nas-searchable-select-toggle/);
   assert.match(storage, /\/console\/storage/);
   assert.match(storage, /\/console\/system\/terminal/);
   assert.match(storage, /Refresh plan/);
@@ -115,6 +116,9 @@ test("setup stylesheet provides a full-height responsive shell and dark-mode tok
   assert.match(css, /@media \(prefers-color-scheme: dark\)/);
   assert.match(css, /\.pf-v6-theme-dark/);
   assert.match(css, /@media \(max-width: 40rem\)/);
+  assert.match(css, /nas-searchable-select-toggle/);
+  assert.match(css, /--nas-setup-control-border/);
+  assert.match(css, /width: min\(100%, 52rem\)/);
 });
 
 test("wizard shell references only relative, locally served assets", async () => {
@@ -157,6 +161,7 @@ test("committed stylesheet carries the global tokens and core component rules", 
   }
   assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the full-height setup shell");
   assert.ok(css.includes(".pf-v6-theme-dark"), "stylesheet is missing dark-mode overrides");
+  assert.ok(css.includes(".nas-searchable-select-toggle{"), "stylesheet is missing visible locale control chrome");
 });
 
 test("dist index.html matches the reviewed source shell", async () => {

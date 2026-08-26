@@ -5,6 +5,7 @@
   --nas-setup-text: #151515;
   --nas-setup-muted: #4f5255;
   --nas-setup-border: #d2d2d2;
+  --nas-setup-control-border: #8a8d90;
   --nas-setup-accent: #06c;
 }
 
@@ -15,6 +16,7 @@
   --nas-setup-text: #f5f5f5;
   --nas-setup-muted: #c7c7c7;
   --nas-setup-border: #4f5255;
+  --nas-setup-control-border: #8a8d90;
   --nas-setup-accent: #73bcf7;
   --pf-t--global--background--color--primary--default: var(--nas-setup-surface);
   --pf-t--global--background--color--secondary--default: var(--nas-setup-background);
@@ -31,6 +33,7 @@
     --nas-setup-text: #f5f5f5;
     --nas-setup-muted: #c7c7c7;
     --nas-setup-border: #4f5255;
+    --nas-setup-control-border: #8a8d90;
     --nas-setup-accent: #73bcf7;
   }
 }
@@ -146,12 +149,57 @@ body {
 }
 
 .nas-setup-wizard .pf-v6-c-wizard__main-body > * {
-  width: min(100%, 58rem);
+  width: min(100%, 52rem);
+  max-width: 52rem;
+  box-sizing: border-box;
   margin-inline: auto;
 }
 
 .nas-wizard-step {
-  max-width: 58rem;
+  width: 100%;
+  max-width: 52rem;
+  box-sizing: border-box;
+}
+
+.nas-searchable-select-toggle {
+  --pf-v6-c-menu-toggle--BackgroundColor: var(--nas-setup-surface);
+  --pf-v6-c-menu-toggle--Color: var(--nas-setup-text);
+  --pf-v6-c-menu-toggle--BorderColor: var(--nas-setup-control-border);
+  --pf-v6-c-menu-toggle--BorderWidth: 1px;
+  --pf-v6-c-menu-toggle--hover--BorderColor: var(--nas-setup-accent);
+  --pf-v6-c-menu-toggle--expanded--BorderColor: var(--nas-setup-accent);
+  --pf-v6-c-menu-toggle--PaddingInlineStart: 0.75rem;
+  --pf-v6-c-menu-toggle--PaddingInlineEnd: 0.75rem;
+  width: 100%;
+  min-height: 3rem;
+  box-sizing: border-box;
+  background: var(--nas-setup-surface);
+  color: var(--nas-setup-text);
+}
+
+.nas-searchable-select-toggle::before {
+  border-color: var(--nas-setup-control-border);
+  border-width: 1px;
+}
+
+.nas-searchable-select-toggle:hover::before,
+.nas-searchable-select-toggle:focus-within::before,
+.nas-searchable-select-toggle.pf-m-expanded::before {
+  border-color: var(--nas-setup-accent);
+}
+
+.nas-searchable-select-toggle:focus-within::before {
+  box-shadow: 0 0 0 1px var(--nas-setup-accent);
+}
+
+.nas-searchable-select-toggle .pf-v6-c-text-input-group {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+}
+
+.nas-searchable-select-toggle .pf-v6-c-text-input-group__main {
+  color: var(--nas-setup-text);
 }
 
 .nas-wizard-message {
@@ -187,7 +235,7 @@ body {
 }
 
 .nas-wizard-intro {
-  max-width: 58rem;
+  max-width: 52rem;
   margin-block: 0 1.5rem;
   color: var(--nas-setup-muted);
   font-size: 1rem;
