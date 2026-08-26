@@ -1,9 +1,8 @@
 {
   "name": "first-run-wizard",
-  "version": "2.2.0-alpha.23",
+  "version": "0.2.0",
   "description": "Standalone React PatternFly wizard for Nix-nas first-run setup",
   "private": true,
-  
   "scripts": {
     "build": "NODE_ENV=production node build.js",
     "check": "node build.js --check",
