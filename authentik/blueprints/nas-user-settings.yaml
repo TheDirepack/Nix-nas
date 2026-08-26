@@ -53,8 +53,10 @@ entries:
         return json.dumps(value, indent=2, sort_keys=True)
       initial_value_expression: true
       sub_text: >-
-        Optional JSON array of your Syncthing devices. Removing an entry removes
-        it from the NAS-managed personal backup folder on the next reconciliation.
+        Optional JSON array of your Syncthing devices. Self-service devices must
+        use the discovery address ["dynamic"]; static connection targets are
+        administrator-managed. Removing an entry removes it from the NAS-managed
+        personal backup folder on the next reconciliation.
 
   - model: authentik_policies_expression.expressionpolicy
     identifiers:
@@ -113,18 +115,14 @@ entries:
                 ak_message("Device names must be text no longer than 128 characters.")
                 return False
 
-            addresses = device.get("addresses", ["dynamic"])
-            if not isinstance(addresses, list) or not addresses or len(addresses) > 32:
-                ak_message("Device addresses must be a non-empty array of at most 32 values.")
-                return False
-            if any(
-                not isinstance(address, str)
-                or not address.strip()
-                or len(address) > 512
-                or any(ord(character) < 32 or ord(character) == 127 for character in address)
-                for address in addresses
-            ):
-                ak_message("Every Syncthing device address must be a short printable string.")
+            # Authenticated users may register their Syncthing identity, but
+            # must not turn profile attributes into attacker-selected outbound
+            # connection targets from the NAS host. Syncthing discovery is the
+            # documented self-service path; static addresses are an admin task.
+            if device.get("addresses", ["dynamic"]) != ["dynamic"]:
+                ak_message(
+                    'Self-service Syncthing devices must use addresses ["dynamic"].'
+                )
                 return False
 
         return True
