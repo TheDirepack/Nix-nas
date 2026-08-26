@@ -43,6 +43,15 @@ class SecureFirstStartTests(unittest.TestCase):
         self.assertLess(source.index('"permanent-runtime-selection"'), source.index('"permanent-keepass-database"'))
         self.assertLess(source.index('"permanent-keepass-database"'), source.index('"permanent-secret-initialization"'))
 
+    def test_bootstrap_authority_and_private_markers_reject_group_world_access(self) -> None:
+        source = SECURE.read_text(encoding="utf-8")
+        root_file = source[source.index("def _regular_root_file"):source.index("def _read_private_root_json")]
+        private_json = source[source.index("def _read_private_root_json"):source.index("def bootstrap_authority_ready")]
+        self.assertIn("& 0o077", root_file)
+        self.assertIn("& 0o077", private_json)
+        self.assertNotIn("& 0o022", root_file)
+        self.assertNotIn("& 0o022", private_json)
+
     def test_no_bootstrap_secret_promotion_stage_exists(self) -> None:
         source = SECURE.read_text(encoding="utf-8")
         self.assertNotIn("promote_bootstrap", source)
