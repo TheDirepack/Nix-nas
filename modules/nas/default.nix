@@ -17,6 +17,7 @@
     ./config/identities.nix
     ./config/application-services.nix
     ./config/bootstrap-security.nix
+    ./config/bootstrap-runtime-credentials.nix
     ./config/password-security.nix
     ./config/reverse-proxy.nix
     ./config/caddy-bootstrap.nix
