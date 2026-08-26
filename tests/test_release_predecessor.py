@@ -230,6 +230,41 @@ class ReleasePredecessorTests(unittest.TestCase):
             ):
                 wait_release_predecessor.reject_published_descendant(root, first)
 
+    def test_existing_source_tag_allows_repair_after_descendant_publication(self) -> None:
+        root = pathlib.Path("/tmp/release-rerun-contract")
+        with (
+            mock.patch.object(
+                wait_release_predecessor,
+                "release_series_anchor",
+                return_value="a" * 40,
+            ),
+            mock.patch.object(wait_release_predecessor, "fetch_tags"),
+            mock.patch.object(
+                wait_release_predecessor,
+                "tag_for_source",
+                return_value="v1.2.4",
+            ),
+            mock.patch.object(
+                wait_release_predecessor,
+                "reject_published_descendant",
+            ) as reject,
+            mock.patch.object(
+                wait_release_predecessor,
+                "find_predecessor_state",
+            ) as find_predecessor,
+        ):
+            wait_release_predecessor.wait_for_predecessor(
+                root,
+                "owner/repo",
+                "b" * 40,
+                workflow="ci.yml",
+                poll_seconds=1,
+                timeout_seconds=5,
+            )
+
+        reject.assert_not_called()
+        find_predecessor.assert_not_called()
+
     def test_published_predecessor_allows_release_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
@@ -253,7 +288,7 @@ class ReleasePredecessorTests(unittest.TestCase):
                 mock.patch.object(
                     wait_release_predecessor,
                     "tag_for_source",
-                    return_value="v1.2.5",
+                    side_effect=[None, "v1.2.5"],
                 ),
                 mock.patch.object(wait_release_predecessor.time, "sleep") as sleep,
             ):
