@@ -122,7 +122,14 @@ in
   # namespace. The production service keeps its normal host accounting policy.
   systemd.services.copyparty.serviceConfig.MemoryPressureWatch = lib.mkForce "off";
 
-  users.users.admin.extraGroups = lib.mkAfter [ "wheel" ];
+  users.users.admin = {
+    isNormalUser = true;
+    linger = true;
+    autoSubUidGidRange = true;
+    extraGroups = [ "wheel" "nas-administrators" "nas-operations" ];
+    hashedPasswordFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$Hsg1F2Cw2J25Jj9ZMzgEC8uiPgOS.DP/A8Pi28n.oXWw.CuB529luz/tBoCaxVXkuP6NqDmqUUUf5scB1/7jU1"));
+    openssh.authorizedKeys.keys = lib.mkAfter [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci" ];
+  };
   security.sudo.wheelNeedsPassword = lib.mkForce false;
 
   services.openssh.settings = {
@@ -133,7 +140,6 @@ in
 
   nas = {
     installationReady = lib.mkForce true;
-    identity.authentikOutpostPort = lib.mkForce 9010;
     testing.installationReadyFixture = true;
     configurationDir = lib.mkForce "/var/lib/nas-test/repo";
     # The guest suite creates its first-run plan here; keep the installed

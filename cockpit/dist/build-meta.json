@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "sourceSha256": "c4b36da8551fae98590b1b5de94a12f2fdabfe4f7a559c5caac230c9248bc0d9",
+  "sourceSha256": "193a1c4743f5390f25ac7e7716411745b0fc38871d6aa28e92b61e0706af374f",
   "inputs": [
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2",
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2",
@@ -798,7 +798,26 @@
     "src/api.js",
     "src/app.jsx",
     "src/app.scss",
+    "src/cockpit-dark-theme.js",
+    "src/components/link-card.jsx",
+    "src/components/output-block.jsx",
+    "src/components/section-header.jsx",
+    "src/components/service-card.jsx",
+    "src/components/status-label.jsx",
+    "src/hooks/use-mutation.js",
+    "src/hooks/use-overview.js",
     "src/index.jsx",
+    "src/lib/format.js",
+    "src/pages/ai-page.jsx",
+    "src/pages/applications-page.jsx",
+    "src/pages/operations-page.jsx",
+    "src/pages/overview-page.jsx",
+    "src/pages/services-page.jsx",
+    "src/pages/setup-page.jsx",
+    "src/pages/source-page.jsx",
+    "src/schema-editor.jsx",
+    "src/schema-model.js",
+    "src/systemd.js",
     "src/view-model.js"
   ],
   "outputFiles": {
@@ -835,16 +854,16 @@
       "sha256": "322295638da2105dffff0eb18ee10ccffcac38888778b7b1b4624772d513e65d"
     },
     "index.css": {
-      "bytes": 2277076,
-      "sha256": "5ef8db4238292749c1701d7f8ab0eefd231258036eaa613f3e386964dcfb2edb"
+      "bytes": 2277472,
+      "sha256": "a228bd5560fef1ebe2d8faa49d72d54d0127d4ff4696f443e192572bc81d5e65"
     },
     "index.html": {
       "bytes": 359,
       "sha256": "2bf29db5f00d4f499b165025a7a00363abe24e06820a1e96a31a660ffbcb7fe2"
     },
     "index.js": {
-      "bytes": 358545,
-      "sha256": "2b340f679838ba0c3d2ac8751f9039b927d15c4fccca378614a14f49cf68926f"
+      "bytes": 357560,
+      "sha256": "684bd26098e1a1e449456f313ab27b43c78b5e40620a25822e7072674f09a500"
     },
     "index.js.LEGAL.txt": {
       "bytes": 1209,

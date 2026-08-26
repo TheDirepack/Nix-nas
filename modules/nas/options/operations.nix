@@ -68,6 +68,39 @@
           description = "Disk-backed scratch directory used only for isolated restore verification.";
         };
       };
+      remote = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Enable remote backup destination via rclone (Google Drive, iCloud, pCloud, S3, etc.). When disabled, backups stay local (or use repositoryFile).";
+        };
+        provider = lib.mkOption {
+          type = lib.types.enum [ "local" "gdrive" "icloud" "pcloud" "s3" "b2" "rclone" ];
+          default = "local";
+          description = "Remote provider for restic+rclone. Use gdrive/icloud/pcloud/s3/b2/rclone; local keeps restic on ZFS.";
+        };
+        scope = lib.mkOption {
+          type = lib.types.enum [ "config-only" "all" ];
+          default = "config-only";
+          description = "What to send to the remote. config-only = boot system + Caddy/Authentik/Syncthing/Keepass key material (needed for remote sign-in route recovery); all = also user app data via V2 storageResources.";
+        };
+        rcloneRemote = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          example = "gdrive:nas-backup";
+          description = "Rclone remote target (e.g. gdrive:nas-backup, s3:bucket/prefix). Empty derives from provider.";
+        };
+        rcloneConfigFile = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Absolute path to rclone.conf with credentials. Empty uses default location.";
+        };
+        rcloneExtraArgs = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          description = "Extra flags forwarded to rclone (e.g. --s3-no-check-bucket).";
+        };
+      };
     };
 
     autoUpdate = {

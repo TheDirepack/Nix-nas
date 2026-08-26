@@ -317,7 +317,10 @@ PY_AI_PROVIDERS
           store_value authentik-api-token "$(get_secret authentik-bootstrap-token)"
           echo "Created KeePassXC item: Authentik NAS API token (initially the bootstrap token)"
         fi
-        store_random_if_missing authentik-bootstrap-password "Authentik bootstrap administrator password" 24
+        if ! has_secret authentik-bootstrap-password; then
+          store_value authentik-bootstrap-password "nas-admin-first-boot"
+          echo "Created KeePassXC item: Authentik bootstrap administrator password"
+        fi
         store_random_if_missing state-bundle-signing-key "NAS state bundle HMAC signing key" 32
         ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''
         store_random_if_missing grafana-secret-key "Grafana signing and data-source secret key" 32
@@ -360,7 +363,7 @@ PY_AI_PROVIDERS
 
         local local_stage root_stage previous transaction_dir runtime_base
         local bootstrap_token_reused=false
-        local authentik_secret authentik_token authentik_password
+        local authentik_secret authentik_bootstrap_token authentik_bootstrap_password
         local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash
         local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token
         ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
@@ -413,26 +416,34 @@ PY_AI_PROVIDERS
         install -d -m 0700 "$local_stage"/{authentik,vaultwarden,zfs,ai,observability,power,state}
 
         authentik_secret="$(get_secret authentik-secret-key)"
-        authentik_token="$(get_secret authentik-bootstrap-token)"
-        authentik_password="$(get_secret authentik-bootstrap-password)"
+        authentik_bootstrap_token="$(get_secret_optional authentik-bootstrap-token)"
+        authentik_bootstrap_password="$(get_secret_optional authentik-bootstrap-password)"
         local authentik_api_token
         authentik_api_token="$(get_secret authentik-api-token)"
         require_secret_hex "$authentik_secret" 128 "Authentik secret key"
-        require_secret_hex "$authentik_token" 64 "Authentik bootstrap token"
-        require_secret_atom "$authentik_password" "Authentik bootstrap password" 20 4096
         require_secret_atom "$authentik_api_token" "Authentik API token" 20 4096
+        if [[ -n "$authentik_bootstrap_token" || -n "$authentik_bootstrap_password" ]]; then
+          require_secret_hex "$authentik_bootstrap_token" 64 "Authentik bootstrap token"
+          require_secret_atom "$authentik_bootstrap_password" "Authentik bootstrap password" 20 4096
+        fi
         cat > "$local_stage/authentik/environment" <<AUTHENTIK_ENV
 AUTHENTIK_SECRET_KEY=$authentik_secret
-AUTHENTIK_BOOTSTRAP_TOKEN=$authentik_token
-AUTHENTIK_BOOTSTRAP_PASSWORD=$authentik_password
-AUTHENTIK_BOOTSTRAP_EMAIL=${lib.escapeShellArg cfg.identity.bootstrapEmail}
 AUTHENTIK_ENV
+        if [[ -n "$authentik_bootstrap_token" ]]; then
+          cat >> "$local_stage/authentik/environment" <<AUTHENTIK_BOOTSTRAP_ENV
+AUTHENTIK_BOOTSTRAP_TOKEN=$authentik_bootstrap_token
+AUTHENTIK_BOOTSTRAP_PASSWORD=$authentik_bootstrap_password
+AUTHENTIK_BOOTSTRAP_EMAIL=${lib.escapeShellArg cfg.identity.bootstrapEmail}
+AUTHENTIK_BOOTSTRAP_ENV
+        fi
         printf '%s' "$authentik_api_token" > "$local_stage/authentik/api-token"
-        printf '%s' "$authentik_token" > "$local_stage/authentik/bootstrap-token"
+        if [[ -n "$authentik_bootstrap_token" ]]; then
+          printf '%s' "$authentik_bootstrap_token" > "$local_stage/authentik/bootstrap-token"
+        fi
         state_bundle_signing_key="$(get_secret state-bundle-signing-key)"
         require_secret_hex "$state_bundle_signing_key" 64 "State bundle signing key"
         printf '%s' "$state_bundle_signing_key" > "$local_stage/state/bundle-signing-key"
-        if [[ "$authentik_api_token" == "$authentik_token" ]]; then
+        if [[ -n "$authentik_bootstrap_token" && "$authentik_api_token" == "$authentik_bootstrap_token" ]]; then
           bootstrap_token_reused=true
           cat > "$local_stage/authentik-token-warning" <<'TOKEN_WARNING'
 The Authentik runtime API token is still the bootstrap token. Create a scoped service-account token, store it with `nas-secrets set-authentik-token`, and activate secrets again.
@@ -489,7 +500,6 @@ NTFY_ENV
           require_secret_atom "$provider_key" "llama-swap provider $provider_id API key" 8 4096
           printf '%s=%s\n' "$provider_env" "$provider_key" >> "$local_stage/ai/llama-swap.env"
         done < <(ai_provider_pairs)
-        printf '%s' "$llama_swap_api_key" > "$local_stage/ai/gate-api-key"
         printf 'WEBUI_SECRET_KEY=%s\nWEBUI_ADMIN_PASSWORD=%s\n' "$open_webui_secret" "$open_webui_admin_password" > "$local_stage/ai/open-webui.env"
         printf 'HF_TOKEN=%s\n' "$huggingface_token" > "$local_stage/ai/hfdownloader.env"
         ''}
@@ -515,7 +525,9 @@ NTFY_ENV
 
         install_secret "$local_stage/authentik/environment" "$root_stage/authentik/environment" authentik authentik
         install_secret "$local_stage/authentik/api-token" "$root_stage/authentik/api-token" root root
-        install_secret "$local_stage/authentik/bootstrap-token" "$root_stage/authentik/bootstrap-token" root root
+        if [[ -n "$authentik_bootstrap_token" ]]; then
+          install_secret "$local_stage/authentik/bootstrap-token" "$root_stage/authentik/bootstrap-token" root root
+        fi
         install_secret "$local_stage/state/bundle-signing-key" "$root_stage/state/bundle-signing-key" root root
         if $bootstrap_token_reused; then
           install_secret "$local_stage/authentik-token-warning" "$root_stage/authentik-token-warning" root root
@@ -525,7 +537,6 @@ NTFY_ENV
         ${lib.optionalString cfg.ai.enable ''
         install_secret "$local_stage/ai/llama-swap.env" "$root_stage/ai/llama-swap.env" nas-ai nas-ai
         ${lib.optionalString cfg.ai.codingAgent.enable ''install_secret "$local_stage/ai/coding-agent-api-key" "$root_stage/ai/coding-agent-api-key" nas-code-agent nas-code-agent''}
-        install_secret "$local_stage/ai/gate-api-key" "$root_stage/ai/gate-api-key" nas-feature-gate nas-feature-control
         install_secret "$local_stage/ai/open-webui.env" "$root_stage/ai/open-webui.env" root root
         install_secret "$local_stage/ai/hfdownloader.env" "$root_stage/ai/hfdownloader.env" hfdownloader hfdownloader
         ''}
@@ -545,7 +556,7 @@ NTFY_ENV
           exit 71
         fi
 
-        for unit in authentik.service authentik-worker.service copyparty.service caddy.service; do
+        for unit in authentik.service authentik-worker.service caddy.service; do
           if sudo systemctl is-failed --quiet "$unit"; then
             echo "Protected service entered the failed state: $unit" >&2
             exit 72
@@ -571,16 +582,12 @@ NTFY_ENV
           exit 73
         fi
 
-        for unit in authentik.service authentik-worker.service copyparty.service caddy.service; do
+        for unit in authentik.service authentik-worker.service caddy.service; do
           if ! sudo systemctl is-active --quiet "$unit"; then
             echo "Protected service is not active after readiness validation: $unit" >&2
             exit 74
           fi
         done
-        if ! sudo test -S /run/copyparty/http.sock; then
-          echo "CopyParty is active but its Unix socket is unavailable." >&2
-          exit 75
-        fi
 
         nas_secret_tx_commit
         echo "Runtime service secrets activated. Authentik remains the identity source of truth."
@@ -590,7 +597,7 @@ NTFY_ENV
         [[ -f "$secret_root/ready" ]] && echo "Runtime secrets: active" || echo "Runtime secrets: inactive"
         [[ -f "$database" ]] && echo "KeePassXC database: configured" || echo "KeePassXC database: missing"
         systemctl is-active authentik.service 2>/dev/null || true
-        systemctl is-active nas-identity-sync.timer 2>/dev/null || true
+        systemctl is-active nas-v2-timer-identity-sync-0.timer 2>/dev/null || true
         if [[ -f "$secret_root/authentik-token-warning" ]]; then
           echo "Authentik API token: WARNING — bootstrap token still in use"
         else
@@ -652,6 +659,15 @@ NTFY_ENV
         store_value authentik-api-token "$token"
         unset token
         echo "Authentik API token stored."
+      }
+
+      command_retire_authentik_bootstrap_stdin() {
+        acquire_lock
+        password_from_stdin=true
+        prompt_unlock
+        remove_value authentik-bootstrap-token
+        remove_value authentik-bootstrap-password
+        echo "Authentik bootstrap credentials removed. Run nas-secrets activate to remove runtime artifacts."
       }
 
       command_set_hf_token() {
@@ -768,7 +784,7 @@ NTFY_ENV
 
       enter_operation_coordinator() {
         case "''${1:-}" in
-          init|activate|activate-stdin|stop|set-authentik-token|set-authentik-token-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
+          init|activate|activate-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
             local runner="''${NAS_OPERATION_RUNNER:-/run/current-system/sw/bin/nas-operation-run}"
             [[ -x "$runner" ]] || {
               echo "NAS operation coordinator is unavailable: $runner" >&2
@@ -796,6 +812,7 @@ NTFY_ENV
         stop) command_stop ;;
         set-authentik-token) command_set_authentik_token ;;
         set-authentik-token-stdin) command_set_authentik_token_stdin ;;
+        retire-authentik-bootstrap-stdin) command_retire_authentik_bootstrap_stdin ;;
         check-authentik-token) command_check_authentik_token ;;
         set-hf-token) command_set_hf_token ;;
         clear-hf-token) command_clear_hf_token ;;
@@ -809,7 +826,7 @@ NTFY_ENV
         show-zfs-key-stdin) command_show_zfs_key_stdin ;;
         show-authentik-bootstrap) command_show_authentik_bootstrap ;;
         *)
-          echo "Usage: nas-secrets {init|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
+          echo "Usage: nas-secrets {init|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
           exit 2
           ;;
       esac

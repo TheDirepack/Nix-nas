@@ -3,18 +3,20 @@
 let
   inherit (nasInternal)
     authentikApiTokenFile
-    authentikBootstrapTokenFile
+    authentikDataDir
     authentikEnvironmentFile
+    authentikRuntimeApiTokenFile
+    authentikRuntimeEnvironmentFile
     authentikPort
     caddyBackendUnits
     caddyCaExportDir
     caddyCaExportPath
     caddyInternalCaPath
     cfg
+    copypartyDataDir
     copypartyMountRoot
     failureAlert
     nasAlert
-    nasFeatureControl
     nasIdentitySync
     nasPythonApplication
     nasSetup
@@ -22,12 +24,15 @@ let
     nasZfsMountCheck
     nasZfsUnlock
     observabilitySecretDir
+    postgresqlDataDir
     powerSecretDir
-    protectedServiceUnits
     sanoidMonitorConfig
     secretRoot
     shareRoot
+    syncthingDataDir
     syncthingGuiPort
+    vaultwardenBackupDir
+    vaultwardenDataDir
     vaultwardenSecretDir
     vmStoragePath
     zfsKeyPath
@@ -35,12 +40,35 @@ let
 in
 {
   config.systemd.services = {
+    nas-bootstrap-administrator = lib.mkIf cfg.firstStart.enable {
+      description = "Create the disposable local administrator for first-run setup";
+      wantedBy = [ "multi-user.target" ];
+      before = [ "nas-first-start.service" ];
+      unitConfig.ConditionPathExists = "!/var/lib/nas-setup/state.json";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "nas-bootstrap-administrator" ''
+          set -euo pipefail
+          if ! ${pkgs.glibc.bin}/bin/getent passwd nas-bootstrap >/dev/null 2>&1; then
+            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash nas-bootstrap || {
+              rc=$?
+              [[ "$rc" -eq 9 ]] || exit "$rc"
+            }
+          fi
+          printf '%s\n' 'nas-bootstrap:nixos-nas-bootstrap' | ${pkgs.shadow}/bin/chpasswd
+          ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations nas-bootstrap
+        '';
+        NoNewPrivileges = false;
+        UMask = "0077";
+      };
+    };
+
     nas-first-start = lib.mkIf cfg.firstStart.enable {
       description = "Prepare the automatic NixOS NAS first-start workflow";
       wantedBy = [ "multi-user.target" ];
-      wants = [ "cockpit.socket" ];
-      before = [ "cockpit.socket" ];
-      after = [ "local-fs.target" ];
+      wants = [ "nas-bootstrap-administrator.service" ];
+      after = [ "nas-bootstrap-administrator.service" "local-fs.target" ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -93,40 +121,85 @@ in
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
         AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathExists = [ "/var/lib/nas-setup/state.json" ];
       };
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = "${nasZfsMountCheck}/bin/nas-zfs-mount-check";
+        # The dataset may be created after boot (first-run setup creates the
+        # pool and mounts it at runtime), in which case the boot-time tmpfiles
+        # pass only materialized ${cfg.zfsRoot}/* as plain root-filesystem
+        # directories that the new mount shadows. Re-apply the rules scoped to
+        # the ZFS root so per-type app directories (postgresql, authentik,
+        # nas-control, ...) exist behind the mount before any protected
+        # service starts. Idempotent; no-op when the dirs already exist.
+        ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix ${cfg.zfsRoot}";
       };
     };
 
-    # Protected services start only after runtime secrets are staged.
     postgresql = {
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       before = [ "authentik-migrate.service" ];
+      requires = [ "nas-bootstrap-runtime-select.service" ];
+      after = [ "nas-bootstrap-runtime-select.service" ];
+      unitConfig.RequiresMountsFor = [ ];
     };
 
     authentik-migrate = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      # The first-boot Authentik runtime exists before protected secrets are
+      # activated. Enable the bootstrap transaction directly so it cannot be
+      # skipped when Caddy is already running during a generation switch.
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
-      unitConfig.ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];
+      unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };
 
     authentik-worker = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
-      unitConfig.ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];
+      unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
     };
 
     authentik = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
-      unitConfig.ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];
+      unitConfig.ConditionPathExists = authentikRuntimeEnvironmentFile;
+    };
+
+    nas-identity-bootstrap = {
+      description = "Reconcile the Authentik portal provider before starting its proxy outpost";
+      # Authentik is ordered after runtime selection, which creates the token
+      # this unit requires. Starting from multi-user.target races that token.
+      wantedBy = [ "authentik.service" ];
+      requires = [ "authentik.service" ];
+      after = [ "authentik.service" ];
+      unitConfig.ConditionPathExists = [
+        authentikRuntimeApiTokenFile
+        "!/var/lib/nas-setup/state.json"
+      ];
+      environment = {
+        NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;
+        NAS_PUBLIC_HOST = cfg.identity.publicHost;
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync bootstrap";
+        ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ReadWritePaths = [ "/run/lock" "/run/nas-operations" ];
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        UMask = "0077";
+      };
     };
 
     nas-identity-sync = {
@@ -138,8 +211,8 @@ in
       unitConfig.ConditionPathExists = [
         "${secretRoot}/ready"
         authentikApiTokenFile
-        authentikBootstrapTokenFile
         "/var/lib/nas-setup/state.json"
+        "/run/nas-control/effective.json"
       ];
       serviceConfig = {
         Type = "oneshot";
@@ -155,6 +228,7 @@ in
         ];
         UMask = "0077";
       };
+      environment.NAS_PUBLIC_HOST = cfg.identity.publicHost;
     };
 
     nas-copyparty-share-root = {
@@ -165,7 +239,7 @@ in
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig = {
         Type = "oneshot";
@@ -186,18 +260,23 @@ in
       requires = [ "nas-copyparty-share-root.service" ];
       after = [ "nas-copyparty-share-root.service" ];
       unitConfig = {
-        RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
+        RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
         ConditionPathExists = "${secretRoot}/ready";
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig = {
         RuntimeDirectoryMode = lib.mkOverride 90 "0750";
         UMask = lib.mkForce "0007";
-        # CopyParty's private namespace needs the host account database for
-        # its startup hook; TemporaryFileSystem otherwise hides /etc/passwd.
-        BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];
+        ExecStartPre = lib.mkBefore (
+          [
+            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg shareRoot}"
+            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/users")}"
+          ]
+          ++ lib.optional cfg.tftp.enable
+            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/tftp")}"
+        );
         BindPaths = lib.mkOverride 90 [
-          "/var/lib/copyparty"
+          copypartyDataDir
           "/var/cache/copyparty"
           "${shareRoot}:${copypartyMountRoot}"
         ];
@@ -206,13 +285,11 @@ in
 
     nas-vm-storage = lib.mkIf cfg.virtualization.enable {
       description = "Create the libvirt VM storage directory on ZFS";
-      before = [ "libvirtd.service" ];
-      requiredBy = [ "libvirtd.service" ];
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
       };
       serviceConfig = {
         Type = "oneshot";
@@ -224,8 +301,6 @@ in
 
     nas-vm-storage-pool = lib.mkIf cfg.virtualization.enable {
       description = "Define the ZFS-backed libvirt storage pool";
-      # Runtime feature policy owns this unit. Do not make protected-services.target
-      # pull libvirt in when the saved virtualization mode is off.
       wantedBy = lib.mkOverride 90 [ ];
       requires = [ "nas-vm-storage.service" ];
       after = [ "libvirtd.service" "nas-vm-storage.service" ];
@@ -256,11 +331,9 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      requires = [ "nas-vm-storage.service" ];
-      after = [ "nas-vm-storage.service" ];
       unitConfig = {
         RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        ConditionPathIsMountPoint = cfg.zfsRoot;
         ConditionPathExists = [ "${secretRoot}/ready" ] ++ lib.optional cfg.zfsEncryption.enable zfsKeyPath;
       };
     };
@@ -271,21 +344,19 @@ in
       partOf = [ "nas-protected-services.target" ];
       environment = {
         STNODEFAULTFOLDER = "1";
-        # Balanced Go heap target; Syncthing may briefly exceed this for non-heap
-        # allocations, so this is a GC target rather than a hard cgroup limit.
         GOMEMLIMIT = "192MiB";
       };
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig = {
-        RequiresMountsFor = lib.optional (!cfg.zfsEncryption.enable) cfg.zfsRoot;
-        AssertPathIsMountPoint = cfg.zfsRoot;
+        RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
+        ConditionPathIsMountPoint = cfg.zfsRoot;
         ConditionPathExists = [ "${secretRoot}/ready" ] ++ lib.optional cfg.zfsEncryption.enable zfsKeyPath;
       };
       serviceConfig = {
         UMask = "0007";
-        ReadWritePaths = [ "${shareRoot}/users" ];
+        ReadWritePaths = [ syncthingDataDir "${shareRoot}/users" ];
       };
     };
 
@@ -314,73 +385,6 @@ in
             http://127.0.0.1:${toString syncthingGuiPort}/rest/noauth/health
         '';
         ExecStart = "${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
-      };
-    };
-
-    nas-on-demand-gate = {
-      description = "Authenticated on-demand NAS feature gate and idle reaper";
-      onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
-      partOf = [ "nas-protected-services.target" ];
-      after = [ "authentik.service" ];
-      before = [ "caddy.service" "nas-feature-apply.service" ];
-      unitConfig.ConditionPathExists = "${secretRoot}/ready";
-      serviceConfig = {
-        Type = "simple";
-        User = "nas-feature-gate";
-        Group = "caddy";
-        SupplementaryGroups = [ "nas-feature-control" ] ++ lib.optional cfg.ai.enable "nas-ai-models";
-        Environment = "NAS_AI_API_KEY_FILE=${secretRoot}/ai/gate-api-key";
-        ExecStart = "${nasFeatureControl}/bin/nas-feature-control serve";
-        Restart = "on-failure";
-        RestartSec = "2s";
-        RuntimeDirectory = "nas-on-demand";
-        RuntimeDirectoryMode = "0750";
-        UMask = "0007";
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        PrivateDevices = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        ProtectKernelTunables = true;
-        ProtectKernelModules = true;
-        ProtectKernelLogs = true;
-        ProtectControlGroups = true;
-        RestrictSUIDSGID = true;
-        RestrictRealtime = true;
-        LockPersonality = true;
-        MemoryDenyWriteExecute = true;
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
-        ReadWritePaths = [ "/var/lib/nas-control" "/run/nas-control" "/run/nas-on-demand" ];
-      };
-    };
-
-    nas-feature-apply = {
-      description = "Apply persistent NAS feature switches";
-      onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
-      partOf = [ "nas-protected-services.target" ];
-      after = protectedServiceUnits;
-      unitConfig.ConditionPathExists = "${secretRoot}/ready";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = pkgs.writeShellScript "nas-feature-apply" ''
-          set -euo pipefail
-          error_file="$(${pkgs.coreutils}/bin/mktemp)"
-          if ${nasFeatureControl}/bin/nas-feature-control apply 2>"$error_file"; then
-            rm -f -- "$error_file"
-            exit 0
-          fi
-          if ${pkgs.gnugrep}/bin/grep -qF \
-            "Another privileged operation conflicts with feature-apply:" "$error_file"; then
-            echo "Feature policy application deferred to the owning operation." >&2
-            rm -f -- "$error_file"
-            exit 0
-          fi
-          ${pkgs.coreutils}/bin/cat "$error_file" >&2
-          rm -f -- "$error_file"
-          exit 1
-        '';
       };
     };
 
@@ -426,13 +430,17 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" "caddy.service" "nas-caddy-ca-export.service" ];
-      requires = [ "nas-caddy-ca-export.service" ];
-      after = [ "nas-caddy-ca-export.service" ];
+      requires = [ "nas-caddy-ca-export.service" "nas-zfs-mount-guard.service" ];
+      after = [ "nas-caddy-ca-export.service" "nas-zfs-mount-guard.service" ];
       environment = {
         SSL_CERT_FILE = caddyCaExportPath;
         NIX_SSL_CERT_FILE = caddyCaExportPath;
       };
-      unitConfig.ConditionPathExists = "${vaultwardenSecretDir}/environment";
+      unitConfig = {
+        ConditionPathExists = "${vaultwardenSecretDir}/environment";
+        RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
+        ConditionPathIsMountPoint = cfg.zfsRoot;
+      };
       serviceConfig.BindReadOnlyPaths = [ caddyCaExportPath ];
     };
 
@@ -458,7 +466,6 @@ in
           http://127.0.0.1:${toString cfg.observability.victoriaMetricsPort}/victoriametrics/ping >/dev/null
       '';
     };
-
 
     vmalert-nas = lib.mkIf (cfg.observability.enable && cfg.alerting.enable) {
       onFailure = failureAlert;
@@ -501,12 +508,17 @@ in
 
     caddy = {
       onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
+      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
       partOf = [ "nas-protected-services.target" ];
       wants = caddyBackendUnits;
-      requires = [ "nas-managed-services-reconcile.service" ];
-      after = caddyBackendUnits ++ [ "nas-managed-services-reconcile.service" ];
-      unitConfig.ConditionPathExists = "${secretRoot}/ready";
+      # The bootstrap-phase Caddy must come up before secret activation; the
+      # selector (nas-caddy-bootstrap.service) synchronously ensures reconcile
+      # is fresh post-secrets. Do not require reconcile here: pre-secrets it
+      # cannot run (ZFS mount guard) and would permanently block Caddy.
+      requires = [ "nas-caddy-bootstrap.service" ];
+      after = caddyBackendUnits ++ [
+        "nas-caddy-bootstrap.service"
+      ];
     };
 
     sanoid = lib.mkIf (cfg.scheduler.backend == "systemd") { onFailure = failureAlert; };

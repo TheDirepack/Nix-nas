@@ -67,8 +67,13 @@ async function openNasOverview(page) {
   await expect(link).toBeVisible({timeout: 30_000});
   await link.click();
   const frame = await getNasComponentFrame(page);
-  await expect(frame.getByRole("heading", {name: "NAS Overview"})).toBeVisible({timeout: 30_000});
+  await expect(frame.getByRole("heading", {name: "NixOS NAS"})).toBeVisible({timeout: 30_000});
   return frame;
+}
+
+async function openOperationsSection(frame) {
+  await frame.locator(".pf-v6-c-nav").getByText("Operations", {exact: true}).click();
+  await expect(frame.getByRole("heading", {name: "Operations"})).toBeVisible();
 }
 
 async function expectNoSeriousAxeViolations(page) {
@@ -245,7 +250,7 @@ test("final VM exposes the installed Cockpit NAS component after real authentica
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   const frame = await openNasOverview(page);
-  await expect(frame.getByRole("heading", {name: "Service policies"})).toBeVisible();
+  await expect(frame.getByText("Managed Services V2").first()).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -295,10 +300,11 @@ test("final VM confirmation dialog stays usable at extreme zoom and restores foc
 }) => {
   await page.setViewportSize({width: 320, height: 568});
   const frame = await openNasOverview(page);
+  await openOperationsSection(frame);
   await frame.evaluate(() => {
     document.documentElement.style.fontSize = "200%";
   });
-  const trigger = frame.getByRole("button", {name: "Run system health checks"});
+  const trigger = frame.locator(".nas-actions button").first();
   await expect(trigger).toBeVisible();
   await trigger.focus();
   await trigger.click();

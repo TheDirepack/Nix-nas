@@ -3,19 +3,17 @@
 let
   inherit (nasInternal)
     cockpitPort
-    capabilityRegistryDocument
     cfg
+    copypartyDataDir
     copypartyMountRoot
     copypartyUserConfigDir
-    featureCatalog
+    nasAuthentikBlueprints
     lanHost
     llamaCppPackage
     nasAlert
     nasCockpitApi
     nasDoctor
-    nasFeatureControl
     nasIdentitySync
-    nasMigrateState
     nasPythonApplication
     nasPreflight
     nasSecrets
@@ -28,8 +26,6 @@ let
     nasZfsLock
     nasZfsMountCheck
     nasZfsUnlock
-    secretRoot
-    serviceRegistry
   ;
   copypartyUserSeed = pkgs.writeText "00-local-overrides.conf" ''
     # Mutable seed; edit through /shares/admin/copyparty-config and reload CopyParty.
@@ -37,10 +33,10 @@ let
     [/shares]
       ${copypartyMountRoot}
       accs:
-        r: @nas_allow_files
+        r: @application.copyparty.files
         A: @nas_admin
 
-    [/shares/users/''${u%+nas_allow_files}]
+    [/shares/users/''${u%+application.copyparty.files}]
       ${copypartyMountRoot}/users/''${u}
       accs:
         rwmd.: ''${u}
@@ -76,36 +72,9 @@ let
 in
 {
   config = {
-    systemd.sockets.cockpit = {
-      wantedBy = lib.mkOverride 90 [ "multi-user.target" ];
-      partOf = lib.mkOverride 90 [ ];
-      listenStreams = lib.mkOverride 90 (
-        if cfg.hostPolicy.directCockpitRecovery
-        then [ "0.0.0.0:${toString cockpitPort}" "[::]:${toString cockpitPort}" ]
-        else [ "127.0.0.1:${toString cockpitPort}" "[::1]:${toString cockpitPort}" ]
-      );
-      socketConfig.BindIPv6Only = "ipv6-only";
-      unitConfig = {
-        ConditionPathExists = lib.mkOverride 90 [ ];
-        DefaultDependencies = false;
-      };
-      conflicts = [ "shutdown.target" ];
-      before = [ "shutdown.target" ];
-      requires = [ "sysinit.target" ] ++ lib.optional (
-        cfg.hostPolicy.directCockpitRecovery
-        && cfg.networking.enable
-        && cfg.networking.firewall.enable
-        && cfg.trustedInterfaces != [ ]
-        && !cfg.testing.installationReadyFixture
-      ) "nas-management-network-guard.service";
-      after = [ "sysinit.target" "basic.target" ] ++ lib.optional (
-        cfg.hostPolicy.directCockpitRecovery
-        && cfg.networking.enable
-        && cfg.networking.firewall.enable
-        && cfg.trustedInterfaces != [ ]
-        && !cfg.testing.installationReadyFixture
-      ) "nas-management-network-guard.service";
-    };
+    # The packaged socket would occupy cockpitPort before nas-cockpit-sso can
+    # start. The SSO service is the sole Cockpit listener.
+    systemd.sockets.cockpit.enable = false;
 
     services.journald.extraConfig = ''
       Storage=persistent
@@ -116,33 +85,25 @@ in
     networking.nftables.enable = lib.mkIf cfg.networking.firewall.enable true;
 
     # Seed mutable upstream configuration only when absent.
+    # Per-type ZFS app data (copyparty) lives under cfg.zfsRoot; main partition
+    # retains only Caddy, PAM/Cockpit, and ZFS unencrypt.
     systemd.tmpfiles.rules = [
-      "d /var/lib/copyparty/root 0750 copyparty copyparty -"
+      "d ${copypartyDataDir}/root 0750 copyparty copyparty -"
       # Keep the bind target empty until the ZFS mount guard succeeds.
       "d ${copypartyMountRoot} 2770 copyparty copyparty -"
       "d ${copypartyUserConfigDir} 0770 copyparty copyparty -"
       "C ${copypartyUserConfigDir}/00-local-overrides.conf 0660 copyparty copyparty - ${copypartyUserSeed}"
       "d /var/lib/nas-identity-sync 0700 root root -"
       "d /var/lib/nas-setup 0770 root wheel -"
-      "d /var/lib/nas-control 0770 nas-feature-gate nas-feature-control -"
+      "d ${cfg.zfsRoot}/nas-control 0750 root nas-operations -"
+      "L+ /var/lib/nas-control - - - - ${cfg.zfsRoot}/nas-control"
       "d /run/nas-operations 2770 root nas-operations -"
       "d /run/nas-state 0700 root root -"
-      "f /var/lib/nas-control/feature-control.lock 0660 nas-feature-gate nas-feature-control -"
       "d /var/log/journal 2755 root systemd-journal -"
       "f /run/lock/nas-update.lock 0660 root wheel -"
       "f /run/lock/nas-secrets.lock 0660 root wheel -"
       "f /run/lock/nas-identity-sync.lock 0660 root wheel -"
     ];
-
-    environment.etc."nas-control/capabilities.json".text = builtins.toJSON capabilityRegistryDocument;
-    environment.etc."nas-control/capability-registry.schema.json".source = ../../../schemas/capability-registry.schema.json;
-    environment.etc."nas-control/features.json".text = builtins.toJSON featureCatalog;
-    environment.etc."nas-control/endpoints.json".text = builtins.toJSON nasInternal.serviceRegistryV2;
-    environment.etc."nas-control/endpoints-v1.json".text = builtins.toJSON {
-      schemaVersion = 1;
-      endpoints = serviceRegistry;
-    };
-    environment.etc."nas-control/feature-catalog.schema.json".source = ../../../schemas/feature-catalog.schema.json;
 
     environment.systemPackages = with pkgs; [
       copyparty
@@ -152,9 +113,7 @@ in
       nasSetup
       nasState
       nasDoctor
-      nasMigrateState
       nasIdentitySync
-      nasFeatureControl
       nasCockpitApi
       nasPreflight
       nasUpdate
@@ -185,7 +144,7 @@ in
         PasswordAuthentication = false;
         KbdInteractiveAuthentication = false;
         X11Forwarding = false;
-        AllowUsers = [ cfg.adminUser ];
+        AllowGroups = [ "nas-administrators" ];
       };
     };
 

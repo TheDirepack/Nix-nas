@@ -4,13 +4,16 @@ This directory documents how the appliance is built and validated. It is intenti
 
 ## Start here
 
+- [Managed Services V2 specification](managed-services-v2-spec.md) — the V2 application-definition and provisioning contract.
 - [Architecture](architecture.md) — major components, trust boundaries, and data flow.
 - [Non-negotiable invariants](invariants.md) — rules that code and configuration must preserve.
 - [Code map](code-map.md) — where a change belongs.
 - [Testing and validation](testing.md) — local, NixOS, VM, browser, and hardware validation.
 - [Known risks](known-risks.md) — unresolved multi-step failure boundaries and recovery expectations.
+- [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.
+- [Design system](../../.interface-design/system.md) — Cockpit UI direction, PatternFly authority, and component rules.
 
 Historical context lives in [decision history](history.md). Release-specific implementation records are evidence, not design documents.
 
@@ -19,12 +22,11 @@ Historical context lives in [decision history](history.md). Release-specific imp
 ```text
 modules/       NixOS options, implementation fragments, internal registries
 services/      privileged appliance commands and pure control-plane models
-cockpit/       React/PatternFly Cockpit package
-setup/         first-run configuration examples
-policy/        generated/shared policy data
-schemas/       cross-process JSON schemas
+cockpit/       React/PatternFly Cockpit package (build via `npm --prefix cockpit ci && npm --prefix cockpit run build`)
+schemas/       cross-process JSON schemas (V3 at `schemas/managed-services-v3.schema.json`)
 scripts/       validation, packaging, update, and VM tooling
 tests/         unit, contract, browser, NixOS, and guest tests
+./tmp/         local packaging/VM artifacts (inside project, not /tmp; ignored)
 docs/src/      deployed operator manual
 docs/operator/ long-form recovery/operations runbooks
 docs/development/ maintainer architecture and validation material
@@ -62,7 +64,7 @@ Useful supporting records:
 
 - [External validation](external-validation.md)
 - [Privileged-service audit](root-service-audit.md)
-- [Combined Alpha 18/20 remediation register](combined-review-remediation.md)
-- [Alpha.24 implementation record](alpha24-implementation.md)
-- [Alpha.2 audit remediation](alpha2-remediation.md)
-- [Alpha.3 audit remediation](alpha3-remediation.md)
+- [QEMU and installer validation](vm-testing.md)
+- [Artifact naming](artifact-naming.md)
+- [Coding agent operator guide](../../docs/src/admin/coding-agent.md) (operator-facing)
+- [Managed Services V2 spec](managed-services-v2-spec.md) is the single V2 authority; historical V2 drafts and superseded bootstrap plans have been removed.

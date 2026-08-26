@@ -130,6 +130,29 @@ def json_values(*, max_leaves: int = 80) -> st.SearchStrategy[Any]:
     )
 
 
+def v2_service_ids(*, max_size: int = 64) -> st.SearchStrategy[str]:
+    return st.builds(
+        lambda head, tail: head + tail,
+        st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=1, max_size=1),
+        st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789-", min_size=0, max_size=max_size - 1),
+    )
+
+
+def v2_capabilities(*, max_size: int = 64) -> st.SearchStrategy[str]:
+    return st.text(
+        alphabet="abcdefghijklmnopqrstuvwxyz0123456789-.",
+        min_size=1,
+        max_size=max_size,
+    ).filter(lambda s: s[0].isalpha() and ".." not in s and not s.endswith("."))
+
+
+def bounded_paths(*, prefix: str = "/tank") -> st.SearchStrategy[str]:
+    return st.builds(
+        lambda suffix: f"{prefix}/{suffix}",
+        st.text(min_size=1, max_size=64).filter(lambda s: "/" not in s and s not in (".", "..")),
+    )
+
+
 def _render_secret_key(value: str, style: str, capitalize: bool) -> str:
     if style == "dash":
         value = value.replace("_", "-")

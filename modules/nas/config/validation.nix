@@ -2,9 +2,6 @@
 
 let
   inherit (nasInternal)
-    adminAccount
-    adminGroups
-    adminKeys
     bootLoaderConfigured
     cfg
     gpuVendors
@@ -49,7 +46,12 @@ in
         message = "nas.tftp.internalPort must be unprivileged because CopyParty does not run as root.";
       }
       {
-        assertion = !cfg.tftp.enable || !(lib.elem cfg.tftp.internalPort ([ 443 5353 ] ++ lib.optionals cfg.syncthing.enable [ 21027 22000 ]));
+        assertion =
+          let
+            helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };
+          in
+          !cfg.tftp.enable
+          || !(lib.elem cfg.tftp.internalPort ([ 443 5353 ] ++ lib.optionals cfg.syncthing.enable [ helpers.syncthingDiscoveryPort helpers.syncthingSyncPort ]));
         message = "nas.tftp.internalPort conflicts with HTTPS/HTTP3, mDNS, or an enabled Syncthing UDP port.";
       }
       {
@@ -119,22 +121,6 @@ in
       {
         assertion = cfg.scheduler.backend != "cockpit-scheduler" || cfg.scheduler.package != null;
         message = "nas.scheduler.backend = cockpit-scheduler requires a reproducibly packaged plugin in nas.scheduler.package.";
-      }
-      {
-        assertion = cfg.adminUser == "admin";
-        message = "nas.adminUser is the immutable runtime identity anchor and must remain admin.";
-      }
-      {
-        assertion = adminAccount != null;
-        message = "users.users.${cfg.adminUser} must be declared.";
-      }
-      {
-        assertion = adminAccount == null || (adminAccount.isNormalUser or false);
-        message = "nas.adminUser must be a normal Linux user.";
-      }
-      {
-        assertion = adminAccount == null || lib.elem "wheel" adminGroups;
-        message = "nas.adminUser must belong to the wheel group.";
       }
       {
         assertion = lib.elem hostSystem supportedHostSystems;
@@ -238,14 +224,6 @@ in
       {
         assertion = !cfg.installationReady || !cfg.networking.firewall.enable || cfg.networking.firewall.seedDefaults;
         message = "installationReady requires the mandatory firewalld baseline when the managed firewall is enabled.";
-      }
-      {
-        assertion = !cfg.installationReady || adminKeys != [ ];
-        message = "Add at least one SSH public key for the administrator before installation.";
-      }
-      {
-        assertion = !cfg.installationReady || (cfg.adminPasswordHashFile != null && lib.hasPrefix "/" cfg.adminPasswordHashFile);
-        message = "Set nas.adminPasswordHashFile to an absolute root-only password-hash file before installation.";
       }
       {
         assertion =

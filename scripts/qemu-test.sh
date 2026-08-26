@@ -17,9 +17,7 @@ NIXOS_CHANNEL="${NAS_NIXOS_CHANNEL:-nixos-26.05}"
 ISO_URL="${NAS_NIXOS_ISO_URL:-https://channels.nixos.org/$NIXOS_CHANNEL/latest-nixos-minimal-x86_64-linux.iso}"
 ISO_SHA256="${NAS_NIXOS_ISO_SHA256:-}"
 SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
-HTTP_PORT="${NAS_QEMU_HTTP_PORT:-8088}"
 HTTPS_PORT="${NAS_QEMU_HTTPS_PORT:-8443}"
-COCKPIT_PORT="${NAS_QEMU_COCKPIT_PORT:-9094}"
 HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"
 MEMORY_MIB="${NAS_QEMU_MEMORY_MIB:-8192}"
 CPUS="${NAS_QEMU_CPUS:-2}"
@@ -48,9 +46,23 @@ qemu_network_args() {
   validate_host_bind_address
   printf '%s\n' \
     -netdev \
-    "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTP_PORT-:80,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443,hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092" \
+    "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443" \
     -device \
     virtio-net-pci,netdev=net0
+}
+
+qemu_extra_drive_args() {
+  local disks_path disks
+  disks=""
+  if [[ -d "${NAS_QEMU_EXTRA_DISKS_DIR:-}" ]]; then
+    disks_path="$NAS_QEMU_EXTRA_DISKS_DIR"
+    while IFS= read -r -d '' image; do
+      disks="$disks${disks:+ }$image"
+    done < <(find "$disks_path" -maxdepth 1 -name '*.qcow2' -print0 2>/dev/null | sort -z)
+  fi
+  for disk in ${disks:-}; do
+    printf '%s\n' -drive "file=$disk,format=qcow2,if=virtio"
+  done
 }
 
 validate_host_bind_address
@@ -419,6 +431,7 @@ sync_source_to_guest() {
        sudo -n git -C /var/lib/nas-test/repo init -q &&
        sudo -n git -C /var/lib/nas-test/repo config user.name "NixOS NAS VM" &&
        sudo -n git -C /var/lib/nas-test/repo config user.email "vm-test@nas.local" &&
+       sudo -n git -C /var/lib/nas-test/repo config gc.auto 0 &&
        sudo -n git -C /var/lib/nas-test/repo add -A &&
        sudo -n git -C /var/lib/nas-test/repo commit -q -m "VM test source"'
   local -a pipeline_status=("${PIPESTATUS[@]}")
@@ -558,6 +571,7 @@ run_installer() {
 
     mapfile -t accel < <(qemu_acceleration)
     mapfile -t network_args < <(qemu_network_args)
+    mapfile -t extra_drive_args < <(qemu_extra_drive_args)
     options="$(cat "$boot_dir/options") console=ttyS0,115200n8 systemd.show_status=1"
     log "Installing NixOS NAS into a fresh QEMU disk"
     expect "$ROOT/tests/vm/install.expect" \
@@ -590,6 +604,7 @@ run_installer() {
 
   mapfile -t accel < <(qemu_acceleration)
   mapfile -t network_args < <(qemu_network_args)
+  mapfile -t extra_drive_args < <(qemu_extra_drive_args)
   if [[ ! -s "$pidfile" ]]; then
     log "Booting installed NAS in a disposable QEMU VM"
   elif nas_qemu_pid_from_pidfile "$pidfile"; then
@@ -606,6 +621,7 @@ run_installer() {
       -m "$MEMORY_MIB" -smp "$CPUS" \
       -drive "file=$os_disk,format=qcow2,if=virtio" \
       -drive "file=$data_disk,format=qcow2,if=virtio" \
+      "${extra_drive_args[@]}" \
       -device virtio-rng-pci \
       "${network_args[@]}" \
       -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
@@ -638,7 +654,11 @@ run_installer() {
           -p "$SSH_PORT" admin@127.0.0.1 \
           "cd /var/lib/nas-test/repo &&
            sudo -n systemctl reset-failed &&
+           sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1; sleep 1; done' &&
            sudo -n nas-secrets stop &&
+           sudo -n systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service &&
+           (sudo -n systemctl start nas-authentik-proxy-outpost.service || true) &&
+           sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do sleep 1; done' &&
            sudo -n env NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
              nix develop path:/var/lib/nas-test/repo#test -c \
              bash /var/lib/nas-test/repo/tests/vm/full-suite.sh"
@@ -683,6 +703,7 @@ run_installer() {
     -m "$MEMORY_MIB" -smp "$CPUS" \
     -drive "file=$os_disk,format=qcow2,if=virtio" \
     -drive "file=$data_disk,format=qcow2,if=virtio" \
+    "${extra_drive_args[@]}" \
     -device virtio-rng-pci \
     "${network_args[@]}" \
     -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"

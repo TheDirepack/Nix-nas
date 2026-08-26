@@ -43,7 +43,7 @@ run_case() {
     # shellcheck disable=SC2030
     export NAS_VM_CLEANUP_OUTPUT="$case_dir/cleanup.log"
     export NAS_VM_ARTIFACT_PATH="$case_dir/evidence/profile.json"
-    mkdir -p "$case_dir/evidence" "$case_dir/repo/tests/js-fuzz" "$case_dir/fast-check"
+    mkdir -p "$case_dir/evidence" "$case_dir/repo/tests/js-fuzz" "$case_dir/repo/cockpit" "$case_dir/fast-check"
     printf 'secret material\n' >"$case_dir/secrets"
     mkdir -p "$case_dir/state"
 
@@ -155,6 +155,7 @@ while IFS= read -r label; do
   test ! -e "$case_dir/secrets"
   test ! -e "$case_dir/state"
   test ! -e "$case_dir/repo/tests/js-fuzz/node_modules"
+  test ! -e "$case_dir/repo/cockpit/node_modules"
   test ! -e "$case_dir/outpost.pid"
 
   cancel_name="cancel-${RANDOM}-${RANDOM}"
@@ -173,6 +174,7 @@ while IFS= read -r label; do
   test ! -e "$case_dir/secrets"
   test ! -e "$case_dir/state"
   test ! -e "$case_dir/repo/tests/js-fuzz/node_modules"
+  test ! -e "$case_dir/repo/cockpit/node_modules"
   test ! -e "$case_dir/outpost.pid"
   test -f "$case_dir/workload.pid.observed"
   kill -0 "$(<"$case_dir/workload.pid.observed")" 2>/dev/null && exit 1
@@ -206,6 +208,7 @@ for stage in package-install secret-activation browser-tests fuzzing artifact-up
   test ! -e "$case_dir/secrets"
   test ! -e "$case_dir/state"
   test ! -e "$case_dir/repo/tests/js-fuzz/node_modules"
+  test ! -e "$case_dir/repo/cockpit/node_modules"
   test ! -e "$case_dir/outpost.pid"
   test -f "$case_dir/workload.pid.observed"
   kill -0 "$(<"$case_dir/workload.pid.observed")" 2>/dev/null && exit 1

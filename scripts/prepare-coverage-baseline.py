@@ -6,28 +6,7 @@ import sys
 from pathlib import Path
 
 
-FIXES = (
-    (
-        "tests/test_alpha20_cockpit.py",
-        '        self.assertIn("qemu-evidence", workflow)\n',
-        "",
-    ),
-    (
-        "tests/test_alpha20_cockpit.py",
-        '        self.assertIn("installer-evidence", workflow)\n',
-        "",
-    ),
-    (
-        "tests/test_managed_service.py",
-        '"exposure": {"type": "dns", "value": "app.nas.local"}',
-        '"exposure": {"type": "dns", "value": "app.service.local"}',
-    ),
-    (
-        "tests/test_service_caddy_validate.py",
-        '"exposure": {"type": "path", "value": "/api"}',
-        '"exposure": {"type": "path", "value": "/managed-api"}',
-    ),
-)
+FIXES: tuple[tuple[str, str, str], ...] = ()
 
 
 def prepare(root: Path) -> int:

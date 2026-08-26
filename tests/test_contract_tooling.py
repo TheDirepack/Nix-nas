@@ -29,23 +29,32 @@ class ContractTests(unittest.TestCase):
         self.assertIn("${BASH_REMATCH[1]}", updater)
         self.assertIn('nas-update", "--status", "--json', cockpit)
 
-    def test_searchable_docs_include_all_management_surfaces_and_sources(self):
+    def test_searchable_docs_include_management_surfaces_and_closure_reference(self):
         tools = text("modules/nas/internal/documentation-tools.nix")
         summary = text("docs/src/SUMMARY.md")
-        self.assertIn("--help-flags", tools)
+        # Generated pages are limited to closure-accurate NAS command help,
+        # installed versions, and small installation sources; source dumps and
+        # upstream binary snapshots were removed on purpose.
+        self.assertIn("emit_help nas-identity-sync", tools)
+        self.assertIn("emit_help nas-update", tools)
+        self.assertNotIn("--help-flags", tools)
         self.assertIn("authentik-nas-user-settings-blueprint.md", tools)
-        self.assertIn("nix-options-source.md", tools)
         self.assertIn("installed-versions.md", tools)
-        self.assertIn("cockpit-source.md", tools)
-        self.assertIn("modules/nas/config/observability.nix", tools)
-        self.assertIn("services/nas_identity_sync.py", tools)
-        self.assertIn("services/nas_setup.py", tools)
         self.assertIn("project-CHANGELOG.md", tools)
+        self.assertNotIn("nix-options-source.md", tools)
+        self.assertNotIn("cockpit-source.md", tools)
+        self.assertNotIn("configuration-source.md", tools)
+        self.assertNotIn("platform-command-help", tools)
+        self.assertNotIn("copyparty-help", tools)
         self.assertNotIn("REVIEW-ALPHA", tools)
         self.assertNotIn("project-ALPHA-", summary)
         self.assertIn("Locked-state unlock", summary)
         self.assertIn("Web interfaces and endpoints", summary)
         self.assertIn("Trusted superusers", summary)
+
+    def test_nas_help_package_is_discoverable_by_cockpit(self):
+        documentation = text("modules/nas/internal/documentation-tools.nix")
+        self.assertIn("passthru.cockpitPath = [ plugin ];", documentation)
 
     def test_packaging_concerns_are_split_without_duplicate_exports(self):
         accounts = text("modules/nas/internal/account-tools.nix")
@@ -56,7 +65,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("documentation_tools = import ./documentation-tools.nix", internal)
         self.assertIn('mergeChecked "account and documentation tools"', internal)
         self.assertNotIn("storage-tools.nix", documentation)
-        self.assertIn("zfs-tools.nix", documentation)
+        self.assertNotIn("zfs-tools.nix", documentation)
 
     def test_ci_runs_tests_and_pins_actions(self):
         workflow = text(".github/workflows/ci.yml")
@@ -95,10 +104,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn('artifact_name+=" source"', packaging)
         self.assertIn('archive_root="nixos-nas-$version"', packaging)
         version = text("VERSION").strip()
-        match = re.fullmatch(r"(\d+)\.(\d+)\.0-alpha\.(\d+)", version)
-        self.assertIsNotNone(match)
-        assert match is not None
-        display = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+        alpha = re.fullmatch(r"(\d+)\.(\d+)\.0-alpha\.(\d+)", version)
+        if alpha is not None:
+            display = f"{alpha.group(1)}.{alpha.group(2)}.{alpha.group(3)}"
+        else:
+            simple = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?(?:[.-].*)?", version)
+            self.assertIsNotNone(simple, f"VERSION {version!r} does not match expected format")
+            display = version
         self.assertIn(f"Nix OS NAS {display} source.zip", naming)
         self.assertIn("Documentation-only changes do not require a version bump", naming)
         self.assertIn("Every code change requires a new version number", naming)
@@ -327,9 +339,34 @@ class ContractTests(unittest.TestCase):
                 shutil.copytree(
                     ROOT,
                     root,
-                    ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", ".coverage", "state"),
+                    ignore=shutil.ignore_patterns(
+                        ".pytest_cache",
+                        ".ruff_cache",
+                        "__pycache__",
+                        ".coverage",
+                        ".coverage.*",
+                        "coverage.json",
+                        "node_modules",
+                        "state",
+                    ),
                 )
                 shutil.rmtree(root / ".git", ignore_errors=True)
+                if label == "ignored secret":
+                    # A non-git tree is authorized by the allowlist shipped inside a
+                    # source archive; seed it from the pristine copy so the injected
+                    # file is an unreviewed extra against that authority.
+                    subprocess.run(
+                        [
+                            "python3",
+                            str(root / "scripts" / "lib" / "manifest.py"),
+                            "--root",
+                            str(root),
+                            "--out",
+                            str(root / "MANIFEST.sha256"),
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
                 target = target_factory(root)
                 if label == "ignored secret":
                     target.parent.mkdir(parents=True)
@@ -464,7 +501,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("d /var/lib/nas-setup 0770 root wheel -", system)
         self.assertRegex(
             tools,
-            r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0770";',
+            r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0750";',
         )
         self.assertIn("def first_run", setup)
         self.assertIn("passwordFile", setup)
@@ -513,12 +550,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("pythonPackages.selenium", vm)
         self.assertIn("tests/browser/authz.py", guest)
 
-    def test_browser_fixture_assigns_authentik_flow_roles_correctly(self):
+    def test_vm_verifies_the_bootstrap_managed_authentik_portal(self):
         guest = text("tests/vm/guest-test.sh")
-        self.assertIn("default-authentication-flow", guest)
-        self.assertIn("default-provider-authorization-implicit-consent", guest)
-        self.assertIn("authentication_flow:$authentication", guest)
-        self.assertIn("authorization_flow:$authorization", guest)
+        self.assertIn("verify_bootstrap_authentik_proxy", guest)
+        self.assertIn('select(.name == "NAS Portal")', guest)
+        self.assertIn('select(.slug == "nas-portal"', guest)
+        self.assertIn('select(.managed == "goauthentik.io/outposts/embedded")', guest)
+        self.assertIn("AUTHENTIK_PUBLIC_HOST", guest)
 
     def test_nix_matrix_covers_reusable_profiles_and_rejected_configurations(self):
         flake = text("flake.nix")
@@ -597,7 +635,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("run_dynamic_web_scan", host)
         self.assertNotIn("NAS_ZAP_IMAGE", host)
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", host)
-        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
+        self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
         self.assertIn("zap-fuzz-evidence", workflow)
         self.assertIn('NAS_ZAP_CONFIRM_ACTIVE: "1"', workflow)
         self.assertNotIn("adversarial-installed.py", guest)
@@ -617,19 +655,27 @@ class ContractTests(unittest.TestCase):
         vm_common = text("tests/nixos/vm-common.nix")
         self.assertIn("PasswordAuthentication = lib.mkForce false", vm_common)
         self.assertIn('(pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$', vm_common)
-        self.assertNotIn("authorizedKeys.keys", vm_common)
+        self.assertIn("openssh.authorizedKeys.keys", vm_common)
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))
         self.assertIn("nas-secrets activate-stdin", guest)
         self.assertIn("nas-setup first-run", guest)
         self.assertIn("nas-setup account apply", guest)
         self.assertIn("/authorize?scope=files", guest)
-        self.assertIn("/authorize?feature=aiRuntime&scope=admin", guest)
-        self.assertIn('set_feature_modes \'{"aiRuntime":"always","aiWorkspace":"always"}\'', guest)
-        self.assertIn('set_feature_modes \'{"aiRuntime":"off","aiWorkspace":"off"}\'', guest)
-        self.assertIn('set_feature_modes \'{"aiRuntime":"on-demand","aiWorkspace":"on-demand"}\'', guest)
         self.assertIn("open-webui.service", guest)
-        self.assertIn("nas-feature-control set grafana always", guest)
+        self.assertIn("nas-managed-services-control status", guest)
+        self.assertIn("nas-managed-services-control document", guest)
+        self.assertIn("nas-managed-services-control set ", guest)
+        self.assertIn("nas-managed-services-control set-many", guest)
+        self.assertIn("nas-managed-services-control wake", guest)
+        self.assertIn("nas-managed-services-control set grafana", guest)
+        self.assertIn("ai-runtime", guest)
+        self.assertIn("ai-workspace", guest)
+        self.assertIn("ai-downloader", guest)
+        self.assertNotIn("nas-feature-control", guest)
+        self.assertNotIn("nas-migrate-state", guest)
+        self.assertNotIn("aiRuntime", guest)
+        self.assertNotIn("aiWorkspace", guest)
         self.assertIn("syncthing_config=/var/lib/syncthing/.config/syncthing/config.xml", guest)
         self.assertIn('REMOTE = "tftp/qemu-tftp.txt"', guest)
         self.assertIn("read-only TFTP accepted a write request", guest)

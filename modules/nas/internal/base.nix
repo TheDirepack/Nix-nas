@@ -6,25 +6,41 @@ let
     pkgs
   ;
   cfg = config.nas;
-  serviceRegistry = args.serviceRegistry;
+  systemStateVersion = config.system.stateVersion;
   lanHost = "${config.networking.hostName}.local";
   identityAdminGroup = "nas_admin";
   secretRoot = "/run/nas-secrets";
   authentikSecretDir = "${secretRoot}/authentik";
   authentikEnvironmentFile = "${authentikSecretDir}/environment";
+  authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";
+  authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
-  copypartyUserConfigDir = "/var/lib/copyparty/user.d";
-  featureCatalogPath = "/etc/nas-control/features.json";
-  featureSchemaPath = "/etc/nas-control/feature-catalog.schema.json";
-  featureStatePath = "/var/lib/nas-control/settings.json";
-  featureRuntimePath = "/run/nas-control/on-demand.json";
-  onDemandGateSocket = "/run/nas-on-demand/gate.sock";
-  authentikPort = serviceRegistry.identity.endpoints.main.targetPort;
+  bootstrapRuntimeRoot = "/var/lib/nas-bootstrap";
+  bootstrapAuthentikDataDir = "${bootstrapRuntimeRoot}/authentik";
+  bootstrapPostgresqlDataDir = "${bootstrapRuntimeRoot}/postgresql";
+  bootstrapSecretsDir = "${bootstrapRuntimeRoot}/nas-secrets";
+  # These stable compatibility paths are selected at boot: boot-root before
+  # first-run, ZFS thereafter. Services never write directly to the selector.
+  authentikDataDir = "/var/lib/authentik";
+  copypartyDataDir = "${cfg.zfsRoot}/copyparty";
+  copypartyUserConfigDir = "${copypartyDataDir}/user.d";
+  postgresqlDataDir = "/var/lib/postgresql";
+  vaultwardenStateDirectory =
+    if lib.versionOlder systemStateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
+  vaultwardenDataDir = "${cfg.zfsRoot}/${vaultwardenStateDirectory}";
+  vaultwardenBackupDir = "${cfg.zfsRoot}/vaultwarden/backup";
+
+  # Core appliance integration constants. Managed Services V2 owns the
+  # service/route model; Authentik and Cockpit are platform substrate.
+  authentikPort = 9000;
   authentikOutpostPort = cfg.identity.authentikOutpostPort;
-  cockpitPort = serviceRegistry.cockpit.endpoints.main.targetPort;
-  syncthingGuiPort = serviceRegistry.syncthing.endpoints.main.targetPort;
-  vaultwardenPort = serviceRegistry.vaultwarden.endpoints.main.targetPort;
+  authentikOutpostPath = "/outpost.goauthentik.io/auth/caddy";
+  cockpitPort = 9092;
+
+  v2Ports = import ./v2-ports.nix { inherit lib config; };
+  inherit (v2Ports) syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort;
+
   vaultwardenSecretDir = "${secretRoot}/vaultwarden";
   zfsSecretDir = "${secretRoot}/zfs";
   aiSecretDir = "${secretRoot}/ai";
@@ -32,7 +48,6 @@ let
   powerSecretDir = "${secretRoot}/power";
   zfsKeyPath = "${zfsSecretDir}/dataset-key";
   zfsKeyFingerprintProperty = "org.nixos:keystore-sha256";
-  vaultwardenBackupDir = "/var/backup/vaultwarden";
   caddyInternalCaPath = "/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt";
   caddyCaExportDir = "/run/nas-caddy-ca";
   caddyCaExportPath = "${caddyCaExportDir}/ca-bundle.crt";
@@ -41,7 +56,7 @@ let
   vaultwardenOidcCallback = "https://${lanHost}/vault/identity/connect/oidc-signin";
   shareRoot = "${cfg.zfsRoot}/shares";
   aiStorageRoot = if cfg.ai.storageRoot != "" then cfg.ai.storageRoot else "${cfg.zfsRoot}/ai";
-  copypartyMountRoot = "/var/lib/copyparty/shares";
+  copypartyMountRoot = "${copypartyDataDir}/shares";
   tftpMountRoot = "${copypartyMountRoot}/tftp";
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
   upsUsesLocalDriver = lib.elem cfg.power.ups.mode [ "standalone" "netserver" ];
@@ -49,7 +64,7 @@ let
     if cfg.power.ups.monitorSystem != "" then cfg.power.ups.monitorSystem
     else if upsUsesLocalDriver then "${cfg.power.ups.name}@localhost"
     else cfg.power.ups.name;
-  syncthingDataDir = "/var/lib/syncthing";
+  syncthingDataDir = "${cfg.zfsRoot}/syncthing";
   syncthingConfigDir = "${syncthingDataDir}/.config/syncthing";
   hostSystem = pkgs.stdenv.hostPlatform.system;
   isX86_64 = hostSystem == "x86_64-linux";
@@ -59,30 +74,27 @@ let
   rootFilesystem = lib.attrByPath [ "/" ] null config.fileSystems;
   rootFilesystemConfigured = rootFilesystem != null && (rootFilesystem.device or "") != "";
 
+  # These are host/request-routing substrate that Caddy may require directly.
+  # Application backends whose lifecycle is managed by V2 must not appear here:
+  # the finite V2 reconcile transaction starts/stops those from services.yaml.
   caddyBackendUnits = [
     "authentik.service"
     "authentik-worker.service"
-    "copyparty.service"
-    "nas-on-demand-gate.service"
-    "cockpit.socket"
+    "nas-cockpit-sso.service"
   ];
 
+  # Secret activation owns only host/security substrate. In particular, do not
+  # add V2-managed application services or V2 jobs here: Requires= on this
+  # target would bypass their mutable services.yaml lifecycle state.
   protectedServiceUnits = [
     "nas-zfs-mount-guard.service"
     "postgresql.service"
     "authentik-migrate.service"
     "authentik-worker.service"
     "authentik.service"
-    # First-run owns the initial identity bootstrap; the recurring timer
-    # starts this service after setup releases the identity operation lock.
-    "copyparty.service"
-    "nas-on-demand-gate.service"
     "caddy.service"
   ] ++ lib.optional cfg.zfsEncryption.enable "nas-zfs-unlock.service";
 
-  adminAccount = lib.attrByPath [ cfg.adminUser ] null config.users.users;
-  adminGroups = if adminAccount == null then [ ] else (adminAccount.extraGroups or [ ]);
-  adminKeys = if adminAccount == null then [ ] else lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] adminAccount;
   observabilityUidCollisions = lib.attrNames (lib.filterAttrs
     (name: user: name != "nas-observability" && (user.uid or null) == cfg.observability.serviceUid)
     config.users.users);
@@ -118,22 +130,24 @@ let
     else if llamaBackend == "vulkan" then pkgs.llama-cpp.override { vulkanSupport = true; }
     else pkgs.llama-cpp;
 
-
 in
 {
   inherit
-    cfg lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
-    authentikApiTokenFile authentikBootstrapTokenFile authentikOutpostPort copypartyUserConfigDir
-    featureCatalogPath featureSchemaPath featureStatePath featureRuntimePath onDemandGateSocket
-    authentikPort cockpitPort syncthingGuiPort vaultwardenPort
+    cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
+    authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile
+    authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
+    authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
+    authentikOutpostPort authentikOutpostPath
+    bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
+    authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
     caddyCaExportDir caddyCaExportPath vaultwardenOidcClientId vaultwardenOidcAuthority
     vaultwardenOidcCallback shareRoot aiStorageRoot copypartyMountRoot tftpMountRoot
     vmStoragePath upsUsesLocalDriver upsMonitorSystem syncthingDataDir syncthingConfigDir
     hostSystem isX86_64 supportedHostSystems failureAlert
-    bootLoaderConfigured rootFilesystemConfigured caddyBackendUnits protectedServiceUnits adminAccount adminGroups
-    adminKeys observabilityUidCollisions observabilityGidCollisions managementPorts
+    bootLoaderConfigured rootFilesystemConfigured caddyBackendUnits protectedServiceUnits
+    observabilityUidCollisions observabilityGidCollisions managementPorts
     loopbackServicePorts gpuVendors hasIntelGpu hasAmdGpu hasNvidiaGpu llamaBackend
     llamaCppPackage
   ;

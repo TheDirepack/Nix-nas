@@ -34,6 +34,7 @@ guest, rebuild the installed generation, and run the suite. This keeps repeated
 runs independent without reinstalling NixOS or downloading the ISO again.
 
 ```bash
+./scripts/vm-dev.sh     # boot for interactive browser testing and wait for readiness
 ./scripts/vm-start.sh   # install once if needed, then boot the VM
 ./scripts/vm-pytest.sh  # copy the current worktree and run the full suite in it
 ./scripts/vm-stop.sh    # stop the VM and keep the installed disk

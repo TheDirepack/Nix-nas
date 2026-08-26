@@ -24,7 +24,7 @@ done
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 version="$(tr -d '[:space:]' < VERSION)"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+$ ]] || { echo "Invalid VERSION: $version" >&2; exit 1; }
+[[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([.-][A-Za-z0-9.-]+)?$ ]] || { echo "Invalid VERSION: $version" >&2; exit 1; }
 
 # VERSION is canonical inside the repository. Human-facing artifact filenames use
 # the shorter documented display form. For M.m.0-alpha.N, that is M.m.N.
@@ -70,12 +70,15 @@ mkdir -p "$stage_root"
 python3 - "$repo_root" "$stage_root" <<'PY'
 from __future__ import annotations
 
+import atexit
 import os
 import pathlib
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
 
 root = pathlib.Path(sys.argv[1]).resolve()
 stage = pathlib.Path(sys.argv[2]).resolve()
@@ -83,7 +86,18 @@ known_generated = {
     ".coverage",
     "coverage.json",
 }
-ignored_parts = {".git", ".cache", ".pytest_cache", "__pycache__", "node_modules", ".direnv", ".venv"}
+ignored_parts = {
+    ".git",
+    ".cache",
+    ".pytest_cache",
+    "__pycache__",
+    "node_modules",
+    ".direnv",
+    ".venv",
+    ".hypothesis",
+    ".ruff_cache",
+    ".mypy_cache",
+}
 ignored_suffixes = {".pyc", ".zip", ".qcow2", ".iso", ".log"}
 ignored_release_suffixes = (".zip.sha256", ".provenance.json")
 
@@ -144,17 +158,63 @@ if git_checkout:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    if status:
-        raise SystemExit("release checkout is dirty or has untracked files; review and commit inputs first")
+    # Staged cockpit/dist and package-lock.json from the build job's `git add -f`
+    # are expected and not considered dirty for packaging.
+    filtered = "\n".join(
+        line
+        for line in status.splitlines()
+        if not (
+            line.startswith("M  cockpit/dist/")
+            or line.startswith("A  cockpit/dist/")
+            or line.startswith("M  cockpit/package-lock.json")
+            or line.startswith("A  cockpit/package-lock.json")
+            or line.startswith("M  cockpit/dist")
+            or line.startswith("A  cockpit/dist")
+        )
+    ).strip()
+    if filtered:
+        raise SystemExit(f"release checkout is dirty or has untracked files; review and commit inputs first:\n{filtered}")
     payload = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
     selected = [pathlib.PurePosixPath(item.decode()) for item in payload.split(b"\0") if item]
     selection_policy = "git-tracked-clean"
 else:
-    manifest = root / "MANIFEST.sha256"
-    if not manifest.is_file():
-        raise SystemExit("source archive packaging requires the committed MANIFEST.sha256 allowlist")
+    # A non-git tree is authorized by the allowlist that ships inside a source
+    # archive. Building the allowlist from the current tree would let an injected
+    # file authorize itself, so a tree without a shipped manifest is refused.
+    shipped = root / "MANIFEST.sha256"
+    if not shipped.is_file():
+        raise SystemExit("non-git source tree has no shipped MANIFEST.sha256 allowlist authority")
+    _manifest_tmp = tempfile.mkdtemp(prefix="nas-manifest-")
+    _manifest_path = pathlib.Path(_manifest_tmp) / "MANIFEST.sha256"
+    os.environ["MANIFEST_PATH"] = str(_manifest_path)
+    os.environ["NAS_TEST_MANIFEST"] = str(_manifest_path)
+
+    def _cleanup_manifest_tmp() -> None:
+        shutil.rmtree(_manifest_tmp, ignore_errors=True)
+
+    atexit.register(_cleanup_manifest_tmp)
+    for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, lambda s, f: (_cleanup_manifest_tmp(), os._exit(128 + s)))  # type: ignore[arg-type]
+        except ValueError:
+            pass
+    # Refresh the per-run manifest with the shared helper so downstream
+    # verification is not bound to a stale copy; selection still binds to the
+    # shipped allowlist below.
+    helper_lib = root / "scripts" / "lib"
+    if helper_lib.is_dir():
+        sys.path.insert(0, str(helper_lib))
+    else:
+        sys.path.insert(0, str(pathlib.Path(sys.argv[0]).parent / "scripts" / "lib") if len(sys.argv) > 0 else str(helper_lib))
+    try:
+        from manifest import generate_manifest  # type: ignore
+
+        generate_manifest(root, _manifest_path)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"unable to establish release manifest: {exc}") from exc
+    shutil.copy(shipped, _manifest_path)
     selected = []
-    for line in manifest.read_text(encoding="utf-8").splitlines():
+    for line in _manifest_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         fields = line.split(maxsplit=1)
@@ -285,36 +345,7 @@ os.chmod(target, 0o755)
 PY
 fi
 
-python3 - "$stage_root" <<'PY'
-from __future__ import annotations
-
-import hashlib
-import os
-import pathlib
-import stat
-import sys
-
-root = pathlib.Path(sys.argv[1])
-rows = []
-for path in sorted(root.rglob("*")):
-    relative = path.relative_to(root)
-    if relative.as_posix() in {"MANIFEST.sha256", ".release-input-policy"}:
-        continue
-    mode = path.lstat().st_mode
-    if stat.S_ISDIR(mode):
-        continue
-    if not stat.S_ISREG(mode):
-        raise SystemExit(f"staged release contains unsupported object: {relative}")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    rows.append(f"{digest}  ./{relative.as_posix()}")
-manifest = root / "MANIFEST.sha256"
-manifest.write_text("\n".join(rows) + "\n", encoding="utf-8")
-fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-PY
+python3 "$repo_root/scripts/lib/manifest.py" --root "$stage_root" --out "$stage_root/MANIFEST.sha256"
 selection_policy="$(tr -d '\r\n' < "$stage_root/.release-input-policy")"
 case "$selection_policy" in
   git-tracked-clean|committed-manifest-allowlist) ;;

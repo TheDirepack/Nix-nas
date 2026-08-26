@@ -7,7 +7,7 @@ NixOS NAS is designed as a single-host appliance with explicit authorities rathe
 ```text
                     local administrator
                            |
-                     Cockpit / CLI
+              console / SSH / CLI
                            |
                     nas-cockpit-api
                            |
@@ -38,7 +38,8 @@ The arrows describe authority or controlled data flow, not unrestricted write ac
 | Human users, credentials, MFA, groups, application access | Authentik |
 | File volumes, paths, ACLs, quotas, share links, WebDAV policy | CopyParty |
 | Machine secrets and encrypted-storage keys | KeePassXC |
-| Runtime feature modes | NAS feature controller |
+| Application desired state | V2 `services.yaml` (mutable, seed-once from Nix, revision = sha256) |
+| Application runtime topology | V2 effective-state compiler + native systemd/Podman/Caddy/Authentik/firewalld projections (finite, no daemon) |
 | ZFS pool/dataset state | ZFS, with Sanoid/Syncoid for snapshot/replication policy |
 | Appliance-state bundles | `nas-state` registry and signed manifests |
 | Metrics | Telegraf + VictoriaMetrics |
@@ -50,11 +51,11 @@ A new feature should extend an existing authority whenever possible. It should n
 
 Authentik authenticates users and owns group membership. Caddy removes client-supplied identity headers, performs forward authentication, and applies generated capability checks at the edge. Applications keep their own native authorization where applicable. Browser visibility is convenience only; server-side policy is the security boundary.
 
-Capability definitions come from the central registry and fail closed when a protected route references an unknown capability.
+Capability definitions come from V2 `application.<service>.<capability>` objects (generated in the native Authentik blueprint, never assigned by V2) and fail closed when a protected route references an unknown capability. Caddy strips forged `Remote-*` / `X-Authentik-*` headers, forward-authenticates to Authentik, then checks `X-Authentik-Groups` for `nas_admin` or `application.<service>.<capability>`.
 
 ## Locked boot and secrets
 
-The machine can boot before KeePassXC is unlocked. Cockpit and the local PAM administrator form the recovery plane. `nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
+The machine can boot before KeePassXC is unlocked. Local console, SSH with a provisioned recovery key, or hardware KVM form the recovery plane; browser management is unavailable while locked. The initial Caddy bootstrap may serve static setup guidance, but it does not provide a browser login or recovery operation. `nas-secrets` reads the KDBX password from standard input, stages only required runtime material under `/run/nas-secrets`, validates storage/secrets, and then starts the protected target.
 
 No long-running service should need broad read access to the whole secret tree when an exact credential or read-only path is sufficient.
 

@@ -20,37 +20,14 @@ let
   '';
   trustedInterfacesArgs = lib.concatMapStringsSep " " lib.escapeShellArg cfg.trustedInterfaces;
   ownedServices = [ "ssh" "http" "https" "mdns" ];
+  # The NAS-owned zone exposes exactly the management plane: SSH plus the Caddy
+  # HTTPS front door (Caddy is the only host on the default HTTPS port).
+  # Cockpit is reachable only through Caddy at /console on loopback and never
+  # opens a LAN firewall port.
   ownedPorts = [
     { port = "443"; protocol = "udp"; }
-  ]
-  ++ lib.optional cfg.hostPolicy.directCockpitRecovery {
-    port = toString cockpitPort;
-    protocol = "tcp";
-  }
-  ++ lib.optionals cfg.syncthing.enable [
-    { port = "22000"; protocol = "tcp"; }
-    { port = "22000"; protocol = "udp"; }
-    { port = "21027"; protocol = "udp"; }
-  ]
-  ++ lib.optional (cfg.power.ups.enable && cfg.power.ups.mode == "netserver") {
-    port = "3493";
-    protocol = "tcp";
-  }
-  ++ lib.optionals cfg.tftp.enable [
-    {
-      port = "${toString cfg.tftp.responsePortStart}-${toString cfg.tftp.responsePortEnd}";
-      protocol = "udp";
-    }
-  ]
-  ++ lib.optional (cfg.tftp.enable && cfg.tftp.port == cfg.tftp.internalPort) {
-    port = toString cfg.tftp.port;
-    protocol = "udp";
-  };
-  ownedForwardPorts = lib.optional (cfg.tftp.enable && cfg.tftp.port != cfg.tftp.internalPort) {
-    port = toString cfg.tftp.port;
-    protocol = "udp";
-    toPort = toString cfg.tftp.internalPort;
-  };
+  ];
+  ownedForwardPorts = [ ];
   zoneXml = pkgs.writeText "nas-owned-zone.xml" ''
     <zone target="default">
       <short>NixOS NAS trusted management</short>
@@ -190,8 +167,7 @@ in
     };
 
     systemd.services.nas-management-network-guard = lib.mkIf (
-      cfg.hostPolicy.directCockpitRecovery
-      && cfg.networking.firewall.enable
+      cfg.networking.firewall.enable
       && cfg.trustedInterfaces != [ ]
       && !cfg.testing.installationReadyFixture
     ) {

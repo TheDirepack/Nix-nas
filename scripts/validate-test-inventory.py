@@ -9,13 +9,17 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-INVENTORY = ROOT / "tests" / "custom-script-contracts.json"
+INVENTORIES = (
+    ROOT / "tests" / "custom-script-contracts.json",
+    ROOT / "tests" / "custom-script-contracts-v2.json",
+)
 
 # Developer/CI-only harnesses are not shipped runtime command surfaces. Their
 # behavior is asserted by focused tooling/Cockpit contract tests instead of the
 # installed-executable inventory.
 NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/evaluate-reference-configurations.sh",
+    "scripts/lib/manifest.py",
     "scripts/lib/nas-vm-cleanup.sh",
     "scripts/lib/nas-vm-js-deps.sh",
     "scripts/lib/nas-vm-process-cleanup.sh",
@@ -26,6 +30,8 @@ NON_RUNTIME_REPOSITORY_EXECUTABLES = {
     "scripts/vm-bundles.sh",
     "scripts/vm-pytest.sh",
     "scripts/vm-reset.sh",
+    "scripts/vm-run.sh",
+    "scripts/vm-dev.sh",
     "scripts/vm-start.sh",
     "scripts/vm-stop.sh",
     "scripts/zap-automation-scan.sh",
@@ -56,6 +62,30 @@ SOURCE_FUZZ_STRATEGIES = {
 def fail(message: str) -> None:
     print(f"test inventory error: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def load_inventory() -> dict[str, object]:
+    merged: dict[str, object] = {"schemaVersion": 3, "executables": {}, "pythonModules": {}}
+    executables = merged["executables"]
+    python_modules = merged["pythonModules"]
+    assert isinstance(executables, dict)
+    assert isinstance(python_modules, dict)
+    for path in INVENTORIES:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            raw.get("schemaVersion") != 3
+            or not isinstance(raw.get("executables"), dict)
+            or not isinstance(raw.get("pythonModules"), dict)
+        ):
+            fail(f"malformed {path.relative_to(ROOT)}")
+        # Later inventories may override executable rows so command ownership can
+        # move between modules while retaining one strict merged contract.
+        executables.update(raw["executables"])
+        for module, tests in raw["pythonModules"].items():
+            if module in python_modules:
+                fail(f"duplicate python module contract across inventories: {module}")
+            python_modules[module] = tests
+    return merged
 
 
 def pyproject_commands() -> dict[str, set[str]]:
@@ -103,14 +133,11 @@ def repository_executables() -> dict[str, set[str]]:
 
 
 def main() -> int:
-    raw = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    if (
-        raw.get("schemaVersion") != 3
-        or not isinstance(raw.get("executables"), dict)
-        or not isinstance(raw.get("pythonModules"), dict)
-    ):
-        fail("malformed tests/custom-script-contracts.json")
+    raw = load_inventory()
     entries = raw["executables"]
+    python_modules = raw["pythonModules"]
+    assert isinstance(entries, dict)
+    assert isinstance(python_modules, dict)
     discovered: dict[str, set[str]] = {}
     for source in (pyproject_commands(), nix_commands(), repository_executables()):
         for name, paths in source.items():
@@ -124,14 +151,14 @@ def main() -> int:
     if stale:
         fail("test inventory names no longer exist: " + ", ".join(stale))
     service_modules = {path.relative_to(ROOT).as_posix() for path in (ROOT / "services").glob("*.py")}
-    declared_modules = set(raw["pythonModules"])
+    declared_modules = set(python_modules)
     missing_modules = sorted(service_modules - declared_modules)
     stale_modules = sorted(declared_modules - service_modules)
     if missing_modules:
         fail("service module(s) lack focused test contracts: " + ", ".join(missing_modules))
     if stale_modules:
         fail("test inventory names missing service module(s): " + ", ".join(stale_modules))
-    for module, tests in sorted(raw["pythonModules"].items()):
+    for module, tests in sorted(python_modules.items()):
         if not isinstance(tests, list) or not tests:
             fail(f"{module}: no focused module tests declared")
         for test in tests:

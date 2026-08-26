@@ -3,74 +3,65 @@
   overflow-wrap: anywhere;
 }
 
-.nas-page__header {
-  align-items: center;
-}
-
-.nas-page__subtitle,
 .nas-muted {
   color: var(--pf-t--global--text--color--subtle);
 }
 
-.nas-section-heading {
-  margin-bottom: var(--pf-t--global--spacer--md);
-}
-
-.nas-summary-card {
-  height: 100%;
-}
-
-.nas-status-stack > * + * {
-  margin-top: var(--pf-t--global--spacer--sm);
-}
-
-.nas-code-output {
+.nas-pre {
   max-height: 20rem;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.nas-feature-card {
-  height: 100%;
+.nas-schema-editor {
+  margin-top: var(--pf-t--global--spacer--md);
 }
 
-.nas-feature-card--enabled {
-  border-color: var(--pf-t--global--border--color--status--success--default);
+.nas-schema-node {
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--small);
+  margin: var(--pf-t--global--spacer--sm) 0;
+  padding: var(--pf-t--global--spacer--sm);
+  min-width: 0;
 }
 
-.nas-feature-labels,
-.nas-link-list,
-.nas-action-list {
+.nas-schema-node > legend {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+  padding: 0 var(--pf-t--global--spacer--xs);
+}
+
+.nas-schema-description,
+.nas-schema-error {
+  font-size: var(--pf-t--global--font--size--sm);
+  margin-bottom: var(--pf-t--global--spacer--sm);
+}
+
+.nas-schema-description {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.nas-schema-error {
+  color: var(--pf-t--global--text--color--status--danger--default);
+}
+
+.nas-schema-property,
+.nas-schema-map-entry,
+.nas-schema-list-item {
+  margin: var(--pf-t--global--spacer--sm) 0;
+}
+
+.nas-schema-map-key,
+.nas-schema-add-row,
+.nas-schema-variant {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: var(--pf-t--global--spacer--sm);
+  margin: var(--pf-t--global--spacer--sm) 0;
 }
 
-.nas-table-wrap {
-  overflow-x: auto;
-}
-
-.nas-table {
-  min-width: 52rem;
-}
-
-.nas-table code {
-  white-space: nowrap;
-}
-
-.nas-table__excluded {
-  opacity: 0.6;
-}
-
-.nas-password-form {
-  max-width: 56rem;
-}
-
-.nas-device-list code {
-  overflow-wrap: anywhere;
-}
-
-.nas-output-empty {
-  display: none;
+.nas-schema-object > .nas-schema-property:first-child,
+.nas-schema-list > .nas-schema-list-item:first-child {
+  margin-top: 0;
 }

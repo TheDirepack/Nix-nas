@@ -97,9 +97,18 @@ def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
     return None
 
 
+def first_maintenance_action(driver: webdriver.Chrome) -> Any:
+    for element in driver.find_elements(By.CSS_SELECTOR, ".nas-actions button"):
+        try:
+            if element.is_displayed():
+                return element
+        except WebDriverException:
+            continue
+    return None
+
+
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
 ALLOWED_ROUTE_RETRY_ATTEMPTS = 30
-PORTAL_AUTHORIZATION_RETRY_ATTEMPTS = 30
 
 
 def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
@@ -107,6 +116,14 @@ def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
     return ("/favicon.ico" in message and "404" in message) or (
         "/console/cockpit/login" in message and "401" in message
     )
+
+
+def discard_browser_log(driver: webdriver.Chrome) -> None:
+    """Discard diagnostics produced by the unauthenticated login shell."""
+    try:
+        driver.get_log("browser")
+    except (WebDriverException, ValueError):
+        pass
 
 
 def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
@@ -165,8 +182,8 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
         raise RuntimeError(f"{label} rendering validation failed: {json.dumps(failures, indent=2, sort_keys=True)}")
 
 
-def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
-    driver.get(origin + "/")
+def login(driver: webdriver.Chrome, origin: str, username: str, password: str, path: str = "/") -> None:
+    driver.get(origin.rstrip("/") + path)
     wait = WebDriverWait(driver, 60)
     wait.until(lambda current: "/identity/" in current.current_url)
     username_input = wait.until(
@@ -181,6 +198,10 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
             ],
         )
     )
+    # Authentik probes its current-user endpoint while the login shell is
+    # unauthenticated. That expected 403 must not be carried into the
+    # authenticated portal rendering assertions below.
+    discard_browser_log(driver)
     username_input.clear()
     username_input.send_keys(username)
     first(driver, ['button[type="submit"]', 'input[type="submit"]']).click()
@@ -204,70 +225,51 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
 
     try:
         wait.until(authenticated_portal_loaded)
-        wait_for_authenticated_portal(driver, public_origin)
     except TimeoutException as error:
         details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
         raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
 
 
-def wait_for_authenticated_portal(driver: webdriver.Chrome, origin: str) -> None:
-    """Wait for the forward-auth chain to accept the new outpost session."""
-    last_error = ""
-    for attempt in range(PORTAL_AUTHORIZATION_RETRY_ATTEMPTS):
-        try:
-            driver.get(origin + "/")
-            ready = driver.execute_script("return document.readyState") in {"interactive", "complete"}
-            body = str(driver.execute_script("return document.body?.innerText || ''"))
-            if ready and not any(
-                marker in body for marker in ("HTTP ERROR 401", "HTTP ERROR 403", "Access to " + origin + " was denied")
-            ):
-                return
-            last_error = body[:500]
-            # A failed probe leaves a Chrome network error in the browser log.
-            # It is a useful failure diagnostic, but must not poison the real
-            # rendering check after a delayed outpost reload succeeds.
-            driver.get_log("browser")
-        except (TimeoutException, WebDriverException) as error:
-            last_error = str(error)
-        if attempt + 1 < PORTAL_AUTHORIZATION_RETRY_ATTEMPTS:
-            time.sleep(1)
-    raise TimeoutException(
-        f"authenticated portal did not become reachable after "
-        f"{PORTAL_AUTHORIZATION_RETRY_ATTEMPTS} attempts: {last_error!r}"
-    )
-
-
 def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
+    login(driver, origin, username, password)
     cockpit_root = origin.rstrip("/") + "/console/"
     driver.get(cockpit_root)
     wait = WebDriverWait(driver, 60)
-    username_input = wait.until(
-        lambda current: first(
-            current,
-            [
-                "#login-user-input",
-                'input[name="user"]',
-                'input[autocomplete="username"]',
-            ],
-        )
-    )
-    username_input.clear()
-    username_input.send_keys(username)
-    password_input = first(
-        driver,
-        [
-            "#login-password-input",
-            'input[name="password"]',
-            'input[autocomplete="current-password"]',
-        ],
-    )
-    password_input.send_keys(password)
-    first(driver, ["#login-button", 'button[type="submit"]']).click()
     wait.until(
         lambda current: (
             current.current_url.startswith(origin.rstrip("/") + "/console/") and not login_form_visible(current)
         )
     )
+
+
+def callback_return_matches(expected_path: str, returned_path: str) -> bool:
+    """Allow the portal's canonical trailing-slash redirect after login."""
+    canonical_path = expected_path if expected_path.endswith("/") else expected_path + "/"
+    return returned_path in {expected_path, canonical_path}
+
+
+def verify_callback_return_paths(origin: str, username: str, password: str, paths: list[str]) -> None:
+    for path in paths:
+        driver = browser()
+        try:
+            browser_step(driver, f"Callback return ({path})", lambda: login(driver, origin, username, password, path))
+            returned_path = urllib.parse.urlsplit(driver.current_url).path
+            if not callback_return_matches(path, returned_path):
+                raise RuntimeError(f"Authentik callback returned {returned_path!r}, expected {path!r}")
+        finally:
+            driver.quit()
+
+
+def verify_launcher_opens_console(origin: str, username: str, password: str) -> None:
+    driver = browser()
+    try:
+        browser_step(driver, f"Launcher login ({username})", lambda: login(driver, origin, username, password))
+        wait = WebDriverWait(driver, 60)
+        launcher_link = wait.until(lambda current: first(current, ['a[href="/console/"]', 'a[href$="/console/"]']))
+        browser_step(driver, "Launcher opens Cockpit", launcher_link.click)
+        wait.until(lambda current: urllib.parse.urlsplit(current.current_url).path == "/console/")
+    finally:
+        driver.quit()
 
 
 def safe_browser_url(url: str) -> str:
@@ -360,7 +362,7 @@ def verify_cockpit_react_interactions(origin: str, username: str, password: str)
         def verify_actions() -> None:
             wait = WebDriverWait(driver, 90)
             wait.until(lambda current: button_with_text(current, "Refresh")).click()
-            wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
+            wait.until(first_maintenance_action).click()
             wait.until(lambda current: "Confirm maintenance action" in current.page_source)
             cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
             cancel.click()
@@ -538,17 +540,50 @@ def read_secret(path: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--origin", default="https://nas-test.local")
-    parser.add_argument("--cockpit-origin", default="https://localhost:9092")
-    parser.add_argument("--cockpit-password-file", required=True)
-    parser.add_argument("--operator-password-file", required=True)
-    parser.add_argument("--alice-password-file", required=True)
-    parser.add_argument("--baseline-password-file", required=True)
+    parser.add_argument("--cockpit-password-file")
+    parser.add_argument("--operator-password-file")
+    parser.add_argument("--alice-password-file")
+    parser.add_argument("--baseline-password-file")
+    parser.add_argument("--bootstrap-password-file")
+    parser.add_argument("--bootstrap-only", action="store_true")
     args = parser.parse_args()
+    if args.bootstrap_only:
+        if args.bootstrap_password_file is None:
+            parser.error("--bootstrap-only requires --bootstrap-password-file")
+        password = read_secret(args.bootstrap_password_file)
+        verify_callback_return_paths(args.origin, "akadmin", password, ["/setup", "/console/"])
+        verify_launcher_opens_console(args.origin, "akadmin", password)
+        run_account(
+            args.origin,
+            "akadmin",
+            password,
+            [
+                RouteExpectation("/", True),
+                RouteExpectation("/setup", True),
+                RouteExpectation("/console/", True),
+            ],
+            False,
+        )
+        print("bootstrap administrator browser authorization checks ok")
+        return 0
+    required_password_files = {
+        "--cockpit-password-file": args.cockpit_password_file,
+        "--operator-password-file": args.operator_password_file,
+        "--alice-password-file": args.alice_password_file,
+        "--baseline-password-file": args.baseline_password_file,
+    }
+    missing_password_files = [name for name, path in required_password_files.items() if path is None]
+    if missing_password_files:
+        parser.error("missing required arguments: " + ", ".join(missing_password_files))
+    assert args.cockpit_password_file is not None
+    assert args.operator_password_file is not None
+    assert args.alice_password_file is not None
+    assert args.baseline_password_file is not None
     cockpit_password = read_secret(args.cockpit_password_file)
     operator_password = read_secret(args.operator_password_file)
     alice_password = read_secret(args.alice_password_file)
     baseline_password = read_secret(args.baseline_password_file)
-    verify_cockpit_react_interactions(args.cockpit_origin, "admin", cockpit_password)
+    verify_cockpit_react_interactions(args.origin, "admin", cockpit_password)
     capability_routes = {
         "files": "/shares/",
         "webdav": "/dav/",

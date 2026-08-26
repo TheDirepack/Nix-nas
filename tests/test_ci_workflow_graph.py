@@ -69,6 +69,15 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("Build production bundle for fast tier", browser_text)
         self.assertIn("Deterministic common XSS", browser_text)
 
+    def test_browser_checks_are_reported_as_independent_stages(self) -> None:
+        browser = self.jobs["browser"]
+        matrix = browser["strategy"]["matrix"]["include"]
+        self.assertGreaterEqual(len(matrix), 10)
+        self.assertEqual(len({stage["id"] for stage in matrix}), len(matrix))
+        self.assertEqual(len({stage["grep"] for stage in matrix}), len(matrix))
+        self.assertIn("NAS_BROWSER_GREP", self.serialized(browser))
+        self.assertIn("browser-test-evidence-${{ matrix.id }}", self.serialized(browser))
+
     def test_destructive_jobs_are_not_on_pull_requests_and_are_scheduled(self) -> None:
         for name in ("browser", "integration", "source-fuzz"):
             condition = str(self.jobs[name].get("if", ""))

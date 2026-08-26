@@ -4,6 +4,7 @@ set -Eeuo pipefail
 repo_root="${NAS_CONFIG_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 status_file="${NAS_PREFLIGHT_STATUS_FILE:-}"
 require_complete="${NAS_PREFLIGHT_REQUIRE_COMPLETE:-0}"
+unit_test_timeout="${NAS_UNIT_TEST_TIMEOUT:-180}"
 incomplete=()
 identity_fixture_lock="${NAS_IDENTITY_LOCK:-}"
 fresh_manifest=""
@@ -51,6 +52,7 @@ PY
 }
 
 step "repository structure" ./scripts/validate-structure.py
+step "V2 architecture boundary" ./scripts/check-architecture-boundary.py
 step "version metadata" ./scripts/check-version.py
 step "mkForce policy" ./scripts/check-mkforce.py
 step "repository data" ./scripts/validate-repository-data.py
@@ -100,14 +102,14 @@ if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" && "${NAS_PREFLIGHT_SKIP_FUZZ:-0
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
-  step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
+  step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
     --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py \
     --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py \
     --exclude test_secret_security_fuzz.py
-  step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_core.py'
-  step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_matrix.py'
-  step "Maintainer release integration tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_maintainer_release.py'
-  step "Tooling contract tests" ./scripts/run-unit-tests.py --quiet --jobs 1 --pattern 'test_contract_tooling.py'
+  step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_core.py'
+  step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_matrix.py'
+  step "Maintainer release integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_release.py'
+  step "Tooling contract tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_contract_tooling.py'
 else
   skip python-tests "Python behavior tests disabled by NAS_PREFLIGHT_SKIP_TESTS"
 fi
@@ -156,8 +158,13 @@ step "Authentik fixture" env PYTHONDONTWRITEBYTECODE=1 NAS_IDENTITY_LOCK="$ident
   python3 services/nas_identity_sync.py status-fixture tests/fixtures/authentik-identity.json
 
 if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
-  [[ -f MANIFEST.sha256 ]] || { printf 'preflight: MANIFEST.sha256 is required\n' >&2; exit 1; }
-  step "release manifest" sha256sum -c MANIFEST.sha256
+  manifest_tmp="$(mktemp -d "${TMPDIR:-/tmp}/nas-manifest-preflight.XXXXXX")"
+  manifest_path="$manifest_tmp/MANIFEST.sha256"
+  export MANIFEST_PATH="$manifest_path"
+  export NAS_TEST_MANIFEST="$manifest_path"
+  trap 'rm -f -- "$identity_fixture_lock"; rm -rf -- "${manifest_tmp:-}"' EXIT INT TERM HUP
+  python3 "$repo_root/scripts/lib/manifest.py" --root "$repo_root" --out "$manifest_path"
+  step "release manifest" sha256sum -c "$manifest_path"
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_TOOLING:-0}" == "1" ]]; then

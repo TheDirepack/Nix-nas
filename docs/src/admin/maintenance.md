@@ -4,19 +4,23 @@ Use the NAS Cockpit page for routine maintenance. It exposes only fixed, reviewe
 
 ## Service policy
 
-Optional features can expose one or more runtime modes:
+Managed Services V2 applications can expose one or more runtime modes:
 
-- **Off** — keep the feature stopped.
-- **On demand** — start it for authorized use and stop it after the configured idle period.
-- **Always on** — keep it resident.
+- **Off** — keep the managed workload stopped and remove its V2-owned active exposure policy.
+- **On demand** — acquire the native V2 systemd lease after authorized access and release it after the configured idle period.
+- **Always on** — keep the managed daemon resident.
 
-The feature controller handles dependencies, readiness, and safe idle shutdown. NixOS still decides which features are installed. VictoriaMetrics remains resident for continuous history; Grafana can sleep independently.
+`/var/lib/nas-control/services.yaml` is the only mutable application desired-state authority. The finite V2 compiler validates dependencies/readiness and projects lifecycle into native systemd units, timers, targets, and drop-ins; there is no resident feature controller or idle reaper. Caddy + Authentik perform request-time authorization before the socket-activated wake helper acquires an on-demand lease.
+
+NixOS still decides which native platform services and packages are installed. VictoriaMetrics remains resident for continuous history; Grafana can sleep independently.
 
 ## Maintenance actions
 
-Depending on installed features, Cockpit can run health checks, identity validation, snapshots, ZFS scrub, backup, replication, Syncthing reconciliation, protected-stack restart, and update workflows.
+Depending on installed services, Cockpit can run health checks, identity validation, snapshots, ZFS scrub, backup, replication, Syncthing reconciliation, protected-stack restart, and update workflows.
 
-For direct diagnosis, use the generated command reference and systemd journal rather than bypassing the fixed action boundary.
+For direct diagnosis, use the generated command reference and systemd journal rather than bypassing the fixed action boundary. Use `nas-managed-services-control status` to compare V2 requested/effective lifecycle state with native unit state.
+
+For offline checks before installation or while debugging, use `nas-v2 validate`, `nas-v2 effective`, and `nas-v2 plan` with `--spec`, `--schema`, and `--platform` overrides as needed. `nas-v2 apply` delegates to the same finite reconciliation entry point used by systemd.
 
 ## Updates
 
@@ -26,7 +30,7 @@ Use **Preview and validate updates** before deployment. After applying an update
 
 ## Schedules
 
-Use one scheduling authority for each job. The appliance supports native systemd timers and the selected Cockpit Scheduler integration.
+Managed Services V2 job schedules compile to native systemd timers. Do not create a parallel timer for the same V2-owned job. The optional Cockpit Scheduler integration remains available for host tasks that are not owned by V2.
 
 Common scheduled work includes:
 

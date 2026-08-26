@@ -146,6 +146,8 @@ Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, 
 
 CI records branch coverage over the control-plane services and applies both an aggregate floor and service-specific floors with `scripts/check-coverage.py`. Every service module has an explicit floor, including alert routing, diagnostics, structured logging, state migration, and operation locking. Floors are regression guards rather than quality scores: raising them should follow added behavioral coverage, not exclusion of difficult branches.
 
+`tests/test_e2e_v2_lifecycle.py` is the single deterministic E2E that proves the full V2 pipeline (YAML -> effective -> plan -> Caddy/systemd/network/backup/authentik) for all runtimes (systemd, exec, quadlet, compose, vm, job, session) in one place. It complements the per-adapter unit tests and the VM guest suite (`tests/vm/guest-test.sh`) which validates the live appliance.
+
 ```bash
 ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4
 python3 scripts/check-coverage.py coverage.json
@@ -196,7 +198,7 @@ The heavyweight matrix deliberately uses different system lifecycle paths:
 
 The reinstall, failed-candidate, candidate-switch, rollback, and final reconfiguration stages keep a persistence sentinel so an installer or activation path that accidentally destroys unrelated state fails the test. The rejected candidate must leave `/run/current-system` unchanged; the rollback drill must remove a candidate-only `/etc` marker; and the second reboot verifies that the restored reviewed generation remains bootable and persistent.
 
-The guest suite deliberately checks states that must never occur: protected services running while secrets are locked, unauthenticated or spoofed identities receiving protected access, destructive setup without exact confirmation, hostile identifiers reaching shell execution, SQL-shaped usernames passing account validation, traversal-shaped device paths, malformed alert requests producing tracebacks, unsafe state/archive members, stale operation residue, and recovery/rollback inconsistencies.
+The guest suite deliberately checks states that must never occur: protected services running while secrets are locked; a Cockpit listener or browser management route available while locked; unauthenticated or spoofed identities receiving protected access; destructive setup without exact confirmation; hostile identifiers reaching shell execution; SQL-shaped usernames passing account validation; traversal-shaped device paths; malformed alert requests producing tracebacks; unsafe state/archive members; stale operation residue; and recovery/rollback inconsistencies. It must also prove that initial static setup guidance cannot unlock secrets or create an authenticated Cockpit session, and that post-activation Cockpit access passes through Caddy and Authentik.
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
 
@@ -254,6 +256,27 @@ remain separate application bundles; `vm-drivers` contains only the small
 configuration-sensitive driver delta.
 
 Detailed VM behavior and environment overrides are in [`vm-testing.md`](vm-testing.md).
+
+### Interactive VM testing
+
+For hands-on browser testing of a worktree, use the dev wrapper. It starts (or
+reuses) the persistent VM, refreshes the current worktree into it, waits until
+Caddy, Authentik, the proxy outpost, and Cockpit SSO are active, probes the
+Console redirect, and prints the testing URLs:
+
+```bash
+./scripts/vm-dev.sh
+```
+
+- Launcher/setup: `https://nas-test.local:8443/`
+- Authentik: `https://nas-test.local:8443/identity/`
+- Cockpit console: `https://nas-test.local:8443/console/`
+
+Before first-run setup completes, sign in with the bootstrap account
+`akadmin` / `nas-admin-first-boot`; setup retires it after verifying the
+chosen administrator (see [`../src/admin/first-run.md`](../src/admin/first-run.md)).
+Run one-off guest commands with `scripts/vm-run.sh '<command>'`. The host
+needs QEMU/KVM; Nix runs inside the guest, so host-side Nix is not required.
 
 ## 8. Dynamic web security
 

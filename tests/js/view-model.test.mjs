@@ -1,56 +1,75 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  enabledLinkKeys,
-  featureMap,
-  featureRuntimeText,
-  featureUnitState,
   inactiveServiceCount,
-  featureOperationsBusy,
+  managedApplicationLinks,
+  managedServiceMap,
+  managedServiceOperationsBusy,
+  managedServiceRuntimeText,
+  managedServiceUnitState,
   mib,
   operationBusy,
   revisionModel,
   safeInternalPath,
   setupModel,
+  staticLinks,
   visibleOperations,
 } from "../../cockpit/src/view-model.js";
 
-test("feature and link models follow effective runtime state", () => {
+test("managed service and application link models follow V2 state", () => {
   const data = {
-    featureControl: {
-      features: [
-        {id: "syncthing", effective: true, available: true},
-        {id: "vaultwarden", effective: false},
-        {id: "backups", available: false},
+    managedServices: {
+      services: [
+        {
+          id: "snapshot",
+          label: "Create snapshot",
+          managed: true,
+          workloadKind: "job",
+          effective: true,
+          available: true,
+          effectiveMode: "always",
+        },
+        {id: "vaultwarden", available: true, effectiveMode: "off"},
       ],
     },
-    links: {settings: "/settings/", syncthing: "/syncthing/", vaultwarden: "/vault/"},
+    managedServiceLinks: [
+      {id: "syncthing.web", label: "Syncthing", url: "/syncthing/", category: "Files", order: 20},
+      {id: "files.web", label: "Files", url: "/shares/", category: "Files", order: 10},
+    ],
+    links: {accountSettings: "/settings/", identity: "/identity/if/user/"},
   };
-  assert.equal(featureMap(data).syncthing.effective, true);
-  assert.deepEqual(enabledLinkKeys(data), ["settings", "syncthing"]);
-  assert.equal(
-    visibleOperations(data).some(([id]) => id === "syncthing-reconcile"),
-    true,
+  assert.equal(managedServiceMap(data).snapshot.effectiveMode, "always");
+  assert.deepEqual(
+    managedApplicationLinks(data).map((entry) => entry.id),
+    ["files.web", "syncthing.web"],
+  );
+  assert.deepEqual(
+    staticLinks(data)
+      .map((entry) => entry.key)
+      .sort(),
+    ["accountSettings", "identity"],
   );
   assert.equal(
-    visibleOperations(data).some(([id]) => id === "backup"),
-    false,
+    visibleOperations(data).some(([id]) => id === "snapshot"),
+    true,
   );
 });
 
-test("service, feature runtime, and memory formatting are deterministic", () => {
+test("service runtime and memory formatting are deterministic", () => {
   assert.equal(
-    inactiveServiceCount([
-      {unit: "a.service", active: "inactive"},
-      {unit: "a.timer", active: "inactive"},
-      {unit: "b.service", active: "active"},
-    ]),
+    inactiveServiceCount({
+      "a.service": {activeState: "inactive"},
+      "b.service": {activeState: "active"},
+    }),
     1,
   );
-  assert.equal(featureUnitState({units: []}), "Logical group");
-  assert.equal(featureUnitState({units: [{active: true}, {active: false}]}), "Partially running");
+  assert.equal(managedServiceUnitState({managed: false, units: []}), "Platform service");
+  assert.equal(
+    managedServiceUnitState({units: [{active: true}, {active: false}], effectiveMode: "always"}),
+    "Partially running",
+  );
   assert.match(
-    featureRuntimeText({effectiveMode: "on-demand", running: false}),
+    managedServiceRuntimeText({effectiveMode: "on-demand", running: false, idleSeconds: 600}),
     /authorized access/,
   );
   assert.equal(mib(10 * 1048576), "10.0");
@@ -66,6 +85,7 @@ test("setup and revision models retain recovery distinctions", () => {
           message: "ready",
           requiresDestructiveConfirmation: true,
           accountCount: 3,
+          serviceCount: 8,
         },
       },
     }),
@@ -80,7 +100,7 @@ test("setup and revision models retain recovery distinctions", () => {
       planDigest: "",
       storage: {},
       accountCount: 3,
-      featureCount: 0,
+      serviceCount: 8,
       destructiveRequired: true,
       journal: null,
       authorityHealth: null,
@@ -94,19 +114,17 @@ test("setup and revision models retain recovery distinctions", () => {
   });
 });
 
-test("operation conflicts disable only incompatible controls", () => {
+test("operation conflicts disable V2 lifecycle controls while privileged work is active", () => {
   const data = {
-    operationState: {
+    operations: {
       busyClasses: ["storage"],
-      featureConflicts: ["runtime"],
-      conflictsByAction: {scrub: ["storage"], "identity-sync": ["identity"]},
+      managedServicesConflicts: ["runtime", "appliance", "first-start"],
     },
   };
-  assert.equal(operationBusy(data, "scrub"), true);
-  assert.equal(operationBusy(data, "identity-sync"), false);
-  assert.equal(featureOperationsBusy(data), false);
-  data.operationState.busyClasses.push("runtime");
-  assert.equal(featureOperationsBusy(data), true);
+  assert.equal(operationBusy(data, "zfs-scrub"), true);
+  assert.equal(managedServiceOperationsBusy(data), false);
+  data.operations.busyClasses.push("runtime");
+  assert.equal(managedServiceOperationsBusy(data), true);
 });
 
 test("backend link destinations remain same-origin root-relative paths", () => {

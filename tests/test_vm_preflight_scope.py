@@ -46,7 +46,7 @@ class VmPreflightScopeTests(unittest.TestCase):
         self.assertIn("nas_vm_cleanup_add nas_vm_profile_cleanup", profile)
         self.assertIn('run_as_admin*"nas-setup first-run"*', profile)
         self.assertIn('log "Run the complete first-time setup CLI"', guest_test)
-        self.assertIn('log "Browser-level Authentik and capability authorization"', guest_test)
+        self.assertIn('log "Browser-level authorization and deterministic bundle probes"', guest_test)
         self.assertIn('log "Observability, notifications, Syncthing, Vaultwarden, and Cockpit assets"', guest_test)
         self.assertIn('log "Final state"', guest_test)
         result = subprocess.run([str(FAILURE_INJECTION)], cwd=ROOT, text=True, capture_output=True, check=False)
@@ -57,6 +57,9 @@ class VmPreflightScopeTests(unittest.TestCase):
         self.assertIn('source "$repo/scripts/lib/nas-vm-cleanup.sh"', full_suite)
         self.assertIn("nas_vm_cleanup_add cleanup_work", full_suite)
         self.assertIn("nas_vm_cleanup_add nas_vm_js_deps_cleanup", full_suite)
+        self.assertIn('nas_vm_cockpit_js_deps_prepare "$repo"', full_suite)
+        self.assertIn("NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES=1", full_suite)
+        self.assertIn("NAS_UNIT_TEST_TIMEOUT=300", full_suite)
         self.assertIn("trap nas_vm_cleanup_trap EXIT", full_suite)
         self.assertNotIn('nas_vm_js_deps_cleanup "$status" || :', full_suite)
 

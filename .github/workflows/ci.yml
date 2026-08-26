@@ -161,7 +161,7 @@ jobs:
       - name: Validate generated Caddy fragment with real Caddy
         run: |
           nix shell nixpkgs#caddy -c caddy version
-          nix develop .#test -c python3 -m unittest tests.test_service_caddy tests.test_service_caddy_coverage tests.test_service_caddy_validate -v
+          nix develop .#test -c python3 -m unittest tests.test_v2_caddy tests.test_v2_caddy_validate -v
 
   static:
     name: Fast Nix evaluation, lint, type and formatting checks
@@ -648,7 +648,7 @@ jobs:
           echo "Cache persistence is reusable acceleration; qualification evidence remains the build handoff."
 
   browser:
-    name: Post-build deterministic Cockpit layout, XSS, and accessibility
+    name: Post-build deterministic Cockpit (${{ matrix.name }})
     if: >-
       always() && needs.test.result == 'success' &&
       (needs.build.result == 'success' ||
@@ -656,6 +656,44 @@ jobs:
     needs: [build, test]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - id: common-xss
+            name: Deterministic common XSS probes
+            grep: "common XSS probe is rendered inert"
+          - id: hostile-backend
+            name: Hostile backend rendering
+            grep: "renders hostile backend text as text"
+          - id: viewport-controls
+            name: Viewport controls
+            grep: "stays within the viewport and keeps controls usable"
+          - id: accessibility
+            name: Accessibility
+            grep: "no serious or critical automated accessibility violations"
+          - id: responsive-layout
+            name: Responsive layout
+            grep: "narrow, wide, and enlarged-text layouts"
+          - id: keyboard-controls
+            name: Keyboard controls
+            grep: "visible interactive controls stay inside the viewport"
+          - id: dialog-layout
+            name: Dialog layout and DOM IDs
+            grep: "unique DOM ids and keeps the confirmation dialog"
+          - id: hostile-status
+            name: Hostile status corpus
+            grep: "hostile status corpus never creates executable elements"
+          - id: refresh-errors
+            name: Refresh error handling
+            grep: "backend refresh failure becomes a bounded operator-visible error"
+          - id: action-errors
+            name: Action error handling
+            grep: "privileged action failure stays recoverable"
+          - id: keyboard-cancellation
+            name: Keyboard cancellation
+            grep: "confirmation dialog supports keyboard cancellation"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -701,15 +739,16 @@ jobs:
         run: npm --prefix cockpit exec -- playwright install chromium firefox webkit
       - name: Install Playwright system dependencies
         run: npm --prefix cockpit exec -- playwright install-deps chromium firefox webkit
-      - name: Deterministic common XSS, overlap, formatting, layout, and accessibility probes
+      - name: "Deterministic browser stage: ${{ matrix.name }}"
         env:
           NAS_BROWSER_SUITE: deterministic
-        run: npm --prefix cockpit run test:browser
+          NAS_BROWSER_GREP: ${{ matrix.grep }}
+        run: npm --prefix cockpit run test:browser -- --grep "$NAS_BROWSER_GREP"
       - name: Retain browser failure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: browser-test-evidence
+          name: browser-test-evidence-${{ matrix.id }}
           if-no-files-found: ignore
           retention-days: 14
           path: |
@@ -724,8 +763,8 @@ jobs:
        (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))
     needs: [build]
     runs-on: ubuntu-24.04
-    # 379 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
-    timeout-minutes: 409
+    # 384 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
+    timeout-minutes: 414
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -812,8 +851,8 @@ jobs:
        (github.event_name != 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [integration, browser, build]
     runs-on: ubuntu-24.04
-    # 489 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
-    timeout-minutes: 519
+    # 494 minutes of VM runtime plus the manifest's 30-minute CI setup margin.
+    timeout-minutes: 524
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -938,8 +977,8 @@ jobs:
        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
-    # This job invokes the 489-minute installer wrapper; retain the same setup margin.
-    timeout-minutes: 519
+    # This job invokes the 494-minute installer wrapper; retain the same setup margin.
+    timeout-minutes: 524
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -996,8 +1035,8 @@ jobs:
        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
     needs: [installer]
     runs-on: ubuntu-24.04
-    # This job invokes the 489-minute installer wrapper; retain the same setup margin.
-    timeout-minutes: 519
+    # This job invokes the 494-minute installer wrapper; retain the same setup margin.
+    timeout-minutes: 524
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

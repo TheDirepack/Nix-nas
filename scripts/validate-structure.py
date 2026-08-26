@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import os
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -22,11 +23,13 @@ REQUIRED_FILES = {
     "local.nix",
     "modules/nas/internal/default.nix",
     "modules/nas/internal/base.nix",
-    "modules/nas/internal/feature-catalog.nix",
-    "modules/nas/internal/service-registry.nix",
     "modules/nas/internal/caddy-helpers.nix",
     "modules/nas/internal/account-tools.nix",
     "modules/nas/internal/documentation-tools.nix",
+    "modules/nas/config/managed-services.nix",
+    "modules/nas/config/managed-services-seed-v2.nix",
+    "modules/nas/config/managed-services-generations.nix",
+    "modules/nas/config/managed-services-backup-profile.nix",
     "modules/profiles/core-storage.nix",
     "modules/profiles/identity-sharing.nix",
     "modules/profiles/observability.nix",
@@ -39,7 +42,6 @@ REQUIRED_FILES = {
     "docs/development/code-map.md",
     "docs/development/invariants.md",
     "docs/development/known-risks.md",
-    "docs/development/combined-review-remediation.md",
     "docs/development/testing.md",
     "docs/development/dependencies.md",
     "docs/development/history.md",
@@ -51,6 +53,7 @@ REQUIRED_FILES = {
     ".coveragerc",
     ".semgrep.yml",
     "scripts/check-coverage.py",
+    "scripts/check-architecture-boundary.py",
     "scripts/fuzz.py",
     "scripts/fuzz-executables.py",
     "scripts/run-fuzz.py",
@@ -63,21 +66,30 @@ REQUIRED_FILES = {
     "scripts/check-mkforce.py",
     "scripts/check-version.py",
     "scripts/package-release.sh",
-    "schemas/feature-catalog.schema.json",
+    "schemas/managed-services-v3.schema.json",
     "schemas/state-bundle.schema.json",
-    "schemas/service-registry.schema.json",
+    "schemas/first-run.schema.json",
     "services/nas_common.py",
     "services/nas_setup.py",
     "services/nas_state.py",
     "services/nas_setup_config.py",
     "services/nas_identity_sync.py",
     "services/nas_identity_model.py",
-    "services/nas_feature_control.py",
-    "services/nas_feature_model.py",
     "services/nas_cockpit_api.py",
     "services/nas_operation_journal.py",
     "services/nas_operation_lock.py",
     "services/nas_syncthing_devices.py",
+    "services/nas_v2_spec.py",
+    "services/nas_v2_plan.py",
+    "services/nas_v2_apply.py",
+    "services/nas_v2_cli.py",
+    "services/nas_v2_control.py",
+    "services/nas_v2_editor.py",
+    "services/nas_v2_systemd_native.py",
+    "services/nas_v2_systemd_attachments.py",
+    "services/nas_v2_activation.py",
+    "services/nas_v2_generation.py",
+    "services/nas_v2_caddy.py",
     "scripts/preflight.sh",
     "scripts/live-validation.sh",
     "scripts/nix-config-matrix.sh",
@@ -89,24 +101,23 @@ REQUIRED_FILES = {
     "cockpit/e2e/ui-security.spec.mjs",
     "tests/adversarial_payloads.py",
     "tests/custom-script-contracts.json",
-    "tests/fuzz_strategies.py",
     "tests/test_adversarial_security.py",
     "tests/test_cli_surfaces.py",
-    "tests/test_fuzz_architecture.py",
     "tests/test_fuzz_boundaries.py",
     "tests/test_fuzz_custom_inputs.py",
     "tests/test_maintainer_scripts.py",
     "tests/test_script_inventory.py",
     "tests/test_security_surface.py",
     "tests/test_property_invariants.py",
-    "tests/test_secret_security_fuzz.py",
-    "tests/slow_managed_service_stateful.py",
+    "tests/test_v2_control.py",
+    "tests/test_v2_boundary.py",
+    "tests/test_architecture_boundary.py",
+    "tests/test_v2_caddy.py",
+    "tests/test_v2_generation.py",
     "tests/js/security.test.mjs",
-    "tests/js-fuzz/package.json",
-    "tests/js-fuzz/package-lock.json",
-    "tests/js-fuzz/frontend-properties.test.mjs",
     "scripts/qemu-test.sh",
     "scripts/vm-pytest.sh",
+    "scripts/vm-dev.sh",
     "scripts/vm-start.sh",
     "scripts/vm-stop.sh",
     "scripts/vm-reset.sh",
@@ -131,7 +142,6 @@ REQUIRED_FILES = {
     "cockpit/src/app.scss",
     "cockpit/src/api.js",
     "cockpit/src/view-model.js",
-    "tests/test_feature_control.py",
     "tests/test_cockpit_api.py",
     "tests/test_operation_lock.py",
     "tests/test_comment_policy.py",
@@ -156,11 +166,31 @@ REQUIRED_FILES = {
     ".github/workflows/ci.yml",
 }
 
+FORBIDDEN_V1_FILES = {
+    "modules/nas/internal/feature-catalog.nix",
+    "modules/nas/internal/capability-registry.nix",
+    "modules/nas/internal/service-registry.nix",
+    "schemas/feature-catalog.schema.json",
+    "schemas/capability-registry.schema.json",
+    "schemas/service-registry.schema.json",
+    "schemas/managed-service.schema.json",
+    "services/nas_feature_control.py",
+    "services/nas_managed_service.py",
+    "services/nas_migrate_state.py",
+    "services/nas_v2_identity_migrate.py",
+    "services/nas_v2_schedule_migrate.py",
+    "tests/test_feature_control.py",
+    "tests/test_capability_registry.py",
+    "tests/test_doctor_migrations.py",
+    "tests/test_v2_identity_migrate.py",
+    "tests/test_v2_schedule_migrate.py",
+}
+
 ALLOWED_ROOT_MARKDOWN = {"AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "README.md", "SECURITY.md"}
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9][A-Za-z0-9.-]*)?$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:[.-][A-Za-z0-9][A-Za-z0-9.-]*)?$")
 STATIC_NIX_PATH_RE = re.compile(r"\$\{(\.\./[^}]+)\}")
 FORBIDDEN_DIR_NAMES = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__", "node_modules", "build", "dist"}
-ALLOWED_GENERATED_DIRS = {ROOT / "cockpit" / "dist"}
+ALLOWED_GENERATED_DIRS = {ROOT / "cockpit" / "dist", ROOT / "setup" / "first-run-wizard" / "dist"}
 FORBIDDEN_FILE_NAMES = {".coverage", "coverage.json"}
 
 
@@ -174,6 +204,10 @@ def main() -> int:
     if missing:
         fail("missing required files: " + ", ".join(missing))
 
+    surviving_v1 = sorted(path for path in FORBIDDEN_V1_FILES if (ROOT / path).exists())
+    if surviving_v1:
+        fail("V1 compatibility files must stay deleted: " + ", ".join(surviving_v1))
+
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not VERSION_RE.fullmatch(version):
         fail(f"unsupported VERSION value: {version!r}")
@@ -183,10 +217,17 @@ def main() -> int:
     if unexpected:
         fail("root documentation must be grouped under docs/: " + ", ".join(unexpected))
 
+    ignored_dir_parts = {".git", ".opencode", ".direnv", ".venv"}
+    allowed_generated_dirs = set(ALLOWED_GENERATED_DIRS)
+    if os.environ.get("NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES") == "1":
+        allowed_generated_dirs.add(ROOT / "cockpit" / "node_modules")
     forbidden_dirs = sorted(
         str(path.relative_to(ROOT))
         for path in ROOT.rglob("*")
-        if path.is_dir() and path.name in FORBIDDEN_DIR_NAMES and path not in ALLOWED_GENERATED_DIRS
+        if path.is_dir()
+        and path.name in FORBIDDEN_DIR_NAMES
+        and not any(path == allowed or allowed in path.parents for allowed in allowed_generated_dirs)
+        and not any(part in ignored_dir_parts for part in path.parts)
     )
     if forbidden_dirs:
         fail("generated/cache directories are present: " + ", ".join(forbidden_dirs))
@@ -196,6 +237,7 @@ def main() -> int:
         for path in ROOT.rglob("*")
         if path.is_file()
         and (path.name in FORBIDDEN_FILE_NAMES or any(part.endswith(".egg-info") for part in path.parts))
+        and not any(part in ignored_dir_parts for part in path.parts)
     )
     if generated_files:
         fail("generated files are present: " + ", ".join(generated_files))

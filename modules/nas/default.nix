@@ -17,12 +17,21 @@
     ./config/identities.nix
     ./config/application-services.nix
     ./config/reverse-proxy.nix
+    ./config/caddy-bootstrap.nix
     ./config/observability.nix
     ./config/storage-monitoring.nix
     ./config/systemd-services.nix
     ./config/schedules.nix
     ./config/system.nix
     ./config/managed-services.nix
+    ./config/managed-services-transactions.nix
+    ./config/managed-services-lifecycle.nix
+    ./config/managed-services-generations.nix
+    ./config/managed-services-backup-profile.nix
+    ./config/managed-services-network-platform.nix
+    ./config/managed-services-authentik-blueprint.nix
+    ./config/managed-services-compose-import.nix
+    ./config/managed-services-seed-v2.nix
   ];
 
   _module.args.nasInternal = import ./internal { inherit config lib pkgs; };

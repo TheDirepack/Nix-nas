@@ -1,5 +1,13 @@
 {
   "executables": {
+    "scripts/check-architecture-boundary.py": {
+      "source": "scripts/check-architecture-boundary.py",
+      "sourceFuzzStrategy": "source-check",
+      "systemTest": "tests/test_architecture_boundary.py",
+      "tests": [
+        "tests/test_architecture_boundary.py"
+      ]
+    },
     "cockpit/build.js": {
       "source": "cockpit/build.js",
       "sourceFuzzStrategy": "source-check",
@@ -77,19 +85,7 @@
       ],
       "systemTest": "tests/vm/guest-test.sh",
       "tests": [
-        "tests/test_doctor_migrations.py"
-      ]
-    },
-    "nas-feature-control": {
-      "fuzzStrategy": "feature-id",
-      "sources": [
-        "services/nas_feature_control.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_feature_control.py",
-        "tests/test_fuzz_boundaries.py"
+        "tests/test_doctor.py"
       ]
     },
     "nas-identity-sync": {
@@ -102,25 +98,6 @@
       "tests": [
         "tests/test_identity_sync.py",
         "tests/test_contract_identity.py"
-      ]
-    },
-    "nas-managed-service": {
-      "fuzzStrategy": "unknown-argv",
-      "source": "services/nas_managed_service.py",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_managed_service.py"
-      ]
-    },
-    "nas-migrate-state": {
-      "fuzzStrategy": "unknown-argv",
-      "sources": [
-        "services/nas_migrate_state.py",
-        "modules/nas/internal/account-tools.nix"
-      ],
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_doctor_migrations.py"
       ]
     },
     "nas-operation-run": {
@@ -482,108 +459,72 @@
       "tests/test_cockpit_api.py"
     ],
     "services/nas_alert_router.py": [
-      "tests/test_alert_router.py",
       "tests/test_adversarial_security.py",
+      "tests/test_alert_router.py",
       "tests/test_fuzz_boundaries.py"
     ],
     "services/nas_cockpit_api.py": [
-      "tests/test_cockpit_api.py",
       "tests/test_adversarial_security.py",
+      "tests/test_ai_secret_transaction.py",
+      "tests/test_cockpit_api.py",
       "tests/test_security_surface.py"
     ],
     "services/nas_coding_agent.py": [
       "tests/test_coding_agent.py"
     ],
     "services/nas_common.py": [
-      "tests/test_common.py",
       "tests/test_adversarial_security.py",
+      "tests/test_common.py",
       "tests/test_fuzz_boundaries.py",
       "tests/test_property_invariants.py"
     ],
     "services/nas_doctor.py": [
-      "tests/test_doctor_migrations.py",
+      "tests/test_doctor.py",
       "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_feature_control.py": [
-      "tests/test_feature_control.py",
-      "tests/test_fuzz_boundaries.py",
-      "tests/test_adversarial_security.py"
-    ],
-    "services/nas_feature_model.py": [
-      "tests/test_feature_control.py",
-      "tests/test_contract_operations.py",
-      "tests/test_property_invariants.py"
     ],
     "services/nas_identity_model.py": [
-      "tests/test_identity_sync.py",
       "tests/test_contract_identity.py",
-      "tests/test_fuzz_boundaries.py"
+      "tests/test_fuzz_boundaries.py",
+      "tests/test_identity_sync.py",
+      "tests/test_v2_identity_model_coverage.py"
     ],
     "services/nas_identity_sync.py": [
-      "tests/test_identity_sync.py",
       "tests/test_contract_identity.py",
-      "tests/test_fuzz_boundaries.py"
+      "tests/test_fuzz_boundaries.py",
+      "tests/test_identity_sync.py"
     ],
     "services/nas_logging.py": [
-      "tests/test_logging.py",
-      "tests/test_fuzz_boundaries.py"
-    ],
-    "services/nas_managed_service.py": [
-      "tests/test_managed_service.py",
-      "tests/test_managed_service_stateful.py",
-      "tests/test_property_invariants.py"
-    ],
-    "services/nas_service_caddy.py": [
-      "tests/test_service_caddy.py",
-      "tests/test_service_caddy_validate.py",
-      "tests/test_managed_service_stateful.py"
-    ],
-    "services/nas_service_authentik.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_firewall.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_runtime_compose.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_runtime_libvirt.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_service_runtime_podman.py": [
-      "tests/test_managed_service.py"
-    ],
-    "services/nas_migrate_state.py": [
-      "tests/test_doctor_migrations.py",
-      "tests/test_fuzz_boundaries.py"
+      "tests/test_fuzz_boundaries.py",
+      "tests/test_logging.py"
     ],
     "services/nas_operation_journal.py": [
-      "tests/test_operation_journal.py",
-      "tests/test_fuzz_boundaries.py"
+      "tests/test_fuzz_boundaries.py",
+      "tests/test_operation_journal.py"
     ],
     "services/nas_operation_lock.py": [
-      "tests/test_operation_lock.py",
-      "tests/test_fuzz_boundaries.py"
+      "tests/test_fuzz_boundaries.py",
+      "tests/test_operation_lock.py"
     ],
     "services/nas_setup.py": [
-      "tests/test_setup.py",
-      "tests/test_adversarial_security.py"
+      "tests/test_adversarial_security.py",
+      "tests/test_setup.py"
     ],
     "services/nas_setup_config.py": [
-      "tests/test_setup.py",
       "tests/test_adversarial_security.py",
       "tests/test_fuzz_boundaries.py",
-      "tests/test_property_invariants.py"
+      "tests/test_property_invariants.py",
+      "tests/test_setup.py",
+      "tests/test_v2_setup_config_coverage.py"
     ],
     "services/nas_state.py": [
-      "tests/test_state.py",
+      "tests/test_fuzz_boundaries.py",
       "tests/test_security_surface.py",
-      "tests/test_fuzz_boundaries.py"
+      "tests/test_state.py"
     ],
     "services/nas_syncthing_devices.py": [
-      "tests/test_syncthing_devices.py",
       "tests/test_fuzz_boundaries.py",
-      "tests/test_property_invariants.py"
+      "tests/test_property_invariants.py",
+      "tests/test_syncthing_devices.py"
     ]
   },
   "schemaVersion": 3

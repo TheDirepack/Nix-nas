@@ -110,6 +110,31 @@ function overview() {
         load: "loaded",
       },
     ],
+    managedServices: {
+      services: [
+        {
+          id: "policy-probe",
+          label: xss,
+          description: "hostile label probe",
+          managed: true,
+          requestedMode: "off",
+          effectiveMode: "always",
+          healthy: true,
+          allowedModes: ["off", "on-demand", "always"],
+          units: [],
+        },
+        {
+          id: "operation-probe",
+          label: "Run system health checks",
+          description: "hostile-operation action probe",
+          managed: true,
+          workloadKind: "job",
+          effective: true,
+          effectiveMode: "always",
+          units: [{role: "owner", unit: "nas-operation-probe.service"}],
+        },
+      ],
+    },
     zpool: {ok: true, text: xss},
     zfs: {ok: true, text: `tank/nas 1G 2G ${xss}`},
     failedUnits: [xss, longToken],
@@ -246,8 +271,17 @@ async function installCockpitMock(page, behavior = {}) {
 async function openApp(page, behavior = {}) {
   await installCockpitMock(page, behavior);
   await page.goto("/index.html");
-  await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
-  await expect(page.getByRole("heading", {name: "Service policies"})).toBeVisible();
+  await expect(page.getByRole("heading", {name: "NixOS NAS"})).toBeVisible();
+  await expect(page.getByText("Managed Services V2").first()).toBeVisible();
+}
+
+async function openOperationsSection(page) {
+  await page.locator(".pf-v6-c-nav").getByText("Operations", {exact: true}).click();
+  await expect(page.getByRole("heading", {name: "Operations"})).toBeVisible();
+}
+
+function firstMaintenanceAction(page) {
+  return page.locator(".nas-actions button").first();
 }
 
 test("renders hostile backend text as text, never executable markup", async ({page}) => {
@@ -306,10 +340,12 @@ test("stays within the viewport and keeps controls usable", async ({page}) => {
   expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewport + 1);
   expect(metrics.bodyWidth).toBeLessThanOrEqual(metrics.viewport + 1);
 
+  await page.locator(".pf-v6-c-nav").getByText("Managed services", {exact: true}).click();
   const select = page.getByLabel(`${xss} runtime policy`);
   await expect(select).toBeVisible();
   await select.selectOption("always");
-  await page.getByRole("button", {name: "Run system health checks"}).click();
+  await openOperationsSection(page);
+  await firstMaintenanceAction(page).click();
   await expect(page.getByRole("heading", {name: "Confirm maintenance action"})).toBeVisible();
   await page.getByRole("button", {name: "Cancel"}).click();
 });
@@ -386,10 +422,11 @@ test("has unique DOM ids and keeps the confirmation dialog usable at extreme zoo
     .evaluateAll((nodes) => nodes.map((node) => node.id).filter(Boolean));
   expect(new Set(ids).size).toBe(ids.length);
 
+  await openOperationsSection(page);
   await page.evaluate(() => {
     document.documentElement.style.fontSize = "200%";
   });
-  await page.getByRole("button", {name: "Run system health checks"}).click();
+  await firstMaintenanceAction(page).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   const box = await dialog.boundingBox();
@@ -436,8 +473,8 @@ test("backend refresh failure becomes a bounded operator-visible error", async (
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   await installCockpitMock(page, {overviewError: "simulated backend outage"});
   await page.goto("/index.html");
-  await expect(page.getByRole("heading", {name: "NAS Overview"})).toBeVisible();
-  await expect(page.getByRole("heading", {name: /Unable to refresh NAS state/})).toBeVisible();
+  await expect(page.getByRole("heading", {name: "NixOS NAS"})).toBeVisible();
+  await expect(page.getByRole("heading", {name: /Unable to load appliance status/})).toBeVisible();
   await expect(page.getByText("simulated backend outage", {exact: true})).toBeVisible();
   await expect(page.getByLabel("Loading NAS state")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -449,9 +486,12 @@ test("privileged action failure stays recoverable and never becomes an uncaught 
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   await openApp(page, {actionError: "simulated operation rejection"});
-  await page.getByRole("button", {name: "Run system health checks"}).click();
-  await page.getByRole("button", {name: "Run action"}).click();
-  await expect(page.getByRole("heading", {name: /Operation failed/})).toBeVisible();
+  await openOperationsSection(page);
+  await firstMaintenanceAction(page).click();
+  await page.getByRole("button", {name: "Confirm"}).click();
+  await expect(
+    page.locator(".pf-v6-c-alert__title").filter({hasText: "Operation failed"}),
+  ).toBeVisible();
   await expect(page.getByText("simulated operation rejection", {exact: true})).toBeVisible();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", {name: "Cancel"}).click();
@@ -461,7 +501,8 @@ test("privileged action failure stays recoverable and never becomes an uncaught 
 
 test("confirmation dialog supports keyboard cancellation", async ({page}) => {
   await openApp(page);
-  const trigger = page.getByRole("button", {name: "Run system health checks"});
+  await openOperationsSection(page);
+  const trigger = firstMaintenanceAction(page);
   await trigger.click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
