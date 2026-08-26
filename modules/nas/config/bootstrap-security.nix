@@ -31,8 +31,6 @@ let
     # The standalone setup UI authenticates through bootstrap Authentik, not
     # this local account. Keep the Linux bootstrap principal locked/nologin and
     # give it only the wheel role needed to remain the temporary host admin.
-    # In particular it must not inherit nas-administrators/nas-operations,
-    # which would grant avoidable access to runtime control and secret paths.
     ${pkgs.shadow}/bin/passwd --lock nas-bootstrap >/dev/null
     ${pkgs.shadow}/bin/usermod \
       --shell /run/current-system/sw/bin/nologin \
@@ -244,6 +242,14 @@ in
 
   systemd.services.nas-bootstrap-runtime-select.serviceConfig.ExecStart =
     lib.mkOverride 40 runtimeSelector;
+
+  # Authentik's embedded outpost is served by the main Authentik listener. The
+  # legacy first-boot unit still carries an ExecStartPost for the deleted custom
+  # proxy daemon on main, so clear that hook in the effective configuration.
+  systemd.services.nas-identity-bootstrap = {
+    description = lib.mkForce "Reconcile the Authentik setup application and embedded outpost";
+    serviceConfig.ExecStartPost = lib.mkForce [ ];
+  };
 
   systemd.services.nas-first-run-api.environment.NAS_FIRST_START_JOB =
     "${nasPythonApplication}/bin/nas-first-start-job";
