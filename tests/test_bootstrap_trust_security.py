@@ -17,8 +17,12 @@ class BootstrapTrustSecurityTests(unittest.TestCase):
 
     def test_linux_bootstrap_account_has_no_password_login(self) -> None:
         source = BOOTSTRAP.read_text(encoding="utf-8")
-        self.assertIn("passwd --lock nas-bootstrap", source)
-        self.assertIn("/bin/nologin", source)
+        administrator = source[source.index('bootstrapAdministrator ='):source.index('bootstrapSecrets =')]
+        self.assertIn("passwd --lock nas-bootstrap", administrator)
+        self.assertIn("/bin/nologin", administrator)
+        self.assertIn("--groups wheel", administrator)
+        self.assertNotIn("nas-administrators", administrator)
+        self.assertNotIn("nas-operations", administrator)
         self.assertNotIn("nixos-nas-bootstrap", source)
         self.assertIn("nas-bootstrap-administrator.serviceConfig.ExecStart = lib.mkOverride 40", source)
 
