@@ -73,11 +73,6 @@
         default = "/identity/";
         description = "Public subpath where Authentik is served. It must begin and end with a slash.";
       };
-      authentikOutpostPort = lib.mkOption {
-        type = lib.types.port;
-        default = 9010;
-        description = "Loopback port used by the dedicated Authentik proxy outpost.";
-      };
       bootstrapEmail = lib.mkOption {
         type = lib.types.strMatching "^[^[:space:]@]+@[^[:space:]@]+$";
         default = "admin@nas.local";

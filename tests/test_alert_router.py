@@ -60,6 +60,8 @@ class AlertRouterTests(unittest.TestCase):
             password = pathlib.Path(tmp) / "password"
             topic.write_text("ops/admin?token=secret\n", encoding="utf-8")
             password.write_text("pw\n", encoding="utf-8")
+            topic.chmod(0o600)
+            password.chmod(0o600)
             alert = router.normalize_alert(
                 {
                     "labels": {"alertname": "Disk\r\nInjected: yes", "severity": "warning"},
@@ -84,6 +86,33 @@ class AlertRouterTests(unittest.TestCase):
             self.assertEqual(request.full_url, "https://ntfy.invalid/ops%2Fadmin%3Ftoken%3Dsecret")
             self.assertNotRegex(request.headers["Title"], r"[\x00-\x1f\x7f]")
             self.assertEqual(timeout, router.REQUEST_TIMEOUT_SECONDS)
+
+    def test_secret_reader_rejects_symlinks_broad_modes_and_oversized_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            target = root / "target"
+            target.write_text("private-value\n", encoding="utf-8")
+            target.chmod(0o600)
+            link = root / "link"
+            link.symlink_to(target)
+            with self.assertRaisesRegex(router.AlertDeliveryError, "regular file"):
+                router.read_secret(link)
+
+            target.chmod(0o644)
+            with self.assertRaisesRegex(router.AlertDeliveryError, "permissions are too broad"):
+                router.read_secret(target)
+
+            target.write_text("x" * (router.MAX_SECRET_BYTES + 1), encoding="utf-8")
+            target.chmod(0o600)
+            with self.assertRaisesRegex(router.AlertDeliveryError, "too large"):
+                router.read_secret(target)
+
+    def test_secret_reader_accepts_private_single_line_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "secret"
+            path.write_text("private-value\n", encoding="utf-8")
+            path.chmod(0o600)
+            self.assertEqual(router.read_secret(path), "private-value")
 
     def test_critical_inhibits_same_warning(self) -> None:
         labels = {"alertname": "Storage", "instance": "nas"}

@@ -355,12 +355,14 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=False),
             mock.patch.object(setup, "ZFS_ENCRYPTION", True),
+            mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)) as coordinated,
             mock.patch.object(setup, "run_interactive_privileged") as privileged,
             mock.patch.object(setup, "run_root") as root,
         ):
             result = setup.setup_storage(
                 {"createPool": False}, keepass_password="pw", confirmed_devices=[], allow_destructive=False
             )
+        coordinated.assert_called_once_with(["nas-zfs-create-encrypted-dataset"])
         privileged.assert_called_once_with(["nas-zfs-create-encrypted-dataset"], input_text="pw\n")
         root.assert_not_called()
         self.assertTrue(result["encrypted"])
@@ -420,15 +422,12 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         self.assertEqual(result, {"demo": "always"})
         self.assertIn(setup.MANAGED_SERVICES_CONTROL, root.call_args.args[0])
 
-    def test_password_input_authenticators_are_secret_independent_in_output(self) -> None:
-        plan = {"accounts": [{"username": "alice", "password": "secret"}, {"username": "bob"}]}
-        value = setup.password_input_authenticators(plan, "keepass")
-        self.assertEqual(set(value), {"alice"})
-        self.assertNotIn("secret", json.dumps(value))
-        with self.assertRaisesRegex(setup.SetupError, "Account plan is invalid"):
-            setup.password_input_authenticators({"accounts": 1}, "pw")
-        with self.assertRaisesRegex(setup.SetupError, "Account plan is invalid"):
-            setup.password_input_authenticators({"accounts": [1]}, "pw")
+    def test_password_input_authenticators_are_not_persisted(self) -> None:
+        self.assertFalse(hasattr(setup, "password_input_authenticators"))
+        module_file = setup.__file__
+        assert module_file is not None
+        source = pathlib.Path(module_file).read_text(encoding="utf-8")
+        self.assertNotIn("def password_input_authenticators", source)
 
     def test_canonical_plan_digest_and_confirmation(self) -> None:
         config = {
@@ -463,9 +462,10 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         args = argparse.Namespace(
             create_database=False, confirm_storage_device=[], allow_destructive_storage=False, skip_preflight=False
         )
-        first = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
+        administrator = {"username": "nasadmin", "name": "NAS Administrator", "email": "admin@example.test"}
+        first = setup.setup_fingerprint(config, args, administrator)
         args.skip_preflight = True
-        second = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
+        second = setup.setup_fingerprint(config, args, administrator)
         self.assertNotEqual(first, second)
 
     def test_install_runtime_identity_token_validates_and_installs(self) -> None:

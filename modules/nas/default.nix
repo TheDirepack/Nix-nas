@@ -11,15 +11,23 @@
     ./options/operations.nix
     ./options/management.nix
     ./config/validation.nix
+    ./config/installation-security.nix
     ./config/network-firewall.nix
     ./config/host-platform.nix
     ./config/virtualization.nix
     ./config/identities.nix
     ./config/application-services.nix
+    ./config/bootstrap-security.nix
+    ./config/secret-file-preflight.nix
+    ./config/setup-security.nix
+    ./config/password-security.nix
     ./config/reverse-proxy.nix
     ./config/caddy-bootstrap.nix
+    ./config/cockpit-security.nix
+    ./config/copyparty-security.nix
     ./config/observability.nix
     ./config/storage-monitoring.nix
+    ./config/backup-security.nix
     ./config/systemd-services.nix
     ./config/schedules.nix
     ./config/system.nix

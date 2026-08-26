@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import pathlib
 import sys
@@ -144,6 +145,14 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             source_path.write_text("[]", encoding="utf-8")
             with self.assertRaisesRegex(control.ControlError, "must contain an object"):
                 control.replace_json_from_source(str(source_path))
+
+    def test_editor_inputs_are_bounded_before_json_or_yaml_parsing(self) -> None:
+        with (
+            mock.patch.object(control, "MAX_DOCUMENT_CHARS", 8),
+            mock.patch.object(control.sys, "stdin", io.StringIO("x" * 9)),
+        ):
+            with self.assertRaisesRegex(control.ControlError, "input limit"):
+                control._read_json_document("-")
 
 
 if __name__ == "__main__":

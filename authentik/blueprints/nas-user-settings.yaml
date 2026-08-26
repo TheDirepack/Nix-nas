@@ -5,19 +5,34 @@ metadata:
   labels:
     blueprints.goauthentik.io/instantiate: "true"
 entries:
+  # Harden Authentik's native password-change policy instead of adding a
+  # parallel password controller. Authentik fails zxcvbn scores that are less
+  # than or equal to this threshold, so 2 means the accepted scores are 3/4,
+  # matching the standalone setup validator.
+  - model: authentik_policies_password.passwordpolicy
+    identifiers:
+      name: default-password-change-password-policy
+    attrs:
+      check_static_rules: true
+      check_have_i_been_pwned: true
+      hibp_allowed_count: 0
+      check_zxcvbn: true
+      zxcvbn_score_threshold: 2
+      length_min: 15
+      password_field: password
+      error_message: Password must be at least 15 characters, not known-breached, and sufficiently hard to guess.
+
   - model: authentik_rbac.role
     identifiers:
       name: NAS automation
     attrs:
+      # Steady-state NAS reconciliation only projects Authentik-owned identity
+      # data into native services. Human users, passwords, groups, and
+      # assignments are managed in Authentik itself, so the runtime service
+      # account must not be able to mutate those authorities.
       permissions:
         - authentik_core.view_user
-        - authentik_core.add_user
-        - authentik_core.change_user
-        - authentik_core.reset_user_password
         - authentik_core.view_group
-        - authentik_core.add_group
-        - authentik_core.change_group
-        - authentik_core.enable_group_superuser
 
   - model: authentik_stages_prompt.prompt
     identifiers:

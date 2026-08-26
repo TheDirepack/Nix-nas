@@ -72,9 +72,10 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("buildPythonApplication", package)
         for entrypoint in (
             "nas-cockpit-api",
+            "nas-first-run-api",
+            "nas-first-start-job",
             "nas-identity-sync",
             "nas-setup",
-            "nas-managed-services",
             "nas-managed-services-control",
             "nas-managed-session",
         ):
@@ -115,7 +116,9 @@ class Alpha18HardeningContracts(unittest.TestCase):
 
     def test_authentik_has_one_non_secret_config_channel_and_distinct_runtime_dirs(self) -> None:
         services = text("modules/nas/config/application-services.nix")
-        self.assertIn('AUTHENTIK_LISTEN__HTTP="127.0.0.1:${toString authentikOutpostPort}"', services)
+        self.assertIn('http = "127.0.0.1:${toString authentikPort}";', services)
+        self.assertIn('https = "";', services)
+        self.assertNotIn("AUTHENTIK_LISTEN__HTTP", services)
         self.assertNotIn("AUTHENTIK_WEB__", services)
         for directory in ("authentik-migrate", "authentik-worker", "authentik-server"):
             self.assertIn(f'RuntimeDirectory = "{directory}";', services)
