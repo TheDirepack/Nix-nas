@@ -34,7 +34,7 @@ def _regular_root_file(path: pathlib.Path) -> bool:
         stat.S_ISREG(info.st_mode)
         and not stat.S_ISLNK(info.st_mode)
         and info.st_uid == 0
-        and not (stat.S_IMODE(info.st_mode) & 0o022)
+        and not (stat.S_IMODE(info.st_mode) & 0o077)
     )
 
 
@@ -49,7 +49,7 @@ def _read_private_root_json(path: pathlib.Path) -> dict[str, Any]:
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != 0
-            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or stat.S_IMODE(metadata.st_mode) & 0o077
             or metadata.st_size > 16 * 1024
         ):
             raise setup.SetupError(f"Setup transaction marker has unsafe ownership or mode: {path}")
