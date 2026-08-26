@@ -103,8 +103,15 @@ test("setup uses searchable locale controls and keeps storage configuration acti
   assert.match(storage, /\/console\/storage/);
   assert.match(storage, /\/console\/system\/terminal/);
   assert.match(storage, /Refresh plan/);
-  assert.doesNotMatch(await wizard("src/index.jsx"), /AuthentikStep|wizard-authentik|Authentik Integration/);
-  assert.equal(await exists("src/steps/AuthentikStep.jsx"), false, "the removed Authentik step must not remain as dead UI");
+  assert.doesNotMatch(
+    await wizard("src/index.jsx"),
+    /AuthentikStep|wizard-authentik|Authentik Integration/,
+  );
+  assert.equal(
+    await exists("src/steps/AuthentikStep.jsx"),
+    false,
+    "the removed Authentik step must not remain as dead UI",
+  );
 });
 
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
@@ -161,7 +168,10 @@ test("committed stylesheet carries the global tokens and core component rules", 
   }
   assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the full-height setup shell");
   assert.ok(css.includes(".pf-v6-theme-dark"), "stylesheet is missing dark-mode overrides");
-  assert.ok(css.includes(".nas-searchable-select-toggle{"), "stylesheet is missing visible locale control chrome");
+  assert.ok(
+    css.includes(".nas-searchable-select-toggle{"),
+    "stylesheet is missing visible locale control chrome",
+  );
 });
 
 test("dist index.html matches the reviewed source shell", async () => {
