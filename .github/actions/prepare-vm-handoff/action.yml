@@ -70,15 +70,18 @@ runs:
         ./scripts/vm-bundles.sh save-missing "$RUNNER_TEMP/vm-bundles"
         echo "::endgroup::"
 
-    - name: Build and export exact installable system closures
+    - name: Verify exact complete handoff fragments
+      shell: bash
+      run: ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+
+    - name: Build installable system closures and export exact handoff
       shell: bash
       run: |
         set -euo pipefail
         echo "::group::Build and export exact system closures"
         bash scripts/system-handoff.sh save "$RUNNER_TEMP/vm-bundles"
         echo "::endgroup::"
-        echo "::group::Verify complete per-run handoff"
-        ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+        echo "::group::Verify exact system handoff"
         bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
         echo "::endgroup::"
 
