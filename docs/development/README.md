@@ -12,6 +12,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [Known risks](known-risks.md) — unresolved multi-step failure boundaries and recovery expectations.
 - [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
+- [Automated merge releases](automated-releases.md) — release-only version stamping, Diceware bootstrap credentials, build/publish flow, and retry behavior.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.
 - [Design system](../../.interface-design/system.md) — Cockpit UI direction, PatternFly authority, and component rules.
 
