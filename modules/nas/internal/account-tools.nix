@@ -190,9 +190,9 @@ let
       name = "keepass";
       source = cfg.secrets.keepassDatabase;
       sensitive = true;
-      owner = cfg.adminUser;
-      group = "users";
-      rootMode = "0600";
+      owner = "root";
+      group = "nas-administrators";
+      rootMode = "0660";
     })
     (mkDatabaseAuthority { name = "authentik-database"; source = "postgresql://authentik"; })
   ]
