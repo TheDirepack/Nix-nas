@@ -25,11 +25,13 @@ The build job has only read access and checks out with `persist-credentials: fal
 
 ## Version allocation and reruns
 
-`.github/release-version-epoch.json` anchors the current development `VERSION` series. The release patch is the development patch plus the source merge's first-parent distance from that epoch. Each qualified main commit therefore has a deterministic version independent of Actions run numbers, retries, queue order, or overlapping workflow execution.
+`.github/release-version-epoch.json` anchors the current development `VERSION` series. The release patch is the development patch plus the source merge's first-parent distance from that epoch. Each qualified main commit therefore has a deterministic version independent of Actions run numbers, retries, queue order, or overlapping CI execution.
+
+The release workflow itself deliberately uses one `main-release-publication` concurrency group with `queue: max`. This serialization is not needed to make version numbers unique; the first-parent mapping already does that. It exists so each generated release sees the previously published tag history before constructing its cumulative generated changelog. `queue: max` preserves up to 100 pending release runs instead of replacing the previous pending run, so a burst of qualified merges is processed in order rather than silently dropping intermediate release opportunities.
 
 When a new development `VERSION` series is deliberately established, the epoch must be advanced with it. The version metadata checks and release tests enforce the shape of this contract.
 
-Generated release commits are intentionally not merged back to `main`. To keep release changelogs cumulative anyway, release preparation reads the newest earlier generated release tag in the same version series and carries its generated release sections forward before the development baseline section.
+Generated release commits are intentionally not merged back to `main`. To keep release changelogs cumulative anyway, release preparation reads the newest earlier generated release tag in the same version series and carries its generated release sections forward before the development baseline section. Serializing release workflows ensures that earlier qualified merges have finished publishing their tags before the next candidate reads that history.
 
 If publication is interrupted after the tag exists, a rerun finds the tag associated with the original source merge, recovers the exact release version and passphrase from that tagged release commit, and repairs or completes the GitHub Release instead of generating a different release identity.
 
