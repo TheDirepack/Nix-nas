@@ -19,7 +19,7 @@ export const usePasswordQualityCheck = (userInputs = []) => {
       setQuality(null);
       setError(String(reason));
     }
-  }, [userInputs.join('\u0000')]);
+  }, [userInputs]);
 
   return { quality, error, check };
 };
