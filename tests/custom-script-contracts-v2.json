@@ -73,7 +73,8 @@
     "services/nas_first_run_api.py": ["tests/test_first_run_api_contract.py", "tests/test_first_run_security_hardening.py"],
     "services/nas_first_start.py": ["tests/test_secure_first_start.py", "tests/test_first_run_security_hardening.py"],
     "services/nas_identity_bootstrap.py": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"],
-    "services/nas_identity_dispatch.py": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"]
+    "services/nas_identity_dispatch.py": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"],
+    "services/nas_setup_dispatch.py": ["tests/test_secure_first_start.py"]
   },
   "schemaVersion": 3
 }
