@@ -8,7 +8,7 @@ Shared source/test contracts, static/configuration checks, unit/coverage checks,
 
 The qualification layer is split into one shared prerequisite job followed by independent parallel branches. Each branch uses `.github/ci-checks.sh` and `scripts/ci-check-report.py` to continue through its own subchecks, preserve complete logs, annotate exact failures, and fail once after reporting all failures found in that branch. The later qualification gate joins branch outcomes; it is not a cached pass marker.
 
-`npm audit` always queries the current vulnerability database on applicable runs. Cached dependencies may supply its inputs, but no cached result replaces the audit.
+`npm audit` always queries the current vulnerability database on applicable runs. Cached package-manager data may accelerate dependency installation, but no cached result replaces the audit.
 
 ## Shared Nix test-tool preparation
 
@@ -16,20 +16,19 @@ The shared prerequisite job installs Nix through `.github/actions/setup-nix-ci/a
 
 That realization is intentionally sequential because the static, unit, security, and nonroot branches all use the same pinned test-tool closure. The later runners still install Nix locally, but the expensive package realization is already available through the shared Nix cache instead of being independently resolved cold in every branch.
 
-Branch-specific prerequisites remain branch-local. For example, Node dependencies are not restored by the shared job because only the Cockpit branch needs them at this stage.
+Branch-specific prerequisites remain branch-local. For example, Node setup is not performed by the shared job because only the Cockpit branch needs it at that stage.
 
-## Dependency caches
+## JavaScript dependency caches
 
-- `cockpit/node_modules` is keyed by `package-lock.json`, runner operating system, Node major, and `CI_CACHE_SCHEMA`.
-- Playwright browser engines are keyed by `package-lock.json`, runner operating system, and `CI_CACHE_SCHEMA`.
+CI does **not** cache executable `node_modules` trees. `actions/setup-node` caches npm's package-manager download cache, keyed through `cockpit/package-lock.json`, and every runner executes `npm ci` to reconstruct the exact dependency tree from the reviewed lockfile before running project JavaScript.
 
-Playwright operating-system packages installed by `playwright install-deps` are not cached. Each runner that needs real browser engines installs those host packages locally.
+Playwright browser engines are cached by `package-lock.json`, runner operating system, and `CI_CACHE_SCHEMA`. Playwright operating-system packages installed by `playwright install-deps` are not cached; each runner that needs real browser engines installs those host packages locally.
 
 ## Cockpit build handoff
 
-The parallel Cockpit qualification branch already owns the exact Node dependency environment needed to validate the UI. It therefore runs source validation, JavaScript tests, the live vulnerability audit, the production build, and `cockpit/build.js --check` in one runner. If that branch qualifies, it publishes `cockpit-bundle`.
+The parallel Cockpit qualification branch owns the exact Node dependency environment needed to validate the UI. It therefore runs source validation, JavaScript tests, the live vulnerability audit, the production build, and `cockpit/build.js --check` in one runner. If that branch qualifies, it publishes `cockpit-bundle`.
 
-The later `prepare` stage downloads that reviewed artifact instead of restoring Node dependencies and compiling Cockpit again. Browser, integration, installer, and installed-system jobs consume the same artifact.
+The later `prepare` stage downloads that reviewed artifact instead of restoring Node dependencies and compiling Cockpit again. Browser, integration, installer, and installed-system jobs consume the same artifact. Browser-capable consumers still run `npm ci` for their test tooling; they do not rebuild the production Cockpit bundle.
 
 The artifact is not a pass marker. The Cockpit producer runs its own source/tests/audit/build checks, and every downstream consumer still runs the checks appropriate to its layer.
 
@@ -37,7 +36,7 @@ The artifact is not a pass marker. The Cockpit producer runs its own source/test
 
 The prepare stage caches the source-only archive by the exact commit SHA after package assembly and manifest verification have passed. A later run for the same SHA still checks the restored ZIP before publishing source evidence. A different commit always misses and must execute the producer path.
 
-`prepare` no longer restores `node_modules`, because the production Cockpit bundle arrives as an artifact. This keeps generated dependencies out of the packaging checkout by construction.
+`prepare` never restores `node_modules`, because the production Cockpit bundle arrives as an artifact. This keeps generated dependencies out of the packaging checkout by construction.
 
 This cache contains an immutable archive input, not a remembered qualification result.
 
@@ -65,7 +64,7 @@ Never cache mutable VM runtime state, including disks, overlays, PID files, logs
 
 The full QEMU system closure contains thousands of store paths. Fetching those paths independently on every runner is both slow and capable of exhausting per-path cache traffic. CI therefore separates **cross-run acceleration** from the **authoritative per-run handoff**.
 
-`.github/actions/prepare-vm-handoff/action.yml` is the only place that restores the six granular cross-run bundle caches:
+`.github/actions/prepare-vm-handoff/action.yml` is the only place that restores the six granular cross-run package/test-driver bundle caches:
 
 - `core`;
 - `identity`;
@@ -74,11 +73,15 @@ The full QEMU system closure contains thousands of store paths. Fetching those p
 - `ai`; and
 - `vm-drivers`.
 
-The action imports restored fragments, builds and exports only missing roots with `scripts/vm-bundles.sh save-missing`, verifies the complete set, and builds the installable NixOS closures. It then saves only bundle-cache misses for future runs.
+The action imports restored fragments and builds/exports only missing roots with `scripts/vm-bundles.sh save-missing`. These six granular caches remain cross-run acceleration only.
 
-After that preparation, the action always publishes one complete verified `vm-bundle-handoff` artifact for the current workflow run. Downstream integration, installer, and installed-security runners download that artifact, run `scripts/vm-bundles.sh verify-handoff`, and import it. They do **not** independently restore the six bundle caches or rebuild the package set.
+After those reusable roots are available, `scripts/system-handoff.sh save` builds the exact `nas-ci-ready` and `nas-qemu` `system.build.toplevel` outputs, enumerates their complete Nix store closure, exports the closure as `system-closures.nar.gz`, and records both a path manifest and strict SHA-256 checksum. The producer verifies the package handoff and exact system handoff before publication.
 
-This keeps granular caches where they are useful across runs while making a single immutable artifact the source of truth inside one run. The artifact contains Nix store closures only; it does not contain mutable VM state and does not represent a passed test.
+The action then publishes one `vm-bundle-handoff` artifact for the current workflow run containing both the reusable bundle fragments and exact system closure export. Downstream integration, installer, and installed-security runners verify and import **both** layers before executing. They do not independently restore the six package caches or cold-build the full system closure again; their remaining Nix work is limited to the test/configuration delta needed by that consumer.
+
+The successful main CI run's handoff is also the immutable Nix input consumed by automated release preparation. Release stamping still rebuilds the configuration-dependent release delta after changing version/bootstrap source, but it does not refetch the qualified base closure cold.
+
+This keeps granular caches where they are useful across runs while making a single verified artifact the source of truth inside one run. The artifact contains Nix store closures only; it does not contain mutable VM state and does not represent a passed test by itself.
 
 ## Pipeline ordering
 
@@ -86,9 +89,11 @@ This keeps granular caches where they are useful across runs while making a sing
 2. **Parallel qualification fan-out** — static/configuration, unit/coverage, security/Caddy, unprivileged hermeticity, and Cockpit qualification run independently. Each branch owns only prerequisites that do not benefit the others and reports all of its subcheck failures before failing.
 3. **PR coverage drift** — when applicable, start as soon as the unit branch finishes and compare current coverage with the exact main baseline without waiting for unrelated qualification branches.
 4. **Qualification gate** — join the shared prerequisites and every parallel qualification result. Expensive product preparation starts only after the complete inexpensive qualification layer succeeds.
-5. **Prepare reusable build handoff** — consume the already-reviewed Cockpit artifact, restore/build the Nix package set once, publish the complete Nix handoff, and produce source-archive evidence.
+5. **Prepare reusable build handoff** — consume the already-reviewed Cockpit artifact, restore/build the reusable Nix package set once, build/export the exact installable system closures once, publish the complete Nix handoff, and produce source-archive evidence.
 6. **Browser and QEMU qualification** — one browser runner executes the complete deterministic Playwright suite using Playwright's own internal workers; the two long QEMU integration legs remain separate so they can run in parallel. All three consume prepared products.
 7. **Installer qualification** — install from official NixOS media, reboot, and run final-system deterministic browser/security checks while reusing the prepared Nix/Cockpit handoffs.
 8. **Final generated/adversarial qualification** — `scripts/run-fuzz.py` owns source-fuzz parallelism inside one runner, while installed-command and ZAP workloads share one provisioned installed appliance and report their independent failures together.
+
+Actual jobs use `!cancelled()` when they must run after dependency completion, so superseded/cancelled workflow runs terminate instead of spawning new work. `always()` is reserved for diagnostic/report/evidence steps inside an already-running job.
 
 The workflow intentionally splits jobs where parallel execution shortens the critical path or isolation matters, while keeping common prerequisites before the fan-out and branch-only preparation inside the branch that consumes it. It does not create separate runners merely to label individual lint rules, browser greps, or fuzz suites.
