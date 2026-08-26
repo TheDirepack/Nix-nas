@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -18,6 +20,8 @@ from typing import Any
 
 import nas_identity_sync as identity
 from nas_identity_model import SyncError, user_detail_pk
+
+PASSWORD_QUALITY_BIN = os.environ.get("NAS_PASSWORD_QUALITY_BIN", "/run/current-system/sw/bin/nas-password-quality")
 
 
 def _bootstrap_token() -> str:
@@ -38,10 +42,63 @@ def _load_plan() -> dict[str, Any]:
     return value
 
 
+def _password_quality(password: str, user_inputs: list[str]) -> dict[str, Any]:
+    request = json.dumps({"password": password, "userInputs": user_inputs}) + "\n"
+    try:
+        result = subprocess.run(
+            [PASSWORD_QUALITY_BIN],
+            input=request,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SyncError("Unable to run the shared password-quality validator") from exc
+    finally:
+        request = ""
+    if result.returncode != 0:
+        raise SyncError("Shared password-quality validation failed")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise SyncError("Shared password-quality validator returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise SyncError("Shared password-quality validator returned an invalid result")
+    return value
+
+
+def _validate_setup_account_passwords(plan: Mapping[str, Any]) -> None:
+    accounts = plan.get("accounts", [])
+    if not isinstance(accounts, list):
+        raise SyncError("Bootstrap account plan contains an invalid accounts value")
+    for account in accounts:
+        if not isinstance(account, Mapping):
+            raise SyncError("Bootstrap account plan contains an invalid account")
+        password = account.get("password")
+        if password is None:
+            continue
+        if not isinstance(password, str):
+            raise SyncError("Bootstrap account plan contains an invalid password")
+        context = [
+            value
+            for value in (account.get("username"), account.get("name"), account.get("email"))
+            if isinstance(value, str) and value
+        ]
+        quality = _password_quality(password, context)
+        if quality.get("localAccepted") is not True:
+            raise SyncError("Setup account password does not meet the local strength policy")
+        if quality.get("breachStatus") == "breached":
+            raise SyncError("Setup account password appears in the breached-password corpus")
+        password = ""
+
+
 def apply_accounts(*, confirm_password_reapply: bool) -> dict[str, Any]:
+    plan = _load_plan()
+    _validate_setup_account_passwords(plan)
     return identity.apply_account_plan(
         _bootstrap_token(),
-        _load_plan(),
+        plan,
         confirm_password_reapply=confirm_password_reapply,
     )
 
