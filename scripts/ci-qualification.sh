@@ -46,7 +46,7 @@ case "$section" in
 
   static)
     ci_run static secret-faults "Secret transaction fault injection" \
-      nix shell nixpkgs#bats -c bats tests/bats || failed=1
+      nix develop .#test -c bats tests/bats || failed=1
     ci_run static shellcheck "ShellCheck" \
       nix develop .#test -c shellcheck \
       .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
@@ -60,7 +60,7 @@ case "$section" in
     ci_run static pyright "Python types" \
       nix develop .#test -c pyright --project pyproject.toml || failed=1
     ci_run static prettier "JavaScript formatting" \
-      nix shell nixpkgs#prettier -c prettier --check \
+      nix develop .#test -c prettier --check \
       "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" \
       "tests/js/*.mjs" prettier.config.mjs || failed=1
     ci_run static nix-matrix "Nix configuration matrix" \
