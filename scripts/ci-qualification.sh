@@ -106,6 +106,7 @@ case "$section" in
       --exclude test_maintainer_release.py \
       --exclude test_contract_tooling.py \
       --exclude test_fuzz_boundaries.py \
+      --exclude test_fuzz_custom_inputs.py \
       --exclude test_property_invariants.py \
       --exclude test_secret_security_fuzz.py || failed=1
 
@@ -159,7 +160,7 @@ case "$section" in
       sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
       sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
       sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-        bash -c "cd /home/nas-ci/worktree && exec \"$nix_bin\" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py"
+        bash -c "cd /home/nas-ci/worktree && exec \"$nix_bin\" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_fuzz_custom_inputs.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py"
     }
     ci_run nonroot fast-suite "Run the fast suite without root-owned state" \
       run_nonroot_suite || failed=1
