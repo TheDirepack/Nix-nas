@@ -12,7 +12,6 @@ import datetime as dt
 import json
 import pathlib
 import re
-import secrets
 import subprocess
 from dataclasses import dataclass
 
@@ -86,17 +85,16 @@ def next_version(root: pathlib.Path, current: Version, run_number: int, source_s
     return Version(current.major, current.minor, patch)
 
 
-def generate_bootstrap_password() -> str:
-    # 32 random bytes produce a 43-character URL-safe token. The character set
-    # is accepted by nas-secrets' require_secret_atom validation.
-    password = secrets.token_urlsafe(32)
-    validate_bootstrap_password(password)
-    return password
-
-
 def validate_bootstrap_password(password: str) -> None:
     if not 20 <= len(password) <= 128 or SAFE_SECRET_RE.fullmatch(password) is None:
         raise ValueError("bootstrap password does not satisfy the NAS secret atom contract")
+
+
+def validate_release_passphrase(password: str) -> None:
+    validate_bootstrap_password(password)
+    words = password.split("-")
+    if len(words) != 5 or any(not word or not word.isalpha() or not word.isascii() for word in words):
+        raise ValueError("release bootstrap password must be exactly five hyphen-separated words")
 
 
 def bootstrap_password_from_text(source: str, label: str) -> str:
@@ -130,9 +128,9 @@ def tracked_files_containing(root: pathlib.Path, needle: str) -> list[pathlib.Pa
 
 
 def rotate_bootstrap_password(root: pathlib.Path, old: str, new: str) -> list[str]:
-    validate_bootstrap_password(new)
+    validate_release_passphrase(new)
     if old == new:
-        raise ValueError("new bootstrap password must differ from the previous release")
+        raise ValueError("new bootstrap password must differ from the development bootstrap password")
     paths = tracked_files_containing(root, old)
     relative_paths = {path.relative_to(root).as_posix() for path in paths}
     missing = sorted(CORE_BOOTSTRAP_PATHS - relative_paths)
@@ -210,7 +208,7 @@ def update_version_metadata(root: pathlib.Path, old: Version, new: Version, rele
         f"## {new_text} — {release_date}\n\n"
         "### Changed\n\n"
         "- Automated merge release: advanced the release version from "
-        f"`{old_text}` to `{new_text}` and rotated the release-specific Authentik bootstrap credential.\n\n"
+        f"`{old_text}` to `{new_text}` and rotated the release-only Authentik bootstrap credential.\n\n"
     )
     changelog_path.write_text(changelog[:position] + section + changelog[position:], encoding="utf-8")
     changed.append("CHANGELOG.md")
@@ -230,18 +228,19 @@ def prepare_release(
     current = Version.parse((root / "VERSION").read_text(encoding="utf-8"))
     existing = release_tag_for_source(root, current, source_sha)
     target = existing[1] if existing is not None else next_version(root, current, run_number)
-    old_password = discover_bootstrap_password(root)
-    if password is not None:
-        new_password = password
-    elif existing is not None:
-        new_password = bootstrap_password_from_tag(root, existing[0])
+    development_password = discover_bootstrap_password(root)
+
+    if existing is not None:
+        release_password = bootstrap_password_from_tag(root, existing[0])
+    elif password is not None:
+        release_password = password
     else:
-        new_password = generate_bootstrap_password()
-    validate_bootstrap_password(new_password)
+        raise ValueError("new releases require a Diceware bootstrap password supplied by the release workflow")
+    validate_release_passphrase(release_password)
 
     date = release_date or dt.datetime.now(dt.UTC).date().isoformat()
     version_files = update_version_metadata(root, current, target, date)
-    password_files = rotate_bootstrap_password(root, old_password, new_password)
+    password_files = rotate_bootstrap_password(root, development_password, release_password)
 
     metadata: dict[str, object] = {
         "version": str(target),
@@ -250,7 +249,7 @@ def prepare_release(
         "existing_tag": existing[0] if existing is not None else "",
         "source_sha": source_sha,
         "bootstrap_username": BOOTSTRAP_USERNAME,
-        "bootstrap_password": new_password,
+        "bootstrap_password": release_password,
         "version_files": sorted(version_files),
         "bootstrap_files": password_files,
     }
