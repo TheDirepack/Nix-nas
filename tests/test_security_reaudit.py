@@ -84,6 +84,23 @@ class SecurityReauditContracts(unittest.TestCase):
         self.assertNotIn("-C FORWARD -s ${piNsVethIp}/30 -j ACCEPT", network)
         self.assertNotIn("-C FORWARD -d ${piNsVethIp}/30 -j ACCEPT", network)
 
+    def test_first_run_failures_redact_runtime_capabilities_before_persistence(self) -> None:
+        logging = importlib.import_module("nas_logging")
+        pipe = importlib.import_module("nas_first_start_pipe")
+        capability = "0123456789abcdef0123456789abcdef"
+        diagnostic = (
+            "Command failed: env "
+            f"NAS_OPERATION_COORDINATION_TOKEN={capability} nas-identity-sync bootstrap: failed"
+        )
+        sanitized = logging.sanitize(diagnostic)
+        self.assertIsInstance(sanitized, str)
+        self.assertNotIn(capability, sanitized)
+        self.assertIn("NAS_OPERATION_COORDINATION_TOKEN=[redacted]", sanitized)
+        self.assertNotIn(capability, pipe._safe_error(RuntimeError(diagnostic)))
+        source = text("services/nas_first_start_pipe.py")
+        self.assertIn('"error": _safe_error(exc)', source)
+        self.assertIn('print(f"nas-first-start: {_safe_error(exc)}"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
