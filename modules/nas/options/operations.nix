@@ -107,17 +107,17 @@
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Run the guarded nas-update workflow automatically.";
+        description = "Schedule the guarded nas-update check/build workflow. This does not activate an update unless nas.autoUpdate.apply is also true.";
       };
       onCalendar = lib.mkOption {
         type = lib.types.str;
         default = "Mon 03:00";
-        description = "systemd calendar expression for automatic updates.";
+        description = "systemd calendar expression for automatic update checks/builds.";
       };
       apply = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Activate the exact reviewed checkout after successful build and health checks. Keep false for validation-only runs.";
+        description = "Automatically activate the exact reviewed checkout after successful build and health checks. When false, scheduled runs validate/fetch/build only and leave the active system unchanged.";
       };
     };
   };
