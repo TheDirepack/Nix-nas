@@ -13,12 +13,14 @@ cp -- "$(command -v sleep)" "$fake_qemu"
 
 start_fake_qemu() {
   # Model the detached persistent VM rather than a shell-owned background job.
-  # Redirect all stdio and start a new session so leaving the launching subshell
-  # cannot terminate the fake QEMU before the cleanup contract inspects it.
-  setsid "$fake_qemu" 60 </dev/null >/dev/null 2>&1 &
-  printf '%s\n' "$!" > "$1"
+  # nohup preserves the real executable PID while making it independent of the
+  # launching subshell, which is exactly what the persistent QEMU contract needs.
+  local pid
+  nohup "$fake_qemu" 60 </dev/null >/dev/null 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" > "$1"
   if (($# > 1)); then
-    printf '%s\n' "$!" > "$2"
+    printf '%s\n' "$pid" > "$2"
   fi
 }
 
