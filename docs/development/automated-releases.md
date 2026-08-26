@@ -1,6 +1,6 @@
 # Automated merge releases
 
-A release is created only after the repository's `CI` workflow has completed successfully for a `push` to `main`. `.github/workflows/release.yml` listens to that successful `workflow_run`, verifies that the qualified source commit belongs to a merged pull request whose base is `main`, and only then prepares a release candidate. A direct push to `main` can run CI, but it is not eligible for automated publication.
+A release is created only after the repository's `CI` workflow has completed successfully for a `push` to `main`. `.github/workflows/release.yml` listens to that successful `workflow_run`, then verifies that the qualified source SHA is the associated pull request's recorded `merge_commit_sha` after a merge into `main`. GitHub defines that field as the resulting base-branch commit for merge commits, squash merges, and rebase merges. Merely being associated with a pull request is not enough, so a direct or indirect push cannot become release-eligible just because GitHub marks a related pull request as merged.
 
 This trigger graph is intentionally loop-free. CI does not listen to release tags, and the release workflow does not listen to repository push or tag events at all. Publishing `v<version>` therefore cannot start another CI or release workflow, even if the publication token or GitHub's token-trigger behavior changes in the future.
 
@@ -10,7 +10,7 @@ The development tree remains development-friendly: it keeps the fixed `akadmin` 
 
 The workflow:
 
-1. accepts only a successful main-branch `CI` run whose source commit is associated with a merged pull request;
+1. accepts only a successful main-branch `CI` run whose source SHA exactly equals the recorded merge result of a merged pull request targeting `main`;
 2. downloads the exact `vm-bundle-handoff` produced by that CI run and verifies/imports both the reusable package bundles and exact `nas-ci-ready`/`nas-qemu` system-closure handoff;
 3. uses the maintained `diceware` package from the repository's pinned Nixpkgs test environment to generate a five-word passphrase with the long EFF English wordlist (`en_eff`), explicitly selects the `system` cryptographic random source, enables capitalization, and uses `-` as the delimiter;
 4. calculates the release patch deterministically from the source commit's first-parent distance from the checked-in release-version epoch for the current `VERSION` series;
@@ -45,7 +45,7 @@ The setup workflow retires the bootstrap identity after the configured administr
 
 ## Repository policy
 
-Protecting `main` with a repository ruleset that requires pull requests and the stable CI summary remains recommended defense in depth. Automated release eligibility does not rely on that setting: the workflow independently verifies merged-PR provenance and refuses to publish direct pushes.
+Protecting `main` with a repository ruleset that requires pull requests and the stable CI summary remains recommended defense in depth. Automated release eligibility does not rely on that setting: the workflow independently verifies the exact merged-PR result and refuses to publish direct or indirectly associated pushes.
 
 ## Release status
 
