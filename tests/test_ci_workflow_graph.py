@@ -367,9 +367,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn(".github/workflows/ci.yml", self.qualification_script)
         self.assertIn(".github/workflows/release.yml", self.qualification_script)
         self.assertEqual(
-            self.qualification_script.count(
-                'unexpected key "queue" for "concurrency" section'
-            ),
+            self.qualification_script.count('unexpected key "queue" for "concurrency" section'),
             1,
         )
 
