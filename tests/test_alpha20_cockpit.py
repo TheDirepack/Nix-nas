@@ -114,23 +114,34 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("verify_syncthing_configuration", identity)
         self.assertIn('"schemaVersion": 2', identity)
 
-    def test_ci_uses_staged_qualification_and_reusable_build_handoffs(self) -> None:
+    def test_ci_uses_prerequisite_fanout_and_reusable_build_handoffs(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        qualification = text("scripts/ci-qualification.sh")
         handoff = text(".github/actions/prepare-vm-handoff/action.yml")
-        self.assertLess(
-            workflow.index("Source-only repository preflight"),
-            workflow.index("--coverage coverage.json"),
-        )
-        self.assertIn("Pre-build qualification", workflow)
+        self.assertIn("Shared qualification prerequisites", workflow)
+        self.assertIn("Realize pinned test toolchain once", workflow)
+        self.assertIn("nix develop .#test -c true", workflow)
+        for job_name in (
+            "Static analysis and configuration",
+            "Unit, coverage, and maintainer contracts",
+            "Security and generated configuration",
+            "Unprivileged hermeticity",
+            "Cockpit source, dependencies, and production bundle",
+        ):
+            self.assertIn(job_name, workflow)
+        self.assertGreaterEqual(workflow.count("needs: [prerequisites]"), 5)
+        self.assertIn("needs: [unit]", workflow)
+        self.assertIn("Qualification gate", workflow)
+        self.assertIn("needs: [qualification]", workflow)
         self.assertIn("Prepare reusable build handoff", workflow)
         self.assertIn("Full-stack QEMU integration", workflow)
         self.assertIn("Pipeline summary", workflow)
         self.assertIn("ci-check-report.py", workflow)
-        self.assertIn("needs: [prebuild, coverage-diff]", workflow)
-        self.assertIn("needs: [prepare]", workflow)
-        self.assertIn("needs: [integration, browser, installer]", workflow)
+        self.assertIn("Source-only repository preflight", qualification)
+        self.assertIn("--coverage coverage.json", qualification)
         self.assertIn("vm-bundle-handoff", handoff)
         for retired_gate in (
+            "prebuild:",
             "prebuild-gate:",
             "build-gate:",
             "runtime-gate:",
@@ -141,17 +152,19 @@ class Alpha20CockpitContracts(unittest.TestCase):
 
     def test_release_ci_runs_installer_final_vm_and_security_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        qualification = text("scripts/ci-qualification.sh")
         final_vm = text("scripts/qemu-final-browser.sh")
         self.assertIn("qemu-test.sh installer", workflow)
         self.assertIn("qemu-final-browser.sh", workflow)
         self.assertIn("zap-automation-scan.sh", final_vm)
-        self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
+        self.assertIn("npm --prefix cockpit audit --audit-level=high", qualification)
         self.assertIn("checks.x86_64-linux", workflow)
 
     def test_fast_ci_excludes_slow_properties_then_uses_internal_fuzz_parallelism(
         self,
     ) -> None:
         workflow = text(".github/workflows/ci.yml")
+        qualification = text("scripts/ci-qualification.sh")
         preflight = text("scripts/preflight.sh")
         security_runner = text("scripts/run-security-tests.py")
         fuzz_runner = text("scripts/run-fuzz.py")
@@ -160,7 +173,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "test_property_invariants.py",
             "test_secret_security_fuzz.py",
         ):
-            self.assertIn(f"--exclude {name}", workflow)
+            self.assertIn(f"--exclude {name}", qualification)
         self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("scripts/run-fuzz.py --jobs 6", workflow)
