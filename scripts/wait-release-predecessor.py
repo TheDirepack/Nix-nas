@@ -209,6 +209,15 @@ def wait_for_predecessor(
     anchor = release_series_anchor(root, source_sha)
     while True:
         fetch_tags(root)
+
+        # A source that already owns a release tag is a repair/rerun, not a new
+        # publication. Permit it even after descendants have been released so
+        # interrupted GitHub Release notes/assets remain repairable forever.
+        source_tag = tag_for_source(root, source_sha)
+        if source_tag is not None:
+            print(f"release ordering ready: source {source_sha} already owns {source_tag}; allowing repair")
+            return
+
         reject_published_descendant(root, source_sha)
         predecessor, state = find_predecessor_state(
             root,
