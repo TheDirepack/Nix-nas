@@ -63,9 +63,7 @@ def parse_results(path: pathlib.Path) -> list[Subcheck]:
             exit_code = int(exit_text)
             elapsed_seconds = int(elapsed_text)
         except ValueError as exc:
-            raise ValueError(
-                f"{path}:{line_number}: exit code and elapsed time must be integers"
-            ) from exc
+            raise ValueError(f"{path}:{line_number}: exit code and elapsed time must be integers") from exc
         if not section or not slug or not name or not log_text or not command:
             raise ValueError(f"{path}:{line_number}: required field is empty")
         if exit_code < 0 or elapsed_seconds < 0:
@@ -222,9 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     subcheck_failures = failed_subchecks(results)
     emit_failure_annotations(title, checks, results)
     if section_failures or subcheck_failures:
-        section_names = ", ".join(
-            f"{check.name}={check.outcome}" for check in section_failures
-        )
+        section_names = ", ".join(f"{check.name}={check.outcome}" for check in section_failures)
         print(
             f"{title} failed: {section_names or 'recorded subcheck failure'}",
             file=sys.stderr,

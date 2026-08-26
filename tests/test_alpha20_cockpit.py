@@ -26,9 +26,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "default = true;",
             options.split("firstStart = {", 1)[1].split("};", 1)[0],
         )
-        first_start = services.split("nas-first-start =", 1)[1].split(
-            "nas-zfs-unlock =", 1
-        )[0]
+        first_start = services.split("nas-first-start =", 1)[1].split("nas-zfs-unlock =", 1)[0]
         self.assertIn('wantedBy = [ "multi-user.target" ];', first_start)
         self.assertIn("prepare-first-start", first_start)
 
@@ -46,9 +44,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("nas-cockpit-oauth", application)
         # Caddy owns authorization: forward auth via the outpost plus the
         # nas_admin group check before any request reaches Cockpit.
-        console = bootstrap.split("handle /console* {", 1)[1].split(
-            "reverse_proxy", 1
-        )[0]
+        console = bootstrap.split("handle /console* {", 1)[1].split("reverse_proxy", 1)[0]
         self.assertIn("${caddyForwardAuth}", console)
         self.assertIn("missingCockpitAdmin", console)
         self.assertIn("respond @missingCockpitAdmin 403", console)
@@ -219,9 +215,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
     ) -> None:
         config = text("cockpit/e2e/playwright.config.mjs")
         harness = text("scripts/qemu-final-browser.sh")
-        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split(
-            'case "$WORKLOAD"', 1
-        )[0]
+        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split('case "$WORKLOAD"', 1)[0]
         self.assertIn("run_http_adversarial_contracts", harness)
         self.assertIn("curl --insecure --silent --show-error", http_block)
         self.assertIn("spoofed identity headers reached protected path", http_block)

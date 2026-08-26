@@ -108,12 +108,8 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})', runner)
         self.assertNotIn('frozenset({"test_service_caddy_validate.py"})', runner)
 
-        qualification = (ROOT / "scripts" / "ci-qualification.sh").read_text(
-            encoding="utf-8"
-        )
-        security_block = qualification.split("  security)\n", 1)[1].split(
-            "  nonroot)\n", 1
-        )[0]
+        qualification = (ROOT / "scripts" / "ci-qualification.sh").read_text(encoding="utf-8")
+        security_block = qualification.split("  security)\n", 1)[1].split("  nonroot)\n", 1)[0]
         self.assertIn("Caddy generator validation", security_block)
         self.assertIn("tests.test_v2_caddy", security_block)
         self.assertIn("tests.test_v2_caddy_validate", security_block)

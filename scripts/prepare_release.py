@@ -15,9 +15,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 
-VERSION_RE = re.compile(
-    r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)$"
-)
+VERSION_RE = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)$")
 BOOTSTRAP_RE = re.compile(r'store_value authentik-bootstrap-password "([^"\n]+)"')
 AUTHENTIK_ENV_RE = re.compile(r"AUTHENTIK_BOOTSTRAP_PASSWORD=([A-Za-z0-9._~+/=:@-]+)")
 SAFE_SECRET_RE = re.compile(r"^[A-Za-z0-9._~+/=:@-]+$")
@@ -40,19 +38,14 @@ class Version:
     def parse(cls, value: str) -> "Version":
         match = VERSION_RE.fullmatch(value.strip())
         if match is None:
-            raise ValueError(
-                "automatic releases require a three-component numeric VERSION, "
-                f"got {value!r}"
-            )
+            raise ValueError(f"automatic releases require a three-component numeric VERSION, got {value!r}")
         return cls(*(int(match.group(name)) for name in ("major", "minor", "patch")))
 
     def __str__(self) -> str:
         return f"{self.major}.{self.minor}.{self.patch}"
 
 
-def run_git(
-    root: pathlib.Path, *args: str, check: bool = True
-) -> subprocess.CompletedProcess[str]:
+def run_git(root: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         cwd=root,
@@ -74,12 +67,8 @@ def matching_tags(root: pathlib.Path, version: Version) -> list[tuple[str, int]]
     return tags
 
 
-def release_tag_for_source(
-    root: pathlib.Path, current: Version, source_sha: str
-) -> tuple[str, Version] | None:
-    for tag, patch in sorted(
-        matching_tags(root, current), key=lambda item: item[1], reverse=True
-    ):
+def release_tag_for_source(root: pathlib.Path, current: Version, source_sha: str) -> tuple[str, Version] | None:
+    for tag, patch in sorted(matching_tags(root, current), key=lambda item: item[1], reverse=True):
         parent = run_git(root, "rev-parse", f"{tag}^{{commit}}^1", check=False)
         if parent.returncode == 0 and parent.stdout.strip() == source_sha:
             return tag, Version(current.major, current.minor, patch)
@@ -106,9 +95,7 @@ def release_epoch(root: pathlib.Path) -> tuple[Version, str]:
 
 
 def version_anchor(root: pathlib.Path, current: Version, source_sha: str) -> str:
-    version_commit = run_git(
-        root, "log", "-1", "--format=%H", source_sha, "--", "VERSION"
-    ).stdout.strip()
+    version_commit = run_git(root, "log", "-1", "--format=%H", source_sha, "--", "VERSION").stdout.strip()
     if SHA_RE.fullmatch(version_commit) is None:
         raise RuntimeError("could not resolve the commit that established VERSION")
 
@@ -161,20 +148,14 @@ def validate_bootstrap_password(password: str) -> None:
 def validate_release_passphrase(password: str) -> None:
     validate_bootstrap_password(password)
     words = password.split("-")
-    if len(words) != 5 or any(
-        not word or not word.isalpha() or not word.isascii() for word in words
-    ):
-        raise ValueError(
-            "release bootstrap password must be exactly five hyphen-separated words"
-        )
+    if len(words) != 5 or any(not word or not word.isalpha() or not word.isascii() for word in words):
+        raise ValueError("release bootstrap password must be exactly five hyphen-separated words")
 
 
 def bootstrap_password_from_text(source: str, label: str) -> str:
     matches = BOOTSTRAP_RE.findall(source)
     if len(matches) != 1:
-        raise RuntimeError(
-            f"expected exactly one Authentik bootstrap-password seed in {label}"
-        )
+        raise RuntimeError(f"expected exactly one Authentik bootstrap-password seed in {label}")
     password = matches[0]
     validate_bootstrap_password(password)
     return password
@@ -183,29 +164,19 @@ def bootstrap_password_from_text(source: str, label: str) -> str:
 def application_bootstrap_password_from_text(source: str, label: str) -> str:
     matches = AUTHENTIK_ENV_RE.findall(source)
     if len(matches) != 1:
-        raise RuntimeError(
-            f"expected exactly one AUTHENTIK_BOOTSTRAP_PASSWORD assignment in {label}"
-        )
+        raise RuntimeError(f"expected exactly one AUTHENTIK_BOOTSTRAP_PASSWORD assignment in {label}")
     password = matches[0]
     validate_bootstrap_password(password)
     return password
 
 
 def discover_bootstrap_password(root: pathlib.Path) -> str:
-    secret_tools = (root / "modules/nas/internal/secret-tools.nix").read_text(
-        encoding="utf-8"
-    )
+    secret_tools = (root / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
     password = bootstrap_password_from_text(secret_tools, "secret-tools.nix")
-    application_services = (
-        root / "modules/nas/config/application-services.nix"
-    ).read_text(encoding="utf-8")
-    runtime_password = application_bootstrap_password_from_text(
-        application_services, "application-services.nix"
-    )
+    application_services = (root / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+    runtime_password = application_bootstrap_password_from_text(application_services, "application-services.nix")
     if password != runtime_password:
-        raise RuntimeError(
-            "first-boot Authentik runtime does not use the same bootstrap password as nas-secrets"
-        )
+        raise RuntimeError("first-boot Authentik runtime does not use the same bootstrap password as nas-secrets")
     return password
 
 
@@ -224,9 +195,7 @@ def tracked_files_containing(root: pathlib.Path, needle: str) -> list[pathlib.Pa
 def rotate_bootstrap_password(root: pathlib.Path, old: str, new: str) -> list[str]:
     validate_release_passphrase(new)
     if old == new:
-        raise ValueError(
-            "new bootstrap password must differ from the development bootstrap password"
-        )
+        raise ValueError("new bootstrap password must differ from the development bootstrap password")
 
     changed: list[str] = []
     for relative in sorted(BOOTSTRAP_TARGETS):
@@ -235,8 +204,7 @@ def rotate_bootstrap_password(root: pathlib.Path, old: str, new: str) -> list[st
         occurrences = text.count(old)
         if occurrences != 1:
             raise RuntimeError(
-                f"{relative} must contain the development bootstrap password exactly once; "
-                f"found {occurrences}"
+                f"{relative} must contain the development bootstrap password exactly once; found {occurrences}"
             )
         updated = text.replace(old, new, 1)
         path.write_text(updated, encoding="utf-8")
@@ -247,32 +215,20 @@ def rotate_bootstrap_password(root: pathlib.Path, old: str, new: str) -> list[st
 
 def replace_required(text: str, old: str, new: str, label: str) -> str:
     if old not in text:
-        raise RuntimeError(
-            f"{label} does not contain expected release metadata {old!r}"
-        )
+        raise RuntimeError(f"{label} does not contain expected release metadata {old!r}")
     return text.replace(old, new)
 
 
-def prior_published_changelog_sections(
-    root: pathlib.Path, current: Version, target: Version
-) -> str:
-    prior = [
-        (tag, patch)
-        for tag, patch in matching_tags(root, target)
-        if current.patch < patch < target.patch
-    ]
+def prior_published_changelog_sections(root: pathlib.Path, current: Version, target: Version) -> str:
+    prior = [(tag, patch) for tag, patch in matching_tags(root, target) if current.patch < patch < target.patch]
     if not prior:
         return ""
     tag, _ = max(prior, key=lambda item: item[1])
     changelog = run_git(root, "show", f"{tag}:CHANGELOG.md").stdout
     first_release = re.search(r"(?m)^## ", changelog)
-    current_heading = re.search(
-        rf"(?m)^## {re.escape(str(current))} [^\n]*$", changelog
-    )
+    current_heading = re.search(rf"(?m)^## {re.escape(str(current))} [^\n]*$", changelog)
     if first_release is None or current_heading is None:
-        raise RuntimeError(
-            f"{tag}:CHANGELOG.md does not preserve the {current} baseline heading"
-        )
+        raise RuntimeError(f"{tag}:CHANGELOG.md does not preserve the {current} baseline heading")
     if first_release.start() >= current_heading.start():
         return ""
     return changelog[first_release.start() : current_heading.start()]
@@ -312,9 +268,7 @@ def update_version_metadata(
     description_old = f'description = "NixOS NAS {old_text} '
     description_new = f'description = "NixOS NAS {new_text} '
     flake_path.write_text(
-        replace_required(
-            flake, description_old, description_new, "flake description"
-        ),
+        replace_required(flake, description_old, description_new, "flake description"),
         encoding="utf-8",
     )
     changed.append("flake.nix")
@@ -330,11 +284,7 @@ def update_version_metadata(
     lock_path = root / "cockpit/package-lock.json"
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     root_package = lock.get("packages", {}).get("")
-    if (
-        lock.get("version") != old_text
-        or not isinstance(root_package, dict)
-        or root_package.get("version") != old_text
-    ):
+    if lock.get("version") != old_text or not isinstance(root_package, dict) or root_package.get("version") != old_text:
         raise RuntimeError("cockpit/package-lock.json root versions do not match VERSION")
     lock["version"] = new_text
     root_package["version"] = new_text
@@ -346,9 +296,7 @@ def update_version_metadata(
     marker = f"## {old_text} "
     position = changelog.find(marker)
     if position < 0:
-        raise RuntimeError(
-            "CHANGELOG.md does not contain the current VERSION release heading"
-        )
+        raise RuntimeError("CHANGELOG.md does not contain the current VERSION release heading")
     section = (
         f"## {new_text} — {release_date}\n\n"
         "### Changed\n\n"
@@ -383,19 +331,13 @@ def prepare_release(
     elif password is not None:
         release_password = password
     else:
-        raise ValueError(
-            "new releases require a Diceware bootstrap password supplied by the release workflow"
-        )
+        raise ValueError("new releases require a Diceware bootstrap password supplied by the release workflow")
     validate_release_passphrase(release_password)
 
     date = release_date or dt.datetime.now(dt.UTC).date().isoformat()
     prior_sections = prior_published_changelog_sections(root, current, target)
-    version_files = update_version_metadata(
-        root, current, target, date, prior_sections=prior_sections
-    )
-    password_files = rotate_bootstrap_password(
-        root, development_password, release_password
-    )
+    version_files = update_version_metadata(root, current, target, date, prior_sections=prior_sections)
+    password_files = rotate_bootstrap_password(root, development_password, release_password)
 
     metadata: dict[str, object] = {
         "version": str(target),
