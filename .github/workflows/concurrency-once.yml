@@ -49,17 +49,21 @@ jobs:
           test_path = Path("tests/test_ci_workflow_graph.py")
           test = test_path.read_text(encoding="utf-8")
           marker = "    def test_shared_prerequisites_run_before_parallel_fanout(self) -> None:\n"
-          addition = '''    def test_concurrency_only_cancels_superseded_pull_requests(self) -> None:
-              concurrency = self.workflow["concurrency"]
-              group = str(concurrency["group"])
-              cancel = str(concurrency["cancel-in-progress"])
-              self.assertIn("github.event_name == 'pull_request'", group)
-              self.assertIn("github.event.pull_request.number", group)
-              self.assertIn("github.run_id", group)
-              self.assertIn("github.event_name == 'pull_request'", cancel)
-              self.assertNotEqual(cancel, "true")
-
-          '''
+          addition = "\n".join(
+              [
+                  "    def test_concurrency_only_cancels_superseded_pull_requests(self) -> None:",
+                  "        concurrency = self.workflow[\"concurrency\"]",
+                  "        group = str(concurrency[\"group\"])",
+                  "        cancel = str(concurrency[\"cancel-in-progress\"])",
+                  "        self.assertIn(\"github.event_name == 'pull_request'\", group)",
+                  "        self.assertIn(\"github.event.pull_request.number\", group)",
+                  "        self.assertIn(\"github.run_id\", group)",
+                  "        self.assertIn(\"github.event_name == 'pull_request'\", cancel)",
+                  "        self.assertNotEqual(cancel, \"true\")",
+                  "",
+                  "",
+              ]
+          )
           if test.count(marker) != 1:
               raise SystemExit("expected CI graph insertion marker exactly once")
           if "test_concurrency_only_cancels_superseded_pull_requests" in test:
