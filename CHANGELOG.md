@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.2.0 — 2026-08-25
+
+### Added
+
+- Hardened standalone first-run setup with a disposable bootstrap KDBX/AuthentiK trust domain and a separately generated permanent, user-password-protected KDBX.
+- Shared human-password strength checks using zxcvbn, HIBP range queries, Authentik-native password policy, and Linux libpwquality/PAM enforcement.
+- Security regression coverage for bootstrap retirement, Caddy identity-header trust, first-run capabilities, root/ZFS storage boundaries, native ZFS key handling, firewall projection, Quadlet sources, and backup recovery domains.
+
+### Changed
+
+- Permanent Authentik, PostgreSQL, KeePassXC, Caddy, and unlock/control-plane state remain on the root filesystem; mutable Managed Services V2 authority and application state remain on encrypted ZFS.
+- Bootstrap secrets are never promoted into the permanent trust domain; permanent service secrets and the native OpenZFS key are regenerated during setup.
+- Authentik steady-state automation is reduced to read-only identity projection permissions, with setup-only mutations isolated behind temporary bootstrap authority and native blueprints.
+- Root/control-plane recovery uses Restic while complete encrypted ZFS replication preserves native ZFS encryption.
+- Removed custom ZFS key fingerprints and the standalone custom Authentik proxy outpost in favor of native OpenZFS validation and Authentik's embedded outpost.
+
+### Fixed
+
+- First-run can no longer take over an existing Linux account, and bootstrap retirement fails closed.
+- Setup no longer persists a cheap password-derived verifier for the KeePass master password.
+- Authentik bearer requests refuse redirects/origin changes and redact sensitive error payloads.
+- Caddy strips spoofable identity headers before reconstructing trusted Authentik identity headers.
+
 ## 0.1.0 — 2026-08-25
 
 ### Added
