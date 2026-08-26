@@ -1,13 +1,27 @@
 import React from 'react';
-import { Alert, FormGroup, Checkbox, Label, HelperText, HelperTextItem } from '@patternfly/react-core';
+import { Alert, Button, FormGroup, Checkbox, Label, HelperText, HelperTextItem } from '@patternfly/react-core';
 
-const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive }) => {
+const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive, onRefresh }) => {
   if (planError) {
     return (
       <div className="nas-wizard-step nas-wizard-message">
         <Alert variant="danger" isInline title="Storage plan unavailable">
           {planError}
         </Alert>
+        <div className="nas-storage-actions">
+          <p>Configure or partition the disks in Cockpit, then return here and refresh the plan.</p>
+          <div className="nas-storage-links">
+            <Button component="a" href="/console/storage" target="_blank" rel="noreferrer">
+              Open Storage
+            </Button>
+            <Button component="a" href="/console/system/terminal" target="_blank" rel="noreferrer" variant="secondary">
+              Open Terminal
+            </Button>
+            <Button variant="link" onClick={onRefresh}>
+              Refresh plan
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -17,7 +31,25 @@ const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive }) 
   const storage = plan.storage || {};
   return (
     <div className="nas-wizard-step">
-      <p className="nas-wizard-intro">Review the storage plan published by the appliance. Pools are created exactly as reviewed.</p>
+      <p className="nas-wizard-intro">
+        Review the storage plan published by the appliance. Pools are created exactly as reviewed;
+        disk partitioning and advanced ZFS changes are done in Cockpit before you continue.
+      </p>
+      <div className="nas-storage-actions">
+        <h2>Need to change the disk layout?</h2>
+        <p>Use Cockpit to partition disks or import an existing pool, then come back and refresh this plan.</p>
+        <div className="nas-storage-links">
+          <Button component="a" href="/console/storage" target="_blank" rel="noreferrer">
+            Open Storage
+          </Button>
+          <Button component="a" href="/console/system/terminal" target="_blank" rel="noreferrer" variant="secondary">
+            Open Terminal
+          </Button>
+          <Button variant="link" onClick={onRefresh}>
+            Refresh plan
+          </Button>
+        </div>
+      </div>
       <FormGroup label="Status" fieldId="wizard-plan-status">
         <Label color={plan.status === 'ready' ? 'green' : 'orange'}>{plan.status}</Label>
       </FormGroup>
@@ -29,9 +61,11 @@ const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive }) 
       </FormGroup>
       <FormGroup label="Devices" fieldId="wizard-plan-devices">
         <ul id="wizard-plan-devices" className="nas-device-list">
-          {(Array.isArray(storage.devices) ? storage.devices : []).map((device) => (
-            <li key={device}>{device}</li>
-          ))}
+          {Array.isArray(storage.devices) && storage.devices.length ? (
+            storage.devices.map((device) => <li key={device}>{device}</li>)
+          ) : (
+            <li>No block devices are listed in the current plan.</li>
+          )}
         </ul>
         <HelperText>
           <HelperTextItem>These exact devices are used for pool creation. Verify the list before allowing a destructive operation.</HelperTextItem>
