@@ -154,7 +154,9 @@ def update_version_metadata(root: pathlib.Path, old: Version, new: Version, rele
     flake = flake_path.read_text(encoding="utf-8")
     description_old = f'description = "NixOS NAS {old_text} '
     description_new = f'description = "NixOS NAS {new_text} '
-    flake_path.write_text(replace_required(flake, description_old, description_new, "flake description"), encoding="utf-8")
+    flake_path.write_text(
+        replace_required(flake, description_old, description_new, "flake description"), encoding="utf-8"
+    )
     changed.append("flake.nix")
 
     package_path = root / "cockpit/package.json"
@@ -184,7 +186,8 @@ def update_version_metadata(root: pathlib.Path, old: Version, new: Version, rele
     section = (
         f"## {new_text} — {release_date}\n\n"
         "### Changed\n\n"
-        f"- Automated merge release: advanced the release version from `{old_text}` to `{new_text}` and rotated the release-specific Authentik bootstrap credential.\n\n"
+        "- Automated merge release: advanced the release version from "
+        f"`{old_text}` to `{new_text}` and rotated the release-specific Authentik bootstrap credential.\n\n"
     )
     changelog_path.write_text(changelog[:position] + section + changelog[position:], encoding="utf-8")
     changed.append("CHANGELOG.md")
