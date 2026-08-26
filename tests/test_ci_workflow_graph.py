@@ -90,7 +90,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("Fast Python unit tests", text)
         self.assertIn("Deterministic security regression suite", text)
         self.assertIn("Fresh npm vulnerability audit", text)
-        self.assertIn("Run the fast suite without root-owned state", self.serialized(self.jobs["prebuild"]))
+        self.assertIn("/home/nas-ci/worktree", self.serialized(self.jobs["prebuild"]))
 
     def test_coverage_baseline_runs_even_after_other_prebuild_failures(self) -> None:
         coverage = self.jobs["coverage-diff"]
