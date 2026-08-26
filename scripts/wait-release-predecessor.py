@@ -232,9 +232,7 @@ def wait_for_predecessor(
 
         existing_tag = tag_for_source(root, predecessor)
         if state == "success" and existing_tag is not None:
-            print(
-                f"release ordering ready: predecessor {predecessor} is published as {existing_tag}"
-            )
+            print(f"release ordering ready: predecessor {predecessor} is published as {existing_tag}")
             return
 
         if time.monotonic() >= deadline:
