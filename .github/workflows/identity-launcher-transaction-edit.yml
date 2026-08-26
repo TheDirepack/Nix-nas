@@ -1,0 +1,423 @@
+name: Identity launcher transaction edit
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/identity-launcher-transaction-edit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Consolidate Authentik launcher transactions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("services/nas_identity_sync.py")
+          text = path.read_text()
+          start = text.index("def ensure_portal_proxy(token: str) -> dict[str, Any]:")
+          end = text.index("\n\nAUTOMATION_ROLE =", start)
+          replacement = '''def _ensure_proxy_application(
+              token: str,
+              *,
+              provider_name: str,
+              application_slug: str,
+              external_host: str,
+              internal_host: str,
+              application_metadata: Mapping[str, Any] | None = None,
+              outpost_config_patch: Mapping[str, Any] | None = None,
+          ) -> dict[str, Any]:
+              """Reconcile one Authentik proxy application as a staged transaction."""
+              flows = default_flows(token)
+              provider_payload: dict[str, Any] = {
+                  "name": provider_name,
+                  "mode": "forward_single",
+                  "external_host": external_host,
+                  "internal_host": internal_host,
+                  "internal_host_ssl_validation": False,
+              }
+              for field, slug in {
+                  "authentication_flow": "default-authentication-flow",
+                  "authorization_flow": "default-provider-authorization-implicit-consent",
+                  "invalidation_flow": "default-invalidation-flow",
+              }.items():
+                  flow = flows.get(slug)
+                  if not isinstance(flow, Mapping) or flow.get("pk") is None:
+                      raise SyncError(f"Authentik flow {slug} is missing")
+                  provider_payload[field] = flow["pk"]
+
+              application_template: dict[str, Any] = {
+                  "name": provider_name,
+                  "slug": application_slug,
+                  "provider": None,
+                  "meta_launch_url": external_host,
+                  **dict(application_metadata or {}),
+              }
+
+              # Stage every dependency and rollback snapshot before the first write.
+              provider_before = next(
+                  (
+                      item
+                      for item in authentik_list(token, "providers/proxy/")
+                      if item.get("name") == provider_name
+                  ),
+                  None,
+              )
+              application_before = next(
+                  (
+                      item
+                      for item in authentik_list(token, "core/applications/")
+                      if item.get("slug") == application_slug
+                  ),
+                  None,
+              )
+              outpost = next(
+                  (
+                      item
+                      for item in authentik_list(token, "outposts/instances/")
+                      if item.get("managed") == "goauthentik.io/outposts/embedded"
+                  ),
+                  None,
+              )
+              if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
+                  raise SyncError("Authentik embedded outpost is missing")
+              outpost_pk = outpost["pk"]
+              providers_before = list(outpost.get("providers") or [])
+              current_config = outpost.get("config")
+              config_before = dict(current_config) if isinstance(current_config, Mapping) else {}
+              desired_config = dict(config_before)
+              if outpost_config_patch is not None:
+                  desired_config.update(outpost_config_patch)
+
+              provider_existing = isinstance(provider_before, Mapping)
+              provider_pk: Any | None = None
+              provider_restore: dict[str, Any] | None = None
+              if provider_existing:
+                  provider_pk = provider_before.get("pk")
+                  if provider_pk is None:
+                      raise SyncError(f"Authentik {provider_name} provider has no primary key")
+                  missing = [key for key in provider_payload if key not in provider_before]
+                  if missing:
+                      raise SyncError(
+                          f"Authentik {provider_name} provider cannot be transactionally updated; "
+                          f"rollback fields are missing: {', '.join(sorted(missing))}"
+                      )
+                  provider_restore = {key: provider_before[key] for key in provider_payload}
+
+              application_existing = isinstance(application_before, Mapping)
+              application_restore: dict[str, Any] | None = None
+              if application_existing:
+                  application_restore = {}
+                  for key, desired in application_template.items():
+                      if key == "name":
+                          application_restore[key] = application_before.get(key, provider_name)
+                      elif key == "slug":
+                          application_restore[key] = application_slug
+                      elif key == "provider":
+                          application_restore[key] = application_before.get(key)
+                      else:
+                          default = False if isinstance(desired, bool) else ""
+                          application_restore[key] = application_before.get(key, default)
+
+              provider_committed = False
+              application_committed = False
+              application_restore_needed = False
+              outpost_restore_needed = False
+              try:
+                  if provider_existing:
+                      # A failed PATCH may have reached Authentik before the client
+                      # observed the transport failure, so restore this snapshot too.
+                      provider_committed = True
+                      authentik_request(
+                          token,
+                          f"providers/proxy/{provider_pk}/",
+                          method="PATCH",
+                          body=provider_payload,
+                      )
+                  else:
+                      provider = authentik_request(
+                          token,
+                          "providers/proxy/",
+                          method="POST",
+                          body=provider_payload,
+                      )
+                      provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
+                      if provider_pk is None:
+                          raise SyncError(f"Authentik {provider_name} provider has no primary key")
+                      provider_committed = True
+
+                  application_payload = dict(application_template)
+                  application_payload["provider"] = provider_pk
+                  if application_existing:
+                      application_restore_needed = True
+                      authentik_request(
+                          token,
+                          f"core/applications/{application_slug}/",
+                          method="PATCH",
+                          body=application_payload,
+                      )
+                      application_committed = True
+                  else:
+                      authentik_request(
+                          token,
+                          "core/applications/",
+                          method="POST",
+                          body=application_payload,
+                      )
+                      application_committed = True
+
+                  desired_providers = (
+                      providers_before if provider_pk in providers_before else providers_before + [provider_pk]
+                  )
+                  outpost_payload: dict[str, Any] = {"providers": desired_providers}
+                  rollback_outpost_payload: dict[str, Any] = {"providers": providers_before}
+                  config_changed = outpost_config_patch is not None and desired_config != config_before
+                  if outpost_config_patch is not None:
+                      outpost_payload["config"] = desired_config
+                      rollback_outpost_payload["config"] = config_before
+                  if provider_pk not in providers_before or config_changed:
+                      outpost_restore_needed = True
+                      authentik_request(
+                          token,
+                          f"outposts/instances/{outpost_pk}/",
+                          method="PATCH",
+                          body=outpost_payload,
+                      )
+                  return {"provider": provider_name, "application": application_slug}
+              except Exception as exc:  # noqa: BLE001 - rollback must cover transport failures too
+                  rollback_errors: list[str] = []
+
+                  def rollback(label: str, operation: Any) -> None:
+                      try:
+                          operation()
+                      except Exception as rollback_exc:  # noqa: BLE001
+                          rollback_errors.append(f"{label}: {type(rollback_exc).__name__}")
+
+                  if outpost_restore_needed:
+                      rollback(
+                          "embedded outpost",
+                          lambda: authentik_request(
+                              token,
+                              f"outposts/instances/{outpost_pk}/",
+                              method="PATCH",
+                              body=rollback_outpost_payload,
+                          ),
+                      )
+                  if application_existing and application_restore_needed and application_restore is not None:
+                      rollback(
+                          "application",
+                          lambda: authentik_request(
+                              token,
+                              f"core/applications/{application_slug}/",
+                              method="PATCH",
+                              body=application_restore,
+                          ),
+                      )
+                  elif application_committed:
+                      rollback(
+                          "application",
+                          lambda: authentik_request(
+                              token,
+                              f"core/applications/{application_slug}/",
+                              method="DELETE",
+                          ),
+                      )
+                  if provider_existing and provider_committed and provider_restore is not None:
+                      rollback(
+                          "provider",
+                          lambda: authentik_request(
+                              token,
+                              f"providers/proxy/{provider_pk}/",
+                              method="PATCH",
+                              body=provider_restore,
+                          ),
+                      )
+                  elif provider_committed and provider_pk is not None:
+                      rollback(
+                          "provider",
+                          lambda: authentik_request(
+                              token,
+                              f"providers/proxy/{provider_pk}/",
+                              method="DELETE",
+                          ),
+                      )
+
+                  if rollback_errors:
+                      raise SyncError(
+                          f"Authentik {provider_name} reconciliation failed and rollback incomplete: "
+                          + "; ".join(rollback_errors)
+                      ) from exc
+                  raise
+
+
+          def _validate_public_host() -> None:
+              if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", PUBLIC_HOST):
+                  raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+              if ":" in PUBLIC_HOST:
+                  port = int(PUBLIC_HOST.rsplit(":", 1)[1])
+                  if not 1 <= port <= 65535:
+                      raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+
+
+          def ensure_portal_proxy(token: str) -> dict[str, Any]:
+              _validate_public_host()
+              return _ensure_proxy_application(
+                  token,
+                  provider_name="NAS Portal",
+                  application_slug="nas-portal",
+                  external_host=f"https://{PUBLIC_HOST}",
+                  internal_host="http://127.0.0.1:8080",
+                  outpost_config_patch={
+                      # Advertise the browser-reachable public origin while the
+                      # appliance resolves it internally back through Caddy.
+                      "authentik_host": f"https://{PUBLIC_HOST}/identity/",
+                      "authentik_host_browser": f"https://{PUBLIC_HOST}/identity/",
+                  },
+              )
+
+
+          def ensure_cockpit_launcher(token: str) -> dict[str, Any]:
+              """Expose Cockpit as an Authentik launcher application behind forward auth."""
+              _validate_public_host()
+              return _ensure_proxy_application(
+                  token,
+                  provider_name="NAS Cockpit",
+                  application_slug="nas-cockpit",
+                  external_host=f"https://{PUBLIC_HOST}/console/",
+                  internal_host="http://127.0.0.1:9092",
+              )
+
+
+          def ensure_setup_launcher(token: str) -> dict[str, Any]:
+              """Expose first-start setup as an atomic Authentik application update."""
+              _validate_public_host()
+              return _ensure_proxy_application(
+                  token,
+                  provider_name="NAS Setup",
+                  application_slug="nas-setup",
+                  external_host=f"https://{PUBLIC_HOST}/setup/",
+                  internal_host="http://127.0.0.1:8980",
+                  application_metadata={
+                      "meta_description": "First-start setup for the NAS appliance",
+                      "meta_publisher": "NAS",
+                      "open_in_new_tab": False,
+                  },
+              )
+          '''
+          path.write_text(text[:start] + replacement + text[end:])
+
+          test_path = Path("tests/test_setup_launcher_transaction.py")
+          tests = test_path.read_text()
+          marker = '\n\nif __name__ == "__main__":\n'
+          addition = '''
+
+              def test_portal_outpost_failure_restores_config_application_and_provider(self) -> None:
+                  provider = {
+                      "pk": 11,
+                      "name": "NAS Portal",
+                      "mode": "forward_single",
+                      "external_host": "https://old.local",
+                      "internal_host": "http://127.0.0.1:8080",
+                      "internal_host_ssl_validation": False,
+                      "authentication_flow": "old-auth",
+                      "authorization_flow": "old-authorization",
+                      "invalidation_flow": "old-invalidation",
+                  }
+                  application = {
+                      "name": "NAS Portal",
+                      "slug": "nas-portal",
+                      "provider": 4,
+                      "meta_launch_url": "https://old.local",
+                  }
+                  outpost = embedded_outpost(providers=[4])
+                  outpost["config"] = {
+                      "existing": "value",
+                      "authentik_host": "https://old.local/identity/",
+                      "authentik_host_browser": "https://old.local/identity/",
+                  }
+                  failure = sync.SyncError("injected portal outpost failure")
+                  with (
+                      mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
+                      mock.patch.object(sync, "default_flows", return_value=flows()),
+                      mock.patch.object(sync, "authentik_list", side_effect=[[provider], [application], [outpost]]),
+                      mock.patch.object(
+                          sync,
+                          "authentik_request",
+                          side_effect=[None, None, failure, None, None, None],
+                      ) as request,
+                  ):
+                      with self.assertRaisesRegex(sync.SyncError, "injected portal outpost failure"):
+                          sync.ensure_portal_proxy("token")
+
+                  restore_outpost, restore_app, restore_provider = request.call_args_list[-3:]
+                  self.assertEqual(restore_outpost.args, ("token", "outposts/instances/7/"))
+                  self.assertEqual(
+                      restore_outpost.kwargs,
+                      {
+                          "method": "PATCH",
+                          "body": {
+                              "providers": [4],
+                              "config": outpost["config"],
+                          },
+                      },
+                  )
+                  self.assertEqual(restore_app.args, ("token", "core/applications/nas-portal/"))
+                  self.assertEqual(restore_app.kwargs, {"method": "PATCH", "body": application})
+                  self.assertEqual(restore_provider.args, ("token", "providers/proxy/11/"))
+                  self.assertEqual(
+                      restore_provider.kwargs,
+                      {
+                          "method": "PATCH",
+                          "body": {key: value for key, value in provider.items() if key != "pk"},
+                      },
+                  )
+
+              def test_cockpit_application_failure_removes_new_provider(self) -> None:
+                  failure = sync.SyncError("injected cockpit application failure")
+                  with (
+                      mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
+                      mock.patch.object(sync, "default_flows", return_value=flows()),
+                      mock.patch.object(sync, "authentik_list", side_effect=[[], [], [embedded_outpost()]]),
+                      mock.patch.object(
+                          sync,
+                          "authentik_request",
+                          side_effect=[{"pk": 9}, failure, None],
+                      ) as request,
+                  ):
+                      with self.assertRaisesRegex(sync.SyncError, "injected cockpit application failure"):
+                          sync.ensure_cockpit_launcher("token")
+
+                  self.assertEqual(request.call_args_list[-1].args, ("token", "providers/proxy/9/"))
+                  self.assertEqual(request.call_args_list[-1].kwargs, {"method": "DELETE"})
+          '''
+          if "test_portal_outpost_failure_restores_config_application_and_provider" not in tests:
+              tests = tests.replace(marker, addition + marker)
+              test_path.write_text(tests)
+          PY
+      - name: Format and test launcher transactions
+        run: |
+          nix develop .#test -c ruff format services/nas_identity_sync.py tests/test_setup_launcher_transaction.py tests/test_identity_sync.py
+          nix develop .#test -c ruff check services/nas_identity_sync.py tests/test_setup_launcher_transaction.py tests/test_identity_sync.py
+          nix develop .#test -c python3 -m unittest tests.test_setup_launcher_transaction tests.test_identity_sync
+      - name: Commit tested refactor
+        run: |
+          set -euo pipefail
+          git config user.name "TheDirepack"
+          git config user.email "48868531+TheDirepack@users.noreply.github.com"
+          git add services/nas_identity_sync.py tests/test_setup_launcher_transaction.py tests/test_identity_sync.py
+          git diff --cached --quiet && exit 0
+          git commit -m "refactor(identity): transact Authentik launchers together"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
