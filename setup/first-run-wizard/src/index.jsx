@@ -4,9 +4,8 @@ import "@patternfly/patternfly/patternfly.css";
 import "@patternfly/patternfly/patternfly-addons.css";
 import { Wizard, WizardStep } from '@patternfly/react-core';
 import './wizard.css';
-import LanguageStep from './steps/LanguageStep.jsx';
+import LanguageStep, { DEFAULT_LANGUAGE, DEFAULT_TIMEZONE } from './steps/LanguageStep.jsx';
 import AdminStep from './steps/AdminStep.jsx';
-import AuthentikStep from './steps/AuthentikStep.jsx';
 import StorageStep from './steps/StorageStep.jsx';
 import ConfirmStep from './steps/ConfirmStep.jsx';
 
@@ -25,8 +24,8 @@ const readThemePreference = () => {
 };
 
 const App = () => {
-  const [language, setLanguage] = React.useState('en');
-  const [timezone, setTimezone] = React.useState('UTC');
+  const [language, setLanguage] = React.useState(DEFAULT_LANGUAGE);
+  const [timezone, setTimezone] = React.useState(DEFAULT_TIMEZONE);
   const [administrator, setAdministrator] = React.useState(emptyAdministrator);
   const [useSamePassword, setUseSamePassword] = React.useState(true);
   const [keePassPassword, setKeePassPassword] = React.useState('');
@@ -34,6 +33,7 @@ const App = () => {
   const [theme, setTheme] = React.useState(readThemePreference);
   const [plan, setPlan] = React.useState(null);
   const [planError, setPlanError] = React.useState('');
+  const [planRequest, setPlanRequest] = React.useState(0);
 
   React.useEffect(() => {
     const media = window.matchMedia?.('(prefers-color-scheme: dark)');
@@ -55,6 +55,8 @@ const App = () => {
 
   React.useEffect(() => {
     let cancelled = false;
+    setPlan(null);
+    setPlanError('');
     fetch('api/first-start', { headers: { Accept: 'application/json' } })
       .then((response) => response.json())
       .then((value) => {
@@ -71,7 +73,7 @@ const App = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [planRequest]);
 
   const keePassEffective = useSamePassword ? administrator.password : keePassPassword;
   return (
@@ -114,18 +116,16 @@ const App = () => {
               onKeePassPassword={setKeePassPassword}
             />
           </WizardStep>
-          <WizardStep id="wizard-authentik" step={3} name="Authentik Integration">
-            <AuthentikStep />
-          </WizardStep>
-          <WizardStep id="wizard-storage" step={4} name="Storage">
+          <WizardStep id="wizard-storage" step={3} name="Storage">
             <StorageStep
               plan={plan}
               planError={planError}
               allowDestructive={allowDestructive}
               onAllowDestructive={setAllowDestructive}
+              onRefresh={() => setPlanRequest((value) => value + 1)}
             />
           </WizardStep>
-          <WizardStep id="wizard-confirm" step={5} name="Confirm and Reboot">
+          <WizardStep id="wizard-confirm" step={4} name="Confirm and Reboot">
             <ConfirmStep
               administrator={administrator}
               keePassPassword={keePassEffective}

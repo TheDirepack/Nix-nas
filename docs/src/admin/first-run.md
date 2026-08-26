@@ -56,6 +56,10 @@ The setup workflow creates the administrator you choose, verifies that account
 is an enabled `nas_admin` member, and then retires the bootstrap Authentik
 identity. Do not use the bootstrap identity for normal administration.
 
+The browser wizard keeps this boundary out of the setup form: Authentik is the
+temporary access gate, not a separate configuration step. The wizard focuses
+on the administrator account, locale, storage plan, and final confirmation.
+
 Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
 may define storage creation, Authentik accounts, reserved NAS groups, and initial
 feature modes.
@@ -164,6 +168,11 @@ the development tree, or the five-word password published with an automated
 tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
 then retires that bootstrap identity. After protected services are ready, use
 Authentik through Caddy for all browser access.
+
+The Storage step links to Cockpit Storage for disk partitioning or pool import,
+and to the Cockpit terminal for advanced ZFS work. Return to the wizard and
+refresh the plan after changing the disk layout; the destructive operation
+still uses the reviewed device list and plan digest.
 
 ## New-pool safeguards
 

@@ -17,7 +17,6 @@ const exists = async (name) => {
 const STEPS = [
   "wizard-language",
   "wizard-admin",
-  "wizard-authentik",
   "wizard-storage",
   "wizard-confirm",
 ];
@@ -49,7 +48,7 @@ test("wizard builds steps from WizardStep children with explicit ids", async () 
 });
 
 test("wizard step components use exports that exist in react-core 6.1.0", async () => {
-  for (const step of ["LanguageStep", "AdminStep", "AuthentikStep", "StorageStep", "ConfirmStep"]) {
+  for (const step of ["LanguageStep", "AdminStep", "StorageStep", "ConfirmStep"]) {
     const text = await wizard(`src/steps/${step}.jsx`);
     assert.match(
       text,
@@ -91,15 +90,20 @@ test("administrator username starts blank and has no schema default", async () =
   assert.equal(schema.properties.adminUsername.default, undefined);
 });
 
-test("setup uses constrained selects and explains the Authentik application boundary", async () => {
+test("setup uses searchable locale controls and keeps storage configuration actionable", async () => {
   const language = await wizard("src/steps/LanguageStep.jsx");
-  const authentik = await wizard("src/steps/AuthentikStep.jsx");
-  assert.match(language, /FormSelect/);
+  const storage = await wizard("src/steps/StorageStep.jsx");
+  assert.match(language, /Select/);
+  assert.match(language, /typeahead/);
+  assert.match(language, /Search languages/);
+  assert.match(language, /Search cities or regions/);
   assert.match(language, /Intl\.supportedValuesOf/);
-  assert.doesNotMatch(language, /TextInput/);
-  assert.match(authentik, /NAS Setup/);
-  assert.match(authentik, /application viewer/);
-  assert.doesNotMatch(authentik, /authentikUrl/);
+  assert.match(language, /Current browser time zone/);
+  assert.match(storage, /\/console\/storage/);
+  assert.match(storage, /\/console\/system\/terminal/);
+  assert.match(storage, /Refresh plan/);
+  assert.doesNotMatch(await wizard("src/index.jsx"), /AuthentikStep|wizard-authentik|Authentik Integration/);
+  assert.equal(await exists("src/steps/AuthentikStep.jsx"), false, "the removed Authentik step must not remain as dead UI");
 });
 
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
@@ -131,14 +135,15 @@ test("build script emits the reviewed dist layout the Nix derivation packages", 
   assert.ok(await exists("dist/assets"), "dist font assets must be committed");
 });
 
-test("committed bundle registers every step and the KeePassXC toggle", async () => {
+test("committed bundle registers every step and the storage setup links", async () => {
   const js = await wizard("dist/first-run-wizard.js");
   for (const id of STEPS) {
     assert.ok(js.includes(`"${id}"`), `bundle is missing step id ${id}`);
   }
   assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC toggle");
   assert.ok(js.includes("Browser setting"), "bundle is missing the browser theme option");
-  assert.ok(js.includes("application viewer"), "bundle is missing the Authentik application guidance");
+  assert.ok(js.includes("Open Storage"), "bundle is missing the storage console link");
+  assert.ok(!js.includes("wizard-authentik"), "bundle still contains the removed Authentik step");
 });
 
 test("committed stylesheet carries the global tokens and core component rules", async () => {
