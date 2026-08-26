@@ -35,20 +35,22 @@ The live PostgreSQL database directory is not copied while PostgreSQL is running
 
 The Restic backup is tagged `root-control-plane`. It does **not** consume Managed Services V2 per-application backup inventories and does **not** contain `${nas.zfsRoot}/nas-control/services.yaml`; that desired-state authority belongs only to the encrypted ZFS recovery domain.
 
-If no external repository is configured, the default Restic repository is `<nas.zfsRoot>/backups/restic-system`. That is useful for boot-device recovery and, when ZFS replication is enabled, is carried to the replication target with the ZFS dataset. By itself, however, a Restic repository on the same pool is not protection against losing that pool.
+For bare-metal protection, configure the Restic repository on storage independent of the NAS ZFS pool. A same-pool repository is rejected by default and can only be enabled explicitly as a rollback-only copy; it is not considered disaster-recovery protection.
+
+The Restic repository password is a separate recovery credential. Restic requires that password to open the repository, so keep an independent offline copy that is available before the root backup is restored. Do not make the only copy an entry in `NAS.kdbx`, because that KDBX is itself inside the root backup. Automated password/repository files must be root-owned regular files with no group/other permissions; the backup and restore-verification services fail closed on symlinks, unsafe ownership/modes, or empty credential files.
 
 ## Recovery order
 
 The intended disaster-recovery order is:
 
-1. Restore the root/control-plane Restic backup onto replacement boot storage.
+1. Obtain the independently stored Restic repository password and restore the root/control-plane Restic backup onto replacement boot storage.
 2. Boot the restored control plane and provide the user-known KeePass master password.
 3. Recover the ZFS key from `NAS.kdbx`.
 4. Import or receive the replicated encrypted ZFS dataset and load its native ZFS key.
 5. Mount the ZFS dataset. The authoritative `services.yaml` and all ZFS-hosted application state become available only at this point.
 6. Run Managed Services V2 reconciliation to regenerate runtime projections and start application services.
 
-The root backup and ZFS replication are complementary. A complete bare-metal recovery plan needs a usable copy of each domain.
+The root backup and ZFS replication are complementary. A complete bare-metal recovery plan needs a usable copy of each domain plus the independent Restic repository password.
 
 ## Manual checks
 
