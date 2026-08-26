@@ -33,7 +33,7 @@ jobs:
       eligible: ${{ steps.source.outputs.eligible }}
       source_sha: ${{ steps.source.outputs.source_sha }}
     steps:
-      - name: Require a merged pull request on main
+      - name: Require the exact merged pull request result on main
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,14 +46,14 @@ jobs:
             gh api \
               -H 'Accept: application/vnd.github+json' \
               "/repos/$REPOSITORY/commits/$SOURCE_SHA/pulls" \
-              --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length'
+              --jq '[.[] | select(.merged_at != null and .base.ref == "main" and .merge_commit_sha == env.SOURCE_SHA)] | length'
           )"
           if (( merged_prs > 0 )); then
             printf 'eligible=true\n' >> "$GITHUB_OUTPUT"
-            printf 'Qualified CI source %s belongs to %s merged PR(s).\n' "$SOURCE_SHA" "$merged_prs"
+            printf 'Qualified CI source %s is the merge result of %s main PR(s).\n' "$SOURCE_SHA" "$merged_prs"
           else
             printf 'eligible=false\n' >> "$GITHUB_OUTPUT"
-            printf 'Source %s was not produced by a merged PR; no release will be published.\n' "$SOURCE_SHA"
+            printf 'Source %s is not the exact merge result of a main PR; no release will be published.\n' "$SOURCE_SHA"
           fi
 
   build:
