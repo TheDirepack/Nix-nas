@@ -189,6 +189,7 @@
             (pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
               bandit
               coverage
+              diceware
               hypothesis
               jsonschema
               ruamel-yaml
