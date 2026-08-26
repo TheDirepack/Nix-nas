@@ -97,20 +97,30 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("verify_syncthing_configuration", identity)
         self.assertIn('"schemaVersion": 2', identity)
 
-    def test_ci_uses_direct_fast_dependencies_then_qualified_builds(self) -> None:
+    def test_ci_uses_staged_qualification_and_reusable_build_handoffs(self) -> None:
         workflow = text(".github/workflows/ci.yml")
-        self.assertLess(workflow.index("Source-only repository preflight"), workflow.index("--coverage coverage.json"))
-        self.assertIn("Build qualified Cockpit, source archive, and NixOS closures", workflow)
-        self.assertIn("Post-build full-stack QEMU integration", workflow)
-        self.assertIn("Pipeline summary", workflow)
-        for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
-            self.assertNotIn(retired_gate, workflow)
-        self.assertIn(
-            "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]",
-            workflow,
+        handoff = text(".github/actions/prepare-vm-handoff/action.yml")
+        self.assertLess(
+            workflow.index("Source-only repository preflight"),
+            workflow.index("--coverage coverage.json"),
         )
-        self.assertIn("needs: [build]", workflow)
+        self.assertIn("Pre-build qualification", workflow)
+        self.assertIn("Prepare reusable build handoff", workflow)
+        self.assertIn("Full-stack QEMU integration", workflow)
+        self.assertIn("Pipeline summary", workflow)
+        self.assertIn("ci-check-report.py", workflow)
+        self.assertIn("needs: [prebuild, coverage-diff]", workflow)
+        self.assertIn("needs: [prepare]", workflow)
         self.assertIn("needs: [integration, browser, installer]", workflow)
+        self.assertIn("vm-bundle-handoff", handoff)
+        for retired_gate in (
+            "prebuild-gate:",
+            "build-gate:",
+            "runtime-gate:",
+            "final-system-gate:",
+            "cache-vm-bundles:",
+        ):
+            self.assertNotIn(retired_gate, workflow)
 
     def test_release_ci_runs_installer_final_vm_and_security_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
@@ -121,17 +131,21 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
         self.assertIn("checks.x86_64-linux", workflow)
 
-    def test_fast_ci_excludes_slow_property_fuzz_and_parallelizes_it_later(self) -> None:
+    def test_fast_ci_excludes_slow_properties_then_uses_internal_fuzz_parallelism(self) -> None:
         workflow = text(".github/workflows/ci.yml")
         preflight = text("scripts/preflight.sh")
         security_runner = text("scripts/run-security-tests.py")
-        for name in ("test_fuzz_boundaries.py", "test_property_invariants.py", "test_secret_security_fuzz.py"):
+        fuzz_runner = text("scripts/run-fuzz.py")
+        for name in (
+            "test_fuzz_boundaries.py",
+            "test_property_invariants.py",
+            "test_secret_security_fuzz.py",
+        ):
             self.assertIn(f"--exclude {name}", workflow)
         self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
-        self.assertIn("max-parallel: 6", workflow)
-        self.assertIn("fail-fast: false", workflow)
-        self.assertIn("shard:", workflow)
+        self.assertIn("scripts/run-fuzz.py --jobs 6", workflow)
+        self.assertNotIn("shard:", workflow)
         for shard in (
             "boundaries",
             "custom-inputs",
@@ -141,22 +155,28 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "javascript",
             "executable-contracts",
         ):
-            self.assertIn(shard, workflow)
+            self.assertIn(f'"{shard}"', fuzz_runner)
         self.assertIn("timeout-minutes: 240", workflow)
 
     def test_cache_policy_keeps_dependency_and_vm_reuse_without_pass_caching(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        handoff = text(".github/actions/prepare-vm-handoff/action.yml")
         policy = text(".github/CI_CACHE_POLICY.md")
         self.assertIn("CI_CACHE_SCHEMA", workflow)
         self.assertIn("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae", workflow)
-        self.assertIn("vm-bundles.sh", workflow)
+        self.assertIn("actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae", handoff)
+        self.assertIn("actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae", handoff)
+        self.assertIn("vm-bundles.sh", handoff)
+        self.assertIn("vm-bundle-handoff", workflow)
         self.assertNotIn(".ci-cache/", workflow)
         self.assertIn("Qualification results are never pass-cached", policy)
 
     def test_http_adversarial_checks_use_curl_inside_installed_vm_workload(self) -> None:
         config = text("cockpit/e2e/playwright.config.mjs")
         harness = text("scripts/qemu-final-browser.sh")
-        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split('case "$WORKLOAD"', 1)[0]
+        http_block = harness.split("run_http_adversarial_contracts()", 1)[1].split(
+            'case "$WORKLOAD"', 1
+        )[0]
         self.assertIn("run_http_adversarial_contracts", harness)
         self.assertIn("curl --insecure --silent --show-error", http_block)
         self.assertIn("spoofed identity headers reached protected path", http_block)
@@ -176,7 +196,13 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn('command: "node e2e/deterministic-server.mjs"', config)
         self.assertIn('"/base1/cockpit.js"', server)
         self.assertIn('name === "cockpit"', runtime_stub)
-        for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
+        for probe in (
+            "script-tag",
+            "img-onerror",
+            "svg-onload",
+            "javascript-url",
+            "iframe-srcdoc",
+        ):
             self.assertIn(probe, deterministic)
         self.assertIn("hostile status corpus never creates executable elements", security)
         self.assertIn('frame.locator(".nas-actions button").first()', vm)
