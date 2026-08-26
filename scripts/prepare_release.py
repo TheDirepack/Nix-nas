@@ -1,7 +1,7 @@
 """Prepare one release commit from a qualified main-branch source commit.
 
 The GitHub release workflow invokes this module with ``python3``. It keeps the
-release-specific mutations in one tested place: monotonic version stamping,
+release-specific mutations in one tested place: deterministic version stamping,
 bootstrap-password rotation, and synchronized release metadata.
 """
 
@@ -21,7 +21,9 @@ VERSION_RE = re.compile(
 BOOTSTRAP_RE = re.compile(r'store_value authentik-bootstrap-password "([^"\n]+)"')
 AUTHENTIK_ENV_RE = re.compile(r"AUTHENTIK_BOOTSTRAP_PASSWORD=([A-Za-z0-9._~+/=:@-]+)")
 SAFE_SECRET_RE = re.compile(r"^[A-Za-z0-9._~+/=:@-]+$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 BOOTSTRAP_USERNAME = "akadmin"
+RELEASE_EPOCH_PATH = pathlib.Path(".github/release-version-epoch.json")
 BOOTSTRAP_TARGETS = {
     "modules/nas/internal/secret-tools.nix",
     "modules/nas/config/application-services.nix",
@@ -84,22 +86,71 @@ def release_tag_for_source(
     return None
 
 
-def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Version:
-    """Return the next patch version for one serialized release publication.
+def is_ancestor(root: pathlib.Path, older: str, newer: str) -> bool:
+    result = run_git(root, "merge-base", "--is-ancestor", older, newer, check=False)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(result.stderr.strip() or "git merge-base failed")
+    return result.returncode == 0
 
-    Release workflow runs share one FIFO concurrency queue, so tag allocation is
-    exclusive. Existing tags are therefore the durable version authority; a
-    rerun for an already tagged source recovers that exact version.
+
+def release_epoch(root: pathlib.Path) -> tuple[Version, str]:
+    path = root / RELEASE_EPOCH_PATH
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"{RELEASE_EPOCH_PATH} must contain a JSON object")
+    version = Version.parse(str(raw.get("version", "")))
+    source_sha = str(raw.get("sourceSha", ""))
+    if SHA_RE.fullmatch(source_sha) is None:
+        raise RuntimeError(f"{RELEASE_EPOCH_PATH} contains an invalid sourceSha")
+    return version, source_sha
+
+
+def version_anchor(root: pathlib.Path, current: Version, source_sha: str) -> str:
+    version_commit = run_git(
+        root, "log", "-1", "--format=%H", source_sha, "--", "VERSION"
+    ).stdout.strip()
+    if SHA_RE.fullmatch(version_commit) is None:
+        raise RuntimeError("could not resolve the commit that established VERSION")
+
+    epoch_version, epoch_source = release_epoch(root)
+    if (
+        current == epoch_version
+        and is_ancestor(root, version_commit, epoch_source)
+        and is_ancestor(root, epoch_source, source_sha)
+    ):
+        return epoch_source
+
+    if not is_ancestor(root, version_commit, source_sha):
+        raise RuntimeError("VERSION anchor is not an ancestor of the release source")
+    return version_commit
+
+
+def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Version:
+    """Map a main source commit to a deterministic patch version.
+
+    The first-parent distance from the version anchor gives every qualified main
+    source a unique version without requiring workflow-level serialization.
+    Existing tags remain authoritative for publication retries.
     """
     existing = release_tag_for_source(root, current, source_sha)
     if existing is not None:
         return existing[1]
 
-    highest_patch = max(
-        (patch for _, patch in matching_tags(root, current)),
-        default=current.patch,
+    anchor = version_anchor(root, current, source_sha)
+    result = run_git(
+        root,
+        "rev-list",
+        "--count",
+        "--first-parent",
+        f"{anchor}..{source_sha}",
     )
-    return Version(current.major, current.minor, max(current.patch, highest_patch) + 1)
+    try:
+        distance = int(result.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError("git returned an invalid first-parent release distance") from exc
+    if distance < 0:
+        raise RuntimeError("release distance cannot be negative")
+    return Version(current.major, current.minor, current.patch + distance)
 
 
 def validate_bootstrap_password(password: str) -> None:
