@@ -14,9 +14,7 @@ DEVICE_A = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
 
 class SyncthingDeviceTests(unittest.TestCase):
     def test_legacy_id_is_normalized_to_narrow_owned_shape(self):
-        value = devices.normalize_device(
-            {"id": DEVICE_A.lower(), "name": "Laptop", "addresses": ["dynamic", "dynamic"]}
-        )
+        value = devices.normalize_device({"id": DEVICE_A.lower(), "name": "Laptop", "addresses": ["dynamic"]})
         self.assertEqual(value["deviceID"], DEVICE_A)
         self.assertEqual(value["addresses"], ["dynamic"])
         self.assertFalse(value["autoAcceptFolders"])
@@ -61,14 +59,9 @@ class SyncthingDeviceTests(unittest.TestCase):
         normalized = devices.normalize_devices(values)
         self.assertEqual([item["name"] for item in normalized], ["Alpha", "zeta"])
 
-    def test_control_characters_are_rejected_in_names_and_addresses(self):
-        for value in (
-            {"deviceID": DEVICE_A, "name": "Laptop\nInjected"},
-            {"deviceID": DEVICE_A, "addresses": ["tcp://host:22000\rmalformed"]},
-        ):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(devices.DeviceError, "control characters"):
-                    devices.normalize_device(value)
+    def test_control_characters_are_rejected_in_names(self):
+        with self.assertRaisesRegex(devices.DeviceError, "control characters"):
+            devices.normalize_device({"deviceID": DEVICE_A, "name": "Laptop\nInjected"})
 
     def test_device_limit_boundary_is_enforced(self):
         alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
@@ -87,21 +80,23 @@ class SyncthingDeviceTests(unittest.TestCase):
             with self.assertRaisesRegex(devices.DeviceError, "At most"):
                 devices.normalize_devices(values)
 
-    def test_address_count_and_length_limits_are_enforced(self):
-        with self.assertRaisesRegex(devices.DeviceError, "at most"):
-            devices.normalize_device(
-                {
-                    "deviceID": DEVICE_A,
-                    "addresses": [f"tcp://host-{index}:22000" for index in range(devices.MAX_ADDRESSES + 1)],
-                }
-            )
-        with self.assertRaisesRegex(devices.DeviceError, "between 1 and"):
-            devices.normalize_device(
-                {
-                    "deviceID": DEVICE_A,
-                    "addresses": ["x" * (devices.MAX_ADDRESS_LENGTH + 1)],
-                }
-            )
+    def test_self_service_addresses_are_discovery_only(self):
+        for addresses in (
+            ["tcp://10.0.0.5:22000"],
+            ["tcp://127.0.0.1:22000"],
+            ["tcp://169.254.169.254:80"],
+            ["dynamic", "tcp://192.168.1.5:22000"],
+            ["dynamic", "dynamic"],
+            [],
+        ):
+            with self.subTest(addresses=addresses):
+                with self.assertRaisesRegex(devices.DeviceError, "must use the discovery address"):
+                    devices.normalize_device({"deviceID": DEVICE_A, "addresses": addresses})
+        self.assertEqual(devices.normalize_device({"deviceID": DEVICE_A})["addresses"], ["dynamic"])
+        self.assertEqual(
+            devices.normalize_device({"deviceID": DEVICE_A, "addresses": ["dynamic"]})["addresses"],
+            ["dynamic"],
+        )
 
     def test_malformed_json_and_primitive_json_are_rejected(self):
         with self.assertRaisesRegex(devices.DeviceError, "must contain JSON"):
@@ -114,6 +109,11 @@ class SyncthingDeviceTests(unittest.TestCase):
     def test_explicit_empty_device_id_does_not_fall_back_to_legacy_id(self):
         with self.assertRaisesRegex(devices.DeviceError, "Device ID"):
             devices.normalize_device({"deviceID": "", "id": DEVICE_A})
+
+    def test_authentik_blueprint_enforces_the_same_dynamic_only_boundary(self):
+        blueprint = (ROOT / "authentik" / "blueprints" / "nas-user-settings.yaml").read_text(encoding="utf-8")
+        self.assertIn('device.get("addresses", ["dynamic"]) != ["dynamic"]', blueprint)
+        self.assertIn("static connection targets are", blueprint)
 
 
 if __name__ == "__main__":
