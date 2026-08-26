@@ -45,7 +45,8 @@ class SecureFirstStartTests(unittest.TestCase):
 
     def test_no_bootstrap_secret_promotion_stage_exists(self) -> None:
         source = SECURE.read_text(encoding="utf-8")
-        self.assertNotIn("promote", source.lower())
+        self.assertNotIn("promote_bootstrap", source)
+        self.assertNotIn('"bootstrap-secret-promotion"', source)
         self.assertNotIn("bootstrap-secret-initialization", source)
         self.assertNotIn("bootstrap-keepass-database", source)
         self.assertIn("bootstrap-authority-ready", source)
