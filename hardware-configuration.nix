@@ -1,6 +1,11 @@
-# Replace with reviewed nixos-generate-config output before installation.
+# Replace this repository placeholder with reviewed nixos-generate-config output
+# for the actual target host before setting nas.installationReady = true.
 
 { ... }:
 
 {
+  # The generated hardware configuration will overwrite this file and therefore
+  # remove the stub marker. installationReady fails closed while this marker is
+  # present, even if root filesystem settings are supplied somewhere else.
+  nas.testing.hardwareConfigurationStub = true;
 }

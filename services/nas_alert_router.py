@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -44,6 +45,7 @@ MAX_BODY_BYTES = max(4096, int(os.environ.get("NAS_ALERT_ROUTER_MAX_BODY_BYTES",
 MAX_ALERTS_PER_REQUEST = max(1, int(os.environ.get("NAS_ALERT_ROUTER_MAX_ALERTS", "256")))
 MAX_STATE_ENTRIES = max(128, int(os.environ.get("NAS_ALERT_ROUTER_MAX_STATE_ENTRIES", "4096")))
 REQUEST_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("NAS_ALERT_ROUTER_REQUEST_TIMEOUT_SECONDS", "10")))
+MAX_SECRET_BYTES = 4096
 
 STATE_LOCK = threading.RLock()
 
@@ -233,7 +235,49 @@ def should_send(alert: RoutedAlert, state: Mapping[str, Mapping[str, Any]], *, n
 
 
 def read_secret(path: pathlib.Path) -> str:
-    value = path.read_text(encoding="utf-8").strip()
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise AlertDeliveryError(f"Unable to inspect secret file {path}") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise AlertDeliveryError(f"Secret path is not a regular file: {path}")
+    if before.st_mode & 0o077:
+        raise AlertDeliveryError(f"Secret file permissions are too broad: {path}")
+    if before.st_uid not in {0, os.geteuid()}:
+        raise AlertDeliveryError(f"Secret file has an unexpected owner: {path}")
+
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise AlertDeliveryError(f"Unable to open secret file {path}") from exc
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise AlertDeliveryError(f"Secret file changed while opening: {path}")
+        if not stat.S_ISREG(opened.st_mode) or opened.st_mode & 0o077:
+            raise AlertDeliveryError(f"Secret file metadata is unsafe: {path}")
+        if opened.st_uid not in {0, os.geteuid()}:
+            raise AlertDeliveryError(f"Secret file has an unexpected owner: {path}")
+        chunks: list[bytes] = []
+        remaining = MAX_SECRET_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_SECRET_BYTES:
+        raise AlertDeliveryError(f"Secret file is too large: {path}")
+    try:
+        value = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise AlertDeliveryError(f"Secret file is not valid UTF-8: {path}") from exc
     if not value or "\n" in value or "\r" in value:
         raise AlertDeliveryError(f"Invalid single-line secret in {path}")
     return value

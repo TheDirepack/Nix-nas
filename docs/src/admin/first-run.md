@@ -1,222 +1,73 @@
 # First start
 
-`nas-first-start.service` runs automatically at each installed boot when
-`nas.firstStart.enable` is true. It inspects the configured setup file and
-publishes a password-free state document. It prepares the resumable workflow;
-it does not expose Cockpit while KeePassXC secrets, ZFS, and protected services
-are locked.
+First start uses a dedicated browser setup application at `/setup/`. It is separate from Cockpit and is authenticated by a disposable bootstrap Authentik/KeePass trust domain.
 
-The service does not silently create a pool, read a KeePassXC password, or make
-identity changes. It prepares the resumable workflow and shows one of these
-states in `nas-setup status`:
+The bootstrap trust domain exists only so an unconfigured appliance cannot be claimed anonymously over the network. On first boot the appliance creates an installation-unique bootstrap KDBX, random machine credentials, and the intentionally preconfigured Authentik login `akadmin`. A development checkout or development-built image uses the fixed password `nas-admin-first-boot` so first-run, VM, and browser tests remain repeatable. An automated tagged GitHub Release instead uses the five-word Diceware password published in that release's notes and embedded only in that release artifact. This bootstrap credential exists only for first-run web access; setup replaces it with user-selected permanent credentials and retires the entire bootstrap authority. The temporary Linux `nas-bootstrap` principal is locked and has no password login.
 
-- `configuration-missing`: create the configured JSON file;
-- `configuration-invalid`: correct the reported schema or policy error;
-- `state-invalid`: repair or recover the setup journal/state file;
-- `ready`: review the exact non-secret storage, account, feature plan, and plan
-  digest, then enter the KeePassXC database password;
-- `configuration-changed`: the normalized plan differs from the plan that was
-  completed and must be reviewed again;
-- `state-drift`: setup state exists but one or more live authority probes no
-  longer satisfy it;
-- `complete-unverified`: setup finished but final host preflight was explicitly
-  skipped through the CLI; or
-- `complete`: the completed plan and authority probes are verified.
+Do not copy a release bootstrap password into `main`, and do not assume `nas-admin-first-boot` works for a tagged release. Published releases must be installed with the credential from the matching GitHub Release notes.
 
-The defaults are:
+Nothing from the bootstrap KDBX is copied or promoted into the finished appliance. Setup creates a fresh permanent trust domain and destroys the bootstrap runtime only after the replacements are verified.
 
-```nix
-nas.firstStart.enable = true;
-nas.firstStart.configFile = "/etc/nixos/nixos-nas/first-run.json";
-```
+## Setup flow
 
-`nas-setup` performs the actual appliance workflow by calling the existing
-component authorities in their required order. It does not replace NixOS,
-KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
+1. Sign in with the bootstrap Authentik identity `akadmin` and the credential for the exact artifact: `nas-admin-first-boot` for development builds, or the five-word password in the matching tagged release notes.
+2. Review the non-secret storage/V2 plan and its digest.
+3. Choose a new, currently nonexistent Linux administrator username.
+4. Choose the Linux administrator password, permanent KeePassXC master password, and Authentik administrator password. The wizard may explicitly reuse the Linux password for KeePassXC and/or Authentik, but both reuse choices default off.
+5. Passwords are checked with zxcvbn and a 15-character minimum. The setup service also checks the HIBP range API when it is reachable; an offline HIBP service does not block setup. Future Linux password changes use libpwquality/PAM and future Authentik password changes use Authentik's native password policy.
+6. Confirm the exact block-device list and any destructive pool creation.
+7. Submit setup. The browser receives a random per-job capability used only to poll that job and request the final reboot after the bootstrap Authentik database is retired.
 
-## Prepare the configuration
+The setup API listens only on a root-owned Unix socket. Caddy owns public HTTPS and Authentik authentication. Browser-supplied identity headers are stripped before trusted Authentik identity headers are reconstructed.
 
-## First-boot Authentik access
+## Permanent trust domain
 
-The first-boot Authentik setup identity is always `akadmin`. The password depends
-on the artifact you are running:
+After authenticated submission, the finite setup job:
 
-- a development checkout or development-built image uses the fixed
-  `nas-admin-first-boot` password so first-run, VM, and browser tests remain
-  repeatable;
-- an automated tagged GitHub Release uses the five-word Diceware password shown
-  in that release's notes. The same password is embedded in that release-only
-  source commit and package.
+1. verifies the disposable bootstrap authority is healthy without using the user's permanent KeePass password;
+2. selects a fresh root-filesystem permanent runtime;
+3. creates one permanent `/var/lib/nas-secrets/NAS.kdbx` using the user-supplied KeePass master password and reopens it to verify the password;
+4. generates all permanent machine secrets from scratch in that database, including the native OpenZFS encryption key and permanent Authentik/PostgreSQL/service credentials;
+5. creates the chosen Linux administrator only if that username does not already exist;
+6. creates or imports the explicitly confirmed encrypted ZFS storage using native OpenZFS key validation;
+7. starts the permanent root-hosted PostgreSQL/AuthentiK/control plane;
+8. creates the permanent Authentik administrator and provisions a restricted steady-state automation token;
+9. initializes the mutable Managed Services V2 authority on encrypted ZFS and reconciles the requested application state;
+10. verifies the replacement Linux, Authentik, Caddy, storage, and V2 authorities;
+11. removes the temporary Authentik setup application, deletes `akadmin`, verifies the bootstrap token is rejected, removes `nas-bootstrap`, and deletes the entire bootstrap runtime; and
+12. writes the password-free completion state only after bootstrap retirement succeeds.
 
-Do not copy a release password into `main`, and do not assume
-`nas-admin-first-boot` works for a tagged release. If you are installing a
-published release, use the credentials from the matching GitHub Release notes.
+Bootstrap retirement is fail-closed. If a replacement authority or retirement step cannot be verified, setup remains incomplete and reports the failed stage for recovery.
 
-The setup workflow creates the administrator you choose, verifies that account
-is an enabled `nas_admin` member, and then retires the bootstrap Authentik
-identity. Do not use the bootstrap identity for normal administration.
+## Storage boundary
 
-Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
-may define storage creation, Authentik accounts, reserved NAS groups, and initial
-feature modes.
+The root filesystem contains only the control plane required before encrypted ZFS is available: NixOS/V2 implementation code, Caddy base state, Authentik and its PostgreSQL database, the permanent KDBX, setup/recovery metadata, and ZFS unlock machinery.
 
-Do not place plaintext passwords in the JSON file. Each account can reference a
-private password file:
+Mutable V2 desired state, V2 generations/transactions, application configuration/state, containers, VMs, and user data live on encrypted ZFS. There is no root-side fallback copy of the V2 desired-state authority.
 
-```bash
-install -m 0600 /dev/null /run/keys/nas-alice-password
-read -r -s -p 'Alice password: ' password
-printf '%s\n' "$password" > /run/keys/nas-alice-password
-unset password
-```
+The ZFS key is a native random 256-bit key because OpenZFS raw/hex keys are exactly 32 bytes. The project does not add a custom key fingerprint or secondary verifier: after KeePassXC is unlocked, the key is staged privately under `/run`, `zfs load-key` validates it, the datasets are mounted, and V2 can reconcile.
 
-`nas-setup` rejects password files with group or other permissions, rejects
-symlinks, requires a regular UTF-8 file containing exactly one non-empty line,
-and opens each file exactly once. Passwords are retained only in a transient
-in-memory Authentik plan, sent over stdin to `nas-identity-sync`, removed from
-the plan on every exit path, and omitted from
-`/var/lib/nas-setup/state.json`.
+## Resume behavior
 
-The schema is strict: unknown top-level, storage, or account fields are
-rejected so a misspelled safety or account field cannot silently fall back to a
-default. Password-file paths must be absolute.
+Setup is journaled and idempotent. A retry supplies the human passwords again and validates real postconditions rather than comparing a password-derived verifier. Existing permanent KDBX state is reopened; it is never silently overwritten. A secret already generated and consumed by a permanent component is reused from the permanent KDBX on resume rather than independently regenerated.
 
-Validate the file before making changes:
+A stage marked `manual-recovery-required` must be repaired explicitly before retrying. Password-changing stages require explicit confirmation before reapplying a human password.
 
-```bash
-nas-setup validate-config /etc/nixos/nixos-nas/first-run.json
-```
+## Recovery and backups
 
-## Complete first start
+The permanent KeePass master password belongs to the user and is never stored by Nix-nas. Losing that password prevents recovery from the KDBX, so store it in an independent recovery location.
 
-On the first installed boot, complete setup through the browser wizard: sign
-in at the appliance address with the bootstrap Authentik identity above and
-open the First start wizard. The wizard shows the exact pool, dataset,
-topology, stable device paths, and SHA-256 plan digest prepared from the
-configuration file; it collects the KeePassXC database password and the
-administrator account, submits the guarded first-start job, and reports
-progress until the appliance is complete.
+The root/control-plane Restic backup includes the encrypted permanent KDBX and a consistent Authentik PostgreSQL dump while excluding `/run`, caches, raw PostgreSQL files, and the mounted ZFS tree. The ZFS recovery domain is backed up as the complete encrypted ZFS hierarchy using native raw encrypted replication. This keeps root/control-plane recovery separate from the encrypted V2/application data domain.
 
-The browser path is the only first-start execution surface. `nas-setup` on the
-recovery plane stays read-only for this workflow: use
-`nas-setup prepare-first-start` to review the published `ready` state and plan
-digest, and `nas-setup status` to watch completion, but do not expect the
-interactive `first-run` subcommand to perform setup; the wizard's submission
-path is what validates the plan digest, confirms every storage device, and
-runs the guarded job.
+A bare-metal recovery restores the root/control-plane backup, opens the restored KDBX with the user's master password, retrieves the native ZFS key, restores/imports the encrypted ZFS hierarchy, and then lets V2 reconcile from its restored ZFS authority.
 
-When the plan creates a pool, the wizard requires the destructive-storage
-confirmation and the displayed SHA-256 plan digest before it will submit. The
-backend re-reads and normalizes the root-owned configuration, recomputes the
-digest, copies the exact device list into the guarded invocation, and rejects
-a stale digest or mismatched device confirmation.
+## Security notes
 
-Setup is resumable. Completed stages are reused only after their live
-postcondition probes still pass. A `manual-recovery-required` journal never
-automatically resumes; repair the reported authority and run
-`nas-setup reconcile-first-run --note 'what was repaired'` before retrying.
-Keep the recovery terminal available until the protected stack is ready.
-
-The workflow prompts once for the KeePass database password. It then:
-
-1. verifies the configured KDBX database or creates it when missing;
-2. runs `nas-secrets init` idempotently;
-3. verifies existing ZFS storage or creates the explicitly confirmed pool and
-   managed dataset;
-4. activates secrets and starts the protected service target;
-5. bootstraps reserved Authentik groups;
-6. creates or updates configured accounts and passwords;
-7. creates only the ZFS-backed personal directories required by file-enabled
-   accounts, leaving CopyParty ACLs and volumes authoritative;
-8. reconciles managed Syncthing objects when enabled;
-9. applies requested feature lifecycle modes;
-10. runs mount, identity, and optional repository preflight checks; and
-11. writes a password-free completion report to
-    `/var/lib/nas-setup/state.json`.
-
-## First-start commands and automation
-
-Review the prepared plan from the recovery plane as the configured local
-administrator, not as root:
-
-```bash
-nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json
-nas-setup status
-```
-
-Submit the workflow through the browser wizard. The submission path validates
-`sudo` authorization, re-reads the root-owned configuration, confirms the plan
-digest and every storage device, and runs the guarded first-start job as an
-authorized root operation without exposing the KeePass or administrator
-passwords to a shell. Any account `passwordFile` referenced by the JSON must
-exist when the job runs; remove that field after bootstrap when a rerun should
-preserve the current Authentik password.
-
-## Browser bootstrap and locked boot
-
-Before setup completes, Caddy serves the static `/setup` guidance page and the
-Authentik gate protects every management route. The setup wizard itself is
-reachable only after signing in with the bootstrap Authentik identity.
-
-During first start, Authentik creates its temporary `akadmin` bootstrap identity
-using the credential for the exact source artifact: `nas-admin-first-boot` for
-the development tree, or the five-word password published with an automated
-tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
-then retires that bootstrap identity. After protected services are ready, use
-Authentik through Caddy for all browser access.
-
-## New-pool safeguards
-
-Pool creation supports `single`, `stripe`, `mirror`, `raidz1`, `raidz2`, and
-`raidz3`. Use stable `/dev/disk/by-id/...` paths. The CLI sets `ashift=12` by
-default, enables `compression=zstd`, disables `atime`, uses `xattr=sa` and
-`acltype=posixacl`, leaves the pool root unmounted, and enables pool autotrim.
-The `ashift` value can be changed in the setup file before creation.
-
-Example mirror configuration:
-
-```json
-{
-  "storage": {
-    "createPool": true,
-    "devices": [
-      "/dev/disk/by-id/ata-EXACT_DISK_0",
-      "/dev/disk/by-id/ata-EXACT_DISK_1"
-    ],
-    "topology": "mirror",
-    "wipeDevices": true,
-    "ashift": 12
-  }
-}
-```
-
-Every configured device must be confirmed individually, and all new-pool
-creation requires the destructive opt-in in the wizard. Before writing, the
-setup backend verifies that each path resolves to a block device and rejects
-traversal paths or multiple aliases for the same underlying disk.
-
-`wipeDevices` controls whether `wipefs` runs first; the destructive flag is
-required even when wiping is disabled because creating a pool writes ZFS labels.
-Existing pools and datasets are never destroyed or recreated by an idempotent
-rerun. The legacy singular `device`/`wipeDevice` fields remain accepted for old
-single-disk test configurations, but new files should use `devices` and
-`wipeDevices`.
-
-The short `/dev/vdb` form is used only by the disposable QEMU tests.
-
-## Account management after setup
-
-After first-start, manage individual accounts with the runtime account commands described in [Accounts and access](accounts.md). Authentik remains authoritative; the NAS command is a guarded convenience for reserved NAS groups, password changes, and Syncthing reconciliation.
-
-## Idempotency and authority
-
-Rerunning the same first-run file updates only the declared reserved NAS group
-memberships while preserving unrelated Authentik groups. Accounts carry the
-`nasManagedBySetup` attribute so the optional
-`deactivateMissingManagedAccounts` mode can disable accounts removed from the
-file without touching manually managed Authentik accounts.
-
-The initial runtime Authentik API token remains the bootstrap token until the
-administrator creates a narrower service-account token and stores it with
-`nas-secrets set-authentik-token`. Complete that post-bootstrap hardening step
-before production use.
+- The universal `akadmin` / `nas-admin-first-boot` credential is intentional for development builds and is restricted to the disposable bootstrap Authentik authority. Tagged releases replace the fixed password with a release-specific five-word Diceware password. Neither is a permanent appliance credential.
+- `/setup/` is never an anonymous administrator-claim endpoint.
+- The permanent Linux username is user-selected but must not already exist.
+- KeePassXC, Linux, and Authentik passwords are independent unless the user explicitly selects a reuse toggle.
+- Machine credentials are random and are not subjected to human-password strength rules.
+- Authentik owns human browser identities, passwords, MFA, groups, and application assignments after setup.
+- Caddy is the public HTTP/TLS boundary; HTTP applications bind to loopback or Unix sockets.
+- The steady-state Authentik automation token is intentionally unable to create users or reset passwords.

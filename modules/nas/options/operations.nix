@@ -119,6 +119,38 @@
         default = false;
         description = "Activate the exact reviewed checkout after successful build and health checks. Keep false for validation-only runs.";
       };
+      expectedRemoteUrl = lib.mkOption {
+        type = lib.types.strMatching "^https://[^[:space:]@]+$";
+        default = "https://github.com/TheDirepack/Nix-nas.git";
+        description = ''
+          Exact HTTPS Git remote authorized as the update source. nas-update
+          refuses --sync when the configured upstream remote does not match
+          this value; SSH, local paths, embedded credentials, and alternate
+          remotes are not accepted by the guarded updater.
+        '';
+      };
+      signaturePolicy = lib.mkOption {
+        type = lib.types.enum [ "commit" "tag" "commit-or-tag" ];
+        default = "commit-or-tag";
+        description = ''
+          Cryptographic provenance required for a fetched update candidate.
+          commit verifies the candidate commit, tag requires a signed annotated
+          tag pointing exactly at the candidate, and commit-or-tag accepts
+          either. Verification uses only trustedSigningKeyFiles from the
+          running Nix generation and fails closed.
+        '';
+      };
+      trustedSigningKeyFiles = lib.mkOption {
+        type = lib.types.listOf lib.types.path;
+        default = [ ];
+        example = [ "/etc/nixos/trusted-release-key.asc" ];
+        description = ''
+          Public OpenPGP key files trusted to sign update commits/releases.
+          Nix copies path values into the immutable store used by nas-update.
+          --sync fails closed when this list is empty or no trusted key verifies
+          the candidate. These are public verification keys, not secrets.
+        '';
+      };
     };
   };
 }

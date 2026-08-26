@@ -70,39 +70,49 @@ let
     '';
   };
 
+  setupRuntimeInputs = [
+    pkgs.coreutils
+    pkgs.keepassxc
+    pkgs.python3
+    pkgs.systemd
+    pkgs.util-linux
+    pkgs.zfs
+    nasPythonApplication
+    nasIdentitySync
+    nasPreflight
+    nasSecrets
+    nasZfsCreateEncryptedDataset
+    nasZfsMountCheck
+  ];
+  setupEnvironment = ''
+    export PATH=/run/wrappers/bin:$PATH
+    export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
+    export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
+    export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
+    export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
+    export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
+    export NAS_ZFS_ROOT=${lib.escapeShellArg cfg.zfsRoot}
+    export NAS_ZFS_ENCRYPTION_ENABLE=${if cfg.zfsEncryption.enable then "1" else "0"}
+    export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
+    export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
+    export NAS_SETUP_STATE=/var/lib/nas-setup/state.json
+    export NAS_SETUP_JOURNAL=/var/lib/nas-setup/first-run-journal.json
+    export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
+  '';
   nasSetupScript = "${nasPythonApplication}/bin/nas-setup";
-nasSetup = pkgs.writeShellApplication {
+  nasSetup = pkgs.writeShellApplication {
     name = "nas-setup";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.keepassxc
-      pkgs.python3
-      pkgs.shadow
-      pkgs.systemd
-      pkgs.util-linux
-      pkgs.zfs
-      nasPythonApplication
-      nasIdentitySync
-      nasPreflight
-      nasSecrets
-      nasZfsCreateEncryptedDataset
-      nasZfsMountCheck
-    ];
-    text = ''
-      export PATH=/run/wrappers/bin:$PATH
-      export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
-      export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
-      export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
-      export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
-      export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
-      export NAS_ZFS_ROOT=${lib.escapeShellArg cfg.zfsRoot}
-      export NAS_ZFS_ENCRYPTION_ENABLE=${if cfg.zfsEncryption.enable then "1" else "0"}
-      export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
-      export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
-      export NAS_SETUP_STATE=/var/lib/nas-setup/state.json
-      export NAS_SETUP_JOURNAL=/var/lib/nas-setup/first-run-journal.json
-      export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
+    runtimeInputs = setupRuntimeInputs;
+    text = setupEnvironment + ''
       exec ${nasSetupScript} "$@"
+    '';
+  };
+  nasFirstStartScript = "${nasPythonApplication}/bin/nas-first-start-job";
+  nasFirstStart = pkgs.writeShellApplication {
+    name = "nas-first-start-job";
+    runtimeInputs = setupRuntimeInputs;
+    text = setupEnvironment + ''
+      exec ${nasFirstStartScript} "$@"
     '';
   };
 
@@ -415,10 +425,6 @@ nasSetup = pkgs.writeShellApplication {
       export NAS_IDENTITY_URL=${lib.escapeShellArg cfg.identity.authentikPath}
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
-      # runtimeInputs also carries the unwrapped console Python application
-      # whose bin/nas-setup shadows the appliance wrapper; point subprocesses
-      # at the wrapper explicitly so first-start jobs get the real environment.
-      export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup
       exec ${nasCockpitApiScript} "$@"
     '';
   };
@@ -427,7 +433,7 @@ in
 {
   inherit
     nasPythonApplication nasAlertRouter nasIdentitySyncScript nasIdentityPython nasIdentitySync
-    nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
+    nasSetupScript nasSetup nasFirstStartScript nasFirstStart nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
     nasCockpitApiScript nasCockpitApi
   ;
 }

@@ -69,9 +69,49 @@ if ! $status_only; then
     exec "$operation_runner" --action nas-update --class "$operation_class" -- "$0" "${original_args[@]}"
   fi
 fi
+
+for command in nix nixos-rebuild systemctl zfs zpool curl readlink sha256sum git gpg jq ip ss firewall-cmd find stat; do
+  command -v "$command" >/dev/null 2>&1 || { echo "Missing command: $command" >&2; exit 1; }
+done
+
+export HOME=/var/empty
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_OPTIONAL_LOCKS=0
+
 config_dir="${NAS_CONFIG_DIR:-/etc/nixos/nixos-nas}"
+expected_remote_url="${NAS_UPDATE_EXPECTED_REMOTE_URL:-}"
+signature_policy="${NAS_UPDATE_SIGNATURE_POLICY:-commit-or-tag}"
+trusted_key_files="${NAS_UPDATE_TRUSTED_KEY_FILES:-}"
+
+secure_directory_chain() {
+  local path="$1" current=/ segment uid mode
+  [[ "$path" == /* ]] || { echo "Configuration directory must be absolute: $path" >&2; return 1; }
+  [[ "$path" != "/" ]] || { echo "Configuration directory may not be /." >&2; return 1; }
+  IFS='/' read -r -a components <<< "${path#/}"
+  for segment in "${components[@]}"; do
+    [[ -n "$segment" && "$segment" != "." && "$segment" != ".." ]] || {
+      echo "Configuration directory contains an unsafe path component: $path" >&2
+      return 1
+    }
+    current="${current%/}/$segment"
+    [[ ! -L "$current" && -d "$current" ]] || {
+      echo "Configuration path component must be a real directory, not a symlink: $current" >&2
+      return 1
+    }
+    uid="$(stat -c '%u' -- "$current")"
+    mode="$(stat -c '%a' -- "$current")"
+    [[ "$uid" == 0 ]] || { echo "Configuration path component is not root-owned: $current" >&2; return 1; }
+    (( (8#$mode & 8#022) == 0 )) || {
+      echo "Configuration path component is group/world writable: $current" >&2
+      return 1
+    }
+  done
+}
+
+secure_directory_chain "$config_dir"
+config_dir="$(readlink -e -- "$config_dir")"
 cd "$config_dir"
-config_dir="$(pwd -P)"
 active_config_dir="$config_dir"
 deployment_dir="$config_dir"
 candidate_worktree=""
@@ -87,17 +127,88 @@ firewall_zone="${NAS_FIREWALL_ZONE:-nas-lan}"
 lan_host="${NAS_LAN_HOST:-$(cat /proc/sys/kernel/hostname).local}"
 trusted_interfaces="${NAS_TRUSTED_INTERFACES:-}"
 
-for command in nix nixos-rebuild systemctl zfs zpool curl readlink sha256sum git jq ip ss firewall-cmd; do
-  command -v "$command" >/dev/null 2>&1 || { echo "Missing command: $command" >&2; exit 1; }
-done
-
-export HOME=/var/empty
-export GIT_CONFIG_NOSYSTEM=1
-export GIT_CONFIG_GLOBAL=/dev/null
-export GIT_OPTIONAL_LOCKS=0
-
 git_safe() {
   git -c core.hooksPath=/dev/null "$@"
+}
+
+validate_protected_checkout() {
+  local root="$1" top unsafe git_dir
+  top="$(git_safe -C "$root" rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "Protected configuration directory is not a Git worktree: $root" >&2
+    return 1
+  }
+  [[ "$top" == "$root" ]] || {
+    echo "Protected configuration must be the Git repository root: $root (got $top)" >&2
+    return 1
+  }
+  git_dir="$(git_safe -C "$root" rev-parse --git-dir)"
+  [[ "$git_dir" == .git && -d "$root/.git" && ! -L "$root/.git" ]] || {
+    echo "Protected configuration must use an in-tree non-symlink .git directory." >&2
+    return 1
+  }
+  unsafe="$(find "$root" -xdev \( ! -user root -o -perm /022 \) -print -quit)"
+  [[ -z "$unsafe" ]] || {
+    echo "Protected configuration contains non-root-owned or group/world-writable state: $unsafe" >&2
+    return 1
+  }
+  for required in flake.nix flake.lock; do
+    [[ -f "$root/$required" && ! -L "$root/$required" ]] || {
+      echo "Protected configuration is missing regular $required" >&2
+      return 1
+    }
+    git_safe -C "$root" ls-files --error-unmatch "$required" >/dev/null || {
+      echo "Protected configuration $required is not tracked by Git." >&2
+      return 1
+    }
+  done
+}
+
+verify_candidate_provenance() {
+  local commit="$1" policy="$signature_policy" key_file key_real verify_home tag
+  local commit_ok=false tag_ok=false
+  case "$policy" in
+    commit|tag|commit-or-tag) ;;
+    *) echo "Unsupported update signature policy: $policy" >&2; return 1 ;;
+  esac
+  [[ -n "$trusted_key_files" ]] || {
+    echo "No trusted update signing keys are configured; refusing unsigned/untrusted revision $commit." >&2
+    return 1
+  }
+  verify_home="$(mktemp -d /run/nas-update-gnupg.XXXXXX)"
+  chmod 0700 "$verify_home"
+  IFS=':' read -r -a key_paths <<< "$trusted_key_files"
+  for key_file in "${key_paths[@]}"; do
+    [[ -n "$key_file" ]] || continue
+    key_real="$(readlink -e -- "$key_file" 2>/dev/null || true)"
+    [[ "$key_real" == /nix/store/* && -f "$key_real" && ! -L "$key_file" ]] || {
+      echo "Trusted update key must resolve to a regular Nix store file: $key_file" >&2
+      rm -rf -- "$verify_home"
+      return 1
+    }
+    if ! GNUPGHOME="$verify_home" gpg --batch --quiet --import "$key_real" >/dev/null 2>&1; then
+      echo "Unable to import trusted update signing key: $key_file" >&2
+      rm -rf -- "$verify_home"
+      return 1
+    fi
+  done
+  if [[ "$policy" != tag ]] && GNUPGHOME="$verify_home" git_safe verify-commit "$commit" >/dev/null 2>&1; then
+    commit_ok=true
+  fi
+  if [[ "$policy" != commit ]]; then
+    while IFS= read -r tag; do
+      [[ -n "$tag" ]] || continue
+      [[ "$(git_safe rev-parse "$tag^{}" 2>/dev/null || true)" == "$commit" ]] || continue
+      if GNUPGHOME="$verify_home" git_safe verify-tag "$tag" >/dev/null 2>&1; then
+        tag_ok=true
+        break
+      fi
+    done < <(git_safe tag --points-at "$commit")
+  fi
+  rm -rf -- "$verify_home"
+  if ! $commit_ok && ! $tag_ok; then
+    echo "Update candidate $commit has no signature trusted by the running system (policy: $policy)." >&2
+    return 1
+  fi
 }
 
 cleanup_candidate() {
@@ -111,6 +222,7 @@ trap cleanup_candidate EXIT
 inside_git=false
 if git_safe rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   inside_git=true
+  validate_protected_checkout "$config_dir"
 fi
 
 if $status_only; then
@@ -160,10 +272,15 @@ if $inside_git; then
     exit 1
   }
   original_source_commit="$(git_safe rev-parse HEAD)"
+  candidate_commit="$original_source_commit"
 fi
 
 if $sync; then
-  $inside_git || { echo "--sync requires a Git checkout." >&2; exit 1; }
+  $inside_git || { echo "--sync requires a protected Git checkout." >&2; exit 1; }
+  [[ "$expected_remote_url" =~ ^https://[^[:space:]@?#]+$ ]] || {
+    echo "Configured update remote must be an HTTPS URL without credentials, query, or fragment." >&2
+    exit 1
+  }
   upstream="$(git_safe rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" || {
     echo "The current branch has no configured upstream." >&2
     exit 1
@@ -174,17 +291,38 @@ if $sync; then
     echo "Unable to resolve the configured Git upstream: $upstream" >&2
     exit 1
   }
+  remote_url="$(git_safe remote get-url "$remote")"
+  [[ "$remote_url" == "$expected_remote_url" ]] || {
+    echo "Configured Git upstream $remote resolves to untrusted remote $remote_url; expected $expected_remote_url" >&2
+    exit 1
+  }
   echo "Fetching approved updates from $upstream without advancing the active checkout..."
-  git_safe fetch --prune "$remote" "$branch"
+  git_safe fetch --prune --tags "$remote" "$branch"
   candidate_commit="$(git_safe rev-parse FETCH_HEAD)"
   git_safe merge-base --is-ancestor HEAD "$candidate_commit" || {
     echo "Approved update is not a fast-forward descendant of the active revision." >&2
     exit 1
   }
+  verify_candidate_provenance "$candidate_commit"
   candidate_worktree="$(mktemp -d /var/tmp/nas-update-candidate.XXXXXX)"
   rmdir "$candidate_worktree"
   git_safe worktree add --detach "$candidate_worktree" "$candidate_commit" >/dev/null
+  [[ "$(git_safe -C "$candidate_worktree" rev-parse HEAD)" == "$candidate_commit" ]] || {
+    echo "Detached update worktree does not contain the verified candidate commit." >&2
+    exit 1
+  }
+  [[ "$(git_safe -C "$candidate_worktree" rev-parse --show-toplevel)" == "$candidate_worktree" ]] || {
+    echo "Detached update worktree has an unexpected repository root." >&2
+    exit 1
+  }
+  git_safe -C "$candidate_worktree" ls-files --error-unmatch flake.nix flake.lock >/dev/null || {
+    echo "Verified candidate does not contain the expected tracked flake." >&2
+    exit 1
+  }
   deployment_dir="$candidate_worktree"
+elif $apply; then
+  $inside_git || { echo "--apply requires a cryptographically verifiable Git checkout." >&2; exit 1; }
+  verify_candidate_provenance "$candidate_commit"
 fi
 
 cd "$deployment_dir"

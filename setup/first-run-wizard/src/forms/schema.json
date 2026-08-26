@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "first-run-wizard form schema",
+  "type": "object",
+  "properties": {
+    "adminUsername": {
+      "type": "string",
+      "description": "New permanent Linux administrator username",
+      "pattern": "^[a-z_][a-z0-9_-]{0,31}$"
+    },
+    "adminName": {
+      "type": "string",
+      "description": "Administrator display name",
+      "minLength": 1
+    },
+    "adminEmail": {
+      "type": "string",
+      "format": "email",
+      "description": "Administrator email address"
+    },
+    "adminPassword": {
+      "type": "string",
+      "description": "Permanent Linux administrator password",
+      "minLength": 15,
+      "maxLength": 256
+    },
+    "adminPasswordConfirm": {
+      "type": "string",
+      "description": "Confirm permanent Linux administrator password",
+      "minLength": 15,
+      "maxLength": 256
+    },
+    "reuseLinuxPasswordForKeePass": {
+      "type": "boolean",
+      "description": "Reuse the Linux administrator password as the KeePassXC master password",
+      "default": false
+    },
+    "keePassMasterPassword": {
+      "type": "string",
+      "description": "KeePassXC master password when password reuse is disabled",
+      "minLength": 15,
+      "maxLength": 256
+    },
+    "keePassMasterPasswordConfirm": {
+      "type": "string",
+      "description": "Confirm KeePassXC master password when password reuse is disabled",
+      "minLength": 15,
+      "maxLength": 256
+    },
+    "reuseLinuxPasswordForAuthentik": {
+      "type": "boolean",
+      "description": "Reuse the Linux administrator password as the Authentik administrator password",
+      "default": false
+    },
+    "authentikAdministratorPassword": {
+      "type": "string",
+      "description": "Permanent Authentik administrator password when password reuse is disabled",
+      "minLength": 15,
+      "maxLength": 256
+    },
+    "authentikAdministratorPasswordConfirm": {
+      "type": "string",
+      "description": "Confirm permanent Authentik administrator password when password reuse is disabled",
+      "minLength": 15,
+      "maxLength": 256
+    },
+    "authentikExternalUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Authentik external URL"
+    },
+    "zfsPoolName": {
+      "type": "string",
+      "description": "ZFS pool name from the reviewed setup plan"
+    },
+    "zfsPoolDevices": {
+      "type": "string",
+      "description": "ZFS pool devices from the reviewed setup plan"
+    }
+  },
+  "required": [
+    "adminUsername",
+    "adminName",
+    "adminEmail",
+    "adminPassword",
+    "adminPasswordConfirm",
+    "reuseLinuxPasswordForKeePass",
+    "reuseLinuxPasswordForAuthentik"
+  ]
+}

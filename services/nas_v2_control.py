@@ -35,6 +35,7 @@ SCHEMA_PATH = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/man
 PLATFORM_PATH = pathlib.Path(os.environ.get("NAS_V2_PLATFORM", "/run/nas-control/platform-capabilities.json"))
 RECONCILE_UNIT = os.environ.get("NAS_V2_RECONCILE_UNIT", "nas-managed-services-reconcile.service")
 SYSTEMCTL = os.environ.get("NAS_V2_SYSTEMCTL", "systemctl")
+MAX_DOCUMENT_CHARS = 4 * 1024 * 1024
 
 
 class ControlError(RuntimeError):
@@ -49,6 +50,20 @@ def _editor_platform_path() -> pathlib.Path | None:
     immediately before compilation and remains the final fail-closed boundary.
     """
     return PLATFORM_PATH if PLATFORM_PATH.is_file() else None
+
+
+def _read_source_text(source: str, *, label: str) -> str:
+    try:
+        if source == "-":
+            text = sys.stdin.read(MAX_DOCUMENT_CHARS + 1)
+        else:
+            with pathlib.Path(source).open("r", encoding="utf-8") as handle:
+                text = handle.read(MAX_DOCUMENT_CHARS + 1)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ControlError(f"Unable to read {label} from {source}: {exc}") from exc
+    if len(text) > MAX_DOCUMENT_CHARS:
+        raise ControlError(f"{label} exceeds the {MAX_DOCUMENT_CHARS}-character input limit")
+    return text
 
 
 def _systemctl(*args: str, check: bool = True) -> None:
@@ -132,10 +147,9 @@ def status() -> dict[str, Any]:
 
 def _read_mode_document(source: str) -> dict[str, str]:
     try:
-        text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
-        value = json.loads(text)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ControlError(f"Unable to read service mode document from {source}: {exc}") from exc
+        value = json.loads(_read_source_text(source, label="service mode document"))
+    except json.JSONDecodeError as exc:
+        raise ControlError(f"Unable to parse service mode document from {source}: {exc}") from exc
     if not isinstance(value, dict) or any(
         not isinstance(key, str) or not isinstance(mode, str) for key, mode in value.items()
     ):
@@ -145,10 +159,9 @@ def _read_mode_document(source: str) -> dict[str, str]:
 
 def _read_json_document(source: str) -> dict[str, Any]:
     try:
-        text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
-        value = json.loads(text)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ControlError(f"Unable to read Managed Services V2 JSON document from {source}: {exc}") from exc
+        value = json.loads(_read_source_text(source, label="Managed Services V2 JSON document"))
+    except json.JSONDecodeError as exc:
+        raise ControlError(f"Unable to parse Managed Services V2 JSON document from {source}: {exc}") from exc
     if not isinstance(value, dict):
         raise ControlError("Managed Services V2 JSON document must contain an object")
     return value
@@ -193,7 +206,7 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
 
 def replace_from_source(source: str) -> dict[str, Any]:
     try:
-        text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
+        text = _read_source_text(source, label="Managed Services V2 YAML document")
         result = replace_document(
             text,
             desired_path=DESIRED_PATH,

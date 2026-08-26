@@ -192,15 +192,19 @@ class V2QuadletTests(unittest.TestCase):
             ):
                 source.write_text(content, encoding="utf-8")
                 with mock.patch.object(v2, "APP_ROOT", pathlib.PurePosixPath(str(app_root))):
-                    effective, service = self.compile_service(
-                        {
-                            "name": "Demo",
-                            "workload": {"kind": "daemon", "activation": "persistent"},
-                            "runtime": {"type": "quadlet", "source": str(source)},
-                        }
-                    )
-                with self.subTest(content=content), self.assertRaisesRegex(quadlet.QuadletProjectionError, expected):
-                    self.render(effective, service)
+                    with mock.patch.object(quadlet, "APP_ROOT", pathlib.Path(str(app_root))):
+                        effective, service = self.compile_service(
+                            {
+                                "name": "Demo",
+                                "workload": {"kind": "daemon", "activation": "persistent"},
+                                "runtime": {"type": "quadlet", "source": str(source)},
+                            }
+                        )
+                        with (
+                            self.subTest(content=content),
+                            self.assertRaisesRegex(quadlet.QuadletProjectionError, expected),
+                        ):
+                            self.render(effective, service)
 
     def test_unified_systemd_projection_stages_quadlet_and_owns_generated_service(self):
         effective, _service = self.compile_service(
@@ -351,7 +355,6 @@ class V2QuadletTests(unittest.TestCase):
                             "sandbox": {"mode": "inherit"},
                         }
                     )
-                    # TOCTOU: replace file with symlink escaping app root after compile
                     evil_target = pathlib.Path(tmp) / "evil.container"
                     evil_target.write_text("[Container]\nImage=example.invalid/demo:1\n", encoding="utf-8")
                     source.unlink()
@@ -359,10 +362,8 @@ class V2QuadletTests(unittest.TestCase):
                     with self.assertRaisesRegex(quadlet.QuadletProjectionError, "escapes"):
                         self.render(effective, service)
 
-    def test_render_time_out_of_root_allowed_via_option_b(self):
+    def test_render_time_out_of_root_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            # Source lives outside the default APP_ROOT; compile validates via mocked v2 APP_ROOT
-            # but render with default quadlet APP_ROOT should still allow it (Option B).
             alt_root = pathlib.Path(tmp) / "alt" / "apps"
             alt_service_root = alt_root / "demo"
             alt_service_root.mkdir(parents=True)
@@ -377,9 +378,8 @@ class V2QuadletTests(unittest.TestCase):
                         "sandbox": {"mode": "inherit"},
                     }
                 )
-                # quadlet APP_ROOT remains default /var/lib/nas-control/apps, nominal is outside -> no containment check
-                rendered = self.render(effective, service)
-                self.assertIn("Image=", rendered)
+            with self.assertRaisesRegex(quadlet.QuadletProjectionError, "outside managed app root"):
+                self.render(effective, service)
 
 
 if __name__ == "__main__":

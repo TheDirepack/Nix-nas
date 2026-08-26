@@ -2,7 +2,6 @@
 
 let
   cfg = config.nas;
-  inherit (nasInternal) cockpitPort;
   desiredPath = "/var/lib/nas-control/services.yaml";
   markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
@@ -490,9 +489,8 @@ let
           paths = [ "/console" ];
         };
         target = {
-          type = "http";
-          host = "127.0.0.1";
-          port = cockpitPort;
+          type = "unix-http";
+          socket = "/run/nas-cockpit-proxy/http.sock";
         };
         auth = {
           mode = "identity";

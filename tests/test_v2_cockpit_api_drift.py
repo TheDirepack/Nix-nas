@@ -603,18 +603,32 @@ class CockpitApiDriftTests(unittest.TestCase):
                     self.assertTrue(result["ok"])
                 self.assertEqual(run.call_count, 3)
 
-            active = self.active()
-            with (
-                mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-                mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
-            ):
-                result = api.source_control({"operation": "pull-rebuild"})
-            self.assertTrue(result["ok"])
-            self.assertEqual(len(result["commands"]), 2)
-            self.assertEqual(run.call_args_list[0].kwargs["env"]["NAS_OPERATION_COORDINATION_TOKEN"], "coord-token")
+            expected = {
+                "pull": ["nas-update", "--sync"],
+                "rebuild": ["nas-update", "--apply", "--non-interactive"],
+                "pull-rebuild": ["nas-update", "--sync", "--apply", "--non-interactive"],
+            }
+            for operation, command in expected.items():
+                with (
+                    self.subTest(operation=operation),
+                    mock.patch.object(api, "CONFIG_DIR", root),
+                    mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
+                ):
+                    result = api.source_control({"operation": operation})
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["commands"][0]["command"], command)
+                run.assert_called_once_with(command, check=False, timeout_seconds=21600)
 
-    def test_source_control_rejects_unknown_missing_directory_busy_and_failed_mutation(self) -> None:
+        module_file = api.__file__
+        assert module_file is not None
+        source = pathlib.Path(module_file).read_text(encoding="utf-8")
+        block = source[source.index("def source_control(") : source.index("def build_parser(")]
+        self.assertNotIn('"git", "-C", str(CONFIG_DIR), "pull"', block)
+        self.assertNotIn('"nixos-rebuild", "switch"', block)
+        self.assertIn('["nas-update", "--sync"]', block)
+        self.assertIn('["nas-update", "--apply", "--non-interactive"]', block)
+
+    def test_source_control_rejects_unknown_missing_directory_and_failed_mutation(self) -> None:
         with self.assertRaisesRegex(api.ApiError, "Unsupported source-control"):
             api.source_control({"operation": "reset"})
         with mock.patch.object(api, "CONFIG_DIR", pathlib.Path("/definitely/missing")):
@@ -624,14 +638,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             root = pathlib.Path(raw)
             with (
                 mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", side_effect=OperationBusyError("busy")),
-            ):
-                with self.assertRaisesRegex(api.ApiError, "busy"):
-                    api.source_control({"operation": "pull"})
-            active = self.active()
-            with (
-                mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
                 mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")),
             ):
                 with self.assertRaises(api.ApiError):

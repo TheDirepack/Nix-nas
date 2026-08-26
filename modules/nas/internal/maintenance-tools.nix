@@ -139,6 +139,7 @@ CURL_CONFIG
       pkgs.findutils
       pkgs.gawk
       pkgs.git
+      pkgs.gnupg
       pkgs.gnugrep
       pkgs.gnused
       pkgs.iproute2
@@ -147,6 +148,7 @@ CURL_CONFIG
       pkgs.nix
       pkgs.nixos-rebuild-ng
       pkgs.nut
+      pkgs.python3
       pkgs.skopeo
       pkgs.systemd
       pkgs.zfs
@@ -162,6 +164,9 @@ CURL_CONFIG
       export NAS_FIREWALL_ZONE=${lib.escapeShellArg cfg.networking.firewall.zone}
       export NAS_LAN_HOST=${lib.escapeShellArg lanHost}
       export NAS_TRUSTED_INTERFACES=${lib.escapeShellArg (lib.concatStringsSep " " cfg.trustedInterfaces)}
+      export NAS_UPDATE_EXPECTED_REMOTE_URL=${lib.escapeShellArg cfg.autoUpdate.expectedRemoteUrl}
+      export NAS_UPDATE_SIGNATURE_POLICY=${lib.escapeShellArg cfg.autoUpdate.signaturePolicy}
+      export NAS_UPDATE_TRUSTED_KEY_FILES=${lib.escapeShellArg (lib.concatStringsSep ":" (map toString cfg.autoUpdate.trustedSigningKeyFiles))}
       ${builtins.readFile ../../../scripts/update-nas.sh}
     '';
   };

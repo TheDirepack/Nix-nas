@@ -11,10 +11,13 @@ requires-python = ">=3.12"
 [project.scripts]
 nas-ai-config = "nas_ai_config:main"
 nas-alert-router = "nas_alert_router:main"
-nas-cockpit-api = "nas_cockpit_api:main"
+nas-cockpit-api = "nas_cockpit_entry:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-doctor = "nas_doctor:main"
-nas-identity-sync = "nas_identity_sync:main"
+nas-first-run-api = "nas_first_run_api:main"
+nas-first-start-job = "nas_first_start_pipe:main"
+nas-identity-bootstrap = "nas_identity_bootstrap:main"
+nas-identity-sync = "nas_identity_dispatch:main"
 nas-managed-services-control = "nas_v2_control:main"
 nas-managed-session = "nas_v2_session:main"
 nas-operation-run = "nas_operation_lock:main"
@@ -32,8 +35,14 @@ py-modules = [
   "nas_alert_router",
   "nas_common",
   "nas_cockpit_api",
+  "nas_cockpit_entry",
   "nas_coding_agent",
   "nas_doctor",
+  "nas_first_run_api",
+  "nas_first_start",
+  "nas_first_start_pipe",
+  "nas_identity_bootstrap",
+  "nas_identity_dispatch",
   "nas_identity_model",
   "nas_identity_sync",
   "nas_logging",
