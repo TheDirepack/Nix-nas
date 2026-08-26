@@ -2,7 +2,7 @@
 
 Use this checklist for an **install-ready** release. A source archive may be useful for development without satisfying these gates, but it must remain clearly labeled source-only/unverified.
 
-The automated merge-release workflow described in [`automated-releases.md`](automated-releases.md) deliberately publishes **source-only development releases** before the install-ready qualification below is complete. It creates a release-only commit, assigns the next patch version there, builds/validates the release inputs, and publishes the tagged source artifact without modifying `main`. Passing that workflow is useful build evidence, but it does not by itself satisfy this checklist.
+The automated merge-release workflow described in [`automated-releases.md`](automated-releases.md) deliberately publishes **source-only development releases** before the install-ready qualification below is complete. Publication is eligible only after the complete `CI` workflow succeeds for a `main` push and the source commit is independently verified as belonging to a merged pull request. The release workflow creates a release-only commit, assigns its deterministic patch version there, validates the stamped release delta, and publishes the tagged source artifact without modifying `main`. Passing that workflow is useful build evidence, but it does not by itself satisfy this checklist.
 
 ## 1. Freeze the source and frontend artifact
 
@@ -12,7 +12,7 @@ The automated merge-release workflow described in [`automated-releases.md`](auto
 - Retain the exact compiled `cockpit/dist/` bytes and build metadata.
 - Make Nix evaluation, VM tests, installer tests, and release packaging consume that same frontend artifact.
 
-For an automated merge release, the qualifying source for the published artifact is the generated release-only commit, whose first parent is the original `main` source commit. Version metadata and the release-specific bootstrap credential must be read from that tagged commit, not reconstructed from the current `main` tree.
+For an automated merge release, the main source commit first completes the full CI pipeline and produces the verified Cockpit/Nix handoffs. The published artifact is then built from a generated release-only commit whose first parent is that qualified `main` source commit. Version metadata and the release-specific bootstrap credential must be read from the tagged release commit, not reconstructed from the current `main` tree.
 
 ## 2. Run source validation
 
@@ -35,7 +35,7 @@ Retain results for:
 
 This must evaluate the appliance/reusable-profile matrix and prove every intentionally invalid fixture fails for its expected assertion. Then build the CI-ready and QEMU closures and run all native `runNixOSTest` checks.
 
-Record Nix version, runner architecture, result paths, and check names with the source/frontend digests.
+Record Nix version, runner architecture, result paths, and check names with the source/frontend digests. The CI producer exports the exact `nas-ci-ready` and `nas-qemu` system closures into the per-run handoff; later runners must verify/import that artifact rather than independently reconstructing the full closure cold.
 
 ## 4. Run installation tests
 
@@ -61,9 +61,10 @@ Retain evidence for:
   - documentation-only edits may keep the current development `VERSION`;
   - rebuilding/renaming an artifact from otherwise unchanged source may keep the current `VERSION`;
   - **every code/config/script/UI/test/release-tooling publication requires a distinct release version**;
-  - for the automated merge workflow, `scripts/prepare_release.py` assigns and synchronizes that version in the release-only commit, so developers do not need to write the generated release version back into `main`;
-  - changing the packaging or release tooling itself still requires the next published release to receive a new version.
-- Require `python3 scripts/check-version.py` to pass on the exact release checkout after stamping.
+  - for automated merge releases, `scripts/prepare_release.py` derives the release patch deterministically from the qualified source commit's first-parent position relative to `.github/release-version-epoch.json`, then synchronizes that version only in the release commit;
+  - when intentionally establishing a new development `VERSION` series, update the release-version epoch with it;
+  - changing the packaging or release tooling itself still causes the next qualified merged source to receive its distinct deterministic version.
+- Require `python3 scripts/check-version.py` to pass on the exact release checkout after stamping, including README status, both Cockpit lockfile version fields, flake description, and changelog heading.
 - Use the artifact filename convention in [`artifact-naming.md`](artifact-naming.md).
 - Regenerate `MANIFEST.sha256`.
 - Package from a clean, reviewed tree.
@@ -76,8 +77,11 @@ Retain evidence for:
 - Produce and retain the archive SHA-256 and provenance record.
 - Confirm the archive contains no private or long-lived credentials, local configuration, caches, VM disks, installer ISOs, or unrelated build output.
 - Automated merge releases intentionally contain one public first-boot credential: `akadmin` plus the release-specific five-word Diceware password embedded in the tagged release source. Verify that credential matches the GitHub Release notes exactly and that the development-only `nas-admin-first-boot` password is not the bootstrap password in the published release commit.
+- Verify only the two explicit runtime bootstrap authorities were credential-stamped; tests and documentation must remain independent and retain their development expectations.
 - Verify the generated release commit was not pushed back onto `main`; the fixed development bootstrap credential must remain in the development tree for repeatable tests.
+- Verify the release trigger graph remains loop-free: CI must not trigger on `v*` tags, and the release workflow must be triggered only by successful `CI` `workflow_run` completion rather than push/tag events.
+- Verify repository-write permission exists only in the small publication job; release build/test jobs must use read-only contents access and checkout with persisted credentials disabled.
 
 ## Evidence rule
 
-A release claim is bound to one source/frontend artifact pair. Evidence from a different commit, lockfile, compiled distribution, or flake lock does not qualify the current release. For an interrupted automated publication, rerun/repair must reuse the existing tag's exact release commit, version, and bootstrap credential rather than minting a second identity for the same source commit.
+A release claim is bound to one source/frontend artifact pair. Evidence from a different commit, lockfile, compiled distribution, flake lock, or upstream CI run does not qualify the current release. For an interrupted automated publication, rerun/repair must reuse the existing tag's exact release commit, version, and bootstrap credential rather than minting a second identity for the same source commit.
