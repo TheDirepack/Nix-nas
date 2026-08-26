@@ -1,5 +1,5 @@
 {
-  description = "NixOS NAS 0.2.0 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
+  description = "NixOS NAS 0.1.1 appliance with ZFS, Authentik, CopyParty, on-demand services, and integrated operations";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
