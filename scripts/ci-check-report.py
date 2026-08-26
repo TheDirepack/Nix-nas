@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Summarize independent CI outcomes and surface actionable failure context."""
 
 from __future__ import annotations
