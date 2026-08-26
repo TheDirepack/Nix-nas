@@ -1,0 +1,48 @@
+name: Enable PR QEMU integration matrix
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ci-enable-pr-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable the full encrypted/unencrypted QEMU matrix on PRs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/ci.yml")
+          text = path.read_text()
+          old = """      (github.event_name == 'schedule' || github.event_name == 'push' ||\n       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))\n"""
+          new = """      (github.event_name == 'pull_request' || github.event_name == 'schedule' ||\n       github.event_name == 'push' ||\n       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))\n"""
+          if old in text:
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+          elif new not in text:
+              raise SystemExit("integration event condition did not match expected workflow")
+          PY
+          nix develop .#test -c actionlint .github/workflows/ci.yml
+      - name: Commit validated CI change
+        run: |
+          set -euo pipefail
+          git config user.name "TheDirepack"
+          git config user.email "48868531+TheDirepack@users.noreply.github.com"
+          git add .github/workflows/ci.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "ci: run both QEMU integration variants on PRs"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
