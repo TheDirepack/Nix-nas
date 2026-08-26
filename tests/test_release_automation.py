@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from typing import cast
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -74,8 +76,9 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(lock["version"], "1.2.4")
             self.assertEqual(lock["packages"][""]["version"], "1.2.4")
             self.assertIn("## 1.2.4 — 2026-08-26", (root / "CHANGELOG.md").read_text())
-            for relative in metadata["bootstrap_files"]:
-                text = (root / str(relative)).read_text()
+            bootstrap_files = cast(list[str], metadata["bootstrap_files"])
+            for relative in bootstrap_files:
+                text = (root / relative).read_text()
                 self.assertNotIn("old-bootstrap-password-123456", text)
                 self.assertIn("new-bootstrap-password-654321", text)
             self.assertEqual((root / "untracked.txt").read_text(), "old-bootstrap-password-123456\n")
@@ -101,7 +104,9 @@ class ReleaseAutomationTests(unittest.TestCase):
     def test_current_bootstrap_seed_is_safe_and_shared_by_both_runtime_paths(self) -> None:
         password = prepare_release.discover_bootstrap_password(ROOT)
         prepare_release.validate_bootstrap_password(password)
-        paths = {path.relative_to(ROOT).as_posix() for path in prepare_release.tracked_files_containing(ROOT, password)}
+        paths = {
+            path.relative_to(ROOT).as_posix() for path in prepare_release.tracked_files_containing(ROOT, password)
+        }
         self.assertTrue(prepare_release.CORE_BOOTSTRAP_PATHS.issubset(paths))
 
     def test_release_workflow_builds_packages_and_publishes_credentials(self) -> None:
@@ -114,6 +119,19 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertIn("gh release create", workflow)
         self.assertIn("bootstrap_username", workflow)
         self.assertIn("bootstrap_password", workflow)
+
+    def test_release_workflow_passes_actionlint_when_available(self) -> None:
+        actionlint = shutil.which("actionlint")
+        if actionlint is None:
+            self.skipTest("actionlint is not installed outside the Nix test environment")
+        result = subprocess.run(
+            [actionlint, ".github/workflows/release.yml"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
