@@ -25,6 +25,7 @@
     ./config/storage-monitoring.nix
     ./config/backup-domains.nix
     ./config/systemd-services.nix
+    ./config/security-hardening-overrides.nix
     ./config/schedules.nix
     ./config/system.nix
     ./config/managed-services.nix
