@@ -34,7 +34,8 @@ case "$section" in
     ci_run shared test-inventory "Test inventory contract" \
       nix develop .#test -c python3 scripts/validate-test-inventory.py || failed=1
 
-    # shellcheck disable=SC2329
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
     check_shell_syntax() {
       local rc=0 script
       while IFS= read -r -d '' script; do
@@ -51,7 +52,8 @@ case "$section" in
     # retain the exact Ruff-formatted files/patch in the existing failure-log
     # artifact. This makes formatter drift directly repairable without adding
     # another workflow or weakening the formatting gate.
-    # shellcheck disable=SC2329
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
     check_ruff_format() {
       local rc=0
       local -a formatted=()
@@ -107,7 +109,8 @@ case "$section" in
       --exclude test_property_invariants.py \
       --exclude test_secret_security_fuzz.py || failed=1
 
-    # shellcheck disable=SC2329
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
     check_coverage_floor() {
       if [[ ! -s coverage.json ]]; then
         echo "coverage.json was not produced by the fast unit suite"
@@ -145,7 +148,8 @@ case "$section" in
     ;;
 
   nonroot)
-    # shellcheck disable=SC2329
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
     run_nonroot_suite() {
       local nix_bin
       : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
@@ -162,7 +166,8 @@ case "$section" in
     ;;
 
   cockpit)
-    # shellcheck disable=SC2329
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
     check_cockpit_js_syntax() {
       local rc=0 script
       for script in cockpit/src/*.js; do
