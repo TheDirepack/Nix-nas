@@ -30,17 +30,27 @@ jobs:
           use-flakehub: false
       - name: Fetch release tag history
         run: git fetch --force --tags origin
-      - name: Stamp release version and rotate bootstrap password
+      - name: Stamp release-only version and Diceware bootstrap password
         env:
           RELEASE_METADATA: ${{ runner.temp }}/release-metadata.json
           SOURCE_SHA: ${{ github.sha }}
           RELEASE_RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
+          bootstrap_password=""
+          for _ in {1..20}; do
+            bootstrap_password="$(nix shell nixpkgs#diceware -c diceware -n 5 -d - -w en_eff --caps)"
+            if (( ${#bootstrap_password} >= 20 )); then
+              break
+            fi
+          done
+          (( ${#bootstrap_password} >= 20 ))
           python3 scripts/prepare_release.py \
             --run-number "$RELEASE_RUN_NUMBER" \
             --source-sha "$SOURCE_SHA" \
-            --metadata-out "$RELEASE_METADATA"
+            --metadata-out "$RELEASE_METADATA" \
+            --password "$bootstrap_password"
+          unset bootstrap_password
       - name: Build the production Cockpit bundle
         run: |
           set -euo pipefail
@@ -120,11 +130,11 @@ jobs:
           - Username: `{username}`
           - Password: `{password}`
 
-          This bootstrap credential is intentionally release-specific and public. It is only for first-run Authentik setup and is retired by the normal setup workflow after the administrator account is established.
+          This five-word Diceware bootstrap credential is intentionally release-specific and public. It is only for first-run Authentik setup and is retired by the normal setup workflow after the administrator account is established.
 
           ## Artifact status
 
-          This is a **source-only development release**. The workflow builds the production Cockpit bundle and the CI-ready/QEMU NixOS closures, then packages the repository with its manifest, SHA-256 digest, and provenance metadata. It does not claim install-ready hardware qualification.
+          This is a **source-only development release**. The workflow builds the production Cockpit bundle and the CI-ready/QEMU NixOS closures, then packages the release-only stamped commit with its manifest, SHA-256 digest, and provenance metadata. The development branch keeps its fixed bootstrap password for repeatable testing.
           """
           Path(os.environ["RELEASE_NOTES"]).write_text(notes, encoding="utf-8")
           PY
@@ -161,17 +171,4 @@ jobs:
               --title "NixOS NAS $version" \
               --notes-file "$RELEASE_NOTES" \
               --verify-tag
-          fi
-      - name: Fast-forward release metadata onto main when still current
-        env:
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          release_commit="$(git rev-parse HEAD)"
-          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
-          if [[ "$remote_main" == "$SOURCE_SHA" ]]; then
-            git push origin "$release_commit:refs/heads/main"
-            echo "main now carries the stamped release metadata."
-          else
-            echo "A newer main commit exists; this release remains bound to its tag and the newer merge release will carry version metadata forward."
           fi
