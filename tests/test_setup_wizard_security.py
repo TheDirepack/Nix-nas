@@ -54,6 +54,22 @@ class SetupWizardSecurityTests(unittest.TestCase):
         self.assertNotIn("username: 'admin'", index_source)
         self.assertIn("Choose a new local username", admin_source)
 
+    def test_wizard_surfaces_shared_password_strength_and_breach_feedback(self) -> None:
+        quality = (WIZARD / "PasswordQuality.jsx").read_text(encoding="utf-8")
+        admin = (WIZARD / "steps" / "AdminStep.jsx").read_text(encoding="utf-8")
+        authentik = (WIZARD / "steps" / "AuthentikStep.jsx").read_text(encoding="utf-8")
+        api = (WIZARD / "api.js").read_text(encoding="utf-8")
+
+        self.assertIn("passwordQuality(password", quality)
+        self.assertIn("zxcvbnScore", quality)
+        self.assertIn("breachStatus === 'breached'", quality)
+        self.assertIn("breachStatus === 'unavailable'", quality)
+        self.assertIn("PasswordQualityFeedback", admin)
+        self.assertIn("PasswordQualityFeedback", authentik)
+        self.assertIn("onBlur", admin)
+        self.assertIn("onBlur", authentik)
+        self.assertIn("api/password-quality", api)
+
     def test_browser_api_never_generates_secret_bearing_nix_or_logs_credentials(self) -> None:
         api_source = (WIZARD / "api.js").read_text(encoding="utf-8")
 
