@@ -19,15 +19,10 @@ SPEC.loader.exec_module(ci_summary)
 
 class CiSummaryTests(unittest.TestCase):
     def results(self, expected: set[str]) -> dict[str, dict[str, str]]:
-        return {
-            name: {"result": "success" if name in expected else "skipped"}
-            for name in ci_summary.KNOWN_JOBS
-        }
+        return {name: {"result": "success" if name in expected else "skipped"} for name in ci_summary.KNOWN_JOBS}
 
     def test_summary_policy_classifies_every_workflow_dependency(self) -> None:
-        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-            encoding="utf-8"
-        )
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         summary = workflow.split("  summary:\n", 1)[1]
         match = re.search(r"^    needs: \[([^]]+)]$", summary, re.MULTILINE)
         self.assertIsNotNone(match)

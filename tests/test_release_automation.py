@@ -31,14 +31,8 @@ class ReleaseAutomationTests(unittest.TestCase):
             "VERSION": "1.2.3\n",
             "README.md": "# NixOS NAS 1.2.3\n\n> **Release status:** 1.2.3 is source-only.\n",
             "flake.nix": '{\n  description = "NixOS NAS 1.2.3 appliance";\n}\n',
-            "CHANGELOG.md": (
-                "# Changelog\n\nIntro.\n\n## 1.2.3 — 2026-01-01\n\n"
-                "### Added\n\n- Baseline.\n"
-            ),
-            "cockpit/package.json": json.dumps(
-                {"name": "test", "version": "1.2.3"}, indent=2
-            )
-            + "\n",
+            "CHANGELOG.md": ("# Changelog\n\nIntro.\n\n## 1.2.3 — 2026-01-01\n\n### Added\n\n- Baseline.\n"),
+            "cockpit/package.json": json.dumps({"name": "test", "version": "1.2.3"}, indent=2) + "\n",
             "cockpit/package-lock.json": json.dumps(
                 {
                     "name": "test",
@@ -70,15 +64,32 @@ class ReleaseAutomationTests(unittest.TestCase):
         )
         subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
         baseline = self.commit(root, "baseline")
+        subprocess.run(["git", "branch", "-M", "main"], cwd=root, check=True)
+        subprocess.run(["git", "checkout", "-qb", "release-automation"], cwd=root, check=True)
         epoch_path = root / prepare_release.RELEASE_EPOCH_PATH
         epoch_path.parent.mkdir(parents=True, exist_ok=True)
         epoch_path.write_text(
             json.dumps({"version": "1.2.3", "sourceSha": baseline}, indent=2) + "\n",
             encoding="utf-8",
         )
-        return self.commit(root, "release epoch")
+        self.commit(root, "release automation")
+        subprocess.run(["git", "checkout", "-q", "main"], cwd=root, check=True)
+        return baseline
 
     def add_source_commit(self, root: pathlib.Path, number: int) -> str:
+        if not (root / prepare_release.RELEASE_EPOCH_PATH).exists():
+            subprocess.run(["git", "checkout", "-q", "release-automation"], cwd=root, check=True)
+            path = root / f"source-{number}.txt"
+            path.write_text(f"source {number}\n", encoding="utf-8")
+            self.commit(root, f"source {number}")
+            subprocess.run(["git", "checkout", "-q", "main"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "merge", "--no-ff", "-qm", f"merge source {number}", "release-automation"],
+                cwd=root,
+                check=True,
+            )
+            return self.git(root, "rev-parse", "HEAD")
+
         path = root / f"source-{number}.txt"
         path.write_text(f"source {number}\n", encoding="utf-8")
         return self.commit(root, f"source {number}")
@@ -88,9 +99,7 @@ class ReleaseAutomationTests(unittest.TestCase):
             root = pathlib.Path(tmp)
             self.make_repo(root)
             source_sha = self.add_source_commit(root, 1)
-            (root / "untracked.txt").write_text(
-                "old-bootstrap-password-123456\n", encoding="utf-8"
-            )
+            (root / "untracked.txt").write_text("old-bootstrap-password-123456\n", encoding="utf-8")
             metadata_path = root / ".tmp" / "release.json"
             release_password = "Acorn-Adobe-Alder-Amber-Anchor"
             metadata = prepare_release.prepare_release(
@@ -141,16 +150,10 @@ class ReleaseAutomationTests(unittest.TestCase):
             source_one = self.add_source_commit(root, 1)
             source_two = self.add_source_commit(root, 2)
             current = prepare_release.Version.parse("1.2.3")
-            self.assertEqual(
-                str(prepare_release.next_version(root, current, source_one)), "1.2.4"
-            )
-            self.assertEqual(
-                str(prepare_release.next_version(root, current, source_two)), "1.2.5"
-            )
+            self.assertEqual(str(prepare_release.next_version(root, current, source_one)), "1.2.4")
+            self.assertEqual(str(prepare_release.next_version(root, current, source_two)), "1.2.5")
             subprocess.run(["git", "tag", "v1.2.8", source_one], cwd=root, check=True)
-            self.assertEqual(
-                str(prepare_release.next_version(root, current, source_two)), "1.2.5"
-            )
+            self.assertEqual(str(prepare_release.next_version(root, current, source_two)), "1.2.5")
 
     def test_rerun_recovers_version_and_diceware_password_from_existing_release_tag(
         self,
@@ -233,9 +236,7 @@ class ReleaseAutomationTests(unittest.TestCase):
                 "printf '%s\\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=different-bootstrap-password-123456'\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(
-                RuntimeError, "does not use the same bootstrap password"
-            ):
+            with self.assertRaisesRegex(RuntimeError, "does not use the same bootstrap password"):
                 prepare_release.discover_bootstrap_password(root)
 
     def test_release_passphrase_requires_exactly_five_safe_words(self) -> None:
@@ -252,9 +253,7 @@ class ReleaseAutomationTests(unittest.TestCase):
                     prepare_release.validate_release_passphrase(invalid)
 
     def test_development_tree_keeps_the_fixed_bootstrap_password(self) -> None:
-        self.assertEqual(
-            prepare_release.discover_bootstrap_password(ROOT), "nas-admin-first-boot"
-        )
+        self.assertEqual(prepare_release.discover_bootstrap_password(ROOT), "nas-admin-first-boot")
         for relative in prepare_release.BOOTSTRAP_TARGETS:
             self.assertIn("nas-admin-first-boot", (ROOT / relative).read_text())
         epoch_version, epoch_source = prepare_release.release_epoch(ROOT)

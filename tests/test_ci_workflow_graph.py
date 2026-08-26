@@ -65,11 +65,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
 
     @staticmethod
     def run_text(job: dict[str, Any]) -> str:
-        return "\n".join(
-            str(step.get("run", ""))
-            for step in job.get("steps", [])
-            if isinstance(step, dict)
-        )
+        return "\n".join(str(step.get("run", "")) for step in job.get("steps", []) if isinstance(step, dict))
 
     def test_workflow_has_expected_staged_job_set_and_triggers(self) -> None:
         self.assertEqual(set(self.jobs), self.JOBS)
@@ -96,6 +92,16 @@ class CiWorkflowGraphTests(unittest.TestCase):
             "installed-command-fuzz",
         ):
             self.assertNotIn(retired, self.jobs)
+
+    def test_concurrency_only_cancels_superseded_pull_requests(self) -> None:
+        concurrency = self.workflow["concurrency"]
+        group = str(concurrency["group"])
+        cancel = str(concurrency["cancel-in-progress"])
+        self.assertIn("github.event_name == 'pull_request'", group)
+        self.assertIn("github.event.pull_request.number", group)
+        self.assertIn("github.run_id", group)
+        self.assertIn("github.event_name == 'pull_request'", cancel)
+        self.assertNotEqual(cancel, "true")
 
     def test_shared_prerequisites_run_before_parallel_fanout(self) -> None:
         prerequisites = self.jobs["prerequisites"]
@@ -133,9 +139,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertNotIn("path: cockpit/node_modules", text)
         self.assertNotIn("Restore exact Node dependencies", text)
         self.assertIn("cache: npm", text)
-        self.assertGreaterEqual(
-            text.count("npm --prefix cockpit ci --no-audit --no-fund"), 3
-        )
+        self.assertGreaterEqual(text.count("npm --prefix cockpit ci --no-audit --no-fund"), 3)
 
     def test_parallel_logs_are_short_lived_failure_artifacts(self) -> None:
         for name in self.PARALLEL:
@@ -297,9 +301,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         installed = self.serialized(self.jobs["installed-security"])
         self.assertIn("final-vm-evidence/browser-console.log", installer)
         self.assertIn("installed-security-logs/browser-console.log", installed)
-        self.assertNotIn(
-            "~/.cache/nixos-nas-qemu/state/browser-console.log'", installer
-        )
+        self.assertNotIn("~/.cache/nixos-nas-qemu/state/browser-console.log'", installer)
 
     def test_installed_security_provisions_once_and_aggregates_both_workloads(
         self,
@@ -349,9 +351,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.needs(self.jobs["installed-security"]),
             {"installer", "prepare"},
         )
-        self.assertEqual(
-            self.needs(self.jobs["summary"]), self.JOBS - {"summary", "maintenance"}
-        )
+        self.assertEqual(self.needs(self.jobs["summary"]), self.JOBS - {"summary", "maintenance"})
         self.assertEqual(self.needs(self.jobs["maintenance"]), {"summary"})
 
     def test_github_hosted_job_timeouts_stay_within_platform_limit(self) -> None:

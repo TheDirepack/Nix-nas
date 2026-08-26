@@ -19,9 +19,7 @@ SPEC.loader.exec_module(ci_check_report)
 
 class CiCheckReportTests(unittest.TestCase):
     def test_parse_and_render_preserve_all_sections(self) -> None:
-        checks = ci_check_report.parse_checks(
-            ["static=success", "unit=failure", "coverage=skipped"]
-        )
+        checks = ci_check_report.parse_checks(["static=success", "unit=failure", "coverage=skipped"])
         summary = ci_check_report.render_summary("Pre-build qualification", checks)
         self.assertIn("static", summary)
         self.assertIn("unit", summary)
@@ -77,9 +75,7 @@ class CiCheckReportTests(unittest.TestCase):
                 ci_check_report.parse_results(malformed)
 
     def test_cancelled_and_failure_are_both_fatal(self) -> None:
-        checks = ci_check_report.parse_checks(
-            ["one=success", "two=cancelled", "three=failure"]
-        )
+        checks = ci_check_report.parse_checks(["one=success", "two=cancelled", "three=failure"])
         self.assertEqual(
             [check.outcome for check in ci_check_report.failed_checks(checks)],
             ["cancelled", "failure"],

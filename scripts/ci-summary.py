@@ -22,12 +22,7 @@ BASE_JOBS = {
 }
 SLOW_JOBS = {"source-fuzz"}
 INSTALLED_SECURITY_JOBS = {"installed-security"}
-KNOWN_JOBS = frozenset(
-    BASE_JOBS
-    | SLOW_JOBS
-    | INSTALLED_SECURITY_JOBS
-    | {"coverage-diff", "integration", "installer"}
-)
+KNOWN_JOBS = frozenset(BASE_JOBS | SLOW_JOBS | INSTALLED_SECURITY_JOBS | {"coverage-diff", "integration", "installer"})
 
 
 def _main_or_release_ref(ref: str) -> bool:
@@ -52,23 +47,18 @@ def expected_jobs(
     integration_run = (
         event_name == "schedule"
         or (event_name == "push" and _main_or_release_ref(ref))
-        or (
-            event_name == "workflow_dispatch"
-            and test_tier in {"full", "installer"}
-        )
+        or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
     )
     if integration_run:
         expected.add("integration")
 
-    installer_run = (
-        event_name == "workflow_dispatch" and test_tier in {"full", "installer"}
-    ) or (event_name != "workflow_dispatch" and _main_or_release_ref(ref))
+    installer_run = (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
+        event_name != "workflow_dispatch" and _main_or_release_ref(ref)
+    )
     if installer_run:
         expected.add("installer")
 
-    release_qualification = event_name == "schedule" or (
-        event_name == "push" and _main_or_release_ref(ref)
-    )
+    release_qualification = event_name == "schedule" or (event_name == "push" and _main_or_release_ref(ref))
     if release_qualification:
         expected.update(SLOW_JOBS | INSTALLED_SECURITY_JOBS)
 
