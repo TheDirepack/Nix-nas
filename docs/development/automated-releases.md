@@ -11,17 +11,18 @@ The development tree remains development-friendly: it keeps the fixed `akadmin` 
 The workflow:
 
 1. accepts only a successful main-branch `CI` run whose source SHA exactly equals the recorded merge result of a merged pull request targeting `main`;
-2. downloads the exact `vm-bundle-handoff` produced by that CI run and verifies/imports both the reusable package bundles and exact `nas-ci-ready`/`nas-qemu` system-closure handoff;
-3. uses the maintained `diceware` package from the repository's pinned Nixpkgs test environment to generate a five-word passphrase with the long EFF English wordlist (`en_eff`), explicitly selects the `system` cryptographic random source, enables capitalization, and uses `-` as the delimiter;
-4. calculates the release patch deterministically from the source commit's first-parent distance from the checked-in release-version epoch for the current `VERSION` series;
-5. updates `VERSION`, README/flake/Cockpit version metadata, and the changelog in the release-only checkout;
-6. replaces the fixed development bootstrap password only in the two explicit runtime authorities: `modules/nas/internal/secret-tools.nix` and `modules/nas/config/application-services.nix`. Tests and explanatory documentation are not rewritten, so they remain independent validation rather than changing their expectations with production code;
-7. rebuilds and validates the release-specific Cockpit bundle and configuration-dependent NixOS closures after stamping;
-8. commits the exact stamped release inputs locally and creates a source-only package with manifest, checksum, and provenance metadata;
-9. packages the release candidate commit, release notes, metadata, and release assets into an immutable workflow artifact; and
-10. passes that artifact to a separate publication job that alone has `contents: write`, verifies the candidate's source parent/version, pushes only the annotated `v<version>` tag, and creates or repairs the GitHub Release.
+2. enforces main's first-parent release order before starting the expensive release build: the source-specific ordering job scans only the current release-version epoch, waits for the nearest earlier exact main merge whose CI is active, not yet registered, or successful, skips an earlier merge only after its CI has completed unsuccessfully, and requires a successful predecessor's release tag before continuing;
+3. downloads the exact `vm-bundle-handoff` produced by that CI run and verifies/imports both the reusable package bundles and exact `nas-ci-ready`/`nas-qemu` system-closure handoff;
+4. uses the maintained `diceware` package from the repository's pinned Nixpkgs test environment to generate a five-word passphrase with the long EFF English wordlist (`en_eff`), explicitly selects the `system` cryptographic random source, enables capitalization, and uses `-` as the delimiter;
+5. calculates the release patch deterministically from the source commit's first-parent distance from the checked-in release-version epoch for the current `VERSION` series;
+6. updates `VERSION`, README/flake/Cockpit version metadata, and the changelog in the release-only checkout;
+7. replaces the fixed development bootstrap password only in the two explicit runtime authorities: `modules/nas/internal/secret-tools.nix` and `modules/nas/config/application-services.nix`. Tests and explanatory documentation are not rewritten, so they remain independent validation rather than changing their expectations with production code;
+8. rebuilds and validates the release-specific Cockpit bundle and configuration-dependent NixOS closures after stamping;
+9. commits the exact stamped release inputs locally and creates a source-only package with manifest, checksum, and provenance metadata;
+10. packages the release candidate commit, release notes, metadata, and release assets into an immutable workflow artifact; and
+11. passes that artifact to a separate publication job that alone has `contents: write`, verifies the candidate's source parent/version, pushes only the annotated `v<version>` tag, and creates or repairs the GitHub Release.
 
-The build job has only read access and checks out with `persist-credentials: false`. Repository build/test code therefore never executes with a repository-write credential. The publication job does not run Nix/npm/project build code; it only verifies and publishes the already-built immutable candidate.
+The ordering and build jobs have only read access and check out with `persist-credentials: false`. Repository build/test code therefore never executes with a repository-write credential. The publication job does not run Nix/npm/project build code; it only verifies and publishes the already-built immutable candidate.
 
 ## Version allocation and reruns
 
@@ -29,9 +30,9 @@ The build job has only read access and checks out with `persist-credentials: fal
 
 This avoids self-referential release metadata. When a new development `VERSION` series is deliberately established, change `VERSION` and the epoch file's `version` field together. No commit hash needs to be predicted or written into its own commit. Release preparation fails closed if the epoch version and `VERSION` disagree.
 
-The release workflow itself deliberately uses one `main-release-publication` concurrency group with `queue: max`. This serialization is not needed to make version numbers unique; the first-parent mapping already does that. It exists so each generated release sees the previously published tag history before constructing its cumulative generated changelog. `queue: max` preserves up to 100 pending release runs instead of replacing the previous pending run, so a burst of qualified merges is processed in order rather than silently dropping intermediate release opportunities.
+GitHub concurrency is deliberately limited to duplicate runs for the same source SHA. Cross-source ordering does not rely on Actions queue order, because GitHub orders concurrency waiters by when they enter the queue rather than by main's commit history. Instead, `scripts/wait-release-predecessor.py` uses first-parent history as the authority. A later qualified source waits for the nearest earlier source that can still earn a release. An earlier merge with no registered CI run is treated as pending rather than failed, closing the scheduler-registration race. The scan stops at the current release-series epoch so pre-automation history cannot block publication indefinitely.
 
-Generated release commits are intentionally not merged back to `main`. To keep release changelogs cumulative anyway, release preparation reads the newest earlier generated release tag in the same version series and carries its generated release sections forward before the development baseline section. Serializing release workflows ensures that earlier qualified merges have finished publishing their tags before the next candidate reads that history.
+Generated release commits are intentionally not merged back to `main`. To keep release changelogs cumulative anyway, release preparation reads the newest earlier generated release tag in the same version series and carries its generated release sections forward before the development baseline section. The predecessor barrier ensures that earlier successfully qualified merges have finished publishing their tags before a later candidate reads that history. If an older source is retried only after a descendant source has already been published, the ordering helper fails closed instead of creating a higher tag that points backward in main history.
 
 If publication is interrupted after the tag exists, a rerun finds the tag associated with the original source merge, recovers the exact release version and passphrase from that tagged release commit, and repairs or completes the GitHub Release instead of generating a different release identity.
 
