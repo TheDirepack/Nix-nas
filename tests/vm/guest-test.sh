@@ -239,7 +239,7 @@ authentik_api() {
 }
 
 verify_bootstrap_authentik_proxy() {
-  local provider_id outpost_id code provider_response application_response group_response outpost_response
+  local provider_id setup_provider_id outpost_id code provider_response application_response group_response outpost_response
   provider_response="$(authentik_api GET 'providers/proxy/?page_size=100')" || fail 'Authentik provider API was not ready'
   provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Portal") | .pk')" || \
     fail 'Authentik bootstrap portal provider was not present'
@@ -253,6 +253,14 @@ verify_bootstrap_authentik_proxy() {
   printf '%s' "$application_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
     '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
     fail 'Authentik bootstrap portal application was not present'
+  setup_provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Setup") | .pk')" || \
+    fail 'Authentik bootstrap setup provider was not present'
+  printf '%s' "$provider_response" | jq -e --arg provider "$setup_provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST/setup/" \
+    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || \
+    fail 'Authentik bootstrap setup provider has unexpected settings'
+  printf '%s' "$application_response" | jq -e --arg provider "$setup_provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST/setup/" \
+    '.results[] | select(.slug == "nas-setup" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
+    fail 'Authentik bootstrap setup application was not provider-backed'
   group_response="$(authentik_api GET 'core/groups/?include_users=true&page_size=100')" || fail 'Authentik group API was not ready'
   printf '%s' "$group_response" | jq -e \
     '.results[] | select(.name == "nas_admin") | (.users_obj // .users // []) | any(.username == "akadmin")' >/dev/null || \
@@ -264,6 +272,9 @@ verify_bootstrap_authentik_proxy() {
   printf '%s' "$outpost_response" | jq -e --arg provider "$provider_id" \
     '(.providers | map(tostring) | index($provider)) != null' >/dev/null || \
     fail 'Authentik embedded outpost was not assigned the portal provider'
+  printf '%s' "$outpost_response" | jq -e --arg provider "$setup_provider_id" \
+    '(.providers | map(tostring) | index($provider)) != null' >/dev/null || \
+    fail 'Authentik embedded outpost was not assigned the setup provider'
   printf '%s' "$outpost_response" | jq -e \
     --arg host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
     --arg browser_host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
