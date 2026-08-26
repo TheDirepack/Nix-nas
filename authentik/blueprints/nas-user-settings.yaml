@@ -6,9 +6,9 @@ metadata:
     blueprints.goauthentik.io/instantiate: "true"
 entries:
   # Harden Authentik's native password-change policy instead of adding a
-  # parallel password controller. The built-in authentication password stage
-  # points its configure flow at default-password-change, so future password
-  # changes and recovery-driven changes use this policy as well.
+  # parallel password controller. Authentik fails zxcvbn scores that are less
+  # than or equal to this threshold, so 2 means the accepted scores are 3/4,
+  # matching the standalone setup validator.
   - model: authentik_policies_password.passwordpolicy
     identifiers:
       name: default-password-change-password-policy
@@ -17,7 +17,7 @@ entries:
       check_have_i_been_pwned: true
       hibp_allowed_count: 0
       check_zxcvbn: true
-      zxcvbn_score_threshold: 3
+      zxcvbn_score_threshold: 2
       length_min: 15
       password_field: password
       error_message: Password must be at least 15 characters, not known-breached, and sufficiently hard to guess.
