@@ -75,49 +75,56 @@ def release_tag_for_source(root: pathlib.Path, current: Version, source_sha: str
     return None
 
 
-def is_ancestor(root: pathlib.Path, older: str, newer: str) -> bool:
-    result = run_git(root, "merge-base", "--is-ancestor", older, newer, check=False)
-    if result.returncode not in (0, 1):
-        raise RuntimeError(result.stderr.strip() or "git merge-base failed")
-    return result.returncode == 0
-
-
-def release_epoch(root: pathlib.Path) -> tuple[Version, str]:
+def release_epoch(root: pathlib.Path) -> Version:
     path = root / RELEASE_EPOCH_PATH
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise RuntimeError(f"{RELEASE_EPOCH_PATH} must contain a JSON object")
-    version = Version.parse(str(raw.get("version", "")))
-    source_sha = str(raw.get("sourceSha", ""))
-    if SHA_RE.fullmatch(source_sha) is None:
-        raise RuntimeError(f"{RELEASE_EPOCH_PATH} contains an invalid sourceSha")
-    return version, source_sha
+    if set(raw) != {"version"}:
+        raise RuntimeError(f"{RELEASE_EPOCH_PATH} must contain only the version field")
+    return Version.parse(str(raw.get("version", "")))
 
 
 def version_anchor(root: pathlib.Path, current: Version, source_sha: str) -> str:
-    version_commit = run_git(root, "log", "-1", "--format=%H", source_sha, "--", "VERSION").stdout.strip()
-    if SHA_RE.fullmatch(version_commit) is None:
-        raise RuntimeError("could not resolve the commit that established VERSION")
+    """Return the first parent immediately before the current release epoch.
 
-    epoch_version, epoch_source = release_epoch(root)
-    if (
-        current == epoch_version
-        and is_ancestor(root, version_commit, epoch_source)
-        and is_ancestor(root, epoch_source, source_sha)
-    ):
-        return epoch_source
+    The epoch file deliberately contains no commit SHA. Git history is the
+    authority for where the series began, avoiding a self-referential metadata
+    problem when a future VERSION series and its epoch are changed together.
+    """
+    epoch_version = release_epoch(root)
+    if current != epoch_version:
+        raise RuntimeError(
+            f"{RELEASE_EPOCH_PATH} version {epoch_version} does not match VERSION {current}; "
+            "advance the release epoch with the development version series"
+        )
 
-    if not is_ancestor(root, version_commit, source_sha):
-        raise RuntimeError("VERSION anchor is not an ancestor of the release source")
-    return version_commit
+    epoch_commit = run_git(
+        root,
+        "log",
+        "--first-parent",
+        "-1",
+        "--format=%H",
+        source_sha,
+        "--",
+        RELEASE_EPOCH_PATH.as_posix(),
+    ).stdout.strip()
+    if SHA_RE.fullmatch(epoch_commit) is None:
+        raise RuntimeError("could not resolve the commit that established the release version epoch")
+
+    parent = run_git(root, "rev-parse", f"{epoch_commit}^1", check=False)
+    anchor = parent.stdout.strip()
+    if parent.returncode != 0 or SHA_RE.fullmatch(anchor) is None:
+        raise RuntimeError("release version epoch must have a first parent")
+    return anchor
 
 
 def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Version:
     """Map a main source commit to a deterministic patch version.
 
     The first-parent distance from the version anchor gives every qualified main
-    source a unique version without requiring workflow-level serialization.
-    Existing tags remain authoritative for publication retries.
+    source a unique version without depending on workflow run numbers. Existing
+    tags remain authoritative for publication retries.
     """
     existing = release_tag_for_source(root, current, source_sha)
     if existing is not None:
@@ -135,8 +142,8 @@ def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Versi
         distance = int(result.stdout.strip())
     except ValueError as exc:
         raise RuntimeError("git returned an invalid first-parent release distance") from exc
-    if distance < 0:
-        raise RuntimeError("release distance cannot be negative")
+    if distance < 1:
+        raise RuntimeError("release source must follow the release version epoch anchor")
     return Version(current.major, current.minor, current.patch + distance)
 
 
