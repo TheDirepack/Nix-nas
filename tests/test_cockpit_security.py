@@ -21,6 +21,14 @@ class CockpitSecurityTests(unittest.TestCase):
         self.assertIn("--address 127.0.0.1", application)
         self.assertIn("systemd.services.nas-cockpit-sso.serviceConfig.PrivateNetwork = true;", hardening)
 
+    def test_native_cockpit_socket_cannot_become_an_alternate_ingress(self) -> None:
+        application = read("modules/nas/config/application-services.nix")
+        hardening = read("modules/nas/config/cockpit-security.nix")
+        self.assertIn("services.cockpit = {", application)
+        self.assertIn("systemd.sockets.cockpit = {", hardening)
+        self.assertIn("wantedBy = lib.mkOverride 90 [ ];", hardening)
+        self.assertIn("unitConfig.RefuseManualStart = true;", hardening)
+
     def test_only_caddy_group_can_enter_cockpit_through_host_namespace(self) -> None:
         hardening = read("modules/nas/config/cockpit-security.nix")
         self.assertIn("ListenStream = proxySocket;", hardening)
