@@ -83,10 +83,12 @@ jobs:
             "shared=${{ steps.shared.outcome }}"
 
   # Stage 2: independent checks fan out after shared source/tooling contracts.
-  # Each branch owns only prerequisites that are specific to that branch.
+  # They still run when a shared contract fails so one attempt reports every
+  # inexpensive problem before the aggregate gate blocks expensive builds.
   static:
     name: Static analysis and configuration
     needs: [prerequisites]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -128,6 +130,7 @@ jobs:
   unit:
     name: Unit, coverage, and maintainer contracts
     needs: [prerequisites]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -177,6 +180,7 @@ jobs:
   security:
     name: Security and generated configuration
     needs: [prerequisites]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -218,6 +222,7 @@ jobs:
   nonroot:
     name: Unprivileged hermeticity
     needs: [prerequisites]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -259,6 +264,7 @@ jobs:
   cockpit:
     name: Cockpit source, dependencies, and production bundle
     needs: [prerequisites]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -395,7 +401,6 @@ jobs:
         run: |
           python3 scripts/ci-check-report.py \
             "current-coverage=${{ steps.current-coverage.outcome }}" \
-            "main-coverage-cache=${{ steps.main-coverage.outcome }}" \
             "baseline-nix=${{ steps.baseline-nix.outcome }}" \
             "baseline-build=${{ steps.baseline-build.outcome }}" \
             "coverage-drift=${{ steps.drift.outcome }}"
