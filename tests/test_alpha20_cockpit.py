@@ -36,7 +36,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("--local-session", application)
         self.assertIn("cockpit-bridge", application)
         self.assertIn("--no-tls", application)
-        self.assertIn('partOf = [ "nas-first-start.service" ];', application)
+        cockpit_sso = application.split("systemd.services.nas-cockpit-sso = {", 1)[1].split("};", 1)[0]
+        self.assertIn('after = [ "nas-first-start.service" ];', cockpit_sso)
+        self.assertIn('requires = [ "nas-first-start.service" ];', cockpit_sso)
+        self.assertNotIn('partOf = [ "nas-first-start.service" ];', cockpit_sso)
         self.assertNotIn("settings.bearer", application)
         self.assertNotIn("nas-cockpit-oauth", application)
         # Caddy owns authorization: forward auth via the outpost plus the
