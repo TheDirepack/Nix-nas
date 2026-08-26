@@ -12,7 +12,10 @@ fake_qemu="$work/qemu-system-x86_64"
 cp -- "$(command -v sleep)" "$fake_qemu"
 
 start_fake_qemu() {
-  "$fake_qemu" 60 &
+  # Model the detached persistent VM rather than a shell-owned background job.
+  # Redirect all stdio and start a new session so leaving the launching subshell
+  # cannot terminate the fake QEMU before the cleanup contract inspects it.
+  setsid "$fake_qemu" 60 </dev/null >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$1"
   if (($# > 1)); then
     printf '%s\n' "$!" > "$2"
