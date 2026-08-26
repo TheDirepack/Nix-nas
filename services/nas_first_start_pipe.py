@@ -20,6 +20,7 @@ from typing import Any
 
 import nas_first_start as first_start
 import nas_setup as setup
+from nas_logging import sanitize
 from nas_operation_lock import cancel_reservation
 
 _MAX_SECRET_BYTES = 16 * 1024
@@ -40,6 +41,12 @@ def _read_secret_payload() -> dict[str, Any]:
     }:
         raise setup.SetupError("First-start secret payload contract is invalid")
     return value
+
+
+def _safe_error(exc: BaseException) -> str:
+    """Return a bounded diagnostic with inline runtime capabilities redacted."""
+    value = sanitize(str(exc))
+    return value if isinstance(value, str) else "First-start operation failed"
 
 
 def run_first_start_job(request_file: pathlib.Path) -> dict[str, Any]:
@@ -165,7 +172,7 @@ def run_first_start_job(request_file: pathlib.Path) -> dict[str, Any]:
                     "jobId": job_id,
                     "status": "failed",
                     "completedAt": int(time.time()),
-                    "error": str(exc),
+                    "error": _safe_error(exc),
                 },
             )
         raise
@@ -184,7 +191,7 @@ def main() -> int:
     try:
         result = run_first_start_job(args.request_file)
     except (setup.SetupError, OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"nas-first-start: {exc}", file=sys.stderr)
+        print(f"nas-first-start: {_safe_error(exc)}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
