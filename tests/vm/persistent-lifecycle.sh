@@ -28,13 +28,11 @@ wait_for_fake_qemu_exec() {
 }
 
 start_fake_qemu() {
-  # Model the detached persistent VM rather than a shell-owned background job.
-  # nohup preserves the real executable PID while making it independent of the
-  # launching subshell. Wait for the asynchronous child to complete exec before
-  # exposing its pidfile, otherwise cleanup can race /proc/<pid>/exe and reject
-  # a still-bash process as not being qemu-system-x86_64.
+  # Use the copied sleep binary directly so the pid belongs to the process whose
+  # executable identity the production cleanup helper validates. Waiting for
+  # exec prevents the launcher race without introducing a nohup intermediary.
   local pid
-  nohup "$fake_qemu" 60 </dev/null >/dev/null 2>&1 &
+  "$fake_qemu" 60 </dev/null >/dev/null 2>&1 &
   pid=$!
   if ! wait_for_fake_qemu_exec "$pid"; then
     kill "$pid" 2>/dev/null || true
@@ -81,20 +79,30 @@ fi
   exit 1
 }
 
+# Keep the persistent process as a direct child of this shell. The contract we
+# need to prove here is that cleanup is armed during startup, is disarmed only
+# after the process is healthy, and explicit cleanup still works afterwards.
+# Reparenting a synthetic process through a subshell adds unrelated init/reaper
+# timing and made this otherwise deterministic contract flaky on hosted runners.
 persistent_pidfile="$work/persistent.pid"
-(
-  set -Eeuo pipefail
-  # shellcheck disable=SC2329
-  cleanup() {
-    local status=$?
-    nas_qemu_cleanup_pidfile "$persistent_pidfile" 1 || true
-    return "$status"
-  }
-  trap cleanup EXIT INT TERM
-  start_fake_qemu "$persistent_pidfile"
-  assert_running "$persistent_pidfile"
-  nas_qemu_disarm_cleanup
-)
+# shellcheck disable=SC2329
+persistent_cleanup() {
+  local status=$?
+  nas_qemu_cleanup_pidfile "$persistent_pidfile" 1 || true
+  rm -rf -- "$work"
+  return "$status"
+}
+trap persistent_cleanup EXIT INT TERM
+start_fake_qemu "$persistent_pidfile"
+assert_running "$persistent_pidfile"
+nas_qemu_disarm_cleanup
+if [[ -n "$(trap -p EXIT INT TERM)" ]]; then
+  printf 'persistent cleanup traps remained armed after disarm\n' >&2
+  exit 1
+fi
+# Restore only the fixture-directory cleanup after proving the process cleanup
+# trap is disarmed. The fake QEMU must remain alive until explicit cleanup.
+trap 'rm -rf -- "$work"' EXIT
 assert_running "$persistent_pidfile" || {
   printf 'persistent fake QEMU did not survive disarmed cleanup\n' >&2
   exit 1
