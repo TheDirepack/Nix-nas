@@ -14,7 +14,12 @@ const exists = async (name) => {
   }
 };
 
-const STEPS = ["wizard-language", "wizard-admin", "wizard-storage", "wizard-confirm"];
+const STEPS = [
+  "wizard-language",
+  "wizard-admin",
+  "wizard-storage",
+  "wizard-confirm",
+];
 
 test("wizard entry mounts React and imports PatternFly global styles", async () => {
   const index = await wizard("src/index.jsx");
@@ -88,32 +93,29 @@ test("administrator username starts blank and has no schema default", async () =
   assert.equal(schema.properties.adminUsername.default, undefined);
 });
 
-test(
-  "setup uses searchable locale controls and keeps storage configuration actionable",
-  async () => {
-    const language = await wizard("src/steps/LanguageStep.jsx");
-    const storage = await wizard("src/steps/StorageStep.jsx");
-    assert.match(language, /Select/);
-    assert.match(language, /typeahead/);
-    assert.match(language, /Search languages/);
-    assert.match(language, /Search cities or regions/);
-    assert.match(language, /Intl\.supportedValuesOf/);
-    assert.match(language, /Current browser time zone/);
-    assert.match(language, /nas-searchable-select-toggle/);
-    assert.match(storage, /\/console\/storage/);
-    assert.match(storage, /\/console\/system\/terminal/);
-    assert.match(storage, /Refresh plan/);
-    assert.doesNotMatch(
-      await wizard("src/index.jsx"),
-      /AuthentikStep|wizard-authentik|Authentik Integration/,
-    );
-    assert.equal(
-      await exists("src/steps/AuthentikStep.jsx"),
-      false,
-      "the removed Authentik step must not remain as dead UI",
-    );
-  },
-);
+test("setup uses searchable locale controls and keeps storage configuration actionable", async () => {
+  const language = await wizard("src/steps/LanguageStep.jsx");
+  const storage = await wizard("src/steps/StorageStep.jsx");
+  assert.match(language, /Select/);
+  assert.match(language, /typeahead/);
+  assert.match(language, /Search languages/);
+  assert.match(language, /Search cities or regions/);
+  assert.match(language, /Intl\.supportedValuesOf/);
+  assert.match(language, /Current browser time zone/);
+  assert.match(language, /nas-searchable-select-toggle/);
+  assert.match(storage, /\/console\/storage/);
+  assert.match(storage, /\/console\/system\/terminal/);
+  assert.match(storage, /Refresh plan/);
+  assert.doesNotMatch(
+    await wizard("src/index.jsx"),
+    /AuthentikStep|wizard-authentik|Authentik Integration/,
+  );
+  assert.equal(
+    await exists("src/steps/AuthentikStep.jsx"),
+    false,
+    "the removed Authentik step must not remain as dead UI",
+  );
+});
 
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
   const css = await wizard("src/wizard.css");
