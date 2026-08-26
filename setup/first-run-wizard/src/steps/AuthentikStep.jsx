@@ -1,5 +1,6 @@
 import React from 'react';
 import { Alert, Checkbox, FormGroup, TextInput } from '@patternfly/react-core';
+import { PasswordQualityFeedback, usePasswordQualityCheck } from '../PasswordQuality.jsx';
 
 const AuthentikStep = ({
   authentikUrl,
@@ -10,8 +11,11 @@ const AuthentikStep = ({
   onAdministratorPassword,
   administratorPasswordConfirm,
   onAdministratorPasswordConfirm,
+  userInputs,
 }) => {
   const passwordsMatch = !administratorPasswordConfirm || administratorPassword === administratorPasswordConfirm;
+  const context = React.useMemo(() => [...userInputs, authentikUrl], [userInputs, authentikUrl]);
+  const quality = usePasswordQualityCheck(context);
 
   return (
     <div>
@@ -46,9 +50,11 @@ const AuthentikStep = ({
               type="password"
               value={administratorPassword}
               onChange={(_event, value) => onAdministratorPassword(value)}
+              onBlur={() => quality.check(administratorPassword)}
               autoComplete="new-password"
             />
           </FormGroup>
+          <PasswordQualityFeedback label="Authentik administrator password" quality={quality.quality} error={quality.error} />
           <FormGroup
             label="Confirm Authentik administrator password"
             fieldId="wizard-authentik-admin-password-confirm"
