@@ -6,13 +6,13 @@ from typing import Any
 
 import yaml
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 HANDOFF_ACTION = ROOT / ".github" / "actions" / "prepare-vm-handoff" / "action.yml"
 NIX_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-nix-ci" / "action.yml"
 CHECK_HELPER = ROOT / ".github" / "ci-checks.sh"
 QUALIFICATION_SCRIPT = ROOT / "scripts" / "ci-qualification.sh"
+SYSTEM_HANDOFF = ROOT / "scripts" / "system-handoff.sh"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
@@ -50,6 +50,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         )
         cls.check_helper = CHECK_HELPER.read_text(encoding="utf-8")
         cls.qualification_script = QUALIFICATION_SCRIPT.read_text(encoding="utf-8")
+        cls.system_handoff = SYSTEM_HANDOFF.read_text(encoding="utf-8")
 
     @staticmethod
     def needs(job: dict[str, Any]) -> set[str]:
@@ -64,11 +65,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
 
     @staticmethod
     def run_text(job: dict[str, Any]) -> str:
-        return "\n".join(
-            str(step.get("run", ""))
-            for step in job.get("steps", [])
-            if isinstance(step, dict)
-        )
+        return "\n".join(str(step.get("run", "")) for step in job.get("steps", []) if isinstance(step, dict))
 
     def test_workflow_has_expected_staged_job_set_and_triggers(self) -> None:
         self.assertEqual(set(self.jobs), self.JOBS)
@@ -76,9 +73,15 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("pull_request", triggers)
         self.assertIn("workflow_dispatch", triggers)
         self.assertIn("schedule", triggers)
+        self.assertEqual(triggers["push"]["branches"], ["main"])
+        self.assertNotIn("tags", triggers["push"])
         self.assertEqual(
             triggers["workflow_dispatch"]["inputs"]["force-cache-miss"]["type"],
             "boolean",
+        )
+        self.assertEqual(
+            {path.name for path in (ROOT / ".github" / "workflows").glob("*.yml")},
+            {"ci.yml", "release.yml"},
         )
         for retired in (
             "prebuild",
@@ -90,6 +93,16 @@ class CiWorkflowGraphTests(unittest.TestCase):
         ):
             self.assertNotIn(retired, self.jobs)
 
+    def test_concurrency_only_cancels_superseded_pull_requests(self) -> None:
+        concurrency = self.workflow["concurrency"]
+        group = str(concurrency["group"])
+        cancel = str(concurrency["cancel-in-progress"])
+        self.assertIn("github.event_name == 'pull_request'", group)
+        self.assertIn("github.event.pull_request.number", group)
+        self.assertIn("github.run_id", group)
+        self.assertIn("github.event_name == 'pull_request'", cancel)
+        self.assertNotEqual(cancel, "true")
+
     def test_shared_prerequisites_run_before_parallel_fanout(self) -> None:
         prerequisites = self.jobs["prerequisites"]
         text = self.serialized(prerequisites)
@@ -100,7 +113,9 @@ class CiWorkflowGraphTests(unittest.TestCase):
         for name in self.PARALLEL:
             self.assertEqual(self.needs(self.jobs[name]), {"prerequisites"})
 
-    def test_parallel_branches_have_no_cross_dependencies_and_always_report(self) -> None:
+    def test_parallel_branches_have_no_cross_dependencies_and_honor_cancellation(
+        self,
+    ) -> None:
         for name in self.PARALLEL:
             job = self.jobs[name]
             dependencies = self.needs(job)
@@ -111,13 +126,31 @@ class CiWorkflowGraphTests(unittest.TestCase):
     def test_branch_specific_prerequisites_stay_local(self) -> None:
         cockpit = self.serialized(self.jobs["cockpit"])
         self.assertIn("actions/setup-node@", cockpit)
-        self.assertIn("cache-dependency-path", cockpit)
+        self.assertIn("cache': 'npm", cockpit)
         self.assertIn("npm --prefix cockpit ci", cockpit)
         self.assertNotIn("cockpit/node_modules", cockpit)
         for name in self.PARALLEL - {"cockpit"}:
             text = self.serialized(self.jobs[name])
-            self.assertNotIn("cockpit/node_modules", text, name)
+            self.assertNotIn("actions/setup-node@", text, name)
             self.assertIn("./.github/actions/setup-nix-ci", text, name)
+
+    def test_node_dependency_caches_never_restore_node_modules(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("path: cockpit/node_modules", text)
+        self.assertNotIn("Restore exact Node dependencies", text)
+        self.assertIn("cache: npm", text)
+        self.assertGreaterEqual(text.count("npm --prefix cockpit ci --no-audit --no-fund"), 3)
+
+    def test_parallel_logs_are_short_lived_failure_artifacts(self) -> None:
+        for name in self.PARALLEL:
+            job = self.serialized(self.jobs[name])
+            self.assertIn(f"qualification-{name}-logs", job, name)
+            self.assertIn("retention-days': '3", job, name)
+            self.assertIn("outcome != 'success'", job, name)
+        shared = self.serialized(self.jobs["prerequisites"])
+        self.assertIn("qualification-shared-logs", shared)
+        self.assertIn("retention-days': '3", shared)
+        self.assertIn("outcome != 'success'", shared)
 
     def test_each_parallel_branch_keeps_detailed_failure_logs(self) -> None:
         helper = self.check_helper
@@ -148,15 +181,21 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertNotIn("nix shell nixpkgs#", script)
         self.assertIn("nix develop .#test -c bats", script)
         self.assertIn("nix develop .#test -c prettier", script)
+        self.assertIn("shellcheck -x", script)
+        self.assertIn("set -euo pipefail", script)
 
-    def test_coverage_comparison_starts_after_unit_only(self) -> None:
+    def test_coverage_comparison_starts_after_unit_and_short_circuits_on_missing_input(
+        self,
+    ) -> None:
         coverage = self.jobs["coverage-diff"]
         self.assertEqual(self.needs(coverage), {"unit"})
         self.assertIn("!cancelled()", str(coverage.get("if", "")))
-        self.assertIn("coverage-report", self.serialized(coverage))
-        self.assertIn("main-coverage.json", self.serialized(coverage))
+        text = self.serialized(coverage)
+        self.assertIn("coverage-report", text)
+        self.assertIn("main-coverage.json", text)
         self.assertIn("ci-check-report.py", self.run_text(coverage))
-        self.assertIn("baseline-build", self.serialized(coverage))
+        self.assertIn("baseline-build", text)
+        self.assertGreaterEqual(text.count("current-coverage.outcome == 'success'"), 4)
         self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
     def test_qualification_gate_joins_all_parallel_checks_once(self) -> None:
@@ -173,6 +212,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         prepare = self.serialized(self.jobs["prepare"])
         self.assertIn("Production Cockpit bundle", self.qualification_script)
         self.assertIn("cockpit-bundle", cockpit)
+        self.assertIn("retention-days': '1", cockpit)
         self.assertIn("Restore reviewed Cockpit bundle", prepare)
         self.assertIn("cockpit-bundle", prepare)
         self.assertNotIn("npm --prefix cockpit run build", prepare)
@@ -183,9 +223,11 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(self.needs(prepare), {"qualification"})
         text = self.serialized(prepare)
         self.assertIn("./.github/actions/prepare-vm-handoff", text)
-        self.assertIn("source-archive-evidence", text)
         self.assertIn("force-cache-miss", text)
         self.assertIn("Package and verify as an untrusted consumer", text)
+        self.assertIn("source-archive-cache", text)
+        self.assertIn("source-archive-${{ github.sha }}", text)
+        self.assertNotIn("source-archive-evidence", text)
 
     def test_nix_setup_action_centralizes_repeated_runner_setup(self) -> None:
         self.assertEqual(self.nix_setup["runs"]["using"], "composite")
@@ -194,7 +236,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("DeterminateSystems/magic-nix-cache-action@", text)
         self.assertIn("enable-kvm", text)
 
-    def test_handoff_action_keeps_granular_cross_run_caches_but_publishes_one_artifact(
+    def test_handoff_action_keeps_granular_caches_and_exports_exact_system_closures(
         self,
     ) -> None:
         text = self.serialized(self.handoff)
@@ -206,18 +248,16 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(text.count("actions/upload-artifact@"), 1)
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
-        self.assertIn("system-handoff.sh save", text)
-        self.assertIn("system-handoff.sh verify", text)
         self.assertIn("vm-bundle-handoff", text)
-        self.assertIn(
-            "nixosConfigurations.nas-ci-ready.config.system.build.toplevel",
-            text,
-        )
-        self.assertIn("nixosConfigurations.nas-qemu.config.system.build.toplevel", text)
+        self.assertIn("retention-days': '2", text)
+        self.assertIn("scripts/system-handoff.sh save", text)
+        self.assertIn("scripts/system-handoff.sh verify", text)
+        self.assertIn("nixosConfigurations.nas-ci-ready", self.system_handoff)
+        self.assertIn("nixosConfigurations.nas-qemu", self.system_handoff)
+        self.assertIn("nix-store", self.system_handoff)
+        self.assertIn("--export", self.system_handoff)
 
-    def test_vm_consumers_download_one_complete_handoff_instead_of_restoring_bundle_caches(
-        self,
-    ) -> None:
+    def test_vm_consumers_import_package_and_exact_system_handoffs(self) -> None:
         for name in ("integration", "installer", "installed-security"):
             text = self.serialized(self.jobs[name])
             self.assertIn("vm-bundle-handoff", text)
@@ -225,7 +265,6 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.assertIn("vm-bundles.sh import", text)
             self.assertIn("system-handoff.sh verify", text)
             self.assertIn("system-handoff.sh import", text)
-            self.assertNotIn("actions/cache/restore@", text)
             self.assertNotIn("vm-bundle-core-", text)
 
     def test_browser_executes_whole_suite_in_one_runner(self) -> None:
@@ -234,8 +273,6 @@ class CiWorkflowGraphTests(unittest.TestCase):
         text = self.serialized(browser)
         self.assertIn("Run complete deterministic browser suite", text)
         self.assertIn("npm --prefix cockpit run test:browser", text)
-        self.assertIn("npm --prefix cockpit ci", text)
-        self.assertNotIn("cockpit/node_modules", text)
         self.assertNotIn("NAS_BROWSER_GREP", text)
 
     def test_integration_keeps_only_the_two_useful_parallel_vm_legs(self) -> None:
@@ -248,18 +285,18 @@ class CiWorkflowGraphTests(unittest.TestCase):
             {"nas-vm", "nas-vm-encrypted"},
         )
         self.assertEqual(self.needs(integration), {"prepare"})
+        self.assertIn("!cancelled()", str(integration.get("if", "")))
 
-    def test_source_fuzz_uses_existing_internal_parallel_runner_not_a_job_matrix(
-        self,
-    ) -> None:
+    def test_source_fuzz_uses_visible_evidence_and_internal_parallel_runner(self) -> None:
         fuzz = self.jobs["source-fuzz"]
         self.assertNotIn("strategy", fuzz)
-        text = self.run_text(fuzz)
+        text = self.serialized(fuzz)
         self.assertIn("scripts/run-fuzz.py --jobs 6", text)
         self.assertIn("fuzz-evidence/source-fuzz.log", text)
         self.assertNotIn(".fuzz-evidence", text)
+        self.assertIn("retention-days': '7", text)
 
-    def test_failure_evidence_avoids_hidden_paths(self) -> None:
+    def test_console_evidence_is_copied_out_of_hidden_cache_directories(self) -> None:
         installer = self.serialized(self.jobs["installer"])
         installed = self.serialized(self.jobs["installed-security"])
         self.assertIn("final-vm-evidence/browser-console.log", installer)
