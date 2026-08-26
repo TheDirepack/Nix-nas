@@ -6,6 +6,8 @@ The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secre
 
 > **Release status:** 0.1.0 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
 
+Every non-skipped merge/push to `main` produces a separate, tagged source-only GitHub Release after the release build and validation gates pass. The development tree keeps the fixed `akadmin / nas-admin-first-boot` credential for repeatable testing; the tagged release commit receives a five-word Diceware bootstrap password instead, and that release's notes publish the matching username and password. The generated release commit is never pushed back onto `main`. See [`docs/development/automated-releases.md`](docs/development/automated-releases.md) for the exact versioning, credential, retry, and publication behavior.
+
 ## First installation
 
 1. Replace `hardware-configuration.nix` with reviewed output from the target machine.
