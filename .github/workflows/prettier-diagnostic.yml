@@ -1,0 +1,28 @@
+name: Prettier diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prettier-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diff:
+    name: Print canonical Prettier diff
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Print exact Prettier 3.8.3 changes
+        run: |
+          set -euo pipefail
+          nix shell nixpkgs#prettier -c prettier --write tests/js/setup-wizard.test.mjs
+          git --no-pager diff -- tests/js/setup-wizard.test.mjs
+          test -z "$(git status --porcelain -- tests/js/setup-wizard.test.mjs)"
