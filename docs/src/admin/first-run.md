@@ -38,8 +38,19 @@ KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
 
 ## First-boot Authentik access
 
-The first-boot Authentik setup identity is `akadmin`. Its documented initial
-password is `nas-admin-first-boot`. Setup uses it only during initial setup.
+The first-boot Authentik setup identity is always `akadmin`. The password depends
+on the artifact you are running:
+
+- a development checkout or development-built image uses the fixed
+  `nas-admin-first-boot` password so first-run, VM, and browser tests remain
+  repeatable;
+- an automated tagged GitHub Release uses the five-word Diceware password shown
+  in that release's notes. The same password is embedded in that release-only
+  source commit and package.
+
+Do not copy a release password into `main`, and do not assume
+`nas-admin-first-boot` works for a tagged release. If you are installing a
+published release, use the credentials from the matching GitHub Release notes.
 
 The setup workflow creates the administrator you choose, verifies that account
 is an enabled `nas_admin` member, and then retires the bootstrap Authentik
@@ -159,10 +170,11 @@ protected application access. Complete `nas-setup first-run` from the recovery
 plane.
 
 During first start, Authentik creates its temporary `akadmin` bootstrap identity
-with the documented initial password `nas-admin-first-boot`. Setup creates and
-verifies the chosen `nas_admin` administrator, then retires that bootstrap
-identity. After protected services are ready, use Authentik through Caddy for
-all browser access.
+using the credential for the exact source artifact: `nas-admin-first-boot` for
+the development tree, or the five-word password published with an automated
+tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
+then retires that bootstrap identity. After protected services are ready, use
+Authentik through Caddy for all browser access.
 
 ## New-pool safeguards
 
