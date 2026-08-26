@@ -25,7 +25,12 @@ def _main_or_release_ref(ref: str) -> bool:
     return ref == "refs/heads/main" or ref.startswith("refs/tags/v")
 
 
-def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> set[str]:
+def expected_jobs(
+    event_name: str,
+    ref: str,
+    base_ref: str,
+    test_tier: str,
+) -> set[str]:
     # Every run qualifies source/configuration, prepares the exact Cockpit
     # product, and runs the deterministic browser suite. The explicit fast
     # dispatch tier skips only the expensive Nix/VM work inside prepare.
@@ -37,14 +42,17 @@ def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> s
     qualification_run = (
         event_name == "schedule"
         or (event_name == "push" and _main_or_release_ref(ref))
-        or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
+        or (
+            event_name == "workflow_dispatch"
+            and test_tier in {"full", "installer"}
+        )
     )
     if qualification_run:
         expected.add("integration")
 
-    installer_run = (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
-        event_name != "workflow_dispatch" and _main_or_release_ref(ref)
-    )
+    installer_run = (
+        event_name == "workflow_dispatch" and test_tier in {"full", "installer"}
+    ) or (event_name != "workflow_dispatch" and _main_or_release_ref(ref))
     if installer_run:
         expected.add("installer")
 
@@ -99,7 +107,10 @@ def main() -> int:
     else:
         sys.stdout.write(summary)
     if bad:
-        print("pipeline qualification incomplete: " + ", ".join(bad), file=sys.stderr)
+        print(
+            "pipeline qualification incomplete: " + ", ".join(bad),
+            file=sys.stderr,
+        )
         return 1
     return 0
 
