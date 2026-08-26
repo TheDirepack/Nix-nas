@@ -2,75 +2,71 @@
 
 ## Trust boundaries
 
-- Authentik is authoritative for users, credentials, MFA, groups, and application policy.
-- CopyParty is authoritative for volumes, paths, ACLs, flags, quotas, indexing, and native share links.
-- Caddy is the only trusted reverse proxy. It deletes client-supplied identity headers before forward authentication.
-- Syncthing's global UI is administrator-only; user declarations are limited to an Authentik attribute and reconciled into the reserved `nas-*` namespace.
-- Cockpit and privileged appliance commands remain restricted to the trusted administrators.
-- KeePassXC is authoritative for machine secrets; runtime material lives under `/run/nas-secrets`.
+- Authentik is authoritative for human browser identities, passwords, MFA, groups, and application assignments.
+- Caddy is the only public HTTP/TLS reverse proxy. HTTP applications bind to loopback or Unix sockets and do not implement a second public TLS boundary.
+- CopyParty is authoritative for its volumes, ACLs, quotas, flags, indexing, and native share links.
+- KeePassXC is authoritative for permanent machine secrets. Runtime secret material is staged under `/run` with restrictive ownership/modes.
+- OpenZFS is authoritative for encrypted-dataset key validation. NixOS NAS does not add a custom key fingerprint or secondary encryption protocol.
+- Managed Services V2 is authoritative for managed-application desired state only after encrypted ZFS is mounted.
 
-## KeePass unlock
+## First-run trust
 
-The KDBX password is entered for each `nas-secrets` operation. It is supplied to `keepassxc-cli` through standard input rather than a command-line argument. Runtime files use restrictive modes and disappear on reboot or `nas-secrets stop`.
+The standalone `/setup/` application is never anonymous. Before permanent secrets exist, an installation-unique disposable bootstrap KDBX holds only the temporary Authentik secret key, bootstrap token, and random `akadmin` password. The password is shown on the local console/KVM. The temporary Linux `nas-bootstrap` principal is locked, nologin, and has no password authentication.
 
-## Authentik token separation
+The bootstrap KDBX is not promoted. Authenticated setup creates a fresh permanent KDBX using the user's supplied master password, verifies that database by reopening it, and generates every permanent machine credential from scratch. Setup completion is fail-closed until the permanent Linux administrator, Authentik administrator, Caddy path, storage, and V2 path are verified and the bootstrap Authentik authority/account/runtime are removed.
 
-The bootstrap token exists only to initialize Authentik. Normal automation should use a dedicated scoped token. `nas-secrets activate` warns when both values are equal, and `nas-secrets check-authentik-token`/`nas-identity-sync verify-token` help verify the migration without printing credentials.
+The permanent Linux administrator username is user-selected but must not already exist. Setup never changes the password or groups of an existing local account.
 
-## Superuser policy
+## Password policy
 
-`nas_admin` intentionally remains the only Authentik superuser group. The identity synchronizer requires at least one enabled explicit member; one is bootstrapped by default and additional fully trusted members are allowed. Ordinary users do not receive Cockpit, the global Syncthing UI, CopyParty configuration volume, or application administration.
+Human passwords entered during setup are validated by the shared `nas-password-quality` service using zxcvbn with a 15-character minimum and contextual inputs. The HIBP range API is checked when reachable; a known-breached password is rejected while an unavailable breach service does not prevent offline setup. Setup-created Authentik users use the same validator before mutation.
 
-## Default-deny capability authorization
+The wizard has separate Linux, KeePassXC, and Authentik password fields. Reusing the Linux password for KeePassXC and/or Authentik requires separate explicit opt-in toggles, both off by default.
 
-`nas_users` is an identity baseline, not an access grant. Ordinary access requires an explicit Authentik `nas_allow_*` group. Caddy uses the same shared policy implementation for files, WebDAV, Syncthing self-service, Vaultwarden SSO, and AI; matching `nas_deny_*` groups and `nas_disabled` fail closed. Authentik application bindings should mirror these groups for correct dashboard visibility.
+After setup, Linux password changes use PAM/libpwquality and Authentik password changes use Authentik's native password policy with the same effective minimum zxcvbn score and HIBP rejection. Machine-generated secrets are random and are not evaluated as human passwords.
 
-## CopyParty authorization
+The permanent KeePass master password is never persisted by NixOS NAS. `keepassxc-cli` receives it on standard input when the real KDBX must be opened; setup journals contain no password-derived verifier.
 
-Caddy passes authenticated `Remote-User` and `Remote-Groups` headers only after Authentik forward authentication. The `/shares` route additionally requires `nas_allow_files`, and `/dav` requires `nas_allow_webdav`. CopyParty ACLs remain the final authority for files and shares.
+## Authentik authority separation
 
-CopyParty flags are not filtered through a custom semantic allowlist because only the trusted administrators can change authoritative configuration. Ordinary users may use native share links only where CopyParty's volume ACLs and share flags allow them.
+The temporary bootstrap token performs only first-run mutations. Setup provisions a separate non-expiring `nas-automation` service-account token for steady state, verifies that it can read users/groups, and explicitly proves that user creation and password-reset operations return HTTP 403 before bootstrap retirement.
 
-The project no longer creates root-owned structural share trees or performs custom symlink/path policy for shares. Administrators must configure valid paths in CopyParty and should avoid exposing mutable configuration paths to ordinary users.
+The steady-state role contains only `authentik_core.view_user` and `authentik_core.view_group`. Managed Services V2 uses Authentik blueprints for capability/application projections and never assigns users to capability groups.
 
-## Authentik self-service fields
+Authenticated Authentik API requests refuse redirects and origin changes so bearer tokens cannot be forwarded to a different origin. Error handling must not print token values or password-bearing request bodies.
 
-The bundled flow writes `attributes.nasSyncthingDevices` for the authenticated account and uses a User Write stage configured not to create accounts. This is data declaration, not direct access to the Syncthing API. The reconciler validates identifiers and touches only reserved objects.
+## Caddy and browser authentication
 
-## Forward authentication
+Caddy strips client-provided `Remote-*` and `X-Authentik-*` headers before Authentik forward authentication, then reconstructs trusted identity headers from the Authentik response. Login/outpost callback paths bypass forward-auth recursion only where required by Authentik.
 
-- Client-provided `Remote-*` and `X-Authentik-*` headers are removed.
-- Authentik login and outpost callback paths bypass forward-auth recursion.
-- Backend listeners remain loopback/Unix-socket scoped where practical.
-- Caddy route authorization and upstream application authorization remain independent layers.
+During first-run, Caddy authenticates `/setup/` and proxies `/setup/api/*` to a private Unix socket. The setup API independently accepts only the bootstrap administrator identity. Once the bootstrap Authentik database is retired, the browser uses a random per-job capability only to poll the already-running setup job and request its final reboot; that capability cannot start another setup transaction.
 
-## Managed Services V2 authorization
+After setup, Caddy + Authentik enforce request-time application capability checks. Cockpit's shared local-session bridge is reachable only on host loopback behind the Caddy/AuthentiK administrator route; the default Cockpit socket/service are disabled.
 
-Managed Services V2 compiles desired state from `/var/lib/nas-control/services.yaml` into native systemd, Caddy, Authentik capability objects, and firewall policy. There is no resident feature controller, feature database, or V1 `nas-feature-control` command. Caddy + Authentik enforce request-time capability checks; V2 only ensures the required `application.<service>.<capability>` objects exist and never assigns users to them.
+## Root and encrypted-ZFS boundary
 
-## Deployment safety
+The root filesystem contains the control plane required before encrypted ZFS is available: NixOS and V2 implementation code, Caddy base state, Authentik and its PostgreSQL database, the permanent KDBX, setup/recovery metadata, and ZFS unlock machinery.
 
-`nas-update` retains:
+Encrypted ZFS contains mutable V2 desired state (`services.yaml`), generations/transactions, application configuration/state, containers, VMs, shares, and user data. There is no root-side fallback desired-state copy.
 
-- sanitized Git environment;
-- clean-tree and upstream fast-forward checks;
-- release-manifest verification for packaged trees;
-- local tests and Nix build validation;
-- protected-service readiness checks;
-- Nix-generation rollback.
+The ZFS encryption key is a native random 256-bit key because OpenZFS raw/hex wrapping keys are exactly 32 bytes. After KeePassXC unlock, the key is staged privately under `/run`; `zfs load-key` validates it and the key is removed again on lock.
 
-It intentionally does not enforce repository ownership, writable-parent, or repository-path symlink policy.
+## Managed Services V2 runtime boundaries
 
-## Backup sensitivity
+V2 compiles desired state into native systemd, Podman/Quadlet/Compose, libvirt, Caddy, Authentik blueprint, and firewalld projections. Generated argument lists are not shell strings. Direct Quadlet sources reject source keys that would bypass V2-managed network, mount, device, secret, or sandbox policy. Firewalld reconciliation computes a complete desired NAS-owned policy and removes stale NAS-owned rules rather than accumulating permissions.
 
-Restic contains highly sensitive recovery material, including the KeePass database, identity state, configuration, and private service keys. Protect the repository password separately and restrict repository access.
+Administrators may deliberately choose runtime-native/inherited policy where the schema exposes that choice. Such native source files are trusted administrator input and are not treated as untrusted user content.
 
-A Restic repository on the same ZFS pool is not an independent disaster backup. Syncoid replication must target another pool/host to protect against whole-pool loss, and replication credentials should be restricted to the required datasets and receive operations.
+## Backup and recovery sensitivity
 
-## Locked-state recovery boundary
+The root/control-plane Restic backup contains highly sensitive encrypted recovery material, including `NAS.kdbx`, Authentik state, host configuration, and a consistent PostgreSQL dump. It explicitly excludes `/run`, live PostgreSQL pages, caches, restore scratch space, and the mounted ZFS tree. Restic password/repository files must be regular root-owned files with no group/other permissions; backup and restore verification fail closed on unsafe credential files.
 
-While the protected stack is locked, no browser management endpoint is exposed. Caddy may serve static setup guidance at the trusted-interface HTTPS port, but Cockpit, Authentik, CopyParty, and managed applications remain unavailable until `nas-secrets activate` succeeds. Recovery uses the local console, SSH with a provisioned recovery key, or hardware KVM.
+The Restic repository password is a separate recovery credential and needs an independent offline copy. Do not make the only copy an entry inside `NAS.kdbx`, because the KDBX is itself recovered from that Restic repository.
 
-`nas-secrets activate` reads the KeePass password from standard input and never stores it in a URL, argument, environment variable, Nix store path, browser storage, or disk file. The Cockpit privileged API allow-list exposes only `activate-stdin` for this purpose after browser authorization, and only when the protected stack requires it.
+The complete ZFS recovery domain uses native raw encrypted ZFS replication (`zfs send -w` via Syncoid) so V2/application data remains encrypted in transit/storage at the ZFS layer. Root Restic recovery and full encrypted ZFS replication are complementary domains and should normally use storage independent of the source pool.
 
-Caddy/Authentik are deliberately not dependencies of this path. Authentik `nas_admin` membership does not create a host account, which prevents a compromise of the identity database from automatically becoming cold-boot shell/unlock authority. See [ADR-0001](docs/development/adr-0001-authentik-only-browser-access.md) and [Locked-state unlock](docs/src/locked-unlock.md).
+## Locked-state recovery
+
+After normal setup, the browser stack is not the cold-boot root of trust. The user-known KeePass password and local host administrator/out-of-band console form the recovery boundary. The system opens the root-hosted KDBX, stages the native ZFS key, loads/mounts encrypted ZFS, and only then allows V2 to reconcile managed applications.
+
+Keep independent recovery copies of the KeePass master password, Restic repository password, and any remote-replication credentials required to reach the backup target.
