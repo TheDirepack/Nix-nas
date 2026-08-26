@@ -18,9 +18,9 @@ import nas_v2_firewalld_reconcile as firewall  # noqa: E402
 
 class FirewalldSecurityTests(unittest.TestCase):
     def test_rich_rule_rejects_language_injection(self) -> None:
-        rule = ET.fromstring(
-            '<rule family="ipv4"><destination address="10.0.0.0/8\" port port=\"22"/><accept/></rule>'
-        )
+        rule = ET.Element("rule", {"family": "ipv4"})
+        ET.SubElement(rule, "destination", {"address": '10.0.0.0/8" port port="22'})
+        ET.SubElement(rule, "accept")
         with self.assertRaises(firewall.FirewalldReconcileError):
             firewall._rich_rule(rule)
 
