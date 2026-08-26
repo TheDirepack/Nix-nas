@@ -82,6 +82,11 @@ class ReleaseAutomationTests(unittest.TestCase):
                 text = (root / relative).read_text()
                 self.assertNotIn("old-bootstrap-password-123456", text)
                 self.assertIn(release_password, text)
+            self.assertNotIn("docs/example.md", bootstrap_files)
+            self.assertEqual(
+                (root / "docs/example.md").read_text(),
+                "Login with old-bootstrap-password-123456.\n",
+            )
             self.assertEqual((root / "untracked.txt").read_text(), "old-bootstrap-password-123456\n")
             on_disk = json.loads(metadata_path.read_text())
             self.assertEqual(on_disk["bootstrap_username"], "akadmin")
