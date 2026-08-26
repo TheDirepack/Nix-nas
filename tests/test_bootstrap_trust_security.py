@@ -6,14 +6,17 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "modules/nas/config/bootstrap-security.nix"
+BOOTSTRAP_RUNTIME = ROOT / "modules/nas/config/bootstrap-runtime-credentials.nix"
 SYSTEMD = ROOT / "modules/nas/config/systemd-services.nix"
 APPLICATIONS = ROOT / "modules/nas/config/application-services.nix"
 DEFAULT = ROOT / "modules/nas/default.nix"
 
 
 class BootstrapTrustSecurityTests(unittest.TestCase):
-    def test_security_module_is_imported(self) -> None:
-        self.assertIn("./config/bootstrap-security.nix", DEFAULT.read_text(encoding="utf-8"))
+    def test_security_modules_are_imported(self) -> None:
+        source = DEFAULT.read_text(encoding="utf-8")
+        self.assertIn("./config/bootstrap-security.nix", source)
+        self.assertIn("./config/bootstrap-runtime-credentials.nix", source)
 
     def test_linux_bootstrap_account_has_no_password_login(self) -> None:
         source = BOOTSTRAP.read_text(encoding="utf-8")
@@ -57,6 +60,16 @@ class BootstrapTrustSecurityTests(unittest.TestCase):
         self.assertIn('> /dev/console', source)
         self.assertNotIn('echo "$bootstrap_password"', source)
         self.assertNotIn('printf \'%s\\n\' "$bootstrap_password"', source)
+
+    def test_bootstrap_runtime_credentials_are_private_regular_run_files(self) -> None:
+        source = BOOTSTRAP_RUNTIME.read_text(encoding="utf-8")
+        self.assertIn("materializeBootstrapCredentials", source)
+        self.assertIn("must be a regular non-symlink file", source)
+        self.assertIn("/run/nas-authentik/.credential.XXXXXX", source)
+        self.assertIn("0640 root authentik", source)
+        self.assertIn("0400 root root", source)
+        self.assertIn("mv -T", source)
+        self.assertIn("operational-runtime-select", source)
 
     def test_bootstrap_secrets_are_not_promoted(self) -> None:
         apps = APPLICATIONS.read_text(encoding="utf-8")
