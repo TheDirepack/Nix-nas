@@ -26,6 +26,9 @@ test("wizard entry mounts React and imports PatternFly global styles", async () 
   const index = await wizard("src/index.jsx");
   assert.match(index, /createRoot/);
   assert.match(index, /@patternfly\/patternfly\/patternfly\.css/);
+  assert.match(index, /nas-setup-shell/);
+  assert.match(index, /pf-v6-theme-dark/);
+  assert.match(index, /Use dark mode/);
 });
 
 test("wizard builds steps from WizardStep children with explicit ids", async () => {
@@ -78,6 +81,25 @@ test("admin step gates the KeePassXC database password behind the shared-passwor
   );
 });
 
+test("setup uses constrained selects and explains the Authentik application boundary", async () => {
+  const language = await wizard("src/steps/LanguageStep.jsx");
+  const authentik = await wizard("src/steps/AuthentikStep.jsx");
+  assert.match(language, /FormSelect/);
+  assert.match(language, /Intl\.supportedValuesOf/);
+  assert.doesNotMatch(language, /TextInput/);
+  assert.match(authentik, /NAS Setup/);
+  assert.match(authentik, /application viewer/);
+  assert.doesNotMatch(authentik, /authentikUrl/);
+});
+
+test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
+  const css = await wizard("src/wizard.css");
+  assert.match(css, /min-height: 100dvh/);
+  assert.match(css, /--pf-v6-c-wizard--Height: 100%/);
+  assert.match(css, /\.pf-v6-theme-dark/);
+  assert.match(css, /@media \(max-width: 40rem\)/);
+});
+
 test("wizard shell references only relative, locally served assets", async () => {
   const html = await wizard("index.html");
   assert.match(html, /src="\.\/first-run-wizard\.js"/);
@@ -102,6 +124,8 @@ test("committed bundle registers every step and the KeePassXC toggle", async () 
     assert.ok(js.includes(`"${id}"`), `bundle is missing step id ${id}`);
   }
   assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC toggle");
+  assert.ok(js.includes("Use dark mode"), "bundle is missing the theme control");
+  assert.ok(js.includes("application viewer"), "bundle is missing the Authentik application guidance");
 });
 
 test("committed stylesheet carries the global tokens and core component rules", async () => {
@@ -113,6 +137,8 @@ test("committed stylesheet carries the global tokens and core component rules", 
   for (const rule of [".pf-v6-c-button{", ".pf-v6-c-wizard{", ".pf-v6-c-form-control{"]) {
     assert.ok(css.includes(rule), `stylesheet is missing ${rule}`);
   }
+  assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the full-height setup shell");
+  assert.ok(css.includes(".pf-v6-theme-dark"), "stylesheet is missing dark-mode overrides");
 });
 
 test("dist index.html matches the reviewed source shell", async () => {

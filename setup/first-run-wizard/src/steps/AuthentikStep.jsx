@@ -1,78 +1,31 @@
 import React from 'react';
-import { Alert, Checkbox, FormGroup, TextInput } from '@patternfly/react-core';
-import { PasswordQualityFeedback, usePasswordQualityCheck } from '../PasswordQuality.jsx';
+import { Alert, Label } from '@patternfly/react-core';
 
-const AuthentikStep = ({
-  authentikUrl,
-  onAuthentikUrl,
-  reuseLinuxPassword,
-  onReuseLinuxPassword,
-  administratorPassword,
-  onAdministratorPassword,
-  administratorPasswordConfirm,
-  onAdministratorPasswordConfirm,
-  userInputs,
-}) => {
-  const passwordsMatch = !administratorPasswordConfirm || administratorPassword === administratorPasswordConfirm;
-  const context = React.useMemo(() => [...userInputs, authentikUrl], [userInputs, authentikUrl]);
-  const quality = usePasswordQualityCheck(context);
-
-  return (
-    <div>
-      <Alert isInline variant="info" title="Bootstrap identity is temporary">
-        The bootstrap Authentik authority only protects first-run setup. Setup creates the permanent
-        administrator and then retires bootstrap authority. Password reuse is optional and disabled by default.
-      </Alert>
+const AuthentikStep = () => (
+  <div className="nas-wizard-step">
+    <p className="nas-wizard-intro">
+      Authentik is the identity authority for the appliance. The setup wizard is registered there
+      as a real <strong>NAS Setup</strong> application, so it appears in the Authentik application
+      viewer for authorized administrators instead of being an untracked external link.
+    </p>
+    <div className="nas-setup-card">
+      <h2>NAS Setup application</h2>
       <p>
-        Authentik is already running with the embedded proxy outpost. Identity applications are
-        reconciled by the appliance after setup completes.
+        Access is limited to the <code>nas_admin</code> group. The embedded proxy outpost protects
+        this wizard and the appliance removes the temporary application after setup is complete.
       </p>
-      <FormGroup label="Authentik external URL" fieldId="wizard-authentik-url">
-        <TextInput
-          id="wizard-authentik-url"
-          type="text"
-          value={authentikUrl}
-          onChange={(_event, value) => onAuthentikUrl(value)}
-          placeholder="https://nas.example.com"
-        />
-      </FormGroup>
-      <Checkbox
-        id="wizard-authentik-reuse-linux"
-        label="Reuse the Linux administrator password for Authentik"
-        isChecked={reuseLinuxPassword}
-        onChange={(_event, checked) => onReuseLinuxPassword(checked)}
-      />
-      {!reuseLinuxPassword && (
-        <>
-          <FormGroup label="Authentik administrator password" fieldId="wizard-authentik-admin-password" isRequired>
-            <TextInput
-              id="wizard-authentik-admin-password"
-              type="password"
-              value={administratorPassword}
-              onChange={(_event, value) => onAdministratorPassword(value)}
-              onBlur={() => quality.check(administratorPassword)}
-              autoComplete="new-password"
-            />
-          </FormGroup>
-          <PasswordQualityFeedback label="Authentik administrator password" quality={quality.quality} error={quality.error} />
-          <FormGroup
-            label="Confirm Authentik administrator password"
-            fieldId="wizard-authentik-admin-password-confirm"
-            isRequired
-          >
-            <TextInput
-              id="wizard-authentik-admin-password-confirm"
-              type="password"
-              value={administratorPasswordConfirm}
-              onChange={(_event, value) => onAdministratorPasswordConfirm(value)}
-              autoComplete="new-password"
-              validated={passwordsMatch ? 'default' : 'error'}
-            />
-          </FormGroup>
-        </>
-      )}
+      <p>
+        <Label color="green">Registered in Authentik</Label>
+      </p>
+      <a className="nas-setup-link" href="/identity/if/user/" target="_blank" rel="noreferrer">
+        Open the Authentik application viewer
+      </a>
     </div>
-  );
-};
+    <Alert variant="info" isInline title="No Authentik URL is required here">
+      The appliance publishes its configured hostname and reconciles the provider automatically.
+      This prevents a mistyped URL from breaking sign-in or proxy authorization.
+    </Alert>
+  </div>
+);
 
 export default AuthentikStep;

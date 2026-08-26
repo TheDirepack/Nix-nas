@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import "@patternfly/patternfly/patternfly.css";
 import "@patternfly/patternfly/patternfly-addons.css";
 import { Wizard, WizardStep } from '@patternfly/react-core';
+import './wizard.css';
 import LanguageStep from './steps/LanguageStep.jsx';
 import AdminStep from './steps/AdminStep.jsx';
 import AuthentikStep from './steps/AuthentikStep.jsx';
@@ -11,26 +12,50 @@ import ConfirmStep from './steps/ConfirmStep.jsx';
 
 // @patternfly/react-core 6.1.0 builds wizard steps exclusively from
 // WizardStep children; the steps-array prop arrived in a later 6.x.
-const emptyAdministrator = { username: '', name: '', email: '', password: '', confirm: '' };
+const emptyAdministrator = { username: 'admin', name: '', email: '', password: '', confirm: '' };
+const THEME_STORAGE_KEY = 'nas-setup-theme';
+
+const readThemePreference = () => {
+  try {
+    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return ['auto', 'light', 'dark'].includes(value) ? value : 'auto';
+  } catch (_error) {
+    return 'auto';
+  }
+};
 
 const App = () => {
   const [language, setLanguage] = React.useState('en');
   const [timezone, setTimezone] = React.useState('UTC');
   const [administrator, setAdministrator] = React.useState(emptyAdministrator);
-  const [reuseLinuxPasswordForKeePass, setReuseLinuxPasswordForKeePass] = React.useState(false);
+  const [useSamePassword, setUseSamePassword] = React.useState(true);
   const [keePassPassword, setKeePassPassword] = React.useState('');
-  const [keePassPasswordConfirm, setKeePassPasswordConfirm] = React.useState('');
-  const [authentikUrl, setAuthentikUrl] = React.useState('');
-  const [reuseLinuxPasswordForAuthentik, setReuseLinuxPasswordForAuthentik] = React.useState(false);
-  const [authentikAdministratorPassword, setAuthentikAdministratorPassword] = React.useState('');
-  const [authentikAdministratorPasswordConfirm, setAuthentikAdministratorPasswordConfirm] = React.useState('');
   const [allowDestructive, setAllowDestructive] = React.useState(false);
+  const [theme, setTheme] = React.useState(readThemePreference);
   const [plan, setPlan] = React.useState(null);
   const [planError, setPlanError] = React.useState('');
 
   React.useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      const isDark = theme === 'dark' || (theme === 'auto' && media?.matches);
+      document.documentElement.classList.toggle('pf-v6-theme-dark', Boolean(isDark));
+      document.documentElement.dataset.nasTheme = theme;
+    };
+    applyTheme();
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (_error) {
+      // A restricted browser may not permit localStorage; the current page
+      // still follows the selected theme for this session.
+    }
+    media?.addEventListener?.('change', applyTheme);
+    return () => media?.removeEventListener?.('change', applyTheme);
+  }, [theme]);
+
+  React.useEffect(() => {
     let cancelled = false;
-    fetch('api/first-start', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    fetch('api/first-start', { headers: { Accept: 'application/json' } })
       .then((response) => response.json())
       .then((value) => {
         if (cancelled) return;
@@ -48,83 +73,68 @@ const App = () => {
     };
   }, []);
 
-  const clearSecrets = React.useCallback(() => {
-    setAdministrator((current) => ({ ...current, password: '', confirm: '' }));
-    setKeePassPassword('');
-    setKeePassPasswordConfirm('');
-    setAuthentikAdministratorPassword('');
-    setAuthentikAdministratorPasswordConfirm('');
-  }, []);
-
-  const effectiveKeePassPassword = reuseLinuxPasswordForKeePass ? administrator.password : keePassPassword;
-  const effectiveKeePassPasswordConfirm = reuseLinuxPasswordForKeePass
-    ? administrator.confirm
-    : keePassPasswordConfirm;
-  const effectiveAuthentikPassword = reuseLinuxPasswordForAuthentik
-    ? administrator.password
-    : authentikAdministratorPassword;
-  const effectiveAuthentikPasswordConfirm = reuseLinuxPasswordForAuthentik
-    ? administrator.confirm
-    : authentikAdministratorPasswordConfirm;
-  const passwordContext = React.useMemo(
-    () => [administrator.username, administrator.name, administrator.email],
-    [administrator.username, administrator.name, administrator.email],
-  );
+  const keePassEffective = useSamePassword ? administrator.password : keePassPassword;
+  const nextTheme = theme === 'dark' ? 'light' : 'dark';
 
   return (
-    <Wizard
-      navAriaLabel="First-run setup steps"
-      mainAriaLabel="First-run setup content"
-    >
-      <WizardStep id="wizard-language" step={1} name="Language and Timezone">
-        <LanguageStep language={language} onLanguage={setLanguage} timezone={timezone} onTimezone={setTimezone} />
-      </WizardStep>
-      <WizardStep id="wizard-admin" step={2} name="Administrator and Recovery">
-        <AdminStep
-          administrator={administrator}
-          onAdministrator={setAdministrator}
-          reuseLinuxPasswordForKeePass={reuseLinuxPasswordForKeePass}
-          onReuseLinuxPasswordForKeePass={setReuseLinuxPasswordForKeePass}
-          keePassPassword={keePassPassword}
-          onKeePassPassword={setKeePassPassword}
-          keePassPasswordConfirm={keePassPasswordConfirm}
-          onKeePassPasswordConfirm={setKeePassPasswordConfirm}
-        />
-      </WizardStep>
-      <WizardStep id="wizard-authentik" step={3} name="Authentik Administrator">
-        <AuthentikStep
-          authentikUrl={authentikUrl}
-          onAuthentikUrl={setAuthentikUrl}
-          reuseLinuxPassword={reuseLinuxPasswordForAuthentik}
-          onReuseLinuxPassword={setReuseLinuxPasswordForAuthentik}
-          administratorPassword={authentikAdministratorPassword}
-          onAdministratorPassword={setAuthentikAdministratorPassword}
-          administratorPasswordConfirm={authentikAdministratorPasswordConfirm}
-          onAdministratorPasswordConfirm={setAuthentikAdministratorPasswordConfirm}
-          userInputs={passwordContext}
-        />
-      </WizardStep>
-      <WizardStep id="wizard-storage" step={4} name="Storage">
-        <StorageStep
-          plan={plan}
-          planError={planError}
-          allowDestructive={allowDestructive}
-          onAllowDestructive={setAllowDestructive}
-        />
-      </WizardStep>
-      <WizardStep id="wizard-confirm" step={5} name="Confirm and Reboot">
-        <ConfirmStep
-          administrator={administrator}
-          keePassPassword={effectiveKeePassPassword}
-          keePassPasswordConfirm={effectiveKeePassPasswordConfirm}
-          authentikAdministratorPassword={effectiveAuthentikPassword}
-          authentikAdministratorPasswordConfirm={effectiveAuthentikPasswordConfirm}
-          allowDestructive={allowDestructive}
-          plan={plan}
-          onSecretsSubmitted={clearSecrets}
-        />
-      </WizardStep>
-    </Wizard>
+    <div className="nas-setup-shell">
+      <header className="nas-setup-header">
+        <div>
+          <p className="nas-setup-eyebrow">NAS appliance</p>
+          <h1 className="nas-setup-title">First-start setup</h1>
+          <p className="nas-setup-subtitle">A guided setup for identity, storage, and recovery.</p>
+        </div>
+        <button
+          className="nas-theme-toggle"
+          type="button"
+          onClick={() => setTheme(nextTheme)}
+          aria-label={`Switch to ${nextTheme} mode`}
+          aria-pressed={theme === 'dark'}
+        >
+          {theme === 'dark' ? 'Use light mode' : 'Use dark mode'}
+        </button>
+      </header>
+      <main className="nas-setup-main">
+        <Wizard
+          className="nas-setup-wizard"
+          navAriaLabel="First-run setup steps"
+          mainAriaLabel="First-run setup content"
+        >
+          <WizardStep id="wizard-language" step={1} name="Language and Timezone">
+            <LanguageStep language={language} onLanguage={setLanguage} timezone={timezone} onTimezone={setTimezone} />
+          </WizardStep>
+          <WizardStep id="wizard-admin" step={2} name="Admin Account">
+            <AdminStep
+              administrator={administrator}
+              onAdministrator={setAdministrator}
+              useSamePassword={useSamePassword}
+              onUseSamePassword={setUseSamePassword}
+              keePassPassword={keePassPassword}
+              onKeePassPassword={setKeePassPassword}
+            />
+          </WizardStep>
+          <WizardStep id="wizard-authentik" step={3} name="Authentik Integration">
+            <AuthentikStep />
+          </WizardStep>
+          <WizardStep id="wizard-storage" step={4} name="Storage">
+            <StorageStep
+              plan={plan}
+              planError={planError}
+              allowDestructive={allowDestructive}
+              onAllowDestructive={setAllowDestructive}
+            />
+          </WizardStep>
+          <WizardStep id="wizard-confirm" step={5} name="Confirm and Reboot">
+            <ConfirmStep
+              administrator={administrator}
+              keePassPassword={keePassEffective}
+              allowDestructive={allowDestructive}
+              plan={plan}
+            />
+          </WizardStep>
+        </Wizard>
+      </main>
+    </div>
   );
 };
 

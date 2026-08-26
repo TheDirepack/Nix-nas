@@ -587,6 +587,83 @@ def ensure_cockpit_launcher(token: str) -> dict[str, Any]:
     return {"provider": "NAS Cockpit", "application": "nas-cockpit"}
 
 
+def ensure_setup_launcher(token: str) -> dict[str, Any]:
+    """Expose first-start setup as a real Authentik application.
+
+    The static blueprint seeds the application early enough for Authentik to
+    discover it during first boot. Once the public hostname and default flows
+    are available, this reconciliation gives it a proxy provider and assigns
+    that provider to the embedded outpost so the application viewer can launch
+    the same Caddy-protected wizard users reach directly.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", PUBLIC_HOST):
+        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+    flows = default_flows(token)
+    payload: dict[str, Any] = {
+        "name": "NAS Setup",
+        "mode": "forward_single",
+        "external_host": f"https://{PUBLIC_HOST}/setup/",
+        "internal_host": "http://127.0.0.1:8980",
+        "internal_host_ssl_validation": False,
+    }
+    for field, slug in {
+        "authentication_flow": "default-authentication-flow",
+        "authorization_flow": "default-provider-authorization-implicit-consent",
+        "invalidation_flow": "default-invalidation-flow",
+    }.items():
+        flow = flows.get(slug)
+        if not isinstance(flow, Mapping) or flow.get("pk") is None:
+            raise SyncError(f"Authentik flow {slug} is missing")
+        payload[field] = flow["pk"]
+    provider = next(
+        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Setup"), None
+    )
+    if provider is None:
+        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
+    else:
+        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
+    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
+    if provider_pk is None:
+        raise SyncError("Authentik NAS Setup provider has no primary key")
+
+    app_payload = {
+        "name": "NAS Setup",
+        "slug": "nas-setup",
+        "provider": provider_pk,
+        "meta_description": "First-start setup for the NAS appliance",
+        "meta_publisher": "NAS",
+        "meta_launch_url": f"https://{PUBLIC_HOST}/setup/",
+        "open_in_new_tab": False,
+    }
+    application = next(
+        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-setup"), None
+    )
+    if application is None:
+        authentik_request(token, "core/applications/", method="POST", body=app_payload)
+    else:
+        authentik_request(token, "core/applications/nas-setup/", method="PATCH", body=app_payload)
+
+    outpost = next(
+        (
+            item
+            for item in authentik_list(token, "outposts/instances/")
+            if item.get("managed") == "goauthentik.io/outposts/embedded"
+        ),
+        None,
+    )
+    if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
+        raise SyncError("Authentik embedded outpost is missing")
+    providers = list(outpost.get("providers") or [])
+    if provider_pk not in providers:
+        authentik_request(
+            token,
+            f"outposts/instances/{outpost['pk']}/",
+            method="PATCH",
+            body={"providers": providers + [provider_pk]},
+        )
+    return {"provider": "NAS Setup", "application": "nas-setup"}
+
+
 AUTOMATION_ROLE = "NAS automation"
 AUTOMATION_USER = "nas-automation"
 AUTOMATION_TOKEN_IDENTIFIER = "nas-automation-api"
@@ -1408,6 +1485,7 @@ def main() -> int:
                     "groups": ensure_groups(token),
                     "portal": ensure_portal_proxy(token),
                     "cockpit": ensure_cockpit_launcher(token),
+                    "setup": ensure_setup_launcher(token),
                 }
             elif args.command == "bootstrap-runtime-token":
                 result = provision_runtime_token(authentik_token(bootstrap=True))
