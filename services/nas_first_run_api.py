@@ -643,18 +643,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.command == "GET" and (path.startswith("/jobs/") or path.startswith("/first-start/job/")):
             job_id = path.rsplit("/", 1)[-1]
             _validate_job_id(job_id)
-            _enforce_rate_limit("job-status")
             require_job_capability(job_id, self.headers.get(JOB_CAPABILITY_HEADER))
+            _enforce_rate_limit("job-status")
             return 200, job_status(job_id)
 
         if self.command == "POST" and path == "/reboot":
-            _enforce_rate_limit("reboot")
             self._require_same_origin()
             request = self._read_json()
             if set(request) != {"jobId"}:
                 raise RequestError(400, "Reboot request contract is invalid")
             job_id = _single_line(request.get("jobId"), "Job identifier", maximum=24)
-            return 202, request_reboot(job_id, self.headers.get(JOB_CAPABILITY_HEADER, ""))
+            job_token = self.headers.get(JOB_CAPABILITY_HEADER, "")
+            require_job_capability(job_id, job_token)
+            _enforce_rate_limit("reboot")
+            return 202, request_reboot(job_id, job_token)
 
         self._require_authorized_identity()
         if self.command == "GET" and path in {"/status", "/first-start"}:
