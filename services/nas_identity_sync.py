@@ -530,7 +530,9 @@ def _ensure_proxy_application(
                 application_restore[key] = application_before.get(key, default)
 
     provider_committed = False
+    provider_create_attempted = False
     application_committed = False
+    application_create_attempted = False
     application_restore_needed = False
     outpost_restore_needed = False
     try:
@@ -545,6 +547,7 @@ def _ensure_proxy_application(
                 body=provider_payload,
             )
         else:
+            provider_create_attempted = True
             provider = authentik_request(
                 token,
                 "providers/proxy/",
@@ -568,6 +571,7 @@ def _ensure_proxy_application(
             )
             application_committed = True
         else:
+            application_create_attempted = True
             authentik_request(
                 token,
                 "core/applications/",
@@ -600,6 +604,40 @@ def _ensure_proxy_application(
                 operation()
             except Exception as rollback_exc:  # noqa: BLE001
                 rollback_errors.append(f"{label}: {type(rollback_exc).__name__}")
+
+        # A non-idempotent POST can succeed upstream even when the client never
+        # receives its response. The staged snapshot proves these reserved
+        # objects did not exist before this transaction, so rediscover exact
+        # names/slugs before rollback and remove any ambiguous creation.
+        if not application_existing and application_create_attempted and not application_committed:
+            try:
+                created_application = next(
+                    (
+                        item
+                        for item in authentik_list(token, "core/applications/")
+                        if item.get("slug") == application_slug
+                    ),
+                    None,
+                )
+                application_committed = isinstance(created_application, Mapping)
+            except Exception as discovery_exc:  # noqa: BLE001
+                rollback_errors.append(f"application discovery: {type(discovery_exc).__name__}")
+
+        if not provider_existing and provider_create_attempted and not provider_committed:
+            try:
+                created_provider = next(
+                    (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == provider_name),
+                    None,
+                )
+                if isinstance(created_provider, Mapping):
+                    discovered_pk = created_provider.get("pk")
+                    if discovered_pk is None:
+                        rollback_errors.append("provider discovery: missing primary key")
+                    else:
+                        provider_pk = discovered_pk
+                        provider_committed = True
+            except Exception as discovery_exc:  # noqa: BLE001
+                rollback_errors.append(f"provider discovery: {type(discovery_exc).__name__}")
 
         if outpost_restore_needed:
             rollback(
