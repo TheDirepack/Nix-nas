@@ -5,6 +5,15 @@ let
   rootControlArtifactDir = "/var/lib/nas-backup/root-control";
   rootControlDatabaseDump = "${rootControlArtifactDir}/authentik.pgdump";
   restoreVerifyPath = cfg.backup.restoreVerification.targetPath;
+  safeRestoreVerifyPath =
+    lib.hasPrefix "/var/lib/nas-backup/" restoreVerifyPath
+    && restoreVerifyPath != "/var/lib/nas-backup/"
+    && restoreVerifyPath != rootControlArtifactDir
+    && !lib.hasInfix "/../" restoreVerifyPath
+    && !lib.hasSuffix "/.." restoreVerifyPath
+    && !lib.hasInfix "/./" restoreVerifyPath
+    && !lib.hasPrefix "${rootControlArtifactDir}/" restoreVerifyPath
+    && !lib.hasPrefix "${restoreVerifyPath}/" rootControlArtifactDir;
   localResticRepository =
     if cfg.backup.localRepository != "" then cfg.backup.localRepository
     else "${cfg.zfsRoot}/backups/restic-system";
@@ -56,6 +65,15 @@ in
             the encrypted ZFS source. Configure an external repository/remote, or
             set nas.backup.allowSamePoolRepository only for a rollback-only copy
             that is not considered bare-metal recovery protection.
+          '';
+        }
+        {
+          assertion = !cfg.backup.enable || !cfg.backup.restoreVerification.enable || safeRestoreVerifyPath;
+          message = ''
+            nas.backup.restoreVerification.targetPath is deleted recursively during
+            verification and must therefore be a dedicated child of
+            /var/lib/nas-backup/, without dot-dot traversal and separate from the
+            root-control backup artifact directory.
           '';
         }
         {
