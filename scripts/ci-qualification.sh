@@ -50,7 +50,7 @@ case "$section" in
     ci_run static secret-faults "Secret transaction fault injection" \
       nix develop .#test -c bats tests/bats || failed=1
     ci_run static shellcheck "ShellCheck" \
-      nix develop .#test -c shellcheck \
+      nix develop .#test -c shellcheck -x \
       .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
     ci_run static actionlint "GitHub Actions lint" \
       nix develop .#test -c actionlint \
