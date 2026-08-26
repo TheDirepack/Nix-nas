@@ -14,7 +14,7 @@ class FirstRunApiContractTests(unittest.TestCase):
     def test_installed_system_wires_nas_first_run_api(self) -> None:
         source = (ROOT / "modules" / "nas" / "config" / "caddy-bootstrap.nix").read_text(encoding="utf-8")
         self.assertIn("nas-first-run-api", source)
-        self.assertIn("nasFirstRunApi", source)
+        self.assertIn("nasPythonApplication", source)
         self.assertIn("--socket", source)
 
     def test_private_string_boundary_rejects_multiline_values(self) -> None:
@@ -36,10 +36,18 @@ class FirstRunApiContractTests(unittest.TestCase):
                     capability,
                     {"schemaVersion": 1, "jobId": job_id, "token": token},
                 )
-                self.assertEqual(capability.stat().st_mode & 0o777, 0o600)
-                first_run_api.require_job_capability(job_id, token)
-                with self.assertRaises(first_run_api.RequestError):
-                    first_run_api.require_job_capability(job_id, "y" * 64)
+                metadata = capability.stat()
+                self.assertEqual(metadata.st_mode & 0o777, 0o600)
+
+                # The production reader must require UID 0. The unprivileged
+                # hermetic CI tier cannot create root-owned fixtures, so model
+                # only the ownership metadata while keeping the real descriptor,
+                # file contents, permissions, and compare_digest path intact.
+                root_owned = mock.Mock(st_mode=metadata.st_mode, st_uid=0, st_size=metadata.st_size)
+                with mock.patch.object(first_run_api.os, "fstat", return_value=root_owned):
+                    first_run_api.require_job_capability(job_id, token)
+                    with self.assertRaises(first_run_api.RequestError):
+                        first_run_api.require_job_capability(job_id, "y" * 64)
 
     def test_setup_job_capability_is_not_accepted_as_a_setup_identity(self) -> None:
         source = pathlib.Path(first_run_api.__file__).read_text(encoding="utf-8")
