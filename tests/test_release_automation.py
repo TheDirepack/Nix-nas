@@ -260,7 +260,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertEqual(str(epoch_version), "0.1.0")
         self.assertEqual(epoch_source, "7ead9bcd26899bedcb4a214fde1197113024279e")
 
-    def test_release_trigger_graph_is_ci_gated_parallel_safe_and_loop_free(self) -> None:
+    def test_release_trigger_graph_is_ci_gated_queued_and_loop_free(self) -> None:
         release = yaml.load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
             Loader=yaml.BaseLoader,
@@ -278,7 +278,9 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertEqual(release_triggers["workflow_run"]["branches"], ["main"])
         self.assertNotIn("tags", ci_triggers["push"])
         self.assertEqual(ci_triggers["push"]["branches"], ["main"])
-        self.assertNotIn("concurrency", release)
+        self.assertEqual(release["concurrency"]["group"], "main-release-publication")
+        self.assertEqual(release["concurrency"]["queue"], "max")
+        self.assertNotIn("cancel-in-progress", release["concurrency"])
 
         eligibility = release["jobs"]["eligibility"]
         eligibility_text = repr(eligibility)
@@ -335,7 +337,12 @@ class ReleaseAutomationTests(unittest.TestCase):
         if actionlint is None:
             self.skipTest("actionlint is not installed outside the Nix test environment")
         result = subprocess.run(
-            [actionlint, ".github/workflows/release.yml"],
+            [
+                actionlint,
+                "-ignore",
+                'unexpected key "queue" for "concurrency" section',
+                ".github/workflows/release.yml",
+            ],
             cwd=ROOT,
             text=True,
             capture_output=True,
