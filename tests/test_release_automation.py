@@ -69,7 +69,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         epoch_path = root / prepare_release.RELEASE_EPOCH_PATH
         epoch_path.parent.mkdir(parents=True, exist_ok=True)
         epoch_path.write_text(
-            json.dumps({"version": "1.2.3", "sourceSha": baseline}, indent=2) + "\n",
+            json.dumps({"version": "1.2.3"}, indent=2) + "\n",
             encoding="utf-8",
         )
         self.commit(root, "release automation")
@@ -154,6 +154,20 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(str(prepare_release.next_version(root, current, source_two)), "1.2.5")
             subprocess.run(["git", "tag", "v1.2.8", source_one], cwd=root, check=True)
             self.assertEqual(str(prepare_release.next_version(root, current, source_two)), "1.2.5")
+
+    def test_release_epoch_has_no_self_referential_sha_and_must_match_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_repo(root)
+            source_sha = self.add_source_commit(root, 1)
+            epoch = json.loads((root / prepare_release.RELEASE_EPOCH_PATH).read_text())
+            self.assertEqual(epoch, {"version": "1.2.3"})
+            self.assertEqual(str(prepare_release.release_epoch(root)), "1.2.3")
+
+            (root / "VERSION").write_text("1.3.0\n", encoding="utf-8")
+            source_sha = self.commit(root, "start next development series incorrectly")
+            with self.assertRaisesRegex(RuntimeError, "advance the release epoch"):
+                prepare_release.next_version(root, prepare_release.Version.parse("1.3.0"), source_sha)
 
     def test_rerun_recovers_version_and_diceware_password_from_existing_release_tag(
         self,
@@ -256,9 +270,9 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertEqual(prepare_release.discover_bootstrap_password(ROOT), "nas-admin-first-boot")
         for relative in prepare_release.BOOTSTRAP_TARGETS:
             self.assertIn("nas-admin-first-boot", (ROOT / relative).read_text())
-        epoch_version, epoch_source = prepare_release.release_epoch(ROOT)
-        self.assertEqual(str(epoch_version), "0.1.0")
-        self.assertEqual(epoch_source, "7ead9bcd26899bedcb4a214fde1197113024279e")
+        self.assertEqual(str(prepare_release.release_epoch(ROOT)), "0.1.0")
+        epoch = json.loads((ROOT / prepare_release.RELEASE_EPOCH_PATH).read_text(encoding="utf-8"))
+        self.assertEqual(epoch, {"version": "0.1.0"})
 
     def test_release_trigger_graph_is_ci_gated_queued_and_loop_free(self) -> None:
         release = yaml.load(
