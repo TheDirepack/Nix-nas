@@ -48,12 +48,17 @@ class SecurityReauditContracts(unittest.TestCase):
     def test_kdbx_shared_mode_requires_dedicated_administrator_group(self) -> None:
         preflight = text("modules/nas/config/secret-file-preflight.nix")
         secrets = text("modules/nas/internal/secret-tools.nix")
+        state = text("modules/nas/internal/account-tools.nix")
         self.assertIn('"permanent KDBX" 0660 admin nas-administrators', preflight)
         self.assertIn('"KeePassXC database" nas-administrators', secrets)
         self.assertIn('expected_gid="$(getent group "$shared_group"', secrets)
         self.assertIn("permissions & ~8#660", secrets)
         self.assertIn("permissions & 8#007", secrets)
         self.assertIn('"KeePassXC key file"', secrets)
+        keepass_authority = state.split('name = "keepass";', 1)[1].split("})", 1)[0]
+        self.assertIn('owner = "root";', keepass_authority)
+        self.assertIn('group = "nas-administrators";', keepass_authority)
+        self.assertIn('rootMode = "0660";', keepass_authority)
 
     def test_coding_agent_namespace_cannot_pivot_into_host_or_private_lans(self) -> None:
         default = text("modules/ai/default.nix")
