@@ -25,11 +25,11 @@ The build job has only read access and checks out with `persist-credentials: fal
 
 ## Version allocation and reruns
 
-`.github/release-version-epoch.json` anchors the current development `VERSION` series. The release patch is the development patch plus the source merge's first-parent distance from that epoch. Each qualified main commit therefore has a deterministic version independent of Actions run numbers, retries, queue order, or overlapping CI execution.
+`.github/release-version-epoch.json` names only the current development `VERSION` series; it deliberately contains no commit SHA. Git history supplies the anchor: release preparation finds the first-parent commit that introduced or last changed the epoch file and uses that commit's first parent as distance zero. The release patch is the development patch plus the qualified source merge's first-parent distance from that anchor. The first qualified merge in a series therefore receives the next patch, and each later qualified main commit has a deterministic version independent of Actions run numbers, retries, queue order, or overlapping CI execution.
+
+This avoids self-referential release metadata. When a new development `VERSION` series is deliberately established, change `VERSION` and the epoch file's `version` field together. No commit hash needs to be predicted or written into its own commit. Release preparation fails closed if the epoch version and `VERSION` disagree.
 
 The release workflow itself deliberately uses one `main-release-publication` concurrency group with `queue: max`. This serialization is not needed to make version numbers unique; the first-parent mapping already does that. It exists so each generated release sees the previously published tag history before constructing its cumulative generated changelog. `queue: max` preserves up to 100 pending release runs instead of replacing the previous pending run, so a burst of qualified merges is processed in order rather than silently dropping intermediate release opportunities.
-
-When a new development `VERSION` series is deliberately established, the epoch must be advanced with it. The version metadata checks and release tests enforce the shape of this contract.
 
 Generated release commits are intentionally not merged back to `main`. To keep release changelogs cumulative anyway, release preparation reads the newest earlier generated release tag in the same version series and carries its generated release sections forward before the development baseline section. Serializing release workflows ensures that earlier qualified merges have finished publishing their tags before the next candidate reads that history.
 
