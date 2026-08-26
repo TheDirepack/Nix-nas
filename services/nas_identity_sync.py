@@ -356,173 +356,23 @@ def default_flows(token: str) -> dict[str, Any]:
         time.sleep(1)
 
 
-def ensure_portal_proxy(token: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", PUBLIC_HOST):
-        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
-    flows = default_flows(token)
-    payload: dict[str, Any] = {
-        "name": "NAS Portal",
-        # This is one protected NAS application. Domain-level forward auth
-        # cannot enforce the application's authorization policy.
-        "mode": "forward_single",
-        "external_host": f"https://{PUBLIC_HOST}",
-        "internal_host": "http://127.0.0.1:8080",
-        "internal_host_ssl_validation": False,
-    }
-    for field, slug in {
-        "authentication_flow": "default-authentication-flow",
-        "authorization_flow": "default-provider-authorization-implicit-consent",
-        "invalidation_flow": "default-invalidation-flow",
-    }.items():
-        flow = flows.get(slug)
-        if not isinstance(flow, Mapping) or flow.get("pk") is None:
-            raise SyncError(f"Authentik flow {slug} is missing")
-        payload[field] = flow["pk"]
-    provider = next(
-        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Portal"), None
-    )
-    if provider is None:
-        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
-    else:
-        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
-    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
-    if provider_pk is None:
-        raise SyncError("Authentik NAS Portal provider has no primary key")
-    app_payload = {
-        "name": "NAS Portal",
-        "slug": "nas-portal",
-        "provider": provider_pk,
-        "meta_launch_url": f"https://{PUBLIC_HOST}",
-    }
-    application = next(
-        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-portal"), None
-    )
-    if application is None:
-        authentik_request(token, "core/applications/", method="POST", body=app_payload)
-    else:
-        authentik_request(token, "core/applications/nas-portal/", method="PATCH", body=app_payload)
-    outpost = next(
-        (
-            item
-            for item in authentik_list(token, "outposts/instances/")
-            if item.get("managed") == "goauthentik.io/outposts/embedded"
-        ),
-        None,
-    )
-    if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
-        raise SyncError("Authentik embedded outpost is missing")
-    providers = list(outpost.get("providers") or [])
-    current_config = outpost.get("config")
-    desired_config = dict(current_config) if isinstance(current_config, Mapping) else {}
-    desired_config.update(
-        {
-            # The outpost advertises the public origin so every authorize
-            # redirect already carries the browser-reachable host. Its own
-            # control-plane calls resolve that public hostname back to Caddy
-            # inside the appliance, so no loopback Location rewriting is
-            # needed in any reverse-proxy projection.
-            "authentik_host": f"https://{PUBLIC_HOST}/identity/",
-            "authentik_host_browser": f"https://{PUBLIC_HOST}/identity/",
-        }
-    )
-    if provider_pk not in providers or desired_config != current_config:
-        authentik_request(
-            token,
-            f"outposts/instances/{outpost['pk']}/",
-            method="PATCH",
-            body={
-                "providers": providers if provider_pk in providers else providers + [provider_pk],
-                "config": desired_config,
-            },
-        )
-    return {"provider": "NAS Portal", "application": "nas-portal"}
-
-
-def ensure_cockpit_launcher(token: str) -> dict[str, Any]:
-    """Expose Cockpit as an Authentik launcher application behind forward auth.
-
-    Caddy enforces the nas_admin group check for /console; this provider only
-    gives the outpost an authorize endpoint so the launcher tile can start a
-    session that returns to /console/.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", PUBLIC_HOST):
-        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
-    flows = default_flows(token)
-    payload: dict[str, Any] = {
-        "name": "NAS Cockpit",
-        "mode": "forward_single",
-        "external_host": f"https://{PUBLIC_HOST}/console/",
-        "internal_host": "http://127.0.0.1:9092",
-        "internal_host_ssl_validation": False,
-    }
-    for field, slug in {
-        "authentication_flow": "default-authentication-flow",
-        "authorization_flow": "default-provider-authorization-implicit-consent",
-        "invalidation_flow": "default-invalidation-flow",
-    }.items():
-        flow = flows.get(slug)
-        if not isinstance(flow, Mapping) or flow.get("pk") is None:
-            raise SyncError(f"Authentik flow {slug} is missing")
-        payload[field] = flow["pk"]
-    provider = next(
-        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Cockpit"), None
-    )
-    if provider is None:
-        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
-    else:
-        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
-    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
-    if provider_pk is None:
-        raise SyncError("Authentik NAS Cockpit provider has no primary key")
-    app_payload = {
-        "name": "NAS Cockpit",
-        "slug": "nas-cockpit",
-        "provider": provider_pk,
-        "meta_launch_url": f"https://{PUBLIC_HOST}/console/",
-    }
-    application = next(
-        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-cockpit"), None
-    )
-    if application is None:
-        authentik_request(token, "core/applications/", method="POST", body=app_payload)
-    else:
-        authentik_request(token, "core/applications/nas-cockpit/", method="PATCH", body=app_payload)
-    outpost = next(
-        (
-            item
-            for item in authentik_list(token, "outposts/instances/")
-            if item.get("managed") == "goauthentik.io/outposts/embedded"
-        ),
-        None,
-    )
-    if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
-        raise SyncError("Authentik embedded outpost is missing")
-    providers = list(outpost.get("providers") or [])
-    if provider_pk not in providers:
-        authentik_request(
-            token,
-            f"outposts/instances/{outpost['pk']}/",
-            method="PATCH",
-            body={"providers": providers + [provider_pk]},
-        )
-    return {"provider": "NAS Cockpit", "application": "nas-cockpit"}
-
-
-def ensure_setup_launcher(token: str) -> dict[str, Any]:
-    """Expose first-start setup as an atomic Authentik application update.
-
-    All objects needed by the mutation are loaded and validated before the
-    first write. If a later step fails, previously committed mutations are
-    restored in reverse order so retries do not inherit half-applied state.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", PUBLIC_HOST):
-        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+def _ensure_proxy_application(
+    token: str,
+    *,
+    provider_name: str,
+    application_slug: str,
+    external_host: str,
+    internal_host: str,
+    application_metadata: Mapping[str, Any] | None = None,
+    outpost_config_patch: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reconcile one Authentik proxy application as a staged transaction."""
     flows = default_flows(token)
     provider_payload: dict[str, Any] = {
-        "name": "NAS Setup",
+        "name": provider_name,
         "mode": "forward_single",
-        "external_host": f"https://{PUBLIC_HOST}/setup/",
-        "internal_host": "http://127.0.0.1:8980",
+        "external_host": external_host,
+        "internal_host": internal_host,
         "internal_host_ssl_validation": False,
     }
     for field, slug in {
@@ -535,13 +385,21 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
             raise SyncError(f"Authentik flow {slug} is missing")
         provider_payload[field] = flow["pk"]
 
-    # Stage and validate every dependency before the first mutation.
+    application_template: dict[str, Any] = {
+        "name": provider_name,
+        "slug": application_slug,
+        "provider": None,
+        "meta_launch_url": external_host,
+        **dict(application_metadata or {}),
+    }
+
+    # Stage every dependency and rollback snapshot before the first write.
     provider_before = next(
-        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Setup"),
+        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == provider_name),
         None,
     )
     application_before = next(
-        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-setup"),
+        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == application_slug),
         None,
     )
     outpost = next(
@@ -556,6 +414,11 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
         raise SyncError("Authentik embedded outpost is missing")
     outpost_pk = outpost["pk"]
     providers_before = list(outpost.get("providers") or [])
+    current_config = outpost.get("config")
+    config_before = dict(current_config) if isinstance(current_config, Mapping) else {}
+    desired_config = dict(config_before)
+    if outpost_config_patch is not None:
+        desired_config.update(outpost_config_patch)
 
     provider_existing = isinstance(provider_before, Mapping)
     provider_pk: Any | None = None
@@ -563,11 +426,11 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
     if provider_existing:
         provider_pk = provider_before.get("pk")
         if provider_pk is None:
-            raise SyncError("Authentik NAS Setup provider has no primary key")
+            raise SyncError(f"Authentik {provider_name} provider has no primary key")
         missing = [key for key in provider_payload if key not in provider_before]
         if missing:
             raise SyncError(
-                "Authentik NAS Setup provider cannot be transactionally updated; "
+                f"Authentik {provider_name} provider cannot be transactionally updated; "
                 f"rollback fields are missing: {', '.join(sorted(missing))}"
             )
         provider_restore = {key: provider_before[key] for key in provider_payload}
@@ -575,15 +438,17 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
     application_existing = isinstance(application_before, Mapping)
     application_restore: dict[str, Any] | None = None
     if application_existing:
-        application_restore = {
-            "name": application_before.get("name", "NAS Setup"),
-            "slug": "nas-setup",
-            "provider": application_before.get("provider"),
-            "meta_description": application_before.get("meta_description", ""),
-            "meta_publisher": application_before.get("meta_publisher", ""),
-            "meta_launch_url": application_before.get("meta_launch_url", ""),
-            "open_in_new_tab": bool(application_before.get("open_in_new_tab", False)),
-        }
+        application_restore = {}
+        for key, desired in application_template.items():
+            if key == "name":
+                application_restore[key] = application_before.get(key, provider_name)
+            elif key == "slug":
+                application_restore[key] = application_slug
+            elif key == "provider":
+                application_restore[key] = application_before.get(key)
+            else:
+                default = False if isinstance(desired, bool) else ""
+                application_restore[key] = application_before.get(key, default)
 
     provider_committed = False
     application_committed = False
@@ -591,54 +456,63 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
     outpost_restore_needed = False
     try:
         if provider_existing:
+            # A failed PATCH may have reached Authentik before the client
+            # observed the transport failure, so restore this snapshot too.
             provider_committed = True
-            provider = authentik_request(
+            authentik_request(
                 token,
                 f"providers/proxy/{provider_pk}/",
                 method="PATCH",
                 body=provider_payload,
             )
         else:
-            provider = authentik_request(token, "providers/proxy/", method="POST", body=provider_payload)
+            provider = authentik_request(
+                token,
+                "providers/proxy/",
+                method="POST",
+                body=provider_payload,
+            )
             provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
             if provider_pk is None:
-                raise SyncError("Authentik NAS Setup provider has no primary key")
+                raise SyncError(f"Authentik {provider_name} provider has no primary key")
             provider_committed = True
 
-        application_payload = {
-            "name": "NAS Setup",
-            "slug": "nas-setup",
-            "provider": provider_pk,
-            "meta_description": "First-start setup for the NAS appliance",
-            "meta_publisher": "NAS",
-            "meta_launch_url": f"https://{PUBLIC_HOST}/setup/",
-            "open_in_new_tab": False,
-        }
+        application_payload = dict(application_template)
+        application_payload["provider"] = provider_pk
         if application_existing:
             application_restore_needed = True
             authentik_request(
                 token,
-                "core/applications/nas-setup/",
+                f"core/applications/{application_slug}/",
                 method="PATCH",
                 body=application_payload,
             )
             application_committed = True
         else:
-            authentik_request(token, "core/applications/", method="POST", body=application_payload)
+            authentik_request(
+                token,
+                "core/applications/",
+                method="POST",
+                body=application_payload,
+            )
             application_committed = True
 
-        if provider_pk not in providers_before:
-            # A failed request may have reached Authentik before the client
-            # observed the failure, so restore the prior provider set even
-            # when this PATCH raises.
+        desired_providers = providers_before if provider_pk in providers_before else providers_before + [provider_pk]
+        outpost_payload: dict[str, Any] = {"providers": desired_providers}
+        rollback_outpost_payload: dict[str, Any] = {"providers": providers_before}
+        config_changed = outpost_config_patch is not None and desired_config != config_before
+        if outpost_config_patch is not None:
+            outpost_payload["config"] = desired_config
+            rollback_outpost_payload["config"] = config_before
+        if provider_pk not in providers_before or config_changed:
             outpost_restore_needed = True
             authentik_request(
                 token,
                 f"outposts/instances/{outpost_pk}/",
                 method="PATCH",
-                body={"providers": providers_before + [provider_pk]},
+                body=outpost_payload,
             )
-        return {"provider": "NAS Setup", "application": "nas-setup"}
+        return {"provider": provider_name, "application": application_slug}
     except Exception as exc:  # noqa: BLE001 - rollback must cover transport failures too
         rollback_errors: list[str] = []
 
@@ -655,7 +529,7 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
                     token,
                     f"outposts/instances/{outpost_pk}/",
                     method="PATCH",
-                    body={"providers": providers_before},
+                    body=rollback_outpost_payload,
                 ),
             )
         if application_existing and application_restore_needed and application_restore is not None:
@@ -663,7 +537,7 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
                 "application",
                 lambda: authentik_request(
                     token,
-                    "core/applications/nas-setup/",
+                    f"core/applications/{application_slug}/",
                     method="PATCH",
                     body=application_restore,
                 ),
@@ -673,7 +547,7 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
                 "application",
                 lambda: authentik_request(
                     token,
-                    "core/applications/nas-setup/",
+                    f"core/applications/{application_slug}/",
                     method="DELETE",
                 ),
             )
@@ -699,9 +573,65 @@ def ensure_setup_launcher(token: str) -> dict[str, Any]:
 
         if rollback_errors:
             raise SyncError(
-                "Authentik NAS Setup reconciliation failed and rollback incomplete: " + "; ".join(rollback_errors)
+                f"Authentik {provider_name} reconciliation failed and rollback incomplete: "
+                + "; ".join(rollback_errors)
             ) from exc
         raise
+
+
+def _validate_public_host() -> None:
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", PUBLIC_HOST):
+        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+    if ":" in PUBLIC_HOST:
+        port = int(PUBLIC_HOST.rsplit(":", 1)[1])
+        if not 1 <= port <= 65535:
+            raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+
+
+def ensure_portal_proxy(token: str) -> dict[str, Any]:
+    _validate_public_host()
+    return _ensure_proxy_application(
+        token,
+        provider_name="NAS Portal",
+        application_slug="nas-portal",
+        external_host=f"https://{PUBLIC_HOST}",
+        internal_host="http://127.0.0.1:8080",
+        outpost_config_patch={
+            # Advertise the browser-reachable public origin while the
+            # appliance resolves it internally back through Caddy.
+            "authentik_host": f"https://{PUBLIC_HOST}/identity/",
+            "authentik_host_browser": f"https://{PUBLIC_HOST}/identity/",
+        },
+    )
+
+
+def ensure_cockpit_launcher(token: str) -> dict[str, Any]:
+    """Expose Cockpit as an Authentik launcher application behind forward auth."""
+    _validate_public_host()
+    return _ensure_proxy_application(
+        token,
+        provider_name="NAS Cockpit",
+        application_slug="nas-cockpit",
+        external_host=f"https://{PUBLIC_HOST}/console/",
+        internal_host="http://127.0.0.1:9092",
+    )
+
+
+def ensure_setup_launcher(token: str) -> dict[str, Any]:
+    """Expose first-start setup as an atomic Authentik application update."""
+    _validate_public_host()
+    return _ensure_proxy_application(
+        token,
+        provider_name="NAS Setup",
+        application_slug="nas-setup",
+        external_host=f"https://{PUBLIC_HOST}/setup/",
+        internal_host="http://127.0.0.1:8980",
+        application_metadata={
+            "meta_description": "First-start setup for the NAS appliance",
+            "meta_publisher": "NAS",
+            "open_in_new_tab": False,
+        },
+    )
 
 
 AUTOMATION_ROLE = "NAS automation"
