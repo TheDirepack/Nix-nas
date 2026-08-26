@@ -6,7 +6,6 @@ from typing import Any
 
 import yaml
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 HANDOFF_ACTION = ROOT / ".github" / "actions" / "prepare-vm-handoff" / "action.yml"
@@ -31,6 +30,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         "source-fuzz",
         "installed-security",
         "summary",
+        "maintenance",
     }
 
     @classmethod
@@ -83,6 +83,10 @@ class CiWorkflowGraphTests(unittest.TestCase):
             triggers["workflow_dispatch"]["inputs"]["force-cache-miss"]["type"],
             "boolean",
         )
+        self.assertEqual(
+            {path.name for path in (ROOT / ".github" / "workflows").glob("*.yml")},
+            {"ci.yml", "release.yml"},
+        )
         for retired in (
             "prebuild",
             "cache-vm-bundles",
@@ -129,7 +133,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertNotIn("path: cockpit/node_modules", text)
         self.assertNotIn("Restore exact Node dependencies", text)
         self.assertIn("cache: npm", text)
-        self.assertGreaterEqual(text.count("npm --prefix cockpit ci --no-audit --no-fund"), 3)
+        self.assertGreaterEqual(
+            text.count("npm --prefix cockpit ci --no-audit --no-fund"), 3
+        )
+
+    def test_parallel_logs_are_short_lived_failure_artifacts(self) -> None:
+        for name in self.PARALLEL:
+            job = self.serialized(self.jobs[name])
+            self.assertIn(f"qualification-{name}-logs", job, name)
+            self.assertIn("retention-days': '3", job, name)
+            self.assertIn("outcome != 'success'", job, name)
+        shared = self.serialized(self.jobs["prerequisites"])
+        self.assertIn("qualification-shared-logs", shared)
+        self.assertIn("retention-days': '3", shared)
+        self.assertIn("outcome != 'success'", shared)
 
     def test_each_parallel_branch_keeps_detailed_failure_logs(self) -> None:
         helper = self.check_helper
@@ -160,16 +177,21 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertNotIn("nix shell nixpkgs#", script)
         self.assertIn("nix develop .#test -c bats", script)
         self.assertIn("nix develop .#test -c prettier", script)
+        self.assertIn("shellcheck -x", script)
         self.assertIn("set -euo pipefail", script)
 
-    def test_coverage_comparison_starts_after_unit_only(self) -> None:
+    def test_coverage_comparison_starts_after_unit_and_short_circuits_on_missing_input(
+        self,
+    ) -> None:
         coverage = self.jobs["coverage-diff"]
         self.assertEqual(self.needs(coverage), {"unit"})
         self.assertIn("!cancelled()", str(coverage.get("if", "")))
-        self.assertIn("coverage-report", self.serialized(coverage))
-        self.assertIn("main-coverage.json", self.serialized(coverage))
+        text = self.serialized(coverage)
+        self.assertIn("coverage-report", text)
+        self.assertIn("main-coverage.json", text)
         self.assertIn("ci-check-report.py", self.run_text(coverage))
-        self.assertIn("baseline-build", self.serialized(coverage))
+        self.assertIn("baseline-build", text)
+        self.assertGreaterEqual(text.count("current-coverage.outcome == 'success'"), 4)
         self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
     def test_qualification_gate_joins_all_parallel_checks_once(self) -> None:
@@ -186,6 +208,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         prepare = self.serialized(self.jobs["prepare"])
         self.assertIn("Production Cockpit bundle", self.qualification_script)
         self.assertIn("cockpit-bundle", cockpit)
+        self.assertIn("retention-days': '1", cockpit)
         self.assertIn("Restore reviewed Cockpit bundle", prepare)
         self.assertIn("cockpit-bundle", prepare)
         self.assertNotIn("npm --prefix cockpit run build", prepare)
@@ -196,9 +219,10 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(self.needs(prepare), {"qualification"})
         text = self.serialized(prepare)
         self.assertIn("./.github/actions/prepare-vm-handoff", text)
-        self.assertIn("source-archive-evidence", text)
         self.assertIn("force-cache-miss", text)
         self.assertIn("Package and verify as an untrusted consumer", text)
+        self.assertNotIn("source-archive-cache", text)
+        self.assertNotIn("source-archive-evidence", text)
 
     def test_nix_setup_action_centralizes_repeated_runner_setup(self) -> None:
         self.assertEqual(self.nix_setup["runs"]["using"], "composite")
@@ -220,6 +244,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
         self.assertIn("vm-bundle-handoff", text)
+        self.assertIn("retention-days': '2", text)
         self.assertIn("scripts/system-handoff.sh save", text)
         self.assertIn("scripts/system-handoff.sh verify", text)
         self.assertIn("nixosConfigurations.nas-ci-ready", self.system_handoff)
@@ -264,15 +289,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("scripts/run-fuzz.py --jobs 6", text)
         self.assertIn("fuzz-evidence/source-fuzz.log", text)
         self.assertNotIn(".fuzz-evidence", text)
+        self.assertIn("retention-days': '7", text)
 
     def test_console_evidence_is_copied_out_of_hidden_cache_directories(self) -> None:
         installer = self.serialized(self.jobs["installer"])
         installed = self.serialized(self.jobs["installed-security"])
         self.assertIn("final-vm-evidence/browser-console.log", installer)
         self.assertIn("installed-security-logs/browser-console.log", installed)
-        self.assertNotIn("~/.cache/nixos-nas-qemu/state/browser-console.log'", installer)
+        self.assertNotIn(
+            "~/.cache/nixos-nas-qemu/state/browser-console.log'", installer
+        )
 
-    def test_installed_security_provisions_once_and_aggregates_both_workloads(self) -> None:
+    def test_installed_security_provisions_once_and_aggregates_both_workloads(
+        self,
+    ) -> None:
         job = self.jobs["installed-security"]
         text = self.serialized(job)
         self.assertEqual(text.count("./scripts/qemu-test.sh installer"), 1)
@@ -280,6 +310,26 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("zap-fuzz", text)
         self.assertIn("continue-on-error", text)
         self.assertIn("ci-check-report.py", text)
+
+    def test_maintenance_prunes_only_repo_owned_state_without_blocking_ci(self) -> None:
+        maintenance = self.jobs["maintenance"]
+        self.assertEqual(self.needs(maintenance), {"summary"})
+        self.assertIn("!cancelled()", str(maintenance.get("if", "")))
+        self.assertIn("github.event_name == 'push'", str(maintenance.get("if", "")))
+        self.assertNotIn("pull_request", str(maintenance.get("if", "")))
+        self.assertEqual(maintenance["permissions"]["actions"], "write")
+        self.assertEqual(maintenance["permissions"]["contents"], "read")
+        text = self.serialized(maintenance)
+        self.assertIn("continue-on-error", text)
+        self.assertIn("/actions/runs?status=completed", text)
+        self.assertIn("/actions/caches?per_page=100", text)
+        self.assertIn('[[ "$key" == ci-* ]]', text)
+        self.assertIn("$CI_CACHE_SCHEMA", text)
+        self.assertIn("-forced-", text)
+        self.assertIn("CURRENT_RUN_ID", text)
+        self.assertIn("active-workflows", text)
+        self.assertIn("deleted_runs < 200", text)
+        self.assertIn("deleted_caches < 200", text)
 
     def test_downstream_dependencies_preserve_stage_order(self) -> None:
         self.assertEqual(self.needs(self.jobs["prepare"]), {"qualification"})
@@ -297,7 +347,10 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.needs(self.jobs["installed-security"]),
             {"installer", "prepare"},
         )
-        self.assertEqual(self.needs(self.jobs["summary"]), self.JOBS - {"summary"})
+        self.assertEqual(
+            self.needs(self.jobs["summary"]), self.JOBS - {"summary", "maintenance"}
+        )
+        self.assertEqual(self.needs(self.jobs["maintenance"]), {"summary"})
 
     def test_github_hosted_job_timeouts_stay_within_platform_limit(self) -> None:
         for name, job in self.jobs.items():
@@ -305,6 +358,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.assertLessEqual(timeout, 360, name)
         for name in ("integration", "installer", "installed-security"):
             self.assertEqual(int(self.jobs[name]["timeout-minutes"]), 355)
+        self.assertEqual(int(self.jobs["maintenance"]["timeout-minutes"]), 10)
 
     def test_actionlint_covers_both_workflows_before_build(self) -> None:
         self.assertIn("actionlint", self.qualification_script)
