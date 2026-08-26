@@ -48,9 +48,34 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def validate_staged_version(stage: pathlib.Path, version: str, archive_root: str) -> None:
+    version_path = stage / "VERSION"
+    if not version_path.is_file():
+        raise SystemExit("staged release is missing VERSION")
+    staged_version = version_path.read_text(encoding="utf-8").strip()
+    if staged_version != version:
+        raise SystemExit(f"release provenance version {version!r} does not match staged VERSION {staged_version!r}")
+
+    package_path = stage / "cockpit" / "package.json"
+    if package_path.is_file():
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        package_version = package.get("version")
+        if package_version != version:
+            raise SystemExit(
+                f"release provenance version {version!r} does not match staged cockpit/package.json {package_version!r}"
+            )
+
+    expected_root = f"nixos-nas-{version}"
+    if archive_root not in {expected_root, f"{expected_root}-source-only-unverified"}:
+        raise SystemExit(
+            f"release archive root {archive_root!r} is not derived from project version {version!r}"
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     stage = pathlib.Path(args.stage_root).resolve(strict=True)
+    validate_staged_version(stage, args.version, args.archive_root)
     status_path = pathlib.Path(args.status)
     status = json.loads(status_path.read_text(encoding="utf-8"))
     payload = {
