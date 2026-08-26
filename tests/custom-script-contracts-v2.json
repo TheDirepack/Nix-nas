@@ -35,6 +35,12 @@
       "source": "services/nas_identity_bootstrap.py",
       "systemTest": "tests/test_identity_authority_dispatch.py",
       "tests": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"]
+    },
+    "nas-identity-sync": {
+      "fuzzStrategy": "unknown-argv",
+      "sources": ["modules/nas/internal/account-tools.nix", "services/nas_identity_dispatch.py"],
+      "systemTest": "tests/test_identity_authority_dispatch.py",
+      "tests": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py", "tests/test_identity_sync.py"]
     }
   },
   "pythonModules": {
