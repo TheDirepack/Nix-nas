@@ -11,6 +11,15 @@ permissions:
   contents: read
   pull-requests: read
 
+# Generated release commits are intentionally not merged back to main, so each
+# later release carries forward the prior generated changelog sections from the
+# published tag history. Queue every qualified main release instead of allowing
+# overlapping builds to observe incomplete tag history. GitHub's queue:max
+# retains up to 100 pending runs rather than replacing the previous pending run.
+concurrency:
+  group: main-release-publication
+  queue: max
+
 jobs:
   eligibility:
     name: Verify qualified merge source
@@ -131,7 +140,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/check-version.py
-          nix develop .#test -c actionlint .github/workflows/ci.yml .github/workflows/release.yml
+          nix develop .#test -c actionlint .github/workflows/ci.yml
+          # actionlint 1.7.12 predates GitHub's documented concurrency.queue
+          # syntax. Ignore only that exact false-positive; every other release
+          # workflow diagnostic remains fatal.
+          nix develop .#test -c actionlint \
+            -ignore 'unexpected key "queue" for "concurrency" section' \
+            .github/workflows/release.yml
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern test_release_automation.py
           ./scripts/nix-config-matrix.sh
           ./scripts/evaluate-reference-configurations.sh
