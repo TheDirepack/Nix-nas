@@ -304,7 +304,7 @@ test("final VM confirmation dialog stays usable at extreme zoom and restores foc
   await frame.evaluate(() => {
     document.documentElement.style.fontSize = "200%";
   });
-  const trigger = frame.getByRole("button", {name: "Run system health checks"});
+  const trigger = frame.locator(".nas-actions button").first();
   await expect(trigger).toBeVisible();
   await trigger.focus();
   await trigger.click();

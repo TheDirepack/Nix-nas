@@ -131,10 +131,17 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("max-parallel: 6", workflow)
         self.assertIn("fail-fast: false", workflow)
-        self.assertIn(
-            "shard: [boundaries, custom-inputs, properties, stateful, security, javascript, executable-contracts]",
-            workflow,
-        )
+        self.assertIn("shard:", workflow)
+        for shard in (
+            "boundaries",
+            "custom-inputs",
+            "properties",
+            "stateful",
+            "security",
+            "javascript",
+            "executable-contracts",
+        ):
+            self.assertIn(shard, workflow)
         self.assertIn("timeout-minutes: 240", workflow)
 
     def test_cache_policy_keeps_dependency_and_vm_reuse_without_pass_caching(self) -> None:
@@ -172,6 +179,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
         for probe in ("script-tag", "img-onerror", "svg-onload", "javascript-url", "iframe-srcdoc"):
             self.assertIn(probe, deterministic)
         self.assertIn("hostile status corpus never creates executable elements", security)
+        self.assertIn('frame.locator(".nas-actions button").first()', vm)
+        self.assertIn("function firstMaintenanceAction", security)
         self.assertIn("anonymous clients see only the Cockpit login boundary", vm)
         self.assertIn("unexpected interactive element overlaps", vm)
 

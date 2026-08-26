@@ -97,6 +97,16 @@ def button_with_text(driver: webdriver.Chrome, label: str) -> Any:
     return None
 
 
+def first_maintenance_action(driver: webdriver.Chrome) -> Any:
+    for element in driver.find_elements(By.CSS_SELECTOR, ".nas-actions button"):
+        try:
+            if element.is_displayed():
+                return element
+        except WebDriverException:
+            continue
+    return None
+
+
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
 ALLOWED_ROUTE_RETRY_ATTEMPTS = 30
 
@@ -352,7 +362,7 @@ def verify_cockpit_react_interactions(origin: str, username: str, password: str)
         def verify_actions() -> None:
             wait = WebDriverWait(driver, 90)
             wait.until(lambda current: button_with_text(current, "Refresh")).click()
-            wait.until(lambda current: button_with_text(current, "Run system health checks")).click()
+            wait.until(first_maintenance_action).click()
             wait.until(lambda current: "Confirm maintenance action" in current.page_source)
             cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
             cancel.click()

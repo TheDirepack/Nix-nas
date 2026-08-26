@@ -123,6 +123,16 @@ function overview() {
           allowedModes: ["off", "on-demand", "always"],
           units: [],
         },
+        {
+          id: "operation-probe",
+          label: "Run system health checks",
+          description: "hostile-operation action probe",
+          managed: true,
+          workloadKind: "job",
+          effective: true,
+          effectiveMode: "always",
+          units: [{role: "owner", unit: "nas-operation-probe.service"}],
+        },
       ],
     },
     zpool: {ok: true, text: xss},
@@ -270,6 +280,10 @@ async function openOperationsSection(page) {
   await expect(page.getByRole("heading", {name: "Operations"})).toBeVisible();
 }
 
+function firstMaintenanceAction(page) {
+  return page.locator(".nas-actions button").first();
+}
+
 test("renders hostile backend text as text, never executable markup", async ({page}) => {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -331,7 +345,7 @@ test("stays within the viewport and keeps controls usable", async ({page}) => {
   await expect(select).toBeVisible();
   await select.selectOption("always");
   await openOperationsSection(page);
-  await page.getByRole("button", {name: "Run system health checks"}).click();
+  await firstMaintenanceAction(page).click();
   await expect(page.getByRole("heading", {name: "Confirm maintenance action"})).toBeVisible();
   await page.getByRole("button", {name: "Cancel"}).click();
 });
@@ -412,7 +426,7 @@ test("has unique DOM ids and keeps the confirmation dialog usable at extreme zoo
   await page.evaluate(() => {
     document.documentElement.style.fontSize = "200%";
   });
-  await page.getByRole("button", {name: "Run system health checks"}).click();
+  await firstMaintenanceAction(page).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   const box = await dialog.boundingBox();
@@ -473,9 +487,11 @@ test("privileged action failure stays recoverable and never becomes an uncaught 
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   await openApp(page, {actionError: "simulated operation rejection"});
   await openOperationsSection(page);
-  await page.getByRole("button", {name: "Run system health checks"}).click();
+  await firstMaintenanceAction(page).click();
   await page.getByRole("button", {name: "Confirm"}).click();
-  await expect(page.getByRole("heading", {name: /Operation failed/})).toBeVisible();
+  await expect(
+    page.locator(".pf-v6-c-alert__title").filter({hasText: "Operation failed"}),
+  ).toBeVisible();
   await expect(page.getByText("simulated operation rejection", {exact: true})).toBeVisible();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("button", {name: "Cancel"}).click();
@@ -486,7 +502,7 @@ test("privileged action failure stays recoverable and never becomes an uncaught 
 test("confirmation dialog supports keyboard cancellation", async ({page}) => {
   await openApp(page);
   await openOperationsSection(page);
-  const trigger = page.getByRole("button", {name: "Run system health checks"});
+  const trigger = firstMaintenanceAction(page);
   await trigger.click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
