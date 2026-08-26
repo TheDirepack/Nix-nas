@@ -1,5 +1,6 @@
 # Shared GitHub Actions diagnostics helpers.
 # This file is sourced by workflow steps; it is intentionally not an executable.
+# shellcheck shell=bash
 
 : "${CI_LOG_DIR:=ci-logs}"
 : "${CI_RESULTS_FILE:=$CI_LOG_DIR/results.tsv}"
