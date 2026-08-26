@@ -85,15 +85,13 @@ test("administrator username starts blank and has no schema default", async () =
   const index = await wizard("src/index.jsx");
   const api = await wizard("src/api.js");
   const schema = JSON.parse(await wizard("src/forms/schema.json"));
+  const adminDefault = /adminUsername: schema\.properties\.adminUsername\.default \|\| 'admin'/;
   assert.match(index, /emptyAdministrator = \{ username: ''/);
-  assert.doesNotMatch(
-    api,
-    /adminUsername: schema\.properties\.adminUsername\.default \|\| 'admin'/,
-  );
+  assert.doesNotMatch(api, adminDefault);
   assert.equal(schema.properties.adminUsername.default, undefined);
 });
 
-test("setup uses searchable locale controls and keeps storage configuration actionable", async () => {
+test("setup locale controls keep storage configuration actionable", async () => {
   const language = await wizard("src/steps/LanguageStep.jsx");
   const storage = await wizard("src/steps/StorageStep.jsx");
   assert.match(language, /Select/);
@@ -113,7 +111,7 @@ test("setup uses searchable locale controls and keeps storage configuration acti
   assert.equal(
     await exists("src/steps/AuthentikStep.jsx"),
     false,
-    "the removed Authentik step must not remain as dead UI",
+    "removed Authentik step must not remain as dead UI",
   );
 });
 
@@ -169,7 +167,7 @@ test("committed stylesheet carries the global tokens and core component rules", 
   for (const rule of [".pf-v6-c-button{", ".pf-v6-c-wizard{", ".pf-v6-c-form-control{"]) {
     assert.ok(css.includes(rule), `stylesheet is missing ${rule}`);
   }
-  assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the full-height setup shell");
+  assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the setup shell");
   assert.ok(css.includes(".pf-v6-theme-dark"), "stylesheet is missing dark-mode overrides");
   assert.ok(
     css.includes(".nas-searchable-select-toggle{"),
