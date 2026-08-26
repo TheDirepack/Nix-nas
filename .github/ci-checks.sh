@@ -1,7 +1,7 @@
 # Shared GitHub Actions diagnostics helpers.
 # This file is sourced by workflow steps; it is intentionally not an executable.
 
-: "${CI_LOG_DIR:=.ci-logs}"
+: "${CI_LOG_DIR:=ci-logs}"
 : "${CI_RESULTS_FILE:=$CI_LOG_DIR/results.tsv}"
 mkdir -p "$CI_LOG_DIR"
 
