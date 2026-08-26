@@ -40,6 +40,17 @@ class BackupDomainArchitectureTests(unittest.TestCase):
         self.assertIn("allowSamePoolRepository", options)
         self.assertIn("rollback-only", options)
 
+    def test_restic_credential_files_are_fail_closed(self) -> None:
+        module = read("modules/nas/config/backup-domains.nix")
+        self.assertIn('secureCredentialCheck = pkgs.writeShellScript "nas-backup-secure-credential-check"', module)
+        self.assertIn('[[ -L "$path" || ! -f "$path" ]]', module)
+        self.assertIn('stat -c \'%u\'', module)
+        self.assertIn('stat -c \'%a\'', module)
+        self.assertIn('(8#$mode & 8#077)', module)
+        self.assertIn('check_file "Restic password file"', module)
+        self.assertIn('check_file "Restic repository file"', module)
+        self.assertGreaterEqual(module.count("${secureCredentialCheck}"), 2)
+
     def test_restore_verification_scratch_is_confined_before_recursive_delete(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
         self.assertIn('lib.hasPrefix "/var/lib/nas-backup/" restoreVerifyPath', module)
