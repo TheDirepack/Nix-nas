@@ -147,11 +147,13 @@ class ReleaseAutomationTests(unittest.TestCase):
         }
         self.assertTrue(prepare_release.CORE_BOOTSTRAP_PATHS.issubset(paths))
 
-    def test_release_workflow_uses_nixpkgs_diceware_and_never_pushes_release_commit_to_main(self) -> None:
+    def test_release_workflow_uses_pinned_diceware_and_never_pushes_release_commit_to_main(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         self.assertIn("branches: [main]", workflow)
         self.assertIn("permissions:\n  contents: write", workflow)
-        self.assertIn("nix shell nixpkgs#diceware -c diceware -n 5 -d - -w en_eff --caps", workflow)
+        self.assertIn("nix develop .#test -c diceware -n 5 -d - -w en_eff --caps", workflow)
+        self.assertIn("diceware", flake)
         self.assertIn("scripts/prepare_release.py", workflow)
         self.assertIn("nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel", workflow)
         self.assertIn("./scripts/package-release.sh --source-only", workflow)
