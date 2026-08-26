@@ -23,22 +23,40 @@
   --pf-t--global--border--color--default: var(--nas-setup-border);
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-nas-theme='light']) {
+    color-scheme: dark;
+    --nas-setup-background: #151515;
+    --nas-setup-surface: #1f1f1f;
+    --nas-setup-text: #f5f5f5;
+    --nas-setup-muted: #c7c7c7;
+    --nas-setup-border: #4f5255;
+    --nas-setup-accent: #73bcf7;
+  }
+}
+
 html,
 body,
 #root {
+  width: 100%;
+  height: 100%;
   min-height: 100%;
   margin: 0;
 }
 
 body {
+  overflow: hidden;
   background: var(--nas-setup-background);
   color: var(--nas-setup-text);
 }
 
 .nas-setup-shell {
   display: flex;
+  width: 100%;
+  height: 100dvh;
   min-height: 100dvh;
   flex-direction: column;
+  overflow: hidden;
   background: var(--nas-setup-background);
 }
 
@@ -74,34 +92,57 @@ body {
   color: var(--nas-setup-muted);
 }
 
-.nas-theme-toggle {
+.nas-theme-control {
   flex: 0 0 auto;
-  min-height: 2.5rem;
-  padding: 0.5rem 0.9rem;
-  border: 1px solid var(--nas-setup-border);
-  border-radius: 999px;
-  background: transparent;
   color: var(--nas-setup-text);
-  font: inherit;
-  cursor: pointer;
+  font-size: 0.875rem;
 }
 
-.nas-theme-toggle:hover,
-.nas-theme-toggle:focus-visible {
+.nas-theme-control span {
+  display: block;
+  margin-block-end: 0.25rem;
+  color: var(--nas-setup-muted);
+}
+
+.nas-theme-control select {
+  min-height: 2.5rem;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
+  border: 1px solid var(--nas-setup-border);
+  border-radius: 0.25rem;
+  background: var(--nas-setup-surface);
+  color: var(--nas-setup-text);
+  font: inherit;
+}
+
+.nas-theme-control select:hover,
+.nas-theme-control select:focus-visible {
   border-color: var(--nas-setup-accent);
-  color: var(--nas-setup-accent);
 }
 
 .nas-setup-main {
   display: flex;
+  width: 100%;
   min-height: 0;
   flex: 1 1 auto;
 }
 
 .nas-setup-wizard {
   --pf-v6-c-wizard--Height: 100%;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   flex: 1 1 auto;
+}
+
+.nas-setup-wizard .pf-v6-c-wizard__outer-wrap {
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.nas-setup-wizard .pf-v6-c-wizard__main,
+.nas-setup-wizard .pf-v6-c-wizard__main-body {
+  min-height: 0;
 }
 
 .nas-setup-wizard .pf-v6-c-wizard__main-body > * {
@@ -111,6 +152,10 @@ body {
 
 .nas-wizard-step {
   max-width: 58rem;
+}
+
+.nas-wizard-message {
+  padding-block: 1rem;
 }
 
 .nas-wizard-intro {
@@ -193,7 +238,11 @@ body {
     flex-direction: column;
   }
 
-  .nas-theme-toggle {
+  .nas-theme-control {
+    width: 100%;
+  }
+
+  .nas-theme-control select {
     width: 100%;
   }
 }
