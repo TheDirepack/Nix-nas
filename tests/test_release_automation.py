@@ -51,18 +51,19 @@ class ReleaseAutomationTests(unittest.TestCase):
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
 
-    def test_prepare_release_updates_version_and_all_tracked_password_references(self) -> None:
+    def test_prepare_release_updates_version_and_release_copy_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.make_repo(root)
             (root / "untracked.txt").write_text("old-bootstrap-password-123456\n", encoding="utf-8")
             metadata_path = root / ".tmp" / "release.json"
+            release_password = "Acorn-Adobe-Alder-Amber-Anchor"
             metadata = prepare_release.prepare_release(
                 root,
                 run_number=4,
                 source_sha="a" * 40,
                 metadata_out=metadata_path,
-                password="new-bootstrap-password-654321",
+                password=release_password,
                 release_date="2026-08-26",
             )
 
@@ -80,11 +81,11 @@ class ReleaseAutomationTests(unittest.TestCase):
             for relative in bootstrap_files:
                 text = (root / relative).read_text()
                 self.assertNotIn("old-bootstrap-password-123456", text)
-                self.assertIn("new-bootstrap-password-654321", text)
+                self.assertIn(release_password, text)
             self.assertEqual((root / "untracked.txt").read_text(), "old-bootstrap-password-123456\n")
             on_disk = json.loads(metadata_path.read_text())
             self.assertEqual(on_disk["bootstrap_username"], "akadmin")
-            self.assertEqual(on_disk["bootstrap_password"], "new-bootstrap-password-654321")
+            self.assertEqual(on_disk["bootstrap_password"], release_password)
 
     def test_existing_tags_and_run_number_keep_patch_versions_monotonic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -95,12 +96,12 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(str(prepare_release.next_version(root, current, 4)), "1.2.9")
             self.assertEqual(str(prepare_release.next_version(root, current, 12)), "1.2.12")
 
-    def test_rerun_recovers_version_and_password_from_the_existing_release_tag(self) -> None:
+    def test_rerun_recovers_version_and_diceware_password_from_existing_release_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.make_repo(root)
             source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-            tagged_password = "tagged-bootstrap-password-87654321"
+            tagged_password = "Beacon-Birch-Cedar-Delta-Ember"
             for relative in prepare_release.CORE_BOOTSTRAP_PATHS:
                 path = root / relative
                 path.write_text(
@@ -116,6 +117,7 @@ class ReleaseAutomationTests(unittest.TestCase):
                 run_number=8,
                 source_sha=source_sha,
                 metadata_out=root / ".tmp" / "release.json",
+                password="Different-Fresh-Words-Should-Ignore",
                 release_date="2026-08-26",
             )
             self.assertEqual(metadata["version"], "1.2.8")
@@ -124,24 +126,32 @@ class ReleaseAutomationTests(unittest.TestCase):
             for relative in prepare_release.CORE_BOOTSTRAP_PATHS:
                 self.assertIn(tagged_password, (root / relative).read_text())
 
-    def test_generated_password_matches_runtime_secret_atom_contract(self) -> None:
-        for _ in range(20):
-            password = prepare_release.generate_bootstrap_password()
-            self.assertGreaterEqual(len(password), 20)
-            prepare_release.validate_bootstrap_password(password)
+    def test_release_passphrase_requires_exactly_five_safe_words(self) -> None:
+        prepare_release.validate_release_passphrase("Alpha-Bravo-Cedar-Delta-Ember")
+        for invalid in (
+            "Alpha-Bravo-Cedar-Delta",
+            "Alpha-Bravo-Cedar-Delta-Ember-Forest",
+            "Alpha Bravo Cedar Delta Ember",
+            "Alpha-Bravo-Cedar-Delta-1234",
+            "a-b-c-d-e",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    prepare_release.validate_release_passphrase(invalid)
 
-    def test_current_bootstrap_seed_is_safe_and_shared_by_both_runtime_paths(self) -> None:
-        password = prepare_release.discover_bootstrap_password(ROOT)
-        prepare_release.validate_bootstrap_password(password)
+    def test_development_tree_keeps_the_fixed_bootstrap_password(self) -> None:
+        self.assertEqual(prepare_release.discover_bootstrap_password(ROOT), "nas-admin-first-boot")
         paths = {
-            path.relative_to(ROOT).as_posix() for path in prepare_release.tracked_files_containing(ROOT, password)
+            path.relative_to(ROOT).as_posix()
+            for path in prepare_release.tracked_files_containing(ROOT, "nas-admin-first-boot")
         }
         self.assertTrue(prepare_release.CORE_BOOTSTRAP_PATHS.issubset(paths))
 
-    def test_release_workflow_builds_packages_and_publishes_credentials(self) -> None:
+    def test_release_workflow_uses_nixpkgs_diceware_and_never_pushes_release_commit_to_main(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("branches: [main]", workflow)
         self.assertIn("permissions:\n  contents: write", workflow)
+        self.assertIn("nix shell nixpkgs#diceware -c diceware -n 5 -d - -w en_eff --caps", workflow)
         self.assertIn("scripts/prepare_release.py", workflow)
         self.assertIn("nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel", workflow)
         self.assertIn("./scripts/package-release.sh --source-only", workflow)
@@ -150,6 +160,8 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertIn("existing_tag", workflow)
         self.assertIn("bootstrap_username", workflow)
         self.assertIn("bootstrap_password", workflow)
+        self.assertNotIn("release_commit:refs/heads/main", workflow)
+        self.assertNotIn("Fast-forward release metadata onto main", workflow)
 
     def test_release_workflow_passes_actionlint_when_available(self) -> None:
         actionlint = shutil.which("actionlint")
