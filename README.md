@@ -18,7 +18,7 @@ The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secre
    ```
 
 5. Build or install the NixOS configuration. `nas-first-start.service` validates the first-start plan automatically.
-6. Open Cockpit at `https://<host>.local:9092/console/`. The NAS page guides first-start setup and, after reboot, locked-state unlock.
+6. Sign in with the installation-unique bootstrap Authentik credential shown on the local console, then open `https://<host>.local/setup/`. The standalone setup wizard creates the permanent Linux administrator, permanent KeePass database, Authentik administrator, encrypted storage, and initial V2 state. Cockpit is the normal management interface after setup, not the setup frontend.
 7. Confirm any new-pool operation separately. Storage creation is intentionally never hidden behind a generic setup confirmation.
 
 For the exact setup flow, see [`docs/src/admin/first-run.md`](docs/src/admin/first-run.md).
@@ -42,7 +42,7 @@ The complete authority map is in [`docs/src/admin/service-map.md`](docs/src/admi
 
 ## Recovery model
 
-Protected services stay stopped until secrets and storage checks succeed. Cockpit and the local PAM administrator remain available as the cold-boot recovery plane. Mutable appliance state can be exported, validated, compared, and restored with `nas-state`, while ZFS snapshots/replication and Restic cover different recovery layers.
+Protected services stay stopped until secrets and storage checks succeed. The local PAM administrator and out-of-band console remain the cold-boot recovery plane; browser services become available after the permanent KeePass database unlocks the encrypted storage/control path. Root/control-plane state is backed up with Restic, while complete ZFS replication preserves the encrypted ZFS data domain.
 
 Keep an offline copy of the recovery material listed in [`docs/operator/recovery.md`](docs/operator/recovery.md).
 
