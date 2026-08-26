@@ -10,6 +10,7 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 HANDOFF_ACTION = ROOT / ".github" / "actions" / "prepare-vm-handoff" / "action.yml"
+CHECK_HELPER = ROOT / ".github" / "ci-checks.sh"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
@@ -28,9 +29,16 @@ class CiWorkflowGraphTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        cls.workflow = yaml.load(
+            WORKFLOW.read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
         cls.jobs = cls.workflow["jobs"]
-        cls.handoff = yaml.load(HANDOFF_ACTION.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        cls.handoff = yaml.load(
+            HANDOFF_ACTION.read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
+        cls.check_helper = CHECK_HELPER.read_text(encoding="utf-8")
 
     @staticmethod
     def needs(job: dict[str, Any]) -> set[str]:
@@ -69,7 +77,11 @@ class CiWorkflowGraphTests(unittest.TestCase):
 
     def test_prebuild_runs_all_sections_before_one_aggregate_failure(self) -> None:
         prebuild = self.jobs["prebuild"]
-        steps = {step.get("id"): step for step in prebuild["steps"] if isinstance(step, dict)}
+        steps = {
+            step.get("id"): step
+            for step in prebuild["steps"]
+            if isinstance(step, dict)
+        }
         section_ids = {"contracts", "static", "unit", "security", "cockpit", "nonroot"}
         self.assertTrue(section_ids <= set(steps))
         for section_id in section_ids:
@@ -79,18 +91,36 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(final.get("if"), "always()")
         final_run = str(final.get("run", ""))
         self.assertIn("scripts/ci-check-report.py", final_run)
+        self.assertIn("--results ci-logs/results.tsv", final_run)
+        self.assertIn("--tail-lines 30", final_run)
         for section_id in section_ids:
             self.assertIn(f"steps.{section_id}.outcome", final_run)
 
-    def test_prebuild_keeps_readable_subcheck_groups_and_annotations(self) -> None:
-        text = self.run_text(self.jobs["prebuild"])
-        self.assertIn("::group::", text)
-        self.assertIn("::error title=", text)
-        self.assertIn("GitHub Actions lint", text)
-        self.assertIn("Fast Python unit tests", text)
-        self.assertIn("Deterministic security regression suite", text)
-        self.assertIn("Fresh npm vulnerability audit", text)
-        self.assertIn("/home/nas-ci/worktree", self.serialized(self.jobs["prebuild"]))
+    def test_prebuild_records_command_timing_logs_and_annotations(self) -> None:
+        prebuild_text = self.serialized(self.jobs["prebuild"])
+        helper = self.check_helper
+        self.assertIn("ci_run()", helper)
+        self.assertIn("::group::%s", helper)
+        self.assertIn("::error title=%s", helper)
+        self.assertIn("PIPESTATUS[0]", helper)
+        self.assertIn("date +%s", helper)
+        self.assertIn("results.tsv", helper)
+        self.assertIn("printf -v command_text '%q '", helper)
+        self.assertIn("Source-only repository preflight", prebuild_text)
+        self.assertIn("GitHub Actions lint", prebuild_text)
+        self.assertIn("Fast Python unit tests", prebuild_text)
+        self.assertIn("Deterministic security regression suite", prebuild_text)
+        self.assertIn("Fresh npm vulnerability audit", prebuild_text)
+        self.assertIn("Run the fast suite without root-owned state", prebuild_text)
+        self.assertIn("prebuild-check-logs", prebuild_text)
+
+    def test_node_dependencies_do_not_pollute_source_or_nonroot_preflight(self) -> None:
+        prebuild = self.serialized(self.jobs["prebuild"])
+        nonroot = prebuild.index("Section: unprivileged hermeticity")
+        node_restore = prebuild.index("Restore exact Node 24 dependencies")
+        cockpit = prebuild.index("Section: Cockpit source and dependency audit")
+        self.assertLess(nonroot, node_restore)
+        self.assertLess(node_restore, cockpit)
 
     def test_coverage_baseline_runs_even_after_other_prebuild_failures(self) -> None:
         coverage = self.jobs["coverage-diff"]
@@ -99,6 +129,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("actions/download-artifact", self.serialized(coverage))
         self.assertIn("main-coverage.json", self.serialized(coverage))
         self.assertIn("ci-check-report.py", self.run_text(coverage))
+        self.assertIn("baseline-build", self.serialized(coverage))
 
     def test_prepare_is_the_single_expensive_product_producer(self) -> None:
         prepare = self.jobs["prepare"]
@@ -109,8 +140,12 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("./.github/actions/prepare-vm-handoff", text)
         self.assertIn("source-archive-evidence", text)
         self.assertIn("force-cache-miss", text)
+        self.assertIn("Package and verify as an untrusted consumer", text)
+        self.assertIn("cockpit-node_modules", text)
 
-    def test_handoff_action_keeps_granular_cross_run_caches_but_publishes_one_artifact(self) -> None:
+    def test_handoff_action_keeps_granular_cross_run_caches_but_publishes_one_artifact(
+        self,
+    ) -> None:
         text = self.serialized(self.handoff)
         self.assertEqual(self.handoff["runs"]["using"], "composite")
         for bundle in self.BUNDLES:
@@ -121,10 +156,15 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
         self.assertIn("vm-bundle-handoff", text)
-        self.assertIn("nixosConfigurations.nas-ci-ready.config.system.build.toplevel", text)
+        self.assertIn(
+            "nixosConfigurations.nas-ci-ready.config.system.build.toplevel",
+            text,
+        )
         self.assertIn("nixosConfigurations.nas-qemu.config.system.build.toplevel", text)
 
-    def test_vm_consumers_download_one_complete_handoff_instead_of_restoring_bundle_caches(self) -> None:
+    def test_vm_consumers_download_one_complete_handoff_instead_of_restoring_bundle_caches(
+        self,
+    ) -> None:
         for name in ("integration", "installer", "installed-security"):
             text = self.serialized(self.jobs[name])
             self.assertIn("vm-bundle-handoff", text)
@@ -146,17 +186,24 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(integration["strategy"]["fail-fast"], "false")
         legs = integration["strategy"]["matrix"]["include"]
         self.assertEqual({leg["vm"] for leg in legs}, {"unencrypted", "encrypted"})
-        self.assertEqual({leg["check"] for leg in legs}, {"nas-vm", "nas-vm-encrypted"})
+        self.assertEqual(
+            {leg["check"] for leg in legs},
+            {"nas-vm", "nas-vm-encrypted"},
+        )
         self.assertEqual(self.needs(integration), {"prepare"})
 
-    def test_source_fuzz_uses_existing_internal_parallel_runner_not_a_job_matrix(self) -> None:
+    def test_source_fuzz_uses_existing_internal_parallel_runner_not_a_job_matrix(
+        self,
+    ) -> None:
         fuzz = self.jobs["source-fuzz"]
         self.assertNotIn("strategy", fuzz)
         text = self.run_text(fuzz)
         self.assertIn("scripts/run-fuzz.py --jobs 6", text)
         self.assertIn("source-fuzz.log", text)
 
-    def test_installed_security_provisions_once_and_aggregates_both_workloads(self) -> None:
+    def test_installed_security_provisions_once_and_aggregates_both_workloads(
+        self,
+    ) -> None:
         job = self.jobs["installed-security"]
         text = self.serialized(job)
         self.assertEqual(text.count("./scripts/qemu-test.sh installer"), 1)
@@ -168,13 +215,19 @@ class CiWorkflowGraphTests(unittest.TestCase):
     def test_downstream_dependencies_preserve_stage_order(self) -> None:
         self.assertEqual(self.needs(self.jobs["browser"]), {"prepare"})
         self.assertEqual(self.needs(self.jobs["integration"]), {"prepare"})
-        self.assertEqual(self.needs(self.jobs["installer"]), {"prepare", "browser", "integration"})
-        self.assertEqual(self.needs(self.jobs["source-fuzz"]), {"integration", "browser", "installer"})
-        self.assertEqual(self.needs(self.jobs["installed-security"]), {"installer", "prepare"})
         self.assertEqual(
-            self.needs(self.jobs["summary"]),
-            self.JOBS - {"summary"},
+            self.needs(self.jobs["installer"]),
+            {"prepare", "browser", "integration"},
         )
+        self.assertEqual(
+            self.needs(self.jobs["source-fuzz"]),
+            {"integration", "browser", "installer"},
+        )
+        self.assertEqual(
+            self.needs(self.jobs["installed-security"]),
+            {"installer", "prepare"},
+        )
+        self.assertEqual(self.needs(self.jobs["summary"]), self.JOBS - {"summary"})
 
     def test_github_hosted_job_timeouts_stay_within_platform_limit(self) -> None:
         for name, job in self.jobs.items():
@@ -185,7 +238,9 @@ class CiWorkflowGraphTests(unittest.TestCase):
 
     def test_actionlint_covers_both_workflows_before_build(self) -> None:
         text = self.run_text(self.jobs["prebuild"])
-        self.assertIn("actionlint .github/workflows/ci.yml .github/workflows/release.yml", text)
+        self.assertIn("actionlint", text)
+        self.assertIn(".github/workflows/ci.yml", text)
+        self.assertIn(".github/workflows/release.yml", text)
 
 
 if __name__ == "__main__":
