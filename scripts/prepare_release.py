@@ -53,21 +53,34 @@ def run_git(root: pathlib.Path, *args: str, check: bool = True) -> subprocess.Co
     )
 
 
-def matching_tag_patches(root: pathlib.Path, version: Version) -> list[int]:
+def matching_tags(root: pathlib.Path, version: Version) -> list[tuple[str, int]]:
     result = run_git(root, "tag", "--list", f"v{version.major}.{version.minor}.*")
     pattern = re.compile(rf"^v{version.major}\.{version.minor}\.([0-9]+)$")
-    patches: list[int] = []
+    tags: list[tuple[str, int]] = []
     for line in result.stdout.splitlines():
-        match = pattern.fullmatch(line.strip())
+        tag = line.strip()
+        match = pattern.fullmatch(tag)
         if match is not None:
-            patches.append(int(match.group(1)))
-    return patches
+            tags.append((tag, int(match.group(1))))
+    return tags
 
 
-def next_version(root: pathlib.Path, current: Version, run_number: int) -> Version:
+def version_already_released_from_source(root: pathlib.Path, current: Version, source_sha: str) -> Version | None:
+    for tag, patch in sorted(matching_tags(root, current), key=lambda item: item[1], reverse=True):
+        parent = run_git(root, "rev-parse", f"{tag}^{{commit}}^1", check=False)
+        if parent.returncode == 0 and parent.stdout.strip() == source_sha:
+            return Version(current.major, current.minor, patch)
+    return None
+
+
+def next_version(root: pathlib.Path, current: Version, run_number: int, source_sha: str | None = None) -> Version:
     if run_number < 1:
         raise ValueError("run number must be positive")
-    tag_patches = matching_tag_patches(root, current)
+    if source_sha:
+        reused = version_already_released_from_source(root, current, source_sha)
+        if reused is not None:
+            return reused
+    tag_patches = [patch for _, patch in matching_tags(root, current)]
     highest_tag = max(tag_patches, default=-1)
     patch = max(current.patch + 1, highest_tag + 1, run_number)
     return Version(current.major, current.minor, patch)
@@ -205,7 +218,7 @@ def prepare_release(
 ) -> dict[str, object]:
     root = root.resolve()
     current = Version.parse((root / "VERSION").read_text(encoding="utf-8"))
-    target = next_version(root, current, run_number)
+    target = next_version(root, current, run_number, source_sha)
     old_password = discover_bootstrap_password(root)
     new_password = password or generate_bootstrap_password()
     validate_bootstrap_password(new_password)
