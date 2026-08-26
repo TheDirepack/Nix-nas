@@ -151,6 +151,7 @@ in
     adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$Hsg1F2Cw2J25Jj9ZMzgEC8uiPgOS.DP/A8Pi28n.oXWw.CuB529luz/tBoCaxVXkuP6NqDmqUUUf5scB1/7jU1"));
     zfsImportAtBoot = lib.mkForce false;
     zfsEncryption.enable = lib.mkDefault false;
+    zfsEncryption.acknowledgeUnencrypted = lib.mkForce true;
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
     virtualization.enable = lib.mkForce false;
