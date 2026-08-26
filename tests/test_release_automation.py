@@ -95,6 +95,20 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(str(prepare_release.next_version(root, current, 4)), "1.2.9")
             self.assertEqual(str(prepare_release.next_version(root, current, 12)), "1.2.12")
 
+    def test_rerun_reuses_tag_whose_release_commit_has_the_same_source_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_repo(root)
+            source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            (root / "release-marker").write_text("release\n", encoding="utf-8")
+            subprocess.run(["git", "add", "release-marker"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "release"], cwd=root, check=True)
+            subprocess.run(["git", "tag", "-a", "v1.2.8", "-m", "release"], cwd=root, check=True)
+            subprocess.run(["git", "checkout", "-q", source_sha], cwd=root, check=True)
+
+            current = prepare_release.Version.parse("1.2.3")
+            self.assertEqual(str(prepare_release.next_version(root, current, 8, source_sha)), "1.2.8")
+
     def test_generated_password_matches_runtime_secret_atom_contract(self) -> None:
         for _ in range(20):
             password = prepare_release.generate_bootstrap_password()
