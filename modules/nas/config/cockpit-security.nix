@@ -1,4 +1,4 @@
-{ pkgs, nasInternal, ... }:
+{ lib, pkgs, nasInternal, ... }:
 
 let
   inherit (nasInternal) cockpitPort;
@@ -9,6 +9,18 @@ in
   # Keep its TCP listener in a private network namespace so no host-local
   # process can bypass the Caddy + Authentik authorization boundary.
   systemd.services.nas-cockpit-sso.serviceConfig.PrivateNetwork = true;
+
+  # `services.cockpit.enable` is retained for Cockpit's package, plugins, PAM,
+  # and generated configuration, but the upstream NixOS module also enables a
+  # host-network cockpit.socket on services.cockpit.port. That would become an
+  # alternate authentication ingress whenever the NAS firewall is disabled.
+  # The appliance has exactly one Cockpit ingress: the Caddy-only Unix proxy
+  # below. Keep the upstream socket installed but neither boot-enabled nor
+  # manually startable.
+  systemd.sockets.cockpit = {
+    wantedBy = lib.mkOverride 90 [ ];
+    unitConfig.RefuseManualStart = true;
+  };
 
   # Caddy reaches Cockpit only through this host-visible Unix socket. The
   # socket-proxy process joins the Cockpit network namespace for its outbound
