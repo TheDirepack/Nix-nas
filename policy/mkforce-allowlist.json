@@ -54,6 +54,12 @@
       "setting": "StateDirectoryMode",
       "count": 1,
       "reason": "The ZFS-backed StateDirectory must keep a restrictive mode that matches the NAS share-group write policy."
+    },
+    {
+      "path": "modules/nas/config/security-hardening-overrides.nix",
+      "setting": "serviceConfig.ExecStartPost",
+      "count": 1,
+      "reason": "The hardened identity stack uses Authentik's embedded outpost, so this force-clears the legacy post-start hook that starts the retired standalone proxy outpost."
     }
   ]
 }
