@@ -14,12 +14,7 @@ const exists = async (name) => {
   }
 };
 
-const STEPS = [
-  "wizard-language",
-  "wizard-admin",
-  "wizard-storage",
-  "wizard-confirm",
-];
+const STEPS = ["wizard-language", "wizard-admin", "wizard-storage", "wizard-confirm"];
 
 test("wizard entry mounts React and imports PatternFly global styles", async () => {
   const index = await wizard("src/index.jsx");
