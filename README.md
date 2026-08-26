@@ -6,20 +6,23 @@ The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secre
 
 > **Release status:** 0.1.0 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
 
+**Version note:** `0.1.0` is the NixOS NAS project/release version. The `system.stateVersion = "26.05"` value in `local.nix` is the NixOS compatibility baseline for stateful module defaults; it is not the project version and must not be changed merely to match a project release.
+
 ## First installation
 
-1. Replace `hardware-configuration.nix` with reviewed output from the target machine.
-2. Review `local.nix` and complete the installation checklist in [`docs/src/admin/configuration.md`](docs/src/admin/configuration.md).
-3. Copy `setup/first-run.example.json` to the configured first-run path and fill in the initial accounts, storage plan, and feature policy.
-4. Run the fast source checks:
+1. Replace `hardware-configuration.nix` with reviewed output from the target machine. The committed placeholder now rejects `nas.installationReady = true`.
+2. Review `local.nix` and complete the installation checklist in [`docs/src/admin/configuration.md`](docs/src/admin/configuration.md). Before marking the host installation-ready, configure either an administrator SSH key or verify and explicitly attest a working local-console/hardware-KVM recovery path.
+3. Decide whether the managed ZFS dataset will use native encryption. If encryption stays disabled, the configuration emits a prominent warning and `installationReady` requires the explicit `nas.zfsEncryption.acknowledgeUnencrypted = true` acknowledgement.
+4. Copy `setup/first-run.example.json` to the configured first-run path and fill in the initial accounts, storage plan, and feature policy.
+5. Run the fast source checks:
 
    ```bash
    ./scripts/preflight.sh
    ```
 
-5. Build or install the NixOS configuration. `nas-first-start.service` validates the first-start plan automatically.
-6. Open Cockpit at `https://<host>.local:9092/console/`. The NAS page guides first-start setup and, after reboot, locked-state unlock.
-7. Confirm any new-pool operation separately. Storage creation is intentionally never hidden behind a generic setup confirmation.
+6. Build or install the NixOS configuration. `nas-first-start.service` validates the first-start plan automatically.
+7. Open Cockpit at `https://<host>.local:9092/console/`. The NAS page guides first-start setup and, after reboot, locked-state unlock.
+8. Confirm any new-pool operation separately. Storage creation is intentionally never hidden behind a generic setup confirmation.
 
 For the exact setup flow, see [`docs/src/admin/first-run.md`](docs/src/admin/first-run.md).
 
@@ -46,13 +49,17 @@ Protected services stay stopped until secrets and storage checks succeed. Cockpi
 
 Keep an offline copy of the recovery material listed in [`docs/operator/recovery.md`](docs/operator/recovery.md).
 
+## Automatic updates
+
+`nas.autoUpdate.enable = true` schedules the guarded update check/fetch/build workflow. It does **not** activate a new system generation unless `nas.autoUpdate.apply = true` is also set. Keeping `apply = false` is therefore a scheduled validation/check mode, not unattended updating.
+
 ## Documentation
 
 - **Operator manual:** [`docs/src/`](docs/src/README.md) — installed into Cockpit and organized by task.
 - **Recovery runbook:** [`docs/operator/recovery.md`](docs/operator/recovery.md) — long-form disaster recovery.
 - **Security model:** [`SECURITY.md`](SECURITY.md) — trust and privilege boundaries.
 - **Contributor guide:** [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and quality gates.
-- **Agent handoff:** [`AGENTS.md`](AGENTS.md) — compact reading order for coding agents.
+- **Agent handoff:** [`AGENTS.md`](AGENTS.md) — compact reading order for coding agents; operator procedures do not depend on it.
 - **Development internals:** [`docs/development/`](docs/development/README.md) — architecture, tests, risks, and validation evidence.
 
 ## Validation
