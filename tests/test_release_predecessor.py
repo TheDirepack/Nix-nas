@@ -29,8 +29,16 @@ class ReleasePredecessorTests(unittest.TestCase):
 
     def make_repo(self, root: pathlib.Path) -> tuple[str, str, str]:
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=root,
+            check=True,
+        )
         first = self.commit(root, "first")
         second = self.commit(root, "second")
         third = self.commit(root, "third")
@@ -46,18 +54,40 @@ class ReleasePredecessorTests(unittest.TestCase):
             }
         ]
         self.assertTrue(wait_release_predecessor.exact_main_merge_result(payload, source))
-        self.assertFalse(wait_release_predecessor.exact_main_merge_result(payload, "b" * 40))
-        payload[0]["base"]["ref"] = "development"
-        self.assertFalse(wait_release_predecessor.exact_main_merge_result(payload, source))
+        self.assertFalse(
+            wait_release_predecessor.exact_main_merge_result(payload, "b" * 40)
+        )
+        wrong_base = [
+            {
+                "merged_at": "2026-08-26T00:00:00Z",
+                "base": {"ref": "development"},
+                "merge_commit_sha": source,
+            }
+        ]
+        self.assertFalse(
+            wait_release_predecessor.exact_main_merge_result(wrong_base, source)
+        )
 
     def test_ci_classification_prefers_success_then_active(self) -> None:
         classify = wait_release_predecessor.classify_ci_runs
         self.assertEqual(
-            classify({"workflow_runs": [{"status": "completed", "conclusion": "failure"}]}),
+            classify(
+                {
+                    "workflow_runs": [
+                        {"status": "completed", "conclusion": "failure"}
+                    ]
+                }
+            ),
             "not-qualified",
         )
         self.assertEqual(
-            classify({"workflow_runs": [{"status": "in_progress", "conclusion": None}]}),
+            classify(
+                {
+                    "workflow_runs": [
+                        {"status": "in_progress", "conclusion": None}
+                    ]
+                }
+            ),
             "active",
         )
         self.assertEqual(
@@ -130,13 +160,35 @@ class ReleasePredecessorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             first, second, _third = self.make_repo(root)
-            subprocess.run(["git", "checkout", "-q", second], cwd=root, check=True)
-            (root / "release.txt").write_text("generated release\n", encoding="utf-8")
-            subprocess.run(["git", "add", "release.txt"], cwd=root, check=True)
-            subprocess.run(["git", "commit", "-qm", "release"], cwd=root, check=True)
-            subprocess.run(["git", "tag", "-a", "v1.2.5", "-m", "release"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "checkout", "-q", second],
+                cwd=root,
+                check=True,
+            )
+            (root / "release.txt").write_text(
+                "generated release\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "add", "release.txt"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "release"],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "tag", "-a", "v1.2.5", "-m", "release"],
+                cwd=root,
+                check=True,
+            )
 
-            with self.assertRaisesRegex(RuntimeError, "refusing to publish older source"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "refusing to publish older source",
+            ):
                 wait_release_predecessor.reject_published_descendant(root, first)
 
     def test_published_predecessor_allows_release_immediately(self) -> None:
@@ -145,13 +197,20 @@ class ReleasePredecessorTests(unittest.TestCase):
             _first, second, third = self.make_repo(root)
             with (
                 mock.patch.object(wait_release_predecessor, "fetch_tags"),
-                mock.patch.object(wait_release_predecessor, "reject_published_descendant"),
+                mock.patch.object(
+                    wait_release_predecessor,
+                    "reject_published_descendant",
+                ),
                 mock.patch.object(
                     wait_release_predecessor,
                     "find_predecessor_state",
                     return_value=(second, "success"),
                 ),
-                mock.patch.object(wait_release_predecessor, "tag_for_source", return_value="v1.2.5"),
+                mock.patch.object(
+                    wait_release_predecessor,
+                    "tag_for_source",
+                    return_value="v1.2.5",
+                ),
                 mock.patch.object(wait_release_predecessor.time, "sleep") as sleep,
             ):
                 wait_release_predecessor.wait_for_predecessor(
