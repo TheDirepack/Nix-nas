@@ -1,32 +1,50 @@
 # Automated merge releases
 
-Every non-skipped push to `main` starts `.github/workflows/release.yml`. In the normal pull-request flow, that means every merge gets its own build and GitHub Release.
+A release is created only after the repository's `CI` workflow has completed successfully for a `push` to `main`. `.github/workflows/release.yml` listens to that successful `workflow_run`, verifies that the qualified source commit belongs to a merged pull request whose base is `main`, and only then prepares a release candidate. A direct push to `main` can run CI, but it is not eligible for automated publication.
+
+This trigger graph is intentionally loop-free. CI does not listen to release tags, and the release workflow does not listen to repository push or tag events at all. Publishing `v<version>` therefore cannot start another CI or release workflow, even if the publication token or GitHub's token-trigger behavior changes in the future.
 
 The development tree remains development-friendly: it keeps the fixed `akadmin` bootstrap password `nas-admin-first-boot`, so VM, browser, and first-run tests do not need to discover a changing credential. Automated release stamping happens only in a separate release commit created by the workflow; that commit is tagged and packaged but is never pushed back onto `main`.
 
+## Qualification and publication flow
+
 The workflow:
 
-1. fetches existing release tags and calculates a monotonically increasing patch version;
-2. uses the maintained `diceware` package from the repository's pinned Nixpkgs test environment to generate a five-word passphrase with the long EFF English wordlist (`en_eff`), explicitly selects the `system` cryptographic random source, enables capitalization, and uses `-` as the delimiter;
-3. updates `VERSION`, README/flake/Cockpit version metadata, and the changelog in the release-only checkout;
-4. replaces the fixed development bootstrap password in release-behavior source files, including both Authentik runtime paths and executable/test references that must behave like the packaged release. Explanatory Markdown documentation is deliberately not string-rewritten, so it can continue to distinguish the fixed development credential from the release-specific credential;
-5. rebuilds and validates the production Cockpit bundle;
-6. evaluates the configuration matrix and builds the CI-ready and QEMU NixOS closures;
-7. commits the exact stamped release inputs locally and creates a source-only package with manifest, checksum, and provenance metadata;
-8. publishes a `v<version>` tag and GitHub Release whose notes contain the first-boot Authentik username (`akadmin`) and five-word release passphrase.
+1. accepts only a successful main-branch `CI` run whose source commit is associated with a merged pull request;
+2. downloads the exact `vm-bundle-handoff` produced by that CI run and verifies/imports both the reusable package bundles and exact `nas-ci-ready`/`nas-qemu` system-closure handoff;
+3. uses the maintained `diceware` package from the repository's pinned Nixpkgs test environment to generate a five-word passphrase with the long EFF English wordlist (`en_eff`), explicitly selects the `system` cryptographic random source, enables capitalization, and uses `-` as the delimiter;
+4. calculates the release patch deterministically from the source commit's first-parent distance from the checked-in release-version epoch for the current `VERSION` series;
+5. updates `VERSION`, README/flake/Cockpit version metadata, and the changelog in the release-only checkout;
+6. replaces the fixed development bootstrap password only in the two explicit runtime authorities: `modules/nas/internal/secret-tools.nix` and `modules/nas/config/application-services.nix`. Tests and explanatory documentation are not rewritten, so they remain independent validation rather than changing their expectations with production code;
+7. rebuilds and validates the release-specific Cockpit bundle and configuration-dependent NixOS closures after stamping;
+8. commits the exact stamped release inputs locally and creates a source-only package with manifest, checksum, and provenance metadata;
+9. packages the release candidate commit, release notes, metadata, and release assets into an immutable workflow artifact; and
+10. passes that artifact to a separate publication job that alone has `contents: write`, verifies the candidate's source parent/version, pushes only the annotated `v<version>` tag, and creates or repairs the GitHub Release.
 
-If another merge lands while an older release is building, the older release is still published from its own merge commit. The workflow run number is included as a lower bound for the patch number so concurrently started merge releases do not select the same version; existing tags are also treated as authoritative when choosing the next patch.
+The build job has only read access and checks out with `persist-credentials: false`. Repository build/test code therefore never executes with a repository-write credential. The publication job does not run Nix/npm/project build code; it only verifies and publishes the already-built immutable candidate.
 
-If publication is interrupted after the tag exists, a rerun finds the tag associated with the original merge, recovers the exact release version and passphrase from that tagged release commit, and repairs or completes the GitHub Release instead of generating a different release identity.
+## Version allocation and reruns
+
+`.github/release-version-epoch.json` anchors the current development `VERSION` series. The release patch is the development patch plus the source merge's first-parent distance from that epoch. Each qualified main commit therefore has a deterministic version independent of Actions run numbers, retries, queue order, or overlapping workflow execution.
+
+When a new development `VERSION` series is deliberately established, the epoch must be advanced with it. The version metadata checks and release tests enforce the shape of this contract.
+
+Generated release commits are intentionally not merged back to `main`. To keep release changelogs cumulative anyway, release preparation reads the newest earlier generated release tag in the same version series and carries its generated release sections forward before the development baseline section.
+
+If publication is interrupted after the tag exists, a rerun finds the tag associated with the original source merge, recovers the exact release version and passphrase from that tagged release commit, and repairs or completes the GitHub Release instead of generating a different release identity.
 
 ## Bootstrap credential policy
 
-`main` and ordinary development branches keep `nas-admin-first-boot`. Only the release-only commit's behavioral source receives the generated passphrase. Operator documentation tells release users to obtain the generated value from the matching GitHub Release notes rather than pretending the development password is valid for a tagged release.
+`main` and ordinary development branches keep `nas-admin-first-boot`. Only the release-only commit's explicit runtime bootstrap authorities receive the generated passphrase. Operator documentation tells release users to obtain the generated value from the matching GitHub Release notes rather than assuming the development password is valid for a tagged release.
 
 The release passphrase is generated by the existing `diceware` implementation packaged by Nixpkgs, not by NAS-owned random-word code. The workflow explicitly selects Diceware's `system` random source (Python `SystemRandom`) and the `en_eff` EFF long wordlist with 7,776 entries. Five independently selected words provide about 64.6 bits of selection entropy. Capitalization is only formatting and does not add entropy. The credential is intentionally published in that release's notes because it is a first-run bootstrap credential, not a long-lived secret.
 
 The setup workflow retires the bootstrap identity after the configured administrator has been established. Do not reuse the bootstrap credential for normal administration. Existing installations keep their own KeePassXC state; a new release only changes the seed used by fresh first-run initialization from that release artifact.
 
+## Repository policy
+
+Protecting `main` with a repository ruleset that requires pull requests and the stable CI summary remains recommended defense in depth. Automated release eligibility does not rely on that setting: the workflow independently verifies merged-PR provenance and refuses to publish direct pushes.
+
 ## Release status
 
-Automated releases remain **source-only development artifacts** until the project's install-ready qualification requirements are satisfied. The automation proves that the release-specific source, frontend bundle, and NixOS closures build, but it does not substitute for the hardware recovery and destructive-boundary evidence required by the release qualification checklist.
+Automated releases remain **source-only development artifacts** until the project's install-ready qualification requirements are satisfied. The main source commit completes the full CI pipeline before release preparation begins. Release preparation then validates the release-specific stamped source and configuration-dependent build delta. This does not substitute for the hardware recovery and destructive-boundary evidence required by the release qualification checklist.
