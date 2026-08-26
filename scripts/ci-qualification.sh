@@ -1,5 +1,6 @@
 # Shared implementation for the parallel CI qualification branches.
 # This file is invoked explicitly with `bash`; it is intentionally not a shipped executable.
+# shellcheck shell=bash
 
 set -u -o pipefail
 
@@ -119,6 +120,7 @@ case "$section" in
   nonroot)
     run_nonroot_suite() {
       local nix_bin
+      : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
       nix_bin=$(command -v nix)
       sudo useradd --create-home --shell /bin/bash nas-ci
       sudo install -d -o nas-ci -g nas-ci /home/nas-ci/worktree
