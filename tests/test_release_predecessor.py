@@ -68,8 +68,9 @@ class ReleasePredecessorTests(unittest.TestCase):
             wait_release_predecessor.exact_main_merge_result(wrong_base, source)
         )
 
-    def test_ci_classification_prefers_success_then_active(self) -> None:
+    def test_ci_classification_distinguishes_unregistered_active_and_completed(self) -> None:
         classify = wait_release_predecessor.classify_ci_runs
+        self.assertEqual(classify({"workflow_runs": []}), "unregistered")
         self.assertEqual(
             classify(
                 {
@@ -102,6 +103,19 @@ class ReleasePredecessorTests(unittest.TestCase):
             "success",
         )
 
+    def test_first_parent_scan_stops_at_release_series_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            first, second, third = self.make_repo(root)
+            self.assertEqual(
+                wait_release_predecessor.first_parent_ancestors(
+                    root,
+                    third,
+                    anchor=first,
+                ),
+                [second],
+            )
+
     def test_nearest_qualified_first_parent_merge_is_the_barrier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
@@ -128,6 +142,31 @@ class ReleasePredecessorTests(unittest.TestCase):
                 )
             self.assertEqual(predecessor, second)
             self.assertEqual(state, "active")
+
+    def test_unregistered_predecessor_blocks_instead_of_being_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _first, second, third = self.make_repo(root)
+            with (
+                mock.patch.object(
+                    wait_release_predecessor,
+                    "commit_is_exact_main_merge",
+                    side_effect=lambda _repo, sha: sha == second,
+                ),
+                mock.patch.object(
+                    wait_release_predecessor,
+                    "ci_state",
+                    return_value="unregistered",
+                ),
+            ):
+                predecessor, state = wait_release_predecessor.find_predecessor_state(
+                    root,
+                    "owner/repo",
+                    "ci.yml",
+                    third,
+                )
+            self.assertEqual(predecessor, second)
+            self.assertEqual(state, "unregistered")
 
     def test_failed_predecessor_does_not_block_later_qualified_merge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,12 +233,17 @@ class ReleasePredecessorTests(unittest.TestCase):
     def test_published_predecessor_allows_release_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            _first, second, third = self.make_repo(root)
+            first, second, third = self.make_repo(root)
             with (
                 mock.patch.object(wait_release_predecessor, "fetch_tags"),
                 mock.patch.object(
                     wait_release_predecessor,
                     "reject_published_descendant",
+                ),
+                mock.patch.object(
+                    wait_release_predecessor,
+                    "release_series_anchor",
+                    return_value=first,
                 ),
                 mock.patch.object(
                     wait_release_predecessor,
