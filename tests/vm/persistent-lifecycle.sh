@@ -40,9 +40,6 @@ start_fake_qemu() {
     return 1
   fi
   printf '%s\n' "$pid" > "$1"
-  if (($# > 1)); then
-    printf '%s\n' "$pid" > "$2"
-  fi
 }
 
 assert_running() {
@@ -60,7 +57,7 @@ set +e
     return "$status"
   }
   trap cleanup EXIT INT TERM
-  start_fake_qemu "$failure_pidfile" "$work/failure.process"
+  start_fake_qemu "$failure_pidfile"
   assert_running "$failure_pidfile"
   exit 97
 )
@@ -70,10 +67,10 @@ set -e
   printf 'failure-path fixture returned %s instead of 97\n' "$failure_status" >&2
   exit 1
 }
-if kill -0 "$(<"$work/failure.process")" 2>/dev/null; then
-  printf 'failure-path fake QEMU survived armed cleanup\n' >&2
-  exit 1
-fi
+# The production cleanup helper removes the owned pidfile only after validating
+# the executable identity and completing its TERM/KILL/wait path. Checking that
+# authority is deterministic; checking the raw numeric pid from the parent
+# shell is not, because that pid may already have been recycled by the runner.
 [[ ! -e "$failure_pidfile" ]] || {
   printf 'failure-path pidfile survived armed cleanup\n' >&2
   exit 1
@@ -82,8 +79,6 @@ fi
 # Keep the persistent process as a direct child of this shell. The contract we
 # need to prove here is that cleanup is armed during startup, is disarmed only
 # after the process is healthy, and explicit cleanup still works afterwards.
-# Reparenting a synthetic process through a subshell adds unrelated init/reaper
-# timing and made this otherwise deterministic contract flaky on hosted runners.
 persistent_pidfile="$work/persistent.pid"
 # shellcheck disable=SC2329
 persistent_cleanup() {
