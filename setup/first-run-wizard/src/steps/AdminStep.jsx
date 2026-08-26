@@ -1,28 +1,6 @@
 import React from 'react';
-import { Alert, Checkbox, FormGroup, Progress, TextInput } from '@patternfly/react-core';
-import { passwordQuality } from '../api.js';
-
-const qualityVariant = (quality) => {
-  if (!quality) return 'info';
-  if (quality.breachStatus === 'breached' || !quality.localAccepted) return 'danger';
-  if (quality.breachStatus === 'unavailable') return 'warning';
-  return 'success';
-};
-
-const Quality = ({ label, quality, error }) => {
-  if (error) return <Alert isInline variant="warning" title={`${label} strength check unavailable`}>{error}</Alert>;
-  if (!quality) return null;
-  const score = Number.isInteger(quality.zxcvbnScore) ? quality.zxcvbnScore : 0;
-  const detail = [quality.warning, ...(quality.suggestions || [])].filter(Boolean).join(' ');
-  return (
-    <Alert isInline variant={qualityVariant(quality)} title={`${label} strength: ${score}/4`}>
-      <Progress value={score * 25} aria-label={`${label} password strength`} />
-      {quality.breachStatus === 'breached' && <p>This password is known to be breached and cannot be used.</p>}
-      {quality.breachStatus === 'unavailable' && <p>The online breach check is unavailable; local strength rules still apply.</p>}
-      {detail && <p>{detail}</p>}
-    </Alert>
-  );
-};
+import { Alert, Checkbox, FormGroup, TextInput } from '@patternfly/react-core';
+import { PasswordQualityFeedback, usePasswordQualityCheck } from '../PasswordQuality.jsx';
 
 const AdminStep = ({
   administrator,
@@ -37,26 +15,12 @@ const AdminStep = ({
   const update = (field) => (_event, value) => onAdministrator({ ...administrator, [field]: value });
   const linuxPasswordsMatch = !administrator.confirm || administrator.password === administrator.confirm;
   const keepassPasswordsMatch = !keePassPasswordConfirm || keePassPassword === keePassPasswordConfirm;
-  const [linuxQuality, setLinuxQuality] = React.useState(null);
-  const [linuxQualityError, setLinuxQualityError] = React.useState('');
-  const [keepassQuality, setKeepassQuality] = React.useState(null);
-  const [keepassQualityError, setKeepassQualityError] = React.useState('');
-  const context = [administrator.username, administrator.name, administrator.email].filter(Boolean);
-
-  const check = async (password, setQuality, setError) => {
-    if (!password) {
-      setQuality(null);
-      setError('');
-      return;
-    }
-    try {
-      setError('');
-      setQuality(await passwordQuality(password, context));
-    } catch (reason) {
-      setQuality(null);
-      setError(String(reason));
-    }
-  };
+  const context = React.useMemo(
+    () => [administrator.username, administrator.name, administrator.email],
+    [administrator.username, administrator.name, administrator.email],
+  );
+  const linux = usePasswordQualityCheck(context);
+  const keepass = usePasswordQualityCheck(context);
 
   return (
     <div>
@@ -91,11 +55,11 @@ const AdminStep = ({
           type="password"
           value={administrator.password}
           onChange={update('password')}
-          onBlur={() => check(administrator.password, setLinuxQuality, setLinuxQualityError)}
+          onBlur={() => linux.check(administrator.password)}
           autoComplete="new-password"
         />
       </FormGroup>
-      <Quality label="Linux administrator password" quality={linuxQuality} error={linuxQualityError} />
+      <PasswordQualityFeedback label="Linux administrator password" quality={linux.quality} error={linux.error} />
       <FormGroup label="Confirm Linux administrator password" fieldId="wizard-admin-password-confirm" isRequired>
         <TextInput
           id="wizard-admin-password-confirm"
@@ -113,7 +77,7 @@ const AdminStep = ({
         onChange={(_event, checked) => onReuseLinuxPasswordForKeePass(checked)}
       />
       {reuseLinuxPasswordForKeePass ? (
-        <Quality label="KeePassXC master password" quality={linuxQuality} error={linuxQualityError} />
+        <PasswordQualityFeedback label="KeePassXC master password" quality={linux.quality} error={linux.error} />
       ) : (
         <>
           <FormGroup label="KeePassXC master password" fieldId="wizard-keepass-password" isRequired>
@@ -122,11 +86,11 @@ const AdminStep = ({
               type="password"
               value={keePassPassword}
               onChange={(_event, value) => onKeePassPassword(value)}
-              onBlur={() => check(keePassPassword, setKeepassQuality, setKeepassQualityError)}
+              onBlur={() => keepass.check(keePassPassword)}
               autoComplete="new-password"
             />
           </FormGroup>
-          <Quality label="KeePassXC master password" quality={keepassQuality} error={keepassQualityError} />
+          <PasswordQualityFeedback label="KeePassXC master password" quality={keepass.quality} error={keepass.error} />
           <FormGroup label="Confirm KeePassXC master password" fieldId="wizard-keepass-password-confirm" isRequired>
             <TextInput
               id="wizard-keepass-password-confirm"
