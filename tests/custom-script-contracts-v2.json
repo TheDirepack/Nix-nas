@@ -10,47 +10,31 @@
       "fuzzStrategy": "feature-id",
       "source": "services/nas_v2_control.py",
       "systemTest": "tests/vm/adversarial-installed.py",
-      "tests": [
-        "tests/test_v2_control.py",
-        "tests/test_v2_editor.py",
-        "tests/test_adversarial_security.py"
-      ]
+      "tests": ["tests/test_v2_control.py", "tests/test_v2_editor.py", "tests/test_adversarial_security.py"]
     },
     "nas-managed-session": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_v2_session.py",
       "systemTest": "tests/vm/adversarial-installed.py",
-      "tests": [
-        "tests/test_v2_session.py",
-        "tests/test_v2_session_projection.py"
-      ]
+      "tests": ["tests/test_v2_session.py", "tests/test_v2_session_projection.py"]
     },
     "nas-first-run-api": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_first_run_api.py",
       "systemTest": "tests/test_first_run_api_contract.py",
-      "tests": [
-        "tests/test_first_run_api_contract.py",
-        "tests/test_first_run_security_hardening.py"
-      ]
+      "tests": ["tests/test_first_run_api_contract.py", "tests/test_first_run_security_hardening.py"]
     },
     "nas-first-start-job": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_first_start.py",
       "systemTest": "tests/test_secure_first_start.py",
-      "tests": [
-        "tests/test_secure_first_start.py",
-        "tests/test_first_run_security_hardening.py"
-      ]
+      "tests": ["tests/test_secure_first_start.py", "tests/test_first_run_security_hardening.py"]
     },
     "nas-identity-bootstrap": {
       "fuzzStrategy": "unknown-argv",
       "source": "services/nas_identity_bootstrap.py",
       "systemTest": "tests/test_identity_authority_dispatch.py",
-      "tests": [
-        "tests/test_identity_authority_dispatch.py",
-        "tests/test_identity_http_security.py"
-      ]
+      "tests": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"]
     }
   },
   "pythonModules": {
@@ -88,7 +72,8 @@
     "services/nas_v2_systemd_reconcile.py": ["tests/test_v2_podman_network.py", "tests/test_v2_session_projection.py", "tests/test_v2_source_watch.py", "tests/test_v2_systemd_reconcile.py"],
     "services/nas_first_run_api.py": ["tests/test_first_run_api_contract.py", "tests/test_first_run_security_hardening.py"],
     "services/nas_first_start.py": ["tests/test_secure_first_start.py", "tests/test_first_run_security_hardening.py"],
-    "services/nas_identity_bootstrap.py": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"]
+    "services/nas_identity_bootstrap.py": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"],
+    "services/nas_identity_dispatch.py": ["tests/test_identity_authority_dispatch.py", "tests/test_identity_http_security.py"]
   },
   "schemaVersion": 3
 }
