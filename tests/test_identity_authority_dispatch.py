@@ -16,6 +16,7 @@ class IdentityAuthorityDispatchTests(unittest.TestCase):
         project = PYPROJECT.read_text(encoding="utf-8")
         self.assertIn('nas-identity-sync = "nas_identity_dispatch:main"', project)
         self.assertIn('"nas_identity_dispatch"', project)
+        self.assertIn('nas-identity-bootstrap = "nas_identity_bootstrap:main"', project)
 
     def test_only_setup_mutations_route_to_bootstrap_helper(self) -> None:
         source = DISPATCH.read_text(encoding="utf-8")
