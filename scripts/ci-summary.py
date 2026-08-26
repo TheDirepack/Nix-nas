@@ -6,18 +6,27 @@ import sys
 from typing import Any
 
 
-PREBUILD_JOBS = {"prebuild"}
-PREPARE_JOBS = {"prepare"}
-QUALIFICATION_JOBS = {"browser", "integration"}
+PARALLEL_QUALIFICATION_JOBS = {
+    "static",
+    "unit",
+    "security",
+    "nonroot",
+    "cockpit",
+}
+BASE_JOBS = {
+    "prerequisites",
+    *PARALLEL_QUALIFICATION_JOBS,
+    "qualification",
+    "prepare",
+    "browser",
+}
 SLOW_JOBS = {"source-fuzz"}
 INSTALLED_SECURITY_JOBS = {"installed-security"}
 KNOWN_JOBS = frozenset(
-    PREBUILD_JOBS
-    | PREPARE_JOBS
-    | QUALIFICATION_JOBS
+    BASE_JOBS
     | SLOW_JOBS
     | INSTALLED_SECURITY_JOBS
-    | {"coverage-diff", "installer"}
+    | {"coverage-diff", "integration", "installer"}
 )
 
 
@@ -31,15 +40,16 @@ def expected_jobs(
     base_ref: str,
     test_tier: str,
 ) -> set[str]:
-    # Every run qualifies source/configuration, prepares the exact Cockpit
-    # product, and runs the deterministic browser suite. The explicit fast
-    # dispatch tier skips only the expensive Nix/VM work inside prepare.
-    expected = set(PREBUILD_JOBS | PREPARE_JOBS | {"browser"})
+    # Every run performs shared prerequisite validation, fans out the independent
+    # qualification branches, joins them at one gate, prepares the reviewed
+    # products, and exercises the deterministic browser suite. The explicit
+    # fast dispatch tier skips only the expensive Nix/VM work inside prepare.
+    expected = set(BASE_JOBS)
 
     if event_name == "pull_request" and base_ref == "main":
         expected.add("coverage-diff")
 
-    qualification_run = (
+    integration_run = (
         event_name == "schedule"
         or (event_name == "push" and _main_or_release_ref(ref))
         or (
@@ -47,7 +57,7 @@ def expected_jobs(
             and test_tier in {"full", "installer"}
         )
     )
-    if qualification_run:
+    if integration_run:
         expected.add("integration")
 
     installer_run = (
