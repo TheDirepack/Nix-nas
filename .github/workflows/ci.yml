@@ -444,8 +444,8 @@ jobs:
             "cockpit=${{ needs.cockpit.result }}" \
             "coverage-diff=${{ needs.coverage-diff.result }}"
 
-  # Stage 3: expensive Nix products are materialized once after qualification.
-  # The Cockpit bundle was already built by its parallel qualification branch.
+  # Stage 3: source packaging still runs on PRs, but the expensive exact Nix
+  # handoff is produced only when a later integration/release consumer needs it.
   prepare:
     name: Prepare reusable build handoff
     if: ${{ !cancelled() && needs.qualification.result == 'success' }}
@@ -460,13 +460,15 @@ jobs:
           name: cockpit-bundle
           path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-      - name: Set up Nix for reusable system handoff
+      - name: Set up Nix for packaging and reusable handoff
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         uses: ./.github/actions/setup-nix-ci
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Select VM bundle cache namespace
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+        if: >-
+          github.event_name == 'schedule' || github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast')
         id: vm-bundle-namespace
         env:
           FORCE_CACHE_MISS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force-cache-miss == 'true' }}
@@ -477,13 +479,25 @@ jobs:
             printf 'suffix=\n' >> "$GITHUB_OUTPUT"
           fi
       - name: Restore/build once and publish complete Nix handoff
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+        if: >-
+          github.event_name == 'schedule' || github.event_name == 'push' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast')
         uses: ./.github/actions/prepare-vm-handoff
         with:
           cache-schema: ${{ env.CI_CACHE_SCHEMA }}
           cache-suffix: ${{ steps.vm-bundle-namespace.outputs.suffix }}
-      - name: Package and verify as an untrusted consumer
+      - name: Restore verified source archive
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
+        id: source-archive-cache
+        continue-on-error: true
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: nas-source-release
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
+      - name: Package and verify as an untrusted consumer
+        if: >-
+          (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
+          steps.source-archive-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           out="$GITHUB_WORKSPACE/nas-source-release"
@@ -507,6 +521,22 @@ jobs:
               NAS_PREFLIGHT_SKIP_NIX=1 \
               ./scripts/preflight.sh
           )
+      - name: Verify restored source archive
+        if: >-
+          (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
+          steps.source-archive-cache.outputs.cache-hit == 'true'
+        run: |
+          archive=$(find nas-source-release -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit)
+          test -n "$archive"
+          unzip -tq "$archive"
+      - name: Save verified source archive
+        if: >-
+          (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
+          steps.source-archive-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: nas-source-release
+          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
 
   # Stage 4a: Playwright owns internal parallelism, so use one browser runner.
   browser:
