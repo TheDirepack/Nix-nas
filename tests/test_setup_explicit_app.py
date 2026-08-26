@@ -14,7 +14,8 @@ class ExplicitSetupApplicationTests(unittest.TestCase):
         self.assertIn("nas-setup", content)
         self.assertIn("NAS Setup", content)
         self.assertIn("authentik_core.application", content)
-        self.assertIn("provider: null", content)
+        self.assertIn("metaDescription:", content)
+        self.assertIn("nas_admin", content)
 
     def test_blueprint_is_installed_via_nas_authentik_blueprints(self) -> None:
         account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
