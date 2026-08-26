@@ -93,6 +93,16 @@ class CiWorkflowGraphTests(unittest.TestCase):
         ):
             self.assertNotIn(retired, self.jobs)
 
+    def test_concurrency_only_cancels_superseded_pull_requests(self) -> None:
+        concurrency = self.workflow["concurrency"]
+        group = str(concurrency["group"])
+        cancel = str(concurrency["cancel-in-progress"])
+        self.assertIn("github.event_name == 'pull_request'", group)
+        self.assertIn("github.event.pull_request.number", group)
+        self.assertIn("github.run_id", group)
+        self.assertIn("github.event_name == 'pull_request'", cancel)
+        self.assertNotEqual(cancel, "true")
+
     def test_shared_prerequisites_run_before_parallel_fanout(self) -> None:
         prerequisites = self.jobs["prerequisites"]
         text = self.serialized(prerequisites)
