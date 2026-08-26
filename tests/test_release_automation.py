@@ -64,17 +64,12 @@ class ReleaseAutomationTests(unittest.TestCase):
             path.write_text(content, encoding="utf-8")
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(
-            ["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=root,
+            check=True,
         )
         subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-        baseline = self.commit(root, "baseline")
-        epoch_path = root / prepare_release.RELEASE_EPOCH_PATH
-        epoch_path.parent.mkdir(parents=True, exist_ok=True)
-        epoch_path.write_text(
-            json.dumps({"version": "1.2.3", "sourceSha": baseline}, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return self.commit(root, "release epoch")
+        return self.commit(root, "baseline")
 
     def add_source_commit(self, root: pathlib.Path, number: int) -> str:
         path = root / f"source-{number}.txt"
@@ -132,18 +127,18 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(on_disk["bootstrap_username"], "akadmin")
             self.assertEqual(on_disk["bootstrap_password"], release_password)
 
-    def test_first_parent_distance_makes_versions_deterministic(self) -> None:
+    def test_existing_tags_drive_monotonic_patch_versions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.make_repo(root)
-            source_one = self.add_source_commit(root, 1)
-            source_two = self.add_source_commit(root, 2)
+            source_sha = self.add_source_commit(root, 1)
             current = prepare_release.Version.parse("1.2.3")
             self.assertEqual(
-                str(prepare_release.next_version(root, current, source_one)), "1.2.4"
+                str(prepare_release.next_version(root, current, source_sha)), "1.2.4"
             )
+            subprocess.run(["git", "tag", "v1.2.8"], cwd=root, check=True)
             self.assertEqual(
-                str(prepare_release.next_version(root, current, source_two)), "1.2.5"
+                str(prepare_release.next_version(root, current, source_sha)), "1.2.9"
             )
 
     def test_rerun_recovers_version_and_diceware_password_from_existing_release_tag(
@@ -166,7 +161,9 @@ class ReleaseAutomationTests(unittest.TestCase):
             subprocess.run(["git", "add", "-A"], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "release"], cwd=root, check=True)
             subprocess.run(
-                ["git", "tag", "-a", "v1.2.4", "-m", "release"], cwd=root, check=True
+                ["git", "tag", "-a", "v1.2.4", "-m", "release"],
+                cwd=root,
+                check=True,
             )
             subprocess.run(["git", "checkout", "-q", source_sha], cwd=root, check=True)
 
@@ -225,7 +222,9 @@ class ReleaseAutomationTests(unittest.TestCase):
                 "printf '%s\\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=different-bootstrap-password-123456'\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(RuntimeError, "does not use the same bootstrap password"):
+            with self.assertRaisesRegex(
+                RuntimeError, "does not use the same bootstrap password"
+            ):
                 prepare_release.discover_bootstrap_password(root)
 
     def test_release_passphrase_requires_exactly_five_safe_words(self) -> None:
@@ -248,7 +247,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         for relative in prepare_release.BOOTSTRAP_TARGETS:
             self.assertIn("nas-admin-first-boot", (ROOT / relative).read_text())
 
-    def test_release_trigger_graph_is_ci_gated_and_loop_free(self) -> None:
+    def test_release_trigger_graph_is_ci_gated_serialized_and_loop_free(self) -> None:
         release = yaml.load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
             Loader=yaml.BaseLoader,
@@ -266,6 +265,9 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertEqual(release_triggers["workflow_run"]["branches"], ["main"])
         self.assertNotIn("tags", ci_triggers["push"])
         self.assertEqual(ci_triggers["push"]["branches"], ["main"])
+        self.assertEqual(release["concurrency"]["group"], "release-main")
+        self.assertEqual(release["concurrency"]["queue"], "max")
+        self.assertNotIn("cancel-in-progress", release["concurrency"])
 
         eligibility = release["jobs"]["eligibility"]
         eligibility_text = repr(eligibility)
@@ -283,8 +285,11 @@ class ReleaseAutomationTests(unittest.TestCase):
         )
         jobs = workflow["jobs"]
         self.assertEqual(workflow["permissions"]["contents"], "read")
+        self.assertEqual(workflow["permissions"]["actions"], "read")
         self.assertEqual(jobs["build"]["permissions"]["contents"], "read")
+        self.assertEqual(jobs["build"]["permissions"]["actions"], "read")
         self.assertEqual(jobs["publish"]["permissions"]["contents"], "write")
+        self.assertEqual(jobs["publish"]["permissions"]["actions"], "read")
         build_text = repr(jobs["build"])
         publish_text = repr(jobs["publish"])
         self.assertIn("persist-credentials", build_text)
