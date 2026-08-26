@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           bootstrap_password=""
           for _ in {1..20}; do
-            bootstrap_password="$(nix shell nixpkgs#diceware -c diceware -n 5 -d - -w en_eff --caps)"
+            bootstrap_password="$(nix develop .#test -c diceware -n 5 -d - -w en_eff --caps)"
             if (( ${#bootstrap_password} >= 20 )); then
               break
             fi
