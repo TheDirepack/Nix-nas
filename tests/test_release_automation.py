@@ -95,19 +95,34 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(str(prepare_release.next_version(root, current, 4)), "1.2.9")
             self.assertEqual(str(prepare_release.next_version(root, current, 12)), "1.2.12")
 
-    def test_rerun_reuses_tag_whose_release_commit_has_the_same_source_parent(self) -> None:
+    def test_rerun_recovers_version_and_password_from_the_existing_release_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.make_repo(root)
             source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-            (root / "release-marker").write_text("release\n", encoding="utf-8")
-            subprocess.run(["git", "add", "release-marker"], cwd=root, check=True)
+            tagged_password = "tagged-bootstrap-password-87654321"
+            for relative in prepare_release.CORE_BOOTSTRAP_PATHS:
+                path = root / relative
+                path.write_text(
+                    path.read_text().replace("old-bootstrap-password-123456", tagged_password), encoding="utf-8"
+                )
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "release"], cwd=root, check=True)
             subprocess.run(["git", "tag", "-a", "v1.2.8", "-m", "release"], cwd=root, check=True)
             subprocess.run(["git", "checkout", "-q", source_sha], cwd=root, check=True)
 
-            current = prepare_release.Version.parse("1.2.3")
-            self.assertEqual(str(prepare_release.next_version(root, current, 8, source_sha)), "1.2.8")
+            metadata = prepare_release.prepare_release(
+                root,
+                run_number=8,
+                source_sha=source_sha,
+                metadata_out=root / ".tmp" / "release.json",
+                release_date="2026-08-26",
+            )
+            self.assertEqual(metadata["version"], "1.2.8")
+            self.assertEqual(metadata["existing_tag"], "v1.2.8")
+            self.assertEqual(metadata["bootstrap_password"], tagged_password)
+            for relative in prepare_release.CORE_BOOTSTRAP_PATHS:
+                self.assertIn(tagged_password, (root / relative).read_text())
 
     def test_generated_password_matches_runtime_secret_atom_contract(self) -> None:
         for _ in range(20):
@@ -131,6 +146,8 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertIn("nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel", workflow)
         self.assertIn("./scripts/package-release.sh --source-only", workflow)
         self.assertIn("gh release create", workflow)
+        self.assertIn("gh release upload", workflow)
+        self.assertIn("existing_tag", workflow)
         self.assertIn("bootstrap_username", workflow)
         self.assertIn("bootstrap_password", workflow)
 
