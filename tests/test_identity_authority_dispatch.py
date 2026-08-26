@@ -33,6 +33,14 @@ class IdentityAuthorityDispatchTests(unittest.TestCase):
         self.assertIn("identity.provision_runtime_token(_bootstrap_token())", source)
         self.assertIn("identity.retire_bootstrap_administrator(token, administrator)", source)
 
+    def test_all_setup_created_human_passwords_use_shared_strength_policy(self) -> None:
+        source = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("/run/current-system/sw/bin/nas-password-quality", source)
+        self.assertIn("_validate_setup_account_passwords(plan)", source)
+        self.assertIn('quality.get("localAccepted") is not True', source)
+        self.assertIn('quality.get("breachStatus") == "breached"', source)
+        self.assertNotIn("password=", source)
+
     def test_runtime_authentik_requests_never_follow_redirects(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
         self.assertIn("follow_redirects=False", source)
