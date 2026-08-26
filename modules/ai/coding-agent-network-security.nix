@@ -10,11 +10,18 @@ let
   forwardChain = "NAS_PI_FORWARD";
   iptables = "${pkgs.iptables}/bin/iptables";
   ip = "${pkgs.iproute2}/bin/ip";
+  sysctl = "${pkgs.procps}/bin/sysctl";
 
   secureNetnsStart = pkgs.writeShellScript "nas-pi-netns-secure-setup" ''
     set -euo pipefail
 
     ${ip} netns add pi 2>/dev/null || true
+    # The policy below is deliberately IPv4-only. Disable IPv6 inside the
+    # namespace before bringing its veth online so link-local IPv6 cannot bypass
+    # the host/private-range iptables policy through an automatically assigned
+    # fe80:: address.
+    ${ip} netns exec pi ${sysctl} -q -w net.ipv6.conf.all.disable_ipv6=1
+    ${ip} netns exec pi ${sysctl} -q -w net.ipv6.conf.default.disable_ipv6=1
     ${ip} link add pi-veth0 type veth peer name pi-veth1 2>/dev/null || true
     ${ip} link set pi-veth1 netns pi 2>/dev/null || true
     ${ip} addr add ${piHostVethIp}/30 dev pi-veth0 2>/dev/null || true
