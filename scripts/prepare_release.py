@@ -65,11 +65,11 @@ def matching_tags(root: pathlib.Path, version: Version) -> list[tuple[str, int]]
     return tags
 
 
-def version_already_released_from_source(root: pathlib.Path, current: Version, source_sha: str) -> Version | None:
+def release_tag_for_source(root: pathlib.Path, current: Version, source_sha: str) -> tuple[str, Version] | None:
     for tag, patch in sorted(matching_tags(root, current), key=lambda item: item[1], reverse=True):
         parent = run_git(root, "rev-parse", f"{tag}^{{commit}}^1", check=False)
         if parent.returncode == 0 and parent.stdout.strip() == source_sha:
-            return Version(current.major, current.minor, patch)
+            return tag, Version(current.major, current.minor, patch)
     return None
 
 
@@ -77,9 +77,9 @@ def next_version(root: pathlib.Path, current: Version, run_number: int, source_s
     if run_number < 1:
         raise ValueError("run number must be positive")
     if source_sha:
-        reused = version_already_released_from_source(root, current, source_sha)
-        if reused is not None:
-            return reused
+        existing = release_tag_for_source(root, current, source_sha)
+        if existing is not None:
+            return existing[1]
     tag_patches = [patch for _, patch in matching_tags(root, current)]
     highest_tag = max(tag_patches, default=-1)
     patch = max(current.patch + 1, highest_tag + 1, run_number)
@@ -99,17 +99,27 @@ def validate_bootstrap_password(password: str) -> None:
         raise ValueError("bootstrap password does not satisfy the NAS secret atom contract")
 
 
-def discover_bootstrap_password(root: pathlib.Path) -> str:
-    source = (root / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+def bootstrap_password_from_text(source: str, label: str) -> str:
     matches = BOOTSTRAP_RE.findall(source)
     if len(matches) != 1:
-        raise RuntimeError("expected exactly one Authentik bootstrap-password seed in secret-tools.nix")
+        raise RuntimeError(f"expected exactly one Authentik bootstrap-password seed in {label}")
     password = matches[0]
     validate_bootstrap_password(password)
+    return password
+
+
+def discover_bootstrap_password(root: pathlib.Path) -> str:
+    source = (root / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+    password = bootstrap_password_from_text(source, "secret-tools.nix")
     application_services = (root / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
     if password not in application_services:
         raise RuntimeError("first-boot Authentik runtime does not use the same bootstrap password as nas-secrets")
     return password
+
+
+def bootstrap_password_from_tag(root: pathlib.Path, tag: str) -> str:
+    result = run_git(root, "show", f"{tag}:modules/nas/internal/secret-tools.nix")
+    return bootstrap_password_from_text(result.stdout, f"{tag}:secret-tools.nix")
 
 
 def tracked_files_containing(root: pathlib.Path, needle: str) -> list[pathlib.Path]:
@@ -218,9 +228,15 @@ def prepare_release(
 ) -> dict[str, object]:
     root = root.resolve()
     current = Version.parse((root / "VERSION").read_text(encoding="utf-8"))
-    target = next_version(root, current, run_number, source_sha)
+    existing = release_tag_for_source(root, current, source_sha)
+    target = existing[1] if existing is not None else next_version(root, current, run_number)
     old_password = discover_bootstrap_password(root)
-    new_password = password or generate_bootstrap_password()
+    if password is not None:
+        new_password = password
+    elif existing is not None:
+        new_password = bootstrap_password_from_tag(root, existing[0])
+    else:
+        new_password = generate_bootstrap_password()
     validate_bootstrap_password(new_password)
 
     date = release_date or dt.datetime.now(dt.UTC).date().isoformat()
@@ -231,6 +247,7 @@ def prepare_release(
         "version": str(target),
         "previous_version": str(current),
         "tag": f"v{target}",
+        "existing_tag": existing[0] if existing is not None else "",
         "source_sha": source_sha,
         "bootstrap_username": BOOTSTRAP_USERNAME,
         "bootstrap_password": new_password,
