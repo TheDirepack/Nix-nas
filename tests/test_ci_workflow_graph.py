@@ -99,11 +99,13 @@ class CiWorkflowGraphTests(unittest.TestCase):
         for name in self.PARALLEL:
             self.assertEqual(self.needs(self.jobs[name]), {"prerequisites"})
 
-    def test_parallel_branches_have_no_cross_dependencies(self) -> None:
+    def test_parallel_branches_have_no_cross_dependencies_and_always_report(self) -> None:
         for name in self.PARALLEL:
-            dependencies = self.needs(self.jobs[name])
+            job = self.jobs[name]
+            dependencies = self.needs(job)
             self.assertEqual(dependencies, {"prerequisites"}, name)
             self.assertTrue(dependencies.isdisjoint(self.PARALLEL), name)
+            self.assertEqual(job.get("if"), "always()", name)
 
     def test_branch_specific_prerequisites_stay_local(self) -> None:
         cockpit = self.serialized(self.jobs["cockpit"])
@@ -140,6 +142,9 @@ class CiWorkflowGraphTests(unittest.TestCase):
             "Production Cockpit bundle",
         ):
             self.assertIn(marker, script)
+        self.assertNotIn("nix shell nixpkgs#", script)
+        self.assertIn("nix develop .#test -c bats", script)
+        self.assertIn("nix develop .#test -c prettier", script)
 
     def test_coverage_comparison_starts_after_unit_only(self) -> None:
         coverage = self.jobs["coverage-diff"]
@@ -149,6 +154,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("main-coverage.json", self.serialized(coverage))
         self.assertIn("ci-check-report.py", self.run_text(coverage))
         self.assertIn("baseline-build", self.serialized(coverage))
+        self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
     def test_qualification_gate_joins_all_parallel_checks_once(self) -> None:
         gate = self.jobs["qualification"]
