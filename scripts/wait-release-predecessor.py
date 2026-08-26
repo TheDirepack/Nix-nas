@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Wait until an earlier qualified main merge is released before this source.
 
 GitHub concurrency queues preserve queue-entry order, not source-history order.
@@ -15,10 +14,17 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import time
 from typing import Any
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import prepare_release  # noqa: E402
+
 ACTIVE_RUN_STATUSES = {"queued", "in_progress", "pending", "requested", "waiting"}
 
 
@@ -66,6 +72,11 @@ def classify_ci_runs(payload: Any) -> str:
         return "success"
     if any(run.get("status") in ACTIVE_RUN_STATUSES for run in runs):
         return "active"
+    if not runs:
+        # An earlier main merge can exist before its CI run has been registered
+        # by Actions. Treat that as a barrier rather than incorrectly assuming
+        # the merge already completed CI unsuccessfully.
+        return "unregistered"
     return "not-qualified"
 
 
@@ -115,11 +126,38 @@ def reject_published_descendant(root: pathlib.Path, source_sha: str) -> None:
             )
 
 
-def first_parent_ancestors(root: pathlib.Path, source_sha: str) -> list[str]:
-    parent = git("rev-parse", f"{source_sha}^1", cwd=root, check=False)
-    if not parent:
+def release_series_anchor(root: pathlib.Path, source_sha: str) -> str:
+    current = prepare_release.Version.parse((root / "VERSION").read_text(encoding="utf-8"))
+    return prepare_release.version_anchor(root, current, source_sha)
+
+
+def first_parent_ancestors(
+    root: pathlib.Path,
+    source_sha: str,
+    *,
+    anchor: str | None = None,
+) -> list[str]:
+    parent_result = run(
+        "git",
+        "rev-parse",
+        f"{source_sha}^1",
+        cwd=root,
+        check=False,
+    )
+    parent = parent_result.stdout.strip()
+    if parent_result.returncode != 0 or not parent:
         return []
-    output = git("rev-list", "--first-parent", parent, cwd=root)
+    if anchor is None:
+        output = git("rev-list", "--first-parent", parent, cwd=root)
+    else:
+        if not is_ancestor(root, anchor, source_sha):
+            raise RuntimeError("release series anchor is not an ancestor of the source")
+        output = git(
+            "rev-list",
+            "--first-parent",
+            f"{anchor}..{parent}",
+            cwd=root,
+        )
     return [line for line in output.splitlines() if line]
 
 
@@ -141,9 +179,11 @@ def find_predecessor_state(
     repository: str,
     workflow: str,
     source_sha: str,
+    *,
+    anchor: str | None = None,
 ) -> tuple[str | None, str]:
     """Return nearest earlier exact main merge that may still require release."""
-    for ancestor in first_parent_ancestors(root, source_sha):
+    for ancestor in first_parent_ancestors(root, source_sha, anchor=anchor):
         if not commit_is_exact_main_merge(repository, ancestor):
             continue
         state = ci_state(repository, workflow, ancestor)
@@ -166,10 +206,17 @@ def wait_for_predecessor(
     timeout_seconds: int,
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
+    anchor = release_series_anchor(root, source_sha)
     while True:
         fetch_tags(root)
         reject_published_descendant(root, source_sha)
-        predecessor, state = find_predecessor_state(root, repository, workflow, source_sha)
+        predecessor, state = find_predecessor_state(
+            root,
+            repository,
+            workflow,
+            source_sha,
+            anchor=anchor,
+        )
         if predecessor is None:
             print(f"release ordering ready: no earlier qualified merge blocks {source_sha}")
             return
@@ -184,14 +231,16 @@ def wait_for_predecessor(
         if time.monotonic() >= deadline:
             if state == "success":
                 reason = "qualified successfully but has no release tag"
+            elif state == "unregistered":
+                reason = "has no registered main CI run yet"
             else:
                 reason = f"CI is still {state}"
-            raise TimeoutError(
-                f"timed out waiting for predecessor {predecessor}: {reason}"
-            )
+            raise TimeoutError(f"timed out waiting for predecessor {predecessor}: {reason}")
 
         if state == "success":
             detail = "successful CI; waiting for release tag"
+        elif state == "unregistered":
+            detail = "main CI run not registered yet"
         else:
             detail = f"CI {state}; waiting for qualification to finish"
         print(f"release ordering blocked by {predecessor}: {detail}", flush=True)
