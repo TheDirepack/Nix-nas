@@ -74,7 +74,9 @@ class ContractTests(unittest.TestCase):
         self.assertTrue(uses)
         external_uses = [item for item in uses if not item.startswith(("./", "$/"))]
         self.assertTrue(external_uses)
-        self.assertTrue(all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", item) for item in external_uses))
+        self.assertTrue(
+            all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", item) for item in external_uses)
+        )
         self.assertIn("./.github/actions/prepare-vm-handoff", uses)
         self.assertNotIn("web/settings", workflow)
         self.assertNotIn("web/portal/*.js", workflow)
@@ -694,16 +696,24 @@ class ContractTests(unittest.TestCase):
         bundle_export = handoff.index("Build and export only missing bundle fragments")
         bundle_verify = handoff.index("Verify exact complete handoff")
         system_build = handoff.index("Build installable system closures")
-        bundle_publish = handoff.index("Publish complete Nix handoff for downstream runners")
+        bundle_publish = handoff.index(
+            "Publish complete Nix handoff for downstream runners"
+        )
         self.assertLess(bundle_import, bundle_export)
         self.assertLess(bundle_export, bundle_verify)
         self.assertLess(bundle_verify, system_build)
         self.assertLess(system_build, bundle_publish)
         self.assertIn("save-missing", handoff)
         self.assertIn("verify-handoff", handoff)
-        integration_job = workflow.split("  integration:\n", 1)[1].split("\n  installer:\n", 1)[0]
-        integration_import = integration_job.index("Verify and import prepared Nix handoff")
-        integration_run = integration_job.index("Run ${{ matrix.vm }} NixOS VM integration")
+        integration_job = workflow.split("  integration:\n", 1)[1].split(
+            "\n  installer:\n", 1
+        )[0]
+        integration_import = integration_job.index(
+            "Verify and import prepared Nix handoff"
+        )
+        integration_run = integration_job.index(
+            "Run ${{ matrix.vm }} NixOS VM integration"
+        )
         self.assertLess(integration_import, integration_run)
 
 
