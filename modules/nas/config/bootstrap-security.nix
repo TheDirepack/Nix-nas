@@ -247,8 +247,8 @@ in
   # legacy first-boot unit still carries an ExecStartPost for the deleted custom
   # proxy daemon on main, so clear that hook in the effective configuration.
   systemd.services.nas-identity-bootstrap = {
-    description = lib.mkForce "Reconcile the Authentik setup application and embedded outpost";
-    serviceConfig.ExecStartPost = lib.mkForce [ ];
+    description = lib.mkOverride 40 "Reconcile the Authentik setup application and embedded outpost";
+    serviceConfig.ExecStartPost = lib.mkOverride 40 [ ];
   };
 
   systemd.services.nas-first-run-api.environment.NAS_FIRST_START_JOB =
