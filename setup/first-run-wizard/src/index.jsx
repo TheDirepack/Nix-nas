@@ -12,8 +12,8 @@ import ConfirmStep from './steps/ConfirmStep.jsx';
 
 // @patternfly/react-core 6.1.0 builds wizard steps exclusively from
 // WizardStep children; the steps-array prop arrived in a later 6.x.
-const emptyAdministrator = { username: 'admin', name: '', email: '', password: '', confirm: '' };
-const THEME_STORAGE_KEY = 'nas-setup-theme';
+const emptyAdministrator = { username: '', name: '', email: '', password: '', confirm: '' };
+const THEME_STORAGE_KEY = 'nas-setup-theme-preference';
 
 const readThemePreference = () => {
   try {
@@ -74,8 +74,6 @@ const App = () => {
   }, []);
 
   const keePassEffective = useSamePassword ? administrator.password : keePassPassword;
-  const nextTheme = theme === 'dark' ? 'light' : 'dark';
-
   return (
     <div className="nas-setup-shell">
       <header className="nas-setup-header">
@@ -84,15 +82,18 @@ const App = () => {
           <h1 className="nas-setup-title">First-start setup</h1>
           <p className="nas-setup-subtitle">A guided setup for identity, storage, and recovery.</p>
         </div>
-        <button
-          className="nas-theme-toggle"
-          type="button"
-          onClick={() => setTheme(nextTheme)}
-          aria-label={`Switch to ${nextTheme} mode`}
-          aria-pressed={theme === 'dark'}
-        >
-          {theme === 'dark' ? 'Use light mode' : 'Use dark mode'}
-        </button>
+        <label className="nas-theme-control">
+          <span>Appearance</span>
+          <select
+            value={theme}
+            onChange={(event) => setTheme(event.target.value)}
+            aria-label="Color theme"
+          >
+            <option value="auto">Browser setting</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
       </header>
       <main className="nas-setup-main">
         <Wizard

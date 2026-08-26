@@ -28,7 +28,8 @@ test("wizard entry mounts React and imports PatternFly global styles", async () 
   assert.match(index, /@patternfly\/patternfly\/patternfly\.css/);
   assert.match(index, /nas-setup-shell/);
   assert.match(index, /pf-v6-theme-dark/);
-  assert.match(index, /Use dark mode/);
+  assert.match(index, /Browser setting/);
+  assert.match(index, /prefers-color-scheme/);
 });
 
 test("wizard builds steps from WizardStep children with explicit ids", async () => {
@@ -81,6 +82,15 @@ test("admin step gates the KeePassXC database password behind the shared-passwor
   );
 });
 
+test("administrator username starts blank and has no schema default", async () => {
+  const index = await wizard("src/index.jsx");
+  const api = await wizard("src/api.js");
+  const schema = JSON.parse(await wizard("src/forms/schema.json"));
+  assert.match(index, /emptyAdministrator = \{ username: ''/);
+  assert.doesNotMatch(api, /adminUsername: schema\.properties\.adminUsername\.default \|\| 'admin'/);
+  assert.equal(schema.properties.adminUsername.default, undefined);
+});
+
 test("setup uses constrained selects and explains the Authentik application boundary", async () => {
   const language = await wizard("src/steps/LanguageStep.jsx");
   const authentik = await wizard("src/steps/AuthentikStep.jsx");
@@ -95,7 +105,10 @@ test("setup uses constrained selects and explains the Authentik application boun
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
   const css = await wizard("src/wizard.css");
   assert.match(css, /min-height: 100dvh/);
+  assert.match(css, /height: 100dvh/);
   assert.match(css, /--pf-v6-c-wizard--Height: 100%/);
+  assert.match(css, /pf-v6-c-wizard__outer-wrap/);
+  assert.match(css, /@media \(prefers-color-scheme: dark\)/);
   assert.match(css, /\.pf-v6-theme-dark/);
   assert.match(css, /@media \(max-width: 40rem\)/);
 });
@@ -124,7 +137,7 @@ test("committed bundle registers every step and the KeePassXC toggle", async () 
     assert.ok(js.includes(`"${id}"`), `bundle is missing step id ${id}`);
   }
   assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC toggle");
-  assert.ok(js.includes("Use dark mode"), "bundle is missing the theme control");
+  assert.ok(js.includes("Browser setting"), "bundle is missing the browser theme option");
   assert.ok(js.includes("application viewer"), "bundle is missing the Authentik application guidance");
 });
 

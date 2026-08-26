@@ -1,12 +1,18 @@
 import React from 'react';
-import { FormGroup, Checkbox, Label, HelperText, HelperTextItem } from '@patternfly/react-core';
+import { Alert, FormGroup, Checkbox, Label, HelperText, HelperTextItem } from '@patternfly/react-core';
 
 const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive }) => {
   if (planError) {
-    return <p className="nas-wizard-step">Unable to load the storage plan: {planError}</p>;
+    return (
+      <div className="nas-wizard-step nas-wizard-message">
+        <Alert variant="danger" isInline title="Storage plan unavailable">
+          {planError}
+        </Alert>
+      </div>
+    );
   }
   if (!plan) {
-    return <p className="nas-wizard-step">Loading the storage plan...</p>;
+    return <p className="nas-wizard-step nas-wizard-message">Loading the storage plan...</p>;
   }
   const storage = plan.storage || {};
   return (
