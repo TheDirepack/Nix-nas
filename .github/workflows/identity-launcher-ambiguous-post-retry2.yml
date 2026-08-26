@@ -1,0 +1,64 @@
+name: Identity launcher ambiguous POST retry 2
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/identity-launcher-ambiguous-post-retry2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply hardening and corrected fault fixtures
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path(".github/workflows/identity-launcher-ambiguous-post-edit.yml").read_text()
+          begin = "          python3 - <<'PY'\n"
+          start = workflow.index(begin) + len(begin)
+          end = workflow.index("\n          PY", start)
+          exec(compile(textwrap.dedent(workflow[start:end]), "ambiguous-post-edit", "exec"), {})
+
+          test_path = Path("tests/test_setup_launcher_transaction.py")
+          tests = test_path.read_text()
+          old = 'mock.patch.object(sync, "authentik_list", side_effect=[[], [], [embedded_outpost()]]),'
+          new = 'mock.patch.object(sync, "authentik_list", side_effect=[[], [], [embedded_outpost()], []]),'
+          if tests.count(old) != 1:
+              raise SystemExit(f"unexpected compact fixture count: {tests.count(old)}")
+          tests = tests.replace(old, new)
+
+          old_multiline = '''            mock.patch.object(\n                sync,\n                "authentik_list",\n                side_effect=[[], [], [embedded_outpost()]],\n            ),'''
+          new_multiline = '''            mock.patch.object(\n                sync,\n                "authentik_list",\n                side_effect=[[], [], [embedded_outpost()], []],\n            ),'''
+          if tests.count(old_multiline) != 3:
+              raise SystemExit(f"unexpected multiline fixture count: {tests.count(old_multiline)}")
+          tests = tests.replace(old_multiline, new_multiline)
+          test_path.write_text(tests)
+          PY
+      - name: Format and test ambiguous POST rollback
+        run: |
+          nix develop .#test -c ruff format services/nas_identity_sync.py tests/test_setup_launcher_transaction.py
+          nix develop .#test -c ruff check services/nas_identity_sync.py tests/test_setup_launcher_transaction.py tests/test_identity_sync.py
+          nix develop .#test -c python3 -m unittest tests.test_setup_launcher_transaction tests.test_identity_sync
+      - name: Commit tested hardening
+        run: |
+          set -euo pipefail
+          git config user.name "TheDirepack"
+          git config user.email "48868531+TheDirepack@users.noreply.github.com"
+          git add services/nas_identity_sync.py tests/test_setup_launcher_transaction.py
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(identity): recover ambiguous launcher POSTs"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
