@@ -274,7 +274,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         epoch = json.loads((ROOT / prepare_release.RELEASE_EPOCH_PATH).read_text(encoding="utf-8"))
         self.assertEqual(epoch, {"version": "0.1.0"})
 
-    def test_release_trigger_graph_is_ci_gated_queued_and_loop_free(self) -> None:
+    def test_release_trigger_graph_is_ci_gated_ordered_and_loop_free(self) -> None:
         release = yaml.load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
             Loader=yaml.BaseLoader,
@@ -292,9 +292,9 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertEqual(release_triggers["workflow_run"]["branches"], ["main"])
         self.assertNotIn("tags", ci_triggers["push"])
         self.assertEqual(ci_triggers["push"]["branches"], ["main"])
-        self.assertEqual(release["concurrency"]["group"], "main-release-publication")
-        self.assertEqual(release["concurrency"]["queue"], "max")
-        self.assertNotIn("cancel-in-progress", release["concurrency"])
+        self.assertIn("github.event.workflow_run.head_sha", release["concurrency"]["group"])
+        self.assertEqual(release["concurrency"]["cancel-in-progress"], "false")
+        self.assertNotIn("queue", release["concurrency"])
 
         eligibility = release["jobs"]["eligibility"]
         eligibility_text = repr(eligibility)
@@ -304,6 +304,14 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertIn("commits/$SOURCE_SHA/pulls", eligibility_text)
         self.assertIn(".merged_at != null", eligibility_text)
         self.assertIn('.base.ref == "main"', eligibility_text)
+        self.assertIn(".merge_commit_sha == env.SOURCE_SHA", eligibility_text)
+
+        ordering = release["jobs"]["ordering"]
+        self.assertEqual(ordering["needs"], ["eligibility"])
+        self.assertIn("wait-release-predecessor.py", repr(ordering))
+        self.assertIn("--workflow ci.yml", repr(ordering))
+        self.assertEqual(release["jobs"]["build"]["needs"], ["eligibility", "ordering"])
+        self.assertIn("needs.ordering.result == 'success'", str(release["jobs"]["build"]["if"]))
 
     def test_release_build_is_read_only_and_only_publish_job_can_write(self) -> None:
         workflow = yaml.load(
@@ -313,6 +321,8 @@ class ReleaseAutomationTests(unittest.TestCase):
         jobs = workflow["jobs"]
         self.assertEqual(workflow["permissions"]["contents"], "read")
         self.assertEqual(workflow["permissions"]["actions"], "read")
+        self.assertEqual(jobs["ordering"]["permissions"]["contents"], "read")
+        self.assertEqual(jobs["ordering"]["permissions"]["actions"], "read")
         self.assertEqual(jobs["build"]["permissions"]["contents"], "read")
         self.assertEqual(jobs["build"]["permissions"]["actions"], "read")
         self.assertEqual(jobs["publish"]["permissions"]["contents"], "write")
@@ -337,6 +347,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         )
         self.assertIn("diceware", flake)
         self.assertIn("scripts/prepare_release.py", workflow)
+        self.assertIn("scripts/wait-release-predecessor.py", workflow)
         self.assertIn("./scripts/package-release.sh --source-only", workflow)
         self.assertIn("gh release create", workflow)
         self.assertIn("gh release upload", workflow)
@@ -351,12 +362,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         if actionlint is None:
             self.skipTest("actionlint is not installed outside the Nix test environment")
         result = subprocess.run(
-            [
-                actionlint,
-                "-ignore",
-                'unexpected key "queue" for "concurrency" section',
-                ".github/workflows/release.yml",
-            ],
+            [actionlint, ".github/workflows/release.yml"],
             cwd=ROOT,
             text=True,
             capture_output=True,
