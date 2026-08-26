@@ -53,6 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/check-version.py
+          nix develop .#test -c actionlint .github/workflows/release.yml
           nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern test_release_automation.py
           ./scripts/nix-config-matrix.sh
           ./scripts/evaluate-reference-configurations.sh
