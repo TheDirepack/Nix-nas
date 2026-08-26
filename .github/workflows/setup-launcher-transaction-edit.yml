@@ -1,4 +1,5 @@
 name: Setup launcher transaction edit
+# Retry after correcting the full reverse-rollback expectations.
 
 on:
   pull_request:
