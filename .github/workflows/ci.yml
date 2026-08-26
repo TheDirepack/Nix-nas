@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["v*"]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -29,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_CACHE_SCHEMA: ci-v7-fanout-node24-ubuntu2404
+  CI_CACHE_SCHEMA: ci-v8-fanout-npm-system-handoff
 
 jobs:
   # Stage 1: run only prerequisites shared by every qualification branch.
@@ -88,7 +87,7 @@ jobs:
   static:
     name: Static analysis and configuration
     needs: [prerequisites]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -130,7 +129,7 @@ jobs:
   unit:
     name: Unit, coverage, and maintainer contracts
     needs: [prerequisites]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -180,7 +179,7 @@ jobs:
   security:
     name: Security and generated configuration
     needs: [prerequisites]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -222,7 +221,7 @@ jobs:
   nonroot:
     name: Unprivileged hermeticity
     needs: [prerequisites]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -264,7 +263,7 @@ jobs:
   cockpit:
     name: Cockpit source, dependencies, and production bundle
     needs: [prerequisites]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -273,30 +272,24 @@ jobs:
         run: |
           mkdir -p ci-logs
           : > ci-logs/cockpit-results.tsv
-      - name: Set up Node 24
+      - name: Set up Node 24 with npm cache
         id: setup-node
         continue-on-error: true
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - name: Restore exact Node dependencies
-        id: node-cache
-        if: always() && steps.setup-node.outcome == 'success'
-        continue-on-error: true
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: cockpit/node_modules
-          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install Node dependencies on cache miss
+          cache: npm
+          cache-dependency-path: cockpit/package-lock.json
+      - name: Install exact Node dependencies
         id: node-install
-        if: always() && steps.setup-node.outcome == 'success' && steps.node-cache.outputs.cache-hit != 'true'
+        if: always() && steps.setup-node.outcome == 'success'
         continue-on-error: true
         run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Run Cockpit checks and build once
         id: checks
         if: >-
           always() && steps.setup-node.outcome == 'success' &&
-          (steps.node-install.outcome == 'success' || steps.node-install.outcome == 'skipped')
+          steps.node-install.outcome == 'success'
         continue-on-error: true
         run: bash scripts/ci-qualification.sh cockpit
       - name: Publish reviewed Cockpit bundle
@@ -333,7 +326,7 @@ jobs:
   # not wait for unrelated static/security/Cockpit checks.
   coverage-diff:
     name: PR coverage drift
-    if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'main' }}
     needs: [unit]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -409,7 +402,7 @@ jobs:
   # failure context already lives on the failing branch and in its log artifact.
   qualification:
     name: Qualification gate
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [prerequisites, static, unit, security, nonroot, cockpit, coverage-diff]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -432,7 +425,7 @@ jobs:
   # The Cockpit bundle was already built by its parallel qualification branch.
   prepare:
     name: Prepare reusable build handoff
-    if: always() && needs.qualification.result == 'success'
+    if: ${{ !cancelled() && needs.qualification.result == 'success' }}
     needs: [qualification]
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -527,7 +520,7 @@ jobs:
   # Stage 4a: Playwright owns internal parallelism, so use one browser runner.
   browser:
     name: Deterministic Cockpit browser qualification
-    if: always() && needs.prepare.result == 'success'
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     needs: [prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -536,18 +529,13 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: cockpit/package-lock.json
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cockpit-bundle
           path: cockpit
-      - name: Restore exact dependencies
-        id: browser-deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: cockpit/node_modules
-          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install dependencies on cache miss
-        if: steps.browser-deps.outputs.cache-hit != 'true'
+      - name: Install exact dependencies
         run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Restore Playwright engines
         id: playwright-browsers
@@ -583,7 +571,7 @@ jobs:
   integration:
     name: Full-stack QEMU integration (${{ matrix.vm }})
     if: >-
-      always() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       (github.event_name == 'schedule' || github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier != 'fast'))
     needs: [prepare]
@@ -617,7 +605,9 @@ jobs:
       - name: Verify and import prepared Nix handoff
         run: |
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
           ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Run ${{ matrix.vm }} NixOS VM integration
         run: nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L
 
@@ -625,12 +615,11 @@ jobs:
   installer:
     name: Official-ISO install, reboot, and final-VM checks
     if: >-
-      always() && needs.prepare.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' &&
       needs.browser.result == 'success' && needs.integration.result == 'success' &&
       ((github.event_name == 'workflow_dispatch' &&
         (github.event.inputs.test-tier == 'full' || github.event.inputs.test-tier == 'installer')) ||
-       (github.event_name != 'workflow_dispatch' &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
+       (github.event_name != 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     needs: [prepare, browser, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -639,6 +628,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: cockpit/package-lock.json
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cockpit-bundle
@@ -669,15 +660,10 @@ jobs:
       - name: Verify and import prepared Nix handoff
         run: |
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
           ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
-      - name: Restore final-browser dependencies
-        id: installer-browser-deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: cockpit/node_modules
-          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install final-browser dependencies on cache miss
-        if: steps.installer-browser-deps.outputs.cache-hit != 'true'
+          bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
+      - name: Install exact final-browser dependencies
         run: npm --prefix cockpit ci --no-audit --no-fund
       - name: Restore final-VM Playwright engines
         id: installer-playwright
@@ -694,6 +680,12 @@ jobs:
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
         run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
+      - name: Collect final-VM console evidence
+        if: always()
+        run: |
+          mkdir -p final-vm-evidence
+          cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
+            final-vm-evidence/browser-console.log 2>/dev/null || true
       - name: Retain final-VM evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -704,18 +696,17 @@ jobs:
           path: |
             cockpit/playwright-report
             cockpit/test-results
-            ~/.cache/nixos-nas-qemu/state/browser-console.log
+            final-vm-evidence
 
   # Stage 6a: run-fuzz.py owns safe internal parallelism.
   source-fuzz:
     name: Final source fuzz and property qualification
     if: >-
-      always() && needs.integration.result == 'success' &&
+      !cancelled() && needs.integration.result == 'success' &&
       needs.browser.result == 'success' &&
       (needs.installer.result == 'success' || needs.installer.result == 'skipped') &&
       (github.event_name == 'schedule' ||
-       (github.event_name == 'push' &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     needs: [integration, browser, installer]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -727,10 +718,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run all smart-fuzz suites with internal workers
         run: |
-          mkdir -p .fuzz-evidence
+          mkdir -p fuzz-evidence
           set -o pipefail
           nix develop .#test -c ./scripts/run-fuzz.py --jobs 6 \
-            2>&1 | tee .fuzz-evidence/source-fuzz.log
+            2>&1 | tee fuzz-evidence/source-fuzz.log
       - name: Retain source fuzz evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -738,16 +729,15 @@ jobs:
           name: source-fuzz-evidence
           if-no-files-found: error
           retention-days: 30
-          path: .fuzz-evidence/source-fuzz.log
+          path: fuzz-evidence/source-fuzz.log
 
   # Stage 6b: provision once, then run both installed adversarial workloads.
   installed-security:
     name: Installed appliance adversarial qualification
     if: >-
-      always() && needs.installer.result == 'success' &&
+      !cancelled() && needs.installer.result == 'success' &&
       (github.event_name == 'schedule' ||
-       (github.event_name == 'push' &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))))
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     needs: [installer, prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 355
@@ -783,7 +773,9 @@ jobs:
       - name: Verify and import prepared Nix handoff
         run: |
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
           ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Provision installed appliance once
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Installed-command and HTTP adversarial checks
@@ -808,6 +800,12 @@ jobs:
           test -n "$NAS_ZAP_IMAGE"
           nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 \
             -c bash ./scripts/qemu-final-browser.sh
+      - name: Collect installed-security console evidence
+        if: always()
+        run: |
+          mkdir -p installed-security-logs
+          cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
+            installed-security-logs/browser-console.log 2>/dev/null || true
       - name: Retain installed security evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -819,7 +817,7 @@ jobs:
             installed-command-fuzz.json
             http-adversarial.json
             zap-report
-            ~/.cache/nixos-nas-qemu/state/browser-console.log
+            installed-security-logs
       - name: Report all installed-security failures
         if: always()
         env:
@@ -831,7 +829,7 @@ jobs:
 
   summary:
     name: Pipeline summary
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [prerequisites, static, unit, security, nonroot, cockpit, coverage-diff, qualification, prepare, browser, integration, installer, source-fuzz, installed-security]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
