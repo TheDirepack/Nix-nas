@@ -29,231 +29,124 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_CACHE_SCHEMA: ci-v6-staged-node24-ubuntu2404
+  CI_CACHE_SCHEMA: ci-v7-fanout-node24-ubuntu2404
 
 jobs:
-  # Stage 1: one prepared environment runs every inexpensive qualification
-  # section. Subchecks keep running after failures; the final reporter fails
-  # once with exact commands, exit codes, timings, log tails, and full logs.
-  prebuild:
-    name: Pre-build qualification
+  # Stage 1: run only prerequisites shared by every qualification branch.
+  # Realizing the pinned test shell here warms the shared Nix cache before the
+  # independent Nix-heavy checks fan out onto separate runners.
+  prerequisites:
+    name: Shared qualification prerequisites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize shared diagnostics
+        run: |
+          rm -rf ci-logs
+          mkdir -p ci-logs
+          : > ci-logs/shared-results.tsv
+      - name: Set up shared Nix environment
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Realize pinned test toolchain once
+        id: warm-test-shell
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: nix develop .#test -c true
+      - name: Run repository and test contracts
+        id: shared
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh shared
+      - name: Retain shared diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-shared-logs
+          if-no-files-found: error
+          retention-days: 14
+          path: ci-logs
+      - name: Report shared prerequisite failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Shared qualification prerequisites
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/shared-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "warm-test-shell=${{ steps.warm-test-shell.outcome }}" \
+            "shared=${{ steps.shared.outcome }}"
+
+  # Stage 2: independent checks fan out after shared source/tooling contracts.
+  # Each branch owns only prerequisites that are specific to that branch.
+  static:
+    name: Static analysis and configuration
+    needs: [prerequisites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize static diagnostics
+        run: |
+          mkdir -p ci-logs
+          : > ci-logs/static-results.tsv
+      - name: Set up Nix
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run all static/configuration checks
+        id: checks
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh static
+      - name: Retain static diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-static-logs
+          if-no-files-found: error
+          retention-days: 14
+          path: ci-logs
+      - name: Report static failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Static analysis and configuration
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/static-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "static=${{ steps.checks.outcome }}"
+
+  unit:
+    name: Unit, coverage, and maintainer contracts
+    needs: [prerequisites]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Initialize pre-build diagnostics
+      - name: Initialize unit diagnostics
         run: |
-          rm -rf ci-logs
           mkdir -p ci-logs
-          : > ci-logs/results.tsv
-      - id: setup-node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          : > ci-logs/unit-results.tsv
+      - name: Set up Nix
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
         with:
-          node-version: 24
-      - id: install-nix
-        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        id: nix-cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
-
-      - name: "Section: repository and test contracts"
-        id: contracts
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run unit and coverage checks
+        id: checks
+        if: always() && steps.setup-nix.outcome == 'success'
         continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          source .github/ci-checks.sh
-          failed=0
-
-          ci_run contracts preflight "Source-only repository preflight" env \
-            NAS_PREFLIGHT_SKIP_TESTS=1 \
-            NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 \
-            NAS_PREFLIGHT_SKIP_TOOLING=1 \
-            NAS_PREFLIGHT_SKIP_NIX=1 \
-            ./scripts/preflight.sh || failed=1
-          ci_run contracts python-syntax "Python syntax inventory" \
-            ./scripts/validate-python-syntax.py || failed=1
-          ci_run contracts test-inventory "Test inventory contract" \
-            nix develop .#test -c python3 scripts/validate-test-inventory.py || failed=1
-
-          check_shell_syntax() {
-            local rc=0 script
-            while IFS= read -r -d '' script; do
-              bash -n "$script" || rc=1
-            done < <(find scripts tests/vm -type f -name '*.sh' -print0)
-            bash -n .github/ci-checks.sh || rc=1
-            return "$rc"
-          }
-          ci_run contracts shell-syntax "Shell syntax" check_shell_syntax || failed=1
-          exit "$failed"
-
-      - name: "Section: static analysis and configuration"
-        id: static
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          source .github/ci-checks.sh
-          failed=0
-
-          ci_run static secret-faults "Secret transaction fault injection" \
-            nix shell nixpkgs#bats -c bats tests/bats || failed=1
-          ci_run static shellcheck "ShellCheck" \
-            nix develop .#test -c shellcheck \
-            .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
-          ci_run static actionlint "GitHub Actions lint" \
-            nix develop .#test -c actionlint \
-            .github/workflows/ci.yml .github/workflows/release.yml || failed=1
-          ci_run static ruff-check "Python lint" \
-            nix develop .#test -c ruff check services tests scripts || failed=1
-          ci_run static ruff-format "Python formatting" \
-            nix develop .#test -c ruff format --check services tests scripts || failed=1
-          ci_run static pyright "Python types" \
-            nix develop .#test -c pyright --project pyproject.toml || failed=1
-          ci_run static prettier "JavaScript formatting" \
-            nix shell nixpkgs#prettier -c prettier --check \
-            "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" \
-            "tests/js/*.mjs" prettier.config.mjs || failed=1
-          ci_run static nix-matrix "Nix configuration matrix" \
-            ./scripts/nix-config-matrix.sh || failed=1
-          ci_run static reference-eval "Reference configuration evaluation" \
-            ./scripts/evaluate-reference-configurations.sh || failed=1
-          exit "$failed"
-
-      - name: "Section: unit, coverage, and maintainer contracts"
-        id: unit
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          source .github/ci-checks.sh
-          failed=0
-
-          ci_run unit fast-python "Fast Python unit tests" \
-            nix develop .#test -c ./scripts/run-unit-tests.py \
-            --coverage coverage.json --quiet --jobs 4 \
-            --exclude test_maintainer_core.py \
-            --exclude test_maintainer_matrix.py \
-            --exclude test_maintainer_release.py \
-            --exclude test_contract_tooling.py \
-            --exclude test_fuzz_boundaries.py \
-            --exclude test_property_invariants.py \
-            --exclude test_secret_security_fuzz.py || failed=1
-
-          check_coverage_floor() {
-            if [[ ! -s coverage.json ]]; then
-              echo "coverage.json was not produced by the fast unit suite"
-              return 2
-            fi
-            nix develop .#test -c python3 scripts/check-coverage.py \
-              coverage.json --total-floor 66
-          }
-          ci_run unit coverage-floor "Coverage floor" check_coverage_floor || failed=1
-
-          for contract in \
-            test_maintainer_core.py \
-            test_maintainer_matrix.py \
-            test_maintainer_release.py \
-            test_contract_tooling.py
-          do
-            slug=${contract%.py}
-            ci_run unit "$slug" "Maintainer contract: $contract" \
-              nix develop .#test -c ./scripts/run-unit-tests.py \
-              --jobs 1 --pattern "$contract" || failed=1
-          done
-          exit "$failed"
-
-      - name: "Section: security and generated service configuration"
-        id: security
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          source .github/ci-checks.sh
-          failed=0
-
-          ci_run security regressions "Deterministic security regression suite" \
-            nix develop .#test -c ./scripts/run-security-tests.py || failed=1
-          ci_run security semgrep "Semgrep local rules" \
-            nix develop .#test -c semgrep --config .semgrep.yml --error \
-            services scripts cockpit/src web || failed=1
-          ci_run security bandit "Bandit privileged runtime scan" \
-            nix develop .#test -c bandit -q -c .bandit -r services scripts -ll -ii || failed=1
-          ci_run security caddy "Caddy generator validation" \
-            nix develop .#test -c python3 -m unittest \
-            tests.test_v2_caddy tests.test_v2_caddy_validate -v || failed=1
-          exit "$failed"
-
-      # Keep the unprivileged copy clean: run it before restoring node_modules.
-      - name: "Section: unprivileged hermeticity"
-        id: nonroot
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          source .github/ci-checks.sh
-          failed=0
-
-          run_nonroot_suite() {
-            local nix_bin
-            nix_bin=$(command -v nix)
-            sudo useradd --create-home --shell /bin/bash nas-ci
-            sudo install -d -o nas-ci -g nas-ci /home/nas-ci/worktree
-            sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
-            sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
-            sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-              bash -c "cd /home/nas-ci/worktree && exec \"$nix_bin\" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py"
-          }
-          ci_run nonroot fast-suite "Run the fast suite without root-owned state" \
-            run_nonroot_suite || failed=1
-          exit "$failed"
-
-      # Node dependencies are deliberately restored only after source and
-      # hermeticity checks, so generated node_modules never pollutes preflight.
-      - name: Restore exact Node 24 dependencies
-        id: prebuild-node-deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: cockpit/node_modules
-          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install Node dependencies on cache miss
-        id: prebuild-node-install
-        if: steps.prebuild-node-deps.outputs.cache-hit != 'true'
-        run: npm --prefix cockpit ci --no-audit --no-fund
-
-      - name: "Section: Cockpit source and dependency audit"
-        id: cockpit
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          source .github/ci-checks.sh
-          failed=0
-
-          check_cockpit_js_syntax() {
-            local rc=0 script
-            for script in cockpit/src/*.js; do
-              node --check "$script" || rc=1
-            done
-            return "$rc"
-          }
-          ci_run cockpit js-syntax "Cockpit JavaScript syntax" \
-            check_cockpit_js_syntax || failed=1
-          ci_run cockpit source-contract "Cockpit source renderer contract" \
-            node cockpit/build.js --check-source || failed=1
-          ci_run cockpit jsx "Cockpit JSX validation" \
-            node scripts/validate-cockpit-jsx.cjs || failed=1
-          ci_run cockpit unit-tests "Cockpit unit tests" \
-            node --test tests/js/*.test.mjs || failed=1
-          ci_run cockpit npm-audit "Fresh npm vulnerability audit" \
-            npm --prefix cockpit audit --audit-level=high || failed=1
-          exit "$failed"
-
+        run: bash scripts/ci-qualification.sh unit
       - name: Retain current coverage for PR baseline comparison
         if: always() && hashFiles('coverage.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -262,40 +155,180 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: coverage.json
-      - name: Retain complete pre-build diagnostic logs
+      - name: Retain unit diagnostic logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: prebuild-check-logs
+          name: qualification-unit-logs
           if-no-files-found: error
           retention-days: 14
           path: ci-logs
-      - name: Report all pre-build failures
+      - name: Report unit failures
         if: always()
         env:
-          CI_REPORT_TITLE: Pre-build qualification
+          CI_REPORT_TITLE: Unit, coverage, and maintainer contracts
         run: |
           python3 scripts/ci-check-report.py \
-            --results ci-logs/results.tsv \
+            --results ci-logs/unit-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "unit=${{ steps.checks.outcome }}"
+
+  security:
+    name: Security and generated configuration
+    needs: [prerequisites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize security diagnostics
+        run: |
+          mkdir -p ci-logs
+          : > ci-logs/security-results.tsv
+      - name: Set up Nix
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run security checks
+        id: checks
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh security
+      - name: Retain security diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-security-logs
+          if-no-files-found: error
+          retention-days: 14
+          path: ci-logs
+      - name: Report security failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Security and generated configuration
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/security-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "security=${{ steps.checks.outcome }}"
+
+  nonroot:
+    name: Unprivileged hermeticity
+    needs: [prerequisites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize hermeticity diagnostics
+        run: |
+          mkdir -p ci-logs
+          : > ci-logs/nonroot-results.tsv
+      - name: Set up Nix
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run unprivileged suite
+        id: checks
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh nonroot
+      - name: Retain hermeticity diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-nonroot-logs
+          if-no-files-found: error
+          retention-days: 14
+          path: ci-logs
+      - name: Report hermeticity failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Unprivileged hermeticity
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/nonroot-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "nonroot=${{ steps.checks.outcome }}"
+
+  cockpit:
+    name: Cockpit source, dependencies, and production bundle
+    needs: [prerequisites]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize Cockpit diagnostics
+        run: |
+          mkdir -p ci-logs
+          : > ci-logs/cockpit-results.tsv
+      - name: Set up Node 24
+        id: setup-node
+        continue-on-error: true
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Restore exact Node dependencies
+        id: node-cache
+        if: always() && steps.setup-node.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: cockpit/node_modules
+          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
+      - name: Install Node dependencies on cache miss
+        id: node-install
+        if: always() && steps.setup-node.outcome == 'success' && steps.node-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: npm --prefix cockpit ci --no-audit --no-fund
+      - name: Run Cockpit checks and build once
+        id: checks
+        if: >-
+          always() && steps.setup-node.outcome == 'success' &&
+          (steps.node-install.outcome == 'success' || steps.node-install.outcome == 'skipped')
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh cockpit
+      - name: Publish reviewed Cockpit bundle
+        if: always() && hashFiles('cockpit/dist/build-meta.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cockpit-bundle
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            cockpit/package-lock.json
+            cockpit/dist
+      - name: Retain Cockpit diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-cockpit-logs
+          if-no-files-found: error
+          retention-days: 14
+          path: ci-logs
+      - name: Report Cockpit failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Cockpit source, dependencies, and production bundle
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/cockpit-results.tsv \
             --tail-lines 30 \
             "setup-node=${{ steps.setup-node.outcome }}" \
-            "install-nix=${{ steps.install-nix.outcome }}" \
-            "nix-cache=${{ steps.nix-cache.outcome }}" \
-            "contracts=${{ steps.contracts.outcome }}" \
-            "static=${{ steps.static.outcome }}" \
-            "unit=${{ steps.unit.outcome }}" \
-            "security=${{ steps.security.outcome }}" \
-            "nonroot=${{ steps.nonroot.outcome }}" \
-            "node-cache=${{ steps.prebuild-node-deps.outcome }}" \
-            "node-install=${{ steps.prebuild-node-install.outcome }}" \
-            "cockpit=${{ steps.cockpit.outcome }}"
+            "node-install=${{ steps.node-install.outcome }}" \
+            "cockpit=${{ steps.checks.outcome }}"
 
-  # PR coverage comparison is intentionally independent of other pre-build
-  # failures so one run can reveal both source failures and coverage drift.
+  # Coverage comparison starts as soon as the unit branch completes; it does
+  # not wait for unrelated static/security/Cockpit checks.
   coverage-diff:
     name: PR coverage drift
     if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'
-    needs: [prebuild]
+    needs: [unit]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -316,25 +349,24 @@ jobs:
         run: echo "sha=$(git -C main rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Restore main coverage baseline
         id: main-coverage
+        continue-on-error: true
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: main-coverage.json
           key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py') }}
-      - name: Install Nix for uncached baseline
+      - name: Set up Nix for uncached baseline
+        id: baseline-nix
         if: steps.main-coverage.outputs.cache-hit != 'true'
-        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable Nix cache for uncached baseline
-        if: steps.main-coverage.outputs.cache-hit != 'true'
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build main coverage baseline
         id: baseline-build
         continue-on-error: true
-        if: steps.main-coverage.outputs.cache-hit != 'true'
+        if: >-
+          steps.main-coverage.outputs.cache-hit != 'true' &&
+          steps.baseline-nix.outcome == 'success'
         working-directory: main
         run: |
           python3 ../scripts/prepare-coverage-baseline.py .
@@ -363,62 +395,55 @@ jobs:
         run: |
           python3 scripts/ci-check-report.py \
             "current-coverage=${{ steps.current-coverage.outcome }}" \
+            "main-coverage-cache=${{ steps.main-coverage.outcome }}" \
+            "baseline-nix=${{ steps.baseline-nix.outcome }}" \
             "baseline-build=${{ steps.baseline-build.outcome }}" \
             "coverage-drift=${{ steps.drift.outcome }}"
 
-  # Stage 2: expensive products are materialized once. The per-run Nix artifact
-  # is authoritative; granular caches exist only to accelerate this producer.
+  # One lightweight gate joins every parallel qualification branch. Detailed
+  # failure context already lives on the failing branch and in its log artifact.
+  qualification:
+    name: Qualification gate
+    if: always()
+    needs: [prerequisites, static, unit, security, nonroot, cockpit, coverage-diff]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Summarize parallel qualification
+        env:
+          CI_REPORT_TITLE: Parallel qualification gate
+        run: |
+          python3 scripts/ci-check-report.py \
+            "prerequisites=${{ needs.prerequisites.result }}" \
+            "static=${{ needs.static.result }}" \
+            "unit=${{ needs.unit.result }}" \
+            "security=${{ needs.security.result }}" \
+            "nonroot=${{ needs.nonroot.result }}" \
+            "cockpit=${{ needs.cockpit.result }}" \
+            "coverage-diff=${{ needs.coverage-diff.result }}"
+
+  # Stage 3: expensive Nix products are materialized once after qualification.
+  # The Cockpit bundle was already built by its parallel qualification branch.
   prepare:
     name: Prepare reusable build handoff
-    if: >-
-      always() &&
-      needs.prebuild.result == 'success' &&
-      (needs.coverage-diff.result == 'success' || needs.coverage-diff.result == 'skipped')
-    needs: [prebuild, coverage-diff]
+    if: always() && needs.qualification.result == 'success'
+    needs: [qualification]
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-      - name: Restore exact Node 24 dependencies
-        id: prepare-node-deps
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: cockpit/node_modules
-          key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
-      - name: Install Cockpit dependencies on cache miss
-        if: steps.prepare-node-deps.outputs.cache-hit != 'true'
-        run: npm --prefix cockpit ci --no-audit --no-fund
-      - name: Build and verify production Cockpit once
-        run: |
-          npm --prefix cockpit run build
-          node cockpit/build.js --check
-          node scripts/validate-cockpit-jsx.cjs
-          node --test tests/js/*.test.mjs
-      - name: Publish reviewed Cockpit bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Restore reviewed Cockpit bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cockpit-bundle
-          if-no-files-found: error
-          retention-days: 14
-          path: |
-            cockpit/package-lock.json
-            cockpit/dist
+          path: cockpit
       - run: git add -f cockpit/package-lock.json cockpit/dist
-
-      - name: Install Nix for reusable system handoff
+      - name: Set up Nix for reusable system handoff
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        uses: ./.github/actions/setup-nix-ci
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Select VM bundle cache namespace
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         id: vm-bundle-namespace
@@ -436,10 +461,10 @@ jobs:
         with:
           cache-schema: ${{ env.CI_CACHE_SCHEMA }}
           cache-suffix: ${{ steps.vm-bundle-namespace.outputs.suffix }}
-
       - name: Restore verified source archive
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         id: source-archive-cache
+        continue-on-error: true
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: nas-source-release
@@ -450,18 +475,6 @@ jobs:
           steps.source-archive-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          dependencies="$RUNNER_TEMP/cockpit-node_modules"
-          restore_dependencies() {
-            if [[ -d "$dependencies" ]]; then
-              mv "$dependencies" cockpit/node_modules
-            fi
-          }
-          trap restore_dependencies EXIT
-          if [[ -d cockpit/node_modules ]]; then
-            rm -rf "$dependencies"
-            mv cockpit/node_modules "$dependencies"
-          fi
-
           out="$GITHUB_WORKSPACE/nas-source-release"
           mkdir -p "$out"
           NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
@@ -481,8 +494,6 @@ jobs:
               NAS_PREFLIGHT_SKIP_NIX=1 \
               ./scripts/preflight.sh
           )
-          restore_dependencies
-          trap - EXIT
       - name: Verify restored source archive
         if: >-
           (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
@@ -508,8 +519,7 @@ jobs:
           retention-days: 14
           path: nas-source-release
 
-  # Stage 3a: the Playwright suite already owns internal parallelism, so run it
-  # once rather than repeating setup for one grep per runner.
+  # Stage 4a: Playwright owns internal parallelism, so use one browser runner.
   browser:
     name: Deterministic Cockpit browser qualification
     if: always() && needs.prepare.result == 'success'
@@ -564,8 +574,7 @@ jobs:
             cockpit/playwright-report
             cockpit/test-results
 
-  # Stage 3b: only the two expensive VM variants remain as useful job-level
-  # parallelism. Both import the exact same prepared Nix artifact.
+  # Stage 4b: only the two expensive VM variants remain job-level parallelism.
   integration:
     name: Full-stack QEMU integration (${{ matrix.vm }})
     if: >-
@@ -595,10 +604,11 @@ jobs:
         with:
           name: vm-bundle-handoff
           path: ${{ runner.temp }}/vm-bundles
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - name: Set up Nix with KVM
+        uses: ./.github/actions/setup-nix-ci
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          enable_kvm: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          enable-kvm: "true"
       - name: Verify and import prepared Nix handoff
         run: |
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
@@ -606,8 +616,7 @@ jobs:
       - name: Run ${{ matrix.vm }} NixOS VM integration
         run: nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L
 
-  # Stage 4: official-media installation reuses the prepared Cockpit and Nix
-  # products instead of resolving them again.
+  # Stage 5: official-media installation reuses the prepared products.
   installer:
     name: Official-ISO install, reboot, and final-VM checks
     if: >-
@@ -647,15 +656,11 @@ jobs:
           key: ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-${{ steps.installer-epoch.outputs.week }}-${{ hashFiles('scripts/qemu-test.sh') }}
           restore-keys: |
             ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - name: Set up Nix with KVM
+        uses: ./.github/actions/setup-nix-ci
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          enable_kvm: true
-      - name: Enable incremental Nix build and VM cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          enable-kvm: "true"
       - name: Verify and import prepared Nix handoff
         run: |
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
@@ -696,8 +701,7 @@ jobs:
             cockpit/test-results
             ~/.cache/nixos-nas-qemu/state/browser-console.log
 
-  # Stage 5a: run-fuzz.py owns safe internal parallelism; avoid seven fresh
-  # runners that each repeat checkout and environment setup.
+  # Stage 6a: run-fuzz.py owns safe internal parallelism.
   source-fuzz:
     name: Final source fuzz and property qualification
     if: >-
@@ -712,14 +716,10 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix-ci
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run all smart-fuzz suites with internal workers
         run: |
           mkdir -p .fuzz-evidence
@@ -735,8 +735,7 @@ jobs:
           retention-days: 30
           path: .fuzz-evidence/source-fuzz.log
 
-  # Stage 5b: provision once, then run both adversarial workloads. Each workload
-  # continues independently so the final reporter can surface both failures.
+  # Stage 6b: provision once, then run both installed adversarial workloads.
   installed-security:
     name: Installed appliance adversarial qualification
     if: >-
@@ -771,15 +770,11 @@ jobs:
           key: ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-${{ steps.security-installer-epoch.outputs.week }}-${{ hashFiles('scripts/qemu-test.sh') }}
           restore-keys: |
             ${{ env.CI_CACHE_SCHEMA }}-nixos-26.05-media-${{ runner.os }}-
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - name: Set up Nix with KVM
+        uses: ./.github/actions/setup-nix-ci
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-          enable_kvm: true
-      - name: Enable incremental Nix build and VM cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          enable-kvm: "true"
       - name: Verify and import prepared Nix handoff
         run: |
           ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
@@ -832,7 +827,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: always()
-    needs: [prebuild, coverage-diff, prepare, browser, integration, installer, source-fuzz, installed-security]
+    needs: [prerequisites, static, unit, security, nonroot, cockpit, coverage-diff, qualification, prepare, browser, integration, installer, source-fuzz, installed-security]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
