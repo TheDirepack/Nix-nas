@@ -21,7 +21,7 @@ nas-identity-sync = "nas_identity_dispatch:main"
 nas-managed-services-control = "nas_v2_control:main"
 nas-managed-session = "nas_v2_session:main"
 nas-operation-run = "nas_operation_lock:main"
-nas-setup = "nas_setup:main"
+nas-setup = "nas_setup_dispatch:main"
 nas-state = "nas_state:main"
 nas-v2 = "nas_v2_cli:main"
 
@@ -48,6 +48,7 @@ py-modules = [
   "nas_operation_lock",
   "nas_setup",
   "nas_setup_config",
+  "nas_setup_dispatch",
   "nas_state",
   "nas_syncthing_devices",
   "nas_guarded_apply",
