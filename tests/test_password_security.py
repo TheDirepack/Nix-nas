@@ -42,14 +42,16 @@ class PasswordSecurityTests(unittest.TestCase):
         self.assertIn("usercheck = 1", source)
         self.assertIn("enforce_for_root = true", source)
 
-    def test_authentik_native_password_change_policy_is_hardened(self) -> None:
+    def test_authentik_native_password_change_policy_matches_setup_threshold(self) -> None:
         source = AUTHENTIK.read_text(encoding="utf-8")
         self.assertIn("authentik_policies_password.passwordpolicy", source)
         self.assertIn("default-password-change-password-policy", source)
         self.assertIn("check_have_i_been_pwned: true", source)
         self.assertIn("hibp_allowed_count: 0", source)
         self.assertIn("check_zxcvbn: true", source)
-        self.assertIn("zxcvbn_score_threshold: 3", source)
+        # Authentik rejects scores <= threshold, so threshold 2 accepts 3/4,
+        # matching MINIMUM_ZXCVBN_SCORE = 3 in the setup service.
+        self.assertIn("zxcvbn_score_threshold: 2", source)
         self.assertIn("length_min: 15", source)
 
 
