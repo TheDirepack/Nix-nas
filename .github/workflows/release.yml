@@ -1,0 +1,155 @@
+name: Merge build and release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish merge release
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Fetch release tag history
+        run: git fetch --force --tags origin
+      - name: Stamp release version and rotate bootstrap password
+        env:
+          RELEASE_METADATA: ${{ runner.temp }}/release-metadata.json
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare_release.py \
+            --run-number "$RELEASE_RUN_NUMBER" \
+            --source-sha "$SOURCE_SHA" \
+            --metadata-out "$RELEASE_METADATA"
+      - name: Build the production Cockpit bundle
+        run: |
+          set -euo pipefail
+          npm --prefix cockpit ci --no-audit --no-fund
+          npm --prefix cockpit run build
+          node cockpit/build.js --check
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
+      - name: Validate release metadata and automation contracts
+        run: |
+          set -euo pipefail
+          python3 scripts/check-version.py
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern test_release_automation.py
+          ./scripts/nix-config-matrix.sh
+          ./scripts/evaluate-reference-configurations.sh
+      - name: Build release NixOS closures
+        run: |
+          set -euo pipefail
+          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace -L --no-link
+          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace -L --no-link
+      - name: Commit exact release inputs
+        env:
+          RELEASE_METADATA: ${{ runner.temp }}/release-metadata.json
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["version"])')"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "chore(release): v${version} [skip ci]"
+      - name: Package and verify source release
+        env:
+          RELEASE_OUT: ${{ runner.temp }}/release-out
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RELEASE_OUT"
+          mkdir -p "$RELEASE_OUT"
+          NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$RELEASE_OUT"
+          mapfile -d '' assets < <(find "$RELEASE_OUT" -type f -print0 | sort -z)
+          ((${#assets[@]} >= 3))
+          printf 'Prepared %d release assets.\n' "${#assets[@]}"
+      - name: Prepare release notes
+        env:
+          RELEASE_METADATA: ${{ runner.temp }}/release-metadata.json
+          RELEASE_NOTES: ${{ runner.temp }}/release-notes.md
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path(os.environ["RELEASE_METADATA"]).read_text(encoding="utf-8"))
+          version = metadata["version"]
+          source_sha = metadata["source_sha"]
+          username = metadata["bootstrap_username"]
+          password = metadata["bootstrap_password"]
+          repository = os.environ["REPOSITORY"]
+          notes = f"""# NixOS NAS {version}
+
+          Automated merge build from [`{source_sha[:12]}`](https://github.com/{repository}/commit/{source_sha}).
+
+          ## First-boot Authentik credentials
+
+          - Username: `{username}`
+          - Password: `{password}`
+
+          This bootstrap credential is intentionally release-specific and public. It is only for first-run Authentik setup and is retired by the normal setup workflow after the administrator account is established.
+
+          ## Artifact status
+
+          This is a **source-only development release**. The workflow builds the production Cockpit bundle and the CI-ready/QEMU NixOS closures, then packages the repository with its manifest, SHA-256 digest, and provenance metadata. It does not claim install-ready hardware qualification.
+          """
+          Path(os.environ["RELEASE_NOTES"]).write_text(notes, encoding="utf-8")
+          PY
+      - name: Publish tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_METADATA: ${{ runner.temp }}/release-metadata.json
+          RELEASE_NOTES: ${{ runner.temp }}/release-notes.md
+          RELEASE_OUT: ${{ runner.temp }}/release-out
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["version"])')"
+          tag="v${version}"
+          release_commit="$(git rev-parse HEAD)"
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Release tag already exists: $tag" >&2
+            exit 1
+          fi
+          git tag -a "$tag" -m "NixOS NAS $version" "$release_commit"
+          git push origin "refs/tags/$tag"
+          mapfile -d '' assets < <(find "$RELEASE_OUT" -type f -print0 | sort -z)
+          gh release create "$tag" "${assets[@]}" \
+            --title "NixOS NAS $version" \
+            --notes-file "$RELEASE_NOTES" \
+            --verify-tag
+      - name: Fast-forward release metadata onto main when still current
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-parse HEAD)"
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [[ "$remote_main" == "$SOURCE_SHA" ]]; then
+            git push origin "$release_commit:refs/heads/main"
+            echo "main now carries the stamped release metadata."
+          else
+            echo "A newer main commit exists; this release remains bound to its tag and the newer merge release will carry version metadata forward."
+          fi
