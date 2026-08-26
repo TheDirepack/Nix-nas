@@ -17,7 +17,7 @@ mkdir -p ci-logs
 : > "ci-logs/${section}-results.tsv"
 export CI_LOG_DIR=ci-logs
 export CI_RESULTS_FILE="ci-logs/${section}-results.tsv"
-# shellcheck source=../.github/ci-checks.sh
+# shellcheck source=.github/ci-checks.sh
 source .github/ci-checks.sh
 failed=0
 
@@ -47,6 +47,30 @@ case "$section" in
     ;;
 
   static)
+    # Keep the normal formatting check authoritative, but when it fails also
+    # retain the exact Ruff-formatted files/patch in the existing failure-log
+    # artifact. This makes formatter drift directly repairable without adding
+    # another workflow or weakening the formatting gate.
+    # shellcheck disable=SC2329
+    check_ruff_format() {
+      local rc=0
+      local -a formatted=()
+      nix develop .#test -c ruff format --check services tests scripts || rc=$?
+      if ((rc == 0)); then
+        return 0
+      fi
+      nix develop .#test -c ruff format services tests scripts
+      git diff -- services tests scripts > ci-logs/ruff-format.patch
+      mapfile -t formatted < <(
+        git diff --name-only --diff-filter=AM -- services tests scripts \
+          | grep -E '\.py$' || true
+      )
+      if ((${#formatted[@]} > 0)); then
+        tar -cf ci-logs/ruff-formatted.tar "${formatted[@]}"
+      fi
+      return "$rc"
+    }
+
     ci_run static secret-faults "Secret transaction fault injection" \
       nix develop .#test -c bats tests/bats || failed=1
     ci_run static shellcheck "ShellCheck" \
@@ -58,7 +82,7 @@ case "$section" in
     ci_run static ruff-check "Python lint" \
       nix develop .#test -c ruff check services tests scripts || failed=1
     ci_run static ruff-format "Python formatting" \
-      nix develop .#test -c ruff format --check services tests scripts || failed=1
+      check_ruff_format || failed=1
     ci_run static pyright "Python types" \
       nix develop .#test -c pyright --project pyproject.toml || failed=1
     ci_run static prettier "JavaScript formatting" \
