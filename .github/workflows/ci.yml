@@ -61,13 +61,17 @@ jobs:
         if: always() && steps.setup-nix.outcome == 'success'
         continue-on-error: true
         run: bash scripts/ci-qualification.sh shared
-      - name: Retain shared diagnostic logs
-        if: always()
+      - name: Retain shared diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' ||
+           steps.warm-test-shell.outcome != 'success' ||
+           steps.shared.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-shared-logs
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: ci-logs
       - name: Report shared prerequisite failures
         if: always()
@@ -107,13 +111,15 @@ jobs:
         if: always() && steps.setup-nix.outcome == 'success'
         continue-on-error: true
         run: bash scripts/ci-qualification.sh static
-      - name: Retain static diagnostic logs
-        if: always()
+      - name: Retain static diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-static-logs
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: ci-logs
       - name: Report static failures
         if: always()
@@ -155,15 +161,17 @@ jobs:
         with:
           name: coverage-report
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
           path: coverage.json
-      - name: Retain unit diagnostic logs
-        if: always()
+      - name: Retain unit diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-unit-logs
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: ci-logs
       - name: Report unit failures
         if: always()
@@ -199,13 +207,15 @@ jobs:
         if: always() && steps.setup-nix.outcome == 'success'
         continue-on-error: true
         run: bash scripts/ci-qualification.sh security
-      - name: Retain security diagnostic logs
-        if: always()
+      - name: Retain security diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-security-logs
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: ci-logs
       - name: Report security failures
         if: always()
@@ -241,13 +251,15 @@ jobs:
         if: always() && steps.setup-nix.outcome == 'success'
         continue-on-error: true
         run: bash scripts/ci-qualification.sh nonroot
-      - name: Retain hermeticity diagnostic logs
-        if: always()
+      - name: Retain hermeticity diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-nonroot-logs
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: ci-logs
       - name: Report hermeticity failures
         if: always()
@@ -298,17 +310,21 @@ jobs:
         with:
           name: cockpit-bundle
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
           path: |
             cockpit/package-lock.json
             cockpit/dist
-      - name: Retain Cockpit diagnostic logs
-        if: always()
+      - name: Retain Cockpit diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-node.outcome != 'success' ||
+           steps.node-install.outcome != 'success' ||
+           steps.checks.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qualification-cockpit-logs
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: ci-logs
       - name: Report Cockpit failures
         if: always()
@@ -322,8 +338,9 @@ jobs:
             "node-install=${{ steps.node-install.outcome }}" \
             "cockpit=${{ steps.checks.outcome }}"
 
-  # Coverage comparison starts as soon as the unit branch completes; it does
-  # not wait for unrelated static/security/Cockpit checks.
+  # Coverage comparison starts as soon as the unit branch completes. If the
+  # current unit branch failed before producing coverage, fail quickly instead
+  # of spending minutes constructing a baseline that cannot be compared.
   coverage-diff:
     name: PR coverage drift
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'main' }}
@@ -340,14 +357,17 @@ jobs:
           name: coverage-report
           path: .
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.current-coverage.outcome == 'success'
         with:
           ref: main
           path: main
       - name: Resolve main baseline revision
         id: main-baseline
+        if: steps.current-coverage.outcome == 'success'
         run: echo "sha=$(git -C main rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Restore main coverage baseline
         id: main-coverage
+        if: steps.current-coverage.outcome == 'success'
         continue-on-error: true
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -355,7 +375,9 @@ jobs:
           key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py') }}
       - name: Set up Nix for uncached baseline
         id: baseline-nix
-        if: steps.main-coverage.outputs.cache-hit != 'true'
+        if: >-
+          steps.current-coverage.outcome == 'success' &&
+          steps.main-coverage.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: ./.github/actions/setup-nix-ci
         with:
@@ -364,6 +386,7 @@ jobs:
         id: baseline-build
         continue-on-error: true
         if: >-
+          steps.current-coverage.outcome == 'success' &&
           steps.main-coverage.outputs.cache-hit != 'true' &&
           steps.baseline-nix.outcome == 'success'
         working-directory: main
@@ -381,7 +404,7 @@ jobs:
       - name: Compare current coverage with main
         id: drift
         continue-on-error: true
-        if: always()
+        if: steps.current-coverage.outcome == 'success'
         run: |
           test -s coverage.json
           test -s main-coverage.json
@@ -459,26 +482,18 @@ jobs:
         with:
           cache-schema: ${{ env.CI_CACHE_SCHEMA }}
           cache-suffix: ${{ steps.vm-bundle-namespace.outputs.suffix }}
-      - name: Restore verified source archive
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-        id: source-archive-cache
-        continue-on-error: true
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: nas-source-release
-          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
       - name: Package and verify as an untrusted consumer
-        if: >-
-          (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
-          steps.source-archive-cache.outputs.cache-hit != 'true'
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         run: |
           set -euo pipefail
           out="$GITHUB_WORKSPACE/nas-source-release"
+          rm -rf -- "$out"
           mkdir -p "$out"
           NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
           archive=$(find "$out" -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit)
           test -n "$archive"
           extract="$RUNNER_TEMP/extracted-source"
+          rm -rf -- "$extract"
           mkdir -p "$extract"
           unzip -q "$archive" -d "$extract"
           root=$(find "$extract" -mindepth 1 -maxdepth 1 -type d -print -quit)
@@ -492,30 +507,6 @@ jobs:
               NAS_PREFLIGHT_SKIP_NIX=1 \
               ./scripts/preflight.sh
           )
-      - name: Verify restored source archive
-        if: >-
-          (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
-          steps.source-archive-cache.outputs.cache-hit == 'true'
-        run: |
-          archive=$(find nas-source-release -mindepth 2 -maxdepth 2 -type f -name '*.zip' -print -quit)
-          test -n "$archive"
-          unzip -tq "$archive"
-      - name: Save verified source archive
-        if: >-
-          (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
-          steps.source-archive-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: nas-source-release
-          key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
-      - name: Retain source archive evidence
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: source-archive-evidence
-          if-no-files-found: error
-          retention-days: 14
-          path: nas-source-release
 
   # Stage 4a: Playwright owns internal parallelism, so use one browser runner.
   browser:
@@ -557,12 +548,12 @@ jobs:
           NAS_BROWSER_SUITE: deterministic
         run: npm --prefix cockpit run test:browser
       - name: Retain browser failure evidence
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-test-evidence
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
           path: |
             cockpit/playwright-report
             cockpit/test-results
@@ -686,13 +677,13 @@ jobs:
           mkdir -p final-vm-evidence
           cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
             final-vm-evidence/browser-console.log 2>/dev/null || true
-      - name: Retain final-VM evidence
-        if: always()
+      - name: Retain final-VM failure evidence
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: final-vm-browser-evidence
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 7
           path: |
             cockpit/playwright-report
             cockpit/test-results
@@ -722,13 +713,13 @@ jobs:
           set -o pipefail
           nix develop .#test -c ./scripts/run-fuzz.py --jobs 6 \
             2>&1 | tee fuzz-evidence/source-fuzz.log
-      - name: Retain source fuzz evidence
-        if: always()
+      - name: Retain source fuzz failure evidence
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: source-fuzz-evidence
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
           path: fuzz-evidence/source-fuzz.log
 
   # Stage 6b: provision once, then run both installed adversarial workloads.
@@ -806,13 +797,15 @@ jobs:
           mkdir -p installed-security-logs
           cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
             installed-security-logs/browser-console.log 2>/dev/null || true
-      - name: Retain installed security evidence
-        if: always()
+      - name: Retain installed security failure evidence
+        if: >-
+          always() &&
+          (steps.installed-command.outcome != 'success' || steps.zap.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installed-security-evidence
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 7
           path: |
             installed-command-fuzz.json
             http-adversarial.json
@@ -843,3 +836,104 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           TEST_TIER: ${{ github.event.inputs.test-tier }}
         run: python3 scripts/ci-summary.py
+
+  # Repository hygiene is part of the existing CI rather than another workflow.
+  # It runs after successful or failed main/scheduled qualification, but never on
+  # cancellation and never gives pull-request jobs an Actions write token.
+  maintenance:
+    name: Actions history and cache maintenance
+    needs: [summary]
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Prune obsolete workflow history and repo-owned caches
+        id: prune
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/actions-maintenance"
+          rm -rf -- "$work"
+          mkdir -p "$work"
+
+          # The default branch defines the only workflow names that should stay
+          # visible long-term. Deleted one-shot/agent workflows have their
+          # completed run history removed, which also removes their sidebar noise.
+          gh api "/repos/$REPOSITORY/contents/.github/workflows?ref=$DEFAULT_BRANCH" \
+            --jq '.[] | select(.type == "file") | .path' | sort -u > "$work/active-workflows"
+          gh api --paginate "/repos/$REPOSITORY/actions/runs?status=completed&per_page=100" \
+            --jq '.workflow_runs[] | [.id, .path, .created_at] | @tsv' > "$work/completed-runs"
+
+          active_cutoff="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          deleted_runs=0
+          while IFS=$'\t' read -r run_id workflow_path created_at; do
+            [[ -n "$run_id" && "$run_id" != "$CURRENT_RUN_ID" ]] || continue
+            remove=false
+            if ! grep -Fxq -- "$workflow_path" "$work/active-workflows"; then
+              remove=true
+            elif [[ -n "$created_at" && "$created_at" < "$active_cutoff" ]]; then
+              remove=true
+            fi
+            if [[ "$remove" == true ]]; then
+              gh api --method DELETE "/repos/$REPOSITORY/actions/runs/$run_id" >/dev/null
+              deleted_runs=$((deleted_runs + 1))
+              (( deleted_runs < 200 )) || break
+            fi
+          done < "$work/completed-runs"
+
+          # Only NAS-owned ci-* keys are eligible. setup-node, Determinate and
+          # any other third-party caches are deliberately outside this policy.
+          gh api --paginate "/repos/$REPOSITORY/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | [.id, .key, .last_accessed_at] | @tsv' > "$work/caches"
+          coverage_cutoff="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          default_cutoff="$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          media_cutoff="$(date -u -d '21 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          bundle_cutoff="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          deleted_caches=0
+          while IFS=$'\t' read -r cache_id key accessed_at; do
+            [[ "$key" == ci-* ]] || continue
+            remove=false
+            cutoff="$default_cutoff"
+            if [[ "$key" != "$CI_CACHE_SCHEMA"-* ]]; then
+              remove=true
+            elif [[ "$key" == *-forced-* || "$key" == "$CI_CACHE_SCHEMA"-source-archive-* ]]; then
+              remove=true
+            else
+              case "$key" in
+                "$CI_CACHE_SCHEMA"-coverage-main-*) cutoff="$coverage_cutoff" ;;
+                "$CI_CACHE_SCHEMA"-playwright-*) cutoff="$default_cutoff" ;;
+                "$CI_CACHE_SCHEMA"-nixos-*-media-*) cutoff="$media_cutoff" ;;
+                "$CI_CACHE_SCHEMA"-vm-bundle-*) cutoff="$bundle_cutoff" ;;
+              esac
+              [[ -z "$accessed_at" || "$accessed_at" < "$cutoff" ]] && remove=true
+            fi
+            if [[ "$remove" == true ]]; then
+              gh api --method DELETE "/repos/$REPOSITORY/actions/caches/$cache_id" >/dev/null
+              deleted_caches=$((deleted_caches + 1))
+              (( deleted_caches < 200 )) || break
+            fi
+          done < "$work/caches"
+
+          {
+            echo "### Actions storage maintenance"
+            echo
+            echo "- Active workflow files: $(wc -l < "$work/active-workflows")"
+            echo "- Deleted completed workflow runs: $deleted_runs"
+            echo "- Deleted NAS-owned caches: $deleted_caches"
+            echo "- Active workflow history retention: 7 days"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Warn without blocking releases if maintenance fails
+        if: always() && steps.prune.outcome != 'success'
+        run: |
+          echo "::warning title=Actions maintenance::Workflow/cache cleanup failed; qualification results remain authoritative and the next main/scheduled run will retry cleanup."
