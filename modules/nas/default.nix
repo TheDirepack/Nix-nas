@@ -16,10 +16,13 @@
     ./config/virtualization.nix
     ./config/identities.nix
     ./config/application-services.nix
+    ./config/bootstrap-security.nix
+    ./config/password-security.nix
     ./config/reverse-proxy.nix
     ./config/caddy-bootstrap.nix
     ./config/observability.nix
     ./config/storage-monitoring.nix
+    ./config/backup-domains.nix
     ./config/systemd-services.nix
     ./config/schedules.nix
     ./config/system.nix

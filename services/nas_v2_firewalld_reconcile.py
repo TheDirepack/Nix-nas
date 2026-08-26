@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import pathlib
 import re
@@ -23,6 +24,12 @@ from defusedxml import ElementTree
 
 _OWNED_FILE = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}\.xml$")
 _OWNED_NAME = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}$")
+_PORT_RANGE = re.compile(r"^(?P<start>[1-9][0-9]{0,4})(?:-(?P<end>[1-9][0-9]{0,4}))?$")
+_SAFE_INTERFACE = re.compile(r"^[A-Za-z0-9_.:@-]{1,64}$")
+_SAFE_FIREWALL_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_ALLOWED_PROTOCOLS = frozenset({"tcp", "udp", "sctp", "dccp"})
+_ALLOWED_FAMILIES = frozenset({"ipv4", "ipv6"})
+_ALLOWED_TARGETS = frozenset({"ACCEPT", "DROP", "REJECT", "default"})
 
 
 class FirewalldReconcileError(RuntimeError):
@@ -47,14 +54,6 @@ def _run(command: Sequence[str], *, timeout: int = 60, check: bool = True) -> su
     return result
 
 
-def _sha256(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _safe_target(raw: str) -> pathlib.PurePosixPath:
     target = pathlib.PurePosixPath(raw)
     if len(target.parts) != 2 or target.parts[0] not in {"zones", "policies"}:
@@ -67,13 +66,26 @@ def _safe_target(raw: str) -> pathlib.PurePosixPath:
     return target
 
 
+def _read_regular_file(path: pathlib.Path, *, label: str) -> bytes:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise FirewalldReconcileError(f"{label} is missing or unsafe: {path}") from exc
+    if path.is_symlink() or not path.is_file():
+        raise FirewalldReconcileError(f"{label} must be a regular non-symlink file: {path}")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise FirewalldReconcileError(f"unable to read {label}: {path}") from exc
+
+
 def _read_projection(
     manifest_path: pathlib.Path,
     projection_root: pathlib.Path,
 ) -> dict[pathlib.PurePosixPath, bytes]:
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = json.loads(_read_regular_file(manifest_path, label="firewalld manifest").decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise FirewalldReconcileError(f"unable to read firewalld manifest {manifest_path}: {exc}") from exc
     if (
         not isinstance(manifest, dict)
@@ -82,21 +94,29 @@ def _read_projection(
     ):
         raise FirewalldReconcileError("firewalld projection manifest is invalid")
 
+    try:
+        resolved_root = projection_root.resolve(strict=True)
+    except OSError as exc:
+        raise FirewalldReconcileError(f"firewalld projection root is unavailable: {projection_root}") from exc
+    if not resolved_root.is_dir():
+        raise FirewalldReconcileError("firewalld projection root must be a directory")
+
     desired: dict[pathlib.PurePosixPath, bytes] = {}
     for entry in manifest["files"]:
         if (
             not isinstance(entry, dict)
             or not isinstance(entry.get("target"), str)
             or not isinstance(entry.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", entry.get("sha256", "")) is None
         ):
             raise FirewalldReconcileError("firewalld manifest file entry is invalid")
         target = _safe_target(entry["target"])
-        source = projection_root / str(target)
+        source = resolved_root / str(target)
         try:
-            source.relative_to(projection_root)
-            payload = source.read_bytes()
-        except (ValueError, OSError) as exc:
-            raise FirewalldReconcileError(f"projected firewalld file is missing or unsafe: {source}") from exc
+            source.relative_to(resolved_root)
+        except ValueError as exc:
+            raise FirewalldReconcileError(f"projected firewalld file is outside the projection root: {source}") from exc
+        payload = _read_regular_file(source, label="projected firewalld file")
         if hashlib.sha256(payload).hexdigest() != entry["sha256"]:
             raise FirewalldReconcileError(f"projected firewalld file changed after validation: {source}")
         if target in desired:
@@ -112,32 +132,86 @@ def _attr(element: StdElementTree.Element, name: str, *, label: str) -> str:
     return value
 
 
+def _port(value: str, *, label: str) -> str:
+    match = _PORT_RANGE.fullmatch(value)
+    if match is None:
+        raise FirewalldReconcileError(f"projected {label} has invalid port {value!r}")
+    start = int(match.group("start"))
+    end = int(match.group("end") or start)
+    if start > 65535 or end > 65535 or end < start:
+        raise FirewalldReconcileError(f"projected {label} has invalid port {value!r}")
+    return value
+
+
+def _protocol(value: str, *, label: str) -> str:
+    if value not in _ALLOWED_PROTOCOLS:
+        raise FirewalldReconcileError(f"projected {label} has invalid protocol {value!r}")
+    return value
+
+
+def _priority(value: str, *, label: str) -> str:
+    if re.fullmatch(r"-?[0-9]{1,6}", value) is None:
+        raise FirewalldReconcileError(f"projected {label} has invalid priority {value!r}")
+    number = int(value)
+    if not -32768 <= number <= 32767:
+        raise FirewalldReconcileError(f"projected {label} has invalid priority {value!r}")
+    return value
+
+
+def _family(value: str) -> str:
+    if value not in _ALLOWED_FAMILIES:
+        raise FirewalldReconcileError(f"projected rich rule has invalid family {value!r}")
+    return value
+
+
+def _network(value: str, *, family: str) -> str:
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError as exc:
+        raise FirewalldReconcileError(f"projected rich rule has invalid destination {value!r}") from exc
+    expected = 4 if family == "ipv4" else 6
+    if network.version != expected:
+        raise FirewalldReconcileError("projected rich-rule destination does not match its address family")
+    return value
+
+
+def _target_value(value: str, *, label: str) -> str:
+    if value not in _ALLOWED_TARGETS:
+        raise FirewalldReconcileError(f"projected {label} has invalid target {value!r}")
+    return value
+
+
+def _firewall_name(value: str, *, label: str) -> str:
+    if _SAFE_FIREWALL_NAME.fullmatch(value) is None:
+        raise FirewalldReconcileError(f"projected {label} has invalid name {value!r}")
+    return value
+
+
+def _interface_name(value: str) -> str:
+    if _SAFE_INTERFACE.fullmatch(value) is None:
+        raise FirewalldReconcileError(f"projected zone has invalid interface {value!r}")
+    return value
+
+
 def _rich_rule(element: StdElementTree.Element) -> str:
-    family = _attr(element, "family", label="rich rule")
+    family = _family(_attr(element, "family", label="rich rule"))
     priority = element.get("priority")
     parts = ["rule", f'family="{family}"']
     if priority:
-        parts.append(f'priority="{priority}"')
+        parts.append(f'priority="{_priority(priority, label="rich rule")}"')
     destination = element.find("destination")
     if destination is not None:
-        parts.extend(["destination", f'address="{_attr(destination, "address", label="destination")}"'])
+        address = _network(_attr(destination, "address", label="destination"), family=family)
+        parts.extend(["destination", f'address="{address}"'])
     port = element.find("port")
     if port is not None:
-        parts.extend(
-            [
-                "port",
-                f'port="{_attr(port, "port", label="rich-rule port")}"',
-                f'protocol="{_attr(port, "protocol", label="rich-rule port")}"',
-            ]
-        )
-    if element.find("accept") is not None:
-        parts.append("accept")
-    elif element.find("drop") is not None:
-        parts.append("drop")
-    elif element.find("reject") is not None:
-        parts.append("reject")
-    else:
-        raise FirewalldReconcileError("projected rich rule has no supported action")
+        port_value = _port(_attr(port, "port", label="rich-rule port"), label="rich-rule port")
+        protocol = _protocol(_attr(port, "protocol", label="rich-rule port"), label="rich-rule port")
+        parts.extend(["port", f'port="{port_value}"', f'protocol="{protocol}"'])
+    actions = [name for name in ("accept", "drop", "reject") if element.find(name) is not None]
+    if len(actions) != 1:
+        raise FirewalldReconcileError("projected rich rule must have exactly one supported action")
+    parts.append(actions[0])
     return " ".join(parts)
 
 
@@ -155,16 +229,17 @@ def _apply_zone(firewall_cmd: str, name: str, payload: bytes) -> None:
     _permanent(firewall_cmd, f"--new-zone={name}")
     target = root.get("target")
     if target:
-        _permanent(firewall_cmd, f"--zone={name}", f"--set-target={target}")
+        _permanent(firewall_cmd, f"--zone={name}", f"--set-target={_target_value(target, label='zone')}")
     for interface in root.findall("interface"):
-        _permanent(
-            firewall_cmd, f"--zone={name}", f"--add-interface={_attr(interface, 'name', label='zone interface')}"
-        )
+        value = _interface_name(_attr(interface, "name", label="zone interface"))
+        _permanent(firewall_cmd, f"--zone={name}", f"--add-interface={value}")
     for service in root.findall("service"):
-        _permanent(firewall_cmd, f"--zone={name}", f"--add-service={_attr(service, 'name', label='zone service')}")
+        value = _firewall_name(_attr(service, "name", label="zone service"), label="zone service")
+        _permanent(firewall_cmd, f"--zone={name}", f"--add-service={value}")
     for port in root.findall("port"):
-        value = f"{_attr(port, 'port', label='zone port')}/{_attr(port, 'protocol', label='zone port')}"
-        _permanent(firewall_cmd, f"--zone={name}", f"--add-port={value}")
+        port_value = _port(_attr(port, "port", label="zone port"), label="zone port")
+        protocol = _protocol(_attr(port, "protocol", label="zone port"), label="zone port")
+        _permanent(firewall_cmd, f"--zone={name}", f"--add-port={port_value}/{protocol}")
 
 
 def _apply_policy(firewall_cmd: str, name: str, payload: bytes) -> None:
@@ -178,22 +253,24 @@ def _apply_policy(firewall_cmd: str, name: str, payload: bytes) -> None:
     target = root.get("target")
     priority = root.get("priority")
     if target:
-        _permanent(firewall_cmd, f"--policy={name}", f"--set-target={target}")
+        _permanent(firewall_cmd, f"--policy={name}", f"--set-target={_target_value(target, label='policy')}")
     if priority:
-        _permanent(firewall_cmd, f"--policy={name}", f"--set-priority={priority}")
+        _permanent(firewall_cmd, f"--policy={name}", f"--set-priority={_priority(priority, label='policy')}")
     for zone in root.findall("ingress-zone"):
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-ingress-zone={_attr(zone, 'name', label='ingress zone')}")
+        value = _firewall_name(_attr(zone, "name", label="ingress zone"), label="ingress zone")
+        _permanent(firewall_cmd, f"--policy={name}", f"--add-ingress-zone={value}")
     for zone in root.findall("egress-zone"):
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-egress-zone={_attr(zone, 'name', label='egress zone')}")
+        value = _firewall_name(_attr(zone, "name", label="egress zone"), label="egress zone")
+        _permanent(firewall_cmd, f"--policy={name}", f"--add-egress-zone={value}")
     for port in root.findall("port"):
-        value = f"{_attr(port, 'port', label='policy port')}/{_attr(port, 'protocol', label='policy port')}"
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-port={value}")
+        port_value = _port(_attr(port, "port", label="policy port"), label="policy port")
+        protocol = _protocol(_attr(port, "protocol", label="policy port"), label="policy port")
+        _permanent(firewall_cmd, f"--policy={name}", f"--add-port={port_value}/{protocol}")
     for forward in root.findall("forward-port"):
-        value = (
-            f"port={_attr(forward, 'port', label='forward port')}:"
-            f"proto={_attr(forward, 'protocol', label='forward port')}:"
-            f"toport={_attr(forward, 'to-port', label='forward port')}"
-        )
+        source_port = _port(_attr(forward, "port", label="forward port"), label="forward port")
+        protocol = _protocol(_attr(forward, "protocol", label="forward port"), label="forward port")
+        target_port = _port(_attr(forward, "to-port", label="forward port"), label="forward port")
+        value = f"port={source_port}:proto={protocol}:toport={target_port}"
         _permanent(firewall_cmd, f"--policy={name}", f"--add-forward-port={value}")
     for rule in root.findall("rule"):
         _permanent(firewall_cmd, f"--policy={name}", f"--add-rich-rule={_rich_rule(rule)}")

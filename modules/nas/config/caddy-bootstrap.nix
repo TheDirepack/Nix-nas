@@ -2,17 +2,19 @@
 
 let
   inherit (nasInternal)
-    authentikOutpostPort
     authentikPort
     caddyForwardAuth
     cfg
     cockpitPort
     firstRunWizardStatic
     lanHost
+    nasPythonApplication
+    nasSetup
     secretRoot
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
+  firstRunApiSocket = "/run/nas-first-run-api/api.sock";
   bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
     cat <<EOCF
 {
@@ -40,26 +42,35 @@ https://${lanHost} {
   handle / {
     redir * ${cfg.identity.authentikPath}if/user/ 303
   }
-  # /setup without the slash would make the wizard's relative asset URLs
-  # resolve against /, so canonicalise to /setup/ before serving.
   handle /setup {
     redir /setup /setup/ 308
   }
-  # The wizard's submission API. Authentik-gated like the page itself; the
-  # port must match nas-setup-api.service (application-services.nix).
+
+  # Submission and password checking still require the bootstrap Authentik
+  # session. Status polling and the final reboot use the high-entropy per-job
+  # capability minted only after an authenticated submission, because the
+  # bootstrap Authentik database is intentionally replaced mid-job.
+  handle /setup/api/first-start/job/* {
+    uri strip_prefix /setup/api
+    reverse_proxy unix/${firstRunApiSocket}
+  }
+  handle /setup/api/reboot {
+    uri strip_prefix /setup/api
+    reverse_proxy unix/${firstRunApiSocket}
+  }
   handle /setup/api/* {
     route {
       ${caddyForwardAuth}
-      reverse_proxy 127.0.0.1:8980
+      uri strip_prefix /setup/api
+      reverse_proxy unix/${firstRunApiSocket} {
+        header_up Remote-User {http.request.header.Remote-User}
+        header_up Remote-Groups {http.request.header.Remote-Groups}
+      }
     }
   }
   handle /setup/* {
     route {
       ${caddyForwardAuth}
-      @post method POST
-      handle @post {
-        redir * /setup/ 303
-      }
       uri strip_prefix /setup
       root * ${firstRunWizardStatic}/share/nas-portal-wizard
       file_server
@@ -78,7 +89,8 @@ https://${lanHost} {
   }
   @authentikOutpost path /outpost.goauthentik.io/*
   handle @authentikOutpost {
-    reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+    uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
+    reverse_proxy 127.0.0.1:${toString authentikPort} {
       header_up Host {http.request.host}
       header_up X-Forwarded-Proto https
     }
@@ -146,10 +158,55 @@ in
     && !cfg.testing.installationReadyFixture
   ) [ "nas-management-network-guard.service" ];
 
+  systemd.services.nas-first-run-api = {
+    description = "Authenticated standalone first-run setup API";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "caddy.service" ];
+    unitConfig.ConditionPathExists = [ "!/var/lib/nas-setup/state.json" ];
+    environment = {
+      NAS_FIRST_RUN_CONFIG = cfg.firstStart.configFile;
+      NAS_SETUP_STATE = "/var/lib/nas-setup/state.json";
+    };
+    serviceConfig = {
+      Type = "simple";
+      User = "root";
+      Group = "caddy";
+      RuntimeDirectory = "nas-first-run-api";
+      RuntimeDirectoryMode = "0750";
+      UMask = "0077";
+      ExecStart = "${nasPythonApplication}/bin/nas-first-run-api --socket ${firstRunApiSocket}";
+      Restart = "on-failure";
+      RestartSec = "2s";
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      ReadWritePaths = [
+        "/run/nas-first-run-api"
+        "/run/nas-first-start"
+        "/run/nas-operations"
+        "/run/lock"
+      ];
+    };
+    path = [
+      pkgs.libpwquality
+      pkgs.systemd
+      nasSetup
+    ];
+  };
+
   systemd.services.nas-caddy-bootstrap = {
     description = "Select the active Caddy configuration (bootstrap vs full)";
     wantedBy = [ "multi-user.target" ];
     before = [ "caddy.service" ];
+    after = [ "nas-first-run-api.service" ];
+    wants = [ "nas-first-run-api.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
