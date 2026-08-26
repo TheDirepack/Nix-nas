@@ -7,8 +7,16 @@ from unittest import mock
 
 import nas_first_run_api as first_run_api
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
 
 class FirstRunApiContractTests(unittest.TestCase):
+    def test_installed_system_wires_nas_first_run_api(self) -> None:
+        source = (ROOT / "modules" / "nas" / "config" / "caddy-bootstrap.nix").read_text(encoding="utf-8")
+        self.assertIn("nas-first-run-api", source)
+        self.assertIn("nasFirstRunApi", source)
+        self.assertIn("--socket", source)
+
     def test_private_string_boundary_rejects_multiline_values(self) -> None:
         with self.assertRaises(first_run_api.RequestError):
             first_run_api._single_line("one\ntwo", "test")
