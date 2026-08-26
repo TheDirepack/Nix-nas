@@ -249,6 +249,63 @@ class SetupLauncherTransactionTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[-1].args, ("token", "providers/proxy/9/"))
         self.assertEqual(request.call_args_list[-1].kwargs, {"method": "DELETE"})
 
+    def test_lost_provider_post_response_removes_discovered_provider(self) -> None:
+        failure = sync.SyncError("lost provider POST response")
+        with (
+            mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
+            mock.patch.object(sync, "default_flows", return_value=flows()),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=[
+                    [],
+                    [],
+                    [embedded_outpost()],
+                    [{"name": "NAS Setup", "pk": 11}],
+                ],
+            ),
+            mock.patch.object(
+                sync,
+                "authentik_request",
+                side_effect=[failure, None],
+            ) as request,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "lost provider POST response"):
+                sync.ensure_setup_launcher("token")
+
+        self.assertEqual(request.call_args_list[-1].args, ("token", "providers/proxy/11/"))
+        self.assertEqual(request.call_args_list[-1].kwargs, {"method": "DELETE"})
+
+    def test_lost_application_post_response_removes_discovered_application_and_provider(self) -> None:
+        failure = sync.SyncError("lost application POST response")
+        with (
+            mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
+            mock.patch.object(sync, "default_flows", return_value=flows()),
+            mock.patch.object(
+                sync,
+                "authentik_list",
+                side_effect=[
+                    [],
+                    [],
+                    [embedded_outpost()],
+                    [{"slug": "nas-setup", "provider": 11}],
+                ],
+            ),
+            mock.patch.object(
+                sync,
+                "authentik_request",
+                side_effect=[{"pk": 11}, failure, None, None],
+            ) as request,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "lost application POST response"):
+                sync.ensure_setup_launcher("token")
+
+        rollback_application, rollback_provider = request.call_args_list[-2:]
+        self.assertEqual(rollback_application.args, ("token", "core/applications/nas-setup/"))
+        self.assertEqual(rollback_application.kwargs, {"method": "DELETE"})
+        self.assertEqual(rollback_provider.args, ("token", "providers/proxy/11/"))
+        self.assertEqual(rollback_provider.kwargs, {"method": "DELETE"})
+
 
 if __name__ == "__main__":
     unittest.main()
