@@ -61,6 +61,8 @@ class SecurityReauditContracts(unittest.TestCase):
         self.assertIn("./coding-agent-network-security.nix", default)
         self.assertIn("NAS_PI_INPUT", network)
         self.assertIn("NAS_PI_FORWARD", network)
+        self.assertIn("net.ipv6.conf.all.disable_ipv6=1", network)
+        self.assertIn("net.ipv6.conf.default.disable_ipv6=1", network)
         self.assertIn("-d ${piHostVethIp}/32 -p udp --dport 53 -j ACCEPT", network)
         self.assertIn("-d ${piHostVethIp}/32 -p tcp --dport ${toString ai.llamaSwap.port} -j ACCEPT", network)
         self.assertIn("${iptables} -A ${inputChain} -j REJECT", network)
