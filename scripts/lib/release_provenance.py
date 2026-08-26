@@ -69,9 +69,7 @@ def validate_staged_version(stage: pathlib.Path, version: str, archive_root: str
 
     expected_root = f"nixos-nas-{version}"
     if archive_root not in {expected_root, f"{expected_root}-source-only-unverified"}:
-        raise SystemExit(
-            f"release archive root {archive_root!r} is not derived from project version {version!r}"
-        )
+        raise SystemExit(f"release archive root {archive_root!r} is not derived from project version {version!r}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
