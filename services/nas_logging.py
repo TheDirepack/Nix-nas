@@ -46,6 +46,15 @@ _SENSITIVE_KEYS = frozenset(
 # authorizationMethod remain visible because they do not end at that boundary.
 _SENSITIVE_SUFFIXES = tuple(f"_{key}" for key in sorted(_SENSITIVE_KEYS))
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+# Some privileged orchestration helpers intentionally pass short-lived
+# capabilities through `env NAME=value` argv elements. A failed subprocess may
+# stringify that argv inside an exception before the exception reaches a
+# structured journal, so field-name redaction alone is insufficient. Keep this
+# deliberately narrow: redact known NAS capability assignments wherever they
+# occur in diagnostic text while preserving the surrounding command context.
+_INLINE_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?P<name>NAS_OPERATION_COORDINATION_TOKEN|NAS_AUTHENTICATED_IDENTITY_JSON)=(?P<value>[^\s]+)"
+)
 
 
 def _normalized_key(key: str) -> str:
@@ -62,8 +71,12 @@ def _sensitive_key(key: str) -> bool:
     return lowered in _SENSITIVE_KEYS or lowered.endswith(_SENSITIVE_SUFFIXES)
 
 
+def _redact_inline_secrets(text: str) -> str:
+    return _INLINE_SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group('name')}=[redacted]", text)
+
+
 def _bounded_text(value: Any) -> str:
-    text = str(value).replace("\x00", "")
+    text = _redact_inline_secrets(str(value).replace("\x00", ""))
     if len(text) <= MAX_TEXT_LENGTH:
         return text
     return f"{text[:MAX_TEXT_LENGTH]}[truncated]"
