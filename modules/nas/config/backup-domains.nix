@@ -53,6 +53,34 @@ let
     ++ lib.filter (argument: !(lib.hasPrefix "--sendoptions" argument)) cfg.zfsReplication.extraArgs
     ++ lib.optional cfg.zfsEncryption.enable "--sendoptions=w"
     ++ [ cfg.zfsDataset cfg.zfsReplication.target ];
+  secureCredentialCheck = pkgs.writeShellScript "nas-backup-secure-credential-check" ''
+    set -euo pipefail
+    check_file() {
+      local label="$1" path="$2"
+      [[ -n "$path" ]] || return 0
+      if [[ -L "$path" || ! -f "$path" ]]; then
+        echo "$label must be a regular non-symlink file: $path" >&2
+        exit 70
+      fi
+      owner="$(${pkgs.coreutils}/bin/stat -c '%u' -- "$path")"
+      mode="$(${pkgs.coreutils}/bin/stat -c '%a' -- "$path")"
+      [[ "$owner" == 0 ]] || {
+        echo "$label must be owned by root: $path" >&2
+        exit 70
+      }
+      # Secret-bearing Restic inputs must not be readable or writable by group/other.
+      (( (8#$mode & 8#077) == 0 )) || {
+        echo "$label must not grant group/other permissions: $path" >&2
+        exit 70
+      }
+      [[ -s "$path" ]] || {
+        echo "$label must not be empty: $path" >&2
+        exit 70
+      }
+    }
+    check_file "Restic password file" ${lib.escapeShellArg cfg.backup.passwordFile}
+    check_file "Restic repository file" ${lib.escapeShellArg cfg.backup.repositoryFile}
+  '';
 in
 {
   config = lib.mkMerge [
@@ -117,6 +145,7 @@ in
         backupPrepareCommand = lib.mkOverride 40 ''
           #!${pkgs.runtimeShell}
           set -euo pipefail
+          ${secureCredentialCheck}
           artifact_dir=${lib.escapeShellArg rootControlArtifactDir}
           dump=${lib.escapeShellArg rootControlDatabaseDump}
           install -d -m 0700 "$artifact_dir"
@@ -142,6 +171,7 @@ in
       systemd.services.nas-backup-restore-verify = lib.mkIf cfg.backup.restoreVerification.enable {
         script = lib.mkOverride 40 ''
           set -euo pipefail
+          ${secureCredentialCheck}
           verify_root=${lib.escapeShellArg restoreVerifyPath}
           restore_root="$verify_root/restored"
           cleanup() { rm -rf -- "$verify_root"; }
