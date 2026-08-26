@@ -48,6 +48,24 @@
       "setting": "serviceConfig.StateDirectory",
       "count": 1,
       "reason": "CopyParty data lives on the ZFS tank behind /var/lib/copyparty; reset the upstream StateDirectory directive so systemd does not replace or follow that runtime symlink."
+    },
+    {
+      "path": "modules/nas/config/application-services.nix",
+      "setting": "StateDirectoryMode",
+      "count": 1,
+      "reason": "The ZFS-backed StateDirectory must keep a restrictive mode that matches the NAS share-group write policy."
+    },
+    {
+      "path": "modules/ai/coding-agent-network-security.nix",
+      "setting": "ExecStart",
+      "count": 1,
+      "reason": "The coding-agent network namespace must replace the original broad setup command with the reviewed egress-isolation firewall program so an LLM-driven session cannot pivot into host or private networks."
+    },
+    {
+      "path": "modules/ai/coding-agent-network-security.nix",
+      "setting": "ExecStop",
+      "count": 1,
+      "reason": "The matching teardown must replace the original namespace cleanup so all dedicated coding-agent firewall chains are removed deterministically when the sandbox stops."
     }
   ]
 }
