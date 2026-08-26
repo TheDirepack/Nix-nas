@@ -48,6 +48,21 @@ case "$section" in
     ;;
 
   static)
+    # GitHub documents concurrency.queue=max, but actionlint 1.7.12 predates
+    # that key. Lint CI normally and suppress only that exact known false
+    # positive for the release workflow; every other actionlint diagnostic is
+    # still fatal.
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
+    check_actionlint() {
+      local rc=0
+      nix develop .#test -c actionlint .github/workflows/ci.yml || rc=1
+      nix develop .#test -c actionlint \
+        -ignore 'unexpected key "queue" for "concurrency" section' \
+        .github/workflows/release.yml || rc=1
+      return "$rc"
+    }
+
     # Keep the normal formatting check authoritative, but when it fails also
     # retain the exact Ruff-formatted files/patch in the existing failure-log
     # artifact. This makes formatter drift directly repairable without adding
@@ -79,8 +94,7 @@ case "$section" in
       nix develop .#test -c shellcheck -x \
       .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
     ci_run static actionlint "GitHub Actions lint" \
-      nix develop .#test -c actionlint \
-      .github/workflows/ci.yml .github/workflows/release.yml || failed=1
+      check_actionlint || failed=1
     ci_run static ruff-check "Python lint" \
       nix develop .#test -c ruff check services tests scripts || failed=1
     ci_run static ruff-format "Python formatting" \
