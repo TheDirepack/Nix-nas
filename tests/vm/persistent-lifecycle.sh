@@ -9,7 +9,14 @@ source "$ROOT/scripts/lib/nas-qemu-process.sh"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 fake_qemu="$work/qemu-system-x86_64"
-cp -- "$(command -v sleep)" "$fake_qemu"
+fake_qemu_input="$work/qemu-input"
+# Nix coreutils uses multicall binaries that can dispatch by argv[0], so a
+# renamed copy of `sleep` is not a stable fake QEMU. Bash does not have that
+# behavior. Block the copied Bash executable on a FIFO so /proc/$pid/exe keeps
+# the exact qemu-system-x86_64 basename that the production cleanup validates.
+cp -- "$(readlink -f "$(command -v bash)")" "$fake_qemu"
+mkfifo "$fake_qemu_input"
+exec {fake_qemu_hold_fd}<>"$fake_qemu_input"
 
 wait_for_fake_qemu_exec() {
   local pid=$1 executable
@@ -28,11 +35,8 @@ wait_for_fake_qemu_exec() {
 }
 
 start_fake_qemu() {
-  # Use the copied sleep binary directly so the pid belongs to the process whose
-  # executable identity the production cleanup helper validates. Waiting for
-  # exec prevents the launcher race without introducing a nohup intermediary.
   local pid
-  "$fake_qemu" 60 </dev/null >/dev/null 2>&1 &
+  "$fake_qemu" -c 'IFS= read -r _' <"$fake_qemu_input" >/dev/null 2>&1 &
   pid=$!
   if ! wait_for_fake_qemu_exec "$pid"; then
     kill "$pid" 2>/dev/null || true
@@ -108,4 +112,5 @@ nas_qemu_cleanup_pidfile "$persistent_pidfile" 1
   exit 1
 }
 
+exec {fake_qemu_hold_fd}>&-
 printf '%s\n' "Persistent QEMU lifecycle contract passed"
