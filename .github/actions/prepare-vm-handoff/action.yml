@@ -129,5 +129,5 @@ runs:
       with:
         name: vm-bundle-handoff
         if-no-files-found: error
-        retention-days: 1
+        retention-days: 2
         path: ${{ runner.temp }}/vm-bundles
