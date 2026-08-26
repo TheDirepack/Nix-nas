@@ -6,6 +6,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SECURE = ROOT / "services/nas_first_start.py"
+DISPATCH = ROOT / "services/nas_setup_dispatch.py"
 API = ROOT / "services/nas_first_run_api.py"
 BOOTSTRAP = ROOT / "modules/nas/config/bootstrap-security.nix"
 PYPROJECT = ROOT / "pyproject.toml"
@@ -23,6 +24,14 @@ class SecureFirstStartTests(unittest.TestCase):
         self.assertIn("FIRST_START_JOB", api)
         self.assertIn('"--setenv=NAS_SETUP_ALLOW_ROOT=1"', api)
         self.assertNotIn("firstStartSetupShim", module)
+
+    def test_public_nas_setup_cannot_reenter_legacy_first_run(self) -> None:
+        packaging = PYPROJECT.read_text(encoding="utf-8")
+        dispatch = DISPATCH.read_text(encoding="utf-8")
+        self.assertIn('nas-setup = "nas_setup_dispatch:main"', packaging)
+        self.assertIn('sys.argv[1] == "first-run"', dispatch)
+        self.assertIn("authenticated standalone /setup/ workflow", dispatch)
+        self.assertIn("return nas_setup.main()", dispatch)
 
     def test_permanent_password_never_opens_bootstrap_kdbx(self) -> None:
         source = SECURE.read_text(encoding="utf-8")
