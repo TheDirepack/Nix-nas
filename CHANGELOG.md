@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Permanent Authentik, PostgreSQL, KeePassXC, Caddy, and unlock/control-plane state remain on the root filesystem; mutable Managed Services V2 authority and application state remain on encrypted ZFS.
+- Permanent Authentik, PostgreSQL, KeePassXC, Caddy, unlock/control-plane state, and the live Managed Services V2 `services.yaml` authority remain on the root filesystem so first-run policy is available before user storage exists; encrypted ZFS holds V2 transaction history plus declared application/storage data.
 - Bootstrap secrets are never promoted into the permanent trust domain; permanent service secrets and the native OpenZFS key are regenerated during setup.
 - Authentik steady-state automation is reduced to read-only identity projection permissions, with setup-only mutations isolated behind temporary bootstrap authority and native blueprints.
 - Root/control-plane recovery uses Restic while complete encrypted ZFS replication preserves native ZFS encryption.
@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Setup no longer persists a cheap password-derived verifier for the KeePass master password.
 - Authentik bearer requests refuse redirects/origin changes and redact sensitive error payloads.
 - Caddy strips spoofable identity headers before reconstructing trusted Authentik identity headers.
+- Managed Services V2 desired-state seeding no longer depends on the ZFS mount it helps first-run configure.
 
 ## 0.1.0 — 2026-08-25
 
