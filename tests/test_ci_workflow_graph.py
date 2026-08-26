@@ -221,7 +221,8 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("./.github/actions/prepare-vm-handoff", text)
         self.assertIn("force-cache-miss", text)
         self.assertIn("Package and verify as an untrusted consumer", text)
-        self.assertNotIn("source-archive-cache", text)
+        self.assertIn("source-archive-cache", text)
+        self.assertIn("source-archive-${{ github.sha }}", text)
         self.assertNotIn("source-archive-evidence", text)
 
     def test_nix_setup_action_centralizes_repeated_runner_setup(self) -> None:
@@ -326,6 +327,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn('[[ "$key" == ci-* ]]', text)
         self.assertIn("$CI_CACHE_SCHEMA", text)
         self.assertIn("-forced-", text)
+        self.assertIn("-source-archive-", text)
         self.assertIn("CURRENT_RUN_ID", text)
         self.assertIn("active-workflows", text)
         self.assertIn("deleted_runs < 200", text)
