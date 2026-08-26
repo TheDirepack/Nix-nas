@@ -49,7 +49,7 @@ class SetupLauncherTransactionTests(unittest.TestCase):
             mock.patch.object(
                 sync,
                 "authentik_list",
-                side_effect=[[], [], [embedded_outpost()]],
+                side_effect=[[], [], [embedded_outpost()], []],
             ),
             mock.patch.object(
                 sync,
@@ -158,7 +158,7 @@ class SetupLauncherTransactionTests(unittest.TestCase):
             mock.patch.object(
                 sync,
                 "authentik_list",
-                side_effect=[[], [], [embedded_outpost()]],
+                side_effect=[[], [], [embedded_outpost()], []],
             ),
             mock.patch.object(
                 sync,
@@ -236,7 +236,7 @@ class SetupLauncherTransactionTests(unittest.TestCase):
         with (
             mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
             mock.patch.object(sync, "default_flows", return_value=flows()),
-            mock.patch.object(sync, "authentik_list", side_effect=[[], [], [embedded_outpost()]]),
+            mock.patch.object(sync, "authentik_list", side_effect=[[], [], [embedded_outpost()], []]),
             mock.patch.object(
                 sync,
                 "authentik_request",
