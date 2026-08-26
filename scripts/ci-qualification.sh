@@ -2,10 +2,10 @@
 # This file is invoked explicitly with `bash`; it is intentionally not a shipped executable.
 # shellcheck shell=bash
 
-set -u -o pipefail
+set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit
 
 section=${1:-}
 if [[ -z "$section" ]]; then
@@ -17,6 +17,7 @@ mkdir -p ci-logs
 : > "ci-logs/${section}-results.tsv"
 export CI_LOG_DIR=ci-logs
 export CI_RESULTS_FILE="ci-logs/${section}-results.tsv"
+# shellcheck source=../.github/ci-checks.sh
 source .github/ci-checks.sh
 failed=0
 
@@ -33,6 +34,7 @@ case "$section" in
     ci_run shared test-inventory "Test inventory contract" \
       nix develop .#test -c python3 scripts/validate-test-inventory.py || failed=1
 
+    # shellcheck disable=SC2329
     check_shell_syntax() {
       local rc=0 script
       while IFS= read -r -d '' script; do
@@ -81,6 +83,7 @@ case "$section" in
       --exclude test_property_invariants.py \
       --exclude test_secret_security_fuzz.py || failed=1
 
+    # shellcheck disable=SC2329
     check_coverage_floor() {
       if [[ ! -s coverage.json ]]; then
         echo "coverage.json was not produced by the fast unit suite"
@@ -118,6 +121,7 @@ case "$section" in
     ;;
 
   nonroot)
+    # shellcheck disable=SC2329
     run_nonroot_suite() {
       local nix_bin
       : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
@@ -134,6 +138,7 @@ case "$section" in
     ;;
 
   cockpit)
+    # shellcheck disable=SC2329
     check_cockpit_js_syntax() {
       local rc=0 script
       for script in cockpit/src/*.js; do
