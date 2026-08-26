@@ -13,6 +13,7 @@ HANDOFF_ACTION = ROOT / ".github" / "actions" / "prepare-vm-handoff" / "action.y
 NIX_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-nix-ci" / "action.yml"
 CHECK_HELPER = ROOT / ".github" / "ci-checks.sh"
 QUALIFICATION_SCRIPT = ROOT / "scripts" / "ci-qualification.sh"
+SYSTEM_HANDOFF = ROOT / "scripts" / "system-handoff.sh"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
@@ -49,6 +50,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         )
         cls.check_helper = CHECK_HELPER.read_text(encoding="utf-8")
         cls.qualification_script = QUALIFICATION_SCRIPT.read_text(encoding="utf-8")
+        cls.system_handoff = SYSTEM_HANDOFF.read_text(encoding="utf-8")
 
     @staticmethod
     def needs(job: dict[str, Any]) -> set[str]:
@@ -75,6 +77,8 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("pull_request", triggers)
         self.assertIn("workflow_dispatch", triggers)
         self.assertIn("schedule", triggers)
+        self.assertEqual(triggers["push"]["branches"], ["main"])
+        self.assertNotIn("tags", triggers["push"])
         self.assertEqual(
             triggers["workflow_dispatch"]["inputs"]["force-cache-miss"]["type"],
             "boolean",
@@ -99,22 +103,33 @@ class CiWorkflowGraphTests(unittest.TestCase):
         for name in self.PARALLEL:
             self.assertEqual(self.needs(self.jobs[name]), {"prerequisites"})
 
-    def test_parallel_branches_have_no_cross_dependencies_and_always_report(self) -> None:
+    def test_parallel_branches_have_no_cross_dependencies_and_honor_cancellation(
+        self,
+    ) -> None:
         for name in self.PARALLEL:
             job = self.jobs[name]
             dependencies = self.needs(job)
             self.assertEqual(dependencies, {"prerequisites"}, name)
             self.assertTrue(dependencies.isdisjoint(self.PARALLEL), name)
-            self.assertEqual(job.get("if"), "always()", name)
+            self.assertIn("!cancelled()", str(job.get("if", "")), name)
 
     def test_branch_specific_prerequisites_stay_local(self) -> None:
         cockpit = self.serialized(self.jobs["cockpit"])
         self.assertIn("actions/setup-node@", cockpit)
-        self.assertIn("cockpit/node_modules", cockpit)
+        self.assertIn("cache': 'npm", cockpit)
+        self.assertIn("npm --prefix cockpit ci", cockpit)
+        self.assertNotIn("cockpit/node_modules", cockpit)
         for name in self.PARALLEL - {"cockpit"}:
             text = self.serialized(self.jobs[name])
-            self.assertNotIn("cockpit/node_modules", text, name)
+            self.assertNotIn("actions/setup-node@", text, name)
             self.assertIn("./.github/actions/setup-nix-ci", text, name)
+
+    def test_node_dependency_caches_never_restore_node_modules(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("path: cockpit/node_modules", text)
+        self.assertNotIn("Restore exact Node dependencies", text)
+        self.assertIn("cache: npm", text)
+        self.assertGreaterEqual(text.count("npm --prefix cockpit ci --no-audit --no-fund"), 3)
 
     def test_each_parallel_branch_keeps_detailed_failure_logs(self) -> None:
         helper = self.check_helper
@@ -145,11 +160,12 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertNotIn("nix shell nixpkgs#", script)
         self.assertIn("nix develop .#test -c bats", script)
         self.assertIn("nix develop .#test -c prettier", script)
+        self.assertIn("set -euo pipefail", script)
 
     def test_coverage_comparison_starts_after_unit_only(self) -> None:
         coverage = self.jobs["coverage-diff"]
         self.assertEqual(self.needs(coverage), {"unit"})
-        self.assertIn("always()", str(coverage.get("if", "")))
+        self.assertIn("!cancelled()", str(coverage.get("if", "")))
         self.assertIn("coverage-report", self.serialized(coverage))
         self.assertIn("main-coverage.json", self.serialized(coverage))
         self.assertIn("ci-check-report.py", self.run_text(coverage))
@@ -160,7 +176,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         gate = self.jobs["qualification"]
         expected = {"prerequisites", *self.PARALLEL, "coverage-diff"}
         self.assertEqual(self.needs(gate), expected)
-        self.assertEqual(gate.get("if"), "always()")
+        self.assertIn("!cancelled()", str(gate.get("if", "")))
         text = self.run_text(gate)
         for name in expected:
             self.assertIn(f"needs.{name}.result", text)
@@ -191,7 +207,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("DeterminateSystems/magic-nix-cache-action@", text)
         self.assertIn("enable-kvm", text)
 
-    def test_handoff_action_keeps_granular_cross_run_caches_but_publishes_one_artifact(
+    def test_handoff_action_keeps_granular_caches_and_exports_exact_system_closures(
         self,
     ) -> None:
         text = self.serialized(self.handoff)
@@ -204,21 +220,21 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
         self.assertIn("vm-bundle-handoff", text)
-        self.assertIn(
-            "nixosConfigurations.nas-ci-ready.config.system.build.toplevel",
-            text,
-        )
-        self.assertIn("nixosConfigurations.nas-qemu.config.system.build.toplevel", text)
+        self.assertIn("scripts/system-handoff.sh save", text)
+        self.assertIn("scripts/system-handoff.sh verify", text)
+        self.assertIn("nixosConfigurations.nas-ci-ready", self.system_handoff)
+        self.assertIn("nixosConfigurations.nas-qemu", self.system_handoff)
+        self.assertIn("nix-store", self.system_handoff)
+        self.assertIn("--export", self.system_handoff)
 
-    def test_vm_consumers_download_one_complete_handoff_instead_of_restoring_bundle_caches(
-        self,
-    ) -> None:
+    def test_vm_consumers_import_package_and_exact_system_handoffs(self) -> None:
         for name in ("integration", "installer", "installed-security"):
             text = self.serialized(self.jobs[name])
             self.assertIn("vm-bundle-handoff", text)
             self.assertIn("verify-handoff", text)
             self.assertIn("vm-bundles.sh import", text)
-            self.assertNotIn("actions/cache/restore@", text)
+            self.assertIn("system-handoff.sh verify", text)
+            self.assertIn("system-handoff.sh import", text)
             self.assertNotIn("vm-bundle-core-", text)
 
     def test_browser_executes_whole_suite_in_one_runner(self) -> None:
@@ -239,19 +255,24 @@ class CiWorkflowGraphTests(unittest.TestCase):
             {"nas-vm", "nas-vm-encrypted"},
         )
         self.assertEqual(self.needs(integration), {"prepare"})
+        self.assertIn("!cancelled()", str(integration.get("if", "")))
 
-    def test_source_fuzz_uses_existing_internal_parallel_runner_not_a_job_matrix(
-        self,
-    ) -> None:
+    def test_source_fuzz_uses_visible_evidence_and_internal_parallel_runner(self) -> None:
         fuzz = self.jobs["source-fuzz"]
         self.assertNotIn("strategy", fuzz)
-        text = self.run_text(fuzz)
+        text = self.serialized(fuzz)
         self.assertIn("scripts/run-fuzz.py --jobs 6", text)
-        self.assertIn("source-fuzz.log", text)
+        self.assertIn("fuzz-evidence/source-fuzz.log", text)
+        self.assertNotIn(".fuzz-evidence", text)
 
-    def test_installed_security_provisions_once_and_aggregates_both_workloads(
-        self,
-    ) -> None:
+    def test_console_evidence_is_copied_out_of_hidden_cache_directories(self) -> None:
+        installer = self.serialized(self.jobs["installer"])
+        installed = self.serialized(self.jobs["installed-security"])
+        self.assertIn("final-vm-evidence/browser-console.log", installer)
+        self.assertIn("installed-security-logs/browser-console.log", installed)
+        self.assertNotIn("~/.cache/nixos-nas-qemu/state/browser-console.log'", installer)
+
+    def test_installed_security_provisions_once_and_aggregates_both_workloads(self) -> None:
         job = self.jobs["installed-security"]
         text = self.serialized(job)
         self.assertEqual(text.count("./scripts/qemu-test.sh installer"), 1)
