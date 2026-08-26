@@ -109,11 +109,15 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertNotIn('frozenset({"test_service_caddy_validate.py"})', runner)
 
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        caddy_block = workflow.split("  caddy-validate:\n", 1)[1].split("\n  static:\n", 1)[0]
-        self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
-        self.assertIn("tests.test_v2_caddy", caddy_block)
-        self.assertIn("tests.test_v2_caddy_validate", caddy_block)
-        self.assertNotIn("tests.test_service_caddy", caddy_block)
+        security_block = workflow.split(
+            '      - name: "Section: security and generated service configuration"\n',
+            1,
+        )[1].split('      - name: "Section: unprivileged hermeticity"\n', 1)[0]
+        self.assertIn("Caddy generator validation", security_block)
+        self.assertIn("tests.test_v2_caddy", security_block)
+        self.assertIn("tests.test_v2_caddy_validate", security_block)
+        self.assertNotIn("tests.test_service_caddy", security_block)
+        self.assertIn("nix develop .#test", security_block)
 
     def test_managed_services_v2_has_runtime_and_property_contracts(self):
         v2_contracts = {
