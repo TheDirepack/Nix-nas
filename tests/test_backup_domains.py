@@ -40,6 +40,16 @@ class BackupDomainArchitectureTests(unittest.TestCase):
         self.assertIn("allowSamePoolRepository", options)
         self.assertIn("rollback-only", options)
 
+    def test_restore_verification_scratch_is_confined_before_recursive_delete(self) -> None:
+        module = read("modules/nas/config/backup-domains.nix")
+        self.assertIn('lib.hasPrefix "/var/lib/nas-backup/" restoreVerifyPath', module)
+        self.assertIn('!lib.hasInfix "/../" restoreVerifyPath', module)
+        self.assertIn('restoreVerifyPath != rootControlArtifactDir', module)
+        self.assertIn('!lib.hasPrefix "${rootControlArtifactDir}/" restoreVerifyPath', module)
+        self.assertIn('!lib.hasPrefix "${restoreVerifyPath}/" rootControlArtifactDir', module)
+        self.assertIn('!cfg.backup.restoreVerification.enable || safeRestoreVerifyPath', module)
+        self.assertIn('rm -rf -- "$verify_root"', module)
+
     def test_encrypted_zfs_domain_uses_raw_syncoid_send(self) -> None:
         module = read("modules/nas/config/backup-domains.nix")
         storage = read("modules/nas/config/storage-monitoring.nix")
