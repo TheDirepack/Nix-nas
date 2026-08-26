@@ -11,12 +11,6 @@ permissions:
   contents: read
   pull-requests: read
 
-# Version/tag allocation is intentionally serialized. queue:max preserves every
-# qualified merge instead of replacing an older pending publication.
-concurrency:
-  group: release-main
-  queue: max
-
 jobs:
   eligibility:
     name: Verify qualified merge source
@@ -107,7 +101,7 @@ jobs:
           bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
       - name: Fetch release tag history
         run: git fetch --force --tags origin
-      - name: Stamp next release version and Diceware bootstrap password
+      - name: Stamp deterministic release version and Diceware bootstrap password
         run: |
           set -euo pipefail
           rm -rf -- "$RELEASE_PUBLICATION"
