@@ -12,6 +12,7 @@
     ./options/management.nix
     ./config/validation.nix
     ./config/installation-security.nix
+    ./config/install-readiness.nix
     ./config/network-firewall.nix
     ./config/host-platform.nix
     ./config/virtualization.nix
