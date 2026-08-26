@@ -58,6 +58,10 @@ const App = () => {
   const effectiveAuthentikPasswordConfirm = reuseLinuxPasswordForAuthentik
     ? administrator.confirm
     : authentikAdministratorPasswordConfirm;
+  const passwordContext = React.useMemo(
+    () => [administrator.username, administrator.name, administrator.email],
+    [administrator.username, administrator.name, administrator.email],
+  );
 
   return (
     <Wizard
@@ -89,6 +93,7 @@ const App = () => {
           onAdministratorPassword={setAuthentikAdministratorPassword}
           administratorPasswordConfirm={authentikAdministratorPasswordConfirm}
           onAdministratorPasswordConfirm={setAuthentikAdministratorPasswordConfirm}
+          userInputs={passwordContext}
         />
       </WizardStep>
       <WizardStep id="wizard-storage" step={4} name="Storage">
