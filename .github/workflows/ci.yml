@@ -32,9 +32,9 @@ env:
   CI_CACHE_SCHEMA: ci-v6-staged-node24-ubuntu2404
 
 jobs:
-  # Stage 1: run every inexpensive qualification section in one prepared
-  # environment. Individual sections continue after failure; the final reporter
-  # fails once with a complete list of broken sections.
+  # Stage 1: one prepared environment runs every inexpensive qualification
+  # section. Subchecks keep running after failures; the final reporter fails
+  # once with exact commands, exit codes, timings, log tails, and full logs.
   prebuild:
     name: Pre-build qualification
     runs-on: ubuntu-24.04
@@ -52,6 +52,164 @@ jobs:
         with:
           diagnostic-endpoint: ""
           use-flakehub: false
+      - name: Initialize pre-build diagnostics
+        run: |
+          rm -rf ci-logs
+          mkdir -p ci-logs
+          : > ci-logs/results.tsv
+
+      - name: "Section: repository and test contracts"
+        id: contracts
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          source .github/ci-checks.sh
+          failed=0
+
+          ci_run contracts preflight "Source-only repository preflight" env \
+            NAS_PREFLIGHT_SKIP_TESTS=1 \
+            NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 \
+            NAS_PREFLIGHT_SKIP_TOOLING=1 \
+            NAS_PREFLIGHT_SKIP_NIX=1 \
+            ./scripts/preflight.sh || failed=1
+          ci_run contracts python-syntax "Python syntax inventory" \
+            ./scripts/validate-python-syntax.py || failed=1
+          ci_run contracts test-inventory "Test inventory contract" \
+            nix develop .#test -c python3 scripts/validate-test-inventory.py || failed=1
+
+          check_shell_syntax() {
+            local rc=0 script
+            while IFS= read -r -d '' script; do
+              bash -n "$script" || rc=1
+            done < <(find scripts tests/vm -type f -name '*.sh' -print0)
+            return "$rc"
+          }
+          ci_run contracts shell-syntax "Shell syntax" check_shell_syntax || failed=1
+          exit "$failed"
+
+      - name: "Section: static analysis and configuration"
+        id: static
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          source .github/ci-checks.sh
+          failed=0
+
+          ci_run static secret-faults "Secret transaction fault injection" \
+            nix shell nixpkgs#bats -c bats tests/bats || failed=1
+          ci_run static shellcheck "ShellCheck" \
+            nix develop .#test -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
+          ci_run static actionlint "GitHub Actions lint" \
+            nix develop .#test -c actionlint \
+            .github/workflows/ci.yml .github/workflows/release.yml || failed=1
+          ci_run static ruff-check "Python lint" \
+            nix develop .#test -c ruff check services tests scripts || failed=1
+          ci_run static ruff-format "Python formatting" \
+            nix develop .#test -c ruff format --check services tests scripts || failed=1
+          ci_run static pyright "Python types" \
+            nix develop .#test -c pyright --project pyproject.toml || failed=1
+          ci_run static prettier "JavaScript formatting" \
+            nix shell nixpkgs#prettier -c prettier --check \
+            "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" \
+            "tests/js/*.mjs" prettier.config.mjs || failed=1
+          ci_run static nix-matrix "Nix configuration matrix" \
+            ./scripts/nix-config-matrix.sh || failed=1
+          ci_run static reference-eval "Reference configuration evaluation" \
+            ./scripts/evaluate-reference-configurations.sh || failed=1
+          exit "$failed"
+
+      - name: "Section: unit, coverage, and maintainer contracts"
+        id: unit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          source .github/ci-checks.sh
+          failed=0
+
+          ci_run unit fast-python "Fast Python unit tests" \
+            nix develop .#test -c ./scripts/run-unit-tests.py \
+            --coverage coverage.json --quiet --jobs 4 \
+            --exclude test_maintainer_core.py \
+            --exclude test_maintainer_matrix.py \
+            --exclude test_maintainer_release.py \
+            --exclude test_contract_tooling.py \
+            --exclude test_fuzz_boundaries.py \
+            --exclude test_property_invariants.py \
+            --exclude test_secret_security_fuzz.py || failed=1
+
+          check_coverage_floor() {
+            if [[ ! -s coverage.json ]]; then
+              echo "coverage.json was not produced by the fast unit suite"
+              return 2
+            fi
+            nix develop .#test -c python3 scripts/check-coverage.py \
+              coverage.json --total-floor 66
+          }
+          ci_run unit coverage-floor "Coverage floor" check_coverage_floor || failed=1
+
+          for contract in \
+            test_maintainer_core.py \
+            test_maintainer_matrix.py \
+            test_maintainer_release.py \
+            test_contract_tooling.py
+          do
+            slug=${contract%.py}
+            ci_run unit "$slug" "Maintainer contract: $contract" \
+              nix develop .#test -c ./scripts/run-unit-tests.py \
+              --jobs 1 --pattern "$contract" || failed=1
+          done
+          exit "$failed"
+
+      - name: "Section: security and generated service configuration"
+        id: security
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          source .github/ci-checks.sh
+          failed=0
+
+          ci_run security regressions "Deterministic security regression suite" \
+            nix develop .#test -c ./scripts/run-security-tests.py || failed=1
+          ci_run security semgrep "Semgrep local rules" \
+            nix develop .#test -c semgrep --config .semgrep.yml --error \
+            services scripts cockpit/src web || failed=1
+          ci_run security bandit "Bandit privileged runtime scan" \
+            nix develop .#test -c bandit -q -c .bandit -r services scripts -ll -ii || failed=1
+          ci_run security caddy "Caddy generator validation" \
+            nix develop .#test -c python3 -m unittest \
+            tests.test_v2_caddy tests.test_v2_caddy_validate -v || failed=1
+          exit "$failed"
+
+      # Keep the unprivileged copy clean: run it before restoring node_modules.
+      - name: "Section: unprivileged hermeticity"
+        id: nonroot
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          source .github/ci-checks.sh
+          failed=0
+
+          run_nonroot_suite() {
+            local nix_bin
+            nix_bin=$(command -v nix)
+            sudo useradd --create-home --shell /bin/bash nas-ci
+            sudo install -d -o nas-ci -g nas-ci /home/nas-ci/worktree
+            sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
+            sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
+            sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
+              bash -c "cd /home/nas-ci/worktree && exec \"$nix_bin\" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py"
+          }
+          ci_run nonroot fast-suite "Run the fast suite without root-owned state" \
+            run_nonroot_suite || failed=1
+          exit "$failed"
+
+      # Node dependencies are deliberately restored only after source and
+      # hermeticity checks, so generated node_modules never pollutes preflight.
       - name: Restore exact Node 24 dependencies
         id: prebuild-node-deps
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -62,193 +220,33 @@ jobs:
         if: steps.prebuild-node-deps.outputs.cache-hit != 'true'
         run: npm --prefix cockpit ci --no-audit --no-fund
 
-      - name: "Section: repository and test contracts"
-        id: contracts
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          failed=0
-          run_check() {
-            local label=$1
-            shift
-            echo "::group::$label"
-            "$@"
-            rc=$?
-            echo "::endgroup::"
-            if ((rc != 0)); then
-              echo "::error title=$label::command failed with exit code $rc"
-              failed=1
-            fi
-          }
-          run_check "Source-only repository preflight" env \
-            NAS_PREFLIGHT_SKIP_TESTS=1 \
-            NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1 \
-            NAS_PREFLIGHT_SKIP_TOOLING=1 \
-            NAS_PREFLIGHT_SKIP_NIX=1 \
-            ./scripts/preflight.sh
-          run_check "Python syntax inventory" ./scripts/validate-python-syntax.py
-          run_check "Test inventory contract" nix develop .#test -c python3 scripts/validate-test-inventory.py
-          echo "::group::Shell syntax"
-          shell_failed=0
-          while IFS= read -r -d '' script; do
-            bash -n "$script" || shell_failed=1
-          done < <(find scripts tests/vm -type f -name '*.sh' -print0)
-          echo "::endgroup::"
-          if ((shell_failed != 0)); then
-            echo "::error title=Shell syntax::one or more shell scripts failed bash -n"
-            failed=1
-          fi
-          exit "$failed"
-
-      - name: "Section: static analysis and configuration"
-        id: static
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          failed=0
-          run_check() {
-            local label=$1
-            shift
-            echo "::group::$label"
-            "$@"
-            rc=$?
-            echo "::endgroup::"
-            if ((rc != 0)); then
-              echo "::error title=$label::command failed with exit code $rc"
-              failed=1
-            fi
-          }
-          run_check "Secret transaction fault injection" nix shell nixpkgs#bats -c bats tests/bats
-          run_check "ShellCheck" nix develop .#test -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh
-          run_check "GitHub Actions lint" nix develop .#test -c actionlint .github/workflows/ci.yml .github/workflows/release.yml
-          run_check "Python lint" nix develop .#test -c ruff check services tests scripts
-          run_check "Python formatting" nix develop .#test -c ruff format --check services tests scripts
-          run_check "Python types" nix develop .#test -c pyright --project pyproject.toml
-          run_check "JavaScript formatting" nix shell nixpkgs#prettier -c prettier --check \
-            "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" "tests/js/*.mjs" prettier.config.mjs
-          run_check "Nix configuration matrix" ./scripts/nix-config-matrix.sh
-          run_check "Reference configuration evaluation" ./scripts/evaluate-reference-configurations.sh
-          exit "$failed"
-
-      - name: "Section: unit, coverage, and maintainer contracts"
-        id: unit
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          failed=0
-          echo "::group::Fast Python unit tests"
-          nix develop .#test -c ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4 \
-            --exclude test_maintainer_core.py \
-            --exclude test_maintainer_matrix.py \
-            --exclude test_maintainer_release.py \
-            --exclude test_contract_tooling.py \
-            --exclude test_fuzz_boundaries.py \
-            --exclude test_property_invariants.py \
-            --exclude test_secret_security_fuzz.py
-          unit_rc=$?
-          echo "::endgroup::"
-          if ((unit_rc != 0)); then
-            echo "::error title=Fast Python unit tests::tests failed with exit code $unit_rc"
-            failed=1
-          fi
-          if [[ -s coverage.json ]]; then
-            echo "::group::Coverage floor"
-            nix develop .#test -c python3 scripts/check-coverage.py coverage.json --total-floor 66
-            coverage_rc=$?
-            echo "::endgroup::"
-            if ((coverage_rc != 0)); then
-              echo "::error title=Coverage floor::coverage check failed with exit code $coverage_rc"
-              failed=1
-            fi
-          else
-            echo "::error title=Coverage floor::coverage.json was not produced"
-            failed=1
-          fi
-          for contract in \
-            test_maintainer_core.py \
-            test_maintainer_matrix.py \
-            test_maintainer_release.py \
-            test_contract_tooling.py
-          do
-            echo "::group::Maintainer contract: $contract"
-            nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern "$contract"
-            rc=$?
-            echo "::endgroup::"
-            if ((rc != 0)); then
-              echo "::error title=Maintainer contract::$contract failed with exit code $rc"
-              failed=1
-            fi
-          done
-          exit "$failed"
-
-      - name: "Section: security and generated service configuration"
-        id: security
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          failed=0
-          run_check() {
-            local label=$1
-            shift
-            echo "::group::$label"
-            "$@"
-            rc=$?
-            echo "::endgroup::"
-            if ((rc != 0)); then
-              echo "::error title=$label::command failed with exit code $rc"
-              failed=1
-            fi
-          }
-          run_check "Deterministic security regression suite" nix develop .#test -c ./scripts/run-security-tests.py
-          run_check "Semgrep local rules" nix develop .#test -c semgrep --config .semgrep.yml --error services scripts cockpit/src web
-          run_check "Bandit privileged runtime scan" nix develop .#test -c bandit -q -c .bandit -r services scripts -ll -ii
-          run_check "Caddy generator validation" nix develop .#test -c python3 -m unittest \
-            tests.test_v2_caddy tests.test_v2_caddy_validate -v
-          exit "$failed"
-
       - name: "Section: Cockpit source and dependency audit"
         id: cockpit
         continue-on-error: true
         shell: bash
         run: |
           set +e
+          source .github/ci-checks.sh
           failed=0
-          run_check() {
-            local label=$1
-            shift
-            echo "::group::$label"
-            "$@"
-            rc=$?
-            echo "::endgroup::"
-            if ((rc != 0)); then
-              echo "::error title=$label::command failed with exit code $rc"
-              failed=1
-            fi
-          }
-          run_check "Cockpit JavaScript syntax" bash -c 'for script in cockpit/src/*.js; do node --check "$script" || exit 1; done'
-          run_check "Cockpit source renderer contract" node cockpit/build.js --check-source
-          run_check "Cockpit JSX validation" node scripts/validate-cockpit-jsx.cjs
-          run_check "Cockpit unit tests" node --test tests/js/*.test.mjs
-          run_check "Fresh npm vulnerability audit" npm --prefix cockpit audit --audit-level=high
-          exit "$failed"
 
-      - name: "Section: unprivileged hermeticity"
-        id: nonroot
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          nix_bin="$(command -v nix)"
-          sudo useradd --create-home --shell /bin/bash nas-ci
-          sudo install -d -o nas-ci -g nas-ci /home/nas-ci/worktree
-          sudo cp -a "$GITHUB_WORKSPACE/." /home/nas-ci/worktree/
-          sudo chown -R nas-ci:nas-ci /home/nas-ci/worktree
-          sudo -u nas-ci env HOME=/home/nas-ci TMPDIR=/tmp \
-            bash -c 'cd /home/nas-ci/worktree && exec "$1" develop .#test -c ./scripts/run-unit-tests.py --jobs 4 --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py --exclude test_secret_security_fuzz.py' bash "$nix_bin"
+          check_cockpit_js_syntax() {
+            local rc=0 script
+            for script in cockpit/src/*.js; do
+              node --check "$script" || rc=1
+            done
+            return "$rc"
+          }
+          ci_run cockpit js-syntax "Cockpit JavaScript syntax" \
+            check_cockpit_js_syntax || failed=1
+          ci_run cockpit source-contract "Cockpit source renderer contract" \
+            node cockpit/build.js --check-source || failed=1
+          ci_run cockpit jsx "Cockpit JSX validation" \
+            node scripts/validate-cockpit-jsx.cjs || failed=1
+          ci_run cockpit unit-tests "Cockpit unit tests" \
+            node --test tests/js/*.test.mjs || failed=1
+          ci_run cockpit npm-audit "Fresh npm vulnerability audit" \
+            npm --prefix cockpit audit --audit-level=high || failed=1
+          exit "$failed"
 
       - name: Retain current coverage for PR baseline comparison
         if: always() && hashFiles('coverage.json') != ''
@@ -258,13 +256,22 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: coverage.json
-
+      - name: Retain complete pre-build diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prebuild-check-logs
+          if-no-files-found: error
+          retention-days: 14
+          path: ci-logs
       - name: Report all pre-build failures
         if: always()
         env:
           CI_REPORT_TITLE: Pre-build qualification
         run: |
           python3 scripts/ci-check-report.py \
+            --results ci-logs/results.tsv \
+            --tail-lines 30 \
             "contracts=${{ steps.contracts.outcome }}" \
             "static=${{ steps.static.outcome }}" \
             "unit-and-coverage=${{ steps.unit.outcome }}" \
@@ -272,9 +279,8 @@ jobs:
             "cockpit=${{ steps.cockpit.outcome }}" \
             "unprivileged=${{ steps.nonroot.outcome }}"
 
-  # PR coverage drift needs a main-branch baseline, but it still runs even when
-  # another pre-build section failed so one CI pass reports both classes of
-  # problems. Nix is installed only when the exact main baseline cache misses.
+  # PR coverage comparison is intentionally independent of other pre-build
+  # failures so one run can reveal both source failures and coverage drift.
   coverage-diff:
     name: PR coverage drift
     if: always() && github.event_name == 'pull_request' && github.base_ref == 'main'
@@ -315,11 +321,14 @@ jobs:
           diagnostic-endpoint: ""
           use-flakehub: false
       - name: Build main coverage baseline
+        id: baseline-build
+        continue-on-error: true
         if: steps.main-coverage.outputs.cache-hit != 'true'
         working-directory: main
         run: |
           python3 ../scripts/prepare-coverage-baseline.py .
-          nix develop .#test -c ./scripts/run-unit-tests.py --coverage ../main-coverage.json --quiet --jobs 4 \
+          nix develop .#test -c ./scripts/run-unit-tests.py \
+            --coverage ../main-coverage.json --quiet --jobs 4 \
             --exclude test_maintainer_core.py \
             --exclude test_maintainer_matrix.py \
             --exclude test_maintainer_release.py \
@@ -330,10 +339,12 @@ jobs:
       - name: Compare current coverage with main
         id: drift
         continue-on-error: true
+        if: always()
         run: |
           test -s coverage.json
           test -s main-coverage.json
-          python3 scripts/check-coverage.py coverage.json --baseline main-coverage.json --total-floor 66
+          python3 scripts/check-coverage.py \
+            coverage.json --baseline main-coverage.json --total-floor 66
       - name: Report coverage baseline failures
         if: always()
         env:
@@ -341,12 +352,11 @@ jobs:
         run: |
           python3 scripts/ci-check-report.py \
             "current-coverage=${{ steps.current-coverage.outcome }}" \
+            "baseline-build=${{ steps.baseline-build.outcome }}" \
             "coverage-drift=${{ steps.drift.outcome }}"
 
-  # Stage 2: build or restore expensive products exactly once. The Nix bundle
-  # artifact is authoritative for this run; per-bundle caches are only
-  # cross-run acceleration. Every downstream VM job downloads the same complete
-  # verified handoff instead of independently resolving six caches.
+  # Stage 2: expensive products are materialized once. The per-run Nix artifact
+  # is authoritative; granular caches exist only to accelerate this producer.
   prepare:
     name: Prepare reusable build handoff
     if: >-
@@ -361,8 +371,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-
-      # Cockpit build handoff.
       - name: Restore exact Node 24 dependencies
         id: prepare-node-deps
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -389,7 +397,6 @@ jobs:
             cockpit/dist
       - run: git add -f cockpit/package-lock.json cockpit/dist
 
-      # Heavy Nix handoff is omitted only for the explicit fast dispatch tier.
       - name: Install Nix for reusable system handoff
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
@@ -419,7 +426,6 @@ jobs:
           cache-schema: ${{ env.CI_CACHE_SCHEMA }}
           cache-suffix: ${{ steps.vm-bundle-namespace.outputs.suffix }}
 
-      # Source archive evidence.
       - name: Restore verified source archive
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast'
         id: source-archive-cache
@@ -427,12 +433,24 @@ jobs:
         with:
           path: nas-source-release
           key: ${{ env.CI_CACHE_SCHEMA }}-source-archive-${{ github.sha }}${{ steps.vm-bundle-namespace.outputs.suffix }}
-      - name: Package and verify source archive on cache miss
+      - name: Package and verify as an untrusted consumer
         if: >-
           (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
           steps.source-archive-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          dependencies="$RUNNER_TEMP/cockpit-node_modules"
+          restore_dependencies() {
+            if [[ -d "$dependencies" ]]; then
+              mv "$dependencies" cockpit/node_modules
+            fi
+          }
+          trap restore_dependencies EXIT
+          if [[ -d cockpit/node_modules ]]; then
+            rm -rf "$dependencies"
+            mv cockpit/node_modules "$dependencies"
+          fi
+
           out="$GITHUB_WORKSPACE/nas-source-release"
           mkdir -p "$out"
           NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$out"
@@ -452,6 +470,8 @@ jobs:
               NAS_PREFLIGHT_SKIP_NIX=1 \
               ./scripts/preflight.sh
           )
+          restore_dependencies
+          trap - EXIT
       - name: Verify restored source archive
         if: >-
           (github.event_name != 'workflow_dispatch' || github.event.inputs.test-tier != 'fast') &&
@@ -477,9 +497,8 @@ jobs:
           retention-days: 14
           path: nas-source-release
 
-  # Stage 3a: one browser runner executes the whole deterministic suite. The
-  # Playwright config already parallelizes tests and projects internally, so
-  # splitting each grep into a fresh runner only repeated setup work.
+  # Stage 3a: the Playwright suite already owns internal parallelism, so run it
+  # once rather than repeating setup for one grep per runner.
   browser:
     name: Deterministic Cockpit browser qualification
     if: always() && needs.prepare.result == 'success'
@@ -534,9 +553,8 @@ jobs:
             cockpit/playwright-report
             cockpit/test-results
 
-  # Stage 3b: the two full-stack VMs remain separate because they are long and
-  # genuinely benefit from parallel runners. Both consume the exact same Nix
-  # handoff produced once above.
+  # Stage 3b: only the two expensive VM variants remain as useful job-level
+  # parallelism. Both import the exact same prepared Nix artifact.
   integration:
     name: Full-stack QEMU integration (${{ matrix.vm }})
     if: >-
@@ -577,8 +595,8 @@ jobs:
       - name: Run ${{ matrix.vm }} NixOS VM integration
         run: nix build ".#checks.x86_64-linux.${{ matrix.check }}" --show-trace -L
 
-  # Stage 4: official-media installation waits for browser and both integration
-  # legs, then reuses the same prepared Nix/Cockpit products.
+  # Stage 4: official-media installation reuses the prepared Cockpit and Nix
+  # products instead of resolving them again.
   installer:
     name: Official-ISO install, reboot, and final-VM checks
     if: >-
@@ -667,9 +685,8 @@ jobs:
             cockpit/test-results
             ~/.cache/nixos-nas-qemu/state/browser-console.log
 
-  # Stage 5a: run-fuzz.py already owns safe internal parallelism. One runner
-  # avoids seven independent checkouts/Nix setups while preserving per-suite
-  # logging and shrinking.
+  # Stage 5a: run-fuzz.py owns safe internal parallelism; avoid seven fresh
+  # runners that each repeat checkout and environment setup.
   source-fuzz:
     name: Final source fuzz and property qualification
     if: >-
@@ -696,7 +713,8 @@ jobs:
         run: |
           mkdir -p .fuzz-evidence
           set -o pipefail
-          nix develop .#test -c ./scripts/run-fuzz.py --jobs 6 2>&1 | tee .fuzz-evidence/source-fuzz.log
+          nix develop .#test -c ./scripts/run-fuzz.py --jobs 6 \
+            2>&1 | tee .fuzz-evidence/source-fuzz.log
       - name: Retain source fuzz evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -706,9 +724,8 @@ jobs:
           retention-days: 30
           path: .fuzz-evidence/source-fuzz.log
 
-  # Stage 5b: provision one isolated installed appliance, then run both
-  # independent adversarial workloads against disposable overlays. A failure in
-  # one workload does not suppress the other; the shared reporter fails once.
+  # Stage 5b: provision once, then run both adversarial workloads. Each workload
+  # continues independently so the final reporter can surface both failures.
   installed-security:
     name: Installed appliance adversarial qualification
     if: >-
@@ -778,7 +795,8 @@ jobs:
           NAS_ZAP_BROWSER_WORKERS: "2"
         run: |
           test -n "$NAS_ZAP_IMAGE"
-          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
+          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 \
+            -c bash ./scripts/qemu-final-browser.sh
       - name: Retain installed security evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
