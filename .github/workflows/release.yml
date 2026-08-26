@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       eligible: ${{ steps.source.outputs.eligible }}
-      source-sha: ${{ steps.source.outputs.source-sha }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
     steps:
       - name: Require a merged pull request on main
         id: source
@@ -35,7 +35,7 @@ jobs:
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          printf 'source-sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'source_sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
           merged_prs="$(
             gh api \
               -H 'Accept: application/vnd.github+json' \
@@ -63,11 +63,11 @@ jobs:
       RELEASE_METADATA: ${{ runner.temp }}/release-publication/release-metadata.json
       RELEASE_NOTES: ${{ runner.temp }}/release-publication/release-notes.md
       RELEASE_OUT: ${{ runner.temp }}/release-publication/release-out
-      SOURCE_SHA: ${{ needs.eligibility.outputs.source-sha }}
+      SOURCE_SHA: ${{ needs.eligibility.outputs.source_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.eligibility.outputs.source-sha }}
+          ref: ${{ needs.eligibility.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -204,7 +204,7 @@ jobs:
       - name: Retain immutable release publication inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-publication-${{ needs.eligibility.outputs.source-sha }}
+          name: release-publication-${{ needs.eligibility.outputs.source_sha }}
           if-no-files-found: error
           retention-days: 1
           path: ${{ runner.temp }}/release-publication
@@ -222,16 +222,16 @@ jobs:
       RELEASE_METADATA: ${{ runner.temp }}/release-publication/release-metadata.json
       RELEASE_NOTES: ${{ runner.temp }}/release-publication/release-notes.md
       RELEASE_OUT: ${{ runner.temp }}/release-publication/release-out
-      SOURCE_SHA: ${{ needs.eligibility.outputs.source-sha }}
+      SOURCE_SHA: ${{ needs.eligibility.outputs.source_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.eligibility.outputs.source-sha }}
+          ref: ${{ needs.eligibility.outputs.source_sha }}
           fetch-depth: 0
       - name: Download immutable release publication inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-publication-${{ needs.eligibility.outputs.source-sha }}
+          name: release-publication-${{ needs.eligibility.outputs.source_sha }}
           path: ${{ runner.temp }}/release-publication
       - name: Verify candidate commit and publish tag/release
         env:
