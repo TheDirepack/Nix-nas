@@ -10,14 +10,19 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 HANDOFF_ACTION = ROOT / ".github" / "actions" / "prepare-vm-handoff" / "action.yml"
+NIX_SETUP_ACTION = ROOT / ".github" / "actions" / "setup-nix-ci" / "action.yml"
 CHECK_HELPER = ROOT / ".github" / "ci-checks.sh"
+QUALIFICATION_SCRIPT = ROOT / "scripts" / "ci-qualification.sh"
 
 
 class CiWorkflowGraphTests(unittest.TestCase):
     BUNDLES = ("core", "identity", "observability", "storage", "ai", "vm-drivers")
+    PARALLEL = {"static", "unit", "security", "nonroot", "cockpit"}
     JOBS = {
-        "prebuild",
+        "prerequisites",
+        *PARALLEL,
         "coverage-diff",
+        "qualification",
         "prepare",
         "browser",
         "integration",
@@ -38,7 +43,12 @@ class CiWorkflowGraphTests(unittest.TestCase):
             HANDOFF_ACTION.read_text(encoding="utf-8"),
             Loader=yaml.BaseLoader,
         )
+        cls.nix_setup = yaml.load(
+            NIX_SETUP_ACTION.read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
         cls.check_helper = CHECK_HELPER.read_text(encoding="utf-8")
+        cls.qualification_script = QUALIFICATION_SCRIPT.read_text(encoding="utf-8")
 
     @staticmethod
     def needs(job: dict[str, Any]) -> set[str]:
@@ -69,79 +79,111 @@ class CiWorkflowGraphTests(unittest.TestCase):
             triggers["workflow_dispatch"]["inputs"]["force-cache-miss"]["type"],
             "boolean",
         )
-        self.assertNotIn("cache-vm-bundles", self.jobs)
-        self.assertNotIn("test-nonroot", self.jobs)
-        self.assertNotIn("dependency-audit", self.jobs)
-        self.assertNotIn("zap-fuzz", self.jobs)
-        self.assertNotIn("installed-command-fuzz", self.jobs)
+        for retired in (
+            "prebuild",
+            "cache-vm-bundles",
+            "test-nonroot",
+            "dependency-audit",
+            "zap-fuzz",
+            "installed-command-fuzz",
+        ):
+            self.assertNotIn(retired, self.jobs)
 
-    def test_prebuild_runs_all_sections_before_one_aggregate_failure(self) -> None:
-        prebuild = self.jobs["prebuild"]
-        steps = {
-            step.get("id"): step
-            for step in prebuild["steps"]
-            if isinstance(step, dict)
-        }
-        section_ids = {"contracts", "static", "unit", "security", "cockpit", "nonroot"}
-        self.assertTrue(section_ids <= set(steps))
-        for section_id in section_ids:
-            self.assertEqual(steps[section_id].get("continue-on-error"), "true")
+    def test_shared_prerequisites_run_before_parallel_fanout(self) -> None:
+        prerequisites = self.jobs["prerequisites"]
+        text = self.serialized(prerequisites)
+        self.assertIn("./.github/actions/setup-nix-ci", text)
+        self.assertIn("nix develop .#test -c true", text)
+        self.assertIn("scripts/ci-qualification.sh shared", text)
+        self.assertIn("qualification-shared-logs", text)
+        for name in self.PARALLEL:
+            self.assertEqual(self.needs(self.jobs[name]), {"prerequisites"})
 
-        final = prebuild["steps"][-1]
-        self.assertEqual(final.get("if"), "always()")
-        final_run = str(final.get("run", ""))
-        self.assertIn("scripts/ci-check-report.py", final_run)
-        self.assertIn("--results ci-logs/results.tsv", final_run)
-        self.assertIn("--tail-lines 30", final_run)
-        for section_id in section_ids:
-            self.assertIn(f"steps.{section_id}.outcome", final_run)
+    def test_parallel_branches_have_no_cross_dependencies(self) -> None:
+        for name in self.PARALLEL:
+            dependencies = self.needs(self.jobs[name])
+            self.assertEqual(dependencies, {"prerequisites"}, name)
+            self.assertTrue(dependencies.isdisjoint(self.PARALLEL), name)
 
-    def test_prebuild_records_command_timing_logs_and_annotations(self) -> None:
-        prebuild_text = self.serialized(self.jobs["prebuild"])
+    def test_branch_specific_prerequisites_stay_local(self) -> None:
+        cockpit = self.serialized(self.jobs["cockpit"])
+        self.assertIn("actions/setup-node@", cockpit)
+        self.assertIn("cockpit/node_modules", cockpit)
+        for name in self.PARALLEL - {"cockpit"}:
+            text = self.serialized(self.jobs[name])
+            self.assertNotIn("cockpit/node_modules", text, name)
+            self.assertIn("./.github/actions/setup-nix-ci", text, name)
+
+    def test_each_parallel_branch_keeps_detailed_failure_logs(self) -> None:
         helper = self.check_helper
         self.assertIn("ci_run()", helper)
         self.assertIn("::group::%s", helper)
         self.assertIn("::error title=%s", helper)
         self.assertIn("PIPESTATUS[0]", helper)
         self.assertIn("date +%s", helper)
-        self.assertIn("results.tsv", helper)
         self.assertIn("printf -v command_text '%q '", helper)
-        self.assertIn("Source-only repository preflight", prebuild_text)
-        self.assertIn("GitHub Actions lint", prebuild_text)
-        self.assertIn("Fast Python unit tests", prebuild_text)
-        self.assertIn("Deterministic security regression suite", prebuild_text)
-        self.assertIn("Fresh npm vulnerability audit", prebuild_text)
-        self.assertIn("Run the fast suite without root-owned state", prebuild_text)
-        self.assertIn("prebuild-check-logs", prebuild_text)
+        for name in self.PARALLEL:
+            text = self.serialized(self.jobs[name])
+            self.assertIn("ci-check-report.py", text, name)
+            self.assertIn(f"qualification-{name}-logs", text, name)
+            self.assertIn("--tail-lines 30", text, name)
 
-    def test_node_dependencies_do_not_pollute_source_or_nonroot_preflight(self) -> None:
-        prebuild = self.serialized(self.jobs["prebuild"])
-        nonroot = prebuild.index("Section: unprivileged hermeticity")
-        node_restore = prebuild.index("Restore exact Node 24 dependencies")
-        cockpit = prebuild.index("Section: Cockpit source and dependency audit")
-        self.assertLess(nonroot, node_restore)
-        self.assertLess(node_restore, cockpit)
+    def test_qualification_script_preserves_all_subcheck_groups(self) -> None:
+        script = self.qualification_script
+        for marker in (
+            "Source-only repository preflight",
+            "GitHub Actions lint",
+            "Fast Python unit tests",
+            "Deterministic security regression suite",
+            "Run the fast suite without root-owned state",
+            "Fresh npm vulnerability audit",
+            "Production Cockpit bundle",
+        ):
+            self.assertIn(marker, script)
 
-    def test_coverage_baseline_runs_even_after_other_prebuild_failures(self) -> None:
+    def test_coverage_comparison_starts_after_unit_only(self) -> None:
         coverage = self.jobs["coverage-diff"]
-        self.assertEqual(self.needs(coverage), {"prebuild"})
+        self.assertEqual(self.needs(coverage), {"unit"})
         self.assertIn("always()", str(coverage.get("if", "")))
-        self.assertIn("actions/download-artifact", self.serialized(coverage))
+        self.assertIn("coverage-report", self.serialized(coverage))
         self.assertIn("main-coverage.json", self.serialized(coverage))
         self.assertIn("ci-check-report.py", self.run_text(coverage))
         self.assertIn("baseline-build", self.serialized(coverage))
 
-    def test_prepare_is_the_single_expensive_product_producer(self) -> None:
+    def test_qualification_gate_joins_all_parallel_checks_once(self) -> None:
+        gate = self.jobs["qualification"]
+        expected = {"prerequisites", *self.PARALLEL, "coverage-diff"}
+        self.assertEqual(self.needs(gate), expected)
+        self.assertEqual(gate.get("if"), "always()")
+        text = self.run_text(gate)
+        for name in expected:
+            self.assertIn(f"needs.{name}.result", text)
+
+    def test_cockpit_builds_once_and_prepare_consumes_the_artifact(self) -> None:
+        cockpit = self.serialized(self.jobs["cockpit"])
+        prepare = self.serialized(self.jobs["prepare"])
+        self.assertIn("Production Cockpit bundle", self.qualification_script)
+        self.assertIn("cockpit-bundle", cockpit)
+        self.assertIn("Restore reviewed Cockpit bundle", prepare)
+        self.assertIn("cockpit-bundle", prepare)
+        self.assertNotIn("npm --prefix cockpit run build", prepare)
+        self.assertNotIn("cockpit/node_modules", prepare)
+
+    def test_prepare_is_the_single_expensive_nix_product_producer(self) -> None:
         prepare = self.jobs["prepare"]
-        self.assertEqual(self.needs(prepare), {"prebuild", "coverage-diff"})
+        self.assertEqual(self.needs(prepare), {"qualification"})
         text = self.serialized(prepare)
-        self.assertIn("Build and verify production Cockpit once", text)
-        self.assertIn("cockpit-bundle", text)
         self.assertIn("./.github/actions/prepare-vm-handoff", text)
         self.assertIn("source-archive-evidence", text)
         self.assertIn("force-cache-miss", text)
         self.assertIn("Package and verify as an untrusted consumer", text)
-        self.assertIn("cockpit-node_modules", text)
+
+    def test_nix_setup_action_centralizes_repeated_runner_setup(self) -> None:
+        self.assertEqual(self.nix_setup["runs"]["using"], "composite")
+        text = self.serialized(self.nix_setup)
+        self.assertIn("cachix/install-nix-action@", text)
+        self.assertIn("DeterminateSystems/magic-nix-cache-action@", text)
+        self.assertIn("enable-kvm", text)
 
     def test_handoff_action_keeps_granular_cross_run_caches_but_publishes_one_artifact(
         self,
@@ -213,6 +255,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("ci-check-report.py", text)
 
     def test_downstream_dependencies_preserve_stage_order(self) -> None:
+        self.assertEqual(self.needs(self.jobs["prepare"]), {"qualification"})
         self.assertEqual(self.needs(self.jobs["browser"]), {"prepare"})
         self.assertEqual(self.needs(self.jobs["integration"]), {"prepare"})
         self.assertEqual(
@@ -237,10 +280,9 @@ class CiWorkflowGraphTests(unittest.TestCase):
             self.assertEqual(int(self.jobs[name]["timeout-minutes"]), 355)
 
     def test_actionlint_covers_both_workflows_before_build(self) -> None:
-        text = self.run_text(self.jobs["prebuild"])
-        self.assertIn("actionlint", text)
-        self.assertIn(".github/workflows/ci.yml", text)
-        self.assertIn(".github/workflows/release.yml", text)
+        self.assertIn("actionlint", self.qualification_script)
+        self.assertIn(".github/workflows/ci.yml", self.qualification_script)
+        self.assertIn(".github/workflows/release.yml", self.qualification_script)
 
 
 if __name__ == "__main__":
