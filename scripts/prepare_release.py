@@ -136,11 +136,7 @@ def rotate_bootstrap_password(root: pathlib.Path, old: str, new: str) -> list[st
     validate_release_passphrase(new)
     if old == new:
         raise ValueError("new bootstrap password must differ from the development bootstrap password")
-    paths = [
-        path
-        for path in tracked_files_containing(root, old)
-        if is_release_bootstrap_target(root, path)
-    ]
+    paths = [path for path in tracked_files_containing(root, old) if is_release_bootstrap_target(root, path)]
     relative_paths = {path.relative_to(root).as_posix() for path in paths}
     missing = sorted(CORE_BOOTSTRAP_PATHS - relative_paths)
     if missing:
