@@ -36,14 +36,14 @@ class CiSummaryTests(unittest.TestCase):
         self.assertEqual(workflow_jobs, set(ci_summary.KNOWN_JOBS))
         self.assertNotIn(".ci-cache/", workflow)
 
-    def test_pull_request_runs_staged_prebuild_prepare_and_browser(self) -> None:
+    def test_pull_request_runs_parallel_qualification_prepare_and_browser(self) -> None:
         expected = ci_summary.expected_jobs(
             "pull_request",
             "refs/pull/40/merge",
             "main",
             "fast",
         )
-        self.assertEqual(expected, {"prebuild", "coverage-diff", "prepare", "browser"})
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS) | {"coverage-diff"})
         _, bad = ci_summary.summarize(
             self.results(expected),
             "pull_request",
@@ -60,16 +60,16 @@ class CiSummaryTests(unittest.TestCase):
             "release",
             "fast",
         )
-        self.assertEqual(expected, {"prebuild", "prepare", "browser"})
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS))
 
-    def test_fast_dispatch_keeps_prepare_for_cockpit_but_skips_vm_tiers(self) -> None:
+    def test_fast_dispatch_keeps_parallel_qualification_and_browser(self) -> None:
         expected = ci_summary.expected_jobs(
             "workflow_dispatch",
             "refs/heads/main",
             "",
             "fast",
         )
-        self.assertEqual(expected, {"prebuild", "prepare", "browser"})
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS))
         _, bad = ci_summary.summarize(
             self.results(expected),
             "workflow_dispatch",
@@ -79,7 +79,7 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
-    def test_full_dispatch_includes_integration_and_installer_only(self) -> None:
+    def test_full_dispatch_adds_integration_and_installer_only(self) -> None:
         expected = ci_summary.expected_jobs(
             "workflow_dispatch",
             "refs/heads/main",
@@ -88,7 +88,7 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(
             expected,
-            {"prebuild", "prepare", "browser", "integration", "installer"},
+            set(ci_summary.BASE_JOBS) | {"integration", "installer"},
         )
         self.assertNotIn("source-fuzz", expected)
         self.assertNotIn("installed-security", expected)
@@ -97,10 +97,8 @@ class CiSummaryTests(unittest.TestCase):
         expected = ci_summary.expected_jobs("push", "refs/heads/main", "", "fast")
         self.assertEqual(
             expected,
-            {
-                "prebuild",
-                "prepare",
-                "browser",
+            set(ci_summary.BASE_JOBS)
+            | {
                 "integration",
                 "installer",
                 "source-fuzz",
