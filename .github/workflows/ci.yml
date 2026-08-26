@@ -41,22 +41,25 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Enable incremental Nix build cache
-        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
-        with:
-          diagnostic-endpoint: ""
-          use-flakehub: false
       - name: Initialize pre-build diagnostics
         run: |
           rm -rf ci-logs
           mkdir -p ci-logs
           : > ci-logs/results.tsv
+      - id: setup-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - id: install-nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        id: nix-cache
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
 
       - name: "Section: repository and test contracts"
         id: contracts
@@ -83,6 +86,7 @@ jobs:
             while IFS= read -r -d '' script; do
               bash -n "$script" || rc=1
             done < <(find scripts tests/vm -type f -name '*.sh' -print0)
+            bash -n .github/ci-checks.sh || rc=1
             return "$rc"
           }
           ci_run contracts shell-syntax "Shell syntax" check_shell_syntax || failed=1
@@ -100,7 +104,8 @@ jobs:
           ci_run static secret-faults "Secret transaction fault injection" \
             nix shell nixpkgs#bats -c bats tests/bats || failed=1
           ci_run static shellcheck "ShellCheck" \
-            nix develop .#test -c shellcheck scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
+            nix develop .#test -c shellcheck \
+            .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
           ci_run static actionlint "GitHub Actions lint" \
             nix develop .#test -c actionlint \
             .github/workflows/ci.yml .github/workflows/release.yml || failed=1
@@ -217,6 +222,7 @@ jobs:
           path: cockpit/node_modules
           key: ${{ env.CI_CACHE_SCHEMA }}-cockpit-node24-${{ runner.os }}-${{ hashFiles('cockpit/package-lock.json') }}
       - name: Install Node dependencies on cache miss
+        id: prebuild-node-install
         if: steps.prebuild-node-deps.outputs.cache-hit != 'true'
         run: npm --prefix cockpit ci --no-audit --no-fund
 
@@ -272,12 +278,17 @@ jobs:
           python3 scripts/ci-check-report.py \
             --results ci-logs/results.tsv \
             --tail-lines 30 \
+            "setup-node=${{ steps.setup-node.outcome }}" \
+            "install-nix=${{ steps.install-nix.outcome }}" \
+            "nix-cache=${{ steps.nix-cache.outcome }}" \
             "contracts=${{ steps.contracts.outcome }}" \
             "static=${{ steps.static.outcome }}" \
-            "unit-and-coverage=${{ steps.unit.outcome }}" \
+            "unit=${{ steps.unit.outcome }}" \
             "security=${{ steps.security.outcome }}" \
-            "cockpit=${{ steps.cockpit.outcome }}" \
-            "unprivileged=${{ steps.nonroot.outcome }}"
+            "nonroot=${{ steps.nonroot.outcome }}" \
+            "node-cache=${{ steps.prebuild-node-deps.outcome }}" \
+            "node-install=${{ steps.prebuild-node-install.outcome }}" \
+            "cockpit=${{ steps.cockpit.outcome }}"
 
   # PR coverage comparison is intentionally independent of other pre-build
   # failures so one run can reveal both source failures and coverage drift.
