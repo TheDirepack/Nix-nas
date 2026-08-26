@@ -1,0 +1,26 @@
+name: Setup Nix CI
+
+description: Install the pinned Nix runner environment and shared incremental cache.
+
+inputs:
+  github-token:
+    description: GitHub token used by the Nix installer.
+    required: true
+  enable-kvm:
+    description: Enable KVM access for VM consumers.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      with:
+        github_access_token: ${{ inputs.github-token }}
+        enable_kvm: ${{ inputs.enable-kvm }}
+    - name: Enable incremental Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      with:
+        diagnostic-endpoint: ""
+        use-flakehub: false
