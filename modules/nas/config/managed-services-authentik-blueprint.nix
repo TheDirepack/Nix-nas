@@ -66,7 +66,6 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = populateNativeBlueprints;
-        ReadWritePaths = [ blueprintDir ];
       };
     };
 
