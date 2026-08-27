@@ -43,25 +43,26 @@ let
       "application.syncthing.access"
     ]
     guestTestSchemaV2;
+  capabilityGrantMarker =
+    "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null\nnas-identity-sync status | jq -e '";
+  capabilityGrantBlock = builtins.concatStringsSep "\n" [
+    "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null"
+    "AUTHENTIK_BOOTSTRAP_TOKEN=\"$(< /run/nas-secrets/authentik/api-token)\""
+    "alice_pk=\"$(authentik_api GET 'core/users/?include_groups=true&page_size=100' | jq -er '.results[] | select(.username == \"alice\") | (.num_pk // .pk)')\""
+    "for capability_group in \\\"
+    "  application.copyparty.files \\\"
+    "  application.syncthing.access \\\"
+    "  application.vaultwarden.access; do"
+    "  group_pk=\"$(authentik_api GET 'core/groups/?page_size=100' | jq -er --arg group \"$capability_group\" '.results[] | select(.name == $group) | .pk')\""
+    "  authentik_api POST \"core/groups/$group_pk/add_user/\" \\\"
+    "    \"$(jq -cn --argjson pk \"$alice_pk\" '{pk: $pk}')\" >/dev/null"
+    "done"
+    "pass \"Alice application capabilities are assigned through canonical Authentik groups\""
+    "nas-identity-sync status | jq -e '"
+  ];
   guestTestSource = builtins.replaceStrings
-    [
-      "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null\nnas-identity-sync status | jq -e '"
-    ]
-    [
-      ''  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
-AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-secrets/authentik/api-token)"
-alice_pk="$(authentik_api GET 'core/users/?include_groups=true&page_size=100' | jq -er '.results[] | select(.username == "alice") | (.num_pk // .pk)')"
-for capability_group in \
-  application.copyparty.files \
-  application.syncthing.access \
-  application.vaultwarden.access; do
-  group_pk="$(authentik_api GET 'core/groups/?page_size=100' | jq -er --arg group "$capability_group" '.results[] | select(.name == $group) | .pk')"
-  authentik_api POST "core/groups/$group_pk/add_user/" \
-    "$(jq -cn --argjson pk "$alice_pk" '{pk: $pk}')" >/dev/null
-done
-pass "Alice application capabilities are assigned through canonical Authentik groups"
-nas-identity-sync status | jq -e ''
-    ]
+    [ capabilityGrantMarker ]
+    [ capabilityGrantBlock ]
     guestTestCanonicalGroups;
 
   guestTest = pkgs.writeShellApplication {
