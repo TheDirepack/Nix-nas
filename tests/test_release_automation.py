@@ -143,17 +143,59 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(on_disk["bootstrap_username"], "akadmin")
             self.assertEqual(on_disk["bootstrap_password"], release_password)
 
-    def test_first_parent_distance_makes_versions_deterministic(self) -> None:
+    def test_published_tags_increment_once_regardless_of_raw_commit_distance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.make_repo(root)
             source_one = self.add_source_commit(root, 1)
             source_two = self.add_source_commit(root, 2)
+            source_three = self.add_source_commit(root, 3)
             current = prepare_release.Version.parse("1.2.3")
-            self.assertEqual(str(prepare_release.next_version(root, current, source_one)), "1.2.4")
-            self.assertEqual(str(prepare_release.next_version(root, current, source_two)), "1.2.5")
+
+            # Before the predecessor release is published, raw first-parent
+            # commit count does not consume patch numbers. The ordering job is
+            # what prevents these sources from racing in production.
+            for source in (source_one, source_two, source_three):
+                self.assertEqual(str(prepare_release.next_version(root, current, source)), "1.2.4")
+
+            # An unrelated same-series tag that does not point at a stamped
+            # release-only commit must not move automatic allocation.
             subprocess.run(["git", "tag", "v1.2.8", source_one], cwd=root, check=True)
-            self.assertEqual(str(prepare_release.next_version(root, current, source_two)), "1.2.5")
+            self.assertEqual(str(prepare_release.next_version(root, current, source_three)), "1.2.4")
+
+            subprocess.run(["git", "checkout", "-q", source_one], cwd=root, check=True)
+            metadata = prepare_release.prepare_release(
+                root,
+                source_sha=source_one,
+                metadata_out=root / ".tmp" / "one.json",
+                password="Alpha-Bravo-Cedar-Delta-Ember",
+                release_date="2026-08-26",
+            )
+            self.assertEqual(metadata["version"], "1.2.4")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "release one"], cwd=root, check=True)
+            subprocess.run(["git", "tag", "-a", "v1.2.4", "-m", "release one"], cwd=root, check=True)
+
+            subprocess.run(["git", "checkout", "-q", source_three], cwd=root, check=True)
+            self.assertEqual(str(prepare_release.next_version(root, current, source_three)), "1.2.5")
+            source_four = self.add_source_commit(root, 4)
+            source_five = self.add_source_commit(root, 5)
+            self.assertEqual(str(prepare_release.next_version(root, current, source_four)), "1.2.5")
+            self.assertEqual(str(prepare_release.next_version(root, current, source_five)), "1.2.5")
+
+    def test_noncontiguous_published_release_history_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_repo(root)
+            source_one = self.add_source_commit(root, 1)
+            (root / "VERSION").write_text("1.2.5\n", encoding="utf-8")
+            self.commit(root, "synthetic stamped release")
+            subprocess.run(["git", "tag", "-a", "v1.2.5", "-m", "synthetic release"], cwd=root, check=True)
+
+            subprocess.run(["git", "checkout", "-q", source_one], cwd=root, check=True)
+            source_two = self.add_source_commit(root, 2)
+            with self.assertRaisesRegex(RuntimeError, "not contiguous"):
+                prepare_release.next_version(root, prepare_release.Version.parse("1.2.3"), source_two)
 
     def test_release_epoch_has_no_self_referential_sha_and_must_match_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
