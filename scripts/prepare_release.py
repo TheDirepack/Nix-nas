@@ -67,12 +67,11 @@ def matching_tags(root: pathlib.Path, version: Version) -> list[tuple[str, int]]
     return tags
 
 
-def release_tag_for_source(root: pathlib.Path, current: Version, source_sha: str) -> tuple[str, Version] | None:
-    for tag, patch in sorted(matching_tags(root, current), key=lambda item: item[1], reverse=True):
-        parent = run_git(root, "rev-parse", f"{tag}^{{commit}}^1", check=False)
-        if parent.returncode == 0 and parent.stdout.strip() == source_sha:
-            return tag, Version(current.major, current.minor, patch)
-    return None
+def is_ancestor(root: pathlib.Path, older: str, newer: str) -> bool:
+    result = run_git(root, "merge-base", "--is-ancestor", older, newer, check=False)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(result.stderr.strip() or "git merge-base failed")
+    return result.returncode == 0
 
 
 def release_epoch(root: pathlib.Path) -> Version:
@@ -116,35 +115,101 @@ def version_anchor(root: pathlib.Path, current: Version, source_sha: str) -> str
     anchor = parent.stdout.strip()
     if parent.returncode != 0 or SHA_RE.fullmatch(anchor) is None:
         raise RuntimeError("release version epoch must have a first parent")
+    if source_sha == anchor or not is_ancestor(root, anchor, source_sha):
+        raise RuntimeError("release source must follow the release version epoch anchor")
     return anchor
 
 
-def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Version:
-    """Map a main source commit to a deterministic patch version.
+def release_record(
+    root: pathlib.Path,
+    current: Version,
+    tag: str,
+    patch: int,
+) -> tuple[str, Version, str] | None:
+    """Return one release tag's stamped version and main-source parent.
 
-    The first-parent distance from the version anchor gives every qualified main
-    source a unique version without depending on workflow run numbers. Existing
-    tags remain authoritative for publication retries.
+    Same-series tags that do not point at the release-only commit shape are
+    ignored. In particular, an unrelated/manual tag cannot move automatic
+    version allocation merely by using a larger numeric suffix.
+    """
+    version = Version(current.major, current.minor, patch)
+    commit = run_git(root, "rev-parse", f"{tag}^{{commit}}", check=False)
+    if commit.returncode != 0:
+        return None
+    parents = run_git(root, "rev-list", "--parents", "-n", "1", commit.stdout.strip(), check=False)
+    fields = parents.stdout.split()
+    if parents.returncode != 0 or len(fields) != 2:
+        return None
+    stamped = run_git(root, "show", f"{tag}:VERSION", check=False)
+    if stamped.returncode != 0 or stamped.stdout.strip() != str(version):
+        return None
+    return tag, version, fields[1]
+
+
+def published_releases(
+    root: pathlib.Path,
+    current: Version,
+    source_sha: str,
+) -> list[tuple[str, Version, str]]:
+    """Return contiguous generated releases in this epoch up to source_sha."""
+    anchor = version_anchor(root, current, source_sha)
+    releases: list[tuple[str, Version, str]] = []
+    for tag, patch in matching_tags(root, current):
+        if patch <= current.patch:
+            continue
+        record = release_record(root, current, tag, patch)
+        if record is None:
+            continue
+        _, _, tagged_source = record
+        if not is_ancestor(root, anchor, tagged_source):
+            continue
+        if not is_ancestor(root, tagged_source, source_sha):
+            continue
+        releases.append(record)
+
+    releases.sort(key=lambda item: item[1].patch)
+    expected_patch = current.patch + 1
+    for tag, version, _ in releases:
+        if version.patch != expected_patch:
+            raise RuntimeError(
+                f"published automated release history is not contiguous: expected "
+                f"v{current.major}.{current.minor}.{expected_patch}, found {tag}"
+            )
+        expected_patch += 1
+    return releases
+
+
+def release_tag_for_source(root: pathlib.Path, current: Version, source_sha: str) -> tuple[str, Version] | None:
+    """Recover an existing source release without depending on later tag health."""
+    anchor = version_anchor(root, current, source_sha)
+    for tag, patch in sorted(matching_tags(root, current), key=lambda item: item[1], reverse=True):
+        if patch <= current.patch:
+            continue
+        record = release_record(root, current, tag, patch)
+        if record is None:
+            continue
+        _, version, tagged_source = record
+        if tagged_source == source_sha and is_ancestor(root, anchor, tagged_source):
+            return tag, version
+    return None
+
+
+def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Version:
+    """Allocate exactly one patch per published qualified main merge.
+
+    Source ordering is guaranteed before this function runs by the release
+    predecessor barrier. Existing tags remain authoritative for publication
+    retries. Otherwise the first published release in a series is baseline+1
+    and each later published release advances exactly one patch, independent of
+    whether GitHub used merge, squash, or a multi-commit rebase merge.
     """
     existing = release_tag_for_source(root, current, source_sha)
     if existing is not None:
         return existing[1]
 
-    anchor = version_anchor(root, current, source_sha)
-    result = run_git(
-        root,
-        "rev-list",
-        "--count",
-        "--first-parent",
-        f"{anchor}..{source_sha}",
-    )
-    try:
-        distance = int(result.stdout.strip())
-    except ValueError as exc:
-        raise RuntimeError("git returned an invalid first-parent release distance") from exc
-    if distance < 1:
-        raise RuntimeError("release source must follow the release version epoch anchor")
-    return Version(current.major, current.minor, current.patch + distance)
+    releases = published_releases(root, current, source_sha)
+    patch = current.patch + 1 if not releases else releases[-1][1].patch + 1
+    return Version(current.major, current.minor, patch)
 
 
 def validate_bootstrap_password(password: str) -> None:
