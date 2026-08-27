@@ -139,12 +139,8 @@ class SystemHandoffTests(unittest.TestCase):
 
             self.run_handoff("save", handoff, env)
 
-            full_paths = (handoff / "system-closures.paths").read_text(
-                encoding="utf-8"
-            ).splitlines()
-            delta_paths = (handoff / "system-closures.delta.paths").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            full_paths = (handoff / "system-closures.paths").read_text(encoding="utf-8").splitlines()
+            delta_paths = (handoff / "system-closures.delta.paths").read_text(encoding="utf-8").splitlines()
             exported = export_log.read_text(encoding="utf-8").splitlines()
 
             self.assertEqual(
