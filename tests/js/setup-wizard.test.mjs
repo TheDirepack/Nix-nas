@@ -69,11 +69,15 @@ test("admin step gates the KeePassXC database password behind the shared-passwor
   assert.match(admin, /KeePassXC/);
   assert.match(admin, /useSamePassword/);
   assert.match(admin, /wizard-keepass-password/);
+  assert.match(admin, /wizard-keepass-password-confirm/);
   assert.match(
     admin,
     /wizard-admin-password-confirm/,
     "administrator password needs a confirm field",
   );
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  assert.match(confirm, /keePassPassword !== keePassPasswordConfirm/);
+  assert.match(confirm, /Enter and confirm the KeePassXC database password/);
 });
 
 test("administrator username starts blank and has no schema default", async () => {
@@ -108,6 +112,9 @@ test("setup locale controls keep storage configuration actionable", async () => 
     false,
     "removed Authentik step must not remain as dead UI",
   );
+  assert.match(storage, /configuration-missing/);
+  assert.match(storage, /Storage plan not created yet/);
+  assert.match(storage, /variant="info"/);
 });
 
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import shutil
+import socket
 import ssl
 import stat
 import sys
@@ -13,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
@@ -38,13 +40,20 @@ def browser() -> webdriver.Chrome:
         raise RuntimeError("The VM browser suite requires packaged chromium and chromedriver binaries")
     options.binary_location = chromium
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
-    for argument in [
+    arguments = [
         "--headless=new",
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--ignore-certificate-errors",
         "--window-size=1280,900",
-    ]:
+    ]
+    browser_address = os.environ.get("NAS_BROWSER_HOST_ADDRESS", "").strip()
+    if browser_address:
+        # The VM's public hostname is an isolated test alias, not a DNS
+        # record. Pin it in Chromium to the address of the callback listener
+        # so redirects and callback requests use the same endpoint.
+        arguments.append(f"--host-resolver-rules=MAP nas-test.local {browser_address}")
+    for argument in arguments:
         options.add_argument(argument)
     return webdriver.Chrome(service=Service(executable_path=chromedriver), options=options)
 
@@ -446,12 +455,57 @@ def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
         ) from error
 
 
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, address: str, **kwargs: Any) -> None:
+        self._address = address
+        super().__init__(host, **kwargs)
+
+    def connect(self) -> None:
+        connection: Any = cast(Any, self)
+        connection.sock = socket.create_connection((self._address, self.port), self.timeout, connection.source_address)
+        if connection._tunnel_host:
+            connection._tunnel()
+        connection.sock = connection._context.wrap_socket(
+            connection.sock,
+            server_hostname=connection._tunnel_host or connection.host,
+        )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, address: str, context: ssl.SSLContext) -> None:
+        super().__init__(context=context)
+        self._address = address
+        self._tls_context = context
+
+    def https_open(self, request: urllib.request.Request) -> Any:
+        return self.do_open(
+            lambda host, **kwargs: _PinnedHTTPSConnection(host, self._address, **kwargs),
+            request,
+            context=self._tls_context,
+        )
+
+
 def native_share_response(origin: str) -> dict[str, Any]:
-    url = origin.rstrip("/") + "/share/not-a-real-token"
-    request = urllib.request.Request(url, headers={"Accept": "text/html"})
+    parsed = urllib.parse.urlsplit(origin)
+    headers = {"Accept": "text/html"}
+    request_origin = origin.rstrip("/")
+    browser_address = os.environ.get("NAS_BROWSER_HOST_ADDRESS", "").strip()
+    opener: urllib.request.OpenerDirector | None = None
+    # The VM browser harness supplies the callback listener address for both
+    # Chromium and urllib. Preserve the original Host header for Caddy routing.
+    if parsed.hostname == "nas-test.local" and browser_address:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPSHandler(browser_address, ssl._create_unverified_context()),
+        )
+        headers["Host"] = parsed.netloc
+    request = urllib.request.Request(request_origin + "/share/not-a-real-token", headers=headers)
     context = ssl._create_unverified_context()
     try:
-        with urllib.request.urlopen(request, context=context, timeout=30) as response:
+        response_context = (
+            opener.open(request, timeout=30) if opener else urllib.request.urlopen(request, context=context, timeout=30)
+        )
+        with response_context as response:
             return {"status": response.status, "url": response.geturl()}
     except urllib.error.HTTPError as response:
         return {"status": response.code, "url": response.geturl()}

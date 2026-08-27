@@ -1,10 +1,16 @@
 # NixOS NAS 0.1.0
 
-A NixOS-based NAS appliance that keeps storage, identity, secrets, applications, and recovery paths explicit and independently understandable.
+NixOS NAS is a NixOS-based NAS appliance that keeps storage, identity, secrets, applications, and recovery paths explicit and independently understandable: each setting is owned by exactly one interface. The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secrets.
 
-The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secrets, with optional Syncthing, Vaultwarden, virtualization, local AI, and a lightweight VictoriaMetrics/Telegraf observability stack.
+## Features
 
-> **Release status:** 0.1.0 is a source-only development artifact until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified. Do not treat a source-only archive as an install-ready appliance image.
+- ZFS pool management with snapshots and replication (Sanoid/Syncoid), plus Restic backups.
+- Single sign-on with MFA through Authentik.
+- File sharing with volumes, ACLs, quotas, share links, and WebDAV through CopyParty.
+- Web administration through Cockpit, including guided first-start setup and locked-boot unlock.
+- Machine secrets in a KeePassXC database, staged under `/run` only while the system is unlocked.
+- Optional Syncthing, Vaultwarden, virtualization, local AI, and a VictoriaMetrics/Telegraf observability stack.
+- Recovery-first design: a cold-boot Cockpit/PAM recovery plane, `nas-state` export/restore for appliance state, and Restic for backups.
 
 **Version note:** `0.1.0` is the NixOS NAS project/release version. The `system.stateVersion = "26.05"` value in `local.nix` is the NixOS compatibility baseline for stateful module defaults; it is not the project version and must not be changed merely to match a project release.
 
@@ -16,30 +22,39 @@ The core stack is ZFS + CopyParty + Authentik + Cockpit + KeePassXC-backed secre
 4. Copy `setup/first-run.example.json` to the configured first-run path and fill in the initial accounts, storage plan, and feature policy.
 5. Run the fast source checks:
 
-   ```bash
-   ./scripts/preflight.sh
-   ```
+## Release status
+
+Version 0.1.0 is a source-only development artifact. It is not an install-ready appliance image until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified; see [`docs/development/release-checklist.md`](docs/development/release-checklist.md).
+
+## Getting started
 
 6. Build or install the NixOS configuration. `nas-first-start.service` validates the first-start plan automatically.
 7. Open Cockpit at `https://<host>.local:9092/console/`. The NAS page guides first-start setup and, after reboot, locked-state unlock.
 8. Confirm any new-pool operation separately. Storage creation is intentionally never hidden behind a generic setup confirmation.
 
-For the exact setup flow, see [`docs/src/admin/first-run.md`](docs/src/admin/first-run.md).
+You should be comfortable with Linux administration; NixOS basics help but are explained as they come up.
 
-## Day-to-day administration
+1. Prepare the host configuration (`hardware-configuration.nix`, `local.nix`).
+2. Build and install NixOS from the flake target `.#nas`.
+3. Prepare the first-run plan (accounts, storage plan, feature modes).
+4. Complete guided setup (browser wizard or CLI).
+5. Verify the result and record your offline recovery material.
+
+The full walkthrough is [Install and set up](docs/src/admin/installation.md).
+
+## How the system is organized
 
 Use the interface that owns the setting instead of maintaining duplicate configuration:
 
-| Task | Use |
+| Task | Owning interface |
 |---|---|
-| Appliance status, service policy, ZFS actions, updates, schedules, diagnostics | Cockpit |
+| Appliance status, service policy, updates, reviewed host operations | Cockpit |
 | Users, passwords, MFA, groups, application access | Authentik |
 | File volumes, ACLs, quotas, share links, WebDAV policy | CopyParty |
 | Machine secrets and encrypted-storage unlock material | KeePassXC + `nas-secrets` |
-| Per-user sync declarations | Authentik settings; reconciled into Syncthing |
-| Advanced Syncthing inspection | Syncthing admin UI |
-| Metrics and dashboards | VictoriaMetrics + optional Grafana |
 | Declarative installation and service wiring | NixOS |
+| Storage state across snapshot, replication, and backup layers | ZFS + Sanoid/Syncoid + Restic |
+| Metrics collection, history, and alert evaluation | Telegraf + VictoriaMetrics (+ vmalert) |
 
 The complete authority map is in [`docs/src/admin/service-map.md`](docs/src/admin/service-map.md).
 
@@ -56,23 +71,25 @@ Keep an offline copy of the recovery material listed in [`docs/operator/recovery
 ## Documentation
 
 - **Operator manual:** [`docs/src/`](docs/src/README.md) — installed into Cockpit and organized by task.
+- **Installation walkthrough:** [`docs/src/admin/installation.md`](docs/src/admin/installation.md) — end-to-end install and first-start guide.
 - **Recovery runbook:** [`docs/operator/recovery.md`](docs/operator/recovery.md) — long-form disaster recovery.
 - **Security model:** [`SECURITY.md`](SECURITY.md) — trust and privilege boundaries.
 - **Contributor guide:** [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and quality gates.
 - **Agent handoff:** [`AGENTS.md`](AGENTS.md) — compact reading order for coding agents; operator procedures do not depend on it.
 - **Development internals:** [`docs/development/`](docs/development/README.md) — architecture, tests, risks, and validation evidence.
+- **Agent handoff:** [`AGENTS.md`](AGENTS.md) — compact reading order for coding agents.
 
-## Validation
+## Development and validation
 
-Fast source/security/fuzz matrix:
+Development workflow, style, and release discipline are described in [`CONTRIBUTING.md`](CONTRIBUTING.md). `./scripts/preflight.sh` runs fast source checks before packaging.
+
+Run the fast source/security/fuzz matrix:
 
 ```bash
 ./scripts/test-matrix.py fast --report test-evidence/fast.json
 ```
 
-The lower-level source preflight remains available as `./scripts/preflight.sh`. To see which heavyweight tiers are runnable on the current host, use `./scripts/test-matrix.py list`.
-
-Full NixOS/QEMU validation on a capable Linux builder:
+Run full NixOS/QEMU validation on a capable Linux builder:
 
 ```bash
 nix develop .#qemu-test -c ./scripts/qemu-test.sh all

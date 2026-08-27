@@ -79,14 +79,17 @@ let
   };
   # cockpit's Python bridge dies on sd_bus_attach_event returning EINVAL
   # (libsystemd variant mismatch under Nix); upstream only tolerates EBUSY.
+  # Patch the installed bridge after Cockpit has copied it into site-packages.
   # Tolerating EINVAL turns a fatal shared-session crash into a per-channel
   # error, keeping the Authentik-gated session alive.
   cockpitPatched = pkgs.cockpit.overrideAttrs (old: {
-    postPatch =
-      (old.postPatch or "")
+    postFixup =
+      (old.postFixup or "")
       + ''
-        substituteInPlace cockpit/channels/dbus.py \
-          --replace-fail 'if err.errno != errno.EBUSY:' 'if err.errno not in (errno.EBUSY, errno.EINVAL):' || true
+        dbus_py="$(find "$out/lib" -path '*/site-packages/cockpit/channels/dbus.py' -type f -print -quit)"
+        test -n "$dbus_py"
+        substituteInPlace "$dbus_py" \
+          --replace-fail 'if err.errno != errno.EBUSY:' 'if err.errno not in (errno.EBUSY, errno.EINVAL):'
       '';
   });
 
@@ -217,7 +220,7 @@ in
         ProtectHome = true;
         # Loopback bind only; Caddy forward-auth gates every external request.
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
-        ReadWritePaths = [ "/var/lib/nas-setup" ];
+        ReadWritePaths = [ "/var/lib/nas-setup" "/var/lib/nas-first-start" ];
       };
     };
 
