@@ -57,15 +57,16 @@ stop_browser_port_forward() {
 }
 
 start_browser_port_forward() {
-  local public_host public_address public_port systemd_path systemd_root activate_path proxy_path
+  local public_address public_port systemd_path systemd_root activate_path proxy_path
   if [[ ! "$AUTHENTIK_PUBLIC_HOST" =~ :([0-9]+)$ ]]; then
     return 0
   fi
-  public_host="${AUTHENTIK_PUBLIC_HOST%:*}"
   public_port="${BASH_REMATCH[1]}"
   [[ "$public_port" != 443 ]] || return 0
-  public_address="$(getent ahostsv4 "$public_host" | awk 'NR == 1 { print $1; exit }')"
-  [[ -n "$public_address" ]] || fail "could not resolve the Authentik public host $public_host inside the VM"
+  # The VM maps the public test host back to its own HTTPS listener. Avoid
+  # resolver races with DHCP-provided addresses; callers may override it.
+  public_address="${NAS_BROWSER_HOST_ADDRESS:-127.0.0.1}"
+  export NAS_BROWSER_HOST_ADDRESS="$public_address"
   systemd_path="$(command -v systemctl)"
   systemd_root="$(dirname "$(dirname "$(readlink -f "$systemd_path")")")"
   activate_path="$systemd_root/bin/systemd-socket-activate"
@@ -206,8 +207,21 @@ assert_spoof_blocked() {
   esac
 }
 
+setup_administrator() {
+  local administrator
+  administrator="nas-bootstrap"
+  if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
+    administrator="$(jq -er '.username | strings' /var/lib/nas-setup/local-administrator.json)"
+  fi
+  printf '%s\n' "$administrator"
+}
+
 run_as_admin() {
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
+  local administrator home
+  administrator="$(setup_administrator)"
+  home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
+  [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
+  runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" "$@"
 }
 
 # After first run completes, the wizard-created administrator (nasadmin) is
@@ -222,10 +236,13 @@ activate_secrets() {
 }
 
 run_as_admin_with_stdin() {
-  local timeout_seconds=$1
+  local timeout_seconds=$1 administrator home
   shift
+  administrator="$(setup_administrator)"
+  home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
+  [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+    runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" \
       timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
 }
 
@@ -379,15 +396,15 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
-install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
+install -d -m 0700 -o nas-bootstrap -g users /var/lib/nas-test/setup
 printf '%s\n' 'alice-vm-password' >/var/lib/nas-test/setup/alice.password
 printf '%s\n' 'operator-vm-password' >/var/lib/nas-test/setup/operator.password
 printf '%s\n' 'baseline-vm-password' >/var/lib/nas-test/setup/baseline.password
-chown admin:users /var/lib/nas-test/setup/*.password
+chown nas-bootstrap:users /var/lib/nas-test/setup/*.password
 chmod 0600 /var/lib/nas-test/setup/*.password
 cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "storage": {
     "createPool": true,
     "device": "$ZFS_DEVICE",
@@ -398,14 +415,14 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
       "username": "operator",
       "name": "Second NAS Administrator",
       "email": "operator@nas.local",
-      "groups": ["nas_admin", "nas_allow_files", "nas_allow_ai", "nas_allow_vault", "nas_allow_syncthing"],
+      "groups": ["nas_admin"],
       "passwordFile": "/var/lib/nas-test/setup/operator.password"
     },
     {
       "username": "alice",
       "name": "Alice Example",
       "email": "alice@nas.local",
-      "groups": ["nas_users", "nas_allow_files", "nas_allow_vault", "nas_allow_syncthing"],
+      "groups": ["nas_users"],
       "passwordFile": "/var/lib/nas-test/setup/alice.password"
     },
     {
@@ -422,11 +439,10 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
       "groups": ["nas_guests"]
     }
   ],
-  "features": {},
   "runPreflight": true
 }
 EOFSETUP
-chown admin:users /var/lib/nas-test/setup/first-run.json
+chown nas-bootstrap:users /var/lib/nas-test/setup/first-run.json
 chmod 0600 /var/lib/nas-test/setup/first-run.json
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
@@ -541,7 +557,7 @@ if nas-setup account disable "' OR '1'='1" >/tmp/nas-bad-account.out 2>/tmp/nas-
   fail "account command accepted an SQL-injection-shaped username"
 fi
 cat >/tmp/nas-bad-path-config.json <<'EOF_BAD_CONFIG'
-{"schemaVersion":1,"storage":{"createPool":true,"devices":["../../dev/vdb"]}}
+{"schemaVersion":2,"storage":{"createPool":true,"devices":["../../dev/vdb"]}}
 EOF_BAD_CONFIG
 if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.out 2>/tmp/nas-bad-path.err; then
   fail "setup accepted a traversal-shaped storage device"
@@ -607,7 +623,8 @@ nas-identity-sync status | jq -e '
 nas-identity-sync capabilities | jq -e '
   .users[] |
   select(.id == "alice") |
-  .capabilities.files.allowed == true and .capabilities.ai.allowed == false
+  .capabilities == {} and
+  .assignedApplicationCapabilities == []
 ' >/dev/null
 printf '%s\n' 'alice-updated-password' |
   run_as_nasadmin nas-setup account apply --username alice --password-stdin \
@@ -619,16 +636,17 @@ run_as_nasadmin nas-setup account apply --username alice \
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
   .active == true and
-  (.groups | index("nas_allow_files")) != null and
-  (.groups | index("nas_allow_vault")) != null and
-  (.groups | index("nas_allow_syncthing")) != null
+  (.groups | index("nas_users")) != null and
+  (.groups | index("nas_allow_files")) == null and
+  (.groups | index("nas_allow_vault")) == null and
+  (.groups | index("nas_allow_syncthing")) == null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
   run_as_nasadmin nas-setup account apply \
     --username temporary \
     --name 'Temporary User' \
     --email temporary@nas.local \
-    --group nas_allow_files \
+    --group nas_users \
     --password-stdin >/tmp/nas-account-add.json
 jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
 run_as_nasadmin nas-setup account disable temporary >/tmp/nas-account-disable.json
@@ -637,7 +655,7 @@ nas-identity-sync export-account temporary | jq -e '
   .active == false and
   (.groups | index("nas_disabled")) != null and
   (.groups | index("nas_admin")) == null and
-  (.groups | index("nas_allow_files")) == null
+  (.groups | index("nas_users")) == null
 ' >/dev/null
 pass "core services, account apply/disable CLI, and CopyParty backend are healthy"
 

@@ -44,6 +44,15 @@ class SetupConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(setup_config.SetupError, "unknown field"):
             setup_config.normalize_config(bad)
 
+    def test_vm_first_run_fixtures_use_the_current_config_shape(self) -> None:
+        for relative in ("tests/vm/guest-test.sh", "tests/vm/encrypted-guest-test.sh"):
+            content = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn('"features":', content, relative)
+            self.assertNotIn('"schemaVersion": 1,\n  "storage"', content, relative)
+            self.assertNotIn('{"schemaVersion":1,"storage"', content, relative)
+            self.assertNotIn('"groups": ["nas_admin", "nas_allow_', content, relative)
+            self.assertNotIn('"groups": ["nas_users", "nas_allow_', content, relative)
+
     def test_account_config_accepts_only_base_identity_roles(self) -> None:
         value = setup_config.normalize_config(self.base())
         self.assertEqual(value["accounts"][0]["groups"], ["nas_users"])
@@ -295,6 +304,106 @@ class FirstStartStatusTests(unittest.TestCase):
             result = setup.status_report()
         self.assertNotIn("features", result)
 
+
+class FirstStartJobTests(unittest.TestCase):
+    def test_rejects_non_string_keepass_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            request_file = root / "request.json"
+            password_file = root / "password.json"
+            request_file.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "jobId": "a" * 24,
+                        "reservationToken": "b" * 32,
+                        "config": "/tmp/config.json",
+                        "planDigest": "c" * 64,
+                        "devices": [],
+                        "allowDestructiveStorage": False,
+                        "confirmPasswordReapply": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            password_file.write_text(
+                json.dumps(
+                    {
+                        "keepass": None,
+                        "administrator": {
+                            "username": "nasadmin",
+                            "name": "NAS Administrator",
+                            "email": "admin@example.test",
+                            "password": "password",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            request_file.chmod(0o600)
+            password_file.chmod(0o600)
+            with (
+                mock.patch.object(setup, "STATE_PATH", root / "state.json"),
+                mock.patch.object(setup, "cancel_reservation"),
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "KeePass database password is invalid"):
+                    setup.run_first_start_job(request_file, password_file)
+
+
+class ConfiguredAdministratorTests(unittest.TestCase):
+    def test_uses_the_unique_passworded_admin_account(self) -> None:
+        plan = {
+            "accounts": [
+                {"username": "alice", "active": True, "groups": ["nas_users"], "password": "alice-password"},
+                {"username": "operator", "active": True, "groups": ["nas_admin"], "password": "operator-password"},
+            ]
+        }
+        self.assertEqual(setup.configured_administrator(plan)["username"], "operator")
+
+    def test_requires_one_passworded_admin_account(self) -> None:
+        self.assertIsNone(setup.configured_administrator({"accounts": []}))
+        self.assertIsNone(
+            setup.configured_administrator(
+                {
+                    "accounts": [
+                        {"username": "one", "active": True, "groups": ["nas_admin"], "password": "one-password"},
+                        {"username": "two", "active": True, "groups": ["nas_admin"], "password": "two-password"},
+                    ]
+                }
+            )
+        )
+
+    def test_replaces_the_matching_planned_account(self) -> None:
+        plan = {"accounts": [{"username": "operator", "groups": ["nas_admin"], "password": "old"}]}
+        setup.include_local_administrator(
+            plan,
+            {
+                "username": "operator",
+                "name": "Operator",
+                "email": "operator@nas.local",
+                "active": True,
+                "groups": ["nas_admin"],
+                "attributes": {},
+            },
+            "new-password",
+        )
+        self.assertEqual(len(plan["accounts"]), 1)
+        self.assertEqual(plan["accounts"][0]["password"], "new-password")
+
+    def test_existing_keepass_database_checks_follow_directory_ownership_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = pathlib.Path(tmp) / "secrets" / "NAS.kdbx"
+            database.parent.mkdir()
+            database.write_text("fixture", encoding="utf-8")
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "run_root") as run_root,
+                mock.patch.object(setup, "run_admin") as run_admin,
+            ):
+                self.assertEqual(setup.verify_or_create_database("password", True), "existing")
+        self.assertEqual(run_root.call_args.args[0][0], "install")
+        self.assertEqual(run_admin.call_args.args[0][0], "keepassxc-cli")
+ 
 
 class CliTests(unittest.TestCase):
     def test_validate_config_cli_outputs_schema_two(self) -> None:

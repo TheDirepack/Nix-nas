@@ -15,7 +15,13 @@ nas_vm_outer_value() {
 }
 
 nas_vm_kill_after_seconds() {
-  nas_vm_timeout_value killAfter
+  local value
+  value="$(nas_vm_timeout_value killAfter 2>/dev/null || true)"
+  if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "${NAS_VM_KILL_AFTER_SECONDS:-30}"
+  fi
 }
 
 nas_vm_ordinary_wait_seconds() {
@@ -66,7 +72,7 @@ nas_vm_encrypted_timeout_seconds() {
 nas_vm_installer_timeout_seconds() {
   local guest
   guest=$(nas_vm_guest_watchdog_seconds)
-  printf '%s\n' "$((guest + $(nas_vm_timeout_value reconfigure) + $(nas_vm_outer_value installerSetup) + $(nas_vm_outer_value installerBoot) + $(nas_vm_outer_value installerReboot) + $(nas_vm_outer_value nativeShutdown) + $(nas_vm_outer_value slack)))"
+  printf '%s\n' "$((guest + $(nas_vm_timeout_value setupRebootLifecycle) + $(nas_vm_timeout_value reconfigure) + $(nas_vm_outer_value installerSetup) + $(nas_vm_outer_value installerBoot) + $(nas_vm_outer_value installerReboot) + $(nas_vm_outer_value nativeShutdown) + $(nas_vm_outer_value slack)))"
 }
 
 nas_vm_full_suite_timeout_seconds() {
