@@ -13,10 +13,11 @@ let
   };
   authentikProxy = pkgs.authentik-outposts.proxy;
 
-  # Keep the long-lived full-stack guest suite aligned with the V2 setup and
-  # identity contracts while it remains a source fixture shared by older test
-  # paths. The generated VM executable uses only schema-v2 configuration,
-  # base setup roles, and canonical application capability groups.
+  # The full-stack source harness still contains the final V1-era fixture
+  # vocabulary. Render its VM executable against the current V2 contracts:
+  # schema-v2 setup, base identity roles, canonical application capabilities,
+  # and no retired request-time gate. The browser/Caddy assertions below remain
+  # the request-time authorization coverage for those capabilities.
   guestTestRaw = builtins.readFile ../vm/guest-test.sh;
   guestTestSchemaV2 = builtins.replaceStrings
     [
@@ -43,6 +44,22 @@ let
       "application.syncthing.access"
     ]
     guestTestSchemaV2;
+  guestTestWithoutGateUnit = builtins.replaceStrings
+    [ "  nas-on-demand-gate.service caddy.service; do" ]
+    [ "  caddy.service; do" ]
+    guestTestCanonicalGroups;
+  retiredGateStart = "gate_deny=\"$(http_code --unix-socket /run/nas-on-demand/gate.sock";
+  retiredGateEnd = "pass \"malformed trusted identity headers remain fail-closed inside the installed gate\"\n";
+  retiredGateStartParts = lib.splitString retiredGateStart guestTestWithoutGateUnit;
+  retiredGateTail =
+    if builtins.length retiredGateStartParts == 2
+    then builtins.elemAt retiredGateStartParts 1
+    else throw "ordinary VM fixture no longer contains the expected retired gate block start";
+  retiredGateEndParts = lib.splitString retiredGateEnd retiredGateTail;
+  guestTestWithoutRetiredGate =
+    if builtins.length retiredGateEndParts == 2
+    then (builtins.elemAt retiredGateStartParts 0) + (builtins.elemAt retiredGateEndParts 1)
+    else throw "ordinary VM fixture no longer contains the expected retired gate block end";
   capabilityGrantMarker =
     "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null\nnas-identity-sync status | jq -e '";
   capabilityGrantBlock = builtins.concatStringsSep "\n" [
@@ -63,7 +80,7 @@ let
   guestTestSource = builtins.replaceStrings
     [ capabilityGrantMarker ]
     [ capabilityGrantBlock ]
-    guestTestCanonicalGroups;
+    guestTestWithoutRetiredGate;
 
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
