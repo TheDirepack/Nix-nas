@@ -54,9 +54,7 @@ class ReleasePredecessorTests(unittest.TestCase):
             }
         ]
         self.assertTrue(wait_release_predecessor.exact_main_merge_result(payload, source))
-        self.assertFalse(
-            wait_release_predecessor.exact_main_merge_result(payload, "b" * 40)
-        )
+        self.assertFalse(wait_release_predecessor.exact_main_merge_result(payload, "b" * 40))
         wrong_base = [
             {
                 "merged_at": "2026-08-26T00:00:00Z",
@@ -64,31 +62,17 @@ class ReleasePredecessorTests(unittest.TestCase):
                 "merge_commit_sha": source,
             }
         ]
-        self.assertFalse(
-            wait_release_predecessor.exact_main_merge_result(wrong_base, source)
-        )
+        self.assertFalse(wait_release_predecessor.exact_main_merge_result(wrong_base, source))
 
     def test_ci_classification_distinguishes_unregistered_active_and_completed(self) -> None:
         classify = wait_release_predecessor.classify_ci_runs
         self.assertEqual(classify({"workflow_runs": []}), "unregistered")
         self.assertEqual(
-            classify(
-                {
-                    "workflow_runs": [
-                        {"status": "completed", "conclusion": "failure"}
-                    ]
-                }
-            ),
+            classify({"workflow_runs": [{"status": "completed", "conclusion": "failure"}]}),
             "not-qualified",
         )
         self.assertEqual(
-            classify(
-                {
-                    "workflow_runs": [
-                        {"status": "in_progress", "conclusion": None}
-                    ]
-                }
-            ),
+            classify({"workflow_runs": [{"status": "in_progress", "conclusion": None}]}),
             "active",
         )
         self.assertEqual(
