@@ -12,6 +12,58 @@ let
       );
   };
   authentikProxy = pkgs.authentik-outposts.proxy;
+
+  # Keep the long-lived full-stack guest suite aligned with the V2 setup and
+  # identity contracts while it remains a source fixture shared by older test
+  # paths. The generated VM executable uses only schema-v2 configuration,
+  # base setup roles, and canonical application capability groups.
+  guestTestRaw = builtins.readFile ../vm/guest-test.sh;
+  guestTestSchemaV2 = builtins.replaceStrings
+    [
+      "\"schemaVersion\": 1"
+      "  \"features\": {},\n"
+      "\"groups\": [\"nas_admin\", \"nas_allow_files\", \"nas_allow_ai\", \"nas_allow_vault\", \"nas_allow_syncthing\"]"
+      "\"groups\": [\"nas_users\", \"nas_allow_files\", \"nas_allow_vault\", \"nas_allow_syncthing\"]"
+      "--group nas_allow_files"
+    ]
+    [
+      "\"schemaVersion\": 2"
+      ""
+      "\"groups\": [\"nas_admin\"]"
+      "\"groups\": [\"nas_users\"]"
+      "--group nas_users"
+    ]
+    guestTestRaw;
+  guestTestCanonicalGroups = builtins.replaceStrings
+    [ "nas_allow_files" "nas_allow_ai" "nas_allow_vault" "nas_allow_syncthing" ]
+    [
+      "application.copyparty.files"
+      "application.ai-workspace.access"
+      "application.vaultwarden.access"
+      "application.syncthing.access"
+    ]
+    guestTestSchemaV2;
+  guestTestSource = builtins.replaceStrings
+    [
+      "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null\nnas-identity-sync status | jq -e '"
+    ]
+    [
+      ''  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
+AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-secrets/authentik/api-token)"
+alice_pk="$(authentik_api GET 'core/users/?include_groups=true&page_size=100' | jq -er '.results[] | select(.username == "alice") | (.num_pk // .pk)')"
+for capability_group in \
+  application.copyparty.files \
+  application.syncthing.access \
+  application.vaultwarden.access; do
+  group_pk="$(authentik_api GET 'core/groups/?page_size=100' | jq -er --arg group "$capability_group" '.results[] | select(.name == $group) | .pk')"
+  authentik_api POST "core/groups/$group_pk/add_user/" \
+    "$(jq -cn --argjson pk "$alice_pk" '{pk: $pk}')" >/dev/null
+done
+pass "Alice application capabilities are assigned through canonical Authentik groups"
+nas-identity-sync status | jq -e ''
+    ]
+    guestTestCanonicalGroups;
+
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
     runtimeInputs = with pkgs; [
@@ -53,7 +105,7 @@ let
       ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
       nas_vm_profile_install
 
-      ${builtins.readFile ../vm/guest-test.sh}
+      ${guestTestSource}
     '';
   };
   secretAdversarialTest = pkgs.writeShellApplication {
