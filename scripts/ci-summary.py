@@ -44,23 +44,28 @@ def expected_jobs(
     if event_name == "pull_request" and base_ref == "main":
         expected.add("coverage-diff")
 
+    # Full-stack QEMU and the official-ISO install tier qualify every commit.
+    # Long smart-fuzz searches run only when an operator explicitly requests
+    # the full dispatch tier after deterministic qualification has succeeded.
     integration_run = (
-        event_name == "schedule"
-        or (event_name == "push" and _main_or_release_ref(ref))
+        event_name in {"pull_request", "schedule"}
+        or event_name == "push"
         or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
     )
     if integration_run:
         expected.add("integration")
 
-    installer_run = (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
-        event_name != "workflow_dispatch" and _main_or_release_ref(ref)
-    )
+    installer_run = event_name != "workflow_dispatch" or test_tier in {"full", "installer"}
     if installer_run:
         expected.add("installer")
 
+    manual_full_dispatch = event_name == "workflow_dispatch" and test_tier == "full"
+    if manual_full_dispatch:
+        expected.update(SLOW_JOBS)
+
     release_qualification = event_name == "schedule" or (event_name == "push" and _main_or_release_ref(ref))
     if release_qualification:
-        expected.update(SLOW_JOBS | INSTALLED_SECURITY_JOBS)
+        expected.update(INSTALLED_SECURITY_JOBS)
 
     return expected
 

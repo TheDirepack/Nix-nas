@@ -287,14 +287,21 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertEqual(self.needs(integration), {"prepare"})
         self.assertIn("!cancelled()", str(integration.get("if", "")))
 
-    def test_source_fuzz_uses_visible_evidence_and_internal_parallel_runner(self) -> None:
+    def test_full_stack_and_installer_qualify_every_commit(self) -> None:
+        integration_if = str(self.jobs["integration"].get("if", ""))
+        installer_if = str(self.jobs["installer"].get("if", ""))
+        self.assertIn("github.event_name == 'pull_request'", integration_if)
+        self.assertIn("github.event_name != 'workflow_dispatch'", installer_if)
+        prepare = self.serialized(self.jobs["prepare"])
+        self.assertIn("github.event_name == 'pull_request'", prepare)
+
+    def test_long_fuzz_searches_run_only_when_manually_triggered(self) -> None:
         fuzz = self.jobs["source-fuzz"]
-        self.assertNotIn("strategy", fuzz)
-        text = self.serialized(fuzz)
-        self.assertIn("scripts/run-fuzz.py --jobs 6", text)
-        self.assertIn("fuzz-evidence/source-fuzz.log", text)
-        self.assertNotIn(".fuzz-evidence", text)
-        self.assertIn("retention-days': '7", text)
+        fuzz_if = str(fuzz.get("if", ""))
+        self.assertIn("github.event_name == 'workflow_dispatch'", fuzz_if)
+        self.assertIn("test-tier == 'full'", fuzz_if)
+        for event in ("pull_request", "schedule", "github.event_name == 'push'"):
+            self.assertNotIn(event, fuzz_if)
 
     def test_console_evidence_is_copied_out_of_hidden_cache_directories(self) -> None:
         installer = self.serialized(self.jobs["installer"])

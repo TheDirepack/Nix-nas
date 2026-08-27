@@ -31,14 +31,17 @@ class CiSummaryTests(unittest.TestCase):
         self.assertEqual(workflow_jobs, set(ci_summary.KNOWN_JOBS))
         self.assertNotIn(".ci-cache/", workflow)
 
-    def test_pull_request_runs_parallel_qualification_prepare_and_browser(self) -> None:
+    def test_pull_request_runs_full_stack_installer_and_browser(self) -> None:
         expected = ci_summary.expected_jobs(
             "pull_request",
             "refs/pull/40/merge",
             "main",
             "fast",
         )
-        self.assertEqual(expected, set(ci_summary.BASE_JOBS) | {"coverage-diff"})
+        self.assertEqual(
+            expected,
+            set(ci_summary.BASE_JOBS) | {"coverage-diff", "integration", "installer"},
+        )
         _, bad = ci_summary.summarize(
             self.results(expected),
             "pull_request",
@@ -55,7 +58,7 @@ class CiSummaryTests(unittest.TestCase):
             "release",
             "fast",
         )
-        self.assertEqual(expected, set(ci_summary.BASE_JOBS))
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS) | {"integration", "installer"})
 
     def test_fast_dispatch_keeps_parallel_qualification_and_browser(self) -> None:
         expected = ci_summary.expected_jobs(
@@ -74,7 +77,7 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
-    def test_full_dispatch_adds_integration_and_installer_only(self) -> None:
+    def test_full_dispatch_adds_integration_installer_and_manual_fuzz(self) -> None:
         expected = ci_summary.expected_jobs(
             "workflow_dispatch",
             "refs/heads/main",
@@ -83,10 +86,20 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(
             expected,
+            set(ci_summary.BASE_JOBS) | {"integration", "installer", "source-fuzz"},
+        )
+        self.assertNotIn("installed-security", expected)
+        installer_dispatch = ci_summary.expected_jobs(
+            "workflow_dispatch",
+            "refs/heads/main",
+            "",
+            "installer",
+        )
+        self.assertEqual(
+            installer_dispatch,
             set(ci_summary.BASE_JOBS) | {"integration", "installer"},
         )
-        self.assertNotIn("source-fuzz", expected)
-        self.assertNotIn("installed-security", expected)
+        self.assertNotIn("source-fuzz", installer_dispatch)
 
     def test_main_push_runs_complete_release_qualification(self) -> None:
         expected = ci_summary.expected_jobs("push", "refs/heads/main", "", "fast")
@@ -96,10 +109,12 @@ class CiSummaryTests(unittest.TestCase):
             | {
                 "integration",
                 "installer",
-                "source-fuzz",
                 "installed-security",
             },
         )
+        # Long fuzz searches are manual-only and never ride along with
+        # automatic events.
+        self.assertNotIn("source-fuzz", expected)
 
     def test_any_reported_failure_is_rejected_even_when_job_is_optional(self) -> None:
         expected = ci_summary.expected_jobs(
