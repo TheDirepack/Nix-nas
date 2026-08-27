@@ -427,6 +427,28 @@ def create_local_administrator(administrator: Mapping[str, Any], password: str) 
     }
 
 
+def configured_administrator(account_plan: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    candidates = [
+        account
+        for account in account_plan.get("accounts", [])
+        if isinstance(account, Mapping)
+        and account.get("active") is True
+        and ADMIN_GROUP in account.get("groups", [])
+        and isinstance(account.get("password"), str)
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def include_local_administrator(account_plan: dict[str, Any], administrator: Mapping[str, Any], password: str) -> None:
+    local = {**administrator, "password": password}
+    accounts = account_plan["accounts"]
+    for index, account in enumerate(accounts):
+        if account.get("username") == administrator["username"]:
+            accounts[index] = local
+            return
+    accounts.append(local)
+
+
 def finalize_local_administrator(administrator: Mapping[str, Any]) -> dict[str, str]:
     username = administrator.get("username")
     if not isinstance(username, str):
@@ -471,14 +493,6 @@ def retire_bootstrap_runtime(
 
 def verify_or_create_database(password: str, create: bool) -> str:
     key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
-    if KEEPASS_DATABASE.exists():
-        run_admin(
-            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(KEEPASS_DATABASE)],
-            input_text=password + "\n",
-        )
-        return "existing"
-    if not create:
-        raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
     run_root(
         [
             "install",
@@ -492,6 +506,14 @@ def verify_or_create_database(password: str, create: bool) -> str:
             str(KEEPASS_DATABASE.parent),
         ]
     )
+    if KEEPASS_DATABASE.exists():
+        run_admin(
+            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(KEEPASS_DATABASE)],
+            input_text=password + "\n",
+        )
+        return "existing"
+    if not create:
+        raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
     create_args = ["keepassxc-cli", "db-create", "--quiet", "-p"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
@@ -948,14 +970,14 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 if isinstance(password_override, str) and password_override
                 else read_keepass_password(args.keepass_password_stdin)
             )
-            administrator = getattr(args, "administrator", None)
+            administrator = getattr(args, "administrator", None) or configured_administrator(account_plan)
             if not isinstance(administrator, Mapping):
                 raise SetupError("First-run administrator details are missing")
             administrator_password = administrator.get("password")
             if not isinstance(administrator_password, str):
                 raise SetupError("First-run administrator password is missing")
             local_administrator = create_local_administrator(administrator, administrator_password)
-            account_plan["accounts"].append({**local_administrator, "password": administrator_password})
+            include_local_administrator(account_plan, local_administrator, administrator_password)
             fingerprint = setup_fingerprint(config, args, account_plan, password)
             journal = OperationJournal.open(
                 JOURNAL_PATH,

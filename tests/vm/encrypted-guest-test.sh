@@ -65,14 +65,13 @@ log "Run first-time setup through the encrypted-ZFS path"
 install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
 cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "storage": {
     "createPool": true,
     "device": "$ZFS_DEVICE",
     "wipeDevice": true
   },
   "accounts": [],
-  "features": {},
   "runPreflight": false
 }
 EOFSETUP

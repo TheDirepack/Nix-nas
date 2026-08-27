@@ -6,6 +6,7 @@
     "secretActivation": 600,
     "firstRun": 1200,
     "browserAuthorization": 300,
+    "setupRebootLifecycle": 1800,
     "deterministicBundle": 300,
     "encryptedGuest": 1800,
     "secretAdversarial": 900,

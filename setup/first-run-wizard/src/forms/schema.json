@@ -5,8 +5,7 @@
   "properties": {
     "adminUsername": {
       "type": "string",
-      "description": "Admin username for Authentik and Linux account",
-      "default": "admin"
+      "description": "Admin username for Authentik and Linux account"
     },
     "adminEmail": {
       "type": "string",

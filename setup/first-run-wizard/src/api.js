@@ -14,7 +14,7 @@ const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 
 // Export the form defaults from schema
 const formDefaults = {
-  adminUsername: schema.properties.adminUsername.default || 'admin',
+  adminUsername: schema.properties.adminUsername.default || '',
   adminEmail: schema.properties.adminEmail.default || 'admin@example.com',
   adminPassword: schema.properties.adminPassword.default || '',
   useSamePassword: schema.properties.useSamePassword.default !== undefined ? schema.properties.useSamePassword.default : true,

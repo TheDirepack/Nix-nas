@@ -103,6 +103,7 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
         self.assertEqual(
             installer,
             guest
+            + self.manifest["timeouts"]["setupRebootLifecycle"]
             + self.manifest["timeouts"]["reconfigure"]
             + outer["installerSetup"]
             + outer["installerBoot"]
