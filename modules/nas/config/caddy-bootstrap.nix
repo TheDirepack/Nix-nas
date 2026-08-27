@@ -2,17 +2,18 @@
 
 let
   inherit (nasInternal)
-    authentikOutpostPort
     authentikPort
     caddyForwardAuth
     cfg
-    cockpitPort
     firstRunWizardStatic
     lanHost
+    nasPythonApplication
     secretRoot
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
   activeCaddyPath = "/run/nas-control/caddy-active.conf";
+  firstRunApiSocket = "/run/nas-first-run-api/api.sock";
+  cockpitProxySocket = "/run/nas-cockpit-proxy/http.sock";
   bootstrapCaddyfileGen = pkgs.writeShellScript "bootstrap-caddyfile-gen" ''
     cat <<EOCF
 {
@@ -23,7 +24,14 @@ let
       roll_keep 10
       roll_keep_for 720h
     }
-    format json
+    # The setup job token is a bearer capability that remains usable after the
+    # bootstrap Authentik authority is destroyed. Caddy redacts standard
+    # Authorization/Cookie credentials automatically, but this NAS-specific
+    # header must be removed explicitly before JSON access-log encoding.
+    format filter {
+      request>headers>X-NAS-Setup-Job-Token delete
+      wrap json
+    }
   }
 }
 
@@ -36,30 +44,45 @@ https://${lanHost} {
     Referrer-Policy "no-referrer"
     Permissions-Policy "camera=(), microphone=(), geolocation=()"
   }
+  @setupSecurity path /setup /setup/*
+  header @setupSecurity {
+    Cache-Control "no-store"
+    Content-Security-Policy "frame-ancestors 'none'"
+    X-Frame-Options "DENY"
+  }
 
   handle / {
     redir * ${cfg.identity.authentikPath}if/user/ 303
   }
-  # /setup without the slash would make the wizard's relative asset URLs
-  # resolve against /, so canonicalise to /setup/ before serving.
   handle /setup {
     redir /setup /setup/ 308
   }
-  # The wizard's submission API. Authentik-gated like the page itself; the
-  # port must match nas-setup-api.service (application-services.nix).
+
+  # Submission and password checking still require the bootstrap Authentik
+  # session. Status polling and the final reboot use the high-entropy per-job
+  # capability minted only after an authenticated submission, because the
+  # bootstrap Authentik database is intentionally replaced mid-job.
+  handle /setup/api/first-start/job/* {
+    uri strip_prefix /setup/api
+    reverse_proxy unix/${firstRunApiSocket}
+  }
+  handle /setup/api/reboot {
+    uri strip_prefix /setup/api
+    reverse_proxy unix/${firstRunApiSocket}
+  }
   handle /setup/api/* {
     route {
       ${caddyForwardAuth}
-      reverse_proxy 127.0.0.1:8980
+      uri strip_prefix /setup/api
+      reverse_proxy unix/${firstRunApiSocket} {
+        header_up Remote-User {http.request.header.Remote-User}
+        header_up Remote-Groups {http.request.header.Remote-Groups}
+      }
     }
   }
   handle /setup/* {
     route {
       ${caddyForwardAuth}
-      @post method POST
-      handle @post {
-        redir * /setup/ 303
-      }
       uri strip_prefix /setup
       root * ${firstRunWizardStatic}/share/nas-portal-wizard
       file_server
@@ -78,7 +101,8 @@ https://${lanHost} {
   }
   @authentikOutpost path /outpost.goauthentik.io/*
   handle @authentikOutpost {
-    reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
+    uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
+    reverse_proxy 127.0.0.1:${toString authentikPort} {
       header_up Host {http.request.host}
       header_up X-Forwarded-Proto https
     }
@@ -88,7 +112,7 @@ https://${lanHost} {
       ${caddyForwardAuth}
       @missingCockpitAdmin not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)
       respond @missingCockpitAdmin 403
-      reverse_proxy 127.0.0.1:${toString cockpitPort} {
+      reverse_proxy unix/${cockpitProxySocket} {
         header_up X-Forwarded-Proto https
         header_up X-Forwarded-Prefix /console
       }
@@ -146,10 +170,55 @@ in
     && !cfg.testing.installationReadyFixture
   ) [ "nas-management-network-guard.service" ];
 
+  systemd.services.nas-first-run-api = lib.mkIf cfg.firstStart.enable {
+    description = "Authenticated standalone first-run setup API";
+    wantedBy = [ "multi-user.target" ];
+    requires = [ "nas-first-start.service" ];
+    after = [ "nas-first-start.service" ];
+    before = [ "caddy.service" ];
+    unitConfig.ConditionPathExists = [ "!/var/lib/nas-setup/state.json" ];
+    environment = {
+      NAS_FIRST_RUN_CONFIG = cfg.firstStart.configFile;
+      NAS_SETUP_STATE = "/var/lib/nas-setup/state.json";
+    };
+    serviceConfig = {
+      Type = "simple";
+      User = "root";
+      Group = "caddy";
+      RuntimeDirectory = "nas-first-run-api";
+      RuntimeDirectoryMode = "0750";
+      UMask = "0077";
+      ExecStart = "${nasPythonApplication}/bin/nas-first-run-api --socket ${firstRunApiSocket}";
+      Restart = "on-failure";
+      RestartSec = "2s";
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      ReadWritePaths = [
+        "/run/nas-first-run-api"
+        "/run/nas-first-start"
+        "/run/nas-operations"
+        "/run/lock"
+      ];
+    };
+    path = [
+      pkgs.systemd
+    ];
+  };
+
   systemd.services.nas-caddy-bootstrap = {
     description = "Select the active Caddy configuration (bootstrap vs full)";
     wantedBy = [ "multi-user.target" ];
     before = [ "caddy.service" ];
+    after = lib.optional cfg.firstStart.enable "nas-first-run-api.service";
+    wants = lib.optional cfg.firstStart.enable "nas-first-run-api.service";
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;

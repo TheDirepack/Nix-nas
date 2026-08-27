@@ -21,6 +21,7 @@ import pathlib
 import pwd
 import re
 import secrets
+import stat
 import sys
 import syslog
 import tempfile
@@ -74,6 +75,16 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 PUBLIC_HOST = os.environ.get("NAS_PUBLIC_HOST", "").strip()
 DEFAULT_FLOW_WAIT_SECONDS = 90.0
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Make redirects observable as HTTP errors instead of forwarding credentials."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler())
 
 
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
@@ -163,6 +174,7 @@ def http_json(
     body: Any | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 15.0,
+    follow_redirects: bool = True,
 ) -> Any:
     data = None
     request_headers = {"Accept": "application/json"}
@@ -180,7 +192,11 @@ def http_json(
     for attempt in range(1, max_attempts + 1):
         request = urllib.request.Request(url, data=data, headers=request_headers, method=normalized_method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            if follow_redirects:
+                response_context = urllib.request.urlopen(request, timeout=timeout)
+            else:
+                response_context = _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+            with response_context as response:
                 payload = response.read()
             break
         except urllib.error.HTTPError as exc:
@@ -222,21 +238,84 @@ def http_json(
         raise SyncError(f"Authentik returned invalid JSON (reference {reference})") from exc
 
 
-def authentik_token(*, bootstrap: bool = False) -> str:
-    token_file = AUTHENTIK_BOOTSTRAP_TOKEN_FILE if bootstrap else AUTHENTIK_TOKEN_FILE
-    kind = "bootstrap" if bootstrap else "runtime API"
+def _read_private_root_token(path: pathlib.Path, *, kind: str) -> str:
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     try:
-        token = token_file.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise SyncError(f"Authentik {kind} token is missing: {token_file}") from exc
-    if not token or len(token) > 4096:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise SyncError(f"Authentik {kind} token is missing or unsafe: {path}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > 4096
+        ):
+            raise SyncError(f"Authentik {kind} token must be a private root-owned regular file")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            payload = handle.read(4097)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(payload) > 4096:
+        raise SyncError(f"Authentik {kind} token is empty or malformed")
+    try:
+        token = payload.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise SyncError(f"Authentik {kind} token is empty or malformed") from exc
+    if not token or any(character in token for character in ("\x00", "\r", "\n")):
         raise SyncError(f"Authentik {kind} token is empty or malformed")
     return token
 
 
+def authentik_token(*, bootstrap: bool = False) -> str:
+    token_file = AUTHENTIK_BOOTSTRAP_TOKEN_FILE if bootstrap else AUTHENTIK_TOKEN_FILE
+    kind = "bootstrap" if bootstrap else "runtime API"
+    return _read_private_root_token(token_file, kind=kind)
+
+
+def _url_origin(parsed: urllib.parse.SplitResult) -> tuple[str, str, int]:
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise SyncError("Authentik API URL contains an invalid port") from exc
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else -1
+    return scheme, host, port
+
+
+def authentik_api_url(path: str) -> str:
+    """Resolve an Authentik API path without allowing the bearer token to change origin."""
+    api_base = f"{AUTHENTIK_URL}/api/v3/"
+    base = urllib.parse.urlsplit(api_base)
+    candidate = (
+        urllib.parse.urlsplit(path)
+        if path.startswith(("http://", "https://"))
+        else urllib.parse.urlsplit(api_base + path.lstrip("/"))
+    )
+    if candidate.username is not None or candidate.password is not None or candidate.fragment:
+        raise SyncError("Refusing Authentik API URL with credentials or fragment")
+    if _url_origin(candidate) != _url_origin(base):
+        raise SyncError("Refusing Authentik request outside the configured API origin")
+    decoded_path = urllib.parse.unquote(candidate.path)
+    api_prefix = urllib.parse.unquote(base.path)
+    if not decoded_path.startswith(api_prefix) or any(part in {".", ".."} for part in decoded_path.split("/")):
+        raise SyncError("Refusing Authentik request outside the configured API path")
+    return urllib.parse.urlunsplit(candidate)
+
+
 def authentik_request(token: str, path: str, *, method: str = "GET", body: Any | None = None) -> Any:
-    url = path if path.startswith(("http://", "https://")) else f"{AUTHENTIK_URL}/api/v3/{path.lstrip('/')}"
-    return http_json(url, method=method, body=body, headers={"Authorization": f"Bearer {token}"})
+    return http_json(
+        authentik_api_url(path),
+        method=method,
+        body=body,
+        headers={"Authorization": f"Bearer {token}"},
+        follow_redirects=False,
+    )
 
 
 def authentik_list(token: str, path: str) -> list[dict[str, Any]]:

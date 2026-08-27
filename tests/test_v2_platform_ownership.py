@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import pathlib
 import os
-from unittest import mock
+import pathlib
 import sys
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -37,14 +37,15 @@ class ManagedServicesV2PlatformRouteOwnershipTests(unittest.TestCase):
     def test_cockpit_console_route_is_seeded_only_through_v2(self) -> None:
         seed = (ROOT / "modules" / "nas" / "config" / "managed-services-seed-v2.nix").read_text(encoding="utf-8")
         proxy = (ROOT / "modules" / "nas" / "config" / "reverse-proxy.nix").read_text(encoding="utf-8")
+        cockpit = seed.split("cockpit = {", 1)[1].split("    };\n  };", 1)[0]
 
         self.assertIn("platformServices", seed)
-        self.assertIn("cockpit", seed)
-        self.assertIn('paths = [ "/console" ];', seed)
-        self.assertIn('type = "http";', seed)
-        self.assertIn('host = "127.0.0.1";', seed)
-        self.assertIn('capability = "admin";', seed)
-        self.assertIn('title = "System Console";', seed)
+        self.assertIn('paths = [ "/console" ];', cockpit)
+        self.assertIn('type = "unix-http";', cockpit)
+        self.assertIn('socket = "/run/nas-cockpit-proxy/http.sock";', cockpit)
+        self.assertNotIn('host = "127.0.0.1";', cockpit)
+        self.assertIn('capability = "admin";', cockpit)
+        self.assertIn('title = "System Console";', cockpit)
 
         self.assertNotIn("@console", proxy)
         self.assertNotIn("tls_insecure_skip_verify", proxy)

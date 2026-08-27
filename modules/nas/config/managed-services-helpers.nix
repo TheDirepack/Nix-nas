@@ -1,7 +1,6 @@
 { lib, config, nasInternal }:
 let
   cfg = config.nas;
-  inherit (nasInternal) cockpitPort;
   v2Ports = import ../internal/v2-ports.nix { inherit lib config; };
 in
 rec {

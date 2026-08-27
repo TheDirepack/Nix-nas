@@ -1119,40 +1119,30 @@ def source_control(request: dict[str, Any]) -> dict[str, Any]:
             "stdout": result.stdout,
             "stderr": result.stderr,
         }
-    try:
-        with acquire_operation(f"source-{operation}", ("appliance", "update")) as active:
-            env = dict(os.environ)
-            env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-            outputs: list[dict[str, Any]] = []
-            if operation in {"pull", "pull-rebuild"}:
-                command = ["git", "-C", str(CONFIG_DIR), "pull", "--ff-only"]
-                result = run(command, check=False, timeout_seconds=180, env=env)
-                outputs.append(
-                    {
-                        "command": command,
-                        "returncode": result.returncode,
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                    }
-                )
-                if result.returncode != 0:
-                    raise operation_error(command, result)
-            if operation in {"rebuild", "pull-rebuild"}:
-                command = ["nixos-rebuild", "switch", "--flake", f"{CONFIG_DIR}#nas"]
-                result = run(command, check=False, timeout_seconds=1800, env=env)
-                outputs.append(
-                    {
-                        "command": command,
-                        "returncode": result.returncode,
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                    }
-                )
-                if result.returncode != 0:
-                    raise operation_error(command, result)
-            return {"ok": True, "operation": operation, "commands": outputs}
-    except OperationBusyError as exc:
-        raise ApiError(str(exc)) from exc
+
+    # nas-update is the sole mutation/deployment authority. It owns
+    # operation locking, repository/path trust, signature checks,
+    # build/test, health checks, rollback, and source promotion.
+    command = {
+        "pull": ["nas-update", "--sync"],
+        "rebuild": ["nas-update", "--apply", "--non-interactive"],
+        "pull-rebuild": ["nas-update", "--sync", "--apply", "--non-interactive"],
+    }[operation]
+    result = run(command, check=False, timeout_seconds=21600)
+    if result.returncode != 0:
+        raise operation_error(command, result)
+    return {
+        "ok": True,
+        "operation": operation,
+        "commands": [
+            {
+                "command": command,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        ],
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:

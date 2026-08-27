@@ -18,6 +18,5 @@ in
       createHome = true;
       homeMode = "0750";
     };
-    users.users.caddy.extraGroups = [ "copyparty" ];
   };
 }

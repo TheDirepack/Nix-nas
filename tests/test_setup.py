@@ -206,55 +206,40 @@ class LocalAdministratorTests(unittest.TestCase):
         self.assertTrue(all("new-local-password" not in " ".join(command) for command, _input in calls))
 
     def test_finalizing_local_administrator_removes_bootstrap_and_persists_only_username(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = pathlib.Path(tmp) / "administrator.json"
-            with (
-                mock.patch.object(setup, "ADMIN_STATE_PATH", state),
-                mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "")) as run_root,
-            ):
-                result = setup.finalize_local_administrator({"username": "nasadmin"})
-                persisted = json.loads(state.read_text(encoding="utf-8"))
-        self.assertEqual(result, {"username": "nasadmin"})
-        self.assertEqual(run_root.call_args.args[0], ["userdel", "--remove", "nas-bootstrap"])
-        self.assertEqual(persisted, {"username": "nasadmin"})
-
-    def test_promoting_bootstrap_runtime_rejects_existing_operational_authorities_and_never_moves_bootstrap_state(
-        self,
-    ) -> None:
         calls: list[list[str]] = []
 
         def capture(command, **_kwargs):
             calls.append(list(command))
+            if command[:3] == ["id", "--user", "nas-bootstrap"]:
+                return setup.Completed(tuple(command), "", "", 1)
             return setup.Completed(tuple(command), "", "")
 
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            bootstrap = root / "bootstrap"
-            operational = root / "operational"
-            bootstrap.mkdir()
-            for name in ("authentik", "postgresql", "nas-secrets"):
-                (bootstrap / name).mkdir()
-            (bootstrap / "nas-secrets" / "NAS.kdbx").write_text("database", encoding="utf-8")
-            with mock.patch.object(setup, "run_root", side_effect=capture):
-                result = setup.promote_bootstrap_runtime(bootstrap, operational)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / "administrator.json"
+            with (
+                mock.patch.object(setup, "ADMIN_STATE_PATH", state),
+                mock.patch.object(setup, "run_root", side_effect=capture),
+            ):
+                result = setup.finalize_local_administrator({"username": "nasadmin"})
+                persisted = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(result, {"username": "nasadmin"})
+        self.assertIn(["userdel", "--remove", "nas-bootstrap"], calls)
+        self.assertIn(["id", "--user", "nas-bootstrap"], calls)
+        self.assertEqual(persisted, {"username": "nasadmin"})
 
-        self.assertEqual(result, {"operationalRuntimeSelected": True})
-        self.assertIn(
-            ["systemctl", "stop", "authentik.service", "authentik-worker.service", "postgresql.service"], calls
-        )
-        self.assertIn(["install", "-d", "-m", "0700", str(operational)], calls)
-        self.assertFalse(any(command[0] == "mv" for command in calls))
-        self.assertFalse(any(command[:2] == ["rm", "-rf"] and str(bootstrap) in command for command in calls))
-
-    def test_promoting_bootstrap_runtime_fails_closed_when_an_operational_authority_exists(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            bootstrap = root / "bootstrap"
-            operational = root / "operational"
-            bootstrap.mkdir()
-            (operational / "authentik").mkdir(parents=True)
-            with self.assertRaisesRegex(setup.SetupError, "already exists"):
-                setup.promote_bootstrap_runtime(bootstrap, operational)
+    def test_fresh_permanent_runtime_never_copies_bootstrap_authority(self) -> None:
+        module_file = setup.__file__
+        assert module_file is not None
+        source = pathlib.Path(module_file).read_text(encoding="utf-8")
+        block = source[
+            source.index("def select_fresh_permanent_runtime") : source.index("def retire_bootstrap_runtime")
+        ]
+        self.assertIn("PERMANENT_RUNTIME_ROOT", block)
+        self.assertIn("already exists before selection", block)
+        self.assertIn("nas-bootstrap-runtime-select.service", block)
+        self.assertNotIn("BOOTSTRAP_RUNTIME_ROOT", block)
+        self.assertNotIn("promote_bootstrap_runtime", block)
+        self.assertNotIn('run_root(["mv"', block)
 
 
 class FirstStartStatusTests(unittest.TestCase):
@@ -309,51 +294,6 @@ class FirstStartStatusTests(unittest.TestCase):
         ):
             result = setup.status_report()
         self.assertNotIn("features", result)
-
-
-class FirstStartJobTests(unittest.TestCase):
-    def test_rejects_non_string_keepass_password(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            request_file = root / "request.json"
-            password_file = root / "password.json"
-            request_file.write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "jobId": "a" * 24,
-                        "reservationToken": "b" * 32,
-                        "config": "/tmp/config.json",
-                        "planDigest": "c" * 64,
-                        "devices": [],
-                        "allowDestructiveStorage": False,
-                        "confirmPasswordReapply": False,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            password_file.write_text(
-                json.dumps(
-                    {
-                        "keepass": None,
-                        "administrator": {
-                            "username": "nasadmin",
-                            "name": "NAS Administrator",
-                            "email": "admin@example.test",
-                            "password": "password",
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            request_file.chmod(0o600)
-            password_file.chmod(0o600)
-            with (
-                mock.patch.object(setup, "STATE_PATH", root / "state.json"),
-                mock.patch.object(setup, "cancel_reservation"),
-            ):
-                with self.assertRaisesRegex(setup.SetupError, "KeePass database password is invalid"):
-                    setup.run_first_start_job(request_file, password_file)
 
 
 class CliTests(unittest.TestCase):

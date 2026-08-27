@@ -91,17 +91,35 @@ class IdentitySyncCoverageTests(unittest.TestCase):
             bootstrap = root / "bootstrap"
             runtime.write_text("runtime\n", encoding="utf-8")
             bootstrap.write_text("bootstrap\n", encoding="utf-8")
+            runtime.chmod(0o600)
+            bootstrap.chmod(0o400)
+            real_fstat = sync.os.fstat
+
+            def root_fstat(descriptor: int):
+                metadata = real_fstat(descriptor)
+                return mock.Mock(
+                    st_mode=metadata.st_mode,
+                    st_uid=0,
+                    st_size=metadata.st_size,
+                )
+
             with (
                 mock.patch.object(sync, "AUTHENTIK_TOKEN_FILE", runtime),
                 mock.patch.object(sync, "AUTHENTIK_BOOTSTRAP_TOKEN_FILE", bootstrap),
+                mock.patch.object(sync.os, "fstat", side_effect=root_fstat),
             ):
                 self.assertEqual(sync.authentik_token(), "runtime")
                 self.assertEqual(sync.authentik_token(bootstrap=True), "bootstrap")
+                runtime.chmod(0o640)
+                with self.assertRaisesRegex(sync.SyncError, "private root-owned"):
+                    sync.authentik_token()
+                runtime.chmod(0o600)
                 runtime.write_text("", encoding="utf-8")
                 with self.assertRaisesRegex(sync.SyncError, "empty or malformed"):
                     sync.authentik_token()
                 runtime.unlink()
-                with self.assertRaisesRegex(sync.SyncError, "token is missing"):
+                runtime.symlink_to(bootstrap)
+                with self.assertRaisesRegex(sync.SyncError, "missing or unsafe"):
                     sync.authentik_token()
 
     def test_authentik_request_builds_api_url_and_list_paginates(self) -> None:
