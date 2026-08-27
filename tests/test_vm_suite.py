@@ -13,6 +13,7 @@ QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
+VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
@@ -109,12 +110,30 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("./scripts/preflight.sh", guest_suite)
         self.assertIn("./scripts/run-fuzz.py", guest_suite)
         self.assertIn("nas-vm-guest-test /dev/vdb", guest_suite)
+        self.assertIn(
+            "export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json",
+            VM_COMMON.read_text(encoding="utf-8"),
+        )
         self.assertIn("systemd-socket-activate", guest_test)
         self.assertIn("systemd-socket-proxyd", guest_test)
-        self.assertIn('public_address="$(getent ahostsv4 "$public_host"', guest_test)
+        self.assertIn('public_address="${NAS_BROWSER_HOST_ADDRESS:-127.0.0.1}"', guest_test)
         self.assertIn('"$activate_path" --listen "$public_address:$public_port"', guest_test)
         self.assertNotIn('"$activate_path" --accept --listen', guest_test)
         self.assertNotIn("--exit-idle-time=300s", guest_test)
+        self.assertIn("run_setup_reboot_e2e", qemu)
+        self.assertIn("setupRebootLifecycle", qemu)
+        self.assertIn("nas-vm-guest-test --setup-reboot-e2e --start", qemu)
+
+    def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
+        guest = GUEST_TEST.read_text(encoding="utf-8")
+        self.assertIn('administrator="nas-bootstrap"', guest)
+        self.assertIn('/var/lib/nas-setup/local-administrator.json', guest)
+        self.assertIn('chown nas-bootstrap:users /var/lib/nas-test/setup/first-run.json', guest)
+        self.assertIn('install -d -m 0700 -o nas-bootstrap -g users /var/lib/nas-test/setup', guest)
+        self.assertIn('chown operator:users /var/lib/nas-test/setup', guest)
+        self.assertIn('chown operator:users /var/lib/nas-test/setup/first-run.json', guest)
+        self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
+        self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
 
     def test_persistent_controls_are_additive_to_existing_ci_modes(self) -> None:
         qemu = QEMU.read_text(encoding="utf-8")

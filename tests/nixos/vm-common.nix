@@ -39,6 +39,7 @@ let
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
+      export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
@@ -49,6 +50,11 @@ let
       export NAS_PREFLIGHT_SKIP_TOOLING=1
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
+
+      if [[ "''${1:-}" == "--setup-reboot-e2e" ]]; then
+        shift
+        exec python3 /var/lib/nas-test/repo/tests/vm/setup-reboot-e2e.py "$@"
+      fi
 
       ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
       nas_vm_profile_install

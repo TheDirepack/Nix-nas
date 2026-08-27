@@ -75,7 +75,7 @@ Pure policy and schema helpers should contain no service-management side effects
 - `cockpit/src/app.scss`: NAS-specific layout only; PatternFly owns component styling.
 - `cockpit/build.js`: Starter Kit style esbuild/Sass source-to-package build and source-hash stale-output check.
 - `cockpit/dist/`: generated React/PatternFly package payload installed by Nix; never edit it directly.
-- `web/portal/index.html` and `lib/web/portal-static/setup.html`: Caddy templates, not application services.
+- `web/portal/index.html` and `web/portal/setup.html`: Caddy templates, not application services.
 
 Pure Cockpit API and view-model behavior has direct Node coverage. JSX component composition is checked structurally and through the built browser package in CI.
 
