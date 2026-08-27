@@ -8,6 +8,8 @@ const AdminStep = ({
   onUseSamePassword,
   keePassPassword,
   onKeePassPassword,
+  keePassPasswordConfirm,
+  onKeePassPasswordConfirm,
 }) => {
   const update = (field) => (_event, value) => onAdministrator({ ...administrator, [field]: value });
 
@@ -69,14 +71,28 @@ const AdminStep = ({
         <HelperTextItem>The KeePassXC database protects appliance secrets. A separate password gives it an additional boundary.</HelperTextItem>
       </HelperText>
       {!useSamePassword && (
-        <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
-          <TextInput
-            id="wizard-keepass-password"
-            type="password"
-            value={keePassPassword}
-            onChange={(_event, value) => onKeePassPassword(value)}
-          />
-        </FormGroup>
+        <>
+          <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
+            <TextInput
+              id="wizard-keepass-password"
+              type="password"
+              value={keePassPassword}
+              onChange={(_event, value) => onKeePassPassword(value)}
+            />
+          </FormGroup>
+          <FormGroup
+            label="Confirm KeePassXC database password"
+            fieldId="wizard-keepass-password-confirm"
+            isRequired
+          >
+            <TextInput
+              id="wizard-keepass-password-confirm"
+              type="password"
+              value={keePassPasswordConfirm}
+              onChange={(_event, value) => onKeePassPasswordConfirm(value)}
+            />
+          </FormGroup>
+        </>
       )}
     </div>
   );

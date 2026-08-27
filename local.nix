@@ -1,6 +1,6 @@
 { ... }:
 
-# Complete docs/src/admin/configuration.md before enabling installationReady.
+# Complete docs/src/admin/installation.md before enabling installationReady.
 {
   imports = [
     ./modules/profiles/core-storage.nix

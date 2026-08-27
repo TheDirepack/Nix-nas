@@ -10,6 +10,9 @@
 
 ## Installation checklist
 
+The step-by-step walkthrough, including this checklist with every item explained,
+is in [Install and set up](installation.md).
+
 Complete these values before setting `nas.installationReady = true`:
 
 1. Replace the repository `hardware-configuration.nix` placeholder with reviewed `nixos-generate-config` output from the actual target host. The placeholder carries an internal stub marker and install-ready evaluation fails while it is present.

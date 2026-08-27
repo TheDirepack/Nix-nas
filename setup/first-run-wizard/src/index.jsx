@@ -29,6 +29,7 @@ const App = () => {
   const [administrator, setAdministrator] = React.useState(emptyAdministrator);
   const [useSamePassword, setUseSamePassword] = React.useState(true);
   const [keePassPassword, setKeePassPassword] = React.useState('');
+  const [keePassPasswordConfirm, setKeePassPasswordConfirm] = React.useState('');
   const [allowDestructive, setAllowDestructive] = React.useState(false);
   const [theme, setTheme] = React.useState(readThemePreference);
   const [plan, setPlan] = React.useState(null);
@@ -76,6 +77,7 @@ const App = () => {
   }, [planRequest]);
 
   const keePassEffective = useSamePassword ? administrator.password : keePassPassword;
+  const keePassConfirmation = useSamePassword ? administrator.confirm : keePassPasswordConfirm;
   return (
     <div className="nas-setup-shell">
       <header className="nas-setup-header">
@@ -114,6 +116,8 @@ const App = () => {
               onUseSamePassword={setUseSamePassword}
               keePassPassword={keePassPassword}
               onKeePassPassword={setKeePassPassword}
+              keePassPasswordConfirm={keePassPasswordConfirm}
+              onKeePassPasswordConfirm={setKeePassPasswordConfirm}
             />
           </WizardStep>
           <WizardStep id="wizard-storage" step={3} name="Storage">
@@ -129,6 +133,7 @@ const App = () => {
             <ConfirmStep
               administrator={administrator}
               keePassPassword={keePassEffective}
+              keePassPasswordConfirm={keePassConfirmation}
               allowDestructive={allowDestructive}
               plan={plan}
             />

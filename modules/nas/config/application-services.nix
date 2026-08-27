@@ -71,11 +71,13 @@ let
     RestartSec = "2s";
   };
   cockpitPatched = pkgs.cockpit.overrideAttrs (old: {
-    postPatch =
-      (old.postPatch or "")
+    postFixup =
+      (old.postFixup or "")
       + ''
-        substituteInPlace cockpit/channels/dbus.py \
-          --replace-fail 'if err.errno != errno.EBUSY:' 'if err.errno not in (errno.EBUSY, errno.EINVAL):' || true
+        dbus_py="$(find "$out/lib" -path '*/site-packages/cockpit/channels/dbus.py' -type f -print -quit)"
+        test -n "$dbus_py"
+        substituteInPlace "$dbus_py" \
+          --replace-fail 'if err.errno != errno.EBUSY:' 'if err.errno not in (errno.EBUSY, errno.EINVAL):'
       '';
   });
 
