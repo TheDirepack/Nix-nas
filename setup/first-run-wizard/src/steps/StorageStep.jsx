@@ -28,6 +28,30 @@ const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive, on
   if (!plan) {
     return <p className="nas-wizard-step nas-wizard-message">Loading the storage plan...</p>;
   }
+  if (plan.status === 'configuration-missing') {
+    return (
+      <div className="nas-wizard-step nas-wizard-message">
+        <Alert variant="info" isInline title="Storage plan not created yet">
+          A storage plan is not required until the initial ZFS pool and disk layout have been
+          configured. This is expected on a new appliance.
+        </Alert>
+        <div className="nas-storage-actions">
+          <p>Configure or partition the disks in Cockpit, then return here and refresh the plan.</p>
+          <div className="nas-storage-links">
+            <Button component="a" href="/console/storage" target="_blank" rel="noreferrer">
+              Open Storage
+            </Button>
+            <Button component="a" href="/console/system/terminal" target="_blank" rel="noreferrer" variant="secondary">
+              Open Terminal
+            </Button>
+            <Button variant="link" onClick={onRefresh}>
+              Refresh plan
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const storage = plan.storage || {};
   return (
     <div className="nas-wizard-step">

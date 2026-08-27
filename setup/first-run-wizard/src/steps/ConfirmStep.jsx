@@ -1,7 +1,7 @@
 import React from 'react';
 import { Alert, Button } from '@patternfly/react-core';
 
-const validate = (administrator, keePassPassword, plan, allowDestructive) => {
+const validate = (administrator, keePassPassword, keePassPasswordConfirm, plan, allowDestructive) => {
   if (!administrator.username || !administrator.name || !administrator.email) {
     return 'Complete the administrator account details.';
   }
@@ -10,6 +10,9 @@ const validate = (administrator, keePassPassword, plan, allowDestructive) => {
   }
   if (!keePassPassword) {
     return 'Enter the KeePassXC database password.';
+  }
+  if (keePassPassword !== keePassPasswordConfirm) {
+    return 'Enter and confirm the KeePassXC database password.';
   }
   if (!plan || !/^[0-9a-f]{64}$/.test(plan.planDigest || '')) {
     return 'The storage plan has not loaded yet.';
@@ -20,7 +23,13 @@ const validate = (administrator, keePassPassword, plan, allowDestructive) => {
   return '';
 };
 
-const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan }) => {
+const ConfirmStep = ({
+  administrator,
+  keePassPassword,
+  keePassPasswordConfirm,
+  allowDestructive,
+  plan,
+}) => {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [job, setJob] = React.useState(null);
@@ -43,7 +52,13 @@ const ConfirmStep = ({ administrator, keePassPassword, allowDestructive, plan })
   }, [jobId, jobStatus]);
 
   const submit = async () => {
-    const problem = validate(administrator, keePassPassword, plan, allowDestructive);
+    const problem = validate(
+      administrator,
+      keePassPassword,
+      keePassPasswordConfirm,
+      plan,
+      allowDestructive,
+    );
     if (problem) {
       setError(problem);
       return;
