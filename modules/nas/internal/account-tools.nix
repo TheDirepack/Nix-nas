@@ -71,12 +71,13 @@ let
   };
 
   nasSetupScript = "${nasPythonApplication}/bin/nas-setup";
-  nasSetup = pkgs.writeShellApplication {
+nasSetup = pkgs.writeShellApplication {
     name = "nas-setup";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.keepassxc
-      pkgs.python3
+      pkgs.pythonD
+      pkgs.shadow
       pkgs.systemd
       pkgs.util-linux
       pkgs.zfs

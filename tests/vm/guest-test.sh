@@ -446,7 +446,7 @@ printf '%s\n' 'nasadmin-vm-password' >"$wizard_secret_dir/nasadmin"
 chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
 wizard_admin='{"username":"nasadmin","name":"NAS Administrator","email":"nasadmin@nas-test.local","password":"nasadmin-vm-password"}'
 stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" --argjson administrator "$wizard_admin" \
-  --rawfile keepass "$wizard_secret_dir/keepass" \
+  --arg keepass "$KEEPASS_PASSWORD" \
   '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
