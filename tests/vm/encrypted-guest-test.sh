@@ -85,7 +85,7 @@ nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 # the loopback setup API that the Cockpit First start page posts to. The
 # encrypted leg has no browser, so it exercises the same validation and
 # job-submission path directly.
-setup_api="http://[IP_ADDRESS]:8980/setup/api"
+setup_api="http://127.0.0.1:8980/setup/api"
 first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
 if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
   printf '%s\n' "$first_start_plan" >&2
