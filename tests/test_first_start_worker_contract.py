@@ -17,11 +17,12 @@ class FirstStartWorkerContractTests(unittest.TestCase):
 
     def test_transient_worker_gets_required_provisioning_access(self) -> None:
         policy = WORKER_POLICY.read_text(encoding="utf-8")
-        self.assertIn("nas-first-start-.service.d/20-setup-access.conf", policy)
-        self.assertIn("PrivateDevices=no", policy)
-        self.assertIn("ProtectHome=no", policy)
-        self.assertIn("ProtectSystem=yes", policy)
-        self.assertIn("ReadWritePaths=", policy)
+        self.assertIn('systemd.services."nas-first-start-"', policy)
+        self.assertIn('overrideStrategy = "asDropin";', policy)
+        self.assertIn("PrivateDevices = false;", policy)
+        self.assertIn("ProtectHome = false;", policy)
+        self.assertIn('ProtectSystem = "yes";', policy)
+        self.assertNotIn("environment.etc", policy)
 
     def test_worker_keeps_non_conflicting_hardening(self) -> None:
         api = COCKPIT_API.read_text(encoding="utf-8")
