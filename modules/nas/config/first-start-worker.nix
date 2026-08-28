@@ -7,16 +7,23 @@
   # the short-lived provisioning worker the host access its reviewed setup
   # transaction requires.
   #
+  # Define the prefix override through NixOS' systemd unit machinery instead of
+  # environment.etc. /etc/systemd/system is assembled from the generated
+  # system-units derivation, so trying to create a nested drop-in directory
+  # there from etc.drv collides with the store-backed systemd tree.
+  #
   # The worker creates the selected local administrator, initializes runtime
-  # secrets, and may create ZFS on an explicitly confirmed block device. The
-  # transient launcher keeps NoNewPrivileges=yes and PrivateTmp=yes; this
-  # drop-in only restores /dev, /home, /etc, /var, and /run access needed by
-  # those provisioning operations while /usr and /boot remain read-only.
-  environment.etc."systemd/system/nas-first-start-.service.d/20-setup-access.conf".text = ''
-    [Service]
-    PrivateDevices=no
-    ProtectHome=no
-    ProtectSystem=yes
-    ReadWritePaths=
-  '';
+  # secrets, and may create ZFS on an explicitly confirmed block device. Keep
+  # NoNewPrivileges and PrivateTmp from the transient launcher while restoring
+  # the host access required by those provisioning operations. ProtectSystem
+  # remains enabled, keeping /usr and /boot read-only while /etc and /var are
+  # writable for the first-start transaction.
+  systemd.services."nas-first-start-" = {
+    overrideStrategy = "asDropin";
+    serviceConfig = {
+      PrivateDevices = false;
+      ProtectHome = false;
+      ProtectSystem = "yes";
+    };
+  };
 }
