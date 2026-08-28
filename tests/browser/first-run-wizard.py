@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Complete appliance first start through the GUI bootstrap system.
 
-Drives the Cockpit First start page (behind the Authentik gate) exactly as an
+Drives the standalone First start wizard (behind the Authentik gate) exactly as an
 operator would: sign in with the documented bootstrap identity, review the
 prepared plan, submit the KeePassXC password plus administrator details, and
 wait for the submitted first-start job to finish. The resulting job document
@@ -245,6 +245,10 @@ def wait_for_job(driver: webdriver.Chrome, timeout_seconds: int) -> dict[str, An
             match = re.search(r"Setup job ([A-Za-z0-9._-]+):", body)
             if match:
                 job_id = match.group(1)
+            danger_alerts = driver.find_elements(By.CSS_SELECTOR, ".pf-v6-c-alert.pf-m-danger")
+            errors = [alert.text.strip() for alert in danger_alerts if alert.is_displayed() and alert.text.strip()]
+            if errors:
+                raise RuntimeError(f"first-start submission failed: {' | '.join(errors)}")
         if not job_id:
             time.sleep(2)
             continue

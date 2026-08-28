@@ -206,6 +206,7 @@ class ContractTests(unittest.TestCase):
         update = text("scripts/update-nas.sh")
         package = text("pyproject.toml")
         self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
+        self.assertIn('"d /run/nas-first-start 0700 root root -"', system)
         self.assertIn("users.groups.nas-operations", identities)
         self.assertIn('extraGroups = [ "copyparty" ]', identities)
         self.assertIn('nas-operation-run = "nas_operation_lock:main"', package)

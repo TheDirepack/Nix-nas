@@ -110,7 +110,12 @@ class Alpha20CockpitContracts(unittest.TestCase):
         start = application.index("systemd.services.nas-setup-api = {")
         end = application.index("};", start)
         block = application[start:end]
-        for path in ("/var/lib/nas-setup", "/var/lib/nas-first-start"):
+        for path in (
+            "/var/lib/nas-setup",
+            "/var/lib/nas-first-start",
+            "/run/nas-first-start",
+            "/run/nas-operations",
+        ):
             self.assertIn(f'"{path}"', block)
 
     def test_cockpit_python_bridge_patch_targets_installed_module(self) -> None:
