@@ -114,6 +114,8 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("nas-vm-guest-test /dev/vdb", guest_suite)
         self.assertIn("args.keepass_password_file", first_run_browser)
         self.assertNotIn("args.kee_pass_password_file", first_run_browser)
+        self.assertIn("def search_roots", first_run_browser)
+        self.assertIn("child.shadow_root", first_run_browser)
         self.assertIn(
             "export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json",
             VM_COMMON.read_text(encoding="utf-8"),

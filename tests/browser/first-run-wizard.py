@@ -18,6 +18,7 @@ import ssl
 import stat
 import sys
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from selenium import webdriver
@@ -71,12 +72,28 @@ def read_secret(path: str) -> str:
     return value
 
 
+def search_roots(driver: webdriver.Chrome) -> Iterator[Any]:
+    roots: list[Any] = [driver]
+    for root in roots:
+        yield root
+        try:
+            children = root.find_elements(By.CSS_SELECTOR, "*")
+        except WebDriverException:
+            continue
+        for child in children:
+            try:
+                roots.append(child.shadow_root)
+            except WebDriverException:
+                continue
+
+
 def first(driver: webdriver.Chrome, selectors: list[str]) -> Any:
-    for selector in selectors:
-        elements = driver.find_elements(By.CSS_SELECTOR, selector)
-        for element in elements:
-            if element.is_displayed() and element.is_enabled():
-                return element
+    for root in search_roots(driver):
+        for selector in selectors:
+            elements = root.find_elements(By.CSS_SELECTOR, selector)
+            for element in elements:
+                if element.is_displayed() and element.is_enabled():
+                    return element
     return None
 
 
