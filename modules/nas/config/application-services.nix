@@ -217,7 +217,13 @@ in
         ProtectHome = true;
         # Loopback bind only; Caddy forward-auth gates every external request.
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
-        ReadWritePaths = [ "/var/lib/nas-setup" ];
+        # prepare-first-start publishes the reviewable plan status for the
+        # wizard from this unit, so the first-start state directory must be
+        # writable alongside the setup state.
+        ReadWritePaths = [
+          "/var/lib/nas-setup"
+          "/var/lib/nas-first-start"
+        ];
       };
     };
 
