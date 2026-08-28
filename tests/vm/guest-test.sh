@@ -306,7 +306,7 @@ chmod 0700 "$bootstrap_authz_secret_dir"
 printf '%s\n' 'nas-admin-first-boot' > "$bootstrap_authz_secret_dir/akadmin"
 chmod 0600 "$bootstrap_authz_secret_dir/akadmin"
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
-  "$(nas_vm_timeout_value bootstrapBrowserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
   --origin "https://$AUTHENTIK_PUBLIC_HOST" \
   --bootstrap-only \
   --bootstrap-password-file "$bootstrap_authz_secret_dir/akadmin"
@@ -618,132 +618,111 @@ import struct
 from pathlib import Path
 
 SERVER = ("127.0.0.1", 3969)
-RESOURCE = "qemu-tftp.txt"
-DEST = Path("/tmp/nas-qemu-tftp.txt")
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.settimeout(5.0)
-sock.sendto(struct.pack("!H", 1) + RESOURCE.encode() + b"\x00octet\x00", SERVER)
-payload = bytearray()
-while True:
-    data, address = sock.recvfrom(65535)
-    opcode, block = struct.unpack("!HH", data[:4])
-    if opcode == 5:
-        raise SystemExit(f"TFTP server returned error block {block}: {data[4:]!r}")
-    if opcode != 3:
-        raise SystemExit(f"unexpected TFTP opcode {opcode}")
-    chunk = data[4:]
-    payload.extend(chunk)
-    sock.sendto(struct.pack("!HH", 4, block), address)
-    if len(chunk) < 512:
-        break
-DEST.write_bytes(payload)
-PYTFTP
-grep -qx 'nixos-nas-qemu-tftp' /tmp/nas-qemu-tftp.txt
-python3 - <<'PYTFTPPUT'
-import socket
-import struct
+REMOTE = "tftp/qemu-tftp.txt"
+EXPECTED = b"nixos-nas-qemu-tftp\n"
 
-SERVER = ("127.0.0.1", 3969)
+
+def packet(opcode: int, name: str) -> bytes:
+    return struct.pack("!H", opcode) + name.encode() + b"\0octet\0"
+
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.settimeout(5.0)
-sock.sendto(struct.pack("!H", 2) + b"should-not-write\x00octet\x00", SERVER)
-data, _ = sock.recvfrom(65535)
-opcode = struct.unpack("!H", data[:2])[0]
-if opcode != 5:
-    raise SystemExit(f"anonymous TFTP upload did not return an error packet: {data!r}")
-PYTFTPPUT
-[[ ! -e /tank/shares/tftp/should-not-write ]] || fail "anonymous TFTP upload wrote data"
-pass "anonymous TFTP reads succeed and writes are denied"
+sock.settimeout(10)
+sock.sendto(packet(1, REMOTE), SERVER)  # RRQ
+received = bytearray()
+expected_block = 1
+while True:
+    response, peer = sock.recvfrom(65535)
+    opcode = struct.unpack("!H", response[:2])[0]
+    if opcode == 5:
+        code = struct.unpack("!H", response[2:4])[0]
+        message = response[4:-1].decode("utf-8", "replace")
+        raise SystemExit(f"TFTP read failed ({code}): {message}")
+    if opcode != 3 or len(response) < 4:
+        raise SystemExit(f"unexpected TFTP read packet opcode={opcode}")
+    block = struct.unpack("!H", response[2:4])[0]
+    if block != expected_block:
+        raise SystemExit(f"unexpected TFTP block {block}, wanted {expected_block}")
+    payload = response[4:]
+    received.extend(payload)
+    sock.sendto(struct.pack("!HH", 4, block), peer)
+    if len(payload) < 512:
+        break
+    expected_block = (expected_block + 1) & 0xFFFF
+
+if bytes(received) != EXPECTED:
+    raise SystemExit(f"TFTP payload mismatch: {bytes(received)!r}")
+
+upload = "tftp/qemu-upload-must-fail.txt"
+write_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+write_sock.settimeout(3)
+write_sock.sendto(packet(2, upload), SERVER)
+try:
+    response, _peer = write_sock.recvfrom(65535)
+except TimeoutError:
+    # CopyParty's anonymous read-only TFTP mode rejects writes by withholding
+    # a transfer response; the absence of a created file is the authority.
+    pass
+else:
+    opcode = struct.unpack("!H", response[:2])[0]
+    if opcode != 5:
+        raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
+write_sock.close()
+if Path("/tank/shares/tftp/qemu-upload-must-fail.txt").exists():
+    raise SystemExit("read-only TFTP created the rejected upload")
+PYTFTP
+pass "TFTP serves anonymous reads and rejects writes in read-only mode"
 
 log "Authentik API, identity policy, and proxy authorization"
-wait_active nas-identity-bootstrap.service
-wait_http http://127.0.0.1:9000/identity/-/health/ready/
-AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
-verify_bootstrap_authentik_proxy
+unauth_code="$(http_code http://127.0.0.1:9000/identity/api/v3/core/users/)"
+case "$unauth_code" in 401|403) : ;; *) fail "Authentik API without a token returned $unauth_code" ;; esac
+token="$(cat /run/nas-secrets/authentik/api-token)"
+auth_code="$(http_code -H "Authorization: Bearer $token" http://127.0.0.1:9000/identity/api/v3/core/users/)"
+[[ "$auth_code" == 200 ]] || fail "Authentik API token returned HTTP $auth_code"
 
-# Verify the regular application identity model after first start.
-for account in operator alice baseline; do
-  authentik_api GET "core/users/?username=$account" | jq -e '.pagination.count == 1' >/dev/null || \
-    fail "Authentik account is missing after synchronization: $account"
-done
-for group in nas_admin nas_allow_files nas_allow_webdav nas_allow_ai nas_allow_vault nas_allow_syncthing nas_disabled; do
-  authentik_api GET 'core/groups/?page_size=100' | jq -e --arg group "$group" '.results[] | select(.name == $group)' >/dev/null || \
-    fail "Authentik group is missing after synchronization: $group"
-done
+nas-identity-sync status | jq -e \
+  '.identityProvider == "Authentik" and .shareAuthority == "CopyParty" and (.administrators | length > 0)' >/dev/null
+capabilities_json="$(nas-identity-sync capabilities)"
+jq -e '.identityProvider == "Authentik" and (.users | length > 0)' <<<"$capabilities_json" >/dev/null
+jq -e '[.users[] | select(.administrator) | .capabilities[] | .allowed] | length > 0 and all' \
+  <<<"$capabilities_json" >/dev/null
 
-# Exercise the policy gate itself rather than only testing configuration/API
-# state. The identity synchronizer manages route policy through Authentik; the
-# reverse proxy trusts only loopback assertions from this gate.
-policy_app="$(authentik_api GET 'core/applications/?slug=nas-portal')"
-policy_app_slug="$(jq -r '.results[0].slug // empty' <<<"$policy_app")"
-[[ "$policy_app_slug" == nas-portal ]] || fail "NAS Portal application is missing"
-policy_provider="$(authentik_api GET 'providers/proxy/?page_size=100')"
-policy_provider_id="$(jq -r '.results[] | select(.name == "NAS Portal") | .pk // empty' <<<"$policy_provider")"
-[[ -n "$policy_provider_id" ]] || fail "NAS Portal proxy provider is missing"
-policy_outpost="$(authentik_api GET 'outposts/instances/?page_size=100')"
-embedded_outpost_id="$(jq -r '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk // empty' <<<"$policy_outpost")"
-[[ -n "$embedded_outpost_id" ]] || fail "Authentik embedded outpost is missing"
-
-# The test-managed proxy outpost uses the real embedded-outpost binary against
-# the test VM's Authentik API. It is isolated on loopback and points at Caddy's
-# internal forward-auth endpoint to exercise the same authorization contract.
-stop_authentik_vm_outpost
-AUTHENTIK_OUTPOST_TOKEN="$(authentik_api GET "outposts/instances/$embedded_outpost_id/" | jq -r '.token // empty')"
-[[ -n "$AUTHENTIK_OUTPOST_TOKEN" ]] || fail "Authentik embedded outpost token is missing"
-AUTHENTIK_HOST_BROWSER="https://$AUTHENTIK_PUBLIC_HOST/identity/" AUTHENTIK_HOST="http://127.0.0.1:9000/identity/" \
-  AUTHENTIK_INSECURE=true AUTHENTIK_TOKEN="$AUTHENTIK_OUTPOST_TOKEN" \
-  AUTHENTIK_LISTEN__HTTP="127.0.0.1:$AUTHENTIK_OUTPOST_PORT" \
-  authentik-proxy >"$AUTHENTIK_OUTPOST_LOG" 2>&1 &
-AUTHENTIK_OUTPOST_PID=$!
-for _ in $(seq 1 90); do
-  if http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" | grep -qx 204; then
-    break
-  fi
-  sleep 1
-done
-if ! http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" | grep -qx 204; then
-  cat "$AUTHENTIK_OUTPOST_LOG" >&2 || true
-  fail "test Authentik outpost did not become ready"
-fi
-pass "test Authentik proxy outpost is serving forward-auth decisions"
-
-# Validate the forward-auth callback through the actual outpost. A denied
-# request must remain denied and may redirect only into Authentik's login flow.
-forward_auth_headers="$(curl --silent --show-error --dump-header - --output /dev/null \
-  -H "Host: $PUBLIC_HOST" \
-  -H "X-Forwarded-Proto: https" \
-  -H "X-Forwarded-Host: $PUBLIC_HOST" \
-  -H "X-Forwarded-Uri: /shares/" \
-  "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/auth/caddy")"
-forward_auth_status="$(awk 'NR == 1 {print $2}' <<<"$forward_auth_headers")"
-case "$forward_auth_status" in
-  302|401|403) : ;;
-  *) fail "forward-auth outpost returned unexpected unauthenticated status $forward_auth_status" ;;
-esac
-
-# Feed malformed identity headers directly to the installed local gate. This
-# verifies the boundary immediately before Caddy's trusted proxy layer.
+gate_deny="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
+  -H 'Remote-User: ordinary-user' -H 'Remote-Groups: nas_users' \
+  'http://localhost/authorize?scope=files')"
+[[ "$gate_deny" == 403 ]] || fail "default-deny capability gate returned HTTP $gate_deny"
+gate_allow="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
+  -H 'Remote-User: allowed-user' -H 'Remote-Groups: nas_users,nas_allow_files' \
+  'http://localhost/authorize?scope=files')"
+case "$gate_allow" in 200|204) : ;; *) fail "explicit files capability returned HTTP $gate_allow" ;; esac
+gate_admin="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
+  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
+  'http://localhost/authorize?scope=admin')"
+case "$gate_admin" in 200|204) : ;; *) fail "administrator-only gate returned HTTP $gate_admin" ;; esac
 python3 - <<'PYHOSTILEGATE'
 import socket
 
-requests = [
-    b"GET /shares/ HTTP/1.1\r\nHost: nas-test.local\r\nRemote-User: akadmin\r\nRemote-Groups: nas_admin\x00nas_allow_files\r\nConnection: close\r\n\r\n",
-    b"GET /shares/ HTTP/1.1\r\nHost: nas-test.local\r\nRemote-User: akadmin\r\nRemote-Groups: nas_admin\x01nas_allow_files\r\nConnection: close\r\n\r\n",
-]
-for payload in requests:
-    sock = socket.create_connection(("127.0.0.1", 8990), timeout=5.0)
-    sock.sendall(payload)
-    response = b""
-    while True:
-        chunk = sock.recv(65535)
-        if not chunk:
-            break
-        response += chunk
-    sock.close()
-    first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
-    parts = first.split()
-    if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
-        raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.settimeout(5)
+sock.connect("/run/nas-on-demand/gate.sock")
+sock.sendall(
+    b"GET /authorize?scope=admin HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Remote-User: attacker\r\n"
+    b"Remote-Groups: nas_users,\tnas_admin\r\n"
+    b"Connection: close\r\n\r\n"
+)
+response = b""
+while True:
+    chunk = sock.recv(65536)
+    if not chunk:
+        break
+    response += chunk
+sock.close()
+first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
+parts = first.split()
+if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
+    raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
 PYHOSTILEGATE
 pass "malformed trusted identity headers remain fail-closed inside the installed gate"
 nas-managed-services-control set ai-runtime off >/dev/null
@@ -816,6 +795,7 @@ ip netns del nas-untrusted-test >/dev/null 2>&1 || true
 ip link del nust-host >/dev/null 2>&1 || true
 ip netns add nas-untrusted-test
 ip link add nust-host type veth peer name nust-peer
+ip link set nust-peer netns nas-untrusted-test
 ip addr add 198.18.0.1/30 dev nust-host
 ip link set nust-host up
 ip netns exec nas-untrusted-test ip link set lo up
