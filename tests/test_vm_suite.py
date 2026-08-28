@@ -121,6 +121,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn('send("#wizard-keepass-password-confirm"', first_run_browser)
         self.assertIn('click_button("Run setup")', first_run_browser)
         self.assertIn(".pf-v6-c-alert.pf-m-danger", first_run_browser)
+        self.assertIn("--host-resolver-rules=MAP nas-test.local", first_run_browser)
         self.assertNotIn("#first-start-", first_run_browser)
         self.assertIn(
             "export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json",

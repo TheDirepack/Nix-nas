@@ -38,13 +38,17 @@ def browser() -> webdriver.Chrome:
         raise RuntimeError("The VM browser suite requires packaged chromium and chromedriver binaries")
     options.binary_location = chromium
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
-    for argument in [
+    arguments = [
         "--headless=new",
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--ignore-certificate-errors",
         "--window-size=1280,900",
-    ]:
+    ]
+    browser_address = os.environ.get("NAS_BROWSER_HOST_ADDRESS", "").strip()
+    if browser_address:
+        arguments.append(f"--host-resolver-rules=MAP nas-test.local {browser_address}")
+    for argument in arguments:
         options.add_argument(argument)
     return webdriver.Chrome(service=Service(executable_path=chromedriver), options=options)
 
