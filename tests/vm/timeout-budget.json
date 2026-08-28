@@ -5,8 +5,7 @@
   "timeouts": {
     "secretActivation": 600,
     "firstRun": 1200,
-    "bootstrapBrowserAuthorization": 900,
-    "browserAuthorization": 300,
+    "browserAuthorization": 900,
     "deterministicBundle": 300,
     "encryptedGuest": 1800,
     "secretAdversarial": 900,
@@ -26,7 +25,7 @@
     "slack": 900
   },
   "phases": [
-    {"id": "locked-state", "label": "Locked-state and configuration checks", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": ["bootstrapBrowserAuthorization"]},
+    {"id": "locked-state", "label": "Locked-state and configuration checks", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": ["browserAuthorization"]},
     {"id": "first-run", "label": "Run the complete first-time setup GUI", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": ["firstRun"]},
     {"id": "adversarial", "label": "Adversarial command, SQL-like input, and HTTP validation", "ordinaryWaits": 1, "fixedSeconds": 0, "timeoutKeys": []},
     {"id": "rollback", "label": "Cockpit ZFS rollback wrapper", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": []},
