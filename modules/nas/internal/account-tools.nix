@@ -76,7 +76,7 @@ nasSetup = pkgs.writeShellApplication {
     runtimeInputs = [
       pkgs.coreutils
       pkgs.keepassxc
-      pkgs.pythonD
+      pkgs.python3
       pkgs.shadow
       pkgs.systemd
       pkgs.util-linux
