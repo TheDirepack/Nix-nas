@@ -245,7 +245,14 @@ def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password
 def callback_return_matches(expected_path: str, returned_path: str) -> bool:
     """Allow the portal's canonical trailing-slash redirect after login."""
     canonical_path = expected_path if expected_path.endswith("/") else expected_path + "/"
-    return returned_path in {expected_path, canonical_path}
+    if returned_path in {expected_path, canonical_path}:
+        return True
+    # Cockpit redirects an authenticated console visit to its default page
+    # inside the console subtree; the gate still returned the user to the
+    # requested application.
+    if canonical_path == "/console/" and returned_path.startswith("/console/"):
+        return True
+    return False
 
 
 def verify_callback_return_paths(origin: str, username: str, password: str, paths: list[str]) -> None:

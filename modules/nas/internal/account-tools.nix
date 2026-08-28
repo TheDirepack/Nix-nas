@@ -414,6 +414,10 @@ let
       export NAS_IDENTITY_URL=${lib.escapeShellArg cfg.identity.authentikPath}
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
+      # runtimeInputs also carries the unwrapped console Python application
+      # whose bin/nas-setup shadows the appliance wrapper; point subprocesses
+      # at the wrapper explicitly so first-start jobs get the real environment.
+      export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup
       exec ${nasCockpitApiScript} "$@"
     '';
   };
