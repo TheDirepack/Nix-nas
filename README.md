@@ -12,27 +12,15 @@ NixOS NAS is a NixOS-based NAS appliance that keeps storage, identity, secrets, 
 - Optional Syncthing, Vaultwarden, virtualization, local AI, and a VictoriaMetrics/Telegraf observability stack.
 - Recovery-first design: a cold-boot Cockpit/PAM recovery plane, `nas-state` export/restore for appliance state, and Restic for backups.
 
+## Release status
+
+> **Release status:** 0.1.0 is a source-only development artifact. It is not an install-ready appliance image until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified; see [`docs/development/release-checklist.md`](docs/development/release-checklist.md).
+
 Every successfully qualified pull-request merge to `main` produces a separate, tagged source-only GitHub Release. The release workflow starts only after the full main-branch CI run succeeds, requires the CI source to be the pull request's exact recorded merge result, and preserves main's first-parent release order before publication; direct pushes are not automatically published. The development tree keeps the fixed `akadmin / nas-admin-first-boot` credential for repeatable testing, while the tagged release commit receives a five-word Diceware bootstrap password whose matching username/password are published in that release's notes. The generated release commit is never pushed back onto `main`, CI does not trigger on release tags, and the release workflow does not trigger on push/tag events, so publication cannot recurse into another release cycle. See [`docs/development/automated-releases.md`](docs/development/automated-releases.md) for the exact qualification, ordering, versioning, credential, retry, and publication behavior.
 
 **Version note:** `0.1.0` is the NixOS NAS project/release version. The `system.stateVersion = "26.05"` value in `local.nix` is the NixOS compatibility baseline for stateful module defaults; it is not the project version and must not be changed merely to match a project release.
 
-## First installation
-
-1. Replace `hardware-configuration.nix` with reviewed output from the target machine. The committed placeholder now rejects `nas.installationReady = true`.
-2. Review `local.nix` and complete the installation checklist in [`docs/src/admin/configuration.md`](docs/src/admin/configuration.md). Before marking the host installation-ready, configure either an administrator SSH key or verify and explicitly attest a working local-console/hardware-KVM recovery path.
-3. Decide whether the managed ZFS dataset will use native encryption. If encryption stays disabled, the configuration emits a prominent warning and `installationReady` requires the explicit `nas.zfsEncryption.acknowledgeUnencrypted = true` acknowledgement.
-4. Copy `setup/first-run.example.json` to the configured first-run path and fill in the initial accounts, storage plan, and feature policy.
-5. Run the fast source checks:
-
-## Release status
-
-Version 0.1.0 is a source-only development artifact. It is not an install-ready appliance image until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified; see [`docs/development/release-checklist.md`](docs/development/release-checklist.md).
-
 ## Getting started
-
-6. Build or install the NixOS configuration. `nas-first-start.service` validates the first-start plan automatically.
-7. Open Cockpit at `https://<host>.local:9092/console/`. The NAS page guides first-start setup and, after reboot, locked-state unlock.
-8. Confirm any new-pool operation separately. Storage creation is intentionally never hidden behind a generic setup confirmation.
 
 You should be comfortable with Linux administration; NixOS basics help but are explained as they come up.
 
@@ -79,7 +67,6 @@ Keep an offline copy of the recovery material listed in [`docs/operator/recovery
 - **Contributor guide:** [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and quality gates.
 - **Agent handoff:** [`AGENTS.md`](AGENTS.md) — compact reading order for coding agents; operator procedures do not depend on it.
 - **Development internals:** [`docs/development/`](docs/development/README.md) — architecture, tests, risks, and validation evidence.
-- **Agent handoff:** [`AGENTS.md`](AGENTS.md) — compact reading order for coding agents.
 
 ## Development and validation
 

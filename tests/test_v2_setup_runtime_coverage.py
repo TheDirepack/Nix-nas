@@ -286,11 +286,17 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             root = pathlib.Path(raw)
             database = root / "NAS.kdbx"
             database.write_text("x", encoding="utf-8")
-            with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_admin") as admin:
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "run_root") as root_run,
+                mock.patch.object(setup, "run_admin") as admin,
+            ):
                 self.assertEqual(setup.verify_or_create_database("pw", False), "existing")
+            self.assertIn("nasadmin", root_run.call_args.args[0])
             self.assertIn("db-info", admin.call_args.args[0])
             database.unlink()
-            with mock.patch.object(setup, "KEEPASS_DATABASE", database):
+            with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_root"):
                 with self.assertRaisesRegex(setup.SetupError, "does not exist"):
                     setup.verify_or_create_database("pw", False)
 

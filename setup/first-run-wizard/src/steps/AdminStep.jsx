@@ -20,13 +20,20 @@ const AdminStep = ({
         plane. Use a unique username and a strong password that you can store safely.
       </p>
       <FormGroup label="Username" fieldId="wizard-admin-username" isRequired>
-        <TextInput id="wizard-admin-username" value={administrator.username} onChange={update('username')} />
+        <TextInput
+          id="wizard-admin-username"
+          value={administrator.username}
+          onChange={update('username')}
+          autoComplete="username"
+          maxLength={32}
+          pattern="[a-z_][a-z0-9_-]{0,31}"
+        />
         <HelperText>
           <HelperTextItem>Use lowercase letters, numbers, underscores, or hyphens. This name is used for sign-in.</HelperTextItem>
         </HelperText>
       </FormGroup>
       <FormGroup label="Full name" fieldId="wizard-admin-name" isRequired>
-        <TextInput id="wizard-admin-name" value={administrator.name} onChange={update('name')} />
+        <TextInput id="wizard-admin-name" value={administrator.name} onChange={update('name')} maxLength={256} />
         <HelperText>
           <HelperTextItem>Shown in Authentik and in operator-facing audit messages.</HelperTextItem>
         </HelperText>
@@ -37,6 +44,8 @@ const AdminStep = ({
           type="email"
           value={administrator.email}
           onChange={update('email')}
+          autoComplete="email"
+          maxLength={320}
         />
         <HelperText>
           <HelperTextItem>Used for account recovery and notifications; it is not displayed publicly.</HelperTextItem>
@@ -48,6 +57,8 @@ const AdminStep = ({
           type="password"
           value={administrator.password}
           onChange={update('password')}
+          autoComplete="new-password"
+          minLength={12}
         />
         <HelperText>
           <HelperTextItem>Use at least 12 characters and avoid reusing a password from another service.</HelperTextItem>
@@ -59,6 +70,8 @@ const AdminStep = ({
           type="password"
           value={administrator.confirm}
           onChange={update('confirm')}
+          autoComplete="new-password"
+          minLength={12}
         />
       </FormGroup>
       <Checkbox
@@ -78,6 +91,7 @@ const AdminStep = ({
               type="password"
               value={keePassPassword}
               onChange={(_event, value) => onKeePassPassword(value)}
+              autoComplete="new-password"
             />
           </FormGroup>
           <FormGroup
@@ -90,6 +104,7 @@ const AdminStep = ({
               type="password"
               value={keePassPasswordConfirm}
               onChange={(_event, value) => onKeePassPasswordConfirm(value)}
+              autoComplete="new-password"
             />
           </FormGroup>
         </>
