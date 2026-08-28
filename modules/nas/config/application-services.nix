@@ -215,14 +215,18 @@ in
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
+        RuntimeDirectory = "nas-first-start";
+        RuntimeDirectoryMode = "0700";
         # Loopback bind only; Caddy forward-auth gates every external request.
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
         # prepare-first-start publishes the reviewable plan status for the
-        # wizard from this unit, so the first-start state directory must be
-        # writable alongside the setup state.
+        # wizard from this unit. Submission additionally performs the shared
+        # operation admission check and stages private worker inputs in /run.
         ReadWritePaths = [
           "/var/lib/nas-setup"
           "/var/lib/nas-first-start"
+          "/run/nas-operations"
+          "/run/nas-first-start"
         ];
       };
     };
