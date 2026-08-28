@@ -85,6 +85,16 @@ Pure Cockpit API and view-model behavior has direct Node coverage. JSX component
 - `scripts/validate-structure.py`: generic repository shape/version checks.
 - `scripts/validate-repository-data.py`: JSON/TOML/schema checks.
 - `tests/test_contract_*.py`: cross-file architecture and security contracts.
-- `tests/test_browser_authz.py`, `tests/browser/authz.py`, `tests/vm/guest-test.sh`: browser authorization, no-direct-Cockpit, and locked-boot recovery checks.
+- `tests/test_browser_authz.py`, `tests/browser/authz.py`, `tests/browser/first-run-wizard.py`, `tests/vm/guest-test.sh`: browser authorization, no-direct-Cockpit, GUI first-start, and locked-boot recovery checks.
 - `tests/test_v2_*.py`: V3 compiler, adapter, reconciliation, resource, session, and authority contracts.
 - `scripts/qemu-test.sh`: native NixOS tests and full ISO install/reboot test.
+
+## Top-level data and specification directories
+
+- `schemas/`: cross-process JSON schemas; `managed-services-v3.schema.json` is the V2 structural contract installed at `/etc/nas-control/`.
+- `spec/managed-services/`: the consolidated Managed Services V2 specification (README authority, examples, and the mirrored schema copy kept byte-identical by `test_v2_reference.py`).
+- `authentik/blueprints/`: repository-owned Authentik blueprints layered into the immutable runtime blueprint bundle.
+- `policy/mkforce-allowlist.json`: the reviewed `lib.mkForce` allowlist validated by preflight.
+- `installation/`: operator-facing disk-formatting examples (Disko) and pool layout guidance.
+- `setup/`: first-run configuration examples plus the committed first-run wizard bundle (`setup/first-run-wizard/`).
+- `web/portal/`: static Caddy templates for the launcher and locked-boot setup page.

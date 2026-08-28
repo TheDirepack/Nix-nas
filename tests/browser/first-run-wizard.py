@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import ssl
+import stat
 import sys
 import time
 from typing import Any
@@ -46,10 +48,26 @@ def browser() -> webdriver.Chrome:
 
 
 def read_secret(path: str) -> str:
-    with open(path, encoding="utf-8") as handle:
-        value = handle.read().strip()
-    if not value:
-        raise RuntimeError(f"secret file is empty: {path}")
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"Password path is not a regular file: {path}")
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise ValueError(f"Password file is group/world accessible: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8", closefd=False) as handle:
+            value = handle.read(4098)
+    finally:
+        os.close(descriptor)
+    if len(value.encode("utf-8")) > 4097:
+        raise ValueError(f"Password file is too large: {path}")
+    if value.endswith("\n"):
+        value = value[:-1]
+    if not value or "\n" in value or "\r" in value or "\x00" in value:
+        raise ValueError(f"Invalid one-line password file: {path}")
     return value
 
 
