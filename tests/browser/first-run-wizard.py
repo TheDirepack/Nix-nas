@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import ssl
 import stat
@@ -177,9 +178,9 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
 
 
 def open_setup_page(driver: webdriver.Chrome, origin: str) -> WebDriverWait:
-    driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html#/setup")
+    driver.get(origin.rstrip("/") + "/setup/")
     wait = WebDriverWait(driver, 60)
-    wait.until(lambda current: first(current, ["#first-start-keepass-password"]))
+    wait.until(lambda current: first(current, ["#wizard-admin-username"]))
     return wait
 
 
@@ -187,7 +188,7 @@ def fill_wizard(
     driver: webdriver.Chrome,
     wait: WebDriverWait,
     args: argparse.Namespace,
-    kee_pass_password: str,
+    keepass_password: str,
     admin_password: str,
 ) -> None:
     def send(selector: str, value: str) -> None:
@@ -195,52 +196,76 @@ def fill_wizard(
         element.clear()
         element.send_keys(value)
 
-    send("#first-start-keepass-password", kee_pass_password)
-    send("#first-start-administrator-username", args.admin_username)
-    send("#first-start-administrator-name", args.admin_name)
-    send("#first-start-administrator-email", args.admin_email)
-    send("#first-start-administrator-password", admin_password)
+    def click_button(label: str) -> None:
+        button = wait.until(
+            lambda current: next(
+                (
+                    element
+                    for root in search_roots(current)
+                    for element in root.find_elements(By.CSS_SELECTOR, "button")
+                    if element.is_displayed() and element.is_enabled() and element.text.strip() == label
+                ),
+                None,
+            )
+        )
+        button.click()
 
+    send("#wizard-admin-username", args.admin_username)
+    send("#wizard-admin-name", args.admin_name)
+    send("#wizard-admin-email", args.admin_email)
+    send("#wizard-admin-password", admin_password)
+    send("#wizard-admin-password-confirm", admin_password)
+
+    same_password = wait.until(lambda current: first(current, ["#wizard-keepass-same"]))
+    if same_password.is_selected():
+        same_password.click()
+    send("#wizard-keepass-password", keepass_password)
+    send("#wizard-keepass-password-confirm", keepass_password)
+    click_button("Next")
+
+    devices = wait.until(lambda current: first(current, ["#wizard-plan-devices"]))
     for device in args.device:
-        checkbox = wait.until(lambda current: first(current, [f'input[id="first-start-device-{device}"]']))
-        if not checkbox.is_selected():
-            checkbox.click()
+        if device not in devices.text:
+            raise RuntimeError(f"first-start storage plan does not contain {device}: {devices.text}")
 
-    destructive = first(driver, ["#first-start-destructive"])
+    destructive = first(driver, ["#wizard-destructive"])
     if destructive is not None and not destructive.is_selected():
         destructive.click()
-
-    start_button = wait.until(
-        lambda current: next(
-            (
-                element
-                for element in current.find_elements(By.CSS_SELECTOR, "button")
-                if element.is_displayed() and element.is_enabled() and element.text.strip() == "Start"
-            ),
-            None,
-        ),
-    )
-    start_button.click()
+    click_button("Next")
+    click_button("Run setup")
 
 
 def wait_for_job(driver: webdriver.Chrome, timeout_seconds: int) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
-    last_text = ""
+    job_id = ""
+    last_job: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        try:
-            pre = driver.find_element(By.CSS_SELECTOR, "pre.nas-pre")
-            last_text = pre.text
-            job = json.loads(last_text)
-        except (WebDriverException, json.JSONDecodeError):
+        if not job_id:
+            body = driver.find_element(By.TAG_NAME, "body").text
+            match = re.search(r"Setup job ([A-Za-z0-9._-]+):", body)
+            if match:
+                job_id = match.group(1)
+        if not job_id:
             time.sleep(2)
             continue
-        status = job.get("status")
-        if status in {"complete", "failed"}:
-            return job
+        response = driver.execute_async_script(
+            """
+            const done = arguments[arguments.length - 1];
+            fetch(`api/first-start/job/${arguments[0]}`, {headers: {Accept: 'application/json'}})
+              .then(async (result) => done({ok: result.ok, status: result.status, value: await result.json()}))
+              .catch((error) => done({ok: false, status: 0, value: {error: String(error)}}));
+            """,
+            job_id,
+        )
+        if isinstance(response, dict) and response.get("ok") and isinstance(response.get("value"), dict):
+            last_job = response["value"]
+            if last_job.get("status") in {"complete", "complete-unverified", "failed"}:
+                return last_job
         time.sleep(2)
     details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
     raise RuntimeError(
-        f"first-start job did not finish within {timeout_seconds}s; last output: {last_text[-2000:]}\n{details}"
+        f"first-start job did not finish within {timeout_seconds}s; last output: "
+        f"{json.dumps(last_job)[-2000:]}\n{details}"
     )
 
 
