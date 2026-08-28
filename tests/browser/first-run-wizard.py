@@ -258,7 +258,7 @@ def main() -> int:
     args = parser.parse_args()
 
     bootstrap_password = read_secret(args.bootstrap_password_file)
-    kee_pass_password = read_secret(args.keepass_password_file)
+    keepass_password = read_secret(args.keepass_password_file)
     admin_password = read_secret(args.admin_password_file)
     ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -266,7 +266,7 @@ def main() -> int:
     try:
         login(driver, args.origin, "akadmin", bootstrap_password)
         wait = open_setup_page(driver, args.origin)
-        fill_wizard(driver, wait, args, kee_pass_password, admin_password)
+        fill_wizard(driver, wait, args, keepass_password, admin_password)
         job = wait_for_job(driver, args.job_timeout_seconds)
     except Exception:
         try:
