@@ -148,17 +148,13 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
                 )
                 self.assertGreater(int(budget), 0)
 
-    def test_bootstrap_browser_timeout_is_charged_to_locked_state(self) -> None:
+    def test_browser_timeout_is_charged_to_both_authorization_passes(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
-        self.assertIn("nas_vm_timeout_value bootstrapBrowserAuthorization", guest)
+        self.assertGreaterEqual(guest.count("nas_vm_timeout_value browserAuthorization"), 2)
         locked = next(phase for phase in self.manifest["phases"] if phase["id"] == "locked-state")
         browser = next(phase for phase in self.manifest["phases"] if phase["id"] == "browser")
-        self.assertIn("bootstrapBrowserAuthorization", locked["timeoutKeys"])
+        self.assertIn("browserAuthorization", locked["timeoutKeys"])
         self.assertIn("browserAuthorization", browser["timeoutKeys"])
-        self.assertNotEqual(
-            self.manifest["timeouts"]["bootstrapBrowserAuthorization"],
-            self.manifest["timeouts"]["browserAuthorization"],
-        )
 
     def test_real_phase_timeout_reports_the_failed_phase_and_outer_budget(self) -> None:
         scaled = json.loads(json.dumps(self.manifest))
