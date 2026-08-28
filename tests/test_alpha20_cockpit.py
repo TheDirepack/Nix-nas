@@ -100,6 +100,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
 
     def test_setup_api_can_publish_expected_first_start_status(self) -> None:
         application = text("modules/nas/config/application-services.nix")
+        account_tools = text("modules/nas/internal/account-tools.nix")
         start = application.index("systemd.services.nas-setup-api = {")
         end = application.index("};", start)
         block = application[start:end]
@@ -110,6 +111,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "/run/nas-operations",
         ):
             self.assertIn(f'"{path}"', block)
+        self.assertIn("export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup", account_tools)
 
     def test_cockpit_python_bridge_patch_targets_installed_module(self) -> None:
         application = text("modules/nas/config/application-services.nix")

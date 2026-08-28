@@ -432,7 +432,7 @@ def _start_first_start_unit(
         "--property=RuntimeDirectory=nas-secrets nas-secret-staging nas-secret-transactions",
         "--property=RuntimeDirectoryMode=0700",
         "--property=RuntimeDirectoryPreserve=yes",
-        "--property=ReadWritePaths=/var/lib/nas-setup /run/nas-secrets /run/nas-secret-staging /run/nas-secret-transactions /run/nas-operations /run/lock /run/nas-first-start",
+        "--property=ReadWritePaths=/var/lib/nas-setup /var/lib/nas-first-start /run/nas-secrets /run/nas-secret-staging /run/nas-secret-transactions /run/nas-operations /run/lock /run/nas-first-start",
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
