@@ -373,7 +373,10 @@ class ConfiguredAdministratorTests(unittest.TestCase):
                 {"username": "operator", "active": True, "groups": ["nas_admin"], "password": "operator-password"},
             ]
         }
-        self.assertEqual(setup.configured_administrator(plan)["username"], "operator")
+        administrator = setup.configured_administrator(plan)
+        self.assertIsNotNone(administrator)
+        assert administrator is not None
+        self.assertEqual(administrator["username"], "operator")
 
     def test_requires_one_passworded_admin_account(self) -> None:
         self.assertIsNone(setup.configured_administrator({"accounts": []}))

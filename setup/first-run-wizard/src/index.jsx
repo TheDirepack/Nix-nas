@@ -4,10 +4,10 @@ import "@patternfly/patternfly/patternfly.css";
 import "@patternfly/patternfly/patternfly-addons.css";
 import { Wizard, WizardStep } from '@patternfly/react-core';
 import './wizard.css';
-import LanguageStep, { DEFAULT_LANGUAGE, DEFAULT_TIMEZONE } from './steps/LanguageStep.jsx';
 import AdminStep from './steps/AdminStep.jsx';
 import StorageStep from './steps/StorageStep.jsx';
 import ConfirmStep from './steps/ConfirmStep.jsx';
+import { fetchJson } from './http.js';
 
 // @patternfly/react-core 6.1.0 builds wizard steps exclusively from
 // WizardStep children; the steps-array prop arrived in a later 6.x.
@@ -24,8 +24,6 @@ const readThemePreference = () => {
 };
 
 const App = () => {
-  const [language, setLanguage] = React.useState(DEFAULT_LANGUAGE);
-  const [timezone, setTimezone] = React.useState(DEFAULT_TIMEZONE);
   const [administrator, setAdministrator] = React.useState(emptyAdministrator);
   const [useSamePassword, setUseSamePassword] = React.useState(true);
   const [keePassPassword, setKeePassPassword] = React.useState('');
@@ -58,15 +56,10 @@ const App = () => {
     let cancelled = false;
     setPlan(null);
     setPlanError('');
-    fetch('api/first-start', { headers: { Accept: 'application/json' } })
-      .then((response) => response.json())
+    fetchJson('api/first-start', { headers: { Accept: 'application/json' } })
       .then((value) => {
         if (cancelled) return;
-        if (value.error) {
-          setPlanError(value.error);
-        } else {
-          setPlan(value);
-        }
+        setPlan(value);
       })
       .catch((reason) => {
         if (!cancelled) setPlanError(String(reason));
@@ -104,11 +97,9 @@ const App = () => {
           className="nas-setup-wizard"
           navAriaLabel="First-run setup steps"
           mainAriaLabel="First-run setup content"
+          footer={{ isCancelHidden: true }}
         >
-          <WizardStep id="wizard-language" step={1} name="Language and Timezone">
-            <LanguageStep language={language} onLanguage={setLanguage} timezone={timezone} onTimezone={setTimezone} />
-          </WizardStep>
-          <WizardStep id="wizard-admin" step={2} name="Admin Account">
+          <WizardStep id="wizard-admin" step={1} name="Admin Account">
             <AdminStep
               administrator={administrator}
               onAdministrator={setAdministrator}
@@ -120,7 +111,7 @@ const App = () => {
               onKeePassPasswordConfirm={setKeePassPasswordConfirm}
             />
           </WizardStep>
-          <WizardStep id="wizard-storage" step={3} name="Storage">
+          <WizardStep id="wizard-storage" step={2} name="Storage">
             <StorageStep
               plan={plan}
               planError={planError}
@@ -129,7 +120,7 @@ const App = () => {
               onRefresh={() => setPlanRequest((value) => value + 1)}
             />
           </WizardStep>
-          <WizardStep id="wizard-confirm" step={4} name="Confirm and Reboot">
+          <WizardStep id="wizard-confirm" step={3} name="Confirm and Reboot" footer={<></>}>
             <ConfirmStep
               administrator={administrator}
               keePassPassword={keePassEffective}

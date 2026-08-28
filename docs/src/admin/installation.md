@@ -146,7 +146,7 @@ Two routes reach the same result. Run either as the configured local administrat
 
 ### Route A: the browser wizard
 
-Open `https://<nas-hostname>.local/setup/` and follow the first-start wizard: administrator account, locale, storage plan review, final confirmation.
+Open `https://<nas-hostname>.local/setup/` and follow the first-start wizard: administrator account, storage plan review, and final confirmation. Configure the host locale declaratively in NixOS; the wizard does not maintain a second mutable locale setting.
 
 Authentik gates the wizard. Sign in with its temporary bootstrap identity `akadmin` and the documented initial password `nas-admin-first-boot`. This identity exists only for initial setup; setup retires it automatically once your own administrator account has been created and verified. Protected applications stay unavailable until setup completes and the system unlocks.
 

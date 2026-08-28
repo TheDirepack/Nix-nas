@@ -115,6 +115,12 @@ export function startFirstRun(
   ) {
     throw new Error("Administrator details must be single-line values.");
   }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Administrator email is invalid.");
+  }
+  if (administratorPassword.length < 12) {
+    throw new Error("Administrator password must contain at least 12 characters.");
+  }
   if (typeof options.planDigest !== "string" || !/^[0-9a-f]{64}$/.test(options.planDigest)) {
     throw new Error("Refresh and review the current first-start plan before continuing.");
   }

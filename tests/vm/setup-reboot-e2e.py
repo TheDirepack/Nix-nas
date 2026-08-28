@@ -123,7 +123,14 @@ def managed_service_ids() -> set[str]:
         raise CheckError("managed-services status did not return its V3 service list") from error
     if not isinstance(services, list):
         raise CheckError("managed-services status service list is not an array")
-    return {item.get("id") for item in services if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    service_ids: set[str] = set()
+    for item in services:
+        if not isinstance(item, dict):
+            continue
+        service_id = item.get("id")
+        if isinstance(service_id, str):
+            service_ids.add(service_id)
+    return service_ids
 
 
 def syncthing_api_key() -> str:
@@ -162,14 +169,35 @@ def verify_services(stage: str) -> None:
     missing_services = REQUIRED_SERVICES - managed_service_ids()
     if missing_services:
         raise CheckError(f"V2 status lost required applications after {stage}: {sorted(missing_services)}")
-    wait_http(("curl", "--fail", "--silent", "--show-error", "--unix-socket", "/run/copyparty/http.sock", "http://localhost/"), "CopyParty")
+    wait_http(
+        (
+            "curl",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--unix-socket",
+            "/run/copyparty/http.sock",
+            "http://localhost/",
+        ),
+        "CopyParty",
+    )
     key = syncthing_api_key()
     wait_http(
-        ("curl", "--fail", "--silent", "--show-error", "-H", f"X-API-Key: {key}", "http://127.0.0.1:8384/rest/system/status"),
+        (
+            "curl",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "-H",
+            f"X-API-Key: {key}",
+            "http://127.0.0.1:8384/rest/system/status",
+        ),
         "Syncthing",
     )
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8222/alive"), "Vaultwarden")
-    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8428/victoriametrics/ping"), "VictoriaMetrics")
+    wait_http(
+        ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8428/victoriametrics/ping"), "VictoriaMetrics"
+    )
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/api/health"), "Grafana")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:2586/v1/health"), "ntfy")
 
@@ -204,8 +232,13 @@ def browser_sign_in(stage: str) -> None:
         try:
             wait_http(
                 (
-                    "curl", "--insecure", "--fail", "--silent", "--show-error",
-                    "--resolve", "nas-test.local:8443:127.0.0.1",
+                    "curl",
+                    "--insecure",
+                    "--fail",
+                    "--silent",
+                    "--show-error",
+                    "--resolve",
+                    "nas-test.local:8443:127.0.0.1",
                     "https://nas-test.local:8443/identity/",
                 ),
                 "browser callback proxy",
@@ -226,9 +259,13 @@ def browser_sign_in(stage: str) -> None:
                 "--baseline-password-file",
                 str(secrets / "baseline"),
             ]
-            result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, env=environment)
+            result = subprocess.run(
+                command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, env=environment
+            )
             if result.returncode:
-                raise CheckError(f"authenticated browser checks failed after {stage}: {(result.stderr or result.stdout)[-2400:]}")
+                raise CheckError(
+                    f"authenticated browser checks failed after {stage}: {(result.stderr or result.stdout)[-2400:]}"
+                )
         finally:
             proxy.terminate()
             try:

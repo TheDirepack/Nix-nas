@@ -234,6 +234,13 @@ body {
   margin-block-start: 1rem;
 }
 
+.nas-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block-start: 1rem;
+}
+
 .nas-wizard-intro {
   max-width: 52rem;
   margin-block: 0 1.5rem;

@@ -206,6 +206,31 @@ test("first-start sends password and safety choices only in a JSON stdin request
   assert.equal(calls[0][1].includes("correct horse battery staple"), false);
 });
 
+test("first-start rejects invalid administrator recovery details before spawning", () => {
+  const spawn = () => assert.fail("invalid administrator details reached the privileged process");
+  const options = {planDigest: "a".repeat(64)};
+  assert.throws(
+    () =>
+      startFirstRun(
+        "correct horse battery staple",
+        {username: "nasadmin", name: "NAS Administrator", email: "invalid", password: "long-enough-password"},
+        options,
+        spawn,
+      ),
+    /email is invalid/i,
+  );
+  assert.throws(
+    () =>
+      startFirstRun(
+        "correct horse battery staple",
+        {username: "nasadmin", name: "NAS Administrator", email: "admin@example.test", password: "short"},
+        options,
+        spawn,
+      ),
+    /at least 12/i,
+  );
+});
+
 test("unlock sends the password only over stdin", () => {
   const calls = [];
   const process = {

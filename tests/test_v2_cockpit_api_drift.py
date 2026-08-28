@@ -172,6 +172,22 @@ class CockpitApiDriftTests(unittest.TestCase):
     def test_start_first_start_rejects_bad_inputs_before_reservation(self) -> None:
         cases = [
             ({"password": "x\ny", "administrator": self.administrator(), "planDigest": "a" * 64}, "single line"),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "email": "not-an-email"},
+                    "planDigest": "a" * 64,
+                },
+                "email is invalid",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "password": "too-short"},
+                    "planDigest": "a" * 64,
+                },
+                "at least 12",
+            ),
             ({"password": "pw", "administrator": self.administrator(), "planDigest": "bad"}, "plan digest"),
             (
                 {

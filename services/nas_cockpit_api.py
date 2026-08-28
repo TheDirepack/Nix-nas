@@ -461,6 +461,10 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("Administrator username is invalid")
     if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
         raise ApiError("Administrator details must be single-line values")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise ApiError("Administrator email is invalid")
+    if len(administrator_password) < 12:
+        raise ApiError("Administrator password must contain at least 12 characters")
     plan_digest = _json_string(request, "planDigest", required=True, max_length=64)
     if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
         raise ApiError("Invalid first-start plan digest")

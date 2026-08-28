@@ -14,7 +14,7 @@ const exists = async (name) => {
   }
 };
 
-const STEPS = ["wizard-language", "wizard-admin", "wizard-storage", "wizard-confirm"];
+const STEPS = ["wizard-admin", "wizard-storage", "wizard-confirm"];
 
 test("wizard entry mounts React and imports PatternFly global styles", async () => {
   const index = await wizard("src/index.jsx");
@@ -43,7 +43,7 @@ test("wizard builds steps from WizardStep children with explicit ids", async () 
 });
 
 test("wizard step components use exports that exist in react-core 6.1.0", async () => {
-  for (const step of ["LanguageStep", "AdminStep", "StorageStep", "ConfirmStep"]) {
+  for (const step of ["AdminStep", "StorageStep", "ConfirmStep"]) {
     const text = await wizard(`src/steps/${step}.jsx`);
     assert.match(
       text,
@@ -80,26 +80,15 @@ test("admin step gates the KeePassXC database password behind the shared-passwor
   assert.match(confirm, /Enter and confirm the KeePassXC database password/);
 });
 
-test("administrator username starts blank and has no schema default", async () => {
+test("administrator username starts blank and obsolete setup authorities stay removed", async () => {
   const index = await wizard("src/index.jsx");
-  const api = await wizard("src/api.js");
-  const schema = JSON.parse(await wizard("src/forms/schema.json"));
-  const adminDefault = /adminUsername: schema\.properties\.adminUsername\.default \|\| 'admin'/;
   assert.match(index, /emptyAdministrator = \{ username: ''/);
-  assert.doesNotMatch(api, adminDefault);
-  assert.equal(schema.properties.adminUsername.default, undefined);
+  assert.equal(await exists("src/api.js"), false, "obsolete API stub must not remain");
+  assert.equal(await exists("src/forms/schema.json"), false, "obsolete form authority must not remain");
 });
 
-test("setup locale controls keep storage configuration actionable", async () => {
-  const language = await wizard("src/steps/LanguageStep.jsx");
+test("setup keeps only actionable administrator, storage, and confirmation steps", async () => {
   const storage = await wizard("src/steps/StorageStep.jsx");
-  assert.match(language, /Select/);
-  assert.match(language, /typeahead/);
-  assert.match(language, /Search languages/);
-  assert.match(language, /Search cities or regions/);
-  assert.match(language, /Intl\.supportedValuesOf/);
-  assert.match(language, /Current browser time zone/);
-  assert.match(language, /nas-searchable-select-toggle/);
   assert.match(storage, /\/console\/storage/);
   assert.match(storage, /\/console\/system\/terminal/);
   assert.match(storage, /Refresh plan/);
@@ -111,6 +100,11 @@ test("setup locale controls keep storage configuration actionable", async () => 
     await exists("src/steps/AuthentikStep.jsx"),
     false,
     "removed Authentik step must not remain as dead UI",
+  );
+  assert.equal(
+    await exists("src/steps/LanguageStep.jsx"),
+    false,
+    "an unapplied locale step must not remain as dead UI",
   );
   assert.match(storage, /configuration-missing/);
   assert.match(storage, /Storage plan not created yet/);
@@ -126,7 +120,6 @@ test("setup stylesheet provides a full-height responsive shell and dark-mode tok
   assert.match(css, /@media \(prefers-color-scheme: dark\)/);
   assert.match(css, /\.pf-v6-theme-dark/);
   assert.match(css, /@media \(max-width: 40rem\)/);
-  assert.match(css, /nas-searchable-select-toggle/);
   assert.match(css, /--nas-setup-control-border/);
   assert.match(css, /width: min\(100%, 52rem\)/);
 });
@@ -171,10 +164,6 @@ test("committed stylesheet carries the global tokens and core component rules", 
   }
   assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the setup shell");
   assert.ok(css.includes(".pf-v6-theme-dark"), "stylesheet is missing dark-mode overrides");
-  assert.ok(
-    css.includes(".nas-searchable-select-toggle{"),
-    "stylesheet is missing visible locale control chrome",
-  );
 });
 
 test("dist index.html matches the reviewed source shell", async () => {

@@ -58,7 +58,9 @@ identity. Do not use the bootstrap identity for normal administration.
 
 The browser wizard keeps this boundary out of the setup form: Authentik is the
 temporary access gate, not a separate configuration step. The wizard focuses
-on the administrator account, locale, storage plan, and final confirmation.
+on the administrator account, storage plan, and final confirmation. Host locale
+remains declarative NixOS configuration rather than a second mutable setup
+authority.
 
 Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
 may define storage creation, Authentik accounts, reserved NAS groups, and initial

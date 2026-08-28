@@ -127,11 +127,12 @@ class VmSuiteWrapperTests(unittest.TestCase):
     def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertIn('administrator="nas-bootstrap"', guest)
-        self.assertIn('/var/lib/nas-setup/local-administrator.json', guest)
-        self.assertIn('chown nas-bootstrap:users /var/lib/nas-test/setup/first-run.json', guest)
-        self.assertIn('install -d -m 0700 -o nas-bootstrap -g users /var/lib/nas-test/setup', guest)
-        self.assertIn('chown operator:users /var/lib/nas-test/setup', guest)
-        self.assertIn('chown operator:users /var/lib/nas-test/setup/first-run.json', guest)
+        self.assertIn("/var/lib/nas-setup/local-administrator.json", guest)
+        self.assertIn("chown nas-bootstrap:users /var/lib/nas-test/setup/first-run.json", guest)
+        self.assertIn("install -d -m 0700 -o nas-bootstrap -g users /var/lib/nas-test/setup", guest)
+        self.assertIn('.result.localAdministrator.username == "nasadmin"', guest)
+        self.assertIn("getent passwd nas-bootstrap", guest)
+        self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
         self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
 
