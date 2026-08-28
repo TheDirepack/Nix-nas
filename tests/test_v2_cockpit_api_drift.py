@@ -141,7 +141,12 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_start_first_start_unit_uses_hardened_transient_unit_and_reports_failure(self) -> None:
         with mock.patch.object(api, "run", return_value=CommandResult(0, "", "")) as run:
-            api._start_first_start_unit("a" * 24, pathlib.Path("/request"), pathlib.Path("/password"))
+            api._start_first_start_unit(
+                "a" * 24,
+                pathlib.Path("/request"),
+                pathlib.Path("/password"),
+                ["/dev/disk/by-id/test-disk"],
+            )
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["systemd-run", "--unit", f"nas-first-start-{'a' * 24}.service"])
         self.assertIn("--property=ProtectSystem=strict", command)
@@ -151,6 +156,10 @@ class CockpitApiDriftTests(unittest.TestCase):
         )
         self.assertIn("--property=RuntimeDirectoryMode=0700", command)
         self.assertIn("--property=RuntimeDirectoryPreserve=yes", command)
+        self.assertNotIn("--property=PrivateDevices=yes", command)
+        self.assertIn("--property=DevicePolicy=closed", command)
+        self.assertIn("--property=DeviceAllow=/dev/zfs rw", command)
+        self.assertIn("--property=DeviceAllow=/dev/disk/by-id/test-disk rw", command)
         write_paths = next(value for value in command if value.startswith("--property=ReadWritePaths="))
         self.assertIn("/run/nas-secrets", write_paths)
         self.assertIn("/run/nas-secret-staging", write_paths)
@@ -159,7 +168,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("--password-file", command)
         with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):
             with self.assertRaises(api.ApiError):
-                api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"))
+                api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"), ["/dev/test"])
 
     def prepared_first_start(self) -> dict[str, object]:
         return {
