@@ -22,7 +22,11 @@ class FirstStartWorkerContractTests(unittest.TestCase):
         self.assertIn("PrivateDevices = false;", policy)
         self.assertIn("ProtectHome = false;", policy)
         self.assertIn('ProtectSystem = "yes";', policy)
-        self.assertNotIn("environment.etc", policy)
+        # The drop-in must be declared through NixOS systemd unit machinery,
+        # not an etc file; explanatory comments may still mention the old
+        # mechanism, so assert against executable content only.
+        code = "\n".join(line for line in policy.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotIn("environment.etc", code)
 
     def test_worker_keeps_non_conflicting_hardening(self) -> None:
         api = COCKPIT_API.read_text(encoding="utf-8")
