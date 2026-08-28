@@ -12,6 +12,7 @@ WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
+FIRST_RUN_BROWSER = ROOT / "tests" / "browser" / "first-run-wizard.py"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
 VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
@@ -53,6 +54,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         install_expect = (ROOT / "tests" / "vm" / "install.expect").read_text(encoding="utf-8")
         guest_suite = GUEST_SUITE.read_text(encoding="utf-8")
         guest_test = GUEST_TEST.read_text(encoding="utf-8")
+        first_run_browser = FIRST_RUN_BROWSER.read_text(encoding="utf-8")
         for mode in (
             "persistent-start",
             "persistent-test",
@@ -110,6 +112,8 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("./scripts/preflight.sh", guest_suite)
         self.assertIn("./scripts/run-fuzz.py", guest_suite)
         self.assertIn("nas-vm-guest-test /dev/vdb", guest_suite)
+        self.assertIn("args.keepass_password_file", first_run_browser)
+        self.assertNotIn("args.kee_pass_password_file", first_run_browser)
         self.assertIn(
             "export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json",
             VM_COMMON.read_text(encoding="utf-8"),
