@@ -164,9 +164,11 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("/run/nas-secrets", write_paths)
         self.assertIn("/run/nas-secret-staging", write_paths)
         self.assertIn("/run/nas-secret-transactions", write_paths)
+        self.assertIn("/var/lib/nas-first-start", write_paths)
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
         self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
+        self.assertEqual(command[command.index("--") + 1], api._setup_entry())
         self.assertIn("--password-file", command)
         with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):
             with self.assertRaises(api.ApiError):
