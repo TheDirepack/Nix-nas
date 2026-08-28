@@ -412,6 +412,9 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
         "--property=ReadWritePaths=/var/lib/nas-setup /run/nas-secrets /run/nas-operations /run/lock /run/nas-first-start",
+        # The submitted job is the Cockpit-authorized root setup execution
+        # path; without this flag require_setup_operator fails closed for root.
+        "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
         "--property=TimeoutStartSec=6h",
         "--",
         "nas-setup",

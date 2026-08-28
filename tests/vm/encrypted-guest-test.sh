@@ -80,35 +80,74 @@ chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-plan_json="$(run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/encrypted-first-run.json)"
-plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
+
+# Complete first start through the GUI bootstrap system's submission contract:
+# the loopback setup API that the Cockpit First start page posts to. The
+# encrypted leg has no browser, so it exercises the same validation and
+# job-submission path directly.
+setup_api="http://[IP_ADDRESS]:8980/setup/api"
+first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
+if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
+  printf '%s\n' "$first_start_plan" >&2
+  fail "first-start setup API did not report a reviewable ready plan"
+fi
+plan_digest="$(jq -er '.planDigest' <<<"$first_start_plan")"
 stale_digest="$(printf '0%.0s' {1..64})"
-if run_as_admin nas-setup first-run --config /var/lib/nas-test/setup/encrypted-first-run.json \
-  --confirm-plan-digest "$stale_digest" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
-  fail "first-run accepted a stale plan digest"
+stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
+  '{password: "nixos-nas-vm-test-password",
+    administrator: {username: "nasadmin", name: "NAS Administrator",
+                    email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
+    planDigest: $digest, devices: $devices,
+    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
+  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+if [[ "$stale_code" != 400 ]]; then
+  cat /tmp/nas-stale-plan.json >&2 || true
+  fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
 fi
-if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
-  printf '%s\n' '--- stale plan stdout ---' >&2
-  cat /tmp/nas-stale-plan.out >&2
-  printf '%s\n' '--- stale plan stderr ---' >&2
-  cat /tmp/nas-stale-plan.err >&2
-  fail "stale plan digest failure was not diagnostic"
+grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json || {
+  cat /tmp/nas-stale-plan.json >&2
+  fail "stale plan digest rejection was not diagnostic"
+}
+pass "first-start setup API rejects a stale plan digest before mutation"
+
+job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
+  '{password: "nixos-nas-vm-test-password",
+    administrator: {username: "nasadmin", name: "NAS Administrator",
+                    email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
+    planDigest: $digest, devices: $devices,
+    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+job_submission="$(printf '%s' "$job_request" | curl --fail --silent --show-error --max-time 60 \
+  -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+job_id="$(jq -er '.jobId | select(test("^[0-9a-f]{24}$"))' <<<"$job_submission")"
+job_result=""
+for _ in $(seq 1 "$(nas_vm_timeout_value firstRun)"); do
+  job_result="$(curl --fail --silent --show-error --max-time 30 "$setup_api/first-start/job/$job_id")" || {
+    job_result=""
+    sleep 2
+    continue
+  }
+  job_status="$(jq -r '.status' <<<"$job_result")"
+  [[ "$job_status" == "complete" || "$job_status" == "failed" ]] && break
+  sleep 2
+done
+[[ "$job_status" == "complete" ]] || {
+  jq . <<<"$job_result" >&2 || true
+  fail "encrypted first-start job did not complete (status ${job_status:-none})"
+}
+if ! jq -e '
+  .result.database.result == "created" and
+  .result.storage.createdPool == true and
+  .result.storage.createdDataset == true and
+  .result.storage.encrypted == true and
+  .result.preflight == false and
+  .result.localAdministrator.username == "nasadmin"
+' <<<"$job_result" >/dev/null; then
+  jq . <<<"$job_result" >&2
+  fail "encrypted first-start job report did not contain the expected storage state"
 fi
-pass "first-run rejects a stale plan digest before mutation"
-run_as_admin_with_stdin "$(nas_vm_timeout_value firstRun)" nas-setup first-run \
-  --config /var/lib/nas-test/setup/encrypted-first-run.json \
-  --keepass-password-stdin \
-  --confirm-plan-digest "$plan_digest" \
-  --confirm-storage-device "$ZFS_DEVICE" \
-  --allow-destructive-storage \
-  --skip-preflight >/tmp/nas-encrypted-first-run.json
-jq -e '
-  .database.result == "created" and
-  .storage.createdPool == true and
-  .storage.createdDataset == true and
-  .storage.encrypted == true and
-  .preflight == false
-' /tmp/nas-encrypted-first-run.json >/dev/null
+[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+pass "GUI first-start job created and activated the encrypted storage stack"
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
 wait_active nas-zfs-mount-guard.service

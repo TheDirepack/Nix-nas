@@ -191,6 +191,13 @@ run_as_admin() {
   runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
 }
 
+# After first run completes, the wizard-created administrator (nasadmin) is
+# the configured local administrator and the only account allowed to run
+# mutating nas-setup commands.
+run_as_nasadmin() {
+  runuser -u nasadmin -- env HOME=/home/nasadmin PATH="$PATH" "$@"
+}
+
 activate_secrets() {
   run_as_admin_with_stdin "$(nas_vm_timeout_value secretActivation)" nas-secrets activate-stdin
 }
@@ -327,7 +334,7 @@ if command -v nas-code >/dev/null 2>&1; then
   pass "nas-code optional launcher is installed when codingAgent is enabled"
 fi
 
-log "Run the complete first-time setup CLI"
+log "Run the complete first-time setup GUI"
 for _ in $(seq 1 60); do
   [[ -b "$ZFS_DEVICE" ]] && break
   sleep 1
@@ -385,38 +392,77 @@ chmod 0600 /var/lib/nas-test/setup/first-run.json
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-plan_json="$(run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json)"
-plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
+
+# Complete first start through the GUI bootstrap system: the Cockpit First
+# start page behind the Authentik gate, submitting through the loopback
+# setup API contract. The pre-bootstrap Linux administrator (nas-bootstrap,
+# documented in nas-bootstrap-administrator.service) provisions browser
+# access while the appliance is still locked.
+setup_api="http://127.0.0.1:8980/setup/api"
+first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
+if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
+  printf '%s\n' "$first_start_plan" >&2
+  fail "first-start setup API did not report a reviewable ready plan"
+fi
 stale_digest="$(printf '0%.0s' {1..64})"
-if run_as_admin nas-setup first-run --config /var/lib/nas-test/setup/first-run.json \
-  --confirm-plan-digest "$stale_digest" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
-  fail "first-run accepted a stale plan digest"
+wizard_secret_dir="$(mktemp -d /run/nas-wizard-test.XXXXXX)"
+cleanup_wizard_secrets() {
+  [[ -n "${wizard_secret_dir:-}" ]] || return 0
+  rm -rf -- "$wizard_secret_dir"
+}
+nas_vm_cleanup_add cleanup_wizard_secrets
+chmod 0700 "$wizard_secret_dir"
+printf '%s\n' 'nas-admin-first-boot' >"$wizard_secret_dir/akadmin"
+printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
+printf '%s\n' 'nasadmin-vm-password' >"$wizard_secret_dir/nasadmin"
+chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
+wizard_admin='{"username":"nasadmin","name":"NAS Administrator","email":"nasadmin@nas-test.local","password":"nasadmin-vm-password"}'
+stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" --argjson administrator "$wizard_admin" \
+  --rawfile keepass "$wizard_secret_dir/keepass" \
+  '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
+    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
+  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+if [[ "$stale_code" != 400 ]]; then
+  cat /tmp/nas-stale-plan.json >&2 || true
+  fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
 fi
-if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
-  printf '%s\n' '--- stale plan stdout ---' >&2
-  cat /tmp/nas-stale-plan.out >&2
-  printf '%s\n' '--- stale plan stderr ---' >&2
-  cat /tmp/nas-stale-plan.err >&2
-  fail "stale plan digest failure was not diagnostic"
+if ! grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json; then
+  cat /tmp/nas-stale-plan.json >&2
+  fail "stale plan digest rejection was not diagnostic"
 fi
-pass "first-run rejects a stale plan digest before mutation"
-run_as_admin_with_stdin "$(nas_vm_timeout_value firstRun)" nas-setup first-run \
-  --config /var/lib/nas-test/setup/first-run.json \
-  --keepass-password-stdin \
-  --confirm-plan-digest "$plan_digest" \
-  --confirm-storage-device "$ZFS_DEVICE" \
-  --allow-destructive-storage >/tmp/nas-first-run.json
+pass "first-start setup API rejects a stale plan digest before mutation"
+
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value firstRun)" \
+  python3 /var/lib/nas-test/repo/tests/browser/first-run-wizard.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --bootstrap-password-file "$wizard_secret_dir/akadmin" \
+  --keepass-password-file "$wizard_secret_dir/keepass" \
+  --admin-username nasadmin \
+  --admin-name 'NAS Administrator' \
+  --admin-email 'nasadmin@nas-test.local' \
+  --admin-password-file "$wizard_secret_dir/nasadmin" \
+  --device "$ZFS_DEVICE" \
+  --job-timeout-seconds "$(nas_vm_timeout_value firstRun)" \
+  --result-file /tmp/nas-first-run-job.json
+cleanup_wizard_secrets
+wizard_secret_dir=""
 if ! jq -e '
-  .storage.createdPool == true and
-  .storage.createdDataset == true and
-  (.accounts.created | sort) == ["alice", "baseline", "guest", "operator"] and
-  (.identity.administrators | index("operator")) != null
-' /tmp/nas-first-run.json >/dev/null; then
-  printf '%s\n' '--- first-run report ---' >&2
-  jq . /tmp/nas-first-run.json >&2 || cat /tmp/nas-first-run.json >&2
-  fail "nas-setup first-run report did not contain the expected storage, account, and administrator state"
+  .status == "complete" and
+  .result.storage.createdPool == true and
+  .result.storage.createdDataset == true and
+  (.result.accounts.created | sort) == ["alice", "baseline", "guest", "nasadmin", "operator"] and
+  (.result.identity.administrators | index("operator")) != null and
+  (.result.identity.administrators | index("nasadmin")) != null and
+  .result.localAdministrator.username == "nasadmin"
+' /tmp/nas-first-run-job.json >/dev/null; then
+  printf '%s\n' '--- first-run job report ---' >&2
+  jq . /tmp/nas-first-run-job.json >&2 || cat /tmp/nas-first-run-job.json >&2
+  fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
-pass "nas-setup first-run created the expected storage and accounts"
+[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+pass "GUI first start created the expected storage, accounts, and administrator"
 run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json
 if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
@@ -525,10 +571,10 @@ nas-identity-sync capabilities | jq -e '
   .capabilities.files.allowed == true and .capabilities.ai.allowed == false
 ' >/dev/null
 printf '%s\n' 'alice-updated-password' |
-  run_as_admin nas-setup account apply --username alice --password-stdin \
+  run_as_nasadmin nas-setup account apply --username alice --password-stdin \
     >/tmp/nas-account-password-update.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
-run_as_admin nas-setup account apply --username alice \
+run_as_nasadmin nas-setup account apply --username alice \
   --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
   >/tmp/nas-account-xss-name.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
@@ -539,14 +585,14 @@ nas-identity-sync export-account alice | jq -e '
   (.groups | index("nas_allow_syncthing")) != null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
-  run_as_admin nas-setup account apply \
+  run_as_nasadmin nas-setup account apply \
     --username temporary \
     --name 'Temporary User' \
     --email temporary@nas.local \
     --group nas_allow_files \
     --password-stdin >/tmp/nas-account-add.json
 jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
-run_as_admin nas-setup account disable temporary >/tmp/nas-account-disable.json
+run_as_nasadmin nas-setup account disable temporary >/tmp/nas-account-disable.json
 jq -e '.updated == ["temporary"]' /tmp/nas-account-disable.json >/dev/null
 nas-identity-sync export-account temporary | jq -e '
   .active == false and
@@ -815,8 +861,8 @@ nas-managed-services-control document | jq -e '.document.services | type == "obj
 ! nas-managed-services-control set '../ai-runtime' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
 ! nas-managed-services-control set 'ai-runtime;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
 [[ ! -e /tmp/pwned ]] || fail "service identifier injection created an unexpected file"
-! run_as_admin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
-! run_as_admin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
+! run_as_nasadmin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
+! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
 nas-cockpit-api action health | jq -e '.ok == true' >/dev/null

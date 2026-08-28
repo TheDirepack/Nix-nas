@@ -159,7 +159,7 @@ test("backend JSON parsing fails closed", () => {
   assert.throws(() => parseJsonOutput("not-json"), SyntaxError);
 });
 
-test("first-run sends password and safety choices only in a JSON stdin request", async () => {
+test("first-start sends password and safety choices only in a JSON stdin request", async () => {
   const calls = [];
   const spawn = (command, options) => {
     const process = Promise.resolve('{"schemaVersion":1,"jobId":"abc","status":"submitted"}');
@@ -186,7 +186,7 @@ test("first-run sends password and safety choices only in a JSON stdin request",
   assert.equal(result.status, "submitted");
   assert.deepEqual(calls[0], [
     "spawn",
-    ["nas-cockpit-api", "first-run"],
+    ["nas-cockpit-api", "first-start"],
     {superuser: "require", err: "message"},
   ]);
   const request = JSON.parse(calls[1][1]);
@@ -258,7 +258,7 @@ test("secret transports preserve hostile single-line values only on stdin", asyn
   assert.deepEqual(
     inputs.map(({command}) => command),
     [
-      ["nas-cockpit-api", "first-run"],
+      ["nas-cockpit-api", "first-start"],
       ["nas-secrets", "activate-stdin"],
     ],
   );

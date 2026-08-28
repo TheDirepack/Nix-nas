@@ -26,7 +26,7 @@
   },
   "phases": [
     {"id": "locked-state", "label": "Locked-state and configuration checks", "ordinaryWaits": 3, "fixedSeconds": 0, "timeoutKeys": []},
-    {"id": "first-run", "label": "Run the complete first-time setup CLI", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": ["firstRun"]},
+    {"id": "first-run", "label": "Run the complete first-time setup GUI", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": ["firstRun"]},
     {"id": "adversarial", "label": "Adversarial command, SQL-like input, and HTTP validation", "ordinaryWaits": 1, "fixedSeconds": 0, "timeoutKeys": []},
     {"id": "rollback", "label": "Cockpit ZFS rollback wrapper", "ordinaryWaits": 0, "fixedSeconds": 60, "timeoutKeys": []},
     {"id": "protected-services", "label": "Verify first-run protected services and account population", "ordinaryWaits": 9, "fixedSeconds": 120, "timeoutKeys": []},

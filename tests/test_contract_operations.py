@@ -239,9 +239,10 @@ class ContractTests(unittest.TestCase):
     def test_vm_first_start_uses_normalized_plan_digest_and_negative_stale_digest(self) -> None:
         for path in ("tests/vm/guest-test.sh", "tests/vm/encrypted-guest-test.sh"):
             guest = text(path)
-            self.assertIn("prepare-first-start", guest)
-            self.assertIn("--confirm-plan-digest", guest)
+            self.assertIn("/setup/api", guest)
+            self.assertIn("planDigest", guest)
             self.assertIn("stale", guest.lower())
+        self.assertIn("prepare-first-start", text("tests/vm/guest-test.sh"))
 
     def test_update_snapshots_have_bounded_retention(self) -> None:
         update = text("scripts/update-nas.sh")
