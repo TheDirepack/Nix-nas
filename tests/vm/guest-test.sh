@@ -305,6 +305,11 @@ wait_active authentik.service
   fail "identity bootstrap retried before Authentik's default flows were ready"
 wait_active nas-authentik-proxy-outpost.service
 wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+# The outpost caches provider configuration at startup and property-mapping
+# changes do not reliably trigger a refresh; restart it once the bootstrap
+# and reconcile transactions have settled so its cached config is final.
+systemctl restart nas-authentik-proxy-outpost.service
+wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
 verify_bootstrap_authentik_proxy
