@@ -18,6 +18,10 @@ pkgs.testers.runNixOSTest {
     ];
 
     nas.zfsEncryption.enable = lib.mkForce true;
+    # The shared VM fixture points the setup API at the full-stack first-run
+    # document. This leg writes a distinct encrypted-storage plan, so keep the
+    # API's review/submission contract aligned with the config under test.
+    nas.firstStart.configFile = lib.mkForce "/var/lib/nas-test/setup/encrypted-first-run.json";
     nas.trustedInterfaces = lib.mkForce [ "eth1" ];
     nas.testing.readOnlyPackageSet = true;
     users.users.admin.openssh.authorizedKeys.keys = [
