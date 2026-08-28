@@ -407,7 +407,12 @@ def _write_private_new(path: pathlib.Path, content: str) -> None:
         raise
 
 
-def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_path: pathlib.Path) -> None:
+def _start_first_start_unit(
+    job_id: str,
+    request_path: pathlib.Path,
+    password_path: pathlib.Path,
+    devices: list[str],
+) -> None:
     command = [
         "systemd-run",
         "--unit",
@@ -419,7 +424,9 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         "--property=UMask=0077",
         "--property=NoNewPrivileges=yes",
         "--property=PrivateTmp=yes",
-        "--property=PrivateDevices=yes",
+        "--property=DevicePolicy=closed",
+        "--property=DeviceAllow=/dev/zfs rw",
+        *(f"--property=DeviceAllow={device} rw" for device in devices),
         "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
         # /run/nas-secrets, /var/lib/nas-secrets and the ZFS control paths
@@ -536,7 +543,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
             )
             + "\n",
         )
-        _start_first_start_unit(job_id, request_path, password_path)
+        _start_first_start_unit(job_id, request_path, password_path, devices)
         return {"schemaVersion": 1, "jobId": job_id, "status": "submitted"}
     except Exception:
         request_path.unlink(missing_ok=True)
