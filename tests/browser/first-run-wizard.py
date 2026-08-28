@@ -18,6 +18,7 @@ import ssl
 import stat
 import sys
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from selenium import webdriver
@@ -71,7 +72,7 @@ def read_secret(path: str) -> str:
     return value
 
 
-def search_roots(driver: webdriver.Chrome):
+def search_roots(driver: webdriver.Chrome) -> Iterator[Any]:
     roots: list[Any] = [driver]
     for root in roots:
         yield root
