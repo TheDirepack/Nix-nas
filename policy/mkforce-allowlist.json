@@ -45,15 +45,9 @@
     },
     {
       "path": "modules/nas/config/application-services.nix",
-      "setting": "StateDirectory",
+      "setting": "serviceConfig.StateDirectory",
       "count": 1,
-      "reason": "CopyParty and Vaultwarden store data on the ZFS tank, so StateDirectory must be forced to the absolute ZFS path instead of the default /var/lib path."
-    },
-    {
-      "path": "modules/nas/config/application-services.nix",
-      "setting": "StateDirectoryMode",
-      "count": 1,
-      "reason": "The ZFS-backed StateDirectory must keep a restrictive mode that matches the NAS share-group write policy."
+      "reason": "CopyParty data lives on the ZFS tank behind /var/lib/copyparty; reset the upstream StateDirectory directive so systemd does not replace or follow that runtime symlink."
     }
   ]
 }

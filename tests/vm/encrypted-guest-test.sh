@@ -31,6 +31,25 @@ wait_inactive() {
     "$TEST_TIMEOUT" bash -c "until ! systemctl is-active --quiet '$unit'; do sleep 2; done"
 }
 
+wait_oneshot_completed() {
+  local unit=$1 started state result deadline=$((SECONDS + TEST_TIMEOUT))
+  while ((SECONDS < deadline)); do
+    started="$(systemctl show "$unit" --property=ExecMainStartTimestampMonotonic --value)"
+    state="$(systemctl show "$unit" --property=ActiveState --value)"
+    result="$(systemctl show "$unit" --property=Result --value)"
+    if [[ "$started" != 0 && "$state" != activating && "$result" == success ]]; then
+      return 0
+    fi
+    if [[ "$state" == failed || ( "$started" != 0 && "$state" != activating && "$result" != success ) ]]; then
+      systemctl status "$unit" --no-pager >&2 || true
+      fail "$unit did not complete successfully"
+    fi
+    sleep 2
+  done
+  systemctl status "$unit" --no-pager >&2 || true
+  fail "timed out waiting for $unit to complete"
+}
+
 run_as_admin() {
   runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
 }
@@ -54,6 +73,7 @@ ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session i
 ! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
 
 for _ in $(seq 1 60); do
   [[ -b "$ZFS_DEVICE" ]] && break
@@ -117,8 +137,14 @@ job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEV
                     email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
     planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, confirmPasswordReapply: false}')"
-job_submission="$(printf '%s' "$job_request" | curl --fail --silent --show-error --max-time 60 \
+job_code="$(printf '%s' "$job_request" | curl --silent --show-error --max-time 60 \
+  -o /tmp/nas-first-run-submission.json -w '%{http_code}' \
   -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+if [[ "$job_code" != 200 ]]; then
+  cat /tmp/nas-first-run-submission.json >&2 || true
+  fail "encrypted first-start job submission failed (HTTP ${job_code:-none})"
+fi
+job_submission="$(< /tmp/nas-first-run-submission.json)"
 job_id="$(jq -er '.jobId | select(test("^[0-9a-f]{24}$"))' <<<"$job_submission")"
 job_result=""
 for _ in $(seq 1 "$(nas_vm_timeout_value firstRun)"); do

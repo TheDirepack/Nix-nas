@@ -31,7 +31,7 @@ pkgs.testers.runNixOSTest {
     boot.loader.efi.canTouchEfiVariables = lib.mkForce false;
 
     virtualisation = {
-      memorySize = 8192;
+      memorySize = 4096;
       cores = 4;
       diskSize = 24576;
       emptyDiskImages = [ 8192 ];

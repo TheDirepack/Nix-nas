@@ -126,6 +126,25 @@ wait_inactive() {
   fi
 }
 
+wait_oneshot_completed() {
+  local unit=$1 started state result deadline=$((SECONDS + TEST_TIMEOUT))
+  while ((SECONDS < deadline)); do
+    started="$(systemctl show "$unit" --property=ExecMainStartTimestampMonotonic --value)"
+    state="$(systemctl show "$unit" --property=ActiveState --value)"
+    result="$(systemctl show "$unit" --property=Result --value)"
+    if [[ "$started" != 0 && "$state" != activating && "$result" == success ]]; then
+      return 0
+    fi
+    if [[ "$state" == failed || ( "$started" != 0 && "$state" != activating && "$result" != success ) ]]; then
+      systemctl status "$unit" --no-pager >&2 || true
+      fail "$unit did not complete successfully"
+    fi
+    sleep 2
+  done
+  systemctl status "$unit" --no-pager >&2 || true
+  fail "timed out waiting for $unit to complete"
+}
+
 wait_http() {
   local url=$1
   shift
@@ -285,6 +304,7 @@ wait_active authentik.service
 [[ "$(systemctl show nas-identity-bootstrap.service --property=NRestarts --value)" == 0 ]] || \
   fail "identity bootstrap retried before Authentik's default flows were ready"
 wait_active nas-authentik-proxy-outpost.service
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
 verify_bootstrap_authentik_proxy

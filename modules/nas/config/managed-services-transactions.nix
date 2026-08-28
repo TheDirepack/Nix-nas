@@ -12,6 +12,7 @@ let
   systemdProjectionPath = "/run/nas-control/systemd";
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
+  guardTimeoutSeconds = 300;
   firewalldProjectionPath = "/run/nas-control/firewalld";
   firewalldManifestPath = "${firewalldProjectionPath}/manifest.json";
   quadletRuntimePath = "/run/containers/systemd";
@@ -164,7 +165,7 @@ in
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
         arm \
-        --timeout 60 \
+        --timeout ${toString guardTimeoutSeconds} \
         --systemd-run ${lib.escapeShellArg "${pkgs.systemd}/bin/systemd-run"} \
         -- ${rollbackToApplied}
     '';
