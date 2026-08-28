@@ -16,6 +16,7 @@
     ./config/virtualization.nix
     ./config/identities.nix
     ./config/application-services.nix
+    ./config/first-start-worker.nix
     ./config/reverse-proxy.nix
     ./config/caddy-bootstrap.nix
     ./config/observability.nix
