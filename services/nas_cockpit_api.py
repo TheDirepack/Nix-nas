@@ -427,7 +427,7 @@ def _start_first_start_unit(
         "--property=DevicePolicy=closed",
         "--property=DeviceAllow=/dev/zfs rw",
         *(f"--property=DeviceAllow={device} rw" for device in devices),
-        "--property=ProtectHome=read-only",
+        "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
         "--property=RuntimeDirectory=nas-secret-runtime",
         "--property=RuntimeDirectoryMode=0700",

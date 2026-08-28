@@ -414,7 +414,42 @@ def create_local_administrator(administrator: Mapping[str, Any], password: str) 
 
     existing = run_root(["id", "--user", username], check=False)
     if existing.returncode != 0:
-        run_root(["useradd", "--create-home", "--shell", "/run/current-system/sw/bin/bash", username])
+        run_root(["useradd", "--no-create-home", "--shell", "/run/current-system/sw/bin/bash", username])
+    account = pwd.getpwnam(username)
+    home = pathlib.Path(account.pw_dir)
+    expected_home = pathlib.Path("/home") / username
+    if home != expected_home:
+        raise SetupError(f"Administrator home directory is unexpected: {home}")
+    run_root(
+        [
+            "systemd-run",
+            "--wait",
+            "--pipe",
+            "--collect",
+            "--quiet",
+            "--unit",
+            f"nas-first-start-home-{username}.service",
+            "--property=Type=oneshot",
+            "--property=User=root",
+            "--property=Group=root",
+            "--property=UMask=0077",
+            "--property=NoNewPrivileges=yes",
+            "--property=PrivateTmp=yes",
+            "--property=ProtectSystem=strict",
+            "--property=ProtectHome=no",
+            "--property=ReadWritePaths=/home",
+            "--",
+            "install",
+            "-d",
+            "-m",
+            "0700",
+            "-o",
+            str(account.pw_uid),
+            "-g",
+            str(account.pw_gid),
+            str(home),
+        ]
+    )
     run_root(["chpasswd"], input_text=f"{username}:{password}\n")
     run_root(["usermod", "--append", "--groups", "wheel,nas-administrators,nas-operations", username])
     return {
