@@ -7,16 +7,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestSetupHTML(unittest.TestCase):
-    """Tests for setup HTML structure and content."""
+    """Tests for the packaged setup HTML structure and content."""
 
     def test_setup_html_exists(self):
-        """Verify setup.html file exists."""
-        html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
-        self.assertTrue(html_path.exists(), "setup.html should exist")
+        """Verify the packaged setup.html file exists."""
+        html_path = pathlib.Path(ROOT / "web/portal/setup.html")
+        self.assertTrue(html_path.exists(), "web/portal/setup.html should exist")
 
     def test_setup_html_links_to_the_authentik_gated_console(self):
         """Verify setup.html links to the GUI setup Console."""
-        html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
+        html_path = pathlib.Path(ROOT / "web/portal/setup.html")
         content = html_path.read_text()
         self.assertIn('href="/console/"', content, "setup.html should link to Console")
         self.assertIn("Sign in to Authentik", content, "setup.html should explain Authentik access")
@@ -24,7 +24,7 @@ class TestSetupHTML(unittest.TestCase):
 
     def test_setup_html_has_canonical_link(self):
         """Verify setup.html has canonical link to /setup."""
-        html_path = pathlib.Path(ROOT / "lib/web/portal-static/setup.html")
+        html_path = pathlib.Path(ROOT / "web/portal/setup.html")
         content = html_path.read_text()
         self.assertIn('rel="canonical"', content, "setup.html should have canonical link")
         self.assertIn('href="/setup"', content, "Canonical link should point to /setup")

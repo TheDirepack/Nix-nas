@@ -225,8 +225,11 @@ verify_bootstrap_authentik_proxy() {
   provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Portal") | .pk')" || \
     fail 'Authentik bootstrap portal provider was not present'
   printf '%s' "$provider_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
-    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || \
+    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || {
+    printf '%s\n' "--- NAS Portal provider response (expected external_host https://$AUTHENTIK_PUBLIC_HOST, mode forward_single) ---" >&2
+    printf '%s' "$provider_response" | jq '.results[] | select((.pk | tostring) == $provider)' >&2
     fail 'Authentik bootstrap portal provider has unexpected settings'
+  }
   application_response="$(authentik_api GET 'core/applications/?page_size=100')" || fail 'Authentik application API was not ready'
   printf '%s' "$application_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
     '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
