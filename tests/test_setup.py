@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import pwd
 import sys
 import tempfile
 import unittest
@@ -190,6 +191,7 @@ class ShareProvisioningTests(unittest.TestCase):
 class LocalAdministratorTests(unittest.TestCase):
     def test_setup_creates_a_user_chosen_linux_administrator_without_password_arguments(self) -> None:
         calls: list[tuple[list[str], str | None]] = []
+        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/home/nasadmin", "/bin/bash"))
 
         def capture(command, *, input_text=None, **_kwargs):
             calls.append((list(command), input_text))
@@ -197,7 +199,10 @@ class LocalAdministratorTests(unittest.TestCase):
                 return setup.Completed(tuple(command), "", "", 1)
             return setup.Completed(tuple(command), "", "")
 
-        with mock.patch.object(setup, "run_root", side_effect=capture):
+        with (
+            mock.patch.object(setup, "run_root", side_effect=capture),
+            mock.patch.object(setup.pwd, "getpwnam", return_value=account),
+        ):
             result = setup.create_local_administrator(
                 {"username": "nasadmin", "name": "NAS Administrator", "email": "admin@example.test"},
                 "new-local-password",
@@ -206,13 +211,38 @@ class LocalAdministratorTests(unittest.TestCase):
         self.assertEqual(result["username"], "nasadmin")
         self.assertEqual(result["groups"], ["nas_admin"])
         self.assertIn(
-            (["useradd", "--create-home", "--shell", "/run/current-system/sw/bin/bash", "nasadmin"], None), calls
+            (["useradd", "--no-create-home", "--shell", "/run/current-system/sw/bin/bash", "nasadmin"], None), calls
         )
         self.assertIn((["chpasswd"], "nasadmin:new-local-password\n"), calls)
         self.assertIn(
             (["usermod", "--append", "--groups", "wheel,nas-administrators,nas-operations", "nasadmin"], None), calls
         )
         self.assertTrue(all("new-local-password" not in " ".join(command) for command, _input in calls))
+
+    def test_setup_recovers_a_missing_home_from_a_partial_useradd(self) -> None:
+        calls: list[list[str]] = []
+        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/home/nasadmin", "/bin/bash"))
+
+        def capture(command, **_kwargs):
+            calls.append(list(command))
+            return setup.Completed(tuple(command), "", "", 0)
+
+        with (
+            mock.patch.object(setup, "run_root", side_effect=capture),
+            mock.patch.object(setup.pwd, "getpwnam", return_value=account),
+        ):
+            setup.create_local_administrator(
+                {"username": "nasadmin", "name": "NAS Administrator", "email": "admin@example.test"},
+                "new-local-password",
+            )
+
+        helper = next(command for command in calls if command[:1] == ["systemd-run"])
+        self.assertIn("--property=ProtectHome=no", helper)
+        self.assertIn("--property=ReadWritePaths=/home", helper)
+        self.assertEqual(
+            helper[helper.index("--") + 1 :],
+            ["install", "-d", "-m", "0700", "-o", "1002", "-g", "100", "/home/nasadmin"],
+        )
 
     def test_finalizing_local_administrator_removes_bootstrap_and_persists_only_username(self) -> None:
         calls: list[list[str]] = []
