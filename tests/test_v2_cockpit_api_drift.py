@@ -150,6 +150,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["systemd-run", "--unit", f"nas-first-start-{'a' * 24}.service"])
         self.assertIn("--property=ProtectSystem=strict", command)
+        self.assertIn("--property=ProtectHome=read-only", command)
         self.assertIn(
             "--property=RuntimeDirectory=nas-secrets nas-secret-staging nas-secret-transactions",
             command,
@@ -165,6 +166,8 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("/run/nas-secret-staging", write_paths)
         self.assertIn("/run/nas-secret-transactions", write_paths)
         self.assertIn("/var/lib/nas-first-start", write_paths)
+        self.assertIn("/etc", write_paths.split("=")[-1].split())
+        self.assertIn("/home", write_paths.split("=")[-1].split())
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
         self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
