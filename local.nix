@@ -5,10 +5,10 @@
   imports = [
     ./modules/profiles/core-storage.nix
     ./modules/profiles/identity-sharing.nix
-    # Non-core features are stripped from the build for now; re-enable the
-    # profiles below when AI and observability ship again.
-    # ./modules/profiles/observability.nix
+    # AI is stripped from the build for now; re-enable the profile below
+    # when local AI ships again. Observability stays core.
     # ./modules/profiles/local-ai.nix
+    ./modules/profiles/observability.nix
   ];
 
   system.stateVersion = "26.05";

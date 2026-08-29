@@ -103,10 +103,17 @@
       "timeoutKeys": []
     },
     {
-      "id": "assets",
-      "label": "Cockpit plugin assets",
-      "ordinaryWaits": 0,
-      "fixedSeconds": 30,
+      "id": "observability",
+      "label": "Observability and notifications",
+      "ordinaryWaits": 8,
+      "fixedSeconds": 0,
+      "timeoutKeys": []
+    },
+    {
+      "id": "notifications",
+      "label": "Notification dependency failure and recovery",
+      "ordinaryWaits": 3,
+      "fixedSeconds": 0,
       "timeoutKeys": []
     },
     {

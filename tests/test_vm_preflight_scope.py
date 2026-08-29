@@ -47,7 +47,7 @@ class VmPreflightScopeTests(unittest.TestCase):
         self.assertIn("python3*first-run-wizard.py*", profile)
         self.assertIn('log "Run the complete first-time setup GUI"', guest_test)
         self.assertIn('log "Browser-level authorization and deterministic bundle probes"', guest_test)
-        self.assertIn('log "Cockpit plugin assets"', guest_test)
+        self.assertIn('log "Observability and notifications"', guest_test)
         self.assertIn('log "Final state"', guest_test)
         result = subprocess.run([str(FAILURE_INJECTION)], cwd=ROOT, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)

@@ -227,11 +227,11 @@ in
     # Non-core features are stripped from the appliance build for now
     # (single revertible commit); flip these back to re-enable.
     tftp.enable = lib.mkForce false;
-    alerting.enable = lib.mkForce false;
+    alerting.enable = lib.mkForce true;
     observability = {
-      enable = lib.mkForce false;
-      grafana.enable = lib.mkForce false;
-      ntfy.enable = lib.mkForce false;
+      enable = lib.mkForce true;
+      grafana.enable = lib.mkForce true;
+      ntfy.enable = lib.mkForce true;
     };
     ai = {
       enable = lib.mkForce false;
