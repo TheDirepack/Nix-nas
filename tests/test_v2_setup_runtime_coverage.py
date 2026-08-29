@@ -94,14 +94,14 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             setup.run_root_noninteractive(["x"])
         self.assertEqual(run.call_args.args[0][:3], ["sudo", "-n", "--"])
 
-    def test_interactive_privileged_always_uses_the_current_setup_administrator(self) -> None:
+    def test_interactive_privileged_root_mode_uses_an_accessible_setup_directory(self) -> None:
         with (
             mock.patch.object(setup.os, "geteuid", return_value=0),
             mock.patch.dict(setup.os.environ, {"NAS_SETUP_ALLOW_ROOT": "1"}),
-            mock.patch.object(setup, "run_admin") as admin,
+            mock.patch.object(setup, "run") as run,
         ):
             setup.run_interactive_privileged(["x"])
-        admin.assert_called_once_with(["x"])
+        run.assert_called_once_with(["env", f"--chdir={setup.STATE_PATH.parent}", "x"])
         with mock.patch.object(setup.os, "geteuid", return_value=1000), mock.patch.object(setup, "run_admin") as admin:
             setup.run_interactive_privileged(["x"])
         admin.assert_called_once_with(["x"])

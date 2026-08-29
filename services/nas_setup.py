@@ -192,6 +192,8 @@ def run_admin(command: Sequence[str], **kwargs: Any) -> Completed:
 
 
 def run_interactive_privileged(command: Sequence[str], **kwargs: Any) -> Completed:
+    if os.geteuid() == 0 and os.environ.get("NAS_SETUP_ALLOW_ROOT") == "1":
+        return run(["env", f"--chdir={STATE_PATH.parent}", *map(str, command)], **kwargs)
     return run_admin(command, **kwargs)
 
 
