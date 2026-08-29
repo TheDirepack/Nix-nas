@@ -365,13 +365,13 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=False),
             mock.patch.object(setup, "ZFS_ENCRYPTION", True),
-            mock.patch.object(setup, "run_interactive_privileged") as privileged,
+            mock.patch.object(setup, "run_storage_host") as storage_host,
             mock.patch.object(setup, "run_root") as root,
         ):
             result = setup.setup_storage(
                 {"createPool": False}, keepass_password="pw", confirmed_devices=[], allow_destructive=False
             )
-        privileged.assert_called_once_with(["nas-zfs-create-encrypted-dataset"], input_text="pw\n")
+        storage_host.assert_called_once_with(["nas-zfs-create-encrypted-dataset"], input_text="pw\n")
         root.assert_not_called()
         self.assertTrue(result["encrypted"])
 
@@ -478,6 +478,57 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         second = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
         self.assertNotEqual(first, second)
 
+    def test_verified_storage_retry_reconciles_only_healthy_matching_journal(self) -> None:
+        config = {
+            "storage": {
+                "createPool": True,
+                "devices": ["/dev/vdb"],
+                "topology": "single",
+                "ashift": 12,
+                "wipeDevices": True,
+            }
+        }
+        expected = {
+            "pool": setup.ZFS_POOL,
+            "dataset": setup.ZFS_DATASET,
+            "root": str(setup.ZFS_ROOT),
+            "creationRequest": {
+                "topology": "single",
+                "devices": ["/dev/vdb"],
+                "ashift": 12,
+                "wipeDevices": True,
+            },
+            "createdPool": True,
+            "createdDataset": True,
+            "encrypted": setup.ZFS_ENCRYPTION,
+            "recoveredAfterVerification": True,
+        }
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=True),
+            mock.patch.object(
+                setup,
+                "load_json",
+                return_value={"status": "manual-recovery-required", "currentStep": "storage"},
+            ),
+            mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
+        ):
+            self.assertTrue(setup.reconcile_verified_storage_retry("fingerprint", config["storage"]))
+        recover.assert_called_once_with(
+            setup.JOURNAL_PATH,
+            workflow="first-run-v2",
+            fingerprint="fingerprint",
+            step="storage",
+            result=expected,
+        )
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=False),
+            mock.patch.object(setup, "load_json") as load,
+            mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
+        ):
+            self.assertFalse(setup.reconcile_verified_storage_retry("fingerprint", config["storage"]))
+        load.assert_not_called()
+        recover.assert_not_called()
+
     def test_install_runtime_identity_token_validates_and_installs(self) -> None:
         response = {"token": "runtime-token", "username": "service"}
         with (
@@ -512,6 +563,21 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "dataset_exists", return_value=False),
         ):
             self.assertFalse(setup.storage_ready())
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=True),
+            mock.patch.object(
+                setup, "run_storage_host", return_value=setup.Completed((), "", "mount mismatch", 1)
+            ) as storage_host,
+        ):
+            self.assertFalse(setup.storage_ready())
+        storage_host.assert_called_once_with(["nas-zfs-mount-check"], check=False)
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=True),
+            mock.patch.object(setup, "run_storage_host", return_value=setup.Completed((), "", "")),
+        ):
+            self.assertTrue(setup.storage_ready())
         with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), "{", "", 0)):
             self.assertFalse(setup.identity_command_ready(["x"]))
         with mock.patch.object(

@@ -106,6 +106,47 @@ class OperationJournalTests(unittest.TestCase):
             self.assertEqual("reconciled", result.value["status"])
             self.assertEqual("verified storage", result.value["recoveryNote"])
 
+    def test_verified_step_recovery_requires_exact_transaction_and_failed_step(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "journal.json"
+            value = {
+                "schemaVersion": 1,
+                "workflow": "setup",
+                "fingerprint": "same",
+                "status": "manual-recovery-required",
+                "currentStep": "storage",
+                "steps": {"storage": {"status": "failed", "error": "mount check failed"}},
+            }
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(journal_module.JournalError, "different setup"):
+                journal_module.OperationJournal.complete_verified_recovery_step(
+                    path,
+                    workflow="setup",
+                    fingerprint="different",
+                    step="storage",
+                    result={"pool": "tank"},
+                )
+            with self.assertRaisesRegex(journal_module.JournalError, "not awaiting.*identity"):
+                journal_module.OperationJournal.complete_verified_recovery_step(
+                    path,
+                    workflow="setup",
+                    fingerprint="same",
+                    step="identity",
+                    result={"ok": True},
+                )
+            recovered = journal_module.OperationJournal.complete_verified_recovery_step(
+                path,
+                workflow="setup",
+                fingerprint="same",
+                step="storage",
+                result={"pool": "tank"},
+            )
+            self.assertEqual("reconciled", recovered.value["status"])
+            self.assertIsNone(recovered.value["currentStep"])
+            self.assertTrue(recovered.step_complete("storage"))
+            self.assertEqual({"pool": "tank"}, recovered.result("storage"))
+            self.assertNotIn("error", recovered.value["steps"]["storage"])
+
     def test_step_and_workflow_lifecycle_clears_stale_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary) / "journal.json"

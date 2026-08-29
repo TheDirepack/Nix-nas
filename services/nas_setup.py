@@ -970,7 +970,51 @@ def keepass_database_ready(_result: Any = None) -> bool:
 
 
 def storage_ready(_result: Any = None) -> bool:
-    return pool_exists() and dataset_exists()
+    if not pool_exists() or not dataset_exists():
+        return False
+    try:
+        return run_storage_host(["nas-zfs-mount-check"], check=False).returncode == 0
+    except SetupError:
+        return False
+
+
+def reconcile_verified_storage_retry(fingerprint: str, storage: Mapping[str, Any]) -> bool:
+    if not storage_ready():
+        return False
+    existing = load_json(JOURNAL_PATH)
+    if (
+        existing is None
+        or existing.get("status") != "manual-recovery-required"
+        or existing.get("currentStep") != "storage"
+    ):
+        return False
+    creation_request = None
+    if storage.get("createPool"):
+        creation_request = {
+            "topology": str(storage.get("topology", "single")),
+            "devices": [str(item) for item in storage.get("devices", [])],
+            "ashift": int(storage.get("ashift", 12)),
+            "wipeDevices": bool(storage.get("wipeDevices")),
+        }
+    result = {
+        "pool": ZFS_POOL,
+        "dataset": ZFS_DATASET,
+        "root": str(ZFS_ROOT),
+        "creationRequest": creation_request,
+        "createdPool": bool(storage.get("createPool")),
+        "createdDataset": True,
+        "encrypted": ZFS_ENCRYPTION,
+        "recoveredAfterVerification": True,
+    }
+    OperationJournal.complete_verified_recovery_step(
+        JOURNAL_PATH,
+        workflow="first-run-v2",
+        fingerprint=fingerprint,
+        step="storage",
+        result=result,
+    )
+    progress("verified the completed storage side effects and resumed the existing setup transaction")
+    return True
 
 
 def protected_stack_ready(_result: Any = None) -> bool:
@@ -1098,6 +1142,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             local_administrator = local_administrator_details(administrator)
             include_local_administrator(account_plan, local_administrator, administrator_password)
             fingerprint = setup_fingerprint(config, args, account_plan, password)
+            reconcile_verified_storage_retry(fingerprint, config["storage"])
             journal = OperationJournal.open(
                 JOURNAL_PATH,
                 workflow="first-run-v2",
