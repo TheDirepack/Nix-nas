@@ -71,12 +71,36 @@ def read_secret(path: str) -> str:
     return value
 
 
+def search_roots(driver: webdriver.Chrome):
+    roots: list[Any] = [driver]
+    for root in roots:
+        yield root
+        try:
+            children = root.find_elements(By.CSS_SELECTOR, "*")
+        except WebDriverException:
+            continue
+        for child in children:
+            try:
+                shadow = driver.execute_script("return arguments[0].shadowRoot", child)
+                if shadow:
+                    roots.append(shadow)
+            except WebDriverException:
+                pass
+
+
 def first(driver: webdriver.Chrome, selectors: list[str]) -> Any:
-    for selector in selectors:
-        elements = driver.find_elements(By.CSS_SELECTOR, selector)
-        for element in elements:
-            if element.is_displayed() and element.is_enabled():
-                return element
+    for root in search_roots(driver):
+        for selector in selectors:
+            try:
+                elements = root.find_elements(By.CSS_SELECTOR, selector)
+            except WebDriverException:
+                continue
+            for element in elements:
+                try:
+                    if element.is_displayed() and element.is_enabled():
+                        return element
+                except WebDriverException:
+                    continue
     return None
 
 
@@ -105,6 +129,7 @@ def browser_diagnostics(driver: webdriver.Chrome) -> dict[str, Any]:
 def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
     driver.get(origin.rstrip("/") + "/")
     wait = WebDriverWait(driver, 60)
+    wait.until(lambda current: current.execute_script("return document.readyState") in {"interactive", "complete"})
     wait.until(lambda current: "/identity/" in current.current_url)
     username_input = wait.until(
         lambda current: first(
