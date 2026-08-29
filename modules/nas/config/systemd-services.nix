@@ -190,7 +190,7 @@ in
         Type = "oneshot";
         ExecStart = "${nasIdentitySync}/bin/nas-identity-sync bootstrap";
         ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
-        Restart = "on-failure";
+        Restart = "on-abnormal";
         RestartSec = "5s";
         NoNewPrivileges = true;
         PrivateTmp = true;
