@@ -521,13 +521,38 @@ def finalize_local_administrator(administrator: Mapping[str, Any]) -> dict[str, 
                     "--property=PrivateTmp=yes",
                     "--property=ProtectSystem=yes",
                     "--property=ProtectHome=read-only",
-                    f"--property=ReadWritePaths=/home/{BOOTSTRAP_ADMIN_USER}",
                     "--",
                     "userdel",
-                    "--remove",
                     BOOTSTRAP_ADMIN_USER,
                 ]
             )
+        run_root(
+            [
+                "systemd-run",
+                "--wait",
+                "--pipe",
+                "--collect",
+                "--quiet",
+                "--unit",
+                "nas-bootstrap-home-retirement.service",
+                "--property=Type=oneshot",
+                "--property=User=root",
+                "--property=Group=root",
+                "--property=UMask=0077",
+                "--property=NoNewPrivileges=yes",
+                "--property=PrivateTmp=yes",
+                "--property=ProtectSystem=yes",
+                "--property=ProtectHome=read-only",
+                "--property=ReadWritePaths=/home",
+                "--",
+                "rm",
+                "--recursive",
+                "--force",
+                "--one-file-system",
+                "--",
+                f"/home/{BOOTSTRAP_ADMIN_USER}",
+            ]
+        )
     return value
 
 

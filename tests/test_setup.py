@@ -351,12 +351,34 @@ class LocalAdministratorTests(unittest.TestCase):
                 result = setup.finalize_local_administrator({"username": "nasadmin"})
                 persisted = json.loads(state.read_text(encoding="utf-8"))
         self.assertEqual(result, {"username": "nasadmin"})
-        retirement = run_root.call_args.args[0]
+        retirement = run_root.call_args_list[1].args[0]
+        cleanup = run_root.call_args_list[2].args[0]
         self.assertEqual(retirement[:1], ["systemd-run"])
         self.assertIn("--property=ProtectHome=read-only", retirement)
-        self.assertIn("--property=ReadWritePaths=/home/nas-bootstrap", retirement)
-        self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "--remove", "nas-bootstrap"])
+        self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "nas-bootstrap"])
+        self.assertIn("--property=ProtectHome=read-only", cleanup)
+        self.assertIn("--property=ReadWritePaths=/home", cleanup)
+        self.assertEqual(
+            cleanup[cleanup.index("--") + 1 :],
+            ["rm", "--recursive", "--force", "--one-file-system", "--", "/home/nas-bootstrap"],
+        )
         self.assertEqual(persisted, {"username": "nasadmin"})
+
+    def test_finalizing_local_administrator_cleans_partial_bootstrap_retirement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp) / "administrator.json"
+            with (
+                mock.patch.object(setup, "ADMIN_STATE_PATH", state),
+                mock.patch.object(
+                    setup,
+                    "run_root",
+                    side_effect=[setup.Completed(("id",), "", "", 1), setup.Completed(("rm",), "", "")],
+                ) as run_root,
+            ):
+                setup.finalize_local_administrator({"username": "nasadmin"})
+        self.assertEqual(len(run_root.call_args_list), 2)
+        cleanup = run_root.call_args_list[1].args[0]
+        self.assertEqual(cleanup[cleanup.index("--") + 1 :][-1], "/home/nas-bootstrap")
 
     def test_promoting_bootstrap_runtime_rejects_existing_operational_authorities_and_never_moves_bootstrap_state(
         self,
