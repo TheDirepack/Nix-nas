@@ -109,7 +109,7 @@ in
         PrivateTmp = true;
         ProtectHome = true;
         ProtectSystem = "strict";
-        ReadWritePaths = [ zfsControlRoot "/var/lib/nas-control" ];
+        ReadWritePaths = [ "-${zfsControlRoot}" "/var/lib/nas-control" ];
       };
     };
 
@@ -127,7 +127,7 @@ in
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
       ] ++ lib.optional firewalldEnabled "firewalld.service";
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot zfsControlRoot ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot ];
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;
@@ -172,7 +172,7 @@ in
         ProtectHome = true;
         ProtectSystem = "strict";
         ReadWritePaths = [
-          zfsControlRoot
+          "-${zfsControlRoot}"
           "/var/lib/nas-control"
           "/run/nas-control"
           "/run/systemd/system"
