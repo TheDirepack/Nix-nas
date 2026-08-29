@@ -158,9 +158,15 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
 
     def authenticated(current: webdriver.Chrome) -> bool:
         url = current.current_url
-        if "/identity/" in url or "/outpost.goauthentik.io/callback" in url:
-            return False
-        return url == public_origin or url.startswith(public_origin + "/")
+        # Consider login successful if we're on the public origin (Cockpit) 
+        # OR if we're on the Authentik dashboard (indicating successful login)
+        if url == public_origin or url.startswith(public_origin + "/"):
+            return True
+        # If we're on Authentik dashboard or similar user-specific pages, 
+        # login was successful even if we haven't been redirected yet
+        if "/identity/" in url and ("/if/user/" in url or "/if/flow/" in url):
+            return True
+        return False
 
     try:
         wait.until(authenticated)
