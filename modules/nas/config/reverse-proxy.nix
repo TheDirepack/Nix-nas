@@ -3,13 +3,13 @@
 let
   inherit (nasInternal)
     authentikPort
-    authentikOutpostPort
     caddyForwardAuth
     caddyOnDemandTransport
     cfg
     lanHost
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
+  firstRunApiSocket = "/run/nas-first-run-api/api.sock";
 in
 {
   config.services.caddy = {
@@ -25,17 +25,34 @@ in
         Referrer-Policy "no-referrer"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
       }
+      @setupSecurity path /setup /setup/*
+      header @setupSecurity {
+        Content-Security-Policy "frame-ancestors 'none'"
+        X-Frame-Options "DENY"
+      }
 
-      # Recreate identity headers only from Authentik forward-auth.
+      # Recreate the complete trusted identity corpus only after Authentik.
       request_header -Remote-User
       request_header -Remote-Groups
       request_header -Remote-Name
       request_header -Remote-Email
       request_header -Remote-Role
+      request_header -Remote-UID
       request_header -X-Authentik-Username
       request_header -X-Authentik-Groups
+      request_header -X-Authentik-Entitlements
       request_header -X-Authentik-Name
       request_header -X-Authentik-Email
+      request_header -X-Authentik-Uid
+      request_header -X-Authentik-Jwt
+      request_header -X-Authentik-Meta-Jwks
+      request_header -X-Authentik-Meta-Outpost
+      request_header -X-Authentik-Meta-Provider
+      request_header -X-Authentik-Meta-App
+      request_header -X-Authentik-Meta-Version
+      request_header -X-Authentik-Meta-User
+      request_header -X-Authentik-Meta-Is-Superuser
+      request_header -X-Authentik-Role
 
       log {
         output file ${config.services.caddy.logDir}/access.log {
@@ -44,15 +61,16 @@ in
           roll_keep 10
           roll_keep_for 720h
         }
-        format json
+        format filter {
+          request>headers>X-NAS-Setup-Job-Token delete
+          wrap json
+        }
       }
 
-      # Authentik bootstrap/global routes remain static until Caddy itself moves
-      # behind a non-cyclic V2 bootstrap boundary.
       @authentikOutpost path /outpost.goauthentik.io/*
       handle @authentikOutpost {
-        reverse_proxy 127.0.0.1:${toString authentikOutpostPort} {
-          ${lib.optionalString (authentikOutpostPort == authentikPort) ''uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io''}
+        uri replace /outpost.goauthentik.io ${cfg.identity.authentikPath}outpost.goauthentik.io
+        reverse_proxy 127.0.0.1:${toString authentikPort} {
           header_up Host {http.request.host}
           header_up X-Forwarded-Proto https
           header_up X-Forwarded-For {remote_host}
@@ -77,12 +95,20 @@ in
           header_up X-Forwarded-For {remote_host}
         }
       }
-      # V2 owns all application routes; no app-specific Caddy redirects are needed.
-      # Trailing-slash canonicalization and route handling are defined in the V2
-      # seed (managed-services-seed-v2.nix) and applied via generic Caddy primitives.
 
-      # V2 application routes handle prefix stripping, headers, and lifecycle
-      # without app-specific Caddy branches.
+      # A setup page already loaded in the browser must be able to observe the
+      # final job result and request its one reboot after Caddy switches to the
+      # permanent configuration. The API itself requires the random per-job
+      # capability; no setup submission or password endpoint is exposed here.
+      handle /setup/api/first-start/job/* {
+        uri strip_prefix /setup/api
+        reverse_proxy unix/${firstRunApiSocket}
+      }
+      handle /setup/api/reboot {
+        uri strip_prefix /setup/api
+        reverse_proxy unix/${firstRunApiSocket}
+      }
+
       handle /settings/syncthing {
         route {
           ${caddyForwardAuth}
@@ -95,7 +121,6 @@ in
       }
       redir /settings* ${cfg.identity.authentikPath}if/user/
 
-      # Authentik owns the appliance home page and application launcher.
       handle {
         redir * ${cfg.identity.authentikPath}if/user/ 303
       }

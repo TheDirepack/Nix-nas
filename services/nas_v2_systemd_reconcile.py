@@ -32,6 +32,7 @@ _QUADLET_DIRECT_CONTAINER = re.compile(r"^nas-v2-([a-z][a-z0-9-]{0,63})\.contain
 _QUADLET_DIRECT_NETWORK = re.compile(r"^nas-v2-net-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET_SESSION_NETWORK = re.compile(r"^nas-v2-snet-([a-z][a-z0-9-]{0,63})\.network$")
 _QUADLET = re.compile(r"^nas-v2-[A-Za-z0-9_.@:-]+\.(?:container|pod|network|volume|kube|image|build)$")
+_SYSTEMCTL_TIMEOUT_SECONDS = 180
 
 
 def _read_json(path: pathlib.Path, *, required: bool) -> dict[str, Any]:
@@ -246,7 +247,7 @@ def _run_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_SYSTEMCTL_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

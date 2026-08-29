@@ -1,0 +1,23 @@
+{
+  "executables": {
+    "nas-cockpit-api": {
+      "fuzzStrategy": "unknown-argv",
+      "sources": [
+        "services/nas_cockpit_entry.py",
+        "modules/nas/internal/account-tools.nix"
+      ],
+      "systemTest": "tests/vm/guest-test.sh",
+      "tests": [
+        "tests/test_cockpit_api.py",
+        "tests/test_adversarial_security.py",
+        "tests/test_security_reaudit.py"
+      ]
+    }
+  },
+  "pythonModules": {
+    "services/nas_cockpit_entry.py": [
+      "tests/test_security_reaudit.py"
+    ]
+  },
+  "schemaVersion": 3
+}

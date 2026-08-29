@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PYTHON_ROOTS = (ROOT / "services", ROOT / "scripts")
-WEB_ROOTS = (ROOT / "cockpit" / "src", ROOT / "web")
+WEB_ROOTS = (ROOT / "cockpit" / "src", ROOT / "web", ROOT / "setup" / "first-run-wizard" / "src")
 SHELL_ROOTS = (ROOT / "scripts", ROOT / "tests" / "vm")
 NIX_ROOTS = (ROOT / "modules",)
 

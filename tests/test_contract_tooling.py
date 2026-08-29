@@ -69,16 +69,26 @@ class ContractTests(unittest.TestCase):
 
     def test_ci_runs_tests_and_pins_actions(self):
         workflow = text(".github/workflows/ci.yml")
-        self.assertIn("./scripts/run-unit-tests.py", workflow)
-        uses = re.findall(r"^\s*-?\s*uses:\s*([^\s#]+)", workflow, flags=re.MULTILINE)
+        qualification = text("scripts/ci-qualification.sh")
+        setup_action = text(".github/actions/setup-nix-ci/action.yml")
+        handoff_action = text(".github/actions/prepare-vm-handoff/action.yml")
+        sources = (workflow, setup_action, handoff_action)
+        uses = [
+            item for source in sources for item in re.findall(r"^\s*-?\s*uses:\s*([^\s#]+)", source, flags=re.MULTILINE)
+        ]
         self.assertTrue(uses)
-        self.assertTrue(all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", item) for item in uses))
+        external_uses = [item for item in uses if not item.startswith(("./", "$/"))]
+        self.assertTrue(external_uses)
+        self.assertTrue(all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", item) for item in external_uses))
+        self.assertIn("./.github/actions/prepare-vm-handoff", workflow)
+        self.assertIn("./.github/actions/setup-nix-ci", workflow)
         self.assertNotIn("web/settings", workflow)
         self.assertNotIn("web/portal/*.js", workflow)
-        self.assertIn("./scripts/preflight.sh", workflow)
-        self.assertIn("ruff check services tests scripts", workflow)
-        self.assertIn("pyright --project pyproject.toml", workflow)
-        self.assertIn("--coverage coverage.json --quiet", workflow)
+        self.assertIn("./scripts/preflight.sh", qualification)
+        self.assertIn("./scripts/run-unit-tests.py", qualification)
+        self.assertIn("ruff check services tests scripts", qualification)
+        self.assertIn("pyright --project pyproject.toml", qualification)
+        self.assertIn("--coverage coverage.json --quiet", qualification)
         self.assertIn('select = ["E4", "E7", "E9", "F"]', text("pyproject.toml"))
         self.assertIn('typeCheckingMode = "basic"', text("pyproject.toml"))
         self.assertFalse((ROOT / "ruff.toml").exists())
@@ -306,8 +316,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("archived_mode", packaging)
         self.assertIn("staged_mode", packaging)
         package_step = workflow.split("      - name: Package and verify as an untrusted consumer", 1)[1]
-        self.assertIn('mv cockpit/node_modules "$dependencies"', package_step)
-        self.assertIn('mv "$dependencies" cockpit/node_modules', package_step)
+        self.assertNotIn("cockpit/node_modules", package_step)
         self.assertIn('extract="$RUNNER_TEMP/extracted-source"', package_step)
         self.assertIn("Restore verified source archive", workflow)
         self.assertIn("source-archive-${{ github.sha }}", workflow)
@@ -317,9 +326,6 @@ class ContractTests(unittest.TestCase):
         save_source = workflow.index("Save verified source archive")
         self.assertLess(restore_source, package_source)
         self.assertLess(package_source, save_source)
-        self.assertLess(
-            package_step.index('mv cockpit/node_modules "$dependencies"'), package_step.index("package-release.sh")
-        )
 
     def test_pipeline_summary_checks_out_its_behavioral_policy(self):
         workflow = text(".github/workflows/ci.yml")
@@ -411,6 +417,7 @@ class ContractTests(unittest.TestCase):
                     ".coverage.*",
                     "coverage.json",
                     "node_modules",
+                    ".hypothesis",
                     "state",
                 ),
             )
@@ -446,6 +453,7 @@ class ContractTests(unittest.TestCase):
                     "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
                     "NAS_PREFLIGHT_SKIP_TESTS": "1",
                     "NAS_PREFLIGHT_SKIP_NIX": "1",
+                    "NAS_PREFLIGHT_SKIP_TOOLING": "1",
                 },
                 text=True,
                 capture_output=True,
@@ -488,7 +496,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("export NAS_CONFIG_DIR=", maintenance)
 
     def test_first_run_setup_is_packaged_secure_and_vm_exercised(self):
-        setup = text("services/nas_setup.py") + text("services/nas_setup_config.py")
+        setup = (
+            text("services/nas_setup.py") + text("services/nas_setup_config.py") + text("services/nas_first_start.py")
+        )
         identity = text("services/nas_identity_sync.py")
         tools = text("modules/nas/internal/account-tools.nix")
         system = text("modules/nas/config/system.nix")
@@ -503,7 +513,7 @@ class ContractTests(unittest.TestCase):
             tools,
             r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0750";',
         )
-        self.assertIn("def first_run", setup)
+        self.assertIn("def secure_first_run", setup)
         self.assertIn("passwordFile", setup)
         self.assertIn("plaintext password", setup)
         self.assertIn("--confirm-storage-device", setup)
@@ -519,10 +529,10 @@ class ContractTests(unittest.TestCase):
         self.assertIn('"apply-accounts"', identity)
         self.assertIn("nasManagedBySetup", identity)
         self.assertIn("set_password/", identity)
-        self.assertIn("nas-setup first-run", guest)
-        self.assertIn("nas-setup account disable", guest)
+        self.assertIn("first-run-wizard.py", guest)
+        self.assertIn("run_as_nasadmin nas-setup account disable", guest)
         self.assertIn("alice-updated-password", guest)
-        self.assertIn("nas-setup first-run", encrypted_guest)
+        self.assertIn("first-start setup API rejects a stale plan digest", encrypted_guest)
         self.assertIn("[First start](admin/first-run.md)", summary)
         self.assertTrue((ROOT / "setup" / "first-run.example.json").exists())
 
@@ -560,7 +570,7 @@ class ContractTests(unittest.TestCase):
 
     def test_nix_matrix_covers_reusable_profiles_and_rejected_configurations(self):
         flake = text("flake.nix")
-        workflow = text(".github/workflows/ci.yml")
+        qualification = text("scripts/ci-qualification.sh")
         matrix = text("scripts/nix-config-matrix.sh")
         negative = text("scripts/nix-negative-tests.sh")
         host_platform = text("modules/nas/config/host-platform.nix")
@@ -576,7 +586,7 @@ class ContractTests(unittest.TestCase):
         ]:
             self.assertIn(name, flake)
             self.assertIn(name, matrix)
-        self.assertIn("nix-config-matrix.sh", workflow)
+        self.assertIn("nix-config-matrix.sh", qualification)
         self.assertIn("nix flake metadata --json", matrix)
         self.assertIn("nixosConfigurations.nas", matrix)
         self.assertIn("root file system", matrix)
@@ -605,8 +615,8 @@ class ContractTests(unittest.TestCase):
         flake = text("flake.nix")
         host = text("scripts/qemu-test.sh")
         guest = text("tests/vm/guest-test.sh")
-        run_vm = text("test/qemu/run-vm.sh")
         workflow = text(".github/workflows/ci.yml")
+        handoff = text(".github/actions/prepare-vm-handoff/action.yml")
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/integration.nix"))
         self.assertIn("pkgs.testers.runNixOSTest", text("tests/nixos/encrypted.nix"))
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/integration.nix"))
@@ -616,7 +626,6 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nixosConfigurations.nas-qemu", flake)
         self.assertIn("checks.x86_64-linux", flake)
         self.assertIn("latest-nixos-minimal-x86_64-linux.iso", host)
-        self.assertIn("[[ $MODE == boot ]] || ensure_iso", run_vm)
         self.assertIn("sha256sum --check --status", host)
         self.assertIn("nixos-install", text("tests/vm/install-system.sh"))
         self.assertIn("nas-vm-guest-test /dev/vdb", host)
@@ -636,7 +645,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("NAS_ZAP_IMAGE", host)
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", host)
         self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", host)
-        self.assertIn("zap-fuzz-evidence", workflow)
+        self.assertIn("installed-security-evidence", workflow)
         self.assertIn('NAS_ZAP_CONFIRM_ACTIVE: "1"', workflow)
         self.assertNotIn("adversarial-installed.py", guest)
         installer = text("tests/vm/install-system.sh")
@@ -659,8 +668,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))
         self.assertIn("nas-secrets activate-stdin", guest)
-        self.assertIn("nas-setup first-run", guest)
-        self.assertIn("nas-setup account apply", guest)
+        self.assertIn("first-run-wizard.py", guest)
+        self.assertIn("run_as_nasadmin nas-setup account apply", guest)
         self.assertIn("/authorize?scope=files", guest)
         self.assertIn("open-webui.service", guest)
         self.assertIn("nas-managed-services-control status", guest)
@@ -686,15 +695,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn("check: nas-vm", workflow)
         self.assertIn("check: nas-vm-encrypted", workflow)
         self.assertNotIn("nixosConfigurations.nas.config.system.build.toplevel", workflow)
-        bundle_import = workflow.index("Reassemble cached Nix store bundles before configuration builds")
-        system_build = workflow.index("Build missing testable systems")
-        bundle_publish = workflow.index("Publish the exact Nix bundles used by this run")
-        self.assertLess(bundle_import, system_build)
+        bundle_import = handoff.index("Import restored bundle fragments")
+        bundle_export = handoff.index("Build and export only missing bundle fragments")
+        bundle_verify = handoff.index("Verify exact complete handoff")
+        system_build = handoff.index("Build installable system closures")
+        bundle_publish = handoff.index("Publish complete Nix handoff for downstream runners")
+        self.assertLess(bundle_import, bundle_export)
+        self.assertLess(bundle_export, bundle_verify)
+        self.assertLess(bundle_verify, system_build)
         self.assertLess(system_build, bundle_publish)
-        self.assertIn("Export missing Nix store bundles for downstream VMs", workflow)
-        self.assertIn("steps.vm_bundle_handoff.outputs.cache_complete != 'true'", workflow)
-        integration_import = workflow.index("Reassemble Nix store from the build handoff")
-        integration_run = workflow.index("Run ${{ matrix.vm }} NixOS VM integration tests")
+        self.assertIn("save-missing", handoff)
+        self.assertIn("verify-handoff", handoff)
+        integration_job = workflow.split("  integration:\n", 1)[1].split("\n  installer:\n", 1)[0]
+        integration_import = integration_job.index("Verify and import prepared Nix handoff")
+        integration_run = integration_job.index("Run ${{ matrix.vm }} NixOS VM integration")
         self.assertLess(integration_import, integration_run)
 
 

@@ -17,6 +17,7 @@ let
       pkgs.coreutils
       pkgs.curl
       pkgs.findutils
+      pkgs.glibc.bin
       pkgs.gnugrep
       pkgs.gnused
       pkgs.keepassxc
@@ -40,7 +41,10 @@ let
       cleanup_password() {
         unset keepass_password
       }
-      trap cleanup_password EXIT HUP INT TERM
+      trap cleanup_password EXIT
+      trap 'cleanup_password; exit 129' HUP
+      trap 'cleanup_password; exit 130' INT
+      trap 'cleanup_password; exit 143' TERM
 
       acquire_lock() {
         exec 8>/run/lock/nas-secrets.lock
@@ -50,15 +54,65 @@ let
         }
       }
 
-      require_database() {
-        [[ -f "$database" ]] || {
-          echo "KeePassXC database not found: $database" >&2
-          echo "Create or restore the KDBX database, then configure nas.secrets.keepassDatabase." >&2
+      require_private_credential_file() {
+        local path="$1" label="$2" shared_group="''${3:-}" uid gid mode permissions current_uid expected_gid=""
+        [[ ! -L "$path" ]] || {
+          echo "$label must not be a symlink: $path" >&2
           exit 1
         }
-        if [[ -n "$key_file" && ! -f "$key_file" ]]; then
-          echo "KeePassXC key file not found: $key_file" >&2
+        [[ -f "$path" ]] || {
+          echo "$label is not a regular file: $path" >&2
           exit 1
+        }
+        uid="$(stat -c '%u' -- "$path")" || {
+          echo "Unable to inspect $label owner: $path" >&2
+          exit 1
+        }
+        gid="$(stat -c '%g' -- "$path")" || {
+          echo "Unable to inspect $label group: $path" >&2
+          exit 1
+        }
+        mode="$(stat -c '%a' -- "$path")" || {
+          echo "Unable to inspect $label permissions: $path" >&2
+          exit 1
+        }
+        current_uid="$(id -u)"
+        permissions=$((8#$mode))
+        [[ "$uid" == 0 || "$uid" == "$current_uid" ]] || {
+          echo "$label must be owned by root or the invoking administrator: $path" >&2
+          exit 1
+        }
+        (( (permissions & 8#007) == 0 )) || {
+          echo "$label must not grant access to other users: $path ($mode)" >&2
+          exit 1
+        }
+        if [[ -z "$shared_group" ]]; then
+          (( (permissions & 8#070) == 0 )) || {
+            echo "$label must not grant group permissions: $path ($mode)" >&2
+            exit 1
+          }
+          return 0
+        fi
+        (( (permissions & ~8#660) == 0 )) || {
+          echo "$label permissions exceed the private shared-file policy: $path ($mode)" >&2
+          exit 1
+        }
+        if (( permissions & 8#070 )); then
+          expected_gid="$(getent group "$shared_group" | cut -d: -f3 || true)"
+          [[ -n "$expected_gid" && "$gid" == "$expected_gid" ]] || {
+            echo "$label group-readable permissions require group $shared_group: $path" >&2
+            exit 1
+          }
+        fi
+      }
+
+      require_database() {
+        # Fresh setup creates the permanent KDBX as root:nas-administrators
+        # 0660; restored databases may be owner-only 0600. Group access is
+        # accepted only for the dedicated administrator group.
+        require_private_credential_file "$database" "KeePassXC database" nas-administrators
+        if [[ -n "$key_file" ]]; then
+          require_private_credential_file "$key_file" "KeePassXC key file"
         fi
       }
 
@@ -79,7 +133,9 @@ let
         }
         # keepassxc >= 2.7 reads a piped database password from stdin without an explicit flag.
         local args=(db-info --quiet)
-        [[ -n "$key_file" ]] && args+=(--key-file "$key_file")
+        if [[ -n "$key_file" ]]; then
+          args+=(--key-file "$key_file")
+        fi
         args+=("$database")
         if ! printf '%s\n' "$keepass_password" | keepassxc-cli "''${args[@]}" >/dev/null 2>&1; then
           echo "Unable to unlock the KeePassXC database." >&2
@@ -189,10 +245,11 @@ let
 
       require_huggingface_token() {
         local value="$1"
-        [[ -z "$value" || "$value" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || {
+        [[ -z "$value" ]] && return 0
+        if (( ''${#value} > 4096 )) || [[ ! "$value" =~ ^hf_[A-Za-z0-9]{20,}$ ]]; then
           echo "Hugging Face token has an unsafe or unexpected format in KeePassXC." >&2
           return 1
-        }
+        fi
       }
 
       validate_ai_provider_id() {
@@ -369,6 +426,9 @@ PY_AI_PROVIDERS
         ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
         local provider_id provider_env provider_key
         ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
+        ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''local grafana_secret_key''}
+        ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''local nut_webgui_server_key''}
+        ${lib.optionalString cfg.zfsEncryption.enable ''local zfs_dataset_key''}
         local state_bundle_signing_key
         sudo install -d -m 0711 -o root -g root /run/nas-secret-staging
         runtime_base="/run/nas-secret-staging/$(id -u)"
@@ -452,7 +512,9 @@ TOKEN_WARNING
         fi
 
         ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''
-        printf '%s' "$(get_secret grafana-secret-key)" > "$local_stage/observability/grafana-secret-key"
+        grafana_secret_key="$(get_secret grafana-secret-key)"
+        require_secret_hex "$grafana_secret_key" 64 "Grafana signing and data-source secret key"
+        printf '%s' "$grafana_secret_key" > "$local_stage/observability/grafana-secret-key"
         ''}
         ${lib.optionalString cfg.observability.ntfy.enable ''
         ntfy_password="$(get_secret ntfy-admin-password)"
@@ -469,10 +531,14 @@ NTFY_ENV
         printf '%s' "$ntfy_password" > "$local_stage/observability/ntfy-admin-password"
         ''}
         ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''
-        printf '%s' "$(get_secret nut-webgui-server-key)" > "$local_stage/power/nut-webgui-server-key"
+        nut_webgui_server_key="$(get_secret nut-webgui-server-key)"
+        require_secret_hex "$nut_webgui_server_key" 64 "NUT Web GUI session signing key"
+        printf '%s' "$nut_webgui_server_key" > "$local_stage/power/nut-webgui-server-key"
         ''}
         ${lib.optionalString cfg.zfsEncryption.enable ''
-        printf '%s' "$(get_secret zfs-dataset-key)" > "$local_stage/zfs/dataset-key"
+        zfs_dataset_key="$(get_secret zfs-dataset-key)"
+        require_secret_hex "$zfs_dataset_key" 64 "ZFS native encryption key"
+        printf '%s' "$zfs_dataset_key" > "$local_stage/zfs/dataset-key"
         ''}
         ${lib.optionalString cfg.ai.enable ''
         llama_swap_api_key="$(get_secret llama-swap-api-key)"
@@ -632,10 +698,10 @@ NTFY_ENV
         local token
         read -r -s -p "Authentik API token: " token
         echo
-        [[ "$token" =~ ^[A-Za-z0-9._~-]{20,}$ ]] || {
+        if (( ''${#token} < 20 || ''${#token} > 4096 )) || [[ ! "$token" =~ ^[A-Za-z0-9._~-]+$ ]]; then
           echo "Authentik API token format is invalid." >&2
           exit 1
-        }
+        fi
         store_value authentik-api-token "$token"
         unset token
         echo "Authentik API token stored. Run nas-secrets activate to stage it."
@@ -652,10 +718,10 @@ NTFY_ENV
           echo "Unexpected extra input while setting the Authentik API token." >&2
           exit 1
         fi
-        [[ "$token" =~ ^[A-Za-z0-9._~-]{20,}$ ]] || {
+        if (( ''${#token} < 20 || ''${#token} > 4096 )) || [[ ! "$token" =~ ^[A-Za-z0-9._~-]+$ ]]; then
           echo "Authentik API token format is invalid." >&2
           exit 1
-        }
+        fi
         store_value authentik-api-token "$token"
         unset token
         echo "Authentik API token stored."
@@ -677,7 +743,10 @@ NTFY_ENV
         local token
         read -r -s -p "Hugging Face read token: " token
         echo
-        [[ "$token" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || { echo "Token format is invalid." >&2; exit 1; }
+        if (( ''${#token} > 4096 )) || [[ ! "$token" =~ ^hf_[A-Za-z0-9]{20,}$ ]]; then
+          echo "Token format is invalid." >&2
+          exit 1
+        fi
         store_value huggingface-token "$token"
         unset token
         echo "Token stored. Run nas-secrets activate to export it."

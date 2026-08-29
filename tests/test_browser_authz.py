@@ -20,6 +20,8 @@ def load_authz():
     exceptions = types.ModuleType("selenium.common.exceptions")
     webdriver_common = types.ModuleType("selenium.webdriver.common")
     by = types.ModuleType("selenium.webdriver.common.by")
+    chrome = types.ModuleType("selenium.webdriver.chrome")
+    chrome_service = types.ModuleType("selenium.webdriver.chrome.service")
     support = types.ModuleType("selenium.webdriver.support")
     support_ui = types.ModuleType("selenium.webdriver.support.ui")
 
@@ -27,10 +29,17 @@ def load_authz():
         pass
 
     class DummyChromeOptions:
+        def __init__(self):
+            self.arguments: list[str] = []
+
         def set_capability(self, *_args, **_kwargs):
             pass
 
-        def add_argument(self, *_args, **_kwargs):
+        def add_argument(self, argument, *_args, **_kwargs):
+            self.arguments.append(argument)
+
+    class DummyService:
+        def __init__(self, **_kwargs):
             pass
 
     class DummyBy:
@@ -46,6 +55,7 @@ def load_authz():
 
     setattr(webdriver, "Chrome", DummyChrome)
     setattr(webdriver, "ChromeOptions", DummyChromeOptions)
+    setattr(chrome_service, "Service", DummyService)
     setattr(exceptions, "NoSuchElementException", DummySeleniumError)
     setattr(exceptions, "TimeoutException", DummySeleniumError)
     setattr(exceptions, "WebDriverException", DummySeleniumError)
@@ -59,6 +69,8 @@ def load_authz():
     replacements = {
         "selenium": selenium,
         "selenium.webdriver": webdriver,
+        "selenium.webdriver.chrome": chrome,
+        "selenium.webdriver.chrome.service": chrome_service,
         "selenium.common": common,
         "selenium.common.exceptions": exceptions,
         "selenium.webdriver.common": webdriver_common,
@@ -122,6 +134,25 @@ class BrowserAuthzInputTests(unittest.TestCase):
                     self.authz.main()
             first_browser.assert_called_once_with("https://nas-test.local", "admin", "operator-secret")
 
+    def test_browser_pins_the_vm_public_hostname_to_loopback(self) -> None:
+        options = self.authz.webdriver.ChromeOptions()
+        chrome_service = types.ModuleType("selenium.webdriver.chrome.service")
+
+        class DummyService:
+            def __init__(self, **_kwargs):
+                pass
+
+        setattr(chrome_service, "Service", DummyService)
+        with (
+            mock.patch.object(self.authz.webdriver, "ChromeOptions", return_value=options),
+            mock.patch.object(self.authz.shutil, "which", side_effect=["/bin/chromium", "/bin/chromedriver"]),
+            mock.patch.object(self.authz.webdriver, "Chrome"),
+            mock.patch.dict(sys.modules, {"selenium.webdriver.chrome.service": chrome_service}),
+            mock.patch.dict(self.authz.os.environ, {"NAS_BROWSER_HOST_ADDRESS": "10.0.2.15"}),
+        ):
+            self.authz.browser()
+        self.assertIn("--host-resolver-rules=MAP nas-test.local 10.0.2.15", options.arguments)
+
     def test_bootstrap_only_cli_checks_akadmin_portal_setup_and_console_routes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             password = self.secret(pathlib.Path(temporary), "bootstrap", "bootstrap-secret")
@@ -161,6 +192,11 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.assertTrue(self.authz.callback_return_matches("/console/", "/console/"))
         self.assertFalse(self.authz.callback_return_matches("/setup", "/console/"))
 
+    def test_callback_return_accepts_cockpits_default_console_landing(self) -> None:
+        self.assertTrue(self.authz.callback_return_matches("/console/", "/console/system"))
+        self.assertFalse(self.authz.callback_return_matches("/setup", "/console/system"))
+        self.assertFalse(self.authz.callback_return_matches("/console/", "/identity/if/user/"))
+
     def test_secret_reader_rejects_symlink_and_permissive_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -181,6 +217,24 @@ class BrowserAuthzInputTests(unittest.TestCase):
         ) as fetch:
             self.authz.verify_native_share_route(object(), "https://nas-test.local")
         fetch.assert_called_once_with("https://nas-test.local")
+
+    def test_native_share_probe_uses_loopback_for_vm_host_mapping(self) -> None:
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 404
+        response.geturl.return_value = "https://nas-test.local:8443/share/not-a-real-token"
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with (
+            mock.patch.object(self.authz.urllib.request, "build_opener", return_value=opener) as build_opener,
+            mock.patch.dict(self.authz.os.environ, {"NAS_BROWSER_HOST_ADDRESS": "10.0.2.15"}),
+        ):
+            result = self.authz.native_share_response("https://nas-test.local:8443")
+        request = opener.open.call_args.args[0]
+        self.assertEqual(result["status"], 404)
+        self.assertEqual(request.full_url, "https://nas-test.local:8443/share/not-a-real-token")
+        self.assertEqual(request.get_header("Host"), "nas-test.local:8443")
+        build_opener.assert_called_once()
 
     def test_native_share_route_rejects_authentik_redirect(self) -> None:
         with mock.patch.object(

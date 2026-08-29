@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as apiModule from "../../cockpit/src/api.js";
 import {
   activateSecrets,
   api,
@@ -10,7 +11,6 @@ import {
   replaceManagedServicesDocument,
   replaceManagedServicesJsonDocument,
   setManagedServiceMode,
-  startFirstRun,
 } from "../../cockpit/src/api.js";
 
 test("api uses only the fixed privileged Cockpit backend", async () => {
@@ -26,6 +26,10 @@ test("api uses only the fixed privileged Cockpit backend", async () => {
       options: {superuser: "require", err: "message"},
     },
   ]);
+});
+
+test("Cockpit does not expose a first-run credential submission helper", () => {
+  assert.equal("startFirstRun" in apiModule, false);
 });
 
 test("structured API mutations send JSON only over stdin", async () => {
@@ -120,14 +124,8 @@ test("managed service mode validates identifiers and fixed modes before spawning
     command: ["nas-managed-services-control", "set", "ai-runtime", "on-demand"],
     options: {superuser: "require", err: "message"},
   });
-  assert.throws(
-    () => setManagedServiceMode("../escape", "always", spawn),
-    /Invalid Managed Services/,
-  );
-  assert.throws(
-    () => setManagedServiceMode("ai-runtime", "secret", spawn),
-    /Invalid Managed Services/,
-  );
+  assert.throws(() => setManagedServiceMode("../escape", "always", spawn), /Invalid Managed Services/);
+  assert.throws(() => setManagedServiceMode("ai-runtime", "secret", spawn), /Invalid Managed Services/);
 });
 
 test("hostile structured values never become Cockpit command arguments", async () => {
@@ -146,10 +144,7 @@ test("hostile structured values never become Cockpit command arguments", async (
   };
   await apiInput(["ai-provider-set"], payload, spawn);
   assert.deepEqual(calls[0].command, ["nas-cockpit-api", "ai-provider-set"]);
-  assert.equal(
-    calls[0].command.some((value) => value.includes("pwned")),
-    false,
-  );
+  assert.equal(calls[0].command.some((value) => value.includes("pwned")), false);
   assert.equal(calls[1].value, JSON.stringify(payload));
   assert.equal({}.polluted, undefined);
 });
@@ -157,53 +152,6 @@ test("hostile structured values never become Cockpit command arguments", async (
 test("backend JSON parsing fails closed", () => {
   assert.deepEqual(parseJsonOutput('{"ok":true}'), {ok: true});
   assert.throws(() => parseJsonOutput("not-json"), SyntaxError);
-});
-
-test("first-run sends password and safety choices only in a JSON stdin request", async () => {
-  const calls = [];
-  const spawn = (command, options) => {
-    const process = Promise.resolve('{"schemaVersion":1,"jobId":"abc","status":"submitted"}');
-    process.input = (value) => calls.push(["input", value]);
-    calls.push(["spawn", command, options]);
-    return process;
-  };
-  const result = await startFirstRun(
-    "correct horse battery staple",
-    {
-      username: "nasadmin",
-      name: "NAS Administrator",
-      email: "admin@example.test",
-      password: "new local password",
-    },
-    {
-      allowDestructiveStorage: true,
-      planDigest: "a".repeat(64),
-      confirmPasswordReapply: true,
-      devices: ["/dev/disk/by-id/disk-one"],
-    },
-    spawn,
-  );
-  assert.equal(result.status, "submitted");
-  assert.deepEqual(calls[0], [
-    "spawn",
-    ["nas-cockpit-api", "first-run"],
-    {superuser: "require", err: "message"},
-  ]);
-  const request = JSON.parse(calls[1][1]);
-  assert.deepEqual(request, {
-    password: "correct horse battery staple",
-    administrator: {
-      username: "nasadmin",
-      name: "NAS Administrator",
-      email: "admin@example.test",
-      password: "new local password",
-    },
-    planDigest: "a".repeat(64),
-    devices: ["/dev/disk/by-id/disk-one"],
-    allowDestructiveStorage: true,
-    confirmPasswordReapply: true,
-  });
-  assert.equal(calls[0][1].includes("correct horse battery staple"), false);
 });
 
 test("unlock sends the password only over stdin", () => {
@@ -224,50 +172,25 @@ test("unlock sends the password only over stdin", () => {
   ]);
 });
 
-test("secret transports reject empty and multiline passwords before spawning", () => {
+test("unlock rejects empty and multiline passwords before spawning", () => {
   const fail = () => assert.fail("spawn should not run");
   assert.throws(() => activateSecrets("", fail), /Enter/);
   assert.throws(() => activateSecrets("bad\nvalue", fail), /single line/);
-  assert.throws(
-    () =>
-      startFirstRun(
-        "bad\rvalue",
-        {username: "nasadmin", name: "Admin", email: "admin@example.test", password: "password"},
-        {planDigest: "a".repeat(64)},
-        fail,
-      ),
-    /single line/,
-  );
 });
 
-test("secret transports preserve hostile single-line values only on stdin", async () => {
+test("unlock preserves hostile single-line values only on stdin", () => {
   const inputs = [];
   const spawn = (command) => {
-    const process = Promise.resolve('{"ok":true}');
-    process.input = (value) => inputs.push({command, value});
+    const process = {
+      input(value) {
+        inputs.push({command, value});
+      },
+    };
     return process;
   };
   const password = "'\"\\$`;&|<> password";
-  await startFirstRun(
-    password,
-    {username: "nasadmin", name: "Admin", email: "admin@example.test", password},
-    {planDigest: "b".repeat(64)},
-    spawn,
-  );
   activateSecrets(password, spawn);
-  assert.deepEqual(
-    inputs.map(({command}) => command),
-    [
-      ["nas-cockpit-api", "first-run"],
-      ["nas-secrets", "activate-stdin"],
-    ],
-  );
-  const request = JSON.parse(inputs[0].value);
-  assert.equal(request.password, password);
-  assert.equal(request.planDigest, "b".repeat(64));
-  assert.equal(inputs[1].value, `${password}\n`);
-  assert.equal(
-    inputs.some(({command}) => [].concat(command).some((arg) => arg.includes(password))),
-    false,
-  );
+  assert.deepEqual(inputs.map(({command}) => command), [["nas-secrets", "activate-stdin"]]);
+  assert.equal(inputs[0].value, `${password}\n`);
+  assert.equal(inputs.some(({command}) => command.some((arg) => arg.includes(password))), false);
 });

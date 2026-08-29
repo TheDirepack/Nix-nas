@@ -46,6 +46,13 @@ _SENSITIVE_KEYS = frozenset(
 # authorizationMethod remain visible because they do not end at that boundary.
 _SENSITIVE_SUFFIXES = tuple(f"_{key}" for key in sorted(_SENSITIVE_KEYS))
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+# Privileged orchestration intentionally passes its short-lived coordination
+# capability through `env NAME=value` argv elements. A failed subprocess may
+# stringify that argv inside an exception before the exception reaches a
+# structured journal, so field-name redaction alone is insufficient. The token
+# has a fixed lowercase-hex contract; match exactly that capability rather than
+# using an over-broad environment-variable scrubber.
+_INLINE_COORDINATION_TOKEN_RE = re.compile(r"NAS_OPERATION_COORDINATION_TOKEN=[0-9a-f]{32}")
 
 
 def _normalized_key(key: str) -> str:
@@ -62,8 +69,12 @@ def _sensitive_key(key: str) -> bool:
     return lowered in _SENSITIVE_KEYS or lowered.endswith(_SENSITIVE_SUFFIXES)
 
 
+def _redact_inline_secrets(text: str) -> str:
+    return _INLINE_COORDINATION_TOKEN_RE.sub("NAS_OPERATION_COORDINATION_TOKEN=[redacted]", text)
+
+
 def _bounded_text(value: Any) -> str:
-    text = str(value).replace("\x00", "")
+    text = _redact_inline_secrets(str(value).replace("\x00", ""))
     if len(text) <= MAX_TEXT_LENGTH:
         return text
     return f"{text[:MAX_TEXT_LENGTH]}[truncated]"

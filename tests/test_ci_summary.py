@@ -7,7 +7,10 @@ import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("ci_summary", ROOT / "scripts" / "ci-summary.py")
+SPEC = importlib.util.spec_from_file_location(
+    "ci_summary",
+    ROOT / "scripts" / "ci-summary.py",
+)
 assert SPEC and SPEC.loader
 ci_summary = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = ci_summary
@@ -28,27 +31,43 @@ class CiSummaryTests(unittest.TestCase):
         self.assertEqual(workflow_jobs, set(ci_summary.KNOWN_JOBS))
         self.assertNotIn(".ci-cache/", workflow)
 
-    def test_heavy_jobs_match_the_consolidated_build_graph(self) -> None:
-        self.assertEqual({"build"}, ci_summary.HEAVY_JOBS)
-        self.assertEqual({"browser", "integration"}, ci_summary.QUALIFICATION_JOBS)
-
-    def test_pull_request_requires_fast_build_and_browser_but_not_destructive_qualification(self) -> None:
-        expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
-        needs = self.results(expected)
-        _, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
+    def test_pull_request_runs_full_stack_installer_and_browser(self) -> None:
+        expected = ci_summary.expected_jobs(
+            "pull_request",
+            "refs/pull/40/merge",
+            "main",
+            "fast",
+        )
+        self.assertEqual(
+            expected,
+            set(ci_summary.BASE_JOBS) | {"coverage-diff", "integration", "installer"},
+        )
+        _, bad = ci_summary.summarize(
+            self.results(expected),
+            "pull_request",
+            "refs/pull/40/merge",
+            "main",
+            "fast",
+        )
         self.assertEqual(bad, [])
 
-        self.assertIn("browser", expected)
-        self.assertNotIn("integration", expected)
-        self.assertNotIn("source-fuzz", expected)
+    def test_non_main_pull_request_skips_main_coverage_baseline(self) -> None:
+        expected = ci_summary.expected_jobs(
+            "pull_request",
+            "refs/pull/40/merge",
+            "release",
+            "fast",
+        )
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS) | {"integration", "installer"})
 
-    def test_non_main_pull_request_does_not_require_main_coverage_baseline(self) -> None:
-        expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "release", "fast")
-        self.assertNotIn("coverage-diff", expected)
-
-    def test_fast_dispatch_runs_deterministic_browser_checks_but_skips_heavy_jobs(self) -> None:
-        expected = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "fast")
-        self.assertEqual(expected, ci_summary.FAST_JOBS | {"browser"})
+    def test_fast_dispatch_keeps_parallel_qualification_and_browser(self) -> None:
+        expected = ci_summary.expected_jobs(
+            "workflow_dispatch",
+            "refs/heads/main",
+            "",
+            "fast",
+        )
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS))
         _, bad = ci_summary.summarize(
             self.results(expected),
             "workflow_dispatch",
@@ -58,32 +77,62 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
-    def test_full_dispatch_includes_installer_but_reserves_fuzzing_for_release_qualification(self) -> None:
-        full = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "full")
-        installer = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/main", "", "installer")
-        self.assertTrue(ci_summary.HEAVY_JOBS | ci_summary.QUALIFICATION_JOBS <= full)
-        self.assertIn("installer", full)
-        self.assertIn("installer", installer)
-        self.assertFalse(ci_summary.SLOW_JOBS & full)
-        self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & full)
-        self.assertFalse(ci_summary.SLOW_JOBS & installer)
-        self.assertFalse(ci_summary.INSTALLED_FUZZ_JOBS & installer)
+    def test_full_dispatch_adds_integration_installer_and_manual_fuzz(self) -> None:
+        expected = ci_summary.expected_jobs(
+            "workflow_dispatch",
+            "refs/heads/main",
+            "",
+            "full",
+        )
+        self.assertEqual(
+            expected,
+            set(ci_summary.BASE_JOBS) | {"integration", "installer", "source-fuzz"},
+        )
+        self.assertNotIn("installed-security", expected)
+        installer_dispatch = ci_summary.expected_jobs(
+            "workflow_dispatch",
+            "refs/heads/main",
+            "",
+            "installer",
+        )
+        self.assertEqual(
+            installer_dispatch,
+            set(ci_summary.BASE_JOBS) | {"integration", "installer"},
+        )
+        self.assertNotIn("source-fuzz", installer_dispatch)
+
+    def test_main_push_runs_complete_release_qualification(self) -> None:
+        expected = ci_summary.expected_jobs("push", "refs/heads/main", "", "fast")
+        self.assertEqual(
+            expected,
+            set(ci_summary.BASE_JOBS)
+            | {
+                "integration",
+                "installer",
+                "installed-security",
+            },
+        )
+        # Long fuzz searches are manual-only and never ride along with
+        # automatic events.
+        self.assertNotIn("source-fuzz", expected)
 
     def test_any_reported_failure_is_rejected_even_when_job_is_optional(self) -> None:
-        expected = ci_summary.expected_jobs("workflow_dispatch", "refs/heads/topic", "", "fast")
+        expected = ci_summary.expected_jobs(
+            "workflow_dispatch",
+            "refs/heads/topic",
+            "",
+            "fast",
+        )
         needs = self.results(expected)
         needs["installer"]["result"] = "failure"
-        _, bad = ci_summary.summarize(needs, "workflow_dispatch", "refs/heads/topic", "", "fast")
+        _, bad = ci_summary.summarize(
+            needs,
+            "workflow_dispatch",
+            "refs/heads/topic",
+            "",
+            "fast",
+        )
         self.assertIn("installer=failure", bad)
-
-    def test_cache_persistence_failure_is_reported_without_blocking_qualification(self) -> None:
-        expected = ci_summary.expected_jobs("pull_request", "refs/pull/25/merge", "main", "fast")
-        needs = self.results(expected)
-        needs["cache-vm-bundles"] = {"result": "failure"}
-        summary, bad = ci_summary.summarize(needs, "pull_request", "refs/pull/25/merge", "main", "fast")
-        self.assertEqual(bad, [])
-        self.assertIn("cache-vm-bundles=failure", summary)
-        self.assertIn("non-authoritative cache persistence warning", summary)
 
 
 if __name__ == "__main__":

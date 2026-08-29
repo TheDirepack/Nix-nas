@@ -12,6 +12,72 @@ let
       );
   };
   authentikProxy = pkgs.authentik-outposts.proxy;
+
+  # The full-stack source harness still contains the final V1-era fixture
+  # vocabulary. Render its VM executable against the current V2 contracts:
+  # schema-v2 setup, base identity roles, canonical application capabilities,
+  # and no retired request-time gate. The browser/Caddy assertions below remain
+  # the request-time authorization coverage for those capabilities.
+  guestTestRaw = builtins.readFile ../vm/guest-test.sh;
+  guestTestSchemaV2 = builtins.replaceStrings
+    [
+      "\"schemaVersion\": 1"
+      "  \"features\": {},\n"
+      "\"groups\": [\"nas_admin\", \"nas_allow_files\", \"nas_allow_ai\", \"nas_allow_vault\", \"nas_allow_syncthing\"]"
+      "\"groups\": [\"nas_users\", \"nas_allow_files\", \"nas_allow_vault\", \"nas_allow_syncthing\"]"
+      "--group nas_allow_files"
+    ]
+    [
+      "\"schemaVersion\": 2"
+      ""
+      "\"groups\": [\"nas_admin\"]"
+      "\"groups\": [\"nas_users\"]"
+      "--group nas_users"
+    ]
+    guestTestRaw;
+  guestTestCanonicalGroups = builtins.replaceStrings
+    [ "nas_allow_files" "nas_allow_ai" "nas_allow_vault" "nas_allow_syncthing" ]
+    [
+      "application.copyparty.files"
+      "application.ai-workspace.access"
+      "application.vaultwarden.access"
+      "application.syncthing.access"
+    ]
+    guestTestSchemaV2;
+  guestTestWithoutGateUnit = builtins.replaceStrings
+    [ "  nas-on-demand-gate.service caddy.service; do" ]
+    [ "  caddy.service; do" ]
+    guestTestCanonicalGroups;
+  retiredGateStart = "gate_deny=\"$(http_code --unix-socket /run/nas-on-demand/gate.sock";
+  retiredGateEnd = "pass \"malformed trusted identity headers remain fail-closed inside the installed gate\"\n";
+  retiredGateStartParts = lib.splitString retiredGateStart guestTestWithoutGateUnit;
+  retiredGateTail =
+    if builtins.length retiredGateStartParts == 2
+    then builtins.elemAt retiredGateStartParts 1
+    else throw "ordinary VM fixture no longer contains the expected retired gate block start";
+  retiredGateEndParts = lib.splitString retiredGateEnd retiredGateTail;
+  guestTestWithoutRetiredGate =
+    if builtins.length retiredGateEndParts == 2
+    then (builtins.elemAt retiredGateStartParts 0) + (builtins.elemAt retiredGateEndParts 1)
+    else throw "ordinary VM fixture no longer contains the expected retired gate block end";
+  capabilityGrantMarker =
+    "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null\nnas-identity-sync status | jq -e '";
+  capabilityGrantBlock = builtins.concatStringsSep "\n" [
+    "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null"
+    "AUTHENTIK_BOOTSTRAP_TOKEN=\"$(< /run/nas-secrets/authentik/api-token)\""
+    "alice_pk=\"$(authentik_api GET 'core/users/?include_groups=true&page_size=100' | jq -er '.results[] | select(.username == \"alice\") | (.num_pk // .pk)')\""
+    "for capability_group in application.copyparty.files application.syncthing.access application.vaultwarden.access; do"
+    "  group_pk=\"$(authentik_api GET 'core/groups/?page_size=100' | jq -er --arg group \"$capability_group\" '.results[] | select(.name == $group) | .pk')\""
+    "  authentik_api POST \"core/groups/$group_pk/add_user/\" \"$(jq -cn --argjson pk \"$alice_pk\" '{pk: $pk}')\" >/dev/null"
+    "done"
+    "pass \"Alice application capabilities are assigned through canonical Authentik groups\""
+    "nas-identity-sync status | jq -e '"
+  ];
+  guestTestSource = builtins.replaceStrings
+    [ capabilityGrantMarker ]
+    [ capabilityGrantBlock ]
+    guestTestWithoutRetiredGate;
+
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
     runtimeInputs = with pkgs; [
@@ -39,6 +105,7 @@ let
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
+      export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
@@ -50,10 +117,15 @@ let
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
 
+      if [[ "''${1:-}" == "--setup-reboot-e2e" ]]; then
+        shift
+        exec python3 /var/lib/nas-test/repo/tests/vm/setup-reboot-e2e.py "$@"
+      fi
+
       ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
       nas_vm_profile_install
 
-      ${builtins.readFile ../vm/guest-test.sh}
+      ${guestTestSource}
     '';
   };
   secretAdversarialTest = pkgs.writeShellApplication {
@@ -142,6 +214,10 @@ in
     installationReady = lib.mkForce true;
     testing.installationReadyFixture = true;
     configurationDir = lib.mkForce "/var/lib/nas-test/repo";
+    # The guest fixture and the identity bootstrap must agree on the
+    # browser-facing public host, including the HTTPS port, or the bootstrap
+    # portal provider ends up with an external host the fixtures reject.
+    identity.publicHost = lib.mkForce "nas-test.local:8443";
     # The guest suite creates its first-run plan here; keep the installed
     # Cockpit status source aligned with the plan used by the test.
     firstStart.configFile = "/var/lib/nas-test/setup/first-run.json";
@@ -151,6 +227,7 @@ in
     adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$Hsg1F2Cw2J25Jj9ZMzgEC8uiPgOS.DP/A8Pi28n.oXWw.CuB529luz/tBoCaxVXkuP6NqDmqUUUf5scB1/7jU1"));
     zfsImportAtBoot = lib.mkForce false;
     zfsEncryption.enable = lib.mkDefault false;
+    zfsEncryption.acknowledgeUnencrypted = lib.mkForce true;
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
     virtualization.enable = lib.mkForce false;

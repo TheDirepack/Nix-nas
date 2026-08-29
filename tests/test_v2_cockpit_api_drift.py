@@ -141,14 +141,41 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_start_first_start_unit_uses_hardened_transient_unit_and_reports_failure(self) -> None:
         with mock.patch.object(api, "run", return_value=CommandResult(0, "", "")) as run:
-            api._start_first_start_unit("a" * 24, pathlib.Path("/request"), pathlib.Path("/password"))
+            api._start_first_start_unit(
+                "a" * 24,
+                pathlib.Path("/request"),
+                pathlib.Path("/password"),
+                ["/dev/disk/by-id/test-disk"],
+            )
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["systemd-run", "--unit", f"nas-first-start-{'a' * 24}.service"])
         self.assertIn("--property=ProtectSystem=strict", command)
+        self.assertIn("--property=ProtectHome=yes", command)
+        self.assertIn(
+            "--property=RuntimeDirectory=nas-secrets nas-secret-staging nas-secret-transactions",
+            command,
+        )
+        self.assertIn("--property=RuntimeDirectoryMode=0700", command)
+        self.assertIn("--property=RuntimeDirectoryPreserve=yes", command)
+        self.assertNotIn("--property=PrivateDevices=yes", command)
+        self.assertIn("--property=DevicePolicy=closed", command)
+        self.assertIn("--property=DeviceAllow=/dev/zfs rw", command)
+        self.assertIn("--property=DeviceAllow=/dev/disk/by-id/test-disk rw", command)
+        write_paths = next(value for value in command if value.startswith("--property=ReadWritePaths="))
+        self.assertIn("/run/nas-secrets", write_paths)
+        self.assertIn("/run/nas-secret-staging", write_paths)
+        self.assertIn("/run/nas-secret-transactions", write_paths)
+        self.assertIn("/var/lib/nas-first-start", write_paths)
+        self.assertIn("/var/lib/nas-bootstrap", write_paths)
+        self.assertIn("/etc", write_paths.split("=")[-1].split())
+        self.assertNotIn("/home", write_paths.split("=")[-1].split())
+        self.assertIn(f"--property=ReadWritePaths=-{api.ZFS_ROOT}", command)
+        self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
+        self.assertEqual(command[command.index("--") + 1], api._setup_entry())
         self.assertIn("--password-file", command)
         with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):
             with self.assertRaises(api.ApiError):
-                api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"))
+                api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"), ["/dev/test"])
 
     def prepared_first_start(self) -> dict[str, object]:
         return {
@@ -169,6 +196,30 @@ class CockpitApiDriftTests(unittest.TestCase):
     def test_start_first_start_rejects_bad_inputs_before_reservation(self) -> None:
         cases = [
             ({"password": "x\ny", "administrator": self.administrator(), "planDigest": "a" * 64}, "single line"),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "email": "not-an-email"},
+                    "planDigest": "a" * 64,
+                },
+                "email is invalid",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "password": "too-short"},
+                    "planDigest": "a" * 64,
+                },
+                "at least 12",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "username": "nas-bootstrap"},
+                    "planDigest": "a" * 64,
+                },
+                "reserved bootstrap",
+            ),
             ({"password": "pw", "administrator": self.administrator(), "planDigest": "bad"}, "plan digest"),
             (
                 {
@@ -602,18 +653,32 @@ class CockpitApiDriftTests(unittest.TestCase):
                     self.assertTrue(result["ok"])
                 self.assertEqual(run.call_count, 3)
 
-            active = self.active()
-            with (
-                mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-                mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
-            ):
-                result = api.source_control({"operation": "pull-rebuild"})
-            self.assertTrue(result["ok"])
-            self.assertEqual(len(result["commands"]), 2)
-            self.assertEqual(run.call_args_list[0].kwargs["env"]["NAS_OPERATION_COORDINATION_TOKEN"], "coord-token")
+            expected = {
+                "pull": ["nas-update", "--sync"],
+                "rebuild": ["nas-update", "--apply", "--non-interactive"],
+                "pull-rebuild": ["nas-update", "--sync", "--apply", "--non-interactive"],
+            }
+            for operation, command in expected.items():
+                with (
+                    self.subTest(operation=operation),
+                    mock.patch.object(api, "CONFIG_DIR", root),
+                    mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
+                ):
+                    result = api.source_control({"operation": operation})
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["commands"][0]["command"], command)
+                run.assert_called_once_with(command, check=False, timeout_seconds=21600)
 
-    def test_source_control_rejects_unknown_missing_directory_busy_and_failed_mutation(self) -> None:
+        module_file = api.__file__
+        assert module_file is not None
+        source = pathlib.Path(module_file).read_text(encoding="utf-8")
+        block = source[source.index("def source_control(") : source.index("def build_parser(")]
+        self.assertNotIn('"git", "-C", str(CONFIG_DIR), "pull"', block)
+        self.assertNotIn('"nixos-rebuild", "switch"', block)
+        self.assertIn('["nas-update", "--sync"]', block)
+        self.assertIn('["nas-update", "--apply", "--non-interactive"]', block)
+
+    def test_source_control_rejects_unknown_missing_directory_and_failed_mutation(self) -> None:
         with self.assertRaisesRegex(api.ApiError, "Unsupported source-control"):
             api.source_control({"operation": "reset"})
         with mock.patch.object(api, "CONFIG_DIR", pathlib.Path("/definitely/missing")):
@@ -623,14 +688,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             root = pathlib.Path(raw)
             with (
                 mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", side_effect=OperationBusyError("busy")),
-            ):
-                with self.assertRaisesRegex(api.ApiError, "busy"):
-                    api.source_control({"operation": "pull"})
-            active = self.active()
-            with (
-                mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
                 mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")),
             ):
                 with self.assertRaises(api.ApiError):

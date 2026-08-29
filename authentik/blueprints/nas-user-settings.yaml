@@ -5,19 +5,34 @@ metadata:
   labels:
     blueprints.goauthentik.io/instantiate: "true"
 entries:
+  # Harden Authentik's native password-change policy instead of adding a
+  # parallel password controller. Authentik fails zxcvbn scores that are less
+  # than or equal to this threshold, so 2 means the accepted scores are 3/4,
+  # matching the standalone setup validator.
+  - model: authentik_policies_password.passwordpolicy
+    identifiers:
+      name: default-password-change-password-policy
+    attrs:
+      check_static_rules: true
+      check_have_i_been_pwned: true
+      hibp_allowed_count: 0
+      check_zxcvbn: true
+      zxcvbn_score_threshold: 2
+      length_min: 15
+      password_field: password
+      error_message: Password must be at least 15 characters, not known-breached, and sufficiently hard to guess.
+
   - model: authentik_rbac.role
     identifiers:
       name: NAS automation
     attrs:
+      # Steady-state NAS reconciliation only projects Authentik-owned identity
+      # data into native services. Human users, passwords, groups, and
+      # assignments are managed in Authentik itself, so the runtime service
+      # account must not be able to mutate those authorities.
       permissions:
         - authentik_core.view_user
-        - authentik_core.add_user
-        - authentik_core.change_user
-        - authentik_core.reset_user_password
         - authentik_core.view_group
-        - authentik_core.add_group
-        - authentik_core.change_group
-        - authentik_core.enable_group_superuser
 
   - model: authentik_stages_prompt.prompt
     identifiers:
@@ -38,8 +53,10 @@ entries:
         return json.dumps(value, indent=2, sort_keys=True)
       initial_value_expression: true
       sub_text: >-
-        Optional JSON array of your Syncthing devices. Removing an entry removes
-        it from the NAS-managed personal backup folder on the next reconciliation.
+        Optional JSON array of your Syncthing devices. Self-service devices must
+        use the discovery address ["dynamic"]; static connection targets are
+        administrator-managed. Removing an entry removes it from the NAS-managed
+        personal backup folder on the next reconciliation.
 
   - model: authentik_policies_expression.expressionpolicy
     identifiers:
@@ -98,18 +115,14 @@ entries:
                 ak_message("Device names must be text no longer than 128 characters.")
                 return False
 
-            addresses = device.get("addresses", ["dynamic"])
-            if not isinstance(addresses, list) or not addresses or len(addresses) > 32:
-                ak_message("Device addresses must be a non-empty array of at most 32 values.")
-                return False
-            if any(
-                not isinstance(address, str)
-                or not address.strip()
-                or len(address) > 512
-                or any(ord(character) < 32 or ord(character) == 127 for character in address)
-                for address in addresses
-            ):
-                ak_message("Every Syncthing device address must be a short printable string.")
+            # Authenticated users may register their Syncthing identity, but
+            # must not turn profile attributes into attacker-selected outbound
+            # connection targets from the NAS host. Syncthing discovery is the
+            # documented self-service path; static addresses are an admin task.
+            if device.get("addresses", ["dynamic"]) != ["dynamic"]:
+                ak_message(
+                    'Self-service Syncthing devices must use addresses ["dynamic"].'
+                )
                 return False
 
         return True

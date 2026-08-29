@@ -38,12 +38,32 @@ KeePassXC, Authentik, CopyParty, ZFS, or the feature controller.
 
 ## First-boot Authentik access
 
-The first-boot Authentik setup identity is `akadmin`. Its documented initial
-password is `nas-admin-first-boot`. Setup uses it only during initial setup.
+The first-boot Authentik setup identity is always `akadmin`. The password depends
+on the artifact you are running:
+
+- a development checkout or development-built image uses the fixed
+  `nas-admin-first-boot` password so first-run, VM, and browser tests remain
+  repeatable;
+- an automated tagged GitHub Release uses the five-word Diceware password shown
+  in that release's notes. The same password is embedded in that release-only
+  source commit and package.
+
+Do not copy a release password into `main`, and do not assume
+`nas-admin-first-boot` works for a tagged release. If you are installing a
+published release, use the credentials from the matching GitHub Release notes.
 
 The setup workflow creates the administrator you choose, verifies that account
-is an enabled `nas_admin` member, and then retires the bootstrap Authentik
-identity. Do not use the bootstrap identity for normal administration.
+as the first permanent Linux recovery administrator and as an enabled
+Authentik `nas_admin` member. Its Linux home is
+`<nas.zfsRoot>/homes/<username>`, never `/home/<username>`. Setup then removes
+the disposable local bootstrap account and retires the bootstrap Authentik
+identity. Do not use either bootstrap identity for normal administration.
+
+The browser wizard keeps this boundary out of the setup form: Authentik is the
+temporary access gate, not a separate configuration step. The wizard focuses
+on the administrator account, storage plan, and final confirmation. Host locale
+remains declarative NixOS configuration rather than a second mutable setup
+authority.
 
 Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
 may define storage creation, Authentik accounts, reserved NAS groups, and initial
@@ -76,26 +96,35 @@ Validate the file before making changes:
 nas-setup validate-config /etc/nixos/nixos-nas/first-run.json
 ```
 
-## Complete first start from the recovery plane
+## Complete first start
 
-On the first installed boot, use the local console, SSH with a provisioned
-recovery key, or hardware KVM. Run `nas-setup prepare-first-start` and inspect
-the published `ready` state before starting setup. Review the exact pool,
-dataset, topology, stable device paths, and plan digest.
+On the first installed boot, complete setup through the browser wizard: sign
+in at the appliance address with the bootstrap Authentik identity above and
+open the First start wizard. The wizard shows the exact pool, dataset,
+topology, stable device paths, and SHA-256 plan digest prepared from the
+configuration file; it collects the KeePassXC database password and the
+administrator account, submits the guarded first-start job, and reports
+progress until the appliance is complete.
 
-When the plan creates a pool, pass a separate destructive-storage confirmation
-and the displayed SHA-256 plan digest. The backend re-reads and normalizes the
-root-owned configuration, recomputes the digest, copies the exact device list
-into the guarded invocation, and rejects a stale digest or mismatched device
-confirmation. It reads the KeePassXC password from standard input only.
+The browser path is the only first-start execution surface. `nas-setup` on the
+recovery plane stays read-only for this workflow: use
+`nas-setup prepare-first-start` to review the published `ready` state and plan
+digest, and `nas-setup status` to watch completion, but do not expect the
+interactive `first-run` subcommand to perform setup; the wizard's submission
+path is what validates the plan digest, confirms every storage device, and
+runs the guarded job.
+
+When the plan creates a pool, the wizard requires the destructive-storage
+confirmation and the displayed SHA-256 plan digest before it will submit. The
+backend re-reads and normalizes the root-owned configuration, recomputes the
+digest, copies the exact device list into the guarded invocation, and rejects
+a stale digest or mismatched device confirmation.
 
 Setup is resumable. Completed stages are reused only after their live
 postcondition probes still pass. A `manual-recovery-required` journal never
 automatically resumes; repair the reported authority and run
-`nas-setup reconcile-first-run --note 'what was repaired'` before retrying. If
-resume reaches the account-password stage, pass
-`--confirm-password-reapply` before repeating password changes. Keep the
-recovery terminal available until the protected stack is ready.
+`nas-setup reconcile-first-run --note 'what was repaired'` before retrying.
+Keep the recovery terminal available until the protected stack is ready.
 
 The workflow prompts once for the KeePass database password. It then:
 
@@ -103,66 +132,55 @@ The workflow prompts once for the KeePass database password. It then:
 2. runs `nas-secrets init` idempotently;
 3. verifies existing ZFS storage or creates the explicitly confirmed pool and
    managed dataset;
-4. activates secrets and starts the protected service target;
-5. bootstraps reserved Authentik groups;
-6. creates or updates configured accounts and passwords;
-7. creates only the ZFS-backed personal directories required by file-enabled
+4. creates the permanent local recovery administrator with a private home on
+   that ZFS dataset and removes the disposable local bootstrap account;
+5. activates secrets and starts the protected service target;
+6. bootstraps reserved Authentik groups;
+7. creates or updates configured accounts and passwords, including the chosen
+   administrator;
+8. creates only the ZFS-backed personal directories required by file-enabled
    accounts, leaving CopyParty ACLs and volumes authoritative;
-8. reconciles managed Syncthing objects when enabled;
-9. applies requested feature lifecycle modes;
-10. runs mount, identity, and optional repository preflight checks; and
-11. writes a password-free completion report to
+9. reconciles managed Syncthing objects when enabled;
+10. applies requested feature lifecycle modes;
+11. runs mount, identity, and optional repository preflight checks; and
+12. writes a password-free completion report to
     `/var/lib/nas-setup/state.json`.
 
 ## First-start commands and automation
 
-Run the workflow from the recovery plane as the configured local administrator,
-not as root:
+Review the prepared plan from the recovery plane as the configured local
+administrator, not as root:
 
 ```bash
-status_json="$(nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json)"
-plan_digest="$(printf '%s' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["planDigest"])')"
-nas-setup first-run \
-  --config /etc/nixos/nixos-nas/first-run.json \
-  --confirm-plan-digest "$plan_digest"
+nas-setup prepare-first-start --config /etc/nixos/nixos-nas/first-run.json
+nas-setup status
 ```
 
-The CLI validates `sudo` authorization before it asks for or reads the KeePass
-password, refreshes the cached authorization during long setup runs, and makes
-every subsequent privileged call noninteractive. This preserves administrator
-ownership of the KDBX file while preventing sudo from consuming account-plan or
-secret data sent to a child command over stdin.
-
-For automation, authorize sudo first and then send one KeePass password line
-over stdin:
-
-```bash
-sudo -v
-cat /run/keys/nas-keepass-password | \
-  nas-setup first-run \
-    --config /etc/nixos/nixos-nas/first-run.json \
-    --confirm-plan-digest "$plan_digest" \
-    --keepass-password-stdin
-```
-
-The KeePass password file in this example is an operator-created transient
-input. It is not created or retained by the NAS project. Any account
-`passwordFile` referenced by the JSON must also exist on every run; remove that
-field after bootstrap when a rerun should preserve the current Authentik
-password.
+Submit the workflow through the browser wizard. The submission path validates
+`sudo` authorization, re-reads the root-owned configuration, confirms the plan
+digest and every storage device, and runs the guarded first-start job as an
+authorized root operation without exposing the KeePass or administrator
+passwords to a shell. Any account `passwordFile` referenced by the JSON must
+exist when the job runs; remove that field after bootstrap when a rerun should
+preserve the current Authentik password.
 
 ## Browser bootstrap and locked boot
 
-Before setup completes, Caddy can serve the static `/setup` guidance page. It
-does not provide a browser login, Cockpit session, secret unlock form, or
-protected application access. Complete `nas-setup first-run` from the recovery
-plane.
+Before setup completes, Caddy serves the static `/setup` guidance page and the
+Authentik gate protects every management route. The setup wizard itself is
+reachable only after signing in with the bootstrap Authentik identity.
 
 During first start, Authentik creates its temporary `akadmin` bootstrap identity
-with the documented initial password `nas-admin-first-boot`. Setup creates and
-verifies the chosen `nas_admin` administrator, then retires that bootstrap
-identity. After protected services are ready, use Authentik through Caddy for
-all browser access.
+using the credential for the exact source artifact: `nas-admin-first-boot` for
+the development tree, or the five-word password published with an automated
+tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
+then retires that bootstrap identity. After protected services are ready, use
+Authentik through Caddy for all browser access.
+
+The Storage step links to Cockpit Storage for disk partitioning or pool import,
+and to the Cockpit terminal for advanced ZFS work. Return to the wizard and
+refresh the plan after changing the disk layout; the destructive operation
+still uses the reviewed device list and plan digest.
 
 ## New-pool safeguards
 
@@ -189,19 +207,10 @@ Example mirror configuration:
 }
 ```
 
-Every configured device must be repeated on the command line, and all new-pool
-creation requires the destructive opt-in. Before writing, the CLI verifies that
-each path resolves to a block device and rejects traversal paths or multiple
-aliases for the same underlying disk:
-
-```bash
-nas-setup first-run \
-  --config /etc/nixos/nixos-nas/first-run.json \
-  --confirm-storage-device /dev/disk/by-id/ata-EXACT_DISK_0 \
-  --confirm-storage-device /dev/disk/by-id/ata-EXACT_DISK_1 \
-  --confirm-plan-digest "$plan_digest" \
-  --allow-destructive-storage
-```
+Every configured device must be confirmed individually, and all new-pool
+creation requires the destructive opt-in in the wizard. Before writing, the
+setup backend verifies that each path resolves to a block device and rejects
+traversal paths or multiple aliases for the same underlying disk.
 
 `wipeDevices` controls whether `wipefs` runs first; the destructive flag is
 required even when wiping is disabled because creating a pool writes ZFS labels.

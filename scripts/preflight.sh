@@ -185,7 +185,9 @@ else
 
   if command -v shellcheck >/dev/null 2>&1; then
     mapfile -d '' shell_files < <(find scripts tests/vm -type f -name '*.sh' -print0 | sort -z)
-    step "ShellCheck" shellcheck "${shell_files[@]}"
+    # Follow explicitly annotated local sources so preflight and the dedicated
+    # static CI branch apply the same ShellCheck semantics.
+    step "ShellCheck" shellcheck -x "${shell_files[@]}"
   else
     skip shellcheck "ShellCheck unavailable; Nix/CI builds generated shell applications"
   fi

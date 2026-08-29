@@ -36,20 +36,20 @@ def _managed_source(service_id: str, source: pathlib.Path) -> pathlib.Path:
     if candidate.suffix != ".container":
         raise QuadletProjectionError("V2 quadlet runtime currently supports .container sources only")
     try:
-        nominal = candidate.absolute()
         root = (APP_ROOT / service_id).resolve(strict=False)
-        nominal_inside = nominal.is_relative_to(root)
-    except (OSError, ValueError, RuntimeError):
-        nominal_inside = False
+        nominal = candidate.absolute()
+        nominal.relative_to(root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise QuadletProjectionError(
+            f"Quadlet source {candidate} is outside managed app root; it must remain beneath its managed app root"
+        ) from exc
     try:
         resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
     except OSError as exc:
         raise QuadletProjectionError(f"unable to read Quadlet source {candidate}: {exc}") from exc
-    if nominal_inside:
-        try:
-            resolved.relative_to(root)
-        except ValueError as exc:
-            raise QuadletProjectionError(f"Quadlet source {candidate} escapes its managed app root") from exc
+    except ValueError as exc:
+        raise QuadletProjectionError(f"Quadlet source {candidate} escapes its managed app root") from exc
     if not resolved.is_file():
         raise QuadletProjectionError(f"Quadlet source {candidate} must name a file")
     return resolved

@@ -84,6 +84,11 @@ in
     '';
     networking.nftables.enable = lib.mkIf cfg.networking.firewall.enable true;
 
+    # Automatic nas-state rollback material may contain KDBX/AuthentiK data.
+    # It is transaction scratch state only: keep it under tmpfs-backed /run.
+    environment.variables.NAS_STATE_ROLLBACK_ROOT = "/run/nas-state/rollbacks";
+    systemd.globalEnvironment.NAS_STATE_ROLLBACK_ROOT = "/run/nas-state/rollbacks";
+
     # Seed mutable upstream configuration only when absent.
     # Per-type ZFS app data (copyparty) lives under cfg.zfsRoot; main partition
     # retains only Caddy, PAM/Cockpit, and ZFS unencrypt.
@@ -98,7 +103,9 @@ in
       "d ${cfg.zfsRoot}/nas-control 0750 root nas-operations -"
       "L+ /var/lib/nas-control - - - - ${cfg.zfsRoot}/nas-control"
       "d /run/nas-operations 2770 root nas-operations -"
+      "d /run/nas-first-start 0700 root root -"
       "d /run/nas-state 0700 root root -"
+      "d /run/nas-state/rollbacks 0700 root root -"
       "d /var/log/journal 2755 root systemd-journal -"
       "f /run/lock/nas-update.lock 0660 root wheel -"
       "f /run/lock/nas-secrets.lock 0660 root wheel -"

@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 INVENTORIES = (
     ROOT / "tests" / "custom-script-contracts.json",
     ROOT / "tests" / "custom-script-contracts-v2.json",
+    ROOT / "tests" / "custom-script-contracts-security.json",
 )
 
 # Developer/CI-only harnesses are not shipped runtime command surfaces. Their

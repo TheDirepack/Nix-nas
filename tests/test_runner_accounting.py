@@ -9,6 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CONTRACTS = (
     ROOT / "tests" / "custom-script-contracts.json",
     ROOT / "tests" / "custom-script-contracts-v2.json",
+    ROOT / "tests" / "custom-script-contracts-security.json",
 )
 
 
@@ -108,12 +109,13 @@ class RunnerAccountingTests(unittest.TestCase):
         self.assertIn('ALLOWLIST_ALL_SKIPPED = frozenset({"test_v2_caddy_validate.py"})', runner)
         self.assertNotIn('frozenset({"test_service_caddy_validate.py"})', runner)
 
-        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        caddy_block = workflow.split("  caddy-validate:\n", 1)[1].split("\n  static:\n", 1)[0]
-        self.assertIn("nix shell nixpkgs#caddy -c caddy version", caddy_block)
-        self.assertIn("tests.test_v2_caddy", caddy_block)
-        self.assertIn("tests.test_v2_caddy_validate", caddy_block)
-        self.assertNotIn("tests.test_service_caddy", caddy_block)
+        qualification = (ROOT / "scripts" / "ci-qualification.sh").read_text(encoding="utf-8")
+        security_block = qualification.split("  security)\n", 1)[1].split("  nonroot)\n", 1)[0]
+        self.assertIn("Caddy generator validation", security_block)
+        self.assertIn("tests.test_v2_caddy", security_block)
+        self.assertIn("tests.test_v2_caddy_validate", security_block)
+        self.assertNotIn("tests.test_service_caddy", security_block)
+        self.assertIn("nix develop .#test", security_block)
 
     def test_managed_services_v2_has_runtime_and_property_contracts(self):
         v2_contracts = {

@@ -97,6 +97,7 @@ REQUIRED_FILES = {
     "scripts/lib/nas-secret-transaction.sh",
     "tests/bats/nas-secret-transaction.bats",
     "tests/browser/authz.py",
+    "tests/browser/first-run-wizard.py",
     "cockpit/e2e/playwright.config.mjs",
     "cockpit/e2e/ui-security.spec.mjs",
     "tests/adversarial_payloads.py",

@@ -13,6 +13,8 @@
     trustedInterfaces = lib.mkForce [ "eth0" ];
     adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "ci-admin-password-hash" "!"));
     zfsImportAtBoot = lib.mkForce true;
+    zfsEncryption.disabledAcknowledged = lib.mkForce true;
+    zfsEncryption.acknowledgeUnencrypted = lib.mkForce true;
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
   };

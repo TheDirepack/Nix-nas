@@ -100,7 +100,7 @@ run_case() {
     (exec -a authentik-outpost-contract-sim sleep 600) &
     printf '%s\n' "$!" >"$case_dir/outpost.pid"
 
-    if [[ $label == "Run the complete first-time setup CLI" ]]; then
+    if [[ $label == "Run the complete first-time setup GUI" ]]; then
       NAS_FULL_SUITE_TEST_FAILURE=after-js-deps-directory \
         nas_vm_js_deps_prepare "$case_dir/repo" "$case_dir/fast-check" || {
           prepare_status=$?

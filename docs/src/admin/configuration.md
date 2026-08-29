@@ -10,15 +10,19 @@
 
 ## Installation checklist
 
+The step-by-step walkthrough, including this checklist with every item explained,
+is in [Install and set up](installation.md).
+
 Complete these values before setting `nas.installationReady = true`:
 
-1. Replace `hardware-configuration.nix` with reviewed `nixos-generate-config` output.
-2. Set a stable eight-character `networking.hostId`, record it with recovery material, and do not change it after pool creation or import.
+1. Replace the repository `hardware-configuration.nix` placeholder with reviewed `nixos-generate-config` output from the actual target host. The placeholder carries an internal stub marker and install-ready evaluation fails while it is present.
+2. Set a stable eight-character `networking.hostId`, record it with recovery material, and do not change it after pool creation or import. `00000000` and the historical example IDs are rejected for install-ready systems.
 3. Configure the boot loader for the installed firmware and partitions.
-4. Install at least one administrator SSH public key and a root-only password-hash file for local Cockpit/PAM access.
-5. Set the trusted network interfaces.
-6. Verify `zfsPool`, `zfsDataset`, `zfsRoot`, and the intended boot-import policy.
-7. Run `./scripts/preflight.sh` and the QEMU suite before deployment.
+4. Configure and test a recovery path. Either declare an SSH authorized key on a user that is in `nas-administrators`, or verify a local console/out-of-band KVM path and set `nas.recovery.consoleOrKvmAvailable = true`.
+5. Set `nas.trustedInterfaces` to the real LAN interfaces. An empty list remains fail-closed and is rejected for install-ready deployments.
+6. Verify `zfsPool`, `zfsDataset`, `zfsRoot`, and the intended boot-import policy. Prefer native ZFS encryption. If encryption is deliberately disabled, review the security warning and set `nas.zfsEncryption.disabledAcknowledged = true`; install-ready evaluation otherwise fails.
+7. Verify required KeePass/bootstrap/backup credential files are regular files with restrictive ownership and permissions. The runtime secret-file preflight rejects symlinks, unsafe ownership, and broad modes before identity/protected runtime activation.
+8. Run `./scripts/preflight.sh` and the QEMU suite before deployment.
 
 A stable host ID can be derived once with:
 
@@ -35,7 +39,8 @@ The base NAS module keeps optional applications disabled. Import the focused pro
 - Empty AI and virtualization storage roots use their ZFS defaults.
 - `hardware.cpuVendor = "auto"` selects the portable profile. GPU vendors and the llama.cpp backend must match installed hardware and architecture.
 - The model downloader stays disabled until immutable image digests are populated or a native package replaces it.
-- Native ZFS encryption stores its key in KeePassXC and stages it under `/run` only while unlocked.
+- Native ZFS encryption stores its key in KeePassXC and stages it under `/run` only while unlocked. Disabling native encryption emits a prominent security warning, and an install-ready deployment requires `nas.zfsEncryption.disabledAcknowledged = true` if encryption remains off.
+- `nas.recovery.consoleOrKvmAvailable` is an explicit operator attestation, not an automatic probe. Set it only after verifying the real console/KVM recovery path on the target machine.
 - Syncthing is LAN-oriented by default. User devices are managed through Authentik; the global Syncthing interface remains administrative.
 - Vaultwarden defaults to OIDC-only sign-in. Disable that restriction only for a documented client-compatibility requirement.
 - TFTP is anonymous and disabled by default. Enabling writes is appropriate only on an isolated provisioning network.

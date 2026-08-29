@@ -140,7 +140,7 @@ if HAS_HYPOTHESIS:
             event("syncthing-device:accepted")
             self.assertRegex(device["deviceID"], syncthing.DEVICE_ID_RE)
             self.assertLessEqual(len(device["name"]), syncthing.MAX_DEVICE_NAME)
-            self.assertLessEqual(len(device["addresses"]), syncthing.MAX_ADDRESSES)
+            self.assertEqual(device["addresses"], syncthing.SELF_SERVICE_ADDRESSES)
 
         @settings(max_examples=350, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(

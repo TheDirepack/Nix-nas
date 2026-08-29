@@ -189,17 +189,20 @@
             (pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
               bandit
               coverage
+              diceware
               hypothesis
               jsonschema
               ruamel-yaml
             ]))
+            pkgs.actionlint
+            pkgs.bats
             pkgs.caddy
+            pkgs.nodejs
+            pkgs.prettier
             pkgs.pyright
+            pkgs.ruff
             pkgs.semgrep
             pkgs.shellcheck
-            pkgs.actionlint
-            pkgs.nodejs
-            pkgs.ruff
           ];
           shellHook = ''
             echo "NixOS NAS security, property, and fuzz test tools are available." >&2

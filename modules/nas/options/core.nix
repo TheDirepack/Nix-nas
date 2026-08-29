@@ -16,12 +16,12 @@
     adminUser = lib.mkOption {
       type = lib.types.str;
       default = "admin";
-      description = "Immutable Linux administrator identity used for NAS administration and Cockpit PAM. Application identities are managed in Authentik.";
+      description = "Disposable bootstrap Linux administrator used until first-start creates the operator-selected permanent recovery account. Application identities are managed in Authentik.";
     };
     adminPasswordHashFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Absolute path to a root-only Linux administrator password hash. Authentik manages application identities; KeePassXC does not alter the local PAM password.";
+      description = "Absolute path to a root-only bootstrap administrator password hash used before the wizard creates the permanent local recovery account.";
     };
     hostPolicy = {
       mutableLocalPasswords = lib.mkOption {
@@ -72,11 +72,6 @@
         type = lib.types.strMatching "^/[A-Za-z0-9._/-]*/$";
         default = "/identity/";
         description = "Public subpath where Authentik is served. It must begin and end with a slash.";
-      };
-      authentikOutpostPort = lib.mkOption {
-        type = lib.types.port;
-        default = 9010;
-        description = "Loopback port used by the dedicated Authentik proxy outpost.";
       };
       bootstrapEmail = lib.mkOption {
         type = lib.types.strMatching "^[^[:space:]@]+@[^[:space:]@]+$";

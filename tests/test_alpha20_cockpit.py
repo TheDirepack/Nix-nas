@@ -22,7 +22,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         options = text("modules/nas/options/core.nix")
         services = text("modules/nas/config/systemd-services.nix")
         self.assertIn("firstStart = {", options)
-        self.assertIn("default = true;", options.split("firstStart = {", 1)[1].split("};", 1)[0])
+        self.assertIn(
+            "default = true;",
+            options.split("firstStart = {", 1)[1].split("};", 1)[0],
+        )
         first_start = services.split("nas-first-start =", 1)[1].split("nas-zfs-unlock =", 1)[0]
         self.assertIn('wantedBy = [ "multi-user.target" ];', first_start)
         self.assertIn("prepare-first-start", first_start)
@@ -36,7 +39,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("--local-session", application)
         self.assertIn("cockpit-bridge", application)
         self.assertIn("--no-tls", application)
-        self.assertIn('partOf = [ "nas-first-start.service" ];', application)
+        cockpit_sso = application.split("nas-cockpit-sso =", 1)[1].split("};", 1)[0]
+        self.assertIn('after = [ "nas-first-start.service" ];', cockpit_sso)
+        self.assertIn('requires = [ "nas-first-start.service" ];', cockpit_sso)
+        self.assertNotIn('partOf = [ "nas-first-start.service" ];', cockpit_sso)
         self.assertNotIn("settings.bearer", application)
         self.assertNotIn("nas-cockpit-oauth", application)
         # Caddy owns authorization: forward auth via the outpost plus the
@@ -86,9 +92,29 @@ class Alpha20CockpitContracts(unittest.TestCase):
         setup_page = text("cockpit/src/pages/setup-page.jsx")
         self.assertIn("process.input", api)
         self.assertIn('["nas-secrets", "activate-stdin"]', api)
-        self.assertIn("allowDestructiveStorage", api)
         self.assertIn("Confirm maintenance action", operations)
-        self.assertIn("first-start-destructive", setup_page)
+        self.assertIn("standalone setup flow", setup_page)
+        self.assertIn('href="/setup/"', setup_page)
+        self.assertIn("destructive-storage confirmations", setup_page)
+
+    def test_setup_api_can_publish_expected_first_start_status(self) -> None:
+        application = text("modules/nas/config/caddy-bootstrap.nix")
+        start = application.index("systemd.services.nas-first-run-api = lib.mkIf cfg.firstStart.enable {")
+        block = application[start:]
+        self.assertIn('"/run/nas-first-run-api"', block)
+        self.assertIn('"/run/nas-first-start"', block)
+        self.assertIn('"/run/nas-operations"', block)
+        self.assertIn('"/run/lock"', block)
+
+    def test_cockpit_python_bridge_patch_targets_installed_module(self) -> None:
+        application = text("modules/nas/config/application-services.nix")
+        start = application.index("cockpitPatched = pkgs.cockpit.overrideAttrs")
+        end = application.index("  cockpitWebService =", start)
+        block = application[start:end]
+        self.assertIn("postFixup", block)
+        self.assertIn("site-packages/cockpit/channels/dbus.py", block)
+        self.assertIn("errno.EINVAL", block)
+        self.assertNotIn("postPatch", block)
 
     def test_syncthing_reconcile_uses_a_durable_generation_journal(self) -> None:
         identity = text("services/nas_identity_sync.py")
@@ -97,41 +123,64 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("verify_syncthing_configuration", identity)
         self.assertIn('"schemaVersion": 2', identity)
 
-    def test_ci_uses_direct_fast_dependencies_then_qualified_builds(self) -> None:
+    def test_ci_uses_prerequisite_fanout_and_reusable_build_handoffs(self) -> None:
         workflow = text(".github/workflows/ci.yml")
-        self.assertLess(workflow.index("Source-only repository preflight"), workflow.index("--coverage coverage.json"))
-        self.assertIn("Build qualified Cockpit, source archive, and NixOS closures", workflow)
-        self.assertIn("Post-build full-stack QEMU integration", workflow)
+        qualification = text("scripts/ci-qualification.sh")
+        handoff = text(".github/actions/prepare-vm-handoff/action.yml")
+        self.assertIn("Shared qualification prerequisites", workflow)
+        self.assertIn("Realize pinned test toolchain once", workflow)
+        self.assertIn("nix develop .#test -c true", workflow)
+        for job_name in (
+            "Static analysis and configuration",
+            "Unit, coverage, and maintainer contracts",
+            "Security and generated configuration",
+            "Unprivileged hermeticity",
+            "Cockpit source, dependencies, and production bundle",
+        ):
+            self.assertIn(job_name, workflow)
+        self.assertGreaterEqual(workflow.count("needs: [prerequisites]"), 5)
+        self.assertIn("needs: [unit]", workflow)
+        self.assertIn("Qualification gate", workflow)
+        self.assertIn("needs: [qualification]", workflow)
+        self.assertIn("Prepare reusable build handoff", workflow)
+        self.assertIn("Full-stack QEMU integration", workflow)
         self.assertIn("Pipeline summary", workflow)
-        for retired_gate in ("prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:"):
+        self.assertIn("ci-check-report.py", workflow)
+        self.assertIn("Source-only repository preflight", qualification)
+        self.assertIn("--coverage coverage.json", qualification)
+        self.assertIn("vm-bundle-handoff", handoff)
+        for retired_gate in (
+            "prebuild:",
+            "prebuild-gate:",
+            "build-gate:",
+            "runtime-gate:",
+            "final-system-gate:",
+            "cache-vm-bundles:",
+        ):
             self.assertNotIn(retired_gate, workflow)
-        self.assertIn(
-            "needs: [test, test-nonroot, security, caddy-validate, static, dependency-audit, coverage-diff]",
-            workflow,
-        )
-        self.assertIn("needs: [build]", workflow)
-        self.assertIn("needs: [integration, browser, installer]", workflow)
 
     def test_release_ci_runs_installer_final_vm_and_security_checks(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        qualification = text("scripts/ci-qualification.sh")
         final_vm = text("scripts/qemu-final-browser.sh")
         self.assertIn("qemu-test.sh installer", workflow)
         self.assertIn("qemu-final-browser.sh", workflow)
         self.assertIn("zap-automation-scan.sh", final_vm)
-        self.assertIn("npm --prefix cockpit audit --audit-level=high", workflow)
+        self.assertIn("npm --prefix cockpit audit --audit-level=high", qualification)
         self.assertIn("checks.x86_64-linux", workflow)
 
-    def test_fast_ci_excludes_slow_property_fuzz_and_parallelizes_it_later(self) -> None:
+    def test_fast_ci_excludes_slow_properties_then_uses_internal_fuzz_parallelism(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        qualification = text("scripts/ci-qualification.sh")
         preflight = text("scripts/preflight.sh")
         security_runner = text("scripts/run-security-tests.py")
+        fuzz_runner = text("scripts/run-fuzz.py")
         for name in ("test_fuzz_boundaries.py", "test_property_invariants.py", "test_secret_security_fuzz.py"):
-            self.assertIn(f"--exclude {name}", workflow)
+            self.assertIn(f"--exclude {name}", qualification)
         self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
-        self.assertIn("max-parallel: 6", workflow)
-        self.assertIn("fail-fast: false", workflow)
-        self.assertIn("shard:", workflow)
+        self.assertIn("scripts/run-fuzz.py --jobs 6", workflow)
+        self.assertNotIn("shard:", workflow)
         for shard in (
             "boundaries",
             "custom-inputs",
@@ -141,15 +190,19 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "javascript",
             "executable-contracts",
         ):
-            self.assertIn(shard, workflow)
+            self.assertIn(f'"{shard}"', fuzz_runner)
         self.assertIn("timeout-minutes: 240", workflow)
 
     def test_cache_policy_keeps_dependency_and_vm_reuse_without_pass_caching(self) -> None:
         workflow = text(".github/workflows/ci.yml")
+        handoff = text(".github/actions/prepare-vm-handoff/action.yml")
         policy = text(".github/CI_CACHE_POLICY.md")
         self.assertIn("CI_CACHE_SCHEMA", workflow)
         self.assertIn("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae", workflow)
-        self.assertIn("vm-bundles.sh", workflow)
+        self.assertIn("actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae", handoff)
+        self.assertIn("actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae", handoff)
+        self.assertIn("vm-bundles.sh", handoff)
+        self.assertIn("vm-bundle-handoff", workflow)
         self.assertNotIn(".ci-cache/", workflow)
         self.assertIn("Qualification results are never pass-cached", policy)
 

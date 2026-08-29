@@ -3,6 +3,9 @@
 Authentik is the only user-editable settings authority. The reconciler reads
 ``attributes.nasSyncthingDevices`` (or the legacy singular attribute) and
 translates only the appliance-owned ``nas-*`` folders/devices into Syncthing.
+Self-service devices use Syncthing discovery rather than administrator-selected
+static connection targets, so ordinary profile data cannot become an outbound
+connection primitive from the NAS host.
 """
 
 from __future__ import annotations
@@ -16,8 +19,7 @@ DEVICE_ID_RE = re.compile(r"^[A-Z2-7]{7}(?:-[A-Z2-7]{7}){7}$")
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
 MAX_DEVICES_PER_USER = max(1, int(os.environ.get("NAS_MAX_SYNCTHING_DEVICES_PER_USER", "32")))
 MAX_DEVICE_NAME = 128
-MAX_ADDRESSES = 32
-MAX_ADDRESS_LENGTH = 512
+SELF_SERVICE_ADDRESSES = ["dynamic"]
 
 
 class DeviceError(ValueError):
@@ -68,19 +70,17 @@ def normalize_device(raw: Mapping[str, Any] | str) -> dict[str, Any]:
         raise DeviceError("Device ID is not a valid Syncthing device ID")
     name = _text(value.get("name") or device_id[:7], "Device name", maximum=MAX_DEVICE_NAME)
 
-    raw_addresses = value.get("addresses", ["dynamic"])
-    if not isinstance(raw_addresses, list) or not raw_addresses or len(raw_addresses) > MAX_ADDRESSES:
-        raise DeviceError(f"Addresses must be a non-empty array with at most {MAX_ADDRESSES} entries")
-    addresses: list[str] = []
-    for raw_address in raw_addresses:
-        address = _text(raw_address, "Device address", maximum=MAX_ADDRESS_LENGTH)
-        if address not in addresses:
-            addresses.append(address)
+    raw_addresses = value.get("addresses", SELF_SERVICE_ADDRESSES)
+    if raw_addresses != SELF_SERVICE_ADDRESSES:
+        raise DeviceError(
+            "Self-service Syncthing devices must use the discovery address ['dynamic']; "
+            "static connection targets require administrator-managed configuration"
+        )
 
     return {
         "deviceID": device_id,
         "name": name,
-        "addresses": addresses,
+        "addresses": list(SELF_SERVICE_ADDRESSES),
         "autoAcceptFolders": False,
     }
 

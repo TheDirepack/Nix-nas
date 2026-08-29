@@ -34,6 +34,7 @@ else:
     import nas_coding_agent as coding_agent
     import nas_common as common
     import nas_doctor as doctor
+    import nas_first_start_pipe as first_start_pipe
     import nas_identity_model as identity_model
     import nas_identity_sync as identity_sync
     import nas_logging
@@ -61,10 +62,16 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_ai_config",
         "nas_alert_router",
         "nas_cockpit_api",
+        "nas_cockpit_entry",
         "nas_coding_agent",
         "nas_common",
         "nas_doctor",
+        "nas_first_run_api",
+        "nas_first_start",
+        "nas_first_start_pipe",
         "nas_guarded_apply",
+        "nas_identity_bootstrap",
+        "nas_identity_dispatch",
         "nas_identity_model",
         "nas_identity_sync",
         "nas_logging",
@@ -155,6 +162,7 @@ if HAS_HYPOTHESIS:
         @given(HOSTILE_TEXT)
         def test_text_protocol_and_shell_boundaries(self, value: str) -> None:
             self.assertEqual(nas_v2_cli._parser().prog, "nas-v2")
+            self.assertGreater(first_start_pipe._MAX_SECRET_BYTES, 0)
             expected_boundary_error(ai_config.validate_provider_id, value)
             expected_boundary_error(ai_config.validate_proxy_url, value)
             expected_boundary_error(ai_config.validate_model_id, value)

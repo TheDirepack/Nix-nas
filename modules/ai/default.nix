@@ -8,6 +8,7 @@
     ./downloader.nix
     ./services.nix
     ./coding-agent.nix
+    ./coding-agent-network-security.nix
     ./integration.nix
   ];
 

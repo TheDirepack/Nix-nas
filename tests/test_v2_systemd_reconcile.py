@@ -18,6 +18,13 @@ import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
 
 class V2SystemdReconcileTests(unittest.TestCase):
+    def test_systemctl_timeout_leaves_headroom_for_the_outer_rollback_guard(self) -> None:
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(reconcile.subprocess, "run", return_value=completed) as run:
+            reconcile._run_systemctl("systemctl", "restart", "nas-v2-demo.service")
+
+        self.assertEqual(run.call_args.kwargs["timeout"], 180)
+
     def make_systemctl(
         self, root: pathlib.Path, *, fail_on: set[str] | None = None
     ) -> tuple[pathlib.Path, pathlib.Path]:

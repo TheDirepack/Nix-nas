@@ -55,7 +55,7 @@ nas_vm_profile_command() {
       NAS_VM_PHASE_STARTED=$now
       nas_vm_profile_emit "VM-PHASE-START: $NAS_VM_PHASE_NAME"
       ;;
-    run_as_admin*"nas-setup first-run"*)
+    python3*first-run-wizard.py*)
       nas_vm_profile_emit "VM-FIRST-RUN-START: $NAS_VM_PHASE_NAME"
       nas_vm_start_first_run_timer
       ;;

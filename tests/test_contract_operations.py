@@ -72,7 +72,7 @@ class ContractTests(unittest.TestCase):
         systemd = text("modules/nas/config/managed-services.nix")
         self.assertIn("nas-managed-services-reconcile", systemd)
 
-    def test_v2_authority_bootstraps_before_first_run_storage(self) -> None:
+    def test_v2_authority_remains_zfs_backed_and_reconcile_requires_storage(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")
         seed = managed.split("systemd.services.nas-managed-services-seed = {", 1)[1].split(
             "systemd.services.nas-managed-services-reconcile = {", 1
@@ -80,49 +80,57 @@ class ContractTests(unittest.TestCase):
         reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
             "systemd.paths.nas-managed-services-reconcile = {", 1
         )[0]
+        first_start = text("services/nas_first_start.py")
         protected = text("modules/nas/config/systemd-services.nix")
 
+        self.assertIn('zfsControlRoot = "${cfg.zfsRoot}/nas-control";', managed)
+        self.assertIn('"L+ /var/lib/nas-control - - - - ${zfsControlRoot}"', managed)
         self.assertNotIn("nas-zfs-mount-guard.service", seed)
-        self.assertNotIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
         self.assertIn("RequiresMountsFor", reconcile)
+        self.assertLess(first_start.index('"storage"'), first_start.index('"nas-managed-services-reconcile.service"'))
         self.assertIn("postgresql = {", protected)
         self.assertIn('requires = [ "nas-bootstrap-runtime-select.service" ];', protected)
 
-    def test_identity_runtime_reinitializes_on_zfs_and_retires_bootstrap_authorities(self) -> None:
+    def test_identity_runtime_is_fresh_root_hosted_and_bootstrap_is_retired(self) -> None:
         applications = text("modules/nas/config/application-services.nix")
-        services = text("modules/nas/config/systemd-services.nix")
+        hardening = text("modules/nas/config/bootstrap-security.nix")
+        first_start = text("services/nas_first_start.py")
         setup = text("services/nas_setup.py")
         secrets = text("modules/nas/internal/secret-tools.nix")
+
         self.assertIn("nas-bootstrap-runtime-select.service", applications)
-        self.assertIn("bootstrapAuthentikDataDir", applications)
-        self.assertIn("bootstrapPostgresqlDataDir", applications)
-        self.assertIn("operational-runtime-select", applications)
-        self.assertIn("promote_bootstrap_runtime", setup)
-        self.assertIn("retire-bootstrap", setup)
+        self.assertIn("target=/var/lib/nas-operational", hardening)
+        self.assertIn("select_fresh_permanent_runtime", setup)
+        self.assertIn("select_permanent_runtime", first_start)
+        self.assertNotIn("promote_bootstrap_runtime", setup)
+        self.assertIn("retire_bootstrap_runtime", first_start)
         self.assertIn("retire-authentik-bootstrap-stdin", setup)
         self.assertNotIn('run_root(["mv", str(source), str(destination)])', setup)
         self.assertIn("command_retire_authentik_bootstrap_stdin", secrets)
         self.assertIn(
             '[[ -n "$authentik_bootstrap_token" && "$authentik_api_token" == "$authentik_bootstrap_token" ]]', secrets
         )
-        self.assertIn('ConditionPathExists = "!/var/lib/nas-setup/state.json"', services)
 
-    def test_first_boot_authentik_uses_only_a_random_bootstrap_runtime_environment(self) -> None:
+    def test_first_boot_authentik_uses_random_private_bootstrap_authority(self) -> None:
+        hardening = text("modules/nas/config/bootstrap-security.nix")
         applications = text("modules/nas/config/application-services.nix")
         base = text("modules/nas/internal/base.nix")
         services = text("modules/nas/config/systemd-services.nix")
-        setup = text("services/nas_setup.py")
-        self.assertIn("nas-bootstrap-authentik-secrets", applications)
-        self.assertIn("openssl rand -hex 64", applications)
-        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot", applications)
+        first_start = text("services/nas_first_start.py")
+
+        self.assertIn("nas-bootstrap-authentik-secrets", hardening)
+        self.assertIn("openssl rand -hex 64", hardening)
+        self.assertIn("authentik-bootstrap-password", hardening)
+        self.assertNotIn("AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot", hardening)
+        self.assertIn("install -m 0400 -o root -g root", hardening)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
         self.assertNotIn("EnvironmentFile = [ authentikEnvironmentFile ];", applications)
         self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
         self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
-        self.assertIn("retire_bootstrap_runtime", setup)
-        self.assertIn('run_root(["rm", "-rf", str(bootstrap_root)])', setup)
+        self.assertIn("bootstrap_authority_ready", first_start)
+        self.assertIn("retire_bootstrap_runtime", first_start)
 
     def test_cockpit_is_isolated_until_authentik_can_authorize_it(self) -> None:
         base = text("modules/nas/internal/base.nix")
@@ -202,12 +210,18 @@ class ContractTests(unittest.TestCase):
     def test_shared_operation_coordinator_covers_update_secrets_and_setup_children(self) -> None:
         system = text("modules/nas/config/system.nix")
         identities = text("modules/nas/config/identities.nix")
+        copyparty = text("modules/nas/config/copyparty-security.nix")
         secrets = text("modules/nas/internal/secret-tools.nix")
         update = text("scripts/update-nas.sh")
         package = text("pyproject.toml")
         self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
+        self.assertIn('"d /run/nas-first-start 0700 root root -"', system)
         self.assertIn("users.groups.nas-operations", identities)
-        self.assertIn('extraGroups = [ "copyparty" ]', identities)
+        self.assertNotIn('extraGroups = [ "copyparty" ]', identities)
+        self.assertIn("users.groups.nas-copyparty-proxy", copyparty)
+        self.assertIn('users.users.caddy.extraGroups = lib.mkAfter [ "nas-copyparty-proxy" ];', copyparty)
+        self.assertIn('users.users.copyparty.extraGroups = lib.mkAfter [ "nas-copyparty-proxy" ];', copyparty)
+        self.assertIn("unix:660:nas-copyparty-proxy:/run/copyparty/http.sock", copyparty)
         self.assertIn('nas-operation-run = "nas_operation_lock:main"', package)
         self.assertIn("enter_operation_coordinator", secrets)
         self.assertIn("operation_class=update", update)
@@ -239,9 +253,10 @@ class ContractTests(unittest.TestCase):
     def test_vm_first_start_uses_normalized_plan_digest_and_negative_stale_digest(self) -> None:
         for path in ("tests/vm/guest-test.sh", "tests/vm/encrypted-guest-test.sh"):
             guest = text(path)
-            self.assertIn("prepare-first-start", guest)
-            self.assertIn("--confirm-plan-digest", guest)
+            self.assertIn("/setup/api", guest)
+            self.assertIn("planDigest", guest)
             self.assertIn("stale", guest.lower())
+        self.assertIn("prepare-first-start", text("tests/vm/guest-test.sh"))
 
     def test_update_snapshots_have_bounded_retention(self) -> None:
         update = text("scripts/update-nas.sh")

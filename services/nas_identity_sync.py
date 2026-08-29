@@ -21,6 +21,7 @@ import pathlib
 import pwd
 import re
 import secrets
+import stat
 import sys
 import syslog
 import tempfile
@@ -74,6 +75,16 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 PUBLIC_HOST = os.environ.get("NAS_PUBLIC_HOST", "").strip()
 DEFAULT_FLOW_WAIT_SECONDS = 90.0
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Make redirects observable as HTTP errors instead of forwarding credentials."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler())
 
 
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
@@ -163,6 +174,7 @@ def http_json(
     body: Any | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 15.0,
+    follow_redirects: bool = True,
 ) -> Any:
     data = None
     request_headers = {"Accept": "application/json"}
@@ -180,7 +192,11 @@ def http_json(
     for attempt in range(1, max_attempts + 1):
         request = urllib.request.Request(url, data=data, headers=request_headers, method=normalized_method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            if follow_redirects:
+                response_context = urllib.request.urlopen(request, timeout=timeout)
+            else:
+                response_context = _NO_REDIRECT_OPENER.open(request, timeout=timeout)
+            with response_context as response:
                 payload = response.read()
             break
         except urllib.error.HTTPError as exc:
@@ -222,21 +238,84 @@ def http_json(
         raise SyncError(f"Authentik returned invalid JSON (reference {reference})") from exc
 
 
-def authentik_token(*, bootstrap: bool = False) -> str:
-    token_file = AUTHENTIK_BOOTSTRAP_TOKEN_FILE if bootstrap else AUTHENTIK_TOKEN_FILE
-    kind = "bootstrap" if bootstrap else "runtime API"
+def _read_private_root_token(path: pathlib.Path, *, kind: str) -> str:
+    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     try:
-        token = token_file.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise SyncError(f"Authentik {kind} token is missing: {token_file}") from exc
-    if not token or len(token) > 4096:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise SyncError(f"Authentik {kind} token is missing or unsafe: {path}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > 4096
+        ):
+            raise SyncError(f"Authentik {kind} token must be a private root-owned regular file")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            payload = handle.read(4097)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(payload) > 4096:
+        raise SyncError(f"Authentik {kind} token is empty or malformed")
+    try:
+        token = payload.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise SyncError(f"Authentik {kind} token is empty or malformed") from exc
+    if not token or any(character in token for character in ("\x00", "\r", "\n")):
         raise SyncError(f"Authentik {kind} token is empty or malformed")
     return token
 
 
+def authentik_token(*, bootstrap: bool = False) -> str:
+    token_file = AUTHENTIK_BOOTSTRAP_TOKEN_FILE if bootstrap else AUTHENTIK_TOKEN_FILE
+    kind = "bootstrap" if bootstrap else "runtime API"
+    return _read_private_root_token(token_file, kind=kind)
+
+
+def _url_origin(parsed: urllib.parse.SplitResult) -> tuple[str, str, int]:
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise SyncError("Authentik API URL contains an invalid port") from exc
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else -1
+    return scheme, host, port
+
+
+def authentik_api_url(path: str) -> str:
+    """Resolve an Authentik API path without allowing the bearer token to change origin."""
+    api_base = f"{AUTHENTIK_URL}/api/v3/"
+    base = urllib.parse.urlsplit(api_base)
+    candidate = (
+        urllib.parse.urlsplit(path)
+        if path.startswith(("http://", "https://"))
+        else urllib.parse.urlsplit(api_base + path.lstrip("/"))
+    )
+    if candidate.username is not None or candidate.password is not None or candidate.fragment:
+        raise SyncError("Refusing Authentik API URL with credentials or fragment")
+    if _url_origin(candidate) != _url_origin(base):
+        raise SyncError("Refusing Authentik request outside the configured API origin")
+    decoded_path = urllib.parse.unquote(candidate.path)
+    api_prefix = urllib.parse.unquote(base.path)
+    if not decoded_path.startswith(api_prefix) or any(part in {".", ".."} for part in decoded_path.split("/")):
+        raise SyncError("Refusing Authentik request outside the configured API path")
+    return urllib.parse.urlunsplit(candidate)
+
+
 def authentik_request(token: str, path: str, *, method: str = "GET", body: Any | None = None) -> Any:
-    url = path if path.startswith(("http://", "https://")) else f"{AUTHENTIK_URL}/api/v3/{path.lstrip('/')}"
-    return http_json(url, method=method, body=body, headers={"Authorization": f"Bearer {token}"})
+    return http_json(
+        authentik_api_url(path),
+        method=method,
+        body=body,
+        headers={"Authorization": f"Bearer {token}"},
+        follow_redirects=False,
+    )
 
 
 def authentik_list(token: str, path: str) -> list[dict[str, Any]]:
@@ -356,17 +435,23 @@ def default_flows(token: str) -> dict[str, Any]:
         time.sleep(1)
 
 
-def ensure_portal_proxy(token: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", PUBLIC_HOST):
-        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+def _ensure_proxy_application(
+    token: str,
+    *,
+    provider_name: str,
+    application_slug: str,
+    external_host: str,
+    internal_host: str,
+    application_metadata: Mapping[str, Any] | None = None,
+    outpost_config_patch: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reconcile one Authentik proxy application as a staged transaction."""
     flows = default_flows(token)
-    payload: dict[str, Any] = {
-        "name": "NAS Portal",
-        # This is one protected NAS application. Domain-level forward auth
-        # cannot enforce the application's authorization policy.
+    provider_payload: dict[str, Any] = {
+        "name": provider_name,
         "mode": "forward_single",
-        "external_host": f"https://{PUBLIC_HOST}",
-        "internal_host": "http://127.0.0.1:8080",
+        "external_host": external_host,
+        "internal_host": internal_host,
         "internal_host_ssl_validation": False,
     }
     for field, slug in {
@@ -377,30 +462,25 @@ def ensure_portal_proxy(token: str) -> dict[str, Any]:
         flow = flows.get(slug)
         if not isinstance(flow, Mapping) or flow.get("pk") is None:
             raise SyncError(f"Authentik flow {slug} is missing")
-        payload[field] = flow["pk"]
-    provider = next(
-        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Portal"), None
-    )
-    if provider is None:
-        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
-    else:
-        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
-    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
-    if provider_pk is None:
-        raise SyncError("Authentik NAS Portal provider has no primary key")
-    app_payload = {
-        "name": "NAS Portal",
-        "slug": "nas-portal",
-        "provider": provider_pk,
-        "meta_launch_url": f"https://{PUBLIC_HOST}",
+        provider_payload[field] = flow["pk"]
+
+    application_template: dict[str, Any] = {
+        "name": provider_name,
+        "slug": application_slug,
+        "provider": None,
+        "meta_launch_url": external_host,
+        **dict(application_metadata or {}),
     }
-    application = next(
-        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-portal"), None
+
+    # Stage every dependency and rollback snapshot before the first write.
+    provider_before = next(
+        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == provider_name),
+        None,
     )
-    if application is None:
-        authentik_request(token, "core/applications/", method="POST", body=app_payload)
-    else:
-        authentik_request(token, "core/applications/nas-portal/", method="PATCH", body=app_payload)
+    application_before = next(
+        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == application_slug),
+        None,
+    )
     outpost = next(
         (
             item
@@ -411,101 +491,264 @@ def ensure_portal_proxy(token: str) -> dict[str, Any]:
     )
     if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
         raise SyncError("Authentik embedded outpost is missing")
-    providers = list(outpost.get("providers") or [])
+    outpost_pk = outpost["pk"]
+    providers_before = list(outpost.get("providers") or [])
     current_config = outpost.get("config")
-    desired_config = dict(current_config) if isinstance(current_config, Mapping) else {}
-    desired_config.update(
-        {
-            # The outpost advertises the public origin so every authorize
-            # redirect already carries the browser-reachable host. Its own
-            # control-plane calls resolve that public hostname back to Caddy
-            # inside the appliance, so no loopback Location rewriting is
-            # needed in any reverse-proxy projection.
+    config_before = dict(current_config) if isinstance(current_config, Mapping) else {}
+    desired_config = dict(config_before)
+    if outpost_config_patch is not None:
+        desired_config.update(outpost_config_patch)
+
+    provider_existing = isinstance(provider_before, Mapping)
+    provider_pk: Any | None = None
+    provider_restore: dict[str, Any] | None = None
+    if provider_existing:
+        provider_pk = provider_before.get("pk")
+        if provider_pk is None:
+            raise SyncError(f"Authentik {provider_name} provider has no primary key")
+        missing = [key for key in provider_payload if key not in provider_before]
+        if missing:
+            raise SyncError(
+                f"Authentik {provider_name} provider cannot be transactionally updated; "
+                f"rollback fields are missing: {', '.join(sorted(missing))}"
+            )
+        provider_restore = {key: provider_before[key] for key in provider_payload}
+
+    application_existing = isinstance(application_before, Mapping)
+    application_restore: dict[str, Any] | None = None
+    if application_existing:
+        application_restore = {}
+        for key, desired in application_template.items():
+            if key == "name":
+                application_restore[key] = application_before.get(key, provider_name)
+            elif key == "slug":
+                application_restore[key] = application_slug
+            elif key == "provider":
+                application_restore[key] = application_before.get(key)
+            else:
+                default = False if isinstance(desired, bool) else ""
+                application_restore[key] = application_before.get(key, default)
+
+    provider_committed = False
+    provider_create_attempted = False
+    application_committed = False
+    application_create_attempted = False
+    application_restore_needed = False
+    outpost_restore_needed = False
+    try:
+        if provider_existing:
+            # A failed PATCH may have reached Authentik before the client
+            # observed the transport failure, so restore this snapshot too.
+            provider_committed = True
+            authentik_request(
+                token,
+                f"providers/proxy/{provider_pk}/",
+                method="PATCH",
+                body=provider_payload,
+            )
+        else:
+            provider_create_attempted = True
+            provider = authentik_request(
+                token,
+                "providers/proxy/",
+                method="POST",
+                body=provider_payload,
+            )
+            provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
+            if provider_pk is None:
+                raise SyncError(f"Authentik {provider_name} provider has no primary key")
+            provider_committed = True
+
+        application_payload = dict(application_template)
+        application_payload["provider"] = provider_pk
+        if application_existing:
+            application_restore_needed = True
+            authentik_request(
+                token,
+                f"core/applications/{application_slug}/",
+                method="PATCH",
+                body=application_payload,
+            )
+            application_committed = True
+        else:
+            application_create_attempted = True
+            authentik_request(
+                token,
+                "core/applications/",
+                method="POST",
+                body=application_payload,
+            )
+            application_committed = True
+
+        desired_providers = providers_before if provider_pk in providers_before else providers_before + [provider_pk]
+        outpost_payload: dict[str, Any] = {"providers": desired_providers}
+        rollback_outpost_payload: dict[str, Any] = {"providers": providers_before}
+        config_changed = outpost_config_patch is not None and desired_config != config_before
+        if outpost_config_patch is not None:
+            outpost_payload["config"] = desired_config
+            rollback_outpost_payload["config"] = config_before
+        if provider_pk not in providers_before or config_changed:
+            outpost_restore_needed = True
+            authentik_request(
+                token,
+                f"outposts/instances/{outpost_pk}/",
+                method="PATCH",
+                body=outpost_payload,
+            )
+        return {"provider": provider_name, "application": application_slug}
+    except Exception as exc:  # noqa: BLE001 - rollback must cover transport failures too
+        rollback_errors: list[str] = []
+
+        def rollback(label: str, operation: Any) -> None:
+            try:
+                operation()
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f"{label}: {type(rollback_exc).__name__}")
+
+        # A non-idempotent POST can succeed upstream even when the client never
+        # receives its response. The staged snapshot proves these reserved
+        # objects did not exist before this transaction, so rediscover exact
+        # names/slugs before rollback and remove any ambiguous creation.
+        if not application_existing and application_create_attempted and not application_committed:
+            try:
+                created_application = next(
+                    (
+                        item
+                        for item in authentik_list(token, "core/applications/")
+                        if item.get("slug") == application_slug
+                    ),
+                    None,
+                )
+                application_committed = isinstance(created_application, Mapping)
+            except Exception as discovery_exc:  # noqa: BLE001
+                rollback_errors.append(f"application discovery: {type(discovery_exc).__name__}")
+
+        if not provider_existing and provider_create_attempted and not provider_committed:
+            try:
+                created_provider = next(
+                    (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == provider_name),
+                    None,
+                )
+                if isinstance(created_provider, Mapping):
+                    discovered_pk = created_provider.get("pk")
+                    if discovered_pk is None:
+                        rollback_errors.append("provider discovery: missing primary key")
+                    else:
+                        provider_pk = discovered_pk
+                        provider_committed = True
+            except Exception as discovery_exc:  # noqa: BLE001
+                rollback_errors.append(f"provider discovery: {type(discovery_exc).__name__}")
+
+        if outpost_restore_needed:
+            rollback(
+                "embedded outpost",
+                lambda: authentik_request(
+                    token,
+                    f"outposts/instances/{outpost_pk}/",
+                    method="PATCH",
+                    body=rollback_outpost_payload,
+                ),
+            )
+        if application_existing and application_restore_needed and application_restore is not None:
+            rollback(
+                "application",
+                lambda: authentik_request(
+                    token,
+                    f"core/applications/{application_slug}/",
+                    method="PATCH",
+                    body=application_restore,
+                ),
+            )
+        elif application_committed:
+            rollback(
+                "application",
+                lambda: authentik_request(
+                    token,
+                    f"core/applications/{application_slug}/",
+                    method="DELETE",
+                ),
+            )
+        if provider_existing and provider_committed and provider_restore is not None:
+            rollback(
+                "provider",
+                lambda: authentik_request(
+                    token,
+                    f"providers/proxy/{provider_pk}/",
+                    method="PATCH",
+                    body=provider_restore,
+                ),
+            )
+        elif provider_committed and provider_pk is not None:
+            rollback(
+                "provider",
+                lambda: authentik_request(
+                    token,
+                    f"providers/proxy/{provider_pk}/",
+                    method="DELETE",
+                ),
+            )
+
+        if rollback_errors:
+            raise SyncError(
+                f"Authentik {provider_name} reconciliation failed and rollback incomplete: "
+                + "; ".join(rollback_errors)
+            ) from exc
+        raise
+
+
+def _validate_public_host() -> None:
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]{1,5})?", PUBLIC_HOST):
+        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+    if ":" in PUBLIC_HOST:
+        port = int(PUBLIC_HOST.rsplit(":", 1)[1])
+        if not 1 <= port <= 65535:
+            raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
+
+
+def ensure_portal_proxy(token: str) -> dict[str, Any]:
+    _validate_public_host()
+    return _ensure_proxy_application(
+        token,
+        provider_name="NAS Portal",
+        application_slug="nas-portal",
+        external_host=f"https://{PUBLIC_HOST}",
+        internal_host="http://127.0.0.1:8080",
+        outpost_config_patch={
+            # Advertise the browser-reachable public origin while the
+            # appliance resolves it internally back through Caddy.
             "authentik_host": f"https://{PUBLIC_HOST}/identity/",
             "authentik_host_browser": f"https://{PUBLIC_HOST}/identity/",
-        }
+        },
     )
-    if provider_pk not in providers or desired_config != current_config:
-        authentik_request(
-            token,
-            f"outposts/instances/{outpost['pk']}/",
-            method="PATCH",
-            body={
-                "providers": providers if provider_pk in providers else providers + [provider_pk],
-                "config": desired_config,
-            },
-        )
-    return {"provider": "NAS Portal", "application": "nas-portal"}
 
 
 def ensure_cockpit_launcher(token: str) -> dict[str, Any]:
-    """Expose Cockpit as an Authentik launcher application behind forward auth.
+    """Expose Cockpit as an Authentik launcher application behind forward auth."""
+    _validate_public_host()
+    return _ensure_proxy_application(
+        token,
+        provider_name="NAS Cockpit",
+        application_slug="nas-cockpit",
+        external_host=f"https://{PUBLIC_HOST}/console/",
+        internal_host="http://127.0.0.1:9092",
+    )
 
-    Caddy enforces the nas_admin group check for /console; this provider only
-    gives the outpost an authorize endpoint so the launcher tile can start a
-    session that returns to /console/.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", PUBLIC_HOST):
-        raise SyncError("NAS_PUBLIC_HOST is missing or invalid")
-    flows = default_flows(token)
-    payload: dict[str, Any] = {
-        "name": "NAS Cockpit",
-        "mode": "forward_single",
-        "external_host": f"https://{PUBLIC_HOST}/console/",
-        "internal_host": "http://127.0.0.1:9092",
-        "internal_host_ssl_validation": False,
-    }
-    for field, slug in {
-        "authentication_flow": "default-authentication-flow",
-        "authorization_flow": "default-provider-authorization-implicit-consent",
-        "invalidation_flow": "default-invalidation-flow",
-    }.items():
-        flow = flows.get(slug)
-        if not isinstance(flow, Mapping) or flow.get("pk") is None:
-            raise SyncError(f"Authentik flow {slug} is missing")
-        payload[field] = flow["pk"]
-    provider = next(
-        (item for item in authentik_list(token, "providers/proxy/") if item.get("name") == "NAS Cockpit"), None
+
+def ensure_setup_launcher(token: str) -> dict[str, Any]:
+    """Expose first-start setup as an atomic Authentik application update."""
+    _validate_public_host()
+    return _ensure_proxy_application(
+        token,
+        provider_name="NAS Setup",
+        application_slug="nas-setup",
+        external_host=f"https://{PUBLIC_HOST}/setup/",
+        internal_host="http://127.0.0.1:8980",
+        application_metadata={
+            "meta_description": "First-start setup for the NAS appliance",
+            "meta_publisher": "NAS",
+            "open_in_new_tab": False,
+        },
     )
-    if provider is None:
-        provider = authentik_request(token, "providers/proxy/", method="POST", body=payload)
-    else:
-        provider = authentik_request(token, f"providers/proxy/{provider['pk']}/", method="PATCH", body=payload)
-    provider_pk = provider.get("pk") if isinstance(provider, Mapping) else None
-    if provider_pk is None:
-        raise SyncError("Authentik NAS Cockpit provider has no primary key")
-    app_payload = {
-        "name": "NAS Cockpit",
-        "slug": "nas-cockpit",
-        "provider": provider_pk,
-        "meta_launch_url": f"https://{PUBLIC_HOST}/console/",
-    }
-    application = next(
-        (item for item in authentik_list(token, "core/applications/") if item.get("slug") == "nas-cockpit"), None
-    )
-    if application is None:
-        authentik_request(token, "core/applications/", method="POST", body=app_payload)
-    else:
-        authentik_request(token, "core/applications/nas-cockpit/", method="PATCH", body=app_payload)
-    outpost = next(
-        (
-            item
-            for item in authentik_list(token, "outposts/instances/")
-            if item.get("managed") == "goauthentik.io/outposts/embedded"
-        ),
-        None,
-    )
-    if not isinstance(outpost, Mapping) or outpost.get("pk") is None:
-        raise SyncError("Authentik embedded outpost is missing")
-    providers = list(outpost.get("providers") or [])
-    if provider_pk not in providers:
-        authentik_request(
-            token,
-            f"outposts/instances/{outpost['pk']}/",
-            method="PATCH",
-            body={"providers": providers + [provider_pk]},
-        )
-    return {"provider": "NAS Cockpit", "application": "nas-cockpit"}
 
 
 AUTOMATION_ROLE = "NAS automation"
@@ -1329,6 +1572,7 @@ def main() -> int:
                     "groups": ensure_groups(token),
                     "portal": ensure_portal_proxy(token),
                     "cockpit": ensure_cockpit_launcher(token),
+                    "setup": ensure_setup_launcher(token),
                 }
             elif args.command == "bootstrap-runtime-token":
                 result = provision_runtime_token(authentik_token(bootstrap=True))

@@ -2,7 +2,8 @@ import {createReadStream, readFileSync, statSync} from "node:fs";
 import {createServer} from "node:http";
 import {extname, isAbsolute, join, relative, resolve} from "node:path";
 
-const root = resolve(import.meta.dirname, "..", "dist");
+const cockpitRoot = resolve(import.meta.dirname, "..", "dist");
+const wizardRoot = resolve(import.meta.dirname, "..", "..", "setup", "first-run-wizard", "dist");
 const runtimeStub = readFileSync(join(import.meta.dirname, "cockpit-runtime-stub.js"));
 const port = Number(process.env.PORT || 4173);
 const types = {
@@ -17,7 +18,14 @@ function assetFor(url) {
   const pathname = decodeURIComponent(new URL(url, "http://127.0.0.1").pathname);
   if (pathname === "/base1/cockpit.js") return {stub: true};
   if (!pathname.startsWith("/")) return null;
-  const asset = resolve(root, `.${pathname}`);
+  const isWizard = pathname === "/setup" || pathname.startsWith("/setup/");
+  const root = isWizard ? wizardRoot : cockpitRoot;
+  const relativePath = isWizard
+    ? pathname === "/setup" || pathname === "/setup/"
+      ? "index.html"
+      : pathname.slice("/setup/".length)
+    : `.${pathname}`;
+  const asset = resolve(root, relativePath);
   const withinRoot = relative(root, asset);
   if (withinRoot.startsWith("..") || isAbsolute(withinRoot)) return null;
   try {

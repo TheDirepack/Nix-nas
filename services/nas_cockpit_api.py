@@ -33,6 +33,7 @@ from nas_operation_lock import (
 
 ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
+ZFS_ROOT = pathlib.Path(os.environ.get("NAS_ZFS_ROOT", "/tank"))
 CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas"))
 PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
 FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
@@ -92,6 +93,17 @@ def diagnostic(message: str) -> None:
 
 def _secret_command(command: list[str] | tuple[str, ...]) -> bool:
     return bool(command) and pathlib.PurePath(str(command[0])).name == "nas-secrets"
+
+
+def _setup_entry() -> str:
+    """Resolve the nas-setup wrapper, not the bare Python entry point.
+
+    The cockpit API PATH also carries the unwrapped console Python
+    application, which shadows the appliance wrapper and its required
+    environment (ZFS tooling, pool/dataset names, KeePass database path).
+    The wrapper exports NAS_SETUP_BIN pointing at the real wrapper.
+    """
+    return os.environ.get("NAS_SETUP_BIN", "nas-setup")
 
 
 def operation_error(command: list[str] | tuple[str, ...], result: CommandResult) -> ApiError:
@@ -278,11 +290,11 @@ def static_links() -> dict[str, str]:
 
 def setup_status() -> dict[str, Any]:
     prepared = _json_command(
-        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
+        [_setup_entry(), "prepare-first-start", "--config", FIRST_RUN_CONFIG],
         optional=True,
         timeout_seconds=60,
     )
-    status = _json_command(["nas-setup", "status"], optional=True)
+    status = _json_command([_setup_entry(), "status"], optional=True)
     if prepared.get("ok") is False and "firstStart" not in status:
         status["firstStart"] = prepared
     return status
@@ -362,7 +374,7 @@ def managed_job_rows() -> list[dict[str, Any]]:
 
 def first_start_status() -> dict[str, Any]:
     return _json_command(
-        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
+        [_setup_entry(), "prepare-first-start", "--config", FIRST_RUN_CONFIG],
         optional=True,
         timeout_seconds=60,
     )
@@ -396,7 +408,12 @@ def _write_private_new(path: pathlib.Path, content: str) -> None:
         raise
 
 
-def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_path: pathlib.Path) -> None:
+def _start_first_start_unit(
+    job_id: str,
+    request_path: pathlib.Path,
+    password_path: pathlib.Path,
+    devices: list[str],
+) -> None:
     command = [
         "systemd-run",
         "--unit",
@@ -408,13 +425,22 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         "--property=UMask=0077",
         "--property=NoNewPrivileges=yes",
         "--property=PrivateTmp=yes",
-        "--property=PrivateDevices=yes",
+        "--property=DevicePolicy=closed",
+        "--property=DeviceAllow=/dev/zfs rw",
+        *(f"--property=DeviceAllow={device} rw" for device in devices),
         "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
-        "--property=ReadWritePaths=/var/lib/nas-setup /run/nas-secrets /run/nas-operations /run/lock /run/nas-first-start",
+        "--property=RuntimeDirectory=nas-secrets nas-secret-staging nas-secret-transactions",
+        "--property=RuntimeDirectoryMode=0700",
+        "--property=RuntimeDirectoryPreserve=yes",
+        "--property=ReadWritePaths=/etc /var/lib/nas-bootstrap /var/lib/nas-setup /var/lib/nas-first-start /run/nas-secrets /run/nas-secret-staging /run/nas-secret-transactions /run/nas-operations /run/lock /run/nas-first-start",
+        f"--property=ReadWritePaths=-{ZFS_ROOT}",
+        # The submitted job is the Cockpit-authorized root setup execution
+        # path; without this flag require_setup_operator fails closed for root.
+        "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
         "--property=TimeoutStartSec=6h",
         "--",
-        "nas-setup",
+        _setup_entry(),
         "run-first-start-job",
         "--request-file",
         str(request_path),
@@ -439,8 +465,14 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     administrator_password = _json_string(administrator, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
         raise ApiError("Administrator username is invalid")
+    if username == "nas-bootstrap":
+        raise ApiError("Administrator username is the reserved bootstrap identity")
     if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
         raise ApiError("Administrator details must be single-line values")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise ApiError("Administrator email is invalid")
+    if len(administrator_password) < 12:
+        raise ApiError("Administrator password must contain at least 12 characters")
     plan_digest = _json_string(request, "planDigest", required=True, max_length=64)
     if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
         raise ApiError("Invalid first-start plan digest")
@@ -512,7 +544,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
             )
             + "\n",
         )
-        _start_first_start_unit(job_id, request_path, password_path)
+        _start_first_start_unit(job_id, request_path, password_path, devices)
         return {"schemaVersion": 1, "jobId": job_id, "status": "submitted"}
     except Exception:
         request_path.unlink(missing_ok=True)
@@ -526,9 +558,9 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
 
 def reconcile_first_start(request: dict[str, Any]) -> dict[str, Any]:
     note = _json_string(request, "note", required=True, max_length=2048)
-    result = run(["nas-setup", "reconcile-first-run", "--note", note], check=False, timeout_seconds=60)
+    result = run([_setup_entry(), "reconcile-first-run", "--note", note], check=False, timeout_seconds=60)
     if result.returncode != 0:
-        raise operation_error(["nas-setup", "reconcile-first-run"], result)
+        raise operation_error([_setup_entry(), "reconcile-first-run"], result)
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -1119,40 +1151,30 @@ def source_control(request: dict[str, Any]) -> dict[str, Any]:
             "stdout": result.stdout,
             "stderr": result.stderr,
         }
-    try:
-        with acquire_operation(f"source-{operation}", ("appliance", "update")) as active:
-            env = dict(os.environ)
-            env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-            outputs: list[dict[str, Any]] = []
-            if operation in {"pull", "pull-rebuild"}:
-                command = ["git", "-C", str(CONFIG_DIR), "pull", "--ff-only"]
-                result = run(command, check=False, timeout_seconds=180, env=env)
-                outputs.append(
-                    {
-                        "command": command,
-                        "returncode": result.returncode,
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                    }
-                )
-                if result.returncode != 0:
-                    raise operation_error(command, result)
-            if operation in {"rebuild", "pull-rebuild"}:
-                command = ["nixos-rebuild", "switch", "--flake", f"{CONFIG_DIR}#nas"]
-                result = run(command, check=False, timeout_seconds=1800, env=env)
-                outputs.append(
-                    {
-                        "command": command,
-                        "returncode": result.returncode,
-                        "stdout": result.stdout,
-                        "stderr": result.stderr,
-                    }
-                )
-                if result.returncode != 0:
-                    raise operation_error(command, result)
-            return {"ok": True, "operation": operation, "commands": outputs}
-    except OperationBusyError as exc:
-        raise ApiError(str(exc)) from exc
+
+    # nas-update is the sole mutation/deployment authority. It owns
+    # operation locking, repository/path trust, signature checks,
+    # build/test, health checks, rollback, and source promotion.
+    command = {
+        "pull": ["nas-update", "--sync"],
+        "rebuild": ["nas-update", "--apply", "--non-interactive"],
+        "pull-rebuild": ["nas-update", "--sync", "--apply", "--non-interactive"],
+    }[operation]
+    result = run(command, check=False, timeout_seconds=21600)
+    if result.returncode != 0:
+        raise operation_error(command, result)
+    return {
+        "ok": True,
+        "operation": operation,
+        "commands": [
+            {
+                "command": command,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        ],
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
