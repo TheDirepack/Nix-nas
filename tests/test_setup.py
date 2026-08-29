@@ -222,7 +222,8 @@ class StorageProvisioningTests(unittest.TestCase):
         self.assertIn("--collect", helper)
         self.assertIn("--property=PrivateDevices=no", helper)
         self.assertIn("--property=DevicePolicy=auto", helper)
-        self.assertIn("--property=ProtectSystem=yes", helper)
+        self.assertIn("--setenv=NAS_SETUP_ALLOW_ROOT=1", helper)
+        self.assertFalse(any(value.startswith("--property=Protect") for value in helper))
         self.assertEqual(
             helper[helper.index("--") + 1 : -2],
             [
@@ -246,6 +247,8 @@ class StorageProvisioningTests(unittest.TestCase):
             ],
         )
         self.assertEqual(helper[-2:], [setup.ZFS_POOL, "/dev/disk/by-id/confirmed"])
+        self.assertEqual(calls[2][calls[2].index("--") + 1 :], ["zfs", "mount", setup.ZFS_DATASET])
+        self.assertEqual(calls[3][calls[3].index("--") + 1 :], ["nas-zfs-mount-check"])
         self.assertTrue(result["createdPool"])
 
 

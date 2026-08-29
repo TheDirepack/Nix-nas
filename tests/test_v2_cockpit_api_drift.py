@@ -169,7 +169,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("/var/lib/nas-bootstrap", write_paths)
         self.assertIn("/etc", write_paths.split("=")[-1].split())
         self.assertNotIn("/home", write_paths.split("=")[-1].split())
-        self.assertIn(f"--property=ReadWritePaths=-{api.ZFS_ROOT}", command)
+        self.assertFalse(any(value.startswith("--property=ReadWritePaths=-") for value in command))
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
         self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)

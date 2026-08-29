@@ -651,40 +651,18 @@ def setup_storage(
             ZFS_POOL,
             *vdev,
         ]
-        run_root(
-            [
-                "systemd-run",
-                "--quiet",
-                "--wait",
-                "--collect",
-                "--pipe",
-                "--unit",
-                f"nas-zpool-create-{secrets.token_hex(8)}.service",
-                "--property=Type=exec",
-                "--property=User=root",
-                "--property=Group=root",
-                "--property=UMask=0077",
-                "--property=NoNewPrivileges=yes",
-                "--property=PrivateDevices=no",
-                "--property=DevicePolicy=auto",
-                "--property=ProtectHome=yes",
-                "--property=ProtectSystem=yes",
-                "--property=ReadWritePaths=/etc /run/lock",
-                "--",
-                *zpool_create,
-            ]
-        )
+        run_storage_host(zpool_create)
         run_root(["zpool", "set", "autotrim=on", ZFS_POOL])
         created_pool = True
     if not dataset_exists():
         if ZFS_ENCRYPTION:
-            run_interactive_privileged(["nas-zfs-create-encrypted-dataset"], input_text=keepass_password + "\n")
+            run_storage_host(["nas-zfs-create-encrypted-dataset"], input_text=keepass_password + "\n")
         else:
-            run_root(["zfs", "create", "-o", f"mountpoint={ZFS_ROOT}", ZFS_DATASET])
+            run_storage_host(["zfs", "create", "-o", f"mountpoint={ZFS_ROOT}", ZFS_DATASET])
         created_dataset = True
     if not ZFS_ENCRYPTION:
-        run_root(["zfs", "mount", ZFS_DATASET], check=False)
-        run_root(["nas-zfs-mount-check"])
+        run_storage_host(["zfs", "mount", ZFS_DATASET], check=False)
+        run_storage_host(["nas-zfs-mount-check"])
     creation_request = None
     if storage.get("createPool"):
         creation_request = {
@@ -702,6 +680,37 @@ def setup_storage(
         "createdDataset": created_dataset,
         "encrypted": ZFS_ENCRYPTION,
     }
+
+
+def run_storage_host(
+    command: Sequence[str],
+    *,
+    input_text: str | None = None,
+    check: bool = True,
+) -> Completed:
+    return run_root(
+        [
+            "systemd-run",
+            "--quiet",
+            "--wait",
+            "--collect",
+            "--pipe",
+            "--unit",
+            f"nas-storage-host-{secrets.token_hex(8)}.service",
+            "--property=Type=exec",
+            "--property=User=root",
+            "--property=Group=root",
+            "--property=UMask=0077",
+            "--property=NoNewPrivileges=yes",
+            "--property=PrivateDevices=no",
+            "--property=DevicePolicy=auto",
+            "--setenv=NAS_SETUP_ALLOW_ROOT=1",
+            "--",
+            *command,
+        ],
+        input_text=input_text,
+        check=check,
+    )
 
 
 def apply_accounts(plan: Mapping[str, Any], *, confirm_password_reapply: bool = False) -> dict[str, Any]:
