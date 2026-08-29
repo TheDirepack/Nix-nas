@@ -112,7 +112,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         ):
             self.assertIn(f'"{path}"', block)
         self.assertIn("export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup", account_tools)
-        setup_start = account_tools.index("  nasSetup = pkgs.writeShellApplication")
+        setup_start = account_tools.index("nasSetup = pkgs.writeShellApplication")
         setup_end = account_tools.index("  mkPathAuthority =", setup_start)
         self.assertIn("pkgs.shadow", account_tools[setup_start:setup_end])
 

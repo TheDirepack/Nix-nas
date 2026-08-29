@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import pathlib
+import pwd
 import stat
 import sys
 import tempfile
@@ -40,14 +41,17 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             self.assertEqual(setup.run(["bad"], check=False).returncode, 2)
 
     def test_admin_command_handles_admin_root_and_other_users(self) -> None:
+        account = pwd.struct_passwd((setup.ADMIN_USER, "x", 1000, 100, "", "/tank/homes/admin", "/bin/bash"))
         with mock.patch.object(setup, "current_username", return_value=setup.ADMIN_USER):
             self.assertEqual(setup.admin_command(["x"]), ["x"])
         with (
             mock.patch.object(setup, "current_username", return_value="root"),
             mock.patch.object(setup.os, "geteuid", return_value=0),
+            mock.patch.object(setup.pwd, "getpwnam", return_value=account),
         ):
             command = setup.admin_command(["x"])
         self.assertEqual(command[:4], ["runuser", "-u", setup.ADMIN_USER, "--"])
+        self.assertIn("HOME=/tank/homes/admin", command)
         with (
             mock.patch.object(setup, "current_username", return_value="bob"),
             mock.patch.object(setup.os, "geteuid", return_value=1000),

@@ -228,7 +228,7 @@ run_as_admin() {
 # the configured local administrator and the only account allowed to run
 # mutating nas-setup commands.
 run_as_nasadmin() {
-  runuser -u nasadmin -- env HOME=/home/nasadmin PATH="$PATH" "$@"
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
@@ -518,6 +518,12 @@ if ! jq -e '
   fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
 [[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ "$(getent passwd nasadmin | cut -d: -f6)" == "/tank/homes/nasadmin" ]] || \
+  fail "permanent administrator home is not on the ZFS data root"
+[[ -d /tank/homes/nasadmin ]] || fail "permanent administrator ZFS home is missing"
+[[ ! -e /home/nasadmin ]] || fail "permanent administrator data was created on the system partition"
+findmnt -n -o FSTYPE -T /tank/homes/nasadmin | grep -qx zfs || \
+  fail "permanent administrator home is not backed by ZFS"
 pass "GUI first start created the expected storage, accounts, and administrator"
 run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json

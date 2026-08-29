@@ -69,6 +69,7 @@ KEEPASS_KEY_FILE = os.environ.get("NAS_KEEPASS_KEY_FILE", "")
 ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
 ZFS_ROOT = pathlib.Path(os.environ.get("NAS_ZFS_ROOT", "/tank"))
+LOCAL_HOME_ROOT = ZFS_ROOT / "homes"
 ZFS_ENCRYPTION = os.environ.get("NAS_ZFS_ENCRYPTION_ENABLE", "0") == "1"
 SHARE_ROOT = pathlib.Path(os.environ.get("NAS_SHARE_ROOT", str(ZFS_ROOT / "shares")))
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
@@ -156,13 +157,17 @@ def admin_command(command: Sequence[str]) -> list[str]:
     if current == administrator:
         return [str(item) for item in command]
     if os.geteuid() == 0:
+        try:
+            home = pathlib.Path(pwd.getpwnam(administrator).pw_dir)
+        except KeyError as exc:
+            raise SetupError(f"Configured local administrator does not exist: {administrator}") from exc
         return [
             "runuser",
             "-u",
             administrator,
             "--",
             "env",
-            f"HOME=/home/{administrator}",
+            f"HOME={home}",
             f"PATH={os.environ.get('PATH', '')}",
             *map(str, command),
         ]
@@ -408,6 +413,10 @@ def _validated_administrator(administrator: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def local_administrator_details(administrator: Mapping[str, Any]) -> dict[str, Any]:
+    return _validated_administrator(administrator)
+
+
 def configured_administrator(account_plan: Mapping[str, Any]) -> Mapping[str, Any] | None:
     candidates = [
         account
@@ -431,8 +440,8 @@ def include_local_administrator(account_plan: dict[str, Any], administrator: Map
 
 
 def create_local_administrator(administrator: Mapping[str, Any], password: str) -> dict[str, Any]:
-    desired = _validated_administrator(administrator)
-    username = desired["username"]
+    details = _validated_administrator(administrator)
+    username = details["username"]
     password = normalize_secret_line(password, "Administrator password")
     if ":" in password:
         raise SetupError("Administrator password must not contain a colon")
@@ -446,32 +455,26 @@ def create_local_administrator(administrator: Mapping[str, Any], password: str) 
 
     created = False
     try:
-        run_root(["useradd", "--no-create-home", "--shell", "/run/current-system/sw/bin/bash", username])
+        expected_home = LOCAL_HOME_ROOT / username
+        run_root(
+            [
+                "useradd",
+                "--home-dir",
+                str(expected_home),
+                "--no-create-home",
+                "--shell",
+                "/run/current-system/sw/bin/bash",
+                username,
+            ]
+        )
         created = True
         account = pwd.getpwnam(username)
         home = pathlib.Path(account.pw_dir)
-        expected_home = pathlib.Path("/home") / username
         if home != expected_home:
-            raise SetupError(f"Administrator home directory is unexpected: {home}")
+            raise SetupError(f"Administrator home directory is not ZFS-backed: {home}")
+        run_root(["install", "-d", "-m", "0711", "-o", "root", "-g", "root", str(LOCAL_HOME_ROOT)])
         run_root(
             [
-                "systemd-run",
-                "--wait",
-                "--pipe",
-                "--collect",
-                "--quiet",
-                "--unit",
-                f"nas-first-start-home-{username}.service",
-                "--property=Type=oneshot",
-                "--property=User=root",
-                "--property=Group=root",
-                "--property=UMask=0077",
-                "--property=NoNewPrivileges=yes",
-                "--property=PrivateTmp=yes",
-                "--property=ProtectSystem=strict",
-                "--property=ProtectHome=no",
-                "--property=ReadWritePaths=/home",
-                "--",
                 "install",
                 "-d",
                 "-m",
@@ -485,7 +488,7 @@ def create_local_administrator(administrator: Mapping[str, Any], password: str) 
         )
         run_root(["chpasswd"], input_text=f"{username}:{password}\n")
         run_root(["usermod", "--append", "--groups", "wheel,nas-administrators,nas-operations", username])
-        return desired
+        return details
     except Exception:
         if created:
             run_root(["userdel", "--remove", username], check=False)
@@ -525,6 +528,27 @@ def select_fresh_permanent_runtime() -> dict[str, Any]:
             raise SetupError(f"Permanent runtime selector pointed {stable} at unexpected target {target}")
         resolved[name] = str(target)
     return {"permanentRuntimeSelected": True, "paths": resolved}
+
+
+def provision_local_administrator(administrator: Mapping[str, Any], password: str) -> dict[str, Any]:
+    details = create_local_administrator(administrator, password)
+    finalize_local_administrator(details)
+    return details
+
+
+def local_administrator_ready(administrator: Mapping[str, Any]) -> bool:
+    username = administrator.get("username")
+    if not isinstance(username, str) or local_administrator_username() != username:
+        return False
+    try:
+        account = pwd.getpwnam(username)
+    except KeyError:
+        return False
+    home = pathlib.Path(account.pw_dir)
+    if home != LOCAL_HOME_ROOT / username or not home.is_dir():
+        return False
+    bootstrap = run_root(["id", "--user", BOOTSTRAP_ADMIN_USER], check=False)
+    return bootstrap.returncode != 0
 
 
 def promote_bootstrap_runtime(bootstrap_root: pathlib.Path, operational_root: pathlib.Path) -> dict[str, bool]:
@@ -963,10 +987,11 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             administrator = getattr(args, "administrator", None) or configured_administrator(account_plan)
             if not isinstance(administrator, Mapping):
                 raise SetupError("First-run administrator details are missing")
-            administrator_password = administrator.get("password")
-            if not isinstance(administrator_password, str):
+            administrator_password_value = administrator.get("password")
+            if not isinstance(administrator_password_value, str):
                 raise SetupError("First-run administrator password is missing")
-            local_administrator = create_local_administrator(administrator, administrator_password)
+            administrator_password = str(administrator_password_value)
+            local_administrator = local_administrator_details(administrator)
             include_local_administrator(account_plan, local_administrator, administrator_password)
             fingerprint = setup_fingerprint(config, args, account_plan, password)
             journal = OperationJournal.open(
@@ -986,14 +1011,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 "keepass-database",
                 lambda: verify_or_create_database(password, args.create_database),
                 postcondition=keepass_database_ready,
-            )
-            run_setup_stage(
-                journal,
-                "local-administrator",
-                lambda: local_administrator,
-                postcondition=lambda _result: (
-                    run_root(["id", "--user", local_administrator["username"]], check=False).returncode == 0
-                ),
             )
             progress("initializing machine and service secrets")
             run_setup_stage(
@@ -1017,6 +1034,13 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 manual_recovery_on_failure=pool_was_missing and args.allow_destructive_storage,
                 postcondition=storage_ready,
+            )
+            progress("creating the permanent ZFS-backed recovery administrator")
+            local_administrator = run_setup_stage(
+                journal,
+                "local-administrator",
+                lambda: provision_local_administrator(administrator, administrator_password),
+                postcondition=lambda result: isinstance(result, Mapping) and local_administrator_ready(result),
             )
             progress("activating protected services")
             run_setup_stage(
@@ -1168,16 +1192,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 "final-state",
                 lambda: (write_state(report), report)[1],
                 postcondition=lambda _result: setup_state_matches(report),
-            )
-            run_setup_stage(
-                journal,
-                "bootstrap-account-retirement",
-                lambda: finalize_local_administrator(local_administrator),
-                postcondition=lambda result: (
-                    isinstance(result, Mapping)
-                    and result.get("username") == local_administrator["username"]
-                    and local_administrator_username() == local_administrator["username"]
-                ),
             )
             if not setup_state_matches(report):
                 journal.fail("Final setup state could not be verified", manual_recovery=True)

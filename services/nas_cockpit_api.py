@@ -33,6 +33,7 @@ from nas_operation_lock import (
 
 ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
+ZFS_ROOT = pathlib.Path(os.environ.get("NAS_ZFS_ROOT", "/tank"))
 CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas"))
 PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
 FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
@@ -432,7 +433,8 @@ def _start_first_start_unit(
         "--property=RuntimeDirectory=nas-secrets nas-secret-staging nas-secret-transactions",
         "--property=RuntimeDirectoryMode=0700",
         "--property=RuntimeDirectoryPreserve=yes",
-        "--property=ReadWritePaths=/etc /var/lib/nas-setup /var/lib/nas-first-start /run/nas-secrets /run/nas-secret-staging /run/nas-secret-transactions /run/nas-operations /run/lock /run/nas-first-start",
+        "--property=ReadWritePaths=/etc /var/lib/nas-bootstrap /var/lib/nas-setup /var/lib/nas-first-start /run/nas-secrets /run/nas-secret-staging /run/nas-secret-transactions /run/nas-operations /run/lock /run/nas-first-start",
+        f"--property=ReadWritePaths=-{ZFS_ROOT}",
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
@@ -463,6 +465,8 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     administrator_password = _json_string(administrator, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
         raise ApiError("Administrator username is invalid")
+    if username == "nas-bootstrap":
+        raise ApiError("Administrator username is the reserved bootstrap identity")
     if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
         raise ApiError("Administrator details must be single-line values")
     if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
