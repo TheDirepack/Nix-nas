@@ -227,7 +227,7 @@ def main() -> int:
     args = parser.parse_args()
 
     bootstrap_password = read_secret(args.bootstrap_password_file)
-    kee_pass_password = read_secret(args.kee_pass_password_file)
+    kee_pass_password = read_secret(args.keepass_password_file)
     admin_password = read_secret(args.admin_password_file)
     ssl._create_default_https_context = ssl._create_unverified_context
 

@@ -140,7 +140,7 @@ class WizardFlowContractTests(unittest.TestCase):
     def test_wizard_reads_every_password_file_before_touching_the_browser(self) -> None:
         source = (ROOT / "tests" / "browser" / "first-run-wizard.py").read_text(encoding="utf-8")
         bootstrap = source.index("read_secret(args.bootstrap_password_file)")
-        kee_pass = source.index("read_secret(args.kee_pass_password_file)")
+        kee_pass = source.index("read_secret(args.keepass_password_file)")
         admin = source.index("read_secret(args.admin_password_file)")
         browser_call = source.index("driver = browser()")
         self.assertLess(max(bootstrap, kee_pass, admin), browser_call)

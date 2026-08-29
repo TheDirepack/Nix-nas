@@ -429,6 +429,7 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
+        "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token",
         "--property=TimeoutStartSec=6h",
         "--",
         _setup_entry(),
