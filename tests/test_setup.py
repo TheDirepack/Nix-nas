@@ -356,7 +356,7 @@ class LocalAdministratorTests(unittest.TestCase):
         self.assertEqual(retirement[:1], ["systemd-run"])
         self.assertIn("--property=ProtectHome=read-only", retirement)
         self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "nas-bootstrap"])
-        self.assertIn("--property=ProtectHome=read-only", cleanup)
+        self.assertIn("--property=ProtectHome=no", cleanup)
         self.assertIn("--property=ReadWritePaths=/home", cleanup)
         self.assertEqual(
             cleanup[cleanup.index("--") + 1 :],
