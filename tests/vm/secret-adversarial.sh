@@ -120,7 +120,7 @@ exercise_rejected_vault_value \
   "Vaultwarden administrator token has an unsafe or unexpected format"
 
 # The failed attempts must leave no staged secret files behind.
-if find /run/nas-secret-transactions /run/nas-secret-staging -type f -print -quit 2>/dev/null | grep -q .; then
+if find /run/nas-secret-runtime/transactions /run/nas-secret-runtime/staging -type f -print -quit 2>/dev/null | grep -q .; then
   fail "failed secret activation left staged secret files behind"
 fi
 

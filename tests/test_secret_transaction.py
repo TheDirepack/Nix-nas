@@ -285,7 +285,7 @@ class SecretTransactionShellTests(unittest.TestCase):
         # Activation stages secrets under a root-owned 0700 transaction directory that the
         # calling administrator cannot traverse. The physical validation checks must run
         # through the privilege wrapper; without elevation the layout is rejected exactly
-        # as root-owned /run/nas-secret-transactions rejects an unprivileged realpath.
+        # as root-owned /run/nas-secret-runtime/transactions rejects an unprivileged realpath.
         unprivileged = """mkdir -p tx/transaction.1/new tx/transaction.1/previous
 export NAS_TX_SIM_ELEVATE=0
 ! nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.1/previous" nas-protected-services.target "$PWD/tx/transaction.1"

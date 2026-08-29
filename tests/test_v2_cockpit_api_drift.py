@@ -152,7 +152,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("--property=ProtectSystem=strict", command)
         self.assertIn("--property=ProtectHome=yes", command)
         self.assertIn(
-            "--property=RuntimeDirectory=nas-secrets nas-secret-staging nas-secret-transactions",
+            "--property=RuntimeDirectory=nas-secret-runtime",
             command,
         )
         self.assertIn("--property=RuntimeDirectoryMode=0700", command)
@@ -162,13 +162,14 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("--property=DeviceAllow=/dev/zfs rw", command)
         self.assertIn("--property=DeviceAllow=/dev/disk/by-id/test-disk rw", command)
         write_paths = next(value for value in command if value.startswith("--property=ReadWritePaths="))
-        self.assertIn("/run/nas-secrets", write_paths)
-        self.assertIn("/run/nas-secret-staging", write_paths)
-        self.assertIn("/run/nas-secret-transactions", write_paths)
+        writable = write_paths.split("=")[-1].split()
+        self.assertIn("/run/nas-secret-runtime", writable)
+        self.assertNotIn("/run", writable)
+        self.assertNotIn("/run/nas-secrets", writable)
         self.assertIn("/var/lib/nas-first-start", write_paths)
         self.assertIn("/var/lib/nas-bootstrap", write_paths)
-        self.assertIn("/etc", write_paths.split("=")[-1].split())
-        self.assertNotIn("/home", write_paths.split("=")[-1].split())
+        self.assertIn("/etc", writable)
+        self.assertNotIn("/home", writable)
         self.assertFalse(any(value.startswith("--property=ReadWritePaths=-") for value in command))
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))

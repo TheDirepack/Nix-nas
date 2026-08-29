@@ -9,7 +9,7 @@ let
   systemStateVersion = config.system.stateVersion;
   lanHost = "${config.networking.hostName}.local";
   identityAdminGroup = "nas_admin";
-  secretRoot = "/run/nas-secrets";
+  secretRoot = "/run/nas-secret-runtime/live";
   authentikSecretDir = "${secretRoot}/authentik";
   authentikEnvironmentFile = "${authentikSecretDir}/environment";
   authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";

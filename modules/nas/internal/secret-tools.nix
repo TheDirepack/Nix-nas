@@ -370,8 +370,8 @@ PY_AI_PROVIDERS
         ${lib.optionalString cfg.ai.enable ''local provider_id provider_env provider_key''}
         ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
         local state_bundle_signing_key
-        sudo install -d -m 0711 -o root -g root /run/nas-secret-staging
-        runtime_base="/run/nas-secret-staging/$(id -u)"
+        sudo install -d -m 0711 -o root -g root /run/nas-secret-runtime/staging
+        runtime_base="/run/nas-secret-runtime/staging/$(id -u)"
         sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$runtime_base"
         if [[ ! -d "$runtime_base" || -L "$runtime_base" || "$(stat -c '%u' "$runtime_base")" != "$(id -u)" || "$((8#$(stat -c '%a' "$runtime_base") & 8#077))" -ne 0 ]]; then
           echo "Refusing to stage secrets: a private user runtime directory is unavailable." >&2
@@ -382,8 +382,8 @@ PY_AI_PROVIDERS
           echo "Refusing to stage secrets: temporary directory is not mode 0700." >&2
           exit 70
         fi
-        sudo install -d -m 0700 -o root -g root /run/nas-secret-transactions
-        transaction_dir="$(sudo mktemp -d /run/nas-secret-transactions/transaction.XXXXXX)"
+        sudo install -d -m 0700 -o root -g root /run/nas-secret-runtime/transactions
+        transaction_dir="$(sudo mktemp -d /run/nas-secret-runtime/transactions/transaction.XXXXXX)"
         root_stage="$transaction_dir/new"
         previous="$transaction_dir/previous"
 
