@@ -147,7 +147,10 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("--property=ProtectSystem=strict", command)
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
-        self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
+        # The bootstrap token file must NOT be pinned: after secret activation
+        # the runtime symlink changes, while the wrapper's persistent default
+        # keeps working.
+        self.assertNotIn("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", command)
         self.assertIn("--password-file", command)
         with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):
             with self.assertRaises(api.ApiError):

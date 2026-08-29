@@ -429,8 +429,7 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
-        f"--property=Environment=NAS_PUBLIC_HOST={os.environ.get('NAS_PUBLIC_HOST', 'nas-test.local:8443')}",
-        f"--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE={os.environ.get('NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE', '/run/nas-authentik/api-token')}",
+        f"--property=Environment=NAS_PUBLIC_HOST={os.environ.get('NAS_PUBLIC_HOST', '')}",
         "--property=TimeoutStartSec=6h",
         "--",
         _setup_entry(),
