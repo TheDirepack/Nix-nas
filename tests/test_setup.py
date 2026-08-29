@@ -188,6 +188,67 @@ class ShareProvisioningTests(unittest.TestCase):
         self.assertNotIn("nas_deny_", rendered)
 
 
+class StorageProvisioningTests(unittest.TestCase):
+    def test_pool_creation_uses_a_short_lived_device_helper_for_future_zfs_partitions(self) -> None:
+        calls: list[list[str]] = []
+
+        def capture(command, **_kwargs):
+            calls.append(list(command))
+            return setup.Completed(tuple(command), "", "")
+
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=False),
+            mock.patch.object(setup, "dataset_exists", return_value=True),
+            mock.patch.object(setup, "validate_storage_request"),
+            mock.patch.object(setup, "run_root", side_effect=capture),
+            mock.patch.object(setup.secrets, "token_hex", return_value="0123456789abcdef"),
+        ):
+            result = setup.setup_storage(
+                {
+                    "createPool": True,
+                    "devices": ["/dev/disk/by-id/confirmed"],
+                    "topology": "single",
+                    "ashift": 12,
+                    "wipeDevices": False,
+                },
+                keepass_password="unused",
+                confirmed_devices=["/dev/disk/by-id/confirmed"],
+                allow_destructive=True,
+            )
+
+        helper = calls[0]
+        self.assertEqual(helper[:2], ["systemd-run", "--quiet"])
+        self.assertIn("--wait", helper)
+        self.assertIn("--collect", helper)
+        self.assertIn("--property=PrivateDevices=no", helper)
+        self.assertIn("--property=DevicePolicy=auto", helper)
+        self.assertIn("--property=ProtectSystem=yes", helper)
+        self.assertEqual(
+            helper[helper.index("--") + 1 : -2],
+            [
+                "zpool",
+                "create",
+                "-f",
+                "-o",
+                "ashift=12",
+                "-O",
+                "compression=zstd",
+                "-O",
+                "atime=off",
+                "-O",
+                "xattr=sa",
+                "-O",
+                "acltype=posixacl",
+                "-O",
+                "mountpoint=none",
+                "-m",
+                "none",
+            ],
+        )
+        self.assertEqual(helper[-2:], [setup.ZFS_POOL, "/dev/disk/by-id/confirmed"])
+        self.assertTrue(result["createdPool"])
+
+
 class LocalAdministratorTests(unittest.TestCase):
     def test_setup_rejects_the_disposable_bootstrap_name_for_the_permanent_account(self) -> None:
         with self.assertRaisesRegex(setup.SetupError, "reserved bootstrap"):

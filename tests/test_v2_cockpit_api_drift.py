@@ -179,30 +179,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             with self.assertRaises(api.ApiError):
                 api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"), ["/dev/test"])
 
-    def test_device_allow_paths_include_only_partitions_of_confirmed_disks(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            dev_root = root / "dev"
-            by_id = dev_root / "disk" / "by-id"
-            by_id.mkdir(parents=True)
-            (dev_root / "vdb").touch()
-            confirmed = by_id / "confirmed-disk"
-            confirmed.symlink_to(pathlib.Path("../../vdb"))
-            sys_root = root / "sys" / "class" / "block"
-            (sys_root / "vdb" / "vdb1").mkdir(parents=True)
-            (sys_root / "vdb" / "vdb1" / "partition").touch()
-            (sys_root / "vdb" / "holders").mkdir()
-            (sys_root / "vdc" / "vdc1").mkdir(parents=True)
-            (sys_root / "vdc" / "vdc1" / "partition").touch()
-
-            allowed = api._device_allow_paths(
-                [str(confirmed)],
-                sys_class_root=sys_root,
-                dev_root=dev_root,
-            )
-
-        self.assertEqual(allowed, ["/dev/zfs", str(confirmed), str(dev_root / "vdb1")])
-
     def prepared_first_start(self) -> dict[str, object]:
         return {
             "status": "ready",

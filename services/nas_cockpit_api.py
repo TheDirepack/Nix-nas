@@ -408,31 +408,6 @@ def _write_private_new(path: pathlib.Path, content: str) -> None:
         raise
 
 
-def _device_allow_paths(
-    devices: list[str],
-    *,
-    sys_class_root: pathlib.Path = pathlib.Path("/sys/class/block"),
-    dev_root: pathlib.Path = pathlib.Path("/dev"),
-) -> list[str]:
-    allowed = ["/dev/zfs"]
-    for device in devices:
-        if device not in allowed:
-            allowed.append(device)
-        resolved = pathlib.Path(device).resolve(strict=False)
-        sys_device = sys_class_root / resolved.name
-        try:
-            children = sorted(sys_device.iterdir(), key=lambda path: path.name)
-        except OSError:
-            continue
-        for child in children:
-            if not (child / "partition").is_file():
-                continue
-            partition = str(dev_root / child.name)
-            if partition not in allowed:
-                allowed.append(partition)
-    return allowed
-
-
 def _start_first_start_unit(
     job_id: str,
     request_path: pathlib.Path,
@@ -451,7 +426,8 @@ def _start_first_start_unit(
         "--property=NoNewPrivileges=yes",
         "--property=PrivateTmp=yes",
         "--property=DevicePolicy=closed",
-        *(f"--property=DeviceAllow={device} rw" for device in _device_allow_paths(devices)),
+        "--property=DeviceAllow=/dev/zfs rw",
+        *(f"--property=DeviceAllow={device} rw" for device in devices),
         "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
         "--property=RuntimeDirectory=nas-secret-runtime",
