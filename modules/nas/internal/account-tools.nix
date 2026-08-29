@@ -100,6 +100,7 @@ nasSetup = pkgs.writeShellApplication {
       export NAS_ZFS_ENCRYPTION_ENABLE=${if cfg.zfsEncryption.enable then "1" else "0"}
       export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
+      export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}
       export NAS_SETUP_STATE=/var/lib/nas-setup/state.json
       export NAS_SETUP_JOURNAL=/var/lib/nas-setup/first-run-journal.json
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json

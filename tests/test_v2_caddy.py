@@ -187,7 +187,10 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         )
         self.assertIn("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;", services)
         self.assertIn("NAS_PUBLIC_HOST = cfg.identity.publicHost;", services)
-        self.assertIn("export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}", account_tools)
+        self.assertEqual(
+            2,
+            account_tools.count("export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}"),
+        )
         self.assertIn(
             'ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";',
             services,
