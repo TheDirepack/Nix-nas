@@ -52,6 +52,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             command = setup.admin_command(["x"])
         self.assertEqual(command[:4], ["runuser", "-u", setup.ADMIN_USER, "--"])
         self.assertIn("HOME=/tank/homes/admin", command)
+        self.assertIn("--chdir=/tank/homes/admin", command)
         with (
             mock.patch.object(setup, "current_username", return_value="bob"),
             mock.patch.object(setup.os, "geteuid", return_value=1000),

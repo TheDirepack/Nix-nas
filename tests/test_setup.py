@@ -339,6 +339,7 @@ class LocalAdministratorTests(unittest.TestCase):
         ):
             command = setup.admin_command(["nas-secrets", "init"])
         self.assertIn("HOME=/tank/homes/nasadmin", command)
+        self.assertIn("--chdir=/tank/homes/nasadmin", command)
         self.assertNotIn("HOME=/home/nasadmin", command)
 
     def test_finalizing_local_administrator_removes_bootstrap_and_persists_only_username(self) -> None:

@@ -179,6 +179,7 @@ def admin_command(command: Sequence[str]) -> list[str]:
             administrator,
             "--",
             "env",
+            f"--chdir={home}",
             f"HOME={home}",
             f"PATH={os.environ.get('PATH', '')}",
             *map(str, command),
