@@ -390,7 +390,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             [call.args[0] for call in storage_host.call_args_list],
             [
                 ["nas-zfs-mount-check"],
-                ["systemd-tmpfiles", "--create", "--prefix", "/tank"],
+                ["systemd-tmpfiles", "--create", "--prefix", "/tank/nas-control"],
             ],
         )
         self.assertEqual(result, {"mounted": True, "runtimeDirectoriesPrepared": True})

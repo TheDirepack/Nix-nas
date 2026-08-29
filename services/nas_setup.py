@@ -713,7 +713,7 @@ def prepare_storage_runtime(keepass_password: str) -> dict[str, bool]:
             input_text=keepass_password + "\n",
         )
     run_storage_host(["nas-zfs-mount-check"])
-    run_storage_host(["systemd-tmpfiles", "--create", "--prefix", str(ZFS_ROOT)])
+    run_storage_host(["systemd-tmpfiles", "--create", "--prefix", str(ZFS_ROOT / "nas-control")])
     return {"mounted": True, "runtimeDirectoriesPrepared": True}
 
 

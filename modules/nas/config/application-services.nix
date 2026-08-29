@@ -261,6 +261,7 @@ in
       "d ${bootstrapPostgresqlDataDir} 0700 postgres postgres -"
       "d ${bootstrapSecretsDir} 0700 admin users -"
       "d ${syncthingDataDir} 0700 syncthing copyparty -"
+      "d ${syncthingDataDir}/.config 0700 syncthing copyparty -"
       "d ${syncthingConfigDir} 0700 syncthing copyparty -"
       "L+ /var/lib/syncthing - - - - ${syncthingDataDir}"
       "d ${vaultwardenDataDir} 0700 vaultwarden vaultwarden -"
