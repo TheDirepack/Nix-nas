@@ -83,6 +83,7 @@ let
     name = "nas-zfs-mount-check";
     runtimeInputs = [
       pkgs.coreutils
+      pkgs.findutils
       pkgs.util-linux
     ];
     text = ''
