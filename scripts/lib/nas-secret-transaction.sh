@@ -13,6 +13,13 @@ nas_secret_tx_systemctl() {
   nas_secret_tx_privileged "${NAS_SECRET_TX_SYSTEMCTL:-systemctl}" "$@"
 }
 
+nas_secret_tx_stop_target() {
+  if nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET"; then
+    return 0
+  fi
+  ! nas_secret_tx_systemctl is-active --quiet "$NAS_SECRET_TX_TARGET"
+}
+
 nas_secret_tx_realpath_lexical() {
   local value=$1
   [[ "$value" == /* ]] || return 1
@@ -187,7 +194,7 @@ nas_secret_tx_swap() {
   # or move fall through and incorrectly advance the transaction phase flags.
   NAS_SECRET_TX_SWAP_STARTED=true
   NAS_SECRET_TX_PHASE=stopping
-  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET" || return $?
+  nas_secret_tx_stop_target || return $?
   NAS_SECRET_TX_PHASE=stopped
   if nas_secret_tx_privileged test -d "$NAS_SECRET_TX_ROOT"; then
     nas_secret_tx_privileged mv "$NAS_SECRET_TX_ROOT" "$NAS_SECRET_TX_PREVIOUS" || return $?
@@ -224,7 +231,7 @@ nas_secret_tx_rollback() {
     "$failed" && return 1 || return 0
   fi
 
-  nas_secret_tx_systemctl stop "$NAS_SECRET_TX_TARGET" >/dev/null 2>&1 || failed=true
+  nas_secret_tx_stop_target >/dev/null 2>&1 || failed=true
   if [[ "$NAS_SECRET_TX_NEW_INSTALLED" == true ]]; then
     nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_ROOT" || failed=true
   fi
