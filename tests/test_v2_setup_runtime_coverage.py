@@ -627,6 +627,63 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 with self.assertRaises(setup.SetupError):
                     setup.install_runtime_identity_token("keepass")
 
+    def test_adopt_bootstrap_authentik_authority_imports_exact_running_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = root / "environment"
+            token_file = root / "api-token"
+            secret_key = "a" * 128
+            token = "b" * 64
+            environment.write_text(f"AUTHENTIK_SECRET_KEY={secret_key}\n", encoding="utf-8")
+            token_file.write_text(token, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+                mock.patch.object(setup, "run_admin") as admin,
+                mock.patch.object(pathlib.Path, "is_file", return_value=False),
+                mock.patch.object(setup, "run_interactive_privileged") as activate,
+            ):
+                self.assertEqual({"adopted": True}, setup.adopt_bootstrap_authentik_authority("keepass"))
+            self.assertEqual(
+                ["nas-secrets", "adopt-authentik-bootstrap-stdin"],
+                admin.call_args.args[0],
+            )
+            self.assertEqual(f"keepass\n{secret_key}\n{token}\n", admin.call_args.kwargs["input_text"])
+            activate.assert_not_called()
+
+    def test_adopt_bootstrap_authentik_authority_reactivates_an_existing_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = root / "environment"
+            token_file = root / "api-token"
+            environment.write_text(f"AUTHENTIK_SECRET_KEY={'a' * 128}\n", encoding="utf-8")
+            token_file.write_text("b" * 64, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+                mock.patch.object(setup, "run_admin"),
+                mock.patch.object(pathlib.Path, "is_file", return_value=True),
+                mock.patch.object(setup, "run_interactive_privileged") as activate,
+            ):
+                setup.adopt_bootstrap_authentik_authority("keepass")
+            self.assertEqual("keepass\n", activate.call_args.kwargs["input_text"])
+
+    def test_adopt_bootstrap_authentik_authority_rejects_malformed_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = root / "environment"
+            token_file = root / "api-token"
+            environment.write_text("AUTHENTIK_SECRET_KEY=bad\n", encoding="utf-8")
+            token_file.write_text("b" * 64, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "secret key is malformed"):
+                    setup.adopt_bootstrap_authentik_authority("keepass")
+
     def test_readiness_helpers_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             missing = pathlib.Path(raw) / "missing"

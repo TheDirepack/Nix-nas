@@ -350,6 +350,30 @@ PY_AI_PROVIDERS
         echo "Run: nas-secrets activate"
       }
 
+      command_adopt_authentik_bootstrap_stdin() {
+        acquire_lock
+        password_from_stdin=true
+        prompt_unlock
+        ensure_group
+        local secret_key token
+        IFS= read -r secret_key || { echo "Unable to read the Authentik bootstrap secret key." >&2; exit 1; }
+        IFS= read -r token || { echo "Unable to read the Authentik bootstrap token." >&2; exit 1; }
+        if IFS= read -r _; then
+          echo "Unexpected extra input while adopting Authentik bootstrap authority." >&2
+          exit 1
+        fi
+        require_secret_hex "$secret_key" 128 "Authentik bootstrap secret key"
+        require_secret_hex "$token" 64 "Authentik bootstrap token"
+        store_value authentik-secret-key "$secret_key"
+        store_value authentik-bootstrap-token "$token"
+        store_value authentik-api-token "$token"
+        if ! has_secret authentik-bootstrap-password; then
+          store_value authentik-bootstrap-password "nas-admin-first-boot"
+        fi
+        unset secret_key token
+        echo "Adopted the running first-boot Authentik authority."
+      }
+
       install_secret() {
         local source="$1" target="$2" owner="$3" group="$4"
         sudo install -m 0400 -o "$owner" -g "$group" "$source" "$target"
@@ -784,7 +808,7 @@ NTFY_ENV
 
       enter_operation_coordinator() {
         case "''${1:-}" in
-          init|activate|activate-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
+          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
             local runner="''${NAS_OPERATION_RUNNER:-/run/current-system/sw/bin/nas-operation-run}"
             [[ -x "$runner" ]] || {
               echo "NAS operation coordinator is unavailable: $runner" >&2
@@ -803,6 +827,7 @@ NTFY_ENV
 
       case "''${1:-}" in
         init) command_init ;;
+        adopt-authentik-bootstrap-stdin) command_adopt_authentik_bootstrap_stdin ;;
         activate) command_activate ;;
         activate-stdin)
           password_from_stdin=true
@@ -826,7 +851,7 @@ NTFY_ENV
         show-zfs-key-stdin) command_show_zfs_key_stdin ;;
         show-authentik-bootstrap) command_show_authentik_bootstrap ;;
         *)
-          echo "Usage: nas-secrets {init|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
+          echo "Usage: nas-secrets {init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
           exit 2
           ;;
       esac

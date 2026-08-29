@@ -73,6 +73,8 @@ BOOTSTRAP_ADMIN_USER = "nas-bootstrap"
 ADMIN_USER = BOOTSTRAP_ADMIN_USER
 ADMIN_STATE_PATH = pathlib.Path(os.environ.get("NAS_ADMIN_STATE", "/var/lib/nas-setup/local-administrator.json"))
 BOOTSTRAP_RUNTIME_ROOT = pathlib.Path(os.environ.get("NAS_BOOTSTRAP_RUNTIME_ROOT", "/var/lib/nas-bootstrap"))
+BOOTSTRAP_AUTHENTIK_ENVIRONMENT = BOOTSTRAP_RUNTIME_ROOT / "authentik/environment"
+BOOTSTRAP_AUTHENTIK_TOKEN = BOOTSTRAP_RUNTIME_ROOT / "authentik/api-token"
 OPERATIONAL_RUNTIME_SELECT_PATH = pathlib.Path(
     os.environ.get("NAS_OPERATIONAL_RUNTIME_SELECT", "/var/lib/nas-setup/operational-runtime-select")
 )
@@ -976,6 +978,36 @@ def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
         token = ""
 
 
+def adopt_bootstrap_authentik_authority(keepass_password: str) -> dict[str, bool]:
+    try:
+        environment = BOOTSTRAP_AUTHENTIK_ENVIRONMENT.read_text(encoding="utf-8")
+        token = BOOTSTRAP_AUTHENTIK_TOKEN.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise SetupError("The running first-boot Authentik authority is unavailable") from exc
+    secret_key = ""
+    for line in environment.splitlines():
+        if line.startswith("AUTHENTIK_SECRET_KEY="):
+            secret_key = line.partition("=")[2].strip()
+            break
+    if re.fullmatch(r"[0-9A-Fa-f]{128}", secret_key) is None:
+        raise SetupError("The first-boot Authentik secret key is malformed")
+    if re.fullmatch(r"[0-9A-Fa-f]{64}", token) is None:
+        raise SetupError("The first-boot Authentik token is malformed")
+    try:
+        run_admin(
+            coordinated_child(["nas-secrets", "adopt-authentik-bootstrap-stdin"]),
+            input_text=f"{keepass_password}\n{secret_key}\n{token}\n",
+        )
+        if pathlib.Path("/run/nas-secrets/ready").is_file():
+            run_interactive_privileged(
+                coordinated_child(["nas-secrets", "activate-stdin"]), input_text=f"{keepass_password}\n"
+            )
+        return {"adopted": True}
+    finally:
+        secret_key = ""
+        token = ""
+
+
 def run_setup_stage(
     journal: OperationJournal,
     step: str,
@@ -1225,6 +1257,11 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 postcondition=keepass_database_ready,
             )
             progress("initializing machine and service secrets")
+            run_setup_stage(
+                journal,
+                "bootstrap-authentik-authority",
+                lambda: adopt_bootstrap_authentik_authority(password),
+            )
             run_setup_stage(
                 journal,
                 "secret-initialization",
