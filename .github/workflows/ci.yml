@@ -88,49 +88,139 @@ jobs:
   # Stage 2: independent checks fan out after shared source/tooling contracts.
   # They still run when a shared contract fails so one attempt reports every
   # inexpensive problem before the aggregate gate blocks expensive builds.
-  static:
-    name: Static analysis and configuration
+  # Static analysis is split by engine so the slow Python type checker and
+  # the Nix configuration evaluations run in parallel with the fast linters.
+  static-code:
+    name: Static code analysis (Python and JavaScript)
     needs: [prerequisites]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Initialize static diagnostics
+      - name: Initialize static code diagnostics
         run: |
           mkdir -p ci-logs
-          : > ci-logs/static-results.tsv
+          : > ci-logs/static-code-results.tsv
       - name: Set up Nix
         id: setup-nix
         continue-on-error: true
         uses: ./.github/actions/setup-nix-ci
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run all static/configuration checks
+      - name: Run Python and JavaScript code analysis
         id: checks
         if: always() && steps.setup-nix.outcome == 'success'
         continue-on-error: true
-        run: bash scripts/ci-qualification.sh static
-      - name: Retain static diagnostic logs on failure
+        run: bash scripts/ci-qualification.sh static-code
+      - name: Retain static code diagnostic logs on failure
         if: >-
           always() &&
           (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: qualification-static-logs
+          name: qualification-static-code-logs
           if-no-files-found: error
           retention-days: 3
           path: ci-logs
-      - name: Report static failures
+      - name: Report static code failures
         if: always()
         env:
-          CI_REPORT_TITLE: Static analysis and configuration
+          CI_REPORT_TITLE: Static code analysis (Python and JavaScript)
         run: |
           python3 scripts/ci-check-report.py \
-            --results ci-logs/static-results.tsv \
+            --results ci-logs/static-code-results.tsv \
             --tail-lines 30 \
             "setup-nix=${{ steps.setup-nix.outcome }}" \
-            "static=${{ steps.checks.outcome }}"
+            "static-code=${{ steps.checks.outcome }}"
+
+  static-shell:
+    name: Static shell and workflow analysis
+    needs: [prerequisites]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize static shell diagnostics
+        run: |
+          mkdir -p ci-logs
+          : > ci-logs/static-shell-results.tsv
+      - name: Set up Nix
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run shell and workflow analysis
+        id: checks
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh static-shell
+      - name: Retain static shell diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-static-shell-logs
+          if-no-files-found: error
+          retention-days: 3
+          path: ci-logs
+      - name: Report static shell failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Static shell and workflow analysis
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/static-shell-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "static-shell=${{ steps.checks.outcome }}"
+
+  static-nix:
+    name: Static Nix configuration evaluation
+    needs: [prerequisites]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize static Nix diagnostics
+        run: |
+          mkdir -p ci-logs
+          : > ci-logs/static-nix-results.tsv
+      - name: Set up Nix
+        id: setup-nix
+        continue-on-error: true
+        uses: ./.github/actions/setup-nix-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run Nix configuration evaluation
+        id: checks
+        if: always() && steps.setup-nix.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/ci-qualification.sh static-nix
+      - name: Retain static Nix diagnostic logs on failure
+        if: >-
+          always() &&
+          (steps.setup-nix.outcome != 'success' || steps.checks.outcome != 'success')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-static-nix-logs
+          if-no-files-found: error
+          retention-days: 3
+          path: ci-logs
+      - name: Report static Nix failures
+        if: always()
+        env:
+          CI_REPORT_TITLE: Static Nix configuration evaluation
+        run: |
+          python3 scripts/ci-check-report.py \
+            --results ci-logs/static-nix-results.tsv \
+            --tail-lines 30 \
+            "setup-nix=${{ steps.setup-nix.outcome }}" \
+            "static-nix=${{ steps.checks.outcome }}"
 
   unit:
     name: Unit, coverage, and maintainer contracts
@@ -426,7 +516,7 @@ jobs:
   qualification:
     name: Qualification gate
     if: ${{ !cancelled() }}
-    needs: [prerequisites, static, unit, security, nonroot, cockpit, coverage-diff]
+    needs: [prerequisites, static-code, static-shell, static-nix, unit, security, nonroot, cockpit, coverage-diff]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -437,7 +527,9 @@ jobs:
         run: |
           python3 scripts/ci-check-report.py \
             "prerequisites=${{ needs.prerequisites.result }}" \
-            "static=${{ needs.static.result }}" \
+            "static-code=${{ needs.static-code.result }}" \
+            "static-shell=${{ needs.static-shell.result }}" \
+            "static-nix=${{ needs.static-nix.result }}" \
             "unit=${{ needs.unit.result }}" \
             "security=${{ needs.security.result }}" \
             "nonroot=${{ needs.nonroot.result }}" \
@@ -856,7 +948,7 @@ jobs:
   summary:
     name: Pipeline summary
     if: ${{ !cancelled() }}
-    needs: [prerequisites, static, unit, security, nonroot, cockpit, coverage-diff, qualification, prepare, browser, integration, installer, source-fuzz, installed-security]
+    needs: [prerequisites, static-code, static-shell, static-nix, unit, security, nonroot, cockpit, coverage-diff, qualification, prepare, browser, integration, installer, source-fuzz, installed-security]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

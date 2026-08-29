@@ -118,14 +118,16 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Realize pinned test toolchain once", workflow)
         self.assertIn("nix develop .#test -c true", workflow)
         for job_name in (
-            "Static analysis and configuration",
+            "Static code analysis (Python and JavaScript)",
+            "Static shell and workflow analysis",
+            "Static Nix configuration evaluation",
             "Unit, coverage, and maintainer contracts",
             "Security and generated configuration",
             "Unprivileged hermeticity",
             "Cockpit source, dependencies, and production bundle",
         ):
             self.assertIn(job_name, workflow)
-        self.assertGreaterEqual(workflow.count("needs: [prerequisites]"), 5)
+        self.assertGreaterEqual(workflow.count("needs: [prerequisites]"), 7)
         self.assertIn("needs: [unit]", workflow)
         self.assertIn("Qualification gate", workflow)
         self.assertIn("needs: [qualification]", workflow)

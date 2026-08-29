@@ -7,7 +7,9 @@ from typing import Any
 
 
 PARALLEL_QUALIFICATION_JOBS = {
-    "static",
+    "static-code",
+    "static-shell",
+    "static-nix",
     "unit",
     "security",
     "nonroot",

@@ -9,7 +9,7 @@ cd "$ROOT" || exit
 
 section=${1:-}
 if [[ -z "$section" ]]; then
-  printf 'usage: bash scripts/ci-qualification.sh <shared|static|unit|security|nonroot|cockpit>\n' >&2
+  printf 'usage: bash scripts/ci-qualification.sh <shared|static-code|static-shell|static-nix|unit|security|nonroot|cockpit>\n' >&2
   exit 2
 fi
 
@@ -47,22 +47,7 @@ case "$section" in
     ci_run shared shell-syntax "Shell syntax" check_shell_syntax || failed=1
     ;;
 
-  static)
-    # GitHub documents concurrency.queue=max, but actionlint 1.7.12 predates
-    # that key. Lint CI normally and suppress only that exact known false
-    # positive for the release workflow; every other actionlint diagnostic is
-    # still fatal.
-    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
-    # shellcheck disable=SC2317,SC2329
-    check_actionlint() {
-      local rc=0
-      nix develop .#test -c actionlint .github/workflows/ci.yml || rc=1
-      nix develop .#test -c actionlint \
-        -ignore 'unexpected key "queue" for "concurrency" section' \
-        .github/workflows/release.yml || rc=1
-      return "$rc"
-    }
-
+  static-code)
     # Keep the normal formatting check authoritative, but when it fails also
     # retain the exact Ruff-formatted files/patch in the existing failure-log
     # artifact. This makes formatter drift directly repairable without adding
@@ -88,26 +73,47 @@ case "$section" in
       return "$rc"
     }
 
-    ci_run static secret-faults "Secret transaction fault injection" \
-      nix develop .#test -c bats tests/bats || failed=1
-    ci_run static shellcheck "ShellCheck" \
-      nix develop .#test -c shellcheck -x \
-      .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
-    ci_run static actionlint "GitHub Actions lint" \
-      check_actionlint || failed=1
-    ci_run static ruff-check "Python lint" \
+    ci_run static-code ruff-check "Python lint" \
       nix develop .#test -c ruff check services tests scripts || failed=1
-    ci_run static ruff-format "Python formatting" \
+    ci_run static-code ruff-format "Python formatting" \
       check_ruff_format || failed=1
-    ci_run static pyright "Python types" \
+    ci_run static-code pyright "Python types" \
       nix develop .#test -c pyright --project pyproject.toml || failed=1
-    ci_run static prettier "JavaScript formatting" \
+    ci_run static-code prettier "JavaScript formatting" \
       nix develop .#test -c prettier --check \
       "cockpit/src/**/*.{js,jsx,scss}" "cockpit/e2e/*.mjs" \
       "tests/js/*.mjs" prettier.config.mjs || failed=1
-    ci_run static nix-matrix "Nix configuration matrix" \
+    ;;
+
+  static-shell)
+    # GitHub documents concurrency.queue=max, but actionlint 1.7.12 predates
+    # that key. Lint CI normally and suppress only that exact known false
+    # positive for the release workflow; every other actionlint diagnostic is
+    # still fatal.
+    # Invoked indirectly through ci_run, so ShellCheck cannot prove reachability.
+    # shellcheck disable=SC2317,SC2329
+    check_actionlint() {
+      local rc=0
+      nix develop .#test -c actionlint .github/workflows/ci.yml || rc=1
+      nix develop .#test -c actionlint \
+        -ignore 'unexpected key "queue" for "concurrency" section' \
+        .github/workflows/release.yml || rc=1
+      return "$rc"
+    }
+
+    ci_run static-shell secret-faults "Secret transaction fault injection" \
+      nix develop .#test -c bats tests/bats || failed=1
+    ci_run static-shell shellcheck "ShellCheck" \
+      nix develop .#test -c shellcheck -x \
+      .github/ci-checks.sh scripts/*.sh scripts/lib/*.sh tests/vm/*.sh || failed=1
+    ci_run static-shell actionlint "GitHub Actions lint" \
+      check_actionlint || failed=1
+    ;;
+
+  static-nix)
+    ci_run static-nix nix-matrix "Nix configuration matrix" \
       ./scripts/nix-config-matrix.sh || failed=1
-    ci_run static reference-eval "Reference configuration evaluation" \
+    ci_run static-nix reference-eval "Reference configuration evaluation" \
       ./scripts/evaluate-reference-configurations.sh || failed=1
     ;;
 
