@@ -275,7 +275,7 @@ verify_bootstrap_authentik_proxy() {
 }
 
 require_commands \
-  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-managed-services-control \
+  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-alert-router nas-cockpit-api nas-managed-services-control \
   nas-identity-sync nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock proxy python3 readlink ss systemctl zfs zpool
@@ -522,7 +522,7 @@ pass "nas-setup created storage, KeePass secrets, accounts, shares, and activate
 log "Adversarial command, SQL-like input, and HTTP validation"
 rm -f /tmp/nas-command-injection-marker
 # shellcheck disable=SC2016
-if nas-cockpit-api managed-service 'ai-workspace;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
+if nas-cockpit-api managed-service 'copyparty;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
   fail "Cockpit API accepted a command-injection-shaped service identifier"
 fi
 [[ ! -e /tmp/nas-command-injection-marker ]] || fail "service identifier escaped into shell execution"
@@ -535,15 +535,6 @@ EOF_BAD_CONFIG
 if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.out 2>/tmp/nas-bad-path.err; then
   fail "setup accepted a traversal-shaped storage device"
 fi
-wait_active nas-alert-router.service
-code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
-  --header 'Content-Type: application/json' --data-binary '{' http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$code" == 400 ]] || fail "alert router malformed JSON returned HTTP $code instead of 400"
-! grep -q 'Traceback' /tmp/nas-alert-malformed.json || fail "alert router leaked a traceback for malformed JSON"
-transfer_code="$(curl --silent --output /tmp/nas-alert-transfer.json --write-out '%{http_code}' \
-  --header 'Transfer-Encoding: chunked' --header 'Content-Type: application/json' \
-  --data-binary '[]' http://127.0.0.1:9093/api/v2/alerts || true)"
-[[ "$transfer_code" == 400 ]] || fail "alert router accepted ambiguous transfer encoding (HTTP $transfer_code)"
 pass "hostile identifiers, traversal, and malformed alert requests fail closed"
 
 log "Cockpit ZFS rollback wrapper"
@@ -630,74 +621,6 @@ nas-identity-sync export-account temporary | jq -e '
 ' >/dev/null
 pass "core services, account apply/disable CLI, and CopyParty backend are healthy"
 
-log "Anonymous read-only TFTP behavior"
-[[ -d /tank/shares/tftp ]] || fail "ZFS-backed TFTP directory was not created"
-printf 'nixos-nas-qemu-tftp\n' >/tank/shares/tftp/qemu-tftp.txt
-chown copyparty:copyparty /tank/shares/tftp/qemu-tftp.txt
-chmod 0660 /tank/shares/tftp/qemu-tftp.txt
-timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$TEST_TIMEOUT" bash -c \
-  "until ss -lun | grep -Eq '[:.]3969[[:space:]]'; do sleep 2; done"
-python3 - <<'PYTFTP'
-import socket
-import struct
-from pathlib import Path
-
-SERVER = ("127.0.0.1", 3969)
-REMOTE = "tftp/qemu-tftp.txt"
-EXPECTED = b"nixos-nas-qemu-tftp\n"
-
-
-def packet(opcode: int, name: str) -> bytes:
-    return struct.pack("!H", opcode) + name.encode() + b"\0octet\0"
-
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.settimeout(10)
-sock.sendto(packet(1, REMOTE), SERVER)  # RRQ
-received = bytearray()
-expected_block = 1
-while True:
-    response, peer = sock.recvfrom(65535)
-    opcode = struct.unpack("!H", response[:2])[0]
-    if opcode == 5:
-        code = struct.unpack("!H", response[2:4])[0]
-        message = response[4:-1].decode("utf-8", "replace")
-        raise SystemExit(f"TFTP read failed ({code}): {message}")
-    if opcode != 3 or len(response) < 4:
-        raise SystemExit(f"unexpected TFTP read packet opcode={opcode}")
-    block = struct.unpack("!H", response[2:4])[0]
-    if block != expected_block:
-        raise SystemExit(f"unexpected TFTP block {block}, wanted {expected_block}")
-    payload = response[4:]
-    received.extend(payload)
-    sock.sendto(struct.pack("!HH", 4, block), peer)
-    if len(payload) < 512:
-        break
-    expected_block = (expected_block + 1) & 0xFFFF
-
-if bytes(received) != EXPECTED:
-    raise SystemExit(f"TFTP payload mismatch: {bytes(received)!r}")
-
-upload = "tftp/qemu-upload-must-fail.txt"
-write_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-write_sock.settimeout(3)
-write_sock.sendto(packet(2, upload), SERVER)
-try:
-    response, _peer = write_sock.recvfrom(65535)
-except TimeoutError:
-    # CopyParty's anonymous read-only TFTP mode rejects writes by withholding
-    # a transfer response; the absence of a created file is the authority.
-    pass
-else:
-    opcode = struct.unpack("!H", response[:2])[0]
-    if opcode != 5:
-        raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
-write_sock.close()
-if Path("/tank/shares/tftp/qemu-upload-must-fail.txt").exists():
-    raise SystemExit("read-only TFTP created the rejected upload")
-PYTFTP
-pass "TFTP serves anonymous reads and rejects writes in read-only mode"
-
 log "Authentik API, identity policy, and proxy authorization"
 unauth_code="$(http_code http://127.0.0.1:9000/identity/api/v3/core/users/)"
 case "$unauth_code" in 401|403) : ;; *) fail "Authentik API without a token returned $unauth_code" ;; esac
@@ -750,9 +673,6 @@ if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
     raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
 PYHOSTILEGATE
 pass "malformed trusted identity headers remain fail-closed inside the installed gate"
-nas-managed-services-control set ai-runtime off >/dev/null
-wait_inactive nas-llama-swap.service
-
 backend_admin="$(http_code --unix-socket /run/copyparty/http.sock \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
   http://localhost/shares/admin/)"
@@ -762,12 +682,6 @@ assert_blocked /shares/
 assert_spoof_blocked /shares/
 assert_blocked /shares/admin/
 assert_spoof_blocked /console/
-assert_blocked /ai/
-assert_spoof_blocked /ai/
-assert_blocked /syncthing/
-assert_blocked /vault/admin
-assert_blocked /metrics/
-assert_blocked /alerts/
 
 # V2 routes must begin their unauthenticated flow at Authentik, rather than
 # falling through to the launcher after the flow completes.
@@ -877,7 +791,6 @@ pass "Deterministic bundle XSS, layout, and console-error probes"
 
 log "Custom command surfaces and generated configuration"
 nas-secrets status | grep -q 'Runtime secrets: active'
-run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets show-ai-api-key | grep -Eq '^[0-9a-fA-F]{64}$'
 ! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
   >/tmp/nas-token-warning.log 2>&1 || fail "bootstrap token reuse was not reported"
 grep -q 'bootstrap token' /tmp/nas-token-warning.log
@@ -886,8 +799,8 @@ grep -q 'bootstrap token' /tmp/nas-token-warning.log
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
 nas-managed-services-control status | jq -e '.schemaVersion == 3 and (.services | length > 0)' >/dev/null
 nas-managed-services-control document | jq -e '.document.services | type == "object"' >/dev/null
-! nas-managed-services-control set '../ai-runtime' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
-! nas-managed-services-control set 'ai-runtime;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
+! nas-managed-services-control set '../copyparty' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
+! nas-managed-services-control set 'copyparty;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
 [[ ! -e /tmp/pwned ]] || fail "service identifier injection created an unexpected file"
 ! run_as_nasadmin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
 ! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
@@ -908,97 +821,10 @@ rm -f /tmp/nas-qemu-state.tar.gz
 NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
 pass "all custom command surfaces and in-VM repository preflight succeeded"
 
-log "Open WebUI and llama-swap start/stop/on-demand lifecycle"
-nas-managed-services-control set ai-runtime always | jq -e '.ok == true' >/dev/null
-wait_active nas-llama-swap.service
-assert_http_responsive "llama-swap web interface" http://127.0.0.1:9292/ui/
-
-nas-managed-services-control set ai-workspace always | jq -e '.ok == true' >/dev/null
-wait_active open-webui.service
-wait_http http://127.0.0.1:9380/health
-
-nas-managed-services-control set ai-workspace off | jq -e '.ok == true' >/dev/null
-wait_inactive open-webui.service
-nas-managed-services-control set ai-runtime off | jq -e '.ok == true' >/dev/null
-wait_inactive nas-llama-swap.service
-
-printf '{"ai-runtime":"on-demand","ai-workspace":"on-demand"}' | nas-managed-services-control set-many - | jq -e '.ok == true' >/dev/null
-nas-managed-services-control wake ai-workspace | jq -e '.ok == true' >/dev/null
-wait_active nas-llama-swap.service
-wait_active open-webui.service
-wait_http http://127.0.0.1:9380/health
-nas-managed-services-control set ai-workspace off >/dev/null
-nas-managed-services-control set ai-runtime off >/dev/null
-wait_inactive open-webui.service
-wait_inactive nas-llama-swap.service
-nas-managed-services-control set ai-downloader always | jq -e '.ok == true' >/dev/null
-wait_active podman-hfdownloader.service
-nas-managed-services-control set ai-downloader off | jq -e '.ok == true' >/dev/null
-wait_inactive podman-hfdownloader.service
-pass "Open WebUI, llama-swap, and ai-downloader start, stop, and wake correctly"
-
-log "Observability, notifications, Syncthing, Vaultwarden, and Cockpit assets"
-nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
-for unit in \
-  victoriametrics.service telegraf.service vmalert-nas.service \
-  nas-alert-router.service grafana.service ntfy-sh.service \
-  syncthing.service vaultwarden.service; do
-  systemctl cat "$unit" >/dev/null 2>&1 || fail "expected enabled unit is missing: $unit"
-  wait_active "$unit"
-done
-wait_http http://127.0.0.1:8428/victoriametrics/ping
-wait_http http://127.0.0.1:3000/api/health
-syncthing_key_file=/var/lib/syncthing/.config/syncthing/apikey
-syncthing_config=/var/lib/syncthing/.config/syncthing/config.xml
-if [[ -s "$syncthing_key_file" ]]; then
-  syncthing_key="$(<"$syncthing_key_file")"
-else
-  syncthing_key="$(sed -nE 's#.*<apikey>([^<]+)</apikey>.*#\1#p' "$syncthing_config" | head -n1)"
-fi
-[[ -n "$syncthing_key" ]] || fail "Syncthing API key is missing from apikey and config.xml"
-wait_http http://127.0.0.1:8384/rest/system/status -H "X-API-Key: $syncthing_key"
-nas-identity-sync sync-syncthing | jq -e \
-  'has("folders") and has("devices") and has("removedFolders") and has("removedDevices")' >/dev/null
-wait_http http://127.0.0.1:8222/alive
-assert_http_responsive "ntfy health endpoint" http://127.0.0.1:2586/v1/health
-log "Notification dependency failure and recovery"
-alert_payload='[{"labels":{"alertname":"QemuNtfyDependency","severity":"warning","instance":"qemu"},"annotations":{"summary":"ntfy outage test"}}]'
-systemctl stop ntfy-sh.service
-wait_inactive ntfy-sh.service
-ntfy_down_code="$(curl --silent --output /tmp/nas-alert-ntfy-down.json --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary "$alert_payload" \
-  http://127.0.0.1:9093/api/v2/alerts || true)"
-[[ "$ntfy_down_code" == 502 ]] || fail "alert router did not surface ntfy outage as HTTP 502 (got $ntfy_down_code)"
-! grep -q 'Traceback' /tmp/nas-alert-ntfy-down.json || fail "alert router leaked a traceback during ntfy outage"
-systemctl start ntfy-sh.service
-wait_active ntfy-sh.service
-wait_http http://127.0.0.1:2586/v1/health
-ntfy_recovered_code="$(curl --silent --output /tmp/nas-alert-ntfy-recovered.json --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary "$alert_payload" \
-  http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$ntfy_recovered_code" == 200 ]] || fail "alert delivery did not recover after ntfy restart (HTTP $ntfy_recovered_code)"
-pass "alert delivery fails explicitly during ntfy outage and recovers cleanly"
-malformed_alert_code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary '{' \
-  http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$malformed_alert_code" == 400 ]] || fail "malformed alert JSON returned HTTP $malformed_alert_code"
-python3 - <<'PYALERTBODY'
-from pathlib import Path
-Path('/tmp/nas-alert-oversized.json').write_bytes(b'[' + b' ' * (1024 * 1024 + 4096) + b']')
-PYALERTBODY
-oversized_alert_code="$(curl --silent --output /tmp/nas-alert-oversized-response.json --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary @/tmp/nas-alert-oversized.json \
-  http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$oversized_alert_code" == 413 ]] || fail "oversized alert body returned HTTP $oversized_alert_code"
-rm -f /tmp/nas-alert-oversized.json
-pass "installed alert router rejects malformed and oversized notifier input"
-! nas-alert $'Injected title\r\nX-NAS-Test: injected' 'must not send' >/tmp/nas-alert-header-injection.log 2>&1 || \
-  fail "nas-alert accepted a CRLF header-injection title"
-grep -q 'one line' /tmp/nas-alert-header-injection.log
-nas-alert 'QEMU integration test' 'NixOS NAS notification path is healthy.'
+log "Cockpit plugin assets"
 find /run/current-system/sw/share/cockpit /nix/store -maxdepth 6 -path '*cockpit*zfs*' -print -quit 2>/dev/null | grep -q .
 find /run/current-system/sw/share/cockpit /nix/store -maxdepth 8 -path '*nas*docs*index.html' -print -quit 2>/dev/null | grep -q .
-pass "supporting services and Cockpit plugin assets are present"
+pass "Cockpit plugin and documentation assets are present"
 
 log "Secret stop/reactivation transaction"
 run_as_admin nas-secrets stop

@@ -5,8 +5,10 @@
   imports = [
     ./modules/profiles/core-storage.nix
     ./modules/profiles/identity-sharing.nix
-    ./modules/profiles/observability.nix
-    ./modules/profiles/local-ai.nix
+    # Non-core features are stripped from the build for now; re-enable the
+    # profiles below when AI and observability ship again.
+    # ./modules/profiles/observability.nix
+    # ./modules/profiles/local-ai.nix
   ];
 
   system.stateVersion = "26.05";

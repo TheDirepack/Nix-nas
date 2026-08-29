@@ -224,19 +224,21 @@ in
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
     virtualization.enable = lib.mkForce false;
-    tftp.enable = lib.mkForce true;
-    alerting.enable = lib.mkForce true;
+    # Non-core features are stripped from the appliance build for now
+    # (single revertible commit); flip these back to re-enable.
+    tftp.enable = lib.mkForce false;
+    alerting.enable = lib.mkForce false;
     observability = {
-      enable = lib.mkForce true;
-      grafana.enable = lib.mkForce true;
-      ntfy.enable = lib.mkForce true;
+      enable = lib.mkForce false;
+      grafana.enable = lib.mkForce false;
+      ntfy.enable = lib.mkForce false;
     };
     ai = {
-      enable = lib.mkForce true;
+      enable = lib.mkForce false;
       modelDownloader.enable = lib.mkForce false;
     };
-    syncthing.enable = lib.mkForce true;
-    vaultwarden.enable = lib.mkForce true;
+    syncthing.enable = lib.mkForce false;
+    vaultwarden.enable = lib.mkForce false;
     power.ups.enable = lib.mkForce false;
   };
 
