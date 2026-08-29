@@ -416,6 +416,7 @@ nasSetup = pkgs.writeShellApplication {
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
       export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}
+      export NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token
       # runtimeInputs also carries the unwrapped console Python application
       # whose bin/nas-setup shadows the appliance wrapper; point subprocesses
       # at the wrapper explicitly so first-start jobs get the real environment.
