@@ -92,29 +92,19 @@ class Alpha20CockpitContracts(unittest.TestCase):
         setup_page = text("cockpit/src/pages/setup-page.jsx")
         self.assertIn("process.input", api)
         self.assertIn('["nas-secrets", "activate-stdin"]', api)
-        self.assertIn("allowDestructiveStorage", api)
         self.assertIn("Confirm maintenance action", operations)
-        self.assertIn("first-start-destructive", setup_page)
-        self.assertIn("first-start-keepass-password-confirm", setup_page)
-        self.assertIn("password !== passwordConfirm", setup_page)
+        self.assertIn("standalone setup flow", setup_page)
+        self.assertIn('href="/setup/"', setup_page)
+        self.assertIn("destructive-storage confirmations", setup_page)
 
     def test_setup_api_can_publish_expected_first_start_status(self) -> None:
-        application = text("modules/nas/config/application-services.nix")
-        account_tools = text("modules/nas/internal/account-tools.nix")
-        start = application.index("systemd.services.nas-setup-api = {")
-        end = application.index("};", start)
-        block = application[start:end]
-        for path in (
-            "/var/lib/nas-setup",
-            "/var/lib/nas-first-start",
-            "/run/nas-first-start",
-            "/run/nas-operations",
-        ):
-            self.assertIn(f'"{path}"', block)
-        self.assertIn("export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup", account_tools)
-        setup_start = account_tools.index("nasSetup = pkgs.writeShellApplication")
-        setup_end = account_tools.index("  mkPathAuthority =", setup_start)
-        self.assertIn("pkgs.shadow", account_tools[setup_start:setup_end])
+        application = text("modules/nas/config/caddy-bootstrap.nix")
+        start = application.index("systemd.services.nas-first-run-api = lib.mkIf cfg.firstStart.enable {")
+        block = application[start:]
+        self.assertIn('"/run/nas-first-run-api"', block)
+        self.assertIn('"/run/nas-first-start"', block)
+        self.assertIn('"/run/nas-operations"', block)
+        self.assertIn('"/run/lock"', block)
 
     def test_cockpit_python_bridge_patch_targets_installed_module(self) -> None:
         application = text("modules/nas/config/application-services.nix")
@@ -140,7 +130,13 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Shared qualification prerequisites", workflow)
         self.assertIn("Realize pinned test toolchain once", workflow)
         self.assertIn("nix develop .#test -c true", workflow)
-        for job_name in ("Static analysis and configuration", "Unit, coverage, and maintainer contracts", "Security and generated configuration", "Unprivileged hermeticity", "Cockpit source, dependencies, and production bundle"):
+        for job_name in (
+            "Static analysis and configuration",
+            "Unit, coverage, and maintainer contracts",
+            "Security and generated configuration",
+            "Unprivileged hermeticity",
+            "Cockpit source, dependencies, and production bundle",
+        ):
             self.assertIn(job_name, workflow)
         self.assertGreaterEqual(workflow.count("needs: [prerequisites]"), 5)
         self.assertIn("needs: [unit]", workflow)
@@ -153,7 +149,14 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("Source-only repository preflight", qualification)
         self.assertIn("--coverage coverage.json", qualification)
         self.assertIn("vm-bundle-handoff", handoff)
-        for retired_gate in ("prebuild:", "prebuild-gate:", "build-gate:", "runtime-gate:", "final-system-gate:", "cache-vm-bundles:"):
+        for retired_gate in (
+            "prebuild:",
+            "prebuild-gate:",
+            "build-gate:",
+            "runtime-gate:",
+            "final-system-gate:",
+            "cache-vm-bundles:",
+        ):
             self.assertNotIn(retired_gate, workflow)
 
     def test_release_ci_runs_installer_final_vm_and_security_checks(self) -> None:
@@ -178,7 +181,15 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("scripts/run-fuzz.py --jobs 6", workflow)
         self.assertNotIn("shard:", workflow)
-        for shard in ("boundaries", "custom-inputs", "properties", "stateful", "security", "javascript", "executable-contracts"):
+        for shard in (
+            "boundaries",
+            "custom-inputs",
+            "properties",
+            "stateful",
+            "security",
+            "javascript",
+            "executable-contracts",
+        ):
             self.assertIn(f'"{shard}"', fuzz_runner)
         self.assertIn("timeout-minutes: 240", workflow)
 

@@ -297,7 +297,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 mock.patch.object(setup, "run_admin") as admin,
             ):
                 self.assertEqual(setup.verify_or_create_database("pw", False), "existing")
-            self.assertIn("nasadmin", root_run.call_args.args[0])
+            self.assertEqual(root_run.call_args.args[0][:3], ["install", "-d", "-m"])
             self.assertIn("db-info", admin.call_args.args[0])
             database.unlink()
             with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_root"):

@@ -2,10 +2,9 @@
 """Hardened entry point for the privileged Cockpit control API.
 
 First-run credential submission is owned exclusively by nas-first-run-api over
-its root/caddy Unix socket.  Historical nas-cockpit-api subcommands that wrote
-human credentials to /run or started a second loopback setup server are kept out
-of the installed command surface even while the implementation module is being
-simplified.
+its root/caddy Unix socket. Historical nas-cockpit-api subcommands that wrote
+human credentials to /run or started a second loopback setup server are kept
+out of the installed command surface.
 """
 
 from __future__ import annotations

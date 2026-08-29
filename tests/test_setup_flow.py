@@ -79,14 +79,14 @@ class TestApplicationChanges(unittest.TestCase):
     """Tests for application configuration changes."""
 
     def test_copyparty_does_not_use_absolute_statedirectory(self):
-        """Absolute StateDirectory values are ignored by systemd."""
+        """CopyParty stores its state on the configured ZFS root."""
         app_path = pathlib.Path(ROOT / "modules/nas/config/application-services.nix")
         self.assertTrue(pathlib.Path(app_path).exists(), "application-services.nix should exist")
         content = app_path.read_text()
         copyparty = content[content.index("systemd.services.copyparty = {") :]
         copyparty = copyparty[: copyparty.index("systemd.services.syncthing")]
-        self.assertIn('serviceConfig.StateDirectory = lib.mkForce "";', copyparty)
-        self.assertNotIn("${cfg.zfsRoot}/copyparty", copyparty)
+        self.assertIn('StateDirectory = lib.mkForce "${cfg.zfsRoot}/copyparty";', copyparty)
+        self.assertIn('StateDirectoryMode = lib.mkForce "0750";', copyparty)
 
     def test_vaultwarden_statedirectory_override(self):
         """Verify vaultwarden StateDirectory is overridden."""

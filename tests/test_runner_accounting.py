@@ -9,6 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CONTRACTS = (
     ROOT / "tests" / "custom-script-contracts.json",
     ROOT / "tests" / "custom-script-contracts-v2.json",
+    ROOT / "tests" / "custom-script-contracts-security.json",
 )
 
 

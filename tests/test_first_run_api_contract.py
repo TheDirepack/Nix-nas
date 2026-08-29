@@ -27,7 +27,9 @@ class FirstRunApiContractTests(unittest.TestCase):
     def test_first_start_worker_uses_configured_nix_environment_without_mount_namespace(self) -> None:
         account_tools = (ROOT / "modules" / "nas" / "internal" / "account-tools.nix").read_text(encoding="utf-8")
         bootstrap = (ROOT / "modules" / "nas" / "config" / "bootstrap-security.nix").read_text(encoding="utf-8")
-        source = pathlib.Path(first_run_api.__file__).read_text(encoding="utf-8")
+        module_file = first_run_api.__file__
+        assert module_file is not None
+        source = pathlib.Path(module_file).read_text(encoding="utf-8")
         submit = source[source.index("def submit_setup") : source.index("def request_reboot")]
 
         self.assertIn("nasFirstStart = pkgs.writeShellApplication", account_tools)

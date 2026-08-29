@@ -18,6 +18,7 @@
     ./config/virtualization.nix
     ./config/identities.nix
     ./config/application-services.nix
+    ./config/first-start-worker.nix
     ./config/bootstrap-security.nix
     ./config/secret-file-preflight.nix
     ./config/setup-security.nix

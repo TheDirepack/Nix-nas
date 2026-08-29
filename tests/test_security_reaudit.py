@@ -16,7 +16,7 @@ class SecurityReauditContracts(unittest.TestCase):
     def test_setup_job_capability_is_deleted_from_caddy_access_logs(self) -> None:
         caddy = text("modules/nas/config/caddy-bootstrap.nix")
         api = text("services/nas_first_run_api.py")
-        self.assertIn('JOB_TOKEN_HEADER = "X-NAS-Setup-Job-Token"', api)
+        self.assertIn('JOB_CAPABILITY_HEADER = "X-NAS-Setup-Job-Token"', api)
         self.assertIn("format filter {", caddy)
         self.assertIn("request>headers>X-NAS-Setup-Job-Token delete", caddy)
         self.assertIn("wrap json", caddy)
@@ -89,8 +89,7 @@ class SecurityReauditContracts(unittest.TestCase):
         pipe = importlib.import_module("nas_first_start_pipe")
         capability = "0123456789abcdef0123456789abcdef"
         diagnostic = (
-            "Command failed: env "
-            f"NAS_OPERATION_COORDINATION_TOKEN={capability} nas-identity-sync bootstrap: failed"
+            f"Command failed: env NAS_OPERATION_COORDINATION_TOKEN={capability} nas-identity-sync bootstrap: failed"
         )
         sanitized = logging.sanitize(diagnostic)
         self.assertIsInstance(sanitized, str)

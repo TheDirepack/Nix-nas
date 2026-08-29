@@ -1,5 +1,6 @@
 import React from 'react';
 import { FormGroup, TextInput, Checkbox, HelperText, HelperTextItem } from '@patternfly/react-core';
+import { PasswordQualityFeedback, usePasswordQualityCheck } from '../PasswordQuality.jsx';
 
 const AdminStep = ({
   administrator,
@@ -12,6 +13,7 @@ const AdminStep = ({
   onKeePassPasswordConfirm,
 }) => {
   const update = (field) => (_event, value) => onAdministrator({ ...administrator, [field]: value });
+  const quality = usePasswordQualityCheck([administrator.username, administrator.name, administrator.email]);
 
   return (
     <div className="nas-wizard-step">
@@ -59,7 +61,9 @@ const AdminStep = ({
           onChange={update('password')}
           autoComplete="new-password"
           minLength={12}
+          onBlur={() => quality.check(administrator.password)}
         />
+        <PasswordQualityFeedback label="Administrator" quality={quality.quality} error={quality.error} />
         <HelperText>
           <HelperTextItem>Use at least 12 characters and avoid reusing a password from another service.</HelperTextItem>
         </HelperText>

@@ -114,9 +114,11 @@ class SecureFirstStartTests(unittest.TestCase):
     def test_privileged_job_sandbox_matches_first_run_mutations(self) -> None:
         api = API.read_text(encoding="utf-8")
         self.assertIn('"--property=NoNewPrivileges=no"', api)
-        self.assertIn('"--property=ProtectSystem=strict"', api)
-        self.assertIn('"--property=ProtectHome=read-only"', api)
-        self.assertIn("/etc /home", api)
+        self.assertIn('"--property=StandardOutput=journal"', api)
+        self.assertIn('"--property=TimeoutStartSec=6h"', api)
+        self.assertIn("mount must become host-visible", api)
+        self.assertNotIn('"--property=ProtectSystem=', api)
+        self.assertNotIn('"--property=ProtectHome=', api)
         self.assertNotIn('"--property=PrivateDevices=yes"', api)
 
 

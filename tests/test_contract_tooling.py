@@ -417,6 +417,7 @@ class ContractTests(unittest.TestCase):
                     ".coverage.*",
                     "coverage.json",
                     "node_modules",
+                    ".hypothesis",
                     "state",
                 ),
             )
@@ -452,6 +453,7 @@ class ContractTests(unittest.TestCase):
                     "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
                     "NAS_PREFLIGHT_SKIP_TESTS": "1",
                     "NAS_PREFLIGHT_SKIP_NIX": "1",
+                    "NAS_PREFLIGHT_SKIP_TOOLING": "1",
                 },
                 text=True,
                 capture_output=True,
@@ -494,7 +496,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("export NAS_CONFIG_DIR=", maintenance)
 
     def test_first_run_setup_is_packaged_secure_and_vm_exercised(self):
-        setup = text("services/nas_setup.py") + text("services/nas_setup_config.py")
+        setup = (
+            text("services/nas_setup.py") + text("services/nas_setup_config.py") + text("services/nas_first_start.py")
+        )
         identity = text("services/nas_identity_sync.py")
         tools = text("modules/nas/internal/account-tools.nix")
         system = text("modules/nas/config/system.nix")
@@ -509,7 +513,7 @@ class ContractTests(unittest.TestCase):
             tools,
             r'name = "first-run";\s+source = "/var/lib/nas-setup";[\s\S]*?rootMode = "0750";',
         )
-        self.assertIn("def first_run", setup)
+        self.assertIn("def secure_first_run", setup)
         self.assertIn("passwordFile", setup)
         self.assertIn("plaintext password", setup)
         self.assertIn("--confirm-storage-device", setup)

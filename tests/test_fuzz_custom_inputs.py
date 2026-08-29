@@ -62,6 +62,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_ai_config",
         "nas_alert_router",
         "nas_cockpit_api",
+        "nas_cockpit_entry",
         "nas_coding_agent",
         "nas_common",
         "nas_doctor",

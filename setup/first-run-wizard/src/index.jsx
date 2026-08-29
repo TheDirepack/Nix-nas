@@ -34,6 +34,12 @@ const App = () => {
   const [planError, setPlanError] = React.useState('');
   const [planRequest, setPlanRequest] = React.useState(0);
 
+  const clearSecrets = React.useCallback(() => {
+    setAdministrator((current) => ({ ...current, password: '', confirm: '' }));
+    setKeePassPassword('');
+    setKeePassPasswordConfirm('');
+  }, []);
+
   React.useEffect(() => {
     const media = window.matchMedia?.('(prefers-color-scheme: dark)');
     const applyTheme = () => {
@@ -125,8 +131,11 @@ const App = () => {
               administrator={administrator}
               keePassPassword={keePassEffective}
               keePassPasswordConfirm={keePassConfirmation}
+              authentikAdministratorPassword={administrator.password}
+              authentikAdministratorPasswordConfirm={administrator.confirm}
               allowDestructive={allowDestructive}
               plan={plan}
+              onSecretsSubmitted={clearSecrets}
             />
           </WizardStep>
         </Wizard>

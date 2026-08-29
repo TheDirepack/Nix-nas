@@ -46,8 +46,8 @@ class ReleaseAutomationTests(unittest.TestCase):
             "modules/nas/internal/secret-tools.nix": (
                 'store_value authentik-bootstrap-password "old-bootstrap-password-123456"\n'
             ),
-            "modules/nas/config/application-services.nix": (
-                "printf '%s\\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=old-bootstrap-password-123456'\n"
+            "modules/nas/config/bootstrap-security.nix": (
+                'bootstrapAuthentikPassword = "old-bootstrap-password-123456";\n'
             ),
             "docs/example.md": "Login with old-bootstrap-password-123456.\n",
             "tests/example.py": "EXPECTED = 'old-bootstrap-password-123456'\n",
@@ -287,9 +287,9 @@ class ReleaseAutomationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.make_repo(root)
-            path = root / "modules/nas/config/application-services.nix"
+            path = root / "modules/nas/config/bootstrap-security.nix"
             path.write_text(
-                "printf '%s\\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=different-bootstrap-password-123456'\n",
+                'bootstrapAuthentikPassword = "different-bootstrap-password-123456";\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(RuntimeError, "does not use the same bootstrap password"):

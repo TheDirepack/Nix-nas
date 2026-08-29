@@ -293,16 +293,6 @@ def secure_first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             )
 
-            local_administrator = _stage(
-                journal,
-                "local-administrator",
-                lambda: create_or_resume_local_administrator(administrator, administrator_password, fingerprint),
-                manual_recovery_on_failure=True,
-                postcondition=_local_administrator_ready,
-            )
-            commit_local_administrator_transaction(local_administrator["username"], fingerprint)
-            account_plan["accounts"].append({**desired_administrator, "password": authentik_administrator_password})
-
             pool_was_missing = not setup.pool_exists()
             storage_result = _stage(
                 journal,
@@ -316,6 +306,19 @@ def secure_first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 manual_recovery_on_failure=pool_was_missing and args.allow_destructive_storage,
                 postcondition=setup.storage_ready,
             )
+
+            # The permanent home is created below the managed ZFS root. Do not
+            # create the administrator until storage has crossed its readiness
+            # boundary, or useradd would fall back to the system filesystem.
+            local_administrator = _stage(
+                journal,
+                "local-administrator",
+                lambda: create_or_resume_local_administrator(administrator, administrator_password, fingerprint),
+                manual_recovery_on_failure=True,
+                postcondition=_local_administrator_ready,
+            )
+            commit_local_administrator_transaction(local_administrator["username"], fingerprint)
+            account_plan["accounts"].append({**desired_administrator, "password": authentik_administrator_password})
 
             # Managed Services V2 keeps its sole mutable desired-state authority
             # on encrypted ZFS. Bring the ordinary reconciler up only after the

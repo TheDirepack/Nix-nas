@@ -402,7 +402,7 @@ def _validated_administrator(administrator: Mapping[str, Any]) -> dict[str, Any]
     except DeviceError as exc:
         raise SetupError(f"Administrator username is unsafe: {exc}") from exc
     if username == BOOTSTRAP_ADMIN_USER:
-        raise SetupError(f"{BOOTSTRAP_ADMIN_USER} is reserved for temporary first-run bootstrap access")
+        raise SetupError(f"{BOOTSTRAP_ADMIN_USER} is the reserved bootstrap identity for temporary first-run access")
     return {
         "username": username,
         "name": str(administrator.get("name", username)),
@@ -415,28 +415,6 @@ def _validated_administrator(administrator: Mapping[str, Any]) -> dict[str, Any]
 
 def local_administrator_details(administrator: Mapping[str, Any]) -> dict[str, Any]:
     return _validated_administrator(administrator)
-
-
-def configured_administrator(account_plan: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    candidates = [
-        account
-        for account in account_plan.get("accounts", [])
-        if isinstance(account, Mapping)
-        and account.get("active") is True
-        and ADMIN_GROUP in account.get("groups", [])
-        and isinstance(account.get("password"), str)
-    ]
-    return candidates[0] if len(candidates) == 1 else None
-
-
-def include_local_administrator(account_plan: dict[str, Any], administrator: Mapping[str, Any], password: str) -> None:
-    local = {**administrator, "password": password}
-    accounts = account_plan["accounts"]
-    for index, account in enumerate(accounts):
-        if account.get("username") == administrator["username"]:
-            accounts[index] = local
-            return
-    accounts.append(local)
 
 
 def create_local_administrator(administrator: Mapping[str, Any], password: str) -> dict[str, Any]:
@@ -498,7 +476,32 @@ def create_local_administrator(administrator: Mapping[str, Any], password: str) 
 def finalize_local_administrator(administrator: Mapping[str, Any]) -> dict[str, str]:
     desired = _validated_administrator(administrator)
     username = desired["username"]
-    run_root(["userdel", "--remove", BOOTSTRAP_ADMIN_USER])
+    existing = run_root(["id", "--user", BOOTSTRAP_ADMIN_USER], check=False)
+    if existing.returncode == 0:
+        run_root(
+            [
+                "systemd-run",
+                "--wait",
+                "--pipe",
+                "--collect",
+                "--quiet",
+                "--unit",
+                "nas-bootstrap-account-retirement.service",
+                "--property=Type=oneshot",
+                "--property=User=root",
+                "--property=Group=root",
+                "--property=UMask=0077",
+                "--property=NoNewPrivileges=yes",
+                "--property=PrivateTmp=yes",
+                "--property=ProtectSystem=yes",
+                "--property=ProtectHome=read-only",
+                f"--property=ReadWritePaths=/home/{BOOTSTRAP_ADMIN_USER}",
+                "--",
+                "userdel",
+                "--remove",
+                BOOTSTRAP_ADMIN_USER,
+            ]
+        )
     if run_root(["id", "--user", BOOTSTRAP_ADMIN_USER], check=False).returncode == 0:
         raise SetupError(f"Bootstrap administrator {BOOTSTRAP_ADMIN_USER} still exists after retirement")
     value = {"username": username}
@@ -528,41 +531,6 @@ def select_fresh_permanent_runtime() -> dict[str, Any]:
             raise SetupError(f"Permanent runtime selector pointed {stable} at unexpected target {target}")
         resolved[name] = str(target)
     return {"permanentRuntimeSelected": True, "paths": resolved}
-
-
-def provision_local_administrator(administrator: Mapping[str, Any], password: str) -> dict[str, Any]:
-    details = create_local_administrator(administrator, password)
-    finalize_local_administrator(details)
-    return details
-
-
-def local_administrator_ready(administrator: Mapping[str, Any]) -> bool:
-    username = administrator.get("username")
-    if not isinstance(username, str) or local_administrator_username() != username:
-        return False
-    try:
-        account = pwd.getpwnam(username)
-    except KeyError:
-        return False
-    home = pathlib.Path(account.pw_dir)
-    if home != LOCAL_HOME_ROOT / username or not home.is_dir():
-        return False
-    bootstrap = run_root(["id", "--user", BOOTSTRAP_ADMIN_USER], check=False)
-    return bootstrap.returncode != 0
-
-
-def promote_bootstrap_runtime(bootstrap_root: pathlib.Path, operational_root: pathlib.Path) -> dict[str, bool]:
-    """Switch to empty ZFS-backed identity authorities without copying bootstrap state."""
-    for name in ("authentik", "postgresql", "nas-secrets"):
-        path = operational_root / name
-        if path.exists() or path.is_symlink():
-            raise SetupError(f"Operational runtime path already exists: {path}")
-    run_root(["systemctl", "stop", "authentik.service", "authentik-worker.service", "postgresql.service"])
-    run_root(["install", "-d", "-m", "0700", str(operational_root)])
-    run_root(["install", "-d", "-m", "0700", str(OPERATIONAL_RUNTIME_SELECT_PATH.parent)])
-    run_root(["install", "-m", "0600", "/dev/null", str(OPERATIONAL_RUNTIME_SELECT_PATH)])
-    run_root(["systemctl", "restart", "nas-bootstrap-runtime-select.service"])
-    return {"operationalRuntimeSelected": True}
 
 
 def retire_bootstrap_runtime(
@@ -967,268 +935,6 @@ def setup_state_matches(report: Mapping[str, Any]) -> bool:
         return False
     return current == report
 
-
-def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
-    config = normalize_config(read_json_source(args.config))
-    confirmed_plan_digest = require_confirmed_plan(config, getattr(args, "confirm_plan_digest", None))
-    with maintained_sudo_authorization():
-        validate_storage_request(config["storage"], args.confirm_storage_device, args.allow_destructive_storage)
-        validate_service_request(config["services"])
-        account_plan = identity_plan(config)
-        password = ""
-        started = int(time.time())
-        try:
-            password_override = getattr(args, "keepass_password_value", None)
-            password = (
-                password_override
-                if isinstance(password_override, str) and password_override
-                else read_keepass_password(args.keepass_password_stdin)
-            )
-            administrator = getattr(args, "administrator", None) or configured_administrator(account_plan)
-            if not isinstance(administrator, Mapping):
-                raise SetupError("First-run administrator details are missing")
-            administrator_password_value = administrator.get("password")
-            if not isinstance(administrator_password_value, str):
-                raise SetupError("First-run administrator password is missing")
-            administrator_password = str(administrator_password_value)
-            local_administrator = local_administrator_details(administrator)
-            include_local_administrator(account_plan, local_administrator, administrator_password)
-            fingerprint = setup_fingerprint(config, args, account_plan, password)
-            journal = OperationJournal.open(
-                JOURNAL_PATH,
-                workflow="first-run-v2",
-                fingerprint=fingerprint,
-                metadata={
-                    "configPath": str(pathlib.Path(args.config).resolve()),
-                    "storagePool": ZFS_POOL,
-                    "storageDataset": ZFS_DATASET,
-                    "planDigest": confirmed_plan_digest,
-                },
-            )
-            progress("verifying or creating the KeePassXC database")
-            database_result = run_setup_stage(
-                journal,
-                "keepass-database",
-                lambda: verify_or_create_database(password, args.create_database),
-                postcondition=keepass_database_ready,
-            )
-            progress("initializing machine and service secrets")
-            run_setup_stage(
-                journal,
-                "secret-initialization",
-                lambda: (
-                    run_admin(coordinated_child(["nas-secrets", "init"]), input_text=password + "\n")
-                    and {"initialized": True}
-                ),
-            )
-            progress("creating or validating managed ZFS storage")
-            pool_was_missing = not pool_exists()
-            storage_result = run_setup_stage(
-                journal,
-                "storage",
-                lambda: setup_storage(
-                    config["storage"],
-                    keepass_password=password,
-                    confirmed_devices=args.confirm_storage_device,
-                    allow_destructive=args.allow_destructive_storage,
-                ),
-                manual_recovery_on_failure=pool_was_missing and args.allow_destructive_storage,
-                postcondition=storage_ready,
-            )
-            progress("creating the permanent ZFS-backed recovery administrator")
-            local_administrator = run_setup_stage(
-                journal,
-                "local-administrator",
-                lambda: provision_local_administrator(administrator, administrator_password),
-                postcondition=lambda result: isinstance(result, Mapping) and local_administrator_ready(result),
-            )
-            progress("activating protected services")
-            run_setup_stage(
-                journal,
-                "protected-service-activation",
-                lambda: (
-                    run_interactive_privileged(
-                        coordinated_child(["nas-secrets", "activate-stdin"]), input_text=password + "\n"
-                    )
-                    and {"active": True}
-                ),
-                postcondition=protected_stack_ready,
-            )
-            progress("bootstrapping Authentik base identity roles")
-            bootstrap_result = run_setup_stage(
-                journal,
-                "identity-bootstrap",
-                lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "bootstrap"])).stdout),
-                postcondition=lambda _result: identity_command_ready(["nas-identity-sync", "status"]),
-            )
-            run_setup_stage(
-                journal,
-                "bootstrap-runtime-promotion",
-                lambda: promote_bootstrap_runtime(BOOTSTRAP_RUNTIME_ROOT, ZFS_ROOT),
-                manual_recovery_on_failure=True,
-                postcondition=lambda result: (
-                    isinstance(result, Mapping) and result.get("operationalRuntimeSelected") is True
-                ),
-            )
-            progress("creating a fresh operational KeePassXC database and service secrets")
-            run_setup_stage(
-                journal,
-                "operational-keepass-database",
-                lambda: verify_or_create_database(password, True),
-                postcondition=keepass_database_ready,
-            )
-            run_setup_stage(
-                journal,
-                "operational-secret-initialization",
-                lambda: (
-                    run_admin(coordinated_child(["nas-secrets", "init"]), input_text=password + "\n")
-                    and {"initialized": True}
-                ),
-            )
-            run_setup_stage(
-                journal,
-                "operational-protected-service-activation",
-                lambda: (
-                    run_interactive_privileged(
-                        coordinated_child(["nas-secrets", "activate-stdin"]), input_text=password + "\n"
-                    )
-                    and {"active": True}
-                ),
-                postcondition=protected_stack_ready,
-            )
-            progress("bootstrapping operational Authentik and creating the chosen administrator")
-            operational_bootstrap_result = run_setup_stage(
-                journal,
-                "operational-identity-bootstrap",
-                lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "bootstrap"])).stdout),
-                postcondition=lambda _result: identity_command_ready(["nas-identity-sync", "status"]),
-            )
-            runtime_token_result = run_setup_stage(
-                journal,
-                "identity-runtime-token",
-                lambda: install_runtime_identity_token(password),
-                postcondition=lambda _result: identity_command_ready(["nas-identity-sync", "verify-token"]),
-            )
-            account_result = run_setup_stage(
-                journal,
-                "identity-accounts",
-                lambda: apply_accounts(
-                    account_plan,
-                    confirm_password_reapply=getattr(args, "confirm_password_reapply", False),
-                ),
-                postcondition=lambda _result: account_plan_ready(account_plan),
-            )
-            run_setup_stage(
-                journal,
-                "bootstrap-authority-retirement",
-                lambda: retire_bootstrap_runtime(BOOTSTRAP_RUNTIME_ROOT, local_administrator["username"], password),
-                manual_recovery_on_failure=True,
-                postcondition=lambda result: isinstance(result, Mapping) and result.get("bootstrapRetired") is True,
-            )
-            progress("provisioning CopyParty-backed personal directories")
-            share_directories = run_setup_stage(
-                journal,
-                "share-directories",
-                lambda: provision_share_directories(config["accounts"]),
-                postcondition=lambda _result: share_directories_ready(config["accounts"]),
-            )
-            syncthing_result: dict[str, Any] | None = None
-            if SYNCTHING_ENABLED:
-                progress("reconciling Authentik-owned Syncthing folders and devices")
-                syncthing_result = run_setup_stage(
-                    journal,
-                    "syncthing",
-                    lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"])).stdout),
-                )
-            progress("applying Managed Services V2 lifecycle modes")
-            service_result = run_setup_stage(
-                journal,
-                "managed-services-policy",
-                lambda: apply_services(config["services"]),
-                postcondition=lambda _result: service_policy_ready(config["services"]),
-            )
-            progress("verifying storage and identity state")
-            verification = run_setup_stage(
-                journal,
-                "verification",
-                lambda: (
-                    run_root(["nas-zfs-mount-check"]),
-                    json.loads(run_root(["nas-identity-sync", "status"]).stdout),
-                )[1],
-                postcondition=verification_ready,
-            )
-            preflight_ran = bool(config["runPreflight"] and not args.skip_preflight)
-            if preflight_ran:
-                progress("running repository and host preflight validation")
-                run_setup_stage(
-                    journal,
-                    "preflight",
-                    lambda: run(["nas-preflight"], env={"NAS_PREFLIGHT_VERIFY_MANIFEST": "0"}) and {"passed": True},
-                    postcondition=preflight_ready,
-                )
-            report_status = "complete" if preflight_ran else "complete-unverified"
-            report = {
-                "schemaVersion": SCHEMA_VERSION,
-                "status": report_status,
-                "planDigest": confirmed_plan_digest,
-                "completedAt": int(time.time()),
-                "durationSeconds": int(time.time()) - started,
-                "database": {"path": str(KEEPASS_DATABASE), "result": database_result},
-                "localAdministrator": {key: local_administrator[key] for key in ("username", "name", "email")},
-                "storage": storage_result,
-                "identityBootstrap": bootstrap_result,
-                "operationalIdentityBootstrap": operational_bootstrap_result,
-                "identityRuntimeToken": runtime_token_result,
-                "accounts": account_result,
-                "shareDirectories": share_directories,
-                "syncthing": syncthing_result,
-                "services": service_result,
-                "identity": verification,
-                "preflight": preflight_ran,
-                "journal": str(JOURNAL_PATH),
-            }
-            run_setup_stage(
-                journal,
-                "final-state",
-                lambda: (write_state(report), report)[1],
-                postcondition=lambda _result: setup_state_matches(report),
-            )
-            if not setup_state_matches(report):
-                journal.fail("Final setup state could not be verified", manual_recovery=True)
-                raise SetupError("Final setup state could not be verified")
-            journal.complete(report)
-            # Best-effort removal of the explicit setup application. The Caddy
-            # bootstrap already hides /setup after ready, and the nas-setup-api
-            # service is gated by state.json so the wizard no longer starts on
-            # the next boot. Removing the Authentik object ensures it also
-            # disappears from the launcher.
-            try:
-                _remove_setup_application()
-            except Exception as exc:  # pragma: no cover - best-effort cleanup
-                progress(f"Unable to remove setup application: {exc}")
-            publish_first_start_status(
-                {
-                    "schemaVersion": SCHEMA_VERSION,
-                    "status": report_status,
-                    "planDigest": confirmed_plan_digest,
-                    "configPath": str(pathlib.Path(args.config).resolve()),
-                    "completedAt": report["completedAt"],
-                    "message": "Initial appliance setup is complete."
-                    if preflight_ran
-                    else "Initial setup completed without final preflight verification.",
-                }
-            )
-            return report
-        except JournalError as exc:
-            raise SetupError(str(exc)) from exc
-        finally:
-            password = ""
-            if "administrator_password" in locals():
-                administrator_password = ""
-            for account in account_plan.get("accounts", []):
-                if isinstance(account, dict):
-                    account.pop("password", None)
- 
 
 def existing_account(username: str) -> dict[str, Any] | None:
     completed = run_root(["nas-identity-sync", "export-account", username], check=False)

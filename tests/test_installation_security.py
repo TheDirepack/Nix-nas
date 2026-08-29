@@ -81,9 +81,7 @@ class InstallationSecurityContracts(unittest.TestCase):
         self.assertIn("permissions & 8#007", source)
         self.assertIn("permissions & ~8#660", source)
         self.assertIn('getent group "$shared_group"', source)
-        self.assertIn(
-            'require_private_credential_file "$database" "KeePassXC database" nas-administrators', source
-        )
+        self.assertIn('require_private_credential_file "$database" "KeePassXC database" nas-administrators', source)
         self.assertIn('require_private_credential_file "$key_file" "KeePassXC key file"', source)
         self.assertLess(source.index("require_database\n"), source.index("IFS= read -r keepass_password"))
 
