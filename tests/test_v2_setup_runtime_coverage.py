@@ -508,15 +508,24 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(
                 setup,
                 "load_json",
-                return_value={"status": "manual-recovery-required", "currentStep": "storage"},
+                return_value={
+                    "status": "manual-recovery-required",
+                    "currentStep": "storage",
+                    "fingerprint": "legacy-fingerprint",
+                },
             ),
             mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
         ):
-            self.assertTrue(setup.reconcile_verified_storage_retry("fingerprint", config["storage"]))
+            self.assertEqual(
+                "legacy-fingerprint",
+                setup.reconcile_verified_storage_retry(
+                    ("current-fingerprint", "legacy-fingerprint"), config["storage"]
+                ),
+            )
         recover.assert_called_once_with(
             setup.JOURNAL_PATH,
             workflow="first-run-v2",
-            fingerprint="fingerprint",
+            fingerprint="legacy-fingerprint",
             step="storage",
             result=expected,
         )
@@ -525,8 +534,26 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "load_json") as load,
             mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
         ):
-            self.assertFalse(setup.reconcile_verified_storage_retry("fingerprint", config["storage"]))
+            self.assertIsNone(setup.reconcile_verified_storage_retry(("fingerprint",), config["storage"]))
         load.assert_not_called()
+        recover.assert_not_called()
+
+    def test_verified_storage_retry_rejects_changed_transaction(self) -> None:
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=True),
+            mock.patch.object(
+                setup,
+                "load_json",
+                return_value={
+                    "status": "manual-recovery-required",
+                    "currentStep": "storage",
+                    "fingerprint": "different",
+                },
+            ),
+            mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
+        ):
+            with self.assertRaisesRegex(setup.JournalError, "different first-run-v2"):
+                setup.reconcile_verified_storage_retry(("current", "legacy"), {"createPool": True})
         recover.assert_not_called()
 
     def test_install_runtime_identity_token_validates_and_installs(self) -> None:

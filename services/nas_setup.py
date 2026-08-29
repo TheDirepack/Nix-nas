@@ -978,16 +978,21 @@ def storage_ready(_result: Any = None) -> bool:
         return False
 
 
-def reconcile_verified_storage_retry(fingerprint: str, storage: Mapping[str, Any]) -> bool:
+def reconcile_verified_storage_retry(fingerprints: Sequence[str], storage: Mapping[str, Any]) -> str | None:
     if not storage_ready():
-        return False
+        return None
     existing = load_json(JOURNAL_PATH)
     if (
         existing is None
         or existing.get("status") != "manual-recovery-required"
         or existing.get("currentStep") != "storage"
     ):
-        return False
+        return None
+    fingerprint = existing.get("fingerprint")
+    if not isinstance(fingerprint, str) or not any(
+        secrets.compare_digest(fingerprint, candidate) for candidate in fingerprints
+    ):
+        raise JournalError(f"A different first-run-v2 operation is incomplete; reconcile or clear {JOURNAL_PATH}")
     creation_request = None
     if storage.get("createPool"):
         creation_request = {
@@ -1014,7 +1019,7 @@ def reconcile_verified_storage_retry(fingerprint: str, storage: Mapping[str, Any
         result=result,
     )
     progress("verified the completed storage side effects and resumed the existing setup transaction")
-    return True
+    return fingerprint
 
 
 def protected_stack_ready(_result: Any = None) -> bool:
@@ -1142,7 +1147,10 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             local_administrator = local_administrator_details(administrator)
             include_local_administrator(account_plan, local_administrator, administrator_password)
             fingerprint = setup_fingerprint(config, args, account_plan, password)
-            reconcile_verified_storage_retry(fingerprint, config["storage"])
+            retry_args = argparse.Namespace(**vars(args))
+            retry_args.allow_destructive_storage = not bool(args.allow_destructive_storage)
+            compatible_fingerprints = (fingerprint, setup_fingerprint(config, retry_args, account_plan, password))
+            fingerprint = reconcile_verified_storage_retry(compatible_fingerprints, config["storage"]) or fingerprint
             journal = OperationJournal.open(
                 JOURNAL_PATH,
                 workflow="first-run-v2",
