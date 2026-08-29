@@ -422,10 +422,11 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         "--property=PrivateDevices=yes",
         "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
-        # /run/nas-secrets and /run/nas-operations may not exist before the
-        # first-start transaction creates them; systemd fails namespace setup
-        # on missing ReadWritePaths unless they are marked optional.
-        "--property=ReadWritePaths=/var/lib/nas-setup /run/lock /run/nas-first-start -/run/nas-secrets -/run/nas-operations",
+        # /run/nas-secrets, /var/lib/nas-secrets and the ZFS control paths
+        # may not exist before the first-start transaction creates them;
+        # systemd fails namespace setup on missing ReadWritePaths unless they
+        # are marked optional.
+        "--property=ReadWritePaths=/var/lib/nas-setup /var/lib/nas-control /run/nas-control /run/lock /run/nas-first-start -/run/nas-secrets -/run/nas-operations -/var/lib/nas-secrets -/run/nas-authentik",
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
