@@ -411,6 +411,7 @@ nasSetup = pkgs.writeShellApplication {
       export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
       export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
+      export NAS_ZFS_ROOT=${lib.escapeShellArg cfg.zfsRoot}
       export NAS_CONFIG_DIR=${lib.escapeShellArg cfg.configurationDir}
       export NAS_IDENTITY_URL=${lib.escapeShellArg cfg.identity.authentikPath}
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}

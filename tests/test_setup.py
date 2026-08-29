@@ -189,9 +189,13 @@ class ShareProvisioningTests(unittest.TestCase):
 
 
 class LocalAdministratorTests(unittest.TestCase):
+    def test_setup_rejects_the_disposable_bootstrap_name_for_the_permanent_account(self) -> None:
+        with self.assertRaisesRegex(setup.SetupError, "reserved bootstrap"):
+            setup.local_administrator_details({"username": "nas-bootstrap"})
+
     def test_setup_creates_a_user_chosen_linux_administrator_without_password_arguments(self) -> None:
         calls: list[tuple[list[str], str | None]] = []
-        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/home/nasadmin", "/bin/bash"))
+        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/tank/homes/nasadmin", "/bin/bash"))
 
         def capture(command, *, input_text=None, **_kwargs):
             calls.append((list(command), input_text))
@@ -202,6 +206,7 @@ class LocalAdministratorTests(unittest.TestCase):
         with (
             mock.patch.object(setup, "run_root", side_effect=capture),
             mock.patch.object(setup.pwd, "getpwnam", return_value=account),
+            mock.patch.object(setup, "LOCAL_HOME_ROOT", pathlib.Path("/tank/homes")),
         ):
             result = setup.create_local_administrator(
                 {"username": "nasadmin", "name": "NAS Administrator", "email": "admin@example.test"},
@@ -211,7 +216,24 @@ class LocalAdministratorTests(unittest.TestCase):
         self.assertEqual(result["username"], "nasadmin")
         self.assertEqual(result["groups"], ["nas_admin"])
         self.assertIn(
-            (["useradd", "--no-create-home", "--shell", "/run/current-system/sw/bin/bash", "nasadmin"], None), calls
+            (
+                [
+                    "useradd",
+                    "--home-dir",
+                    "/tank/homes/nasadmin",
+                    "--no-create-home",
+                    "--shell",
+                    "/run/current-system/sw/bin/bash",
+                    "nasadmin",
+                ],
+                None,
+            ),
+            calls,
+        )
+        self.assertIn((["install", "-d", "-m", "0711", "-o", "root", "-g", "root", "/tank/homes"], None), calls)
+        self.assertIn(
+            (["install", "-d", "-m", "0700", "-o", "1002", "-g", "100", "/tank/homes/nasadmin"], None),
+            calls,
         )
         self.assertIn((["chpasswd"], "nasadmin:new-local-password\n"), calls)
         self.assertIn(
@@ -219,9 +241,9 @@ class LocalAdministratorTests(unittest.TestCase):
         )
         self.assertTrue(all("new-local-password" not in " ".join(command) for command, _input in calls))
 
-    def test_setup_recovers_a_missing_home_from_a_partial_useradd(self) -> None:
+    def test_setup_recovers_a_missing_zfs_home_from_a_partial_useradd(self) -> None:
         calls: list[list[str]] = []
-        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/home/nasadmin", "/bin/bash"))
+        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/tank/homes/nasadmin", "/bin/bash"))
 
         def capture(command, **_kwargs):
             calls.append(list(command))
@@ -230,19 +252,30 @@ class LocalAdministratorTests(unittest.TestCase):
         with (
             mock.patch.object(setup, "run_root", side_effect=capture),
             mock.patch.object(setup.pwd, "getpwnam", return_value=account),
+            mock.patch.object(setup, "LOCAL_HOME_ROOT", pathlib.Path("/tank/homes")),
         ):
             setup.create_local_administrator(
                 {"username": "nasadmin", "name": "NAS Administrator", "email": "admin@example.test"},
                 "new-local-password",
             )
 
-        helper = next(command for command in calls if command[:1] == ["systemd-run"])
-        self.assertIn("--property=ProtectHome=no", helper)
-        self.assertIn("--property=ReadWritePaths=/home", helper)
-        self.assertEqual(
-            helper[helper.index("--") + 1 :],
-            ["install", "-d", "-m", "0700", "-o", "1002", "-g", "100", "/home/nasadmin"],
+        self.assertIn(
+            ["install", "-d", "-m", "0700", "-o", "1002", "-g", "100", "/tank/homes/nasadmin"],
+            calls,
         )
+        self.assertFalse(any(command[:1] == ["systemd-run"] for command in calls))
+
+    def test_root_runs_administrator_commands_with_the_zfs_passwd_home(self) -> None:
+        account = pwd.struct_passwd(("nasadmin", "x", 1002, 100, "", "/tank/homes/nasadmin", "/bin/bash"))
+        with (
+            mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+            mock.patch.object(setup, "current_username", return_value="root"),
+            mock.patch.object(setup.os, "geteuid", return_value=0),
+            mock.patch.object(setup.pwd, "getpwnam", return_value=account),
+        ):
+            command = setup.admin_command(["nas-secrets", "init"])
+        self.assertIn("HOME=/tank/homes/nasadmin", command)
+        self.assertNotIn("HOME=/home/nasadmin", command)
 
     def test_finalizing_local_administrator_removes_bootstrap_and_persists_only_username(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -254,7 +287,11 @@ class LocalAdministratorTests(unittest.TestCase):
                 result = setup.finalize_local_administrator({"username": "nasadmin"})
                 persisted = json.loads(state.read_text(encoding="utf-8"))
         self.assertEqual(result, {"username": "nasadmin"})
-        self.assertEqual(run_root.call_args.args[0], ["userdel", "--remove", "nas-bootstrap"])
+        retirement = run_root.call_args.args[0]
+        self.assertEqual(retirement[:1], ["systemd-run"])
+        self.assertIn("--property=ProtectHome=read-only", retirement)
+        self.assertIn("--property=ReadWritePaths=/home/nas-bootstrap", retirement)
+        self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "--remove", "nas-bootstrap"])
         self.assertEqual(persisted, {"username": "nasadmin"})
 
     def test_promoting_bootstrap_runtime_rejects_existing_operational_authorities_and_never_moves_bootstrap_state(

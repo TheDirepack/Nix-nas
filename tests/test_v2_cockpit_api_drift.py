@@ -166,8 +166,10 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("/run/nas-secret-staging", write_paths)
         self.assertIn("/run/nas-secret-transactions", write_paths)
         self.assertIn("/var/lib/nas-first-start", write_paths)
+        self.assertIn("/var/lib/nas-bootstrap", write_paths)
         self.assertIn("/etc", write_paths.split("=")[-1].split())
         self.assertNotIn("/home", write_paths.split("=")[-1].split())
+        self.assertIn(f"--property=ReadWritePaths=-{api.ZFS_ROOT}", command)
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
         self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
@@ -211,6 +213,14 @@ class CockpitApiDriftTests(unittest.TestCase):
                     "planDigest": "a" * 64,
                 },
                 "at least 12",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "username": "nas-bootstrap"},
+                    "planDigest": "a" * 64,
+                },
+                "reserved bootstrap",
             ),
             ({"password": "pw", "administrator": self.administrator(), "planDigest": "bad"}, "plan digest"),
             (
