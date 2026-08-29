@@ -95,6 +95,8 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         )[0]
         for unit in ("authentik-migrate.service", "authentik-worker.service", "authentik.service"):
             self.assertIn(f'"{unit}"', selector)
+        self.assertIn("/var/lib/nas-setup/local-administrator.json", selector)
+        self.assertIn('-o "$secret_owner" -g users "$target/nas-secrets"', selector)
 
     def test_v2_blueprint_root_preserves_native_nested_blueprints(self):
         blueprint = (ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix").read_text(encoding="utf-8")

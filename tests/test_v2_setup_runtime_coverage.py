@@ -376,6 +376,35 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         root.assert_not_called()
         self.assertTrue(result["encrypted"])
 
+    def test_storage_runtime_preparation_unlocks_encryption_then_applies_zfs_tmpfiles(self) -> None:
+        with (
+            mock.patch.object(setup, "ZFS_ENCRYPTION", True),
+            mock.patch.object(setup, "ZFS_ROOT", pathlib.Path("/tank")),
+            mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+            mock.patch.object(setup, "run_interactive_privileged") as activate,
+            mock.patch.object(setup, "run_storage_host") as storage_host,
+        ):
+            result = setup.prepare_storage_runtime("pw")
+        activate.assert_called_once_with(["nas-secrets", "activate-stdin"], input_text="pw\n")
+        self.assertEqual(
+            [call.args[0] for call in storage_host.call_args_list],
+            [
+                ["nas-zfs-mount-check"],
+                ["systemd-tmpfiles", "--create", "--prefix", "/tank"],
+            ],
+        )
+        self.assertEqual(result, {"mounted": True, "runtimeDirectoriesPrepared": True})
+
+    def test_plain_storage_runtime_preparation_does_not_activate_secrets(self) -> None:
+        with (
+            mock.patch.object(setup, "ZFS_ENCRYPTION", False),
+            mock.patch.object(setup, "ZFS_ROOT", pathlib.Path("/tank")),
+            mock.patch.object(setup, "run_interactive_privileged") as activate,
+            mock.patch.object(setup, "run_storage_host"),
+        ):
+            setup.prepare_storage_runtime("pw")
+        activate.assert_not_called()
+
     def test_apply_accounts_validates_json_result_and_confirmation_flag(self) -> None:
         with (
             mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),

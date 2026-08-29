@@ -706,6 +706,21 @@ def setup_storage(
     }
 
 
+def prepare_storage_runtime(keepass_password: str) -> dict[str, bool]:
+    if ZFS_ENCRYPTION:
+        run_interactive_privileged(
+            coordinated_child(["nas-secrets", "activate-stdin"]),
+            input_text=keepass_password + "\n",
+        )
+    run_storage_host(["nas-zfs-mount-check"])
+    run_storage_host(["systemd-tmpfiles", "--create", "--prefix", str(ZFS_ROOT)])
+    return {"mounted": True, "runtimeDirectoriesPrepared": True}
+
+
+def storage_runtime_ready(_result: Any = None) -> bool:
+    return storage_ready() and (ZFS_ROOT / "nas-control").is_dir()
+
+
 def run_storage_host(
     command: Sequence[str],
     *,
@@ -1229,6 +1244,12 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 manual_recovery_on_failure=pool_was_missing and args.allow_destructive_storage,
                 postcondition=storage_ready,
+            )
+            run_setup_stage(
+                journal,
+                "storage-runtime-preparation",
+                lambda: prepare_storage_runtime(password),
+                postcondition=storage_runtime_ready,
             )
             progress("creating the permanent ZFS-backed recovery administrator")
             local_administrator = run_setup_stage(

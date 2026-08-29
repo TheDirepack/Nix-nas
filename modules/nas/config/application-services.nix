@@ -476,14 +476,19 @@ in
           target=${lib.escapeShellArg cfg.zfsRoot}
           environment=${lib.escapeShellArg authentikEnvironmentFile}
           api_token=${lib.escapeShellArg authentikApiTokenFile}
+          secret_owner="$(${pkgs.jq}/bin/jq -er \
+            '.username | strings | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"))' \
+            /var/lib/nas-setup/local-administrator.json)"
+          ${pkgs.coreutils}/bin/id -u "$secret_owner" >/dev/null
         else
           target=${lib.escapeShellArg bootstrapRuntimeRoot}
           environment="$target/authentik/environment"
           api_token="$target/authentik/api-token"
+          secret_owner=${lib.escapeShellArg cfg.adminUser}
         fi
         ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
-        ${pkgs.coreutils}/bin/install -d -m 0700 -o admin -g users "$target/nas-secrets"
+        ${pkgs.coreutils}/bin/install -d -m 0700 -o "$secret_owner" -g users "$target/nas-secrets"
         for name in authentik postgresql nas-secrets; do
           ${pkgs.coreutils}/bin/rm -rf -- "/var/lib/$name"
           ${pkgs.coreutils}/bin/ln -s "$target/$name" "/var/lib/$name"
