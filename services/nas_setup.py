@@ -1007,11 +1007,7 @@ def reconcile_verified_storage_retry(fingerprints: Sequence[str], storage: Mappi
     if not storage_ready():
         return None
     existing = load_json(JOURNAL_PATH)
-    if (
-        existing is None
-        or existing.get("status") != "manual-recovery-required"
-        or existing.get("currentStep") != "storage"
-    ):
+    if existing is None or not fingerprints:
         return None
     fingerprint = existing.get("fingerprint")
     if not isinstance(fingerprint, str) or not any(
@@ -1036,15 +1032,33 @@ def reconcile_verified_storage_retry(fingerprints: Sequence[str], storage: Mappi
         "encrypted": ZFS_ENCRYPTION,
         "recoveredAfterVerification": True,
     }
-    OperationJournal.complete_verified_recovery_step(
-        JOURNAL_PATH,
-        workflow="first-run-v2",
-        fingerprint=fingerprint,
-        step="storage",
-        result=result,
-    )
-    progress("verified the completed storage side effects and resumed the existing setup transaction")
-    return fingerprint
+    primary_fingerprint = fingerprints[0]
+    if existing.get("status") == "manual-recovery-required" and existing.get("currentStep") == "storage":
+        OperationJournal.complete_verified_recovery_step(
+            JOURNAL_PATH,
+            workflow="first-run-v2",
+            fingerprint=fingerprint,
+            step="storage",
+            result=result,
+            replacement_fingerprint=primary_fingerprint,
+        )
+        progress("verified the completed storage side effects and resumed the existing setup transaction")
+        return primary_fingerprint
+    storage_record = existing.get("steps", {}).get("storage")
+    storage_result = storage_record.get("result") if isinstance(storage_record, Mapping) else None
+    if (
+        not secrets.compare_digest(fingerprint, primary_fingerprint)
+        and isinstance(storage_record, Mapping)
+        and storage_record.get("status") == "complete"
+        and isinstance(storage_result, Mapping)
+        and storage_result.get("createdPool") is True
+    ):
+        existing["fingerprint"] = primary_fingerprint
+        journal = OperationJournal(JOURNAL_PATH, existing)
+        journal.save()
+        progress("updated the completed storage transaction for non-destructive retry")
+        return primary_fingerprint
+    return None
 
 
 def protected_stack_ready(_result: Any = None) -> bool:

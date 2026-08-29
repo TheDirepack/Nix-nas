@@ -140,11 +140,13 @@ class OperationJournalTests(unittest.TestCase):
                 fingerprint="same",
                 step="storage",
                 result={"pool": "tank"},
+                replacement_fingerprint="current",
             )
             self.assertEqual("reconciled", recovered.value["status"])
             self.assertIsNone(recovered.value["currentStep"])
             self.assertTrue(recovered.step_complete("storage"))
             self.assertEqual({"pool": "tank"}, recovered.result("storage"))
+            self.assertEqual("current", recovered.value["fingerprint"])
             self.assertNotIn("error", recovered.value["steps"]["storage"])
 
     def test_step_and_workflow_lifecycle_clears_stale_errors(self) -> None:

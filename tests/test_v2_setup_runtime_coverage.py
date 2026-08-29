@@ -517,7 +517,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
         ):
             self.assertEqual(
-                "legacy-fingerprint",
+                "current-fingerprint",
                 setup.reconcile_verified_storage_retry(
                     ("current-fingerprint", "legacy-fingerprint"), config["storage"]
                 ),
@@ -528,6 +528,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             fingerprint="legacy-fingerprint",
             step="storage",
             result=expected,
+            replacement_fingerprint="current-fingerprint",
         )
         with (
             mock.patch.object(setup, "storage_ready", return_value=False),
@@ -537,6 +538,26 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             self.assertIsNone(setup.reconcile_verified_storage_retry(("fingerprint",), config["storage"]))
         load.assert_not_called()
         recover.assert_not_called()
+
+    def test_verified_storage_retry_migrates_confirmation_after_later_failure(self) -> None:
+        journal_value = {
+            "workflow": "first-run-v2",
+            "fingerprint": "legacy",
+            "status": "failed",
+            "currentStep": "identity-bootstrap",
+            "steps": {
+                "storage": {"status": "complete", "result": {"createdPool": True}},
+                "identity-bootstrap": {"status": "failed"},
+            },
+        }
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=True),
+            mock.patch.object(setup, "load_json", return_value=journal_value),
+            mock.patch.object(setup.OperationJournal, "save") as save,
+        ):
+            self.assertEqual("current", setup.reconcile_verified_storage_retry(("current", "legacy"), {}))
+        self.assertEqual("current", journal_value["fingerprint"])
+        save.assert_called_once_with()
 
     def test_verified_storage_retry_rejects_changed_transaction(self) -> None:
         with (

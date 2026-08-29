@@ -137,6 +137,7 @@ class OperationJournal:
         fingerprint: str,
         step: str,
         result: Any,
+        replacement_fingerprint: str | None = None,
     ) -> "OperationJournal":
         existing = load_json(path)
         if existing is None:
@@ -158,6 +159,8 @@ class OperationJournal:
         journal = cls(path, existing)
         journal.value["currentStep"] = None
         journal.value["status"] = "reconciled"
+        if replacement_fingerprint is not None:
+            journal.value["fingerprint"] = replacement_fingerprint
         journal.value["verifiedRecoveryAt"] = int(time.time())
         journal.save()
         return journal
