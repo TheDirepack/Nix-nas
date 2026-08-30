@@ -481,7 +481,7 @@ def verify_or_create_database(password: str, create: bool) -> str:
     key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
     if db_path.exists():
         run_admin(
-            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(db_path)],
+            ["keepassxc-cli", "db-info", "--quiet", *key_args, str(db_path)],
             input_text=password + "\n",
         )
         return "existing"
