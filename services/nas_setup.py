@@ -492,11 +492,11 @@ def verify_or_create_database(password: str, create: bool) -> str:
             str(KEEPASS_DATABASE.parent),
         ]
     )
-    create_args = ["keepassxc-cli", "db-create", "--quiet", "--pw-stdin"]
+    create_args = ["keepassxc-cli", "db-create", "--quiet", "-p"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
     create_args.append(str(KEEPASS_DATABASE))
-    run_admin(create_args, input_text=f"{password}\n")
+    run_admin(create_args, input_text=f"{password}\n{password}\n")
     if not KEEPASS_DATABASE.exists():
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
     return "created"
