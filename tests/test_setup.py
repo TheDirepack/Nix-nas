@@ -405,7 +405,7 @@ class LocalAdministratorTests(unittest.TestCase):
         self.assertIn(
             ["systemctl", "stop", "authentik.service", "authentik-worker.service", "postgresql.service"], calls
         )
-        self.assertIn(["install", "-d", "-m", "0700", str(operational)], calls)
+        self.assertNotIn(["install", "-d", "-m", "0700", str(operational)], calls)
         self.assertFalse(any(command[0] == "mv" for command in calls))
         self.assertFalse(any(command[:2] == ["rm", "-rf"] and str(bootstrap) in command for command in calls))
 
@@ -418,6 +418,18 @@ class LocalAdministratorTests(unittest.TestCase):
             (operational / "authentik").mkdir(parents=True)
             with self.assertRaisesRegex(setup.SetupError, "already exists"):
                 setup.promote_bootstrap_runtime(bootstrap, operational)
+
+    def test_operational_root_access_preserves_private_children_but_allows_traversal(self) -> None:
+        with (
+            mock.patch.object(
+                setup,
+                "run_storage_host",
+                return_value=setup.Completed(("mountpoint",), "", "", 0),
+            ),
+            mock.patch.object(setup, "run_root") as run_root,
+        ):
+            self.assertEqual({"traversable": True}, setup.prepare_operational_root_access())
+        run_root.assert_called_once_with(["chmod", "0711", str(setup.ZFS_ROOT)])
 
 
 class FirstStartStatusTests(unittest.TestCase):

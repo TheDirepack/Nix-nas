@@ -587,11 +587,17 @@ def promote_bootstrap_runtime(bootstrap_root: pathlib.Path, operational_root: pa
         if path.exists() or path.is_symlink():
             raise SetupError(f"Operational runtime path already exists: {path}")
     run_root(["systemctl", "stop", "authentik.service", "authentik-worker.service", "postgresql.service"])
-    run_root(["install", "-d", "-m", "0700", str(operational_root)])
     run_root(["install", "-d", "-m", "0700", str(OPERATIONAL_RUNTIME_SELECT_PATH.parent)])
     run_root(["install", "-m", "0600", "/dev/null", str(OPERATIONAL_RUNTIME_SELECT_PATH)])
     run_root(["systemctl", "restart", "nas-bootstrap-runtime-select.service"])
     return {"operationalRuntimeSelected": True}
+
+
+def prepare_operational_root_access() -> dict[str, bool]:
+    if run_storage_host(["mountpoint", "--quiet", "--", str(ZFS_ROOT)], check=False).returncode != 0:
+        raise SetupError(f"Managed ZFS root is not mounted: {ZFS_ROOT}")
+    run_root(["chmod", "0711", str(ZFS_ROOT)])
+    return {"traversable": True}
 
 
 def retire_bootstrap_runtime(
@@ -1324,6 +1330,11 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 postcondition=lambda result: (
                     isinstance(result, Mapping) and result.get("operationalRuntimeSelected") is True
                 ),
+            )
+            run_setup_stage(
+                journal,
+                "operational-root-access",
+                prepare_operational_root_access,
             )
             progress("creating a fresh operational KeePassXC database and service secrets")
             run_setup_stage(
