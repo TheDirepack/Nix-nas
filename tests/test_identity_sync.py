@@ -42,6 +42,13 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(result, {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": "nasadmin"})
         request.assert_called_once_with("runtime-token", "core/users/1/", method="DELETE")
 
+    def test_retirement_command_uses_one_time_bootstrap_authority(self) -> None:
+        source = (SERVICES / "nas_identity_sync.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "retire_bootstrap_administrator(authentik_token(bootstrap=True), args.administrator)",
+            source,
+        )
+
     def test_portal_proxy_requires_a_valid_public_host(self) -> None:
         with mock.patch.object(sync, "PUBLIC_HOST", "https://not-a-host"):
             with self.assertRaisesRegex(sync.SyncError, "NAS_PUBLIC_HOST"):

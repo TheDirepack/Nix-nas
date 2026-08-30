@@ -1498,7 +1498,7 @@ def main() -> int:
             elif args.command == "bootstrap-runtime-token":
                 result = provision_runtime_token(authentik_token(bootstrap=True))
             elif args.command == "retire-bootstrap":
-                result = retire_bootstrap_administrator(authentik_token(), args.administrator)
+                result = retire_bootstrap_administrator(authentik_token(bootstrap=True), args.administrator)
             elif args.command == "apply-accounts":
                 result = apply_account_plan(
                     authentik_token(),
