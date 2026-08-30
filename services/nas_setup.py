@@ -486,44 +486,19 @@ def verify_or_create_database(password: str, create: bool) -> str:
             "-m",
             "0700",
             "-o",
-            BOOTSTRAP_ADMIN_USER,
+            local_administrator_username(),
             "-g",
             "users",
             str(KEEPASS_DATABASE.parent),
         ]
     )
-    # Ensure the database directory is writable by the bootstrap account even
-    # if a previous failed run left it owned by root or with restrictive ACLs.
-    run_root(["chown", f"{BOOTSTRAP_ADMIN_USER}:users", str(KEEPASS_DATABASE.parent)])
-    run_root(["chmod", "0700", str(KEEPASS_DATABASE.parent)])
     create_args = ["keepassxc-cli", "db-create", "--quiet", "-p"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
     create_args.append(str(KEEPASS_DATABASE))
-    try:
-        run_admin(create_args, input_text=f"{password}\n{password}\n")
-    except SetupError as exc:
-        if "Permission denied" not in str(exc):
-            raise
-        # The bootstrap directory may still be unwritable due to mount
-        # ordering with the encrypted dataset or a stale file owned by root.
-        # Fall back to creating as root and then handing ownership to the
-        # bootstrap account so subsequent keepassxc operations succeed.
-        run_root(["rm", "-f", str(KEEPASS_DATABASE)])
-        run_root(create_args, input_text=f"{password}\n{password}\n")
-        run_root(["chown", f"{BOOTSTRAP_ADMIN_USER}:users", str(KEEPASS_DATABASE)])
-        run_root(["chmod", "0600", str(KEEPASS_DATABASE)])
+    run_admin(create_args, input_text=f"{password}\n{password}\n")
     if not KEEPASS_DATABASE.exists():
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
-    # Ensure the database is owned by the bootstrap account regardless of which
-    # path succeeded, so later db-info checks as that user can read it.
-    try:
-        bootstrap_uid = pwd.getpwnam(BOOTSTRAP_ADMIN_USER).pw_uid
-    except KeyError:
-        bootstrap_uid = None
-    if bootstrap_uid is not None and KEEPASS_DATABASE.stat().st_uid != bootstrap_uid:
-        run_root(["chown", f"{BOOTSTRAP_ADMIN_USER}:users", str(KEEPASS_DATABASE)])
-        run_root(["chmod", "0600", str(KEEPASS_DATABASE)])
     return "created"
 
 
