@@ -609,7 +609,8 @@ def retire_bootstrap_runtime(
         input_text=keepass_password + "\n",
     )
     run_interactive_privileged(coordinated_child(["nas-secrets", "activate-stdin"]), input_text=keepass_password + "\n")
-    run_root(["rm", "-rf", str(bootstrap_root)])
+    if bootstrap_root.is_dir() and not bootstrap_root.is_symlink():
+        run_root(["find", str(bootstrap_root), "-mindepth", "1", "-delete"])
     return {"bootstrapRetired": True}
 
 

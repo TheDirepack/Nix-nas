@@ -1398,10 +1398,9 @@ def retire_bootstrap_administrator(token: str, administrator: str) -> dict[str, 
     ):
         raise SyncError(f"Chosen administrator {administrator!r} is not an enabled explicit member of {ADMIN_GROUP}")
     bootstrap = next((user for user in users if user.get("username") == "akadmin"), None)
-    if not isinstance(bootstrap, Mapping):
-        raise SyncError("Authentik bootstrap administrator akadmin is missing")
-    bootstrap_pk = user_detail_pk(bootstrap)
-    authentik_request(token, f"core/users/{bootstrap_pk}/", method="DELETE")
+    if isinstance(bootstrap, Mapping):
+        bootstrap_pk = user_detail_pk(bootstrap)
+        authentik_request(token, f"core/users/{bootstrap_pk}/", method="DELETE")
     return {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": administrator}
 
 

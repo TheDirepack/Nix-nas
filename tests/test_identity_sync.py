@@ -42,6 +42,14 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(result, {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": "nasadmin"})
         request.assert_called_once_with("runtime-token", "core/users/1/", method="DELETE")
 
+        with (
+            mock.patch.object(sync, "authentik_list", side_effect=[[users[1]], groups]),
+            mock.patch.object(sync, "authentik_request") as request,
+        ):
+            result = sync.retire_bootstrap_administrator("bootstrap-token", "nasadmin")
+        self.assertEqual(result, {"retiredBootstrapAdministrator": "akadmin", "verifiedAdministrator": "nasadmin"})
+        request.assert_not_called()
+
     def test_retirement_command_uses_one_time_bootstrap_authority(self) -> None:
         source = (SERVICES / "nas_identity_sync.py").read_text(encoding="utf-8")
         self.assertIn(

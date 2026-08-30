@@ -125,7 +125,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
         self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
         self.assertIn("retire_bootstrap_runtime", setup)
-        self.assertIn('run_root(["rm", "-rf", str(bootstrap_root)])', setup)
+        self.assertIn('run_root(["find", str(bootstrap_root), "-mindepth", "1", "-delete"])', setup)
 
     def test_cockpit_is_isolated_until_authentik_can_authorize_it(self) -> None:
         base = text("modules/nas/internal/base.nix")
