@@ -30,10 +30,10 @@ let
       set -euo pipefail
       umask 0077
 
-      database=${lib.escapeShellArg cfg.secrets.keepassDatabase}
-      key_file=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
-      secret_group=${lib.escapeShellArg cfg.secrets.keepassGroup}
-      secret_root=${lib.escapeShellArg secretRoot}
+      database="''${NAS_KEEPASS_DATABASE:-${lib.escapeShellArg cfg.secrets.keepassDatabase}}"
+      key_file="''${NAS_KEEPASS_KEY_FILE:-${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}}"
+      secret_group="''${NAS_KEEPASS_GROUP:-${lib.escapeShellArg cfg.secrets.keepassGroup}}"
+      secret_root="''${NAS_SECRET_ROOT:-${lib.escapeShellArg secretRoot}}"
       keepass_password=""
       password_from_stdin=false
 
