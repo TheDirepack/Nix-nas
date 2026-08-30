@@ -575,6 +575,9 @@ NTFY_ENV
 
         nas_secret_tx_swap
 
+        sudo systemctl reset-failed \
+          postgresql.service postgresql-setup.service \
+          authentik-migrate.service authentik-worker.service authentik.service caddy.service
         if ! sudo systemctl start nas-protected-services.target; then
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71

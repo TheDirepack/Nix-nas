@@ -112,6 +112,7 @@ class ContractTests(unittest.TestCase):
     def test_first_boot_authentik_uses_only_a_random_bootstrap_runtime_environment(self) -> None:
         applications = text("modules/nas/config/application-services.nix")
         base = text("modules/nas/internal/base.nix")
+        secrets = text("modules/nas/internal/secret-tools.nix")
         services = text("modules/nas/config/systemd-services.nix")
         setup = text("services/nas_setup.py")
         self.assertIn("nas-bootstrap-authentik-secrets", applications)
@@ -119,6 +120,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot", applications)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
+        self.assertIn("sudo systemctl reset-failed", secrets)
         self.assertNotIn("EnvironmentFile = [ authentikEnvironmentFile ];", applications)
         self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
         self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
