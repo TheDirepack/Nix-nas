@@ -478,6 +478,7 @@ def verify_or_create_database(password: str, create: bool) -> str:
     if ZFS_ENCRYPTION:
         db_path = pathlib.Path("/var/lib/nas-bootstrap/nas-secrets/NAS.kdbx")
         progress(f"keepass using unencrypted path due to ZFS encryption: {db_path}")
+        os.environ["NAS_KEEPASS_DATABASE"] = str(db_path)
     key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
     if db_path.exists():
         run_admin(
