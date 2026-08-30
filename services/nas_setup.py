@@ -492,7 +492,7 @@ def verify_or_create_database(password: str, create: bool) -> str:
             str(KEEPASS_DATABASE.parent),
         ]
     )
-    create_args = ["keepassxc-cli", "db-create", "--quiet"]
+    create_args = ["keepassxc-cli", "db-create", "--quiet", "--pw-stdin"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
     create_args.append(str(KEEPASS_DATABASE))
