@@ -479,6 +479,16 @@ def verify_or_create_database(password: str, create: bool) -> str:
         return "existing"
     if not create:
         raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
+    # Diagnostic: log parent state before creation for CI permission debugging.
+    try:
+        pre = run_root(["ls", "-ld", str(KEEPASS_DATABASE.parent)], check=False)
+        progress(f"keepass parent before install: {pre.stdout.strip()} err:{pre.stderr.strip()} rc:{pre.returncode}")
+        id_root = run_root(["id"], check=False)
+        progress(f"keepass id root: {id_root.stdout.strip()}")
+        id_admin = run_admin(["id"], check=False)
+        progress(f"keepass id admin: {id_admin.stdout.strip()}")
+    except Exception as exc:
+        progress(f"keepass pre-check failed: {exc}")
     run_root(
         [
             "install",
@@ -492,11 +502,29 @@ def verify_or_create_database(password: str, create: bool) -> str:
             str(KEEPASS_DATABASE.parent),
         ]
     )
+    try:
+        post = run_root(["ls", "-ld", str(KEEPASS_DATABASE.parent)], check=False)
+        progress(f"keepass parent after install: {post.stdout.strip()} err:{post.stderr.strip()} rc:{post.returncode}")
+    except Exception as exc:
+        progress(f"keepass post-check failed: {exc}")
     create_args = ["keepassxc-cli", "db-create", "--quiet", "-p"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
     create_args.append(str(KEEPASS_DATABASE))
-    run_admin(create_args, input_text=f"{password}\n{password}\n")
+    try:
+        run_admin(create_args, input_text=f"{password}\n{password}\n")
+    except SetupError as exc:
+        if "Permission denied" not in str(exc):
+            raise
+        progress(f"keepass db-create as admin failed, retrying as root: {exc}")
+        run_root(["rm", "-f", str(KEEPASS_DATABASE)])
+        run_root(create_args, input_text=f"{password}\n{password}\n")
+        try:
+            owner = local_administrator_username()
+        except Exception:
+            owner = BOOTSTRAP_ADMIN_USER
+        run_root(["chown", f"{owner}:users", str(KEEPASS_DATABASE)])
+        run_root(["chmod", "0600", str(KEEPASS_DATABASE)])
     if not KEEPASS_DATABASE.exists():
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
     return "created"
