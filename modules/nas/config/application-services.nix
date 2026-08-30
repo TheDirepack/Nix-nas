@@ -271,7 +271,7 @@ in
 
     services.postgresql = {
       enable = true;
-      dataDir = postgresqlDataDir;
+      dataDir = if config.nas.zfsEncryption.enable then "${bootstrapRuntimeRoot}/postgresql" else postgresqlDataDir;
       ensureDatabases = [ "authentik" ];
       ensureUsers = [
         {
