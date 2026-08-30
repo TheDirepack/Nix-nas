@@ -159,10 +159,10 @@ def run_command(
         decoded_stderr = decoded(stderr_buffer, stderr_truncated)
         decoded_stdout = decoded(stdout_buffer, stdout_truncated)
         actual = decoded_stderr.strip() or decoded_stdout.strip()
-        # Expose actual KeePassXC failures for CI diagnostics while keeping other
-        # secret-bearing failures redacted; the password itself is not reflected
-        # in keepassxc's error output, only the validation reason.
-        if any("keepassxc" in part for part in command):
+        # Expose actual KeePassXC / nas-secrets failures for CI diagnostics
+        # while keeping other secret-bearing failures redacted; the password
+        # itself is not reflected in these tools' error output.
+        if any(("keepassxc" in part or "nas-secrets" in part) for part in command):
             detail = actual or f"exit status {proc.returncode}"
             return CommandResult(proc.returncode, decoded_stdout, detail)
         return CommandResult(proc.returncode, "", "Command failed after receiving protected standard input")
