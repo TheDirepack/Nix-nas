@@ -470,18 +470,26 @@ def retire_bootstrap_runtime(
 
 
 def verify_or_create_database(password: str, create: bool) -> str:
+    # When ZFS encryption is enabled, /var/lib/nas-secrets is a symlink into
+    # the encrypted dataset (/tank/nas-secrets) which is locked until the
+    # KeePass key is available - a deadlock. Keep the KeePass database on the
+    # unencrypted boot filesystem instead.
+    db_path = KEEPASS_DATABASE
+    if ZFS_ENCRYPTION:
+        db_path = pathlib.Path("/var/lib/nas-bootstrap/nas-secrets/NAS.kdbx")
+        progress(f"keepass using unencrypted path due to ZFS encryption: {db_path}")
     key_args = ["--key-file", KEEPASS_KEY_FILE] if KEEPASS_KEY_FILE else []
-    if KEEPASS_DATABASE.exists():
+    if db_path.exists():
         run_admin(
-            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(KEEPASS_DATABASE)],
+            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(db_path)],
             input_text=password + "\n",
         )
         return "existing"
     if not create:
-        raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
+        raise SetupError(f"KeePass database does not exist: {db_path}")
     # Diagnostic: log parent state before creation for CI permission debugging.
     try:
-        pre = run_root(["ls", "-ld", str(KEEPASS_DATABASE.parent)], check=False)
+        pre = run_root(["ls", "-ld", str(db_path.parent)], check=False)
         progress(f"keepass parent before install: {pre.stdout.strip()} err:{pre.stderr.strip()} rc:{pre.returncode}")
         id_root = run_root(["id"], check=False)
         progress(f"keepass id root: {id_root.stdout.strip()}")
@@ -499,34 +507,34 @@ def verify_or_create_database(password: str, create: bool) -> str:
             local_administrator_username(),
             "-g",
             "users",
-            str(KEEPASS_DATABASE.parent),
+            str(db_path.parent),
         ]
     )
     try:
-        post = run_root(["ls", "-ld", str(KEEPASS_DATABASE.parent)], check=False)
+        post = run_root(["ls", "-ld", str(db_path.parent)], check=False)
         progress(f"keepass parent after install: {post.stdout.strip()} err:{post.stderr.strip()} rc:{post.returncode}")
     except Exception as exc:
         progress(f"keepass post-check failed: {exc}")
     create_args = ["keepassxc-cli", "db-create", "--quiet", "-p"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
-    create_args.append(str(KEEPASS_DATABASE))
+    create_args.append(str(db_path))
     try:
         run_admin(create_args, input_text=f"{password}\n{password}\n")
     except SetupError as exc:
         if "Permission denied" not in str(exc):
             raise
         progress(f"keepass db-create as admin failed, retrying as root: {exc}")
-        run_root(["rm", "-f", str(KEEPASS_DATABASE)])
+        run_root(["rm", "-f", str(db_path)])
         run_root(create_args, input_text=f"{password}\n{password}\n")
         try:
             owner = local_administrator_username()
         except Exception:
             owner = BOOTSTRAP_ADMIN_USER
-        run_root(["chown", f"{owner}:users", str(KEEPASS_DATABASE)])
-        run_root(["chmod", "0600", str(KEEPASS_DATABASE)])
-    if not KEEPASS_DATABASE.exists():
-        raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
+        run_root(["chown", f"{owner}:users", str(db_path)])
+        run_root(["chmod", "0600", str(db_path)])
+    if not db_path.exists():
+        raise SetupError(f"KeePassXC did not create {db_path}")
     return "created"
 
 

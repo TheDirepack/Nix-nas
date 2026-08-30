@@ -18,6 +18,10 @@ pkgs.testers.runNixOSTest {
     ];
 
     nas.zfsEncryption.enable = lib.mkForce true;
+    # Keep the KeePass database outside the encrypted dataset to avoid a
+    # deadlock where the dataset key is inside the database that is itself
+    # stored on the locked dataset.
+    nas.secrets.keepassDatabase = lib.mkForce "/var/lib/nas-bootstrap/nas-secrets/NAS.kdbx";
     # The shared VM fixture points the setup API at the full-stack first-run
     # document. This leg writes a distinct encrypted-storage plan, so keep the
     # API's review/submission contract aligned with the config under test.
