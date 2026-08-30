@@ -517,7 +517,11 @@ def verify_or_create_database(password: str, create: bool) -> str:
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
     # Ensure the database is owned by the bootstrap account regardless of which
     # path succeeded, so later db-info checks as that user can read it.
-    if KEEPASS_DATABASE.stat().st_uid != pwd.getpwnam(BOOTSTRAP_ADMIN_USER).pw_uid:
+    try:
+        bootstrap_uid = pwd.getpwnam(BOOTSTRAP_ADMIN_USER).pw_uid
+    except KeyError:
+        bootstrap_uid = None
+    if bootstrap_uid is not None and KEEPASS_DATABASE.stat().st_uid != bootstrap_uid:
         run_root(["chown", f"{BOOTSTRAP_ADMIN_USER}:users", str(KEEPASS_DATABASE)])
         run_root(["chmod", "0600", str(KEEPASS_DATABASE)])
     return "created"
