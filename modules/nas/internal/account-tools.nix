@@ -91,7 +91,6 @@ nasSetup = pkgs.writeShellApplication {
     ];
     text = ''
       export PATH=/run/wrappers/bin:$PATH
-      export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
@@ -182,7 +181,7 @@ nasSetup = pkgs.writeShellApplication {
       name = "keepass";
       source = cfg.secrets.keepassDatabase;
       sensitive = true;
-      owner = cfg.adminUser;
+      owner = null;
       group = "users";
       rootMode = "0600";
     })
@@ -410,7 +409,6 @@ nasSetup = pkgs.writeShellApplication {
       nasPythonApplication nasIdentitySync nasSetup nasUpdate
     ];
     text = ''
-      export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
       export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
       export NAS_ZFS_ROOT=${lib.escapeShellArg cfg.zfsRoot}

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
-DATABASE="${NAS_TEST_KEEPASS_DATABASE:-/var/lib/nas-secrets/NAS.kdbx}"
+DATABASE="${NAS_TEST_KEEPASS_DATABASE:-/var/lib/nas-control-plane/nas-secrets/NAS.kdbx}"
 GROUP="${NAS_TEST_KEEPASS_GROUP:-NixOS NAS}"
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }

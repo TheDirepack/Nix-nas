@@ -8,6 +8,8 @@ let
     authentikRuntimeApiTokenFile
     authentikRuntimeEnvironmentFile
     authentikPort
+    bootstrapUsername
+    bootstrapPassword
     caddyBackendUnits
     caddyCaExportDir
     caddyCaExportPath
@@ -50,14 +52,14 @@ in
         RemainAfterExit = true;
         ExecStart = pkgs.writeShellScript "nas-bootstrap-administrator" ''
           set -euo pipefail
-          if ! ${pkgs.glibc.bin}/bin/getent passwd nas-bootstrap >/dev/null 2>&1; then
-            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash nas-bootstrap || {
+          if ! ${pkgs.glibc.bin}/bin/getent passwd ${bootstrapUsername} >/dev/null 2>&1; then
+            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash ${bootstrapUsername} || {
               rc=$?
               [[ "$rc" -eq 9 ]] || exit "$rc"
             }
           fi
-          printf '%s\n' 'nas-bootstrap:nixos-nas-bootstrap' | ${pkgs.shadow}/bin/chpasswd
-          ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations nas-bootstrap
+          printf '%s\n' '${bootstrapUsername}:${bootstrapPassword}' | ${pkgs.shadow}/bin/chpasswd
+          ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations ${bootstrapUsername}
         '';
         NoNewPrivileges = false;
         UMask = "0077";

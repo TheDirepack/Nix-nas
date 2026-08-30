@@ -90,7 +90,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("postgresql = {", protected)
         self.assertIn('requires = [ "nas-bootstrap-runtime-select.service" ];', protected)
 
-    def test_identity_runtime_reinitializes_on_zfs_and_retires_bootstrap_authorities(self) -> None:
+    def test_identity_runtime_stays_boot_side_and_retires_only_bootstrap_credentials(self) -> None:
         applications = text("modules/nas/config/application-services.nix")
         services = text("modules/nas/config/systemd-services.nix")
         setup = text("services/nas_setup.py")
@@ -98,8 +98,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-bootstrap-runtime-select.service", applications)
         self.assertIn("bootstrapAuthentikDataDir", applications)
         self.assertIn("bootstrapPostgresqlDataDir", applications)
-        self.assertIn("operational-runtime-select", applications)
-        self.assertIn("promote_bootstrap_runtime", setup)
+        self.assertIn("/var/lib/nas-control-plane", text("modules/nas/internal/base.nix"))
+        self.assertNotIn("operational-runtime-select", applications)
+        self.assertNotIn("promote_bootstrap_runtime", setup)
+        self.assertIn("identity-database-regeneration", setup)
+        self.assertIn("regenerate_boot_identity_databases", setup)
         self.assertIn("retire-bootstrap", setup)
         self.assertIn("retire-authentik-bootstrap-stdin", setup)
         self.assertNotIn('run_root(["mv", str(source), str(destination)])', setup)
@@ -117,7 +120,7 @@ class ContractTests(unittest.TestCase):
         setup = text("services/nas_setup.py")
         self.assertIn("nas-bootstrap-authentik-secrets", applications)
         self.assertIn("openssl rand -hex 64", applications)
-        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot", applications)
+        self.assertIn("AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}", applications)
         self.assertIn('authentikRuntimeEnvironmentFile = "/run/nas-authentik/environment";', base)
         self.assertIn('authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";', base)
         self.assertIn("sudo systemctl reset-failed", secrets)
@@ -125,7 +128,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("ConditionPathExists = authentikRuntimeEnvironmentFile;", services)
         self.assertNotIn('ConditionPathExists = [ "${secretRoot}/ready" authentikEnvironmentFile ];', services)
         self.assertIn("retire_bootstrap_runtime", setup)
-        self.assertIn('run_root(["find", str(bootstrap_root), "-mindepth", "1", "-delete"])', setup)
+        self.assertNotIn('run_root(["find", str(bootstrap_root), "-mindepth", "1", "-delete"])', setup)
+        self.assertIn('"/^AUTHENTIK_BOOTSTRAP_/d"', setup)
 
     def test_cockpit_is_isolated_until_authentik_can_authorize_it(self) -> None:
         base = text("modules/nas/internal/base.nix")

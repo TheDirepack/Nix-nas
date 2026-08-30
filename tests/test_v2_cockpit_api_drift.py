@@ -167,10 +167,10 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertNotIn("/run", writable)
         self.assertNotIn("/run/nas-secrets", writable)
         self.assertIn("/var/lib/nas-first-start", write_paths)
-        self.assertIn("/var/lib/nas-bootstrap", write_paths)
+        self.assertIn("/var/lib/nas-control-plane", write_paths)
         self.assertIn("/etc", writable)
         self.assertNotIn("/home", writable)
-        self.assertFalse(any(value.startswith("--property=ReadWritePaths=-") for value in command))
+        self.assertIn("--property=ReadWritePaths=-/tank", command)
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
         self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
@@ -218,7 +218,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             (
                 {
                     "password": "pw",
-                    "administrator": {**self.administrator(), "username": "nas-bootstrap"},
+                    "administrator": {**self.administrator(), "username": "akadmin"},
                     "planDigest": "a" * 64,
                 },
                 "reserved bootstrap",
@@ -282,6 +282,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             "planDigest": "a" * 64,
             "devices": ["/dev/a", "/dev/b"],
             "allowDestructiveStorage": True,
+            "encryptStorage": False,
             "confirmPasswordReapply": True,
         }
         active = self.active()
@@ -300,6 +301,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(len(writes), 2)
         self.assertIn("reservation-token", writes[0][1])
         self.assertNotIn("db-password", writes[0][1])
+        self.assertFalse(json.loads(writes[0][1])["encryptStorage"])
         self.assertEqual(json.loads(writes[1][1])["keepass"], "db-password")
         self.assertEqual(json.loads(writes[1][1])["administrator"]["password"], "admin-password")
 

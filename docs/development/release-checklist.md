@@ -91,7 +91,7 @@ Do not remove the source-only/development warning or publish an install-ready re
 - Produce and retain the archive SHA-256 and provenance record.
 - Confirm the archive contains no private or long-lived credentials, local configuration, caches, VM disks, installer ISOs, or unrelated build output.
 - Automated merge releases intentionally contain one public first-boot credential: `akadmin` plus the release-specific five-word Diceware password embedded in the tagged release source. Verify that credential matches the GitHub Release notes exactly and that the development-only `nas-admin-first-boot` password is not the bootstrap password in the published release commit.
-- Verify only the two explicit runtime bootstrap authorities were credential-stamped; tests and documentation must remain independent and retain their development expectations.
+- Verify only the canonical bootstrap authority in `modules/nas/internal/base.nix` was credential-stamped; Linux, Authentik, and KeePass initialization must all consume it, while tests and documentation retain their development expectations.
 - Verify the generated release commit was not pushed back onto `main`; the fixed development bootstrap credential must remain in the development tree for repeatable tests.
 - Verify the release trigger graph remains loop-free: CI must not trigger on `v*` tags, and the release workflow must be triggered only by successful `CI` `workflow_run` completion rather than push/tag events.
 - Verify repository-write permission exists only in the small publication job; release build/test jobs must use read-only contents access and checkout with persisted credentials disabled.

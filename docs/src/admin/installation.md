@@ -47,7 +47,7 @@ On the target machine, run `nixos-generate-config`, review its output, and repla
 
    Write the value down with your recovery material. It must never change after the pool is created or imported.
 
-2. **Add your SSH public key** to `users.users.admin.openssh.authorizedKeys.keys`. The shipped file leaves this list empty, which means no SSH access until you add a key.
+2. **Plan first access.** Fresh systems create the disposable `akadmin` Linux login at boot with the same release credential used by Authentik. The wizard replaces it with your permanent administrator. Add permanent SSH keys after setup, or use local console/KVM for first access.
 
 3. **Set `nas.trustedInterfaces`** to the names of your LAN interfaces (for example `[ "enp1s0" ]`). These are the only interfaces allowed to reach SSH, HTTPS, mDNS, Syncthing, and optional TFTP; empty is fail-closed.
 
@@ -55,15 +55,7 @@ On the target machine, run `nixos-generate-config`, review its output, and repla
 
 5. **Review the storage names**: `nas.zfsPool`, `nas.zfsDataset`, `nas.zfsRoot` (shipped defaults: `tank`, `tank/nas`, `/tank`) and the boot-import policy (`nas.zfsImportAtBoot`).
 
-6. **Create the administrator password-hash file.** `nas.adminPasswordHashFile` points to a root-only file containing a Linux password hash for local Cockpit/PAM sign-in. Shipped path:
-
-   ```bash
-   sudo install -m 0600 /dev/null /etc/nixos/nixos-nas/secrets/admin-password-hash
-   ```
-
-   Place a hash of your chosen password in that file, for example generated with `mkpasswd -m sha-512`.
-
-7. **Configure the boot loader for your firmware.** For UEFI, enable systemd-boot only after confirming the EFI System Partition appears in `hardware-configuration.nix`; use GRUB when the machine requires it.
+6. **Configure the boot loader for your firmware.** For UEFI, enable systemd-boot only after confirming the EFI System Partition appears in `hardware-configuration.nix`; use GRUB when the machine requires it.
 
 ### Finish the host preparation
 
@@ -146,9 +138,9 @@ Two routes reach the same result. Run either as the configured local administrat
 
 ### Route A: the browser wizard
 
-Open `https://<nas-hostname>.local/setup/` and follow the first-start wizard: administrator account, storage plan review, and final confirmation. Configure the host locale declaratively in NixOS; the wizard does not maintain a second mutable locale setting.
+Open `https://<nas-hostname>.local/setup/` and follow the first-start wizard: administrator account, storage plan and ZFS-encryption choice, and final confirmation. Encryption is recommended and starts enabled; its key is created in the new system-side KeePassXC database before ZFS is created. Configure the host locale declaratively in NixOS; the wizard does not maintain a second mutable locale setting.
 
-Authentik gates the wizard. Sign in with its temporary bootstrap identity `akadmin` and the documented initial password `nas-admin-first-boot`. This identity exists only for initial setup; setup retires it automatically once your own administrator account has been created and verified. Protected applications stay unavailable until setup completes and the system unlocks.
+Authentik gates the wizard. Sign in with temporary identity `akadmin`: development builds use `nas-admin-first-boot`, while releases publish their generated password in the matching release notes. The same username/password works for the initial Linux console login. Setup rebuilds Authentik and PostgreSQL on the system partition, creates your permanent Authentik and ZFS-backed Linux administrator, and removes both temporary identities.
 
 ### Route B: the CLI from a recovery terminal
 

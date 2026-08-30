@@ -187,7 +187,7 @@ in
             ${lib.escapeShellArg "${stateDir}/sessions"} ${lib.escapeShellArg "${stateDir}/packages"}
           ${lib.concatMapStringsSep "\n" (root: ''
             if [[ ! -e ${lib.escapeShellArg root} ]]; then
-              install -d -m 2770 -o ${lib.escapeShellArg config.nas.adminUser} -g nas-code-agent ${lib.escapeShellArg root}
+              install -d -m 2770 -o root -g nas-code-agent ${lib.escapeShellArg root}
             fi
             [[ -d ${lib.escapeShellArg root} && ! -L ${lib.escapeShellArg root} ]] || {
               echo "Coding workspace root must be a real directory: ${root}" >&2

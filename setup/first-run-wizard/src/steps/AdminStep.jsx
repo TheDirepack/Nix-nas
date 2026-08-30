@@ -1,11 +1,9 @@
 import React from 'react';
-import { FormGroup, TextInput, Checkbox, HelperText, HelperTextItem } from '@patternfly/react-core';
+import { FormGroup, TextInput, HelperText, HelperTextItem } from '@patternfly/react-core';
 
 const AdminStep = ({
   administrator,
   onAdministrator,
-  useSamePassword,
-  onUseSamePassword,
   keePassPassword,
   onKeePassPassword,
   keePassPasswordConfirm,
@@ -74,41 +72,31 @@ const AdminStep = ({
           minLength={12}
         />
       </FormGroup>
-      <Checkbox
-        id="wizard-keepass-same"
-        label="Use the same password for the KeePassXC database"
-        isChecked={useSamePassword}
-        onChange={(_event, checked) => onUseSamePassword(checked)}
-      />
       <HelperText>
-        <HelperTextItem>The KeePassXC database protects appliance secrets. A separate password gives it an additional boundary.</HelperTextItem>
+        <HelperTextItem>The KeePassXC password only unlocks the boot-side appliance secret database. It is not an account password.</HelperTextItem>
       </HelperText>
-      {!useSamePassword && (
-        <>
-          <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
-            <TextInput
-              id="wizard-keepass-password"
-              type="password"
-              value={keePassPassword}
-              onChange={(_event, value) => onKeePassPassword(value)}
-              autoComplete="new-password"
-            />
-          </FormGroup>
-          <FormGroup
-            label="Confirm KeePassXC database password"
-            fieldId="wizard-keepass-password-confirm"
-            isRequired
-          >
-            <TextInput
-              id="wizard-keepass-password-confirm"
-              type="password"
-              value={keePassPasswordConfirm}
-              onChange={(_event, value) => onKeePassPasswordConfirm(value)}
-              autoComplete="new-password"
-            />
-          </FormGroup>
-        </>
-      )}
+      <FormGroup label="KeePassXC database password" fieldId="wizard-keepass-password" isRequired>
+        <TextInput
+          id="wizard-keepass-password"
+          type="password"
+          value={keePassPassword}
+          onChange={(_event, value) => onKeePassPassword(value)}
+          autoComplete="new-password"
+        />
+      </FormGroup>
+      <FormGroup
+        label="Confirm KeePassXC database password"
+        fieldId="wizard-keepass-password-confirm"
+        isRequired
+      >
+        <TextInput
+          id="wizard-keepass-password-confirm"
+          type="password"
+          value={keePassPasswordConfirm}
+          onChange={(_event, value) => onKeePassPasswordConfirm(value)}
+          autoComplete="new-password"
+        />
+      </FormGroup>
     </div>
   );
 };

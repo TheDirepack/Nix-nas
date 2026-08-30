@@ -220,9 +220,6 @@ def fill_wizard(
     send("#wizard-admin-password", admin_password)
     send("#wizard-admin-password-confirm", admin_password)
 
-    same_password = wait.until(lambda current: first(current, ["#wizard-keepass-same"]))
-    if same_password.is_selected():
-        same_password.click()
     send("#wizard-keepass-password", keepass_password)
     send("#wizard-keepass-password-confirm", keepass_password)
     click_button("Next")
@@ -231,6 +228,10 @@ def fill_wizard(
     for device in args.device:
         if device not in devices.text:
             raise RuntimeError(f"first-start storage plan does not contain {device}: {devices.text}")
+
+    encryption = wait.until(lambda current: first(current, ["#wizard-encrypt-storage"]))
+    if encryption.is_selected() != args.encrypt_storage:
+        encryption.click()
 
     destructive = first(driver, ["#wizard-destructive"])
     if destructive is not None and not destructive.is_selected():
@@ -287,6 +288,7 @@ def main() -> int:
     parser.add_argument("--admin-email", required=True)
     parser.add_argument("--admin-password-file", required=True, help="File with the administrator password")
     parser.add_argument("--device", action="append", default=[], help="Storage device to confirm; repeatable")
+    parser.add_argument("--encrypt-storage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--job-timeout-seconds", type=int, default=1200)
     parser.add_argument("--result-file", help="Write the final job document JSON here")
     args = parser.parse_args()

@@ -45,6 +45,15 @@ https://${lanHost} {
   handle /setup {
     redir /setup /setup/ 308
   }
+  # Rebuilding Authentik invalidates the temporary session while the detached
+  # job is still running. The unguessable 96-bit job id is a narrow capability
+  # for status and completed-job reboot only; submission remains Authentik-gated.
+  handle /setup/api/first-start/job/* {
+    reverse_proxy 127.0.0.1:8980
+  }
+  handle /setup/api/reboot {
+    reverse_proxy 127.0.0.1:8980
+  }
   # The wizard's submission API. Authentik-gated like the page itself; the
   # port must match nas-setup-api.service (application-services.nix).
   handle /setup/api/* {

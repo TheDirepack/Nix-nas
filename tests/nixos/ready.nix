@@ -11,7 +11,6 @@
     installationReady = lib.mkForce true;
     testing.installationReadyFixture = true;
     trustedInterfaces = lib.mkForce [ "eth0" ];
-    adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "ci-admin-password-hash" "!"));
     zfsImportAtBoot = lib.mkForce true;
     zfsEncryption.acknowledgeUnencrypted = lib.mkForce true;
     autoUpdate.enable = lib.mkForce false;

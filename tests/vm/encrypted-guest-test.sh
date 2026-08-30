@@ -118,7 +118,7 @@ stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_
     administrator: {username: "nasadmin", name: "NAS Administrator",
                     email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
     planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+    allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
   -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
 if [[ "$stale_code" != 400 ]]; then
@@ -136,7 +136,7 @@ job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEV
     administrator: {username: "nasadmin", name: "NAS Administrator",
                     email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
     planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+    allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 job_code="$(printf '%s' "$job_request" | curl --silent --show-error --max-time 60 \
   -o /tmp/nas-first-run-submission.json -w '%{http_code}' \
   -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
@@ -172,7 +172,7 @@ if ! jq -e '
   jq . <<<"$job_result" >&2
   fail "encrypted first-start job report did not contain the expected storage state"
 fi
-[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 pass "GUI first-start job created and activated the encrypted storage stack"
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service

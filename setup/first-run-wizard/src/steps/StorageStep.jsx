@@ -1,7 +1,15 @@
 import React from 'react';
 import { Alert, Button, FormGroup, Checkbox, Label, HelperText, HelperTextItem } from '@patternfly/react-core';
 
-const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive, onRefresh }) => {
+const StorageStep = ({
+  plan,
+  planError,
+  allowDestructive,
+  onAllowDestructive,
+  encryptStorage,
+  onEncryptStorage,
+  onRefresh,
+}) => {
   if (planError) {
     return (
       <div className="nas-wizard-step nas-wizard-message">
@@ -83,6 +91,17 @@ const StorageStep = ({ plan, planError, allowDestructive, onAllowDestructive, on
       <FormGroup label="Dataset" fieldId="wizard-plan-dataset">
         <div id="wizard-plan-dataset" className="nas-readonly-value">{storage.dataset || 'Not specified'}</div>
       </FormGroup>
+      <Checkbox
+        id="wizard-encrypt-storage"
+        label="Encrypt the ZFS data partition using the key stored in KeePassXC"
+        isChecked={encryptStorage}
+        onChange={(_event, checked) => onEncryptStorage(checked)}
+      />
+      <HelperText>
+        <HelperTextItem>
+          Recommended. KeePassXC stays on the system partition so it can provide the key before the ZFS data partition is unlocked.
+        </HelperTextItem>
+      </HelperText>
       <FormGroup label="Devices" fieldId="wizard-plan-devices">
         <ul id="wizard-plan-devices" className="nas-device-list">
           {Array.isArray(storage.devices) && storage.devices.length ? (

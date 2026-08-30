@@ -59,6 +59,11 @@ The machine can boot before KeePassXC is unlocked. Local console, SSH with a pro
 
 No long-running service should need broad read access to the whole secret tree when an exact credential or read-only path is sufficient.
 
+The unlock control plane is system-partition state: KeePassXC, Authentik, and
+PostgreSQL live under `/var/lib/nas-control-plane`. First start may discard and
+regenerate the temporary identity databases in that same location, but never
+moves them to ZFS. Permanent Linux homes and user/application data are ZFS-backed.
+
 ## Mutable state and recovery
 
 Mutable application state remains with the owning service. `nas-state` exports a versioned, signed bundle according to the state-authority registry, quiesces writers where required, validates/diffs before restore, and retains rollback material. This is coordinated recovery, not a substitute for native application consistency mechanisms.

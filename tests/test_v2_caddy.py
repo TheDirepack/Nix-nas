@@ -188,7 +188,7 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;", services)
         self.assertIn("NAS_PUBLIC_HOST = cfg.identity.publicHost;", services)
         self.assertEqual(
-            2,
+            3,
             account_tools.count("export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}"),
         )
         self.assertIn(

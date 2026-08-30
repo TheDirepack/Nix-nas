@@ -16,12 +16,15 @@ let
   authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
-  bootstrapRuntimeRoot = "/var/lib/nas-bootstrap";
+  # This deliberately lives on the boot filesystem. Authentik, PostgreSQL,
+  # and KeePass must be available before the ZFS data pool can be unlocked.
+  bootstrapRuntimeRoot = "/var/lib/nas-control-plane";
+  bootstrapUsername = "akadmin";
+  bootstrapPassword = "nas-admin-first-boot";
   bootstrapAuthentikDataDir = "${bootstrapRuntimeRoot}/authentik";
   bootstrapPostgresqlDataDir = "${bootstrapRuntimeRoot}/postgresql";
   bootstrapSecretsDir = "${bootstrapRuntimeRoot}/nas-secrets";
-  # These stable compatibility paths are selected at boot: boot-root before
-  # first-run, ZFS thereafter. Services never write directly to the selector.
+  # Stable compatibility paths always resolve to the boot-side control plane.
   authentikDataDir = "/var/lib/authentik";
   copypartyDataDir = "${cfg.zfsRoot}/copyparty";
   copypartyUserConfigDir = "${copypartyDataDir}/user.d";
@@ -139,6 +142,7 @@ in
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
     authentikOutpostPort authentikOutpostPath
     bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
+    bootstrapUsername bootstrapPassword
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
     vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath

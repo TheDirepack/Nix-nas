@@ -2,11 +2,13 @@
 
 let
   cfg = config.nas;
-  adminAuthorizedKeys = lib.attrByPath [ cfg.adminUser "openssh" "authorizedKeys" "keys" ] [ ] config.users.users;
-  adminAuthorizedKeyFiles = lib.attrByPath [ cfg.adminUser "openssh" "authorizedKeys" "keyFiles" ] [ ] config.users.users;
+  recoveryUsers = lib.attrValues config.users.users;
   sshRecoveryConfigured =
     config.services.openssh.enable
-    && (adminAuthorizedKeys != [ ] || adminAuthorizedKeyFiles != [ ]);
+    && lib.any (user:
+      lib.attrByPath [ "openssh" "authorizedKeys" "keys" ] [ ] user != [ ]
+      || lib.attrByPath [ "openssh" "authorizedKeys" "keyFiles" ] [ ] user != [ ]
+    ) recoveryUsers;
 
   runtimeInputValidation = pkgs.writeShellScript "nas-installation-input-validation" ''
     set -euo pipefail
@@ -53,9 +55,6 @@ let
     check_file ${lib.escapeShellArg cfg.secrets.keepassDatabase} "KeePassXC database" private
     ${lib.optionalString (cfg.secrets.keepassKeyFile != null) ''
       check_file ${lib.escapeShellArg cfg.secrets.keepassKeyFile} "KeePassXC key file" private
-    ''}
-    ${lib.optionalString (cfg.adminPasswordHashFile != null) ''
-      check_file ${lib.escapeShellArg cfg.adminPasswordHashFile} "administrator password hash" root-private
     ''}
     ${lib.optionalString cfg.firstStart.enable ''
       check_file ${lib.escapeShellArg cfg.firstStart.configFile} "first-start configuration" root-config
@@ -105,10 +104,6 @@ in
           || sshRecoveryConfigured
           || cfg.hostPolicy.consoleRecoveryVerified;
         message = "installationReady requires an administrator SSH key with OpenSSH enabled or nas.hostPolicy.consoleRecoveryVerified = true after a tested console/KVM recovery drill.";
-      }
-      {
-        assertion = !cfg.installationReady || cfg.adminPasswordHashFile != null;
-        message = "installationReady requires nas.adminPasswordHashFile so the local recovery administrator has a declarative PAM credential.";
       }
       {
         assertion =

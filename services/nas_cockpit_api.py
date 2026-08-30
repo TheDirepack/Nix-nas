@@ -433,7 +433,7 @@ def _start_first_start_unit(
         "--property=RuntimeDirectory=nas-secret-runtime",
         "--property=RuntimeDirectoryMode=0700",
         "--property=RuntimeDirectoryPreserve=yes",
-        "--property=ReadWritePaths=/etc /var/lib/nas-bootstrap /var/lib/nas-setup /var/lib/nas-first-start /run/nas-secret-runtime /run/nas-operations /run/lock /run/nas-first-start",
+        "--property=ReadWritePaths=/etc /var/lib/nas-control-plane /var/lib/nas-setup /var/lib/nas-first-start /run/nas-secret-runtime /run/nas-operations /run/lock /run/nas-first-start",
         f"--property=ReadWritePaths=-{ZFS_ROOT}",
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
@@ -467,7 +467,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     administrator_password = _json_string(administrator, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
         raise ApiError("Administrator username is invalid")
-    if username == "nas-bootstrap":
+    if username == "akadmin":
         raise ApiError("Administrator username is the reserved bootstrap identity")
     if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
         raise ApiError("Administrator details must be single-line values")
@@ -483,7 +483,12 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("First-start devices contain duplicates")
     allow_destructive = request.get("allowDestructiveStorage", False)
     confirm_password_reapply = request.get("confirmPasswordReapply", False)
-    if not isinstance(allow_destructive, bool) or not isinstance(confirm_password_reapply, bool):
+    encrypt_storage = request.get("encryptStorage", True)
+    if (
+        not isinstance(allow_destructive, bool)
+        or not isinstance(confirm_password_reapply, bool)
+        or not isinstance(encrypt_storage, bool)
+    ):
         raise ApiError("First-start confirmation flags must be boolean")
 
     prepared = first_start_status()
@@ -528,6 +533,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         "devices": devices,
         "allowDestructiveStorage": allow_destructive,
         "confirmPasswordReapply": confirm_password_reapply,
+        "encryptStorage": encrypt_storage,
     }
     try:
         _write_private_new(request_path, json.dumps(job, sort_keys=True) + "\n")
@@ -1229,11 +1235,28 @@ def _setup_complete() -> bool:
     return isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}
 
 
+def reboot_after_first_start(request: dict[str, Any]) -> dict[str, bool]:
+    if not _setup_complete():
+        raise ApiError("Reboot is only offered after first-start setup completes")
+    if set(request) != {"jobId"}:
+        raise ApiError("A completed first-start job is required to reboot")
+    job_id = request.get("jobId")
+    if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{24}", job_id):
+        raise ApiError("A completed first-start job is required to reboot")
+    if first_start_job_status(job_id).get("status") not in {"complete", "complete-unverified"}:
+        raise ApiError("A completed first-start job is required to reboot")
+    completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
+    if completed.returncode != 0:
+        raise ApiError("Unable to schedule the reboot")
+    return {"rebooting": True}
+
+
 class SetupApiHandler(http.server.BaseHTTPRequestHandler):
     """Loopback-only JSON API for the first-start setup wizard.
 
-    Exposure is gated by Caddy forward-auth; the handlers reuse the exact
-    validation and job-submission path as the Cockpit first-start page.
+    Caddy forward-auth gates plans and submission. Job polling and reboot use
+    the submitted 96-bit job id as a narrow capability so the already-open
+    wizard survives replacement of the temporary Authentik database.
     """
 
     server_version = "nas-setup-api/1"
@@ -1279,12 +1302,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, start_first_start(request))
                 return
             if self.path == "/setup/api/reboot":
-                if not _setup_complete():
-                    raise ApiError("Reboot is only offered after first-start setup completes")
-                completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
-                if completed.returncode != 0:
-                    raise ApiError("Unable to schedule the reboot")
-                self._send_json(200, {"rebooting": True})
+                self._send_json(200, reboot_after_first_start(request))
                 return
             self._send_json(404, {"error": "Not found"})
         except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:

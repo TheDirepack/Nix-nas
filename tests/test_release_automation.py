@@ -43,12 +43,7 @@ class ReleaseAutomationTests(unittest.TestCase):
                 indent=2,
             )
             + "\n",
-            "modules/nas/internal/secret-tools.nix": (
-                'store_value authentik-bootstrap-password "old-bootstrap-password-123456"\n'
-            ),
-            "modules/nas/config/application-services.nix": (
-                "printf '%s\\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=old-bootstrap-password-123456'\n"
-            ),
+            "modules/nas/internal/base.nix": 'bootstrapPassword = "old-bootstrap-password-123456";\n',
             "docs/example.md": "Login with old-bootstrap-password-123456.\n",
             "tests/example.py": "EXPECTED = 'old-bootstrap-password-123456'\n",
         }
@@ -283,17 +278,13 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertLess(changelog.index("## 1.2.5"), changelog.index("## 1.2.4"))
             self.assertLess(changelog.index("## 1.2.4"), changelog.index("## 1.2.3"))
 
-    def test_runtime_bootstrap_assignment_must_exactly_match_secret_seed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            self.make_repo(root)
-            path = root / "modules/nas/config/application-services.nix"
-            path.write_text(
-                "printf '%s\\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=different-bootstrap-password-123456'\n",
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(RuntimeError, "does not use the same bootstrap password"):
-                prepare_release.discover_bootstrap_password(root)
+    def test_linux_authentik_and_keepass_use_the_canonical_bootstrap_password(self) -> None:
+        for relative in (
+            "modules/nas/config/systemd-services.nix",
+            "modules/nas/config/application-services.nix",
+            "modules/nas/internal/secret-tools.nix",
+        ):
+            self.assertIn("bootstrapPassword", (ROOT / relative).read_text(encoding="utf-8"))
 
     def test_release_passphrase_requires_exactly_five_safe_words(self) -> None:
         prepare_release.validate_release_passphrase("Alpha-Bravo-Cedar-Delta-Ember")

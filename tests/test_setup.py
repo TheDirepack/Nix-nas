@@ -194,7 +194,8 @@ class StorageProvisioningTests(unittest.TestCase):
 
         def capture(command, **_kwargs):
             calls.append(list(command))
-            return setup.Completed(tuple(command), "", "")
+            output = "off\n" if "encryption" in command else ""
+            return setup.Completed(tuple(command), output, "")
 
         with (
             mock.patch.object(setup, "pool_exists", return_value=False),
@@ -214,6 +215,7 @@ class StorageProvisioningTests(unittest.TestCase):
                 keepass_password="unused",
                 confirmed_devices=["/dev/disk/by-id/confirmed"],
                 allow_destructive=True,
+                encrypt_storage=False,
             )
 
         helper = calls[0]
@@ -247,15 +249,94 @@ class StorageProvisioningTests(unittest.TestCase):
             ],
         )
         self.assertEqual(helper[-2:], [setup.ZFS_POOL, "/dev/disk/by-id/confirmed"])
-        self.assertEqual(calls[2][calls[2].index("--") + 1 :], ["zfs", "mount", setup.ZFS_DATASET])
-        self.assertEqual(calls[3][calls[3].index("--") + 1 :], ["nas-zfs-mount-check"])
+        self.assertEqual(
+            calls[2][calls[2].index("--") + 1 :],
+            ["zfs", "get", "-H", "-o", "value", "encryption", setup.ZFS_DATASET],
+        )
+        self.assertEqual(calls[3][calls[3].index("--") + 1 :], ["zfs", "mount", setup.ZFS_DATASET])
+        self.assertEqual(calls[4][calls[4].index("--") + 1 :], ["nas-zfs-mount-check"])
         self.assertTrue(result["createdPool"])
+
+    def test_encryption_toggle_creates_the_dataset_through_the_keepass_backed_helper(self) -> None:
+        calls: list[tuple[list[str], str | None, bool]] = []
+
+        def capture(command, *, input_text=None, check=True, **_kwargs):
+            calls.append((list(command), input_text, check))
+            return setup.Completed(tuple(command), "", "")
+
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=False),
+            mock.patch.object(setup, "run_storage_host", side_effect=capture),
+        ):
+            result = setup.setup_storage(
+                {"createPool": False},
+                keepass_password="database-password",
+                confirmed_devices=[],
+                allow_destructive=False,
+                encrypt_storage=True,
+            )
+
+        self.assertEqual(calls, [(["nas-zfs-create-encrypted-dataset"], "database-password\n", True)])
+        self.assertTrue(result["createdDataset"])
+        self.assertTrue(result["encrypted"])
+
+    def test_existing_dataset_must_match_the_reviewed_encryption_toggle(self) -> None:
+        for encryption_value, selected in (("off\n", True), ("aes-256-gcm\n", False)):
+            with (
+                self.subTest(encryption_value=encryption_value, selected=selected),
+                mock.patch.object(setup, "pool_exists", return_value=True),
+                mock.patch.object(setup, "dataset_exists", return_value=True),
+                mock.patch.object(
+                    setup,
+                    "run_storage_host",
+                    return_value=setup.Completed(("zfs", "get"), encryption_value, ""),
+                ) as run_storage,
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "does not match the encryption choice"):
+                    setup.setup_storage(
+                        {"createPool": False},
+                        keepass_password="database-password",
+                        confirmed_devices=[],
+                        allow_destructive=False,
+                        encrypt_storage=selected,
+                    )
+            self.assertEqual(run_storage.call_count, 1)
+
+    def test_storage_runtime_unlocks_only_when_encryption_was_selected(self) -> None:
+        for selected in (True, False):
+            with (
+                self.subTest(selected=selected),
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+                mock.patch.object(setup, "run_interactive_privileged") as activate,
+                mock.patch.object(setup, "run_storage_host", return_value=setup.Completed((), "", "")) as storage,
+            ):
+                self.assertEqual(
+                    setup.prepare_storage_runtime("database-password", selected),
+                    {"mounted": True, "runtimeDirectoriesPrepared": True},
+                )
+            self.assertEqual(activate.call_count, int(selected))
+            if selected:
+                self.assertEqual(activate.call_args.kwargs["input_text"], "database-password\n")
+            self.assertEqual(storage.call_args_list[0].args[0], ["nas-zfs-mount-check"])
+            self.assertEqual(
+                storage.call_args_list[1].args[0],
+                ["systemd-tmpfiles", "--create", "--prefix", str(setup.ZFS_ROOT / "nas-control")],
+            )
 
 
 class LocalAdministratorTests(unittest.TestCase):
+    def test_first_run_creates_keepass_before_storage_and_regenerates_identity_afterward(self) -> None:
+        source = (SERVICES / "nas_setup.py").read_text(encoding="utf-8")
+        workflow = source.split("def _first_run_locked", 1)[1].split("def existing_account", 1)[0]
+        keepass = workflow.index('"keepass-database"')
+        storage = workflow.index('"storage",', keepass)
+        self.assertLess(keepass, storage)
+        self.assertLess(storage, workflow.index('"identity-database-regeneration"'))
+
     def test_setup_rejects_the_disposable_bootstrap_name_for_the_permanent_account(self) -> None:
         with self.assertRaisesRegex(setup.SetupError, "reserved bootstrap"):
-            setup.local_administrator_details({"username": "nas-bootstrap"})
+            setup.local_administrator_details({"username": "akadmin"})
 
     def test_setup_creates_a_user_chosen_linux_administrator_without_password_arguments(self) -> None:
         calls: list[tuple[list[str], str | None]] = []
@@ -352,16 +433,16 @@ class LocalAdministratorTests(unittest.TestCase):
                 result = setup.finalize_local_administrator({"username": "nasadmin"})
                 persisted = json.loads(state.read_text(encoding="utf-8"))
         self.assertEqual(result, {"username": "nasadmin"})
-        retirement = run_root.call_args_list[1].args[0]
-        cleanup = run_root.call_args_list[2].args[0]
+        retirement = run_root.call_args_list[2].args[0]
+        cleanup = run_root.call_args_list[3].args[0]
         self.assertEqual(retirement[:1], ["systemd-run"])
         self.assertIn("--property=ProtectHome=read-only", retirement)
-        self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "nas-bootstrap"])
+        self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "akadmin"])
         self.assertIn("--property=ProtectHome=no", cleanup)
         self.assertIn("--property=ReadWritePaths=/home", cleanup)
         self.assertEqual(
             cleanup[cleanup.index("--") + 1 :],
-            ["rm", "--recursive", "--force", "--one-file-system", "--", "/home/nas-bootstrap"],
+            ["rm", "--recursive", "--force", "--one-file-system", "--", "/home/akadmin"],
         )
         self.assertEqual(persisted, {"username": "nasadmin"})
 
@@ -373,17 +454,26 @@ class LocalAdministratorTests(unittest.TestCase):
                 mock.patch.object(
                     setup,
                     "run_root",
-                    side_effect=[setup.Completed(("id",), "", "", 1), setup.Completed(("rm",), "", "")],
+                    side_effect=[
+                        setup.Completed(("chown",), "", ""),
+                        setup.Completed(("id",), "", "", 1),
+                        setup.Completed(("rm",), "", ""),
+                    ],
                 ) as run_root,
             ):
                 setup.finalize_local_administrator({"username": "nasadmin"})
-        self.assertEqual(len(run_root.call_args_list), 2)
-        cleanup = run_root.call_args_list[1].args[0]
-        self.assertEqual(cleanup[cleanup.index("--") + 1 :][-1], "/home/nas-bootstrap")
+        self.assertEqual(len(run_root.call_args_list), 3)
+        cleanup = run_root.call_args_list[2].args[0]
+        self.assertEqual(cleanup[cleanup.index("--") + 1 :][-1], "/home/akadmin")
 
-    def test_promoting_bootstrap_runtime_rejects_existing_operational_authorities_and_never_moves_bootstrap_state(
-        self,
-    ) -> None:
+    def test_control_plane_authorities_are_boot_side_and_never_zfs_promoted(self) -> None:
+        self.assertEqual(setup.BOOTSTRAP_RUNTIME_ROOT, pathlib.Path("/var/lib/nas-control-plane"))
+        self.assertTrue(setup.KEEPASS_DATABASE.is_relative_to(setup.BOOTSTRAP_RUNTIME_ROOT))
+        source = (SERVICES / "nas_setup.py").read_text(encoding="utf-8")
+        self.assertNotIn("promote_bootstrap_runtime", source)
+        self.assertNotIn("operational-runtime-select", source)
+
+    def test_identity_database_regeneration_preserves_boot_side_keepass(self) -> None:
         calls: list[list[str]] = []
 
         def capture(command, **_kwargs):
@@ -391,45 +481,18 @@ class LocalAdministratorTests(unittest.TestCase):
             return setup.Completed(tuple(command), "", "")
 
         with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            bootstrap = root / "bootstrap"
-            operational = root / "operational"
-            bootstrap.mkdir()
+            control = pathlib.Path(raw)
             for name in ("authentik", "postgresql", "nas-secrets"):
-                (bootstrap / name).mkdir()
-            (bootstrap / "nas-secrets" / "NAS.kdbx").write_text("database", encoding="utf-8")
+                (control / name).mkdir()
+            database = control / "nas-secrets/NAS.kdbx"
+            database.write_text("keep", encoding="utf-8")
             with mock.patch.object(setup, "run_root", side_effect=capture):
-                result = setup.promote_bootstrap_runtime(bootstrap, operational)
+                result = setup.regenerate_boot_identity_databases(control)
 
-        self.assertEqual(result, {"operationalRuntimeSelected": True})
-        self.assertIn(
-            ["systemctl", "stop", "authentik.service", "authentik-worker.service", "postgresql.service"], calls
-        )
-        self.assertNotIn(["install", "-d", "-m", "0700", str(operational)], calls)
-        self.assertFalse(any(command[0] == "mv" for command in calls))
-        self.assertFalse(any(command[:2] == ["rm", "-rf"] and str(bootstrap) in command for command in calls))
-
-    def test_promoting_bootstrap_runtime_fails_closed_when_an_operational_authority_exists(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            bootstrap = root / "bootstrap"
-            operational = root / "operational"
-            bootstrap.mkdir()
-            (operational / "authentik").mkdir(parents=True)
-            with self.assertRaisesRegex(setup.SetupError, "already exists"):
-                setup.promote_bootstrap_runtime(bootstrap, operational)
-
-    def test_operational_root_access_preserves_private_children_but_allows_traversal(self) -> None:
-        with (
-            mock.patch.object(
-                setup,
-                "run_storage_host",
-                return_value=setup.Completed(("mountpoint",), "", "", 0),
-            ),
-            mock.patch.object(setup, "run_root") as run_root,
-        ):
-            self.assertEqual({"traversable": True}, setup.prepare_operational_root_access())
-        run_root.assert_called_once_with(["chmod", "0711", str(setup.ZFS_ROOT)])
+        self.assertEqual(result, {"regenerated": True, "bootSide": True})
+        self.assertIn(["find", str(control / "authentik"), "-mindepth", "1", "-delete"], calls)
+        self.assertIn(["find", str(control / "postgresql"), "-mindepth", "1", "-delete"], calls)
+        self.assertFalse(any(str(control / "nas-secrets") in command for command in calls))
 
 
 class FirstStartStatusTests(unittest.TestCase):
@@ -502,6 +565,7 @@ class FirstStartJobTests(unittest.TestCase):
                         "planDigest": "c" * 64,
                         "devices": [],
                         "allowDestructiveStorage": False,
+                        "encryptStorage": True,
                         "confirmPasswordReapply": False,
                     }
                 ),

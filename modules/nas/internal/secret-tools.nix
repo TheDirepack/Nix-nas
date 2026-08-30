@@ -2,6 +2,7 @@ args:
 let
   inherit (args)
     authentikPort
+    bootstrapPassword
     cfg
     lib
     pkgs
@@ -318,7 +319,7 @@ PY_AI_PROVIDERS
           echo "Created KeePassXC item: Authentik NAS API token (initially the bootstrap token)"
         fi
         if ! has_secret authentik-bootstrap-password; then
-          store_value authentik-bootstrap-password "nas-admin-first-boot"
+          store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}
           echo "Created KeePassXC item: Authentik bootstrap administrator password"
         fi
         store_random_if_missing state-bundle-signing-key "NAS state bundle HMAC signing key" 32
@@ -368,7 +369,7 @@ PY_AI_PROVIDERS
         store_value authentik-bootstrap-token "$token"
         store_value authentik-api-token "$token"
         if ! has_secret authentik-bootstrap-password; then
-          store_value authentik-bootstrap-password "nas-admin-first-boot"
+          store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}
         fi
         unset secret_key token
         echo "Adopted the running first-boot Authentik authority."

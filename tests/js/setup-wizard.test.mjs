@@ -64,10 +64,11 @@ test("wizard step components use exports that exist in react-core 6.1.0", async 
   }
 });
 
-test("admin step gates the KeePassXC database password behind the shared-password toggle", async () => {
+test("admin step keeps the KeePassXC unlock password distinct from account credentials", async () => {
   const admin = await wizard("src/steps/AdminStep.jsx");
   assert.match(admin, /KeePassXC/);
-  assert.match(admin, /useSamePassword/);
+  assert.doesNotMatch(admin, /useSamePassword|wizard-keepass-same/);
+  assert.match(admin, /It is not an account password/);
   assert.match(admin, /wizard-keepass-password/);
   assert.match(admin, /wizard-keepass-password-confirm/);
   assert.match(
@@ -109,6 +110,13 @@ test("setup keeps only actionable administrator, storage, and confirmation steps
   assert.match(storage, /configuration-missing/);
   assert.match(storage, /Storage plan not created yet/);
   assert.match(storage, /variant="info"/);
+  assert.match(storage, /wizard-encrypt-storage/);
+  assert.match(storage, /Encrypt the ZFS data partition/);
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  assert.match(confirm, /encryptStorage/);
+  assert.match(confirm, /ZFS encryption/);
+  assert.match(confirm, /api\/reboot/);
+  assert.match(confirm, /JSON\.stringify\(\{ jobId \}\)/);
 });
 
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
@@ -147,7 +155,7 @@ test("committed bundle registers every step and the storage setup links", async 
   for (const id of STEPS) {
     assert.ok(js.includes(`"${id}"`), `bundle is missing step id ${id}`);
   }
-  assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC toggle");
+  assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC password fields");
   assert.ok(js.includes("Browser setting"), "bundle is missing the browser theme option");
   assert.ok(js.includes("Open Storage"), "bundle is missing the storage console link");
   assert.ok(!js.includes("wizard-authentik"), "bundle still contains the removed Authentik step");

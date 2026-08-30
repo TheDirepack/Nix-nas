@@ -13,16 +13,6 @@
         global memory limit and does not include ZFS ARC.
       '';
     };
-    adminUser = lib.mkOption {
-      type = lib.types.str;
-      default = "admin";
-      description = "Disposable bootstrap Linux administrator used until first-start creates the operator-selected permanent recovery account. Application identities are managed in Authentik.";
-    };
-    adminPasswordHashFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Absolute path to a root-only bootstrap administrator password hash used before the wizard creates the permanent local recovery account.";
-    };
     hostPolicy = {
       mutableLocalPasswords = lib.mkOption {
         type = lib.types.bool;
@@ -107,7 +97,7 @@
     secrets = {
       keepassDatabase = lib.mkOption {
         type = lib.types.str;
-        default = "/var/lib/nas-secrets/NAS.kdbx";
+        default = "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx";
         description = "KeePassXC database containing machine secrets. The database password is entered interactively and is never persisted by this project.";
       };
       keepassKeyFile = lib.mkOption {

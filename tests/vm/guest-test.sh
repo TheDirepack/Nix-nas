@@ -209,7 +209,7 @@ assert_spoof_blocked() {
 
 setup_administrator() {
   local administrator
-  administrator="nas-bootstrap"
+  administrator="akadmin"
   if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
     administrator="$(jq -er '.username | strings' /var/lib/nas-setup/local-administrator.json)"
   fi
@@ -339,11 +339,21 @@ wait_oneshot_completed nas-managed-services-authentik-reconcile.service
 systemctl restart nas-authentik-proxy-outpost.service
 wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
+expect <<'EXPECT_LINUX_BOOTSTRAP'
+set timeout 15
+spawn su - akadmin -c {test "$(id -un)" = akadmin}
+expect "Password:"
+send "nas-admin-first-boot\r"
+expect eof
+set status [lindex [wait] 3]
+exit $status
+EXPECT_LINUX_BOOTSTRAP
+pass "the initial Linux login uses the same akadmin development credential as Authentik"
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
 verify_bootstrap_authentik_proxy
-[[ -f /var/lib/nas-bootstrap/authentik/environment ]] || fail "first-boot Authentik environment is missing"
-[[ -f /var/lib/nas-bootstrap/authentik/api-token ]] || fail "first-boot Authentik API token is missing"
-[[ "$(readlink -f /run/nas-authentik/environment)" == "/var/lib/nas-bootstrap/authentik/environment" ]] || \
+[[ -f /var/lib/nas-control-plane/authentik/environment ]] || fail "first-boot Authentik environment is missing"
+[[ -f /var/lib/nas-control-plane/authentik/api-token ]] || fail "first-boot Authentik API token is missing"
+[[ "$(readlink -f /run/nas-authentik/environment)" == "/var/lib/nas-control-plane/authentik/environment" ]] || \
   fail "Authentik did not select the first-boot environment"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 assert_no_502_authentik_redirect / "locked base route"
@@ -396,11 +406,11 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
-install -d -m 0700 -o nas-bootstrap -g users /var/lib/nas-test/setup
+install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup
 printf '%s\n' 'alice-vm-password' >/var/lib/nas-test/setup/alice.password
 printf '%s\n' 'operator-vm-password' >/var/lib/nas-test/setup/operator.password
 printf '%s\n' 'baseline-vm-password' >/var/lib/nas-test/setup/baseline.password
-chown nas-bootstrap:users /var/lib/nas-test/setup/*.password
+chown akadmin:users /var/lib/nas-test/setup/*.password
 chmod 0600 /var/lib/nas-test/setup/*.password
 cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
 {
@@ -442,7 +452,7 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
   "runPreflight": true
 }
 EOFSETUP
-chown nas-bootstrap:users /var/lib/nas-test/setup/first-run.json
+chown akadmin:users /var/lib/nas-test/setup/first-run.json
 chmod 0600 /var/lib/nas-test/setup/first-run.json
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
@@ -450,7 +460,7 @@ nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 
 # Complete first start through the GUI bootstrap system: the Cockpit First
 # start page behind the Authentik gate, submitting through the loopback
-# setup API contract. The pre-bootstrap Linux administrator (nas-bootstrap,
+# setup API contract. The pre-bootstrap Linux administrator (akadmin,
 # documented in nas-bootstrap-administrator.service) provisions browser
 # access while the appliance is still locked.
 setup_api="http://127.0.0.1:8980/setup/api"
@@ -499,6 +509,7 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   --admin-name 'NAS Administrator' \
   --admin-email 'nasadmin@nas-test.local' \
   --admin-password-file "$wizard_secret_dir/nasadmin" \
+  --no-encrypt-storage \
   --device "$ZFS_DEVICE" \
   --job-timeout-seconds "$(nas_vm_timeout_value firstRun)" \
   --result-file /tmp/nas-first-run-job.json
@@ -508,6 +519,7 @@ if ! jq -e '
   .status == "complete" and
   .result.storage.createdPool == true and
   .result.storage.createdDataset == true and
+  .result.storage.encrypted == false and
   (.result.accounts.created | sort) == ["alice", "baseline", "guest", "nasadmin", "operator"] and
   (.result.identity.administrators | index("operator")) != null and
   (.result.identity.administrators | index("nasadmin")) != null and
@@ -517,7 +529,19 @@ if ! jq -e '
   jq . /tmp/nas-first-run-job.json >&2 || cat /tmp/nas-first-run-job.json >&2
   fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
-[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ -d /var/lib/nas-control-plane/authentik ]] || fail "Authentik moved off the system control partition"
+[[ -d /var/lib/nas-control-plane/postgresql ]] || fail "PostgreSQL moved off the system control partition"
+[[ -f /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "KeePassXC database moved off the system control partition"
+[[ ! -e /tank/authentik && ! -e /tank/postgresql && ! -e /tank/nas-secrets ]] || \
+  fail "unlock control data was copied onto the managed ZFS data partition"
+! grep -q '^AUTHENTIK_BOOTSTRAP_' /var/lib/nas-control-plane/authentik/environment || \
+  fail "retired Authentik bootstrap values remain in the persistent environment"
+runtime_authentik_token="$(< /run/nas-authentik/api-token)"
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $runtime_authentik_token" \
+  'http://127.0.0.1:9000/identity/api/v3/core/users/?username=akadmin' \
+  | jq -e '.pagination.count == 0' >/dev/null || fail "Authenik bootstrap account still exists after setup"
 [[ "$(getent passwd nasadmin | cut -d: -f6)" == "/tank/homes/nasadmin" ]] || \
   fail "permanent administrator home is not on the ZFS data root"
 [[ -d /tank/homes/nasadmin ]] || fail "permanent administrator ZFS home is missing"
@@ -599,14 +623,14 @@ zfs destroy -r "$rollback_dataset"
 pass "Cockpit ZFS rollback wrapper restores data and creates a source marker"
 
 ! nas-zfs-lock >/tmp/nas-zfs-lock-disabled.log 2>&1 || fail "nas-zfs-lock succeeded with encryption disabled"
-grep -q 'zfsEncryption.enable is false' /tmp/nas-zfs-lock-disabled.log
-! nas-zfs-unlock >/tmp/nas-zfs-unlock-disabled.log 2>&1 || fail "nas-zfs-unlock succeeded with encryption disabled"
-grep -q 'zfsEncryption.enable is false' /tmp/nas-zfs-unlock-disabled.log
-! nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-disabled.log 2>&1 || fail "encrypted-dataset creation succeeded while disabled"
-grep -q 'Enable nas.zfsEncryption.enable' /tmp/nas-zfs-create-disabled.log
+grep -q 'is not encrypted' /tmp/nas-zfs-lock-disabled.log
+nas-zfs-unlock
+! printf '%s\n' "$KEEPASS_PASSWORD" | nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-disabled.log 2>&1 || \
+  fail "encrypted-dataset creation replaced an existing unencrypted dataset"
+grep -q 'already exists' /tmp/nas-zfs-create-disabled.log
 ! nas-ups-init-password >/tmp/nas-ups-disabled.log 2>&1 || fail "UPS password initialization succeeded while UPS support was disabled"
 grep -q 'Enable nas.power.ups' /tmp/nas-ups-disabled.log
-pass "disabled ZFS encryption and UPS tools fail early without unreachable code"
+pass "the wizard's unencrypted choice is honored and cannot be changed destructively afterward"
 
 log "Verify first-run protected services and account population"
 [[ -f /run/nas-secrets/ready ]] || fail "first-run setup did not commit runtime secrets"

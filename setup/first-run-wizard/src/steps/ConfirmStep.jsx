@@ -46,6 +46,7 @@ const ConfirmStep = ({
   keePassPassword,
   keePassPasswordConfirm,
   allowDestructive,
+  encryptStorage,
   plan,
 }) => {
   const [busy, setBusy] = React.useState(false);
@@ -100,6 +101,7 @@ const ConfirmStep = ({
           planDigest: plan.planDigest,
           devices: (plan.storage && plan.storage.devices) || [],
           allowDestructiveStorage: allowDestructive,
+          encryptStorage,
           confirmPasswordReapply,
         }),
       });
@@ -119,7 +121,11 @@ const ConfirmStep = ({
     setRebooting(true);
     setError('');
     try {
-      await fetchJson('api/reboot', { method: 'POST' });
+      await fetchJson('api/reboot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      });
       setRebootRequested(true);
     } catch (reason) {
       setError(String(reason));
@@ -140,6 +146,7 @@ const ConfirmStep = ({
       <ul>
         <li>Administrator: {administrator.username || '(unset)'}</li>
         <li>Pool: {storage.pool || '(plan pending)'}</li>
+        <li>ZFS encryption: {encryptStorage ? 'Enabled' : 'Disabled'}</li>
         <li>Devices: {Array.isArray(storage.devices) ? storage.devices.join(' ') : ''}</li>
       </ul>
       {error && <Alert variant="danger" isInline title={error} />}

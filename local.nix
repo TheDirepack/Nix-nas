@@ -14,17 +14,6 @@
   system.stateVersion = "26.05";
   networking.hostId = "00000000";
 
-  users.users.admin = {
-    isNormalUser = true;
-    description = "NAS Administrator";
-    extraGroups = [
-      "wheel"
-      "video"
-      "render"
-    ];
-    openssh.authorizedKeys.keys = [ ];
-  };
-
   boot.loader.systemd-boot = {
     enable = false;
     configurationLimit = 20;
@@ -32,9 +21,6 @@
   boot.loader.efi.canTouchEfiVariables = false;
 
   nas = {
-    adminUser = "admin";
-    adminPasswordHashFile = "/etc/nixos/nixos-nas/secrets/admin-password-hash";
-
     hostPolicy = {
       mutableLocalPasswords = true;
       directCockpitRecovery = false;
@@ -92,7 +78,7 @@
     zfsTrimEnable = false;
 
     zfsEncryption = {
-      enable = false;
+      enable = true;
       algorithm = "aes-256-gcm";
     };
 
@@ -152,7 +138,7 @@
     };
 
     secrets = {
-      keepassDatabase = "/var/lib/nas-secrets/NAS.kdbx";
+      keepassDatabase = "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx";
       keepassKeyFile = null;
       keepassGroup = "NixOS NAS";
     };

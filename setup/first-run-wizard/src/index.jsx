@@ -25,10 +25,10 @@ const readThemePreference = () => {
 
 const App = () => {
   const [administrator, setAdministrator] = React.useState(emptyAdministrator);
-  const [useSamePassword, setUseSamePassword] = React.useState(true);
   const [keePassPassword, setKeePassPassword] = React.useState('');
   const [keePassPasswordConfirm, setKeePassPasswordConfirm] = React.useState('');
   const [allowDestructive, setAllowDestructive] = React.useState(false);
+  const [encryptStorage, setEncryptStorage] = React.useState(true);
   const [theme, setTheme] = React.useState(readThemePreference);
   const [plan, setPlan] = React.useState(null);
   const [planError, setPlanError] = React.useState('');
@@ -69,8 +69,6 @@ const App = () => {
     };
   }, [planRequest]);
 
-  const keePassEffective = useSamePassword ? administrator.password : keePassPassword;
-  const keePassConfirmation = useSamePassword ? administrator.confirm : keePassPasswordConfirm;
   return (
     <div className="nas-setup-shell">
       <header className="nas-setup-header">
@@ -103,8 +101,6 @@ const App = () => {
             <AdminStep
               administrator={administrator}
               onAdministrator={setAdministrator}
-              useSamePassword={useSamePassword}
-              onUseSamePassword={setUseSamePassword}
               keePassPassword={keePassPassword}
               onKeePassPassword={setKeePassPassword}
               keePassPasswordConfirm={keePassPasswordConfirm}
@@ -117,15 +113,18 @@ const App = () => {
               planError={planError}
               allowDestructive={allowDestructive}
               onAllowDestructive={setAllowDestructive}
+              encryptStorage={encryptStorage}
+              onEncryptStorage={setEncryptStorage}
               onRefresh={() => setPlanRequest((value) => value + 1)}
             />
           </WizardStep>
           <WizardStep id="wizard-confirm" step={3} name="Confirm and Reboot" footer={<></>}>
             <ConfirmStep
               administrator={administrator}
-              keePassPassword={keePassEffective}
-              keePassPasswordConfirm={keePassConfirmation}
+              keePassPassword={keePassPassword}
+              keePassPasswordConfirm={keePassPasswordConfirm}
               allowDestructive={allowDestructive}
+              encryptStorage={encryptStorage}
               plan={plan}
             />
           </WizardStep>

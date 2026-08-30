@@ -7,10 +7,10 @@ let
     bootstrapPostgresqlDataDir
     bootstrapRuntimeRoot
     bootstrapSecretsDir
-    authentikEnvironmentFile
+    bootstrapUsername
+    bootstrapPassword
     authentikRuntimeEnvironmentFile
     authentikRuntimeApiTokenFile
-    authentikApiTokenFile
     authentikPort
     authentikOutpostPort
     nasAuthentikBlueprints
@@ -220,7 +220,8 @@ in
         ProtectHome = true;
         RuntimeDirectory = "nas-first-start";
         RuntimeDirectoryMode = "0700";
-        # Loopback bind only; Caddy forward-auth gates every external request.
+        # Loopback bind only. Caddy forward-auth gates plans and submission;
+        # an unguessable completed-job capability gates polling and reboot.
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
         # prepare-first-start publishes the reviewable plan status for the
         # wizard from this unit. Submission additionally performs the shared
@@ -259,7 +260,7 @@ in
       "d ${bootstrapAuthentikDataDir} 0750 authentik authentik -"
       "d ${bootstrapAuthentikDataDir}/data 0750 authentik authentik -"
       "d ${bootstrapPostgresqlDataDir} 0700 postgres postgres -"
-      "d ${bootstrapSecretsDir} 0700 admin users -"
+      "d ${bootstrapSecretsDir} 0700 root users -"
       "d ${syncthingDataDir} 0700 syncthing copyparty -"
       "d ${syncthingDataDir}/.config 0700 syncthing copyparty -"
       "d ${syncthingConfigDir} 0700 syncthing copyparty -"
@@ -455,8 +456,9 @@ in
   };
 
   config.systemd.services.nas-bootstrap-runtime-select = {
-    description = "Select boot-root or ZFS identity runtime storage";
+    description = "Prepare boot-side identity and unlock control storage";
     before = [ "postgresql.service" "authentik-migrate.service" "authentik-worker.service" "authentik.service" ];
+    requires = lib.optional cfg.firstStart.enable "nas-bootstrap-administrator.service";
     # Pull the identity stack from the selector itself. The runtime files are
     # created by this unit, so multi-user.target may evaluate the dependent
     # ConditionPathExists checks too early and permanently skip them.
@@ -466,27 +468,23 @@ in
       "authentik-worker.service"
       "authentik.service"
     ];
-    after = [ "nas-bootstrap-authentik-secrets.service" ];
+    after = [ "nas-bootstrap-authentik-secrets.service" ]
+      ++ lib.optional cfg.firstStart.enable "nas-bootstrap-administrator.service";
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
       ExecStart = pkgs.writeShellScript "nas-bootstrap-runtime-select" ''
         set -euo pipefail
-        if [[ -e /var/lib/nas-setup/operational-runtime-select || -e /var/lib/nas-setup/state.json ]]; then
-          ${pkgs.util-linux}/bin/mountpoint --quiet -- ${lib.escapeShellArg cfg.zfsRoot}
-          target=${lib.escapeShellArg cfg.zfsRoot}
-          environment=${lib.escapeShellArg authentikEnvironmentFile}
-          api_token=${lib.escapeShellArg authentikApiTokenFile}
+        target=${lib.escapeShellArg bootstrapRuntimeRoot}
+        environment="$target/authentik/environment"
+        api_token="$target/authentik/api-token"
+        secret_owner=${lib.escapeShellArg bootstrapUsername}
+        if [[ -s /var/lib/nas-setup/local-administrator.json ]]; then
           secret_owner="$(${pkgs.jq}/bin/jq -er \
             '.username | strings | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"))' \
             /var/lib/nas-setup/local-administrator.json)"
-          ${pkgs.coreutils}/bin/id -u "$secret_owner" >/dev/null
-        else
-          target=${lib.escapeShellArg bootstrapRuntimeRoot}
-          environment="$target/authentik/environment"
-          api_token="$target/authentik/api-token"
-          secret_owner=${lib.escapeShellArg cfg.adminUser}
         fi
+        ${pkgs.coreutils}/bin/id -u "$secret_owner" >/dev/null
         ${pkgs.coreutils}/bin/install -d -m 0750 -o authentik -g authentik "$target/authentik"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o postgres -g postgres "$target/postgresql"
         ${pkgs.coreutils}/bin/install -d -m 0700 -o "$secret_owner" -g users "$target/nas-secrets"
@@ -506,10 +504,6 @@ in
 
   config.systemd.services.nas-bootstrap-authentik-secrets = {
     description = "Create the first-boot-only Authentik runtime secrets";
-    unitConfig.ConditionPathExists = [
-      "!/var/lib/nas-setup/operational-runtime-select"
-      "!/var/lib/nas-setup/state.json"
-    ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -525,7 +519,7 @@ in
           token="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
           printf '%s\n' 'AUTHENTIK_SECRET_KEY='"$(${pkgs.openssl}/bin/openssl rand -hex 64)"
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_TOKEN='"$token"
-          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=nas-admin-first-boot'
+          printf '%s\n' 'AUTHENTIK_BOOTSTRAP_PASSWORD=${bootstrapPassword}'
           printf '%s\n' 'AUTHENTIK_BOOTSTRAP_EMAIL=${cfg.identity.bootstrapEmail}'
         } > "$temporary"
         ${pkgs.coreutils}/bin/install -m 0640 -o root -g authentik "$temporary" "$environment"
