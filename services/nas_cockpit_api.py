@@ -428,7 +428,7 @@ def _start_first_start_unit(
         "--property=DevicePolicy=closed",
         "--property=DeviceAllow=/dev/zfs rw",
         *(f"--property=DeviceAllow={device} rw" for device in devices),
-        "--property=ProtectHome=yes",
+        "--property=ProtectHome=read-only",
         "--property=ProtectSystem=strict",
         "--property=RuntimeDirectory=nas-secret-runtime",
         "--property=RuntimeDirectoryMode=0700",
@@ -439,7 +439,7 @@ def _start_first_start_unit(
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
         f"--property=Environment=NAS_PUBLIC_HOST={os.environ.get('NAS_PUBLIC_HOST', '')}",
-        "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token",
+        "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-secrets/authentik/bootstrap-token",
         "--property=TimeoutStartSec=6h",
         "--",
         _setup_entry(),

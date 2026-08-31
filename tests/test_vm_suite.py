@@ -109,6 +109,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
             "until systemctl is-active --quiet nas-authentik-proxy-outpost.service",
             qemu,
         )
+
         self.assertIn("./scripts/preflight.sh", guest_suite)
         self.assertIn("./scripts/run-fuzz.py", guest_suite)
         self.assertIn("nas-vm-guest-test /dev/vdb", guest_suite)
@@ -137,6 +138,17 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("setupRebootLifecycle", qemu)
         self.assertIn("nas-vm-guest-test --setup-reboot-e2e --start", qemu)
 
+    def test_install_ready_reference_does_not_declaratively_synthesize_a_runtime_administrator(self) -> None:
+        ready = (ROOT / "tests/nixos/ready.nix").read_text(encoding="utf-8")
+        self.assertNotIn("users.users.admin", ready)
+        self.assertNotIn("users.users.akadmin", ready)
+        self.assertIn("hostPolicy.consoleRecoveryVerified = true;", ready)
+
+    def test_unencrypted_negative_fixture_explicitly_disables_the_default_encryption_capability(self) -> None:
+        fixture = (ROOT / "tests/nixos/invalid/installation-ready-unencrypted.nix").read_text(encoding="utf-8")
+        self.assertIn("zfsEncryption.enable = lib.mkForce false;", fixture)
+        self.assertIn("zfsEncryption.acknowledgeUnencrypted = lib.mkForce false;", fixture)
+
     def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertIn('administrator="akadmin"', guest)
@@ -148,6 +160,12 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("getent passwd nasadmin | cut -d: -f6", guest)
         self.assertIn("/tank/homes/nasadmin", guest)
         self.assertIn("findmnt -n -o FSTYPE -T /tank/homes/nasadmin", guest)
+        self.assertIn("spawn runuser -u admin -- su - akadmin", guest)
+        self.assertNotIn("spawn su - akadmin", guest)
+        self.assertIn(
+            'wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"',
+            guest,
+        )
         self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
         self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))

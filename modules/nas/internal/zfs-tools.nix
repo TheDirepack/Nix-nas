@@ -106,14 +106,16 @@ let
         exit 1
       }
 
-      actual_type="$(findmnt --noheadings --output FSTYPE --target "$expected_root" | xargs)"
-      actual_source="$(findmnt --noheadings --output SOURCE --target "$expected_root" | xargs)"
-      [[ "$actual_type" == "zfs" ]] || {
-        echo "$expected_root is mounted as '$actual_type', not ZFS" >&2
-        exit 1
-      }
-      [[ "$actual_source" == "$expected_dataset" ]] || {
-        echo "$expected_root is backed by '$actual_source', expected '$expected_dataset'" >&2
+      mount_rows="$(findmnt --raw --noheadings --output SOURCE,FSTYPE,TARGET --target "$expected_root")"
+      expected_mount_visible=false
+      while read -r actual_source actual_type actual_target; do
+        if [[ "$actual_source" == "$expected_dataset" && "$actual_type" == "zfs" && "$actual_target" == "$expected_root" ]]; then
+          expected_mount_visible=true
+          break
+        fi
+      done <<< "$mount_rows"
+      [[ "$expected_mount_visible" == true ]] || {
+        echo "$expected_root is not visibly backed by ZFS dataset '$expected_dataset': $mount_rows" >&2
         exit 1
       }
 

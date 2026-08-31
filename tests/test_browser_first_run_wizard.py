@@ -121,6 +121,19 @@ class WizardSecretInputTests(unittest.TestCase):
 
 
 class WizardFlowContractTests(unittest.TestCase):
+    def test_login_waits_for_authentik_to_leave_the_authentication_flow(self) -> None:
+        wizard = load_wizard()
+        origin = "https://nas-test.local:8443"
+        self.assertFalse(
+            wizard.login_complete_url(
+                origin + "/identity/if/flow/default-authentication-flow/",
+                origin,
+            )
+        )
+        self.assertFalse(wizard.login_complete_url("https://attacker.invalid/setup/", origin))
+        self.assertTrue(wizard.login_complete_url(origin + "/identity/if/user/", origin))
+        self.assertTrue(wizard.login_complete_url(origin + "/setup/", origin))
+
     def test_driver_targets_the_standalone_first_start_page_and_documented_fields(self) -> None:
         source = (ROOT / "tests" / "browser" / "first-run-wizard.py").read_text(encoding="utf-8")
         self.assertIn('origin.rstrip("/") + "/setup/"', source)

@@ -132,6 +132,14 @@ def browser_diagnostics(driver: webdriver.Chrome) -> dict[str, Any]:
     return diagnostics
 
 
+def login_complete_url(url: str, public_origin: str) -> bool:
+    if url != public_origin and not url.startswith(public_origin + "/"):
+        return False
+    if "/identity/" not in url:
+        return True
+    return "/identity/if/user/" in url
+
+
 def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
     driver.get(origin.rstrip("/") + "/")
     wait = WebDriverWait(driver, 60)
@@ -163,16 +171,7 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str) -
     public_origin = origin.rstrip("/")
 
     def authenticated(current: webdriver.Chrome) -> bool:
-        url = current.current_url
-        # Consider login successful if we're on the public origin (Cockpit)
-        # OR if we're on the Authentik dashboard (indicating successful login)
-        if url == public_origin or url.startswith(public_origin + "/"):
-            return True
-        # If we're on Authentik dashboard or similar user-specific pages,
-        # login was successful even if we haven't been redirected yet
-        if "/identity/" in url and ("/if/user/" in url or "/if/flow/" in url):
-            return True
-        return False
+        return login_complete_url(current.current_url, public_origin)
 
     try:
         wait.until(authenticated)

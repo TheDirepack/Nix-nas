@@ -150,7 +150,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["systemd-run", "--unit", f"nas-first-start-{'a' * 24}.service"])
         self.assertIn("--property=ProtectSystem=strict", command)
-        self.assertIn("--property=ProtectHome=yes", command)
+        self.assertIn("--property=ProtectHome=read-only", command)
         self.assertIn(
             "--property=RuntimeDirectory=nas-secret-runtime",
             command,
@@ -173,7 +173,10 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn("--property=ReadWritePaths=-/tank", command)
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
-        self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
+        self.assertIn(
+            "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-secrets/authentik/bootstrap-token",
+            command,
+        )
         self.assertEqual(command[command.index("--") + 1], api._setup_entry())
         self.assertIn("--password-file", command)
         with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):

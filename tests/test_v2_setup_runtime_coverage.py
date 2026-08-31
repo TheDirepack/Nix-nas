@@ -305,16 +305,18 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 with self.assertRaisesRegex(setup.SetupError, "does not exist"):
                     setup.verify_or_create_database("pw", False)
 
-            def create(_command: object, **_kwargs: object) -> setup.Completed:
+            def create(_command: object, **kwargs: object) -> setup.Completed:
+                self.assertEqual(kwargs.get("input_text"), "pw\npw\n")
                 database.write_text("created", encoding="utf-8")
                 return setup.Completed((), "", "")
 
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin", side_effect=create),
+                mock.patch.object(setup, "run_admin", side_effect=create) as create_admin,
             ):
                 self.assertEqual(setup.verify_or_create_database("pw", True), "created")
+            self.assertIn("--set-password", create_admin.call_args.args[0])
 
     def test_verify_or_create_database_reports_failed_creation_and_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -507,6 +509,15 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         args.skip_preflight = True
         second = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
         self.assertNotEqual(first, second)
+
+    def test_installed_preflight_keeps_release_integrity_checks_without_developer_tooling(self) -> None:
+        self.assertEqual(setup.INSTALLED_PREFLIGHT_ENV["NAS_PREFLIGHT_VERIFY_MANIFEST"], "0")
+        self.assertEqual(setup.INSTALLED_PREFLIGHT_ENV["NAS_PREFLIGHT_REQUIRE_COMPLETE"], "0")
+        for name in ("COCKPIT_BUNDLE", "FUZZ", "NIX", "TESTS", "TOOLING"):
+            self.assertEqual(setup.INSTALLED_PREFLIGHT_ENV[f"NAS_PREFLIGHT_SKIP_{name}"], "1")
+        with mock.patch.object(setup, "run", return_value=setup.Completed(("nas-preflight",), "", "", 0)) as run:
+            self.assertTrue(setup.preflight_ready())
+        run.assert_called_once_with(["nas-preflight"], env=setup.INSTALLED_PREFLIGHT_ENV, check=False)
 
     def test_verified_storage_retry_reconciles_only_healthy_matching_journal(self) -> None:
         config = {

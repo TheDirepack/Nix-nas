@@ -23,7 +23,7 @@
     overrideStrategy = "asDropin";
     serviceConfig = {
       PrivateDevices = false;
-      ProtectHome = true;
+      ProtectHome = "read-only";
       ProtectSystem = "yes";
     };
   };

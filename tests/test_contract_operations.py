@@ -69,6 +69,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn("show-zfs-key-stdin", zfs_tools)
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
+    def test_zfs_mount_check_accepts_the_expected_mount_inside_a_stacked_namespace(self) -> None:
+        zfs_tools = text("modules/nas/internal/zfs-tools.nix")
+        self.assertIn("SOURCE,FSTYPE,TARGET", zfs_tools)
+        self.assertIn('actual_source" == "$expected_dataset"', zfs_tools)
+        self.assertIn('actual_type" == "zfs"', zfs_tools)
+        self.assertIn('actual_target" == "$expected_root"', zfs_tools)
+        self.assertNotIn('actual_type="$(findmnt', zfs_tools)
+
     def test_feature_apply_defers_to_an_owned_runtime_operation(self):
         systemd = text("modules/nas/config/managed-services.nix")
         self.assertIn("nas-managed-services-reconcile", systemd)

@@ -297,6 +297,7 @@ verify_bootstrap_authentik_proxy() {
     --arg browser_host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
     '.config.authentik_host == $host and .config.authentik_host_browser == $browser_host' >/dev/null || \
     fail 'Authentik embedded outpost has unexpected host settings'
+  wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" -H "Host: $PUBLIC_HOST"
   code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
   [[ "$code" == 204 ]] || fail "Authentik bootstrap proxy outpost did not become reachable (HTTP ${code:-none})"
   pass 'bootstrap Authentik portal provider, application, and outpost assignment are ready'
@@ -341,7 +342,7 @@ wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 expect <<'EXPECT_LINUX_BOOTSTRAP'
 set timeout 15
-spawn su - akadmin -c {test "$(id -un)" = akadmin}
+spawn runuser -u admin -- su - akadmin -c {test "$(id -un)" = akadmin}
 expect "Password:"
 send "nas-admin-first-boot\r"
 expect eof

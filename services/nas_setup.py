@@ -106,6 +106,15 @@ FIRST_START_JOB_RETAIN_SECONDS = max(
 )
 COMMAND_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("NAS_SETUP_COMMAND_TIMEOUT_SECONDS", "900")))
 COMMAND_MAX_OUTPUT_BYTES = max(4096, int(os.environ.get("NAS_SETUP_COMMAND_MAX_OUTPUT_BYTES", str(256 * 1024))))
+INSTALLED_PREFLIGHT_ENV = {
+    "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
+    "NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE": "1",
+    "NAS_PREFLIGHT_SKIP_FUZZ": "1",
+    "NAS_PREFLIGHT_SKIP_NIX": "1",
+    "NAS_PREFLIGHT_SKIP_TESTS": "1",
+    "NAS_PREFLIGHT_SKIP_TOOLING": "1",
+    "NAS_PREFLIGHT_VERIFY_MANIFEST": "0",
+}
 
 
 def progress(message: str) -> None:
@@ -660,11 +669,11 @@ def verify_or_create_database(password: str, create: bool) -> str:
         return "existing"
     if not create:
         raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
-    create_args = ["keepassxc-cli", "db-create", "--quiet"]
+    create_args = ["keepassxc-cli", "db-create", "--quiet", "--set-password"]
     if KEEPASS_KEY_FILE:
         create_args.extend(["--set-key-file", KEEPASS_KEY_FILE])
     create_args.append(str(KEEPASS_DATABASE))
-    run_admin(create_args, input_text=f"{password}\n")
+    run_admin(create_args, input_text=f"{password}\n{password}\n")
     if not KEEPASS_DATABASE.exists():
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
     return "created"
@@ -1215,7 +1224,7 @@ def verification_ready(_result: Any = None) -> bool:
 
 
 def preflight_ready(_result: Any = None) -> bool:
-    return run(["nas-preflight"], env={"NAS_PREFLIGHT_VERIFY_MANIFEST": "0"}, check=False).returncode == 0
+    return run(["nas-preflight"], env=INSTALLED_PREFLIGHT_ENV, check=False).returncode == 0
 
 
 def service_policy_ready(services: Mapping[str, str]) -> bool:
@@ -1462,7 +1471,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 run_setup_stage(
                     journal,
                     "preflight",
-                    lambda: run(["nas-preflight"], env={"NAS_PREFLIGHT_VERIFY_MANIFEST": "0"}) and {"passed": True},
+                    lambda: run(["nas-preflight"], env=INSTALLED_PREFLIGHT_ENV) and {"passed": True},
                     postcondition=preflight_ready,
                 )
             report_status = "complete" if preflight_ran else "complete-unverified"
