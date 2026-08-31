@@ -69,6 +69,10 @@ in
       };
     };
 
+    # Do not set AUTHENTIK_BLUEPRINTS_DIR here.  The reconcile unit
+    # invokes ``ak apply_blueprint`` synchronously; letting migrate also
+    # apply blueprints causes duplicate-key errors when the reconcile
+    # service runs.
     systemd.services.authentik-migrate = {
       requires = [ "nas-authentik-blueprints.service" ];
       after = [ "nas-authentik-blueprints.service" ];
@@ -87,7 +91,6 @@ in
     # watcher is convenience/recovery rather than the transaction boundary.
     systemd.services.authentik.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
     systemd.services.authentik-worker.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
-    systemd.services.authentik-migrate.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
 
     # Replace the REST CRUD reconciler. A normal lower-priority override is
     # sufficient here; unlike mkForce it does not bypass the repository's
