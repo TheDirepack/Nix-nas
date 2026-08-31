@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pathlib
 import pwd
 import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -16,6 +18,36 @@ if str(SERVICES) not in sys.path:
 
 import nas_setup as setup  # noqa: E402
 import nas_setup_config as setup_config  # noqa: E402
+
+
+class SetupApplicationRetirementTests(unittest.TestCase):
+    def test_removal_uses_bootstrap_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            token_path = pathlib.Path(temporary) / "bootstrap-token"
+            token_path.write_text("bootstrap-authority\n", encoding="utf-8")
+            response = mock.MagicMock()
+            response.__enter__.return_value.status = 204
+            with (
+                mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
+                mock.patch("urllib.request.urlopen", return_value=response) as urlopen,
+            ):
+                result = setup._remove_setup_application()
+
+        self.assertEqual(result, {"removed": True, "slug": "nas-setup"})
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer bootstrap-authority")
+
+    def test_removal_fails_closed_when_bootstrap_authority_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            token_path = pathlib.Path(temporary) / "bootstrap-token"
+            token_path.write_text("bootstrap-authority\n", encoding="utf-8")
+            forbidden = urllib.error.HTTPError("http://authentik", 403, "Forbidden", {}, None)
+            with (
+                mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
+                mock.patch("urllib.request.urlopen", side_effect=forbidden),
+                self.assertRaisesRegex(setup.SetupError, "HTTP 403"),
+            ):
+                setup._remove_setup_application()
 
 
 class SetupConfigTests(unittest.TestCase):

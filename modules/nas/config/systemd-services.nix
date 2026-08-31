@@ -190,9 +190,20 @@ in
       };
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync bootstrap";
+        ExecStart = pkgs.writeShellScript "nas-identity-bootstrap" ''
+          set -u
+          while [[ ! -e /var/lib/nas-setup/state.json ]]; do
+            ${nasPythonApplication}/bin/nas-operation-run \
+              --action identity-bootstrap --class identity --class runtime -- \
+              ${nasIdentitySync}/bin/nas-identity-sync bootstrap
+            rc=$?
+            [[ "$rc" -eq 0 ]] && exit 0
+            [[ "$rc" -eq 75 ]] || exit "$rc"
+            ${pkgs.coreutils}/bin/sleep 2
+          done
+        '';
         ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
-        Restart = "on-abnormal";
+        Restart = "on-failure";
         RestartSec = "5s";
         NoNewPrivileges = true;
         PrivateTmp = true;

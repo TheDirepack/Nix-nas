@@ -543,6 +543,10 @@ curl --fail --silent --show-error \
   -H "Authorization: Bearer $runtime_authentik_token" \
   'http://127.0.0.1:9000/identity/api/v3/core/users/?username=akadmin' \
   | jq -e '.pagination.count == 0' >/dev/null || fail "Authenik bootstrap account still exists after setup"
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $runtime_authentik_token" \
+  'http://127.0.0.1:9000/identity/api/v3/core/applications/?slug=nas-setup' \
+  | jq -e '.pagination.count == 0' >/dev/null || fail "one-time Authentik setup application still exists after setup"
 [[ "$(getent passwd nasadmin | cut -d: -f6)" == "/tank/homes/nasadmin" ]] || \
   fail "permanent administrator home is not on the ZFS data root"
 [[ -d /tank/homes/nasadmin ]] || fail "permanent administrator ZFS home is missing"
@@ -550,6 +554,10 @@ curl --fail --silent --show-error \
 findmnt -n -o FSTYPE -T /tank/homes/nasadmin | grep -qx zfs || \
   fail "permanent administrator home is not backed by ZFS"
 pass "GUI first start created the expected storage, accounts, and administrator"
+# This is a test-only static plan created by the disposable administrator.
+# Transfer it to the permanent administrator before verifying the idempotent
+# status path; browser-submitted production secrets are already deleted.
+chown -R nasadmin:users /var/lib/nas-test/setup
 run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json
 if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \

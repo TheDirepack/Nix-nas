@@ -946,34 +946,16 @@ def setup_fingerprint(
 
 
 def _remove_setup_application() -> dict[str, Any]:
-    """Best-effort removal of the explicit first-run setup Authentik application.
-
-    The setup wizard is an explicit application (slug nas-setup) so it is
-    discoverable in Authentik during first run. After a successful run the
-    Caddy bootstrap already hides /setup, but the Authentik object would
-    otherwise remain visible. Deletion is idempotent and never fails setup;
-    the setup API service itself is gated by ConditionPathExists on
-    state.json so the wizard no longer starts on the next boot.
-    """
-    token_paths = [
-        pathlib.Path(os.environ.get("NAS_AUTHENTIK_TOKEN_FILE", "/run/nas-secrets/authentik/api-token")),
-        pathlib.Path(
-            os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")
-        ),
-        pathlib.Path("/run/nas-authentik/api-token"),
-        pathlib.Path("/var/lib/nas-control-plane/authentik/api-token"),
-    ]
-    token: str | None = None
-    for candidate in token_paths:
-        try:
-            value = candidate.read_text(encoding="utf-8").strip()
-            if value:
-                token = value
-                break
-        except OSError:
-            continue
+    """Remove the one-time setup application before bootstrap authority retirement."""
+    token_path = pathlib.Path(
+        os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")
+    )
+    try:
+        token = token_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise SetupError("Authentik bootstrap token is unavailable for setup application retirement") from exc
     if not token:
-        return {"removed": False, "reason": "no-token"}
+        raise SetupError("Authentik bootstrap token is empty during setup application retirement")
 
     # Authentik listens on 127.0.0.1:9000 with the configured path prefix.
     # Try both the canonical and the bare API path for robustness across
@@ -1002,8 +984,7 @@ def _remove_setup_application() -> dict[str, Any]:
         except OSError as exc:
             last_error = str(exc)
             continue
-    # If all bases failed with a non-404, report it but don't fail setup.
-    return {"removed": False, "reason": last_error or "unknown"}
+    raise SetupError(f"Unable to retire the Authentik setup application: {last_error or 'unknown error'}")
 
 
 def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
@@ -1417,6 +1398,15 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
             )
             run_setup_stage(
                 journal,
+                "setup-application-retirement",
+                _remove_setup_application,
+                postcondition=lambda result: (
+                    isinstance(result, Mapping)
+                    and (result.get("removed") is True or result.get("reason") == "not-found")
+                ),
+            )
+            run_setup_stage(
+                journal,
                 "bootstrap-authority-retirement",
                 lambda: retire_bootstrap_runtime(BOOTSTRAP_RUNTIME_ROOT, local_administrator["username"], password),
                 manual_recovery_on_failure=True,
@@ -1504,15 +1494,6 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 journal.fail("Final setup state could not be verified", manual_recovery=True)
                 raise SetupError("Final setup state could not be verified")
             journal.complete(report)
-            # Best-effort removal of the explicit setup application. The Caddy
-            # bootstrap already hides /setup after ready, and the nas-setup-api
-            # service is gated by state.json so the wizard no longer starts on
-            # the next boot. Removing the Authentik object ensures it also
-            # disappears from the launcher.
-            try:
-                _remove_setup_application()
-            except Exception as exc:  # pragma: no cover - best-effort cleanup
-                progress(f"Unable to remove setup application: {exc}")
             publish_first_start_status(
                 {
                     "schemaVersion": SCHEMA_VERSION,
