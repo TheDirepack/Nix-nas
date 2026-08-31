@@ -73,7 +73,7 @@ authentikEnvironment = {
       PrivateTmp = true;
       ProtectHome = true;
       ProtectSystem = "strict";
-      ReadWritePaths = [ if config.nas.zfsEncryption.enable then "${bootstrapAuthentikDataDir}" else authentikDataDir, "/var/lib/authentik" ];
+      ReadWritePaths = [ (if config.nas.zfsEncryption.enable then "${bootstrapAuthentikDataDir}" else authentikDataDir) "/var/lib/authentik" ];
       Restart = "on-failure";
       RestartSec = "2s";
     };
