@@ -89,8 +89,12 @@ in
     # Authentik's worker continues to watch this directory natively. The V2
     # reconcile unit also invokes `ak apply_blueprint` synchronously, so a file
     # watcher is convenience/recovery rather than the transaction boundary.
+    # The migrate service must NOT receive AUTHENTIK_BLUEPRINTS_DIR, or ak
+    # migrate will apply the blueprint and conflict with the later reconcile.
     systemd.services.authentik.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
     systemd.services.authentik-worker.environment.AUTHENTIK_BLUEPRINTS_DIR = blueprintDir;
+    systemd.services.authentik-migrate.environment.AUTHENTIK_BLUEPRINTS_DIR = null;
+    systemd.services.authentik-migrate.environment.PYTHONPATH = toString v2Source;
 
     # Replace the REST CRUD reconciler. A normal lower-priority override is
     # sufficient here; unlike mkForce it does not bypass the repository's
