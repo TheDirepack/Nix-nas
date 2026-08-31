@@ -61,19 +61,19 @@ let
   };
 authentikEnvironment = {
       AUTHENTIK_ENV = "production";
-      HOME = if config.nas.zfsEncryption.enable then "${bootstrapAuthentikDataDir}" else authentikDataDir;
+      HOME = authentikDataDir;
     };
     authentikServiceConfig = {
       User = "authentik";
       Group = "authentik";
       UMask = "0027";
-      WorkingDirectory = if config.nas.zfsEncryption.enable then "${bootstrapAuthentikDataDir}" else authentikDataDir;
+      WorkingDirectory = authentikDataDir;
       EnvironmentFile = [ authentikRuntimeEnvironmentFile ];
       NoNewPrivileges = true;
       PrivateTmp = true;
       ProtectHome = true;
       ProtectSystem = "strict";
-      ReadWritePaths = [ (if config.nas.zfsEncryption.enable then "${bootstrapAuthentikDataDir}" else authentikDataDir) "/var/lib/authentik" ];
+      ReadWritePaths = [ authentikDataDir "/var/lib/authentik" ];
       Restart = "on-failure";
       RestartSec = "2s";
     };
