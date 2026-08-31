@@ -19,8 +19,14 @@ class ExplicitSetupApplicationTests(unittest.TestCase):
 
     def test_blueprint_is_installed_via_nas_authentik_blueprints(self) -> None:
         account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
+        blueprint_module = (ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("nas-setup.yaml", account_tools)
         self.assertIn("nasAuthentikBlueprints", account_tools)
+        self.assertIn("/var/lib/nas-setup/state.json", blueprint_module)
+        self.assertIn("${blueprintDir}/nas-setup.yaml", blueprint_module)
+        self.assertIn("rm -f --", blueprint_module)
 
     def test_blueprint_has_policy_binding_for_nas_admin(self) -> None:
         content = BLUEPRINT.read_text(encoding="utf-8")
@@ -58,6 +64,7 @@ class SetupUtilityLifecycleTests(unittest.TestCase):
         authority_idx = setup_py.index('"bootstrap-authority-retirement"')
         self.assertLess(retirement_idx, authority_idx)
         self.assertIn("Authentik bootstrap token is unavailable", setup_py)
+        self.assertIn("SETUP_BLUEPRINT_PATH.unlink(missing_ok=True)", setup_py)
         self.assertNotIn("Best-effort removal", setup_py)
 
 

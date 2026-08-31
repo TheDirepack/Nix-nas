@@ -26,13 +26,17 @@ class SetupApplicationRetirementTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             token_path = pathlib.Path(temporary) / "bootstrap-token"
             token_path.write_text("bootstrap-authority\n", encoding="utf-8")
+            blueprint_path = pathlib.Path(temporary) / "nas-setup.yaml"
+            blueprint_path.write_text("version: 1\n", encoding="utf-8")
             response = mock.MagicMock()
             response.__enter__.return_value.status = 204
             with (
                 mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
+                mock.patch.object(setup, "SETUP_BLUEPRINT_PATH", blueprint_path),
                 mock.patch("urllib.request.urlopen", return_value=response) as urlopen,
             ):
                 result = setup._remove_setup_application()
+            self.assertFalse(blueprint_path.exists())
 
         self.assertEqual(result, {"removed": True, "slug": "nas-setup"})
         request = urlopen.call_args.args[0]
@@ -45,10 +49,12 @@ class SetupApplicationRetirementTests(unittest.TestCase):
             forbidden = urllib.error.HTTPError("http://authentik", 403, "Forbidden", email.message.Message(), None)
             with (
                 mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
+                mock.patch.object(setup, "SETUP_BLUEPRINT_PATH", pathlib.Path(temporary) / "nas-setup.yaml"),
                 mock.patch("urllib.request.urlopen", side_effect=forbidden),
                 self.assertRaisesRegex(setup.SetupError, "HTTP 403"),
             ):
                 setup._remove_setup_application()
+            forbidden.close()
 
 
 class SetupConfigTests(unittest.TestCase):

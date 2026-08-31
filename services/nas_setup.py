@@ -62,9 +62,8 @@ from nas_syncthing_devices import DeviceError, validate_username
 # Explicit setup application for first run. The wizard is served at /setup
 # behind Authentik forward-auth as an explicit Authentik Application
 # (nas-setup) so it is discoverable in the launcher during first run. After a
-# successful first run the application self-removes via the best-effort helper
-# below, and the Caddy bootstrap (secretReady + state.json) plus the
-# nas-setup-api ConditionPathExists ensure the wizard no longer serves.
+# successful first run the setup transaction removes both its mutable blueprint
+# and application before retiring the one-time Authentik authority.
 SETUP_APPLICATION_SLUG = "nas-setup"
 
 BOOTSTRAP_ADMIN_USER = "akadmin"
@@ -75,6 +74,7 @@ ADMIN_STATE_PATH = pathlib.Path(os.environ.get("NAS_ADMIN_STATE", "/var/lib/nas-
 BOOTSTRAP_RUNTIME_ROOT = pathlib.Path(os.environ.get("NAS_BOOTSTRAP_RUNTIME_ROOT", "/var/lib/nas-control-plane"))
 BOOTSTRAP_AUTHENTIK_ENVIRONMENT = BOOTSTRAP_RUNTIME_ROOT / "authentik/environment"
 BOOTSTRAP_AUTHENTIK_TOKEN = BOOTSTRAP_RUNTIME_ROOT / "authentik/api-token"
+SETUP_BLUEPRINT_PATH = BOOTSTRAP_RUNTIME_ROOT / "authentik/blueprints/nas-setup.yaml"
 KEEPASS_DATABASE = pathlib.Path(
     os.environ.get("NAS_KEEPASS_DATABASE", "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx")
 )
@@ -947,6 +947,10 @@ def setup_fingerprint(
 
 def _remove_setup_application() -> dict[str, Any]:
     """Remove the one-time setup application before bootstrap authority retirement."""
+    try:
+        SETUP_BLUEPRINT_PATH.unlink(missing_ok=True)
+    except OSError as exc:
+        raise SetupError("Unable to remove the mutable Authentik setup blueprint") from exc
     token_path = pathlib.Path(
         os.environ.get("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE", "/run/nas-secrets/authentik/bootstrap-token")
     )

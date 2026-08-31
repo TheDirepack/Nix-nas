@@ -192,15 +192,15 @@ in
         Type = "oneshot";
         ExecStart = pkgs.writeShellScript "nas-identity-bootstrap" ''
           set -u
-          while [[ ! -e /var/lib/nas-setup/state.json ]]; do
-            ${nasPythonApplication}/bin/nas-operation-run \
-              --action identity-bootstrap --class identity --class runtime -- \
-              ${nasIdentitySync}/bin/nas-identity-sync bootstrap
-            rc=$?
-            [[ "$rc" -eq 0 ]] && exit 0
-            [[ "$rc" -eq 75 ]] || exit "$rc"
-            ${pkgs.coreutils}/bin/sleep 2
-          done
+          ${nasPythonApplication}/bin/nas-operation-run \
+            --action identity-bootstrap --class identity --class runtime -- \
+            ${nasIdentitySync}/bin/nas-identity-sync bootstrap
+          rc=$?
+          # An active first-start transaction owns bootstrap reconciliation.
+          # Treat its lock as a successful handoff so protected-service startup
+          # cannot wait on the transaction that is waiting for this unit.
+          [[ "$rc" -eq 0 || "$rc" -eq 75 ]] && exit 0
+          exit "$rc"
         '';
         ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
         Restart = "on-failure";
