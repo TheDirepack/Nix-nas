@@ -74,6 +74,7 @@ ACCOUNT_JOURNAL_PATH = pathlib.Path(
 SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 PUBLIC_HOST = os.environ.get("NAS_PUBLIC_HOST", "").strip()
 DEFAULT_FLOW_WAIT_SECONDS = 90.0
+BOOTSTRAP_RECONCILE_ATTEMPTS = 4
 
 
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
@@ -154,6 +155,27 @@ def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
     jitter_ceiling = min(base * 0.25, 0.25)
     jitter = (secrets.randbelow(1_000_001) / 1_000_000) * jitter_ceiling
     return base + jitter
+
+
+def bootstrap_identity(token: str) -> dict[str, Any]:
+    """Converge bootstrap objects after Authentik's asynchronous blueprint startup."""
+    for attempt in range(1, BOOTSTRAP_RECONCILE_ATTEMPTS + 1):
+        try:
+            return {
+                "groups": ensure_groups(token),
+                "portal": ensure_portal_proxy(token),
+                "cockpit": ensure_cockpit_launcher(token),
+                "setup": ensure_setup_launcher(token),
+            }
+        except SyncError:
+            if attempt >= BOOTSTRAP_RECONCILE_ATTEMPTS:
+                raise
+            diagnostic(
+                "nas-identity-sync: Authentik bootstrap reconciliation raced with startup; "
+                f"retrying attempt {attempt + 1}/{BOOTSTRAP_RECONCILE_ATTEMPTS}"
+            )
+            time.sleep(_retry_delay(attempt))
+    raise SyncError("Authentik bootstrap reconciliation exhausted retries")  # pragma: no cover
 
 
 def http_json(
@@ -1488,12 +1510,7 @@ def main() -> int:
         with operation, identity_command_lock(args.command):
             if args.command == "bootstrap":
                 token = authentik_token(bootstrap=True)
-                result = {
-                    "groups": ensure_groups(token),
-                    "portal": ensure_portal_proxy(token),
-                    "cockpit": ensure_cockpit_launcher(token),
-                    "setup": ensure_setup_launcher(token),
-                }
+                result = bootstrap_identity(token)
             elif args.command == "bootstrap-runtime-token":
                 result = provision_runtime_token(authentik_token(bootstrap=True))
             elif args.command == "retire-bootstrap":
