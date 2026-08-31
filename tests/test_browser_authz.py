@@ -161,6 +161,11 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.assertTrue(self.authz.callback_return_matches("/console/", "/console/"))
         self.assertFalse(self.authz.callback_return_matches("/setup", "/console/"))
 
+    def test_callback_return_accepts_cockpits_default_console_landing(self) -> None:
+        self.assertTrue(self.authz.callback_return_matches("/console/", "/console/system"))
+        self.assertFalse(self.authz.callback_return_matches("/setup", "/console/system"))
+        self.assertFalse(self.authz.callback_return_matches("/console/", "/identity/if/user/"))
+
     def test_secret_reader_rejects_symlink_and_permissive_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

@@ -105,6 +105,15 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
             blueprint,
         )
 
+    def test_blueprint_population_can_create_the_selected_runtime_directory(self):
+        blueprint = (ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix").read_text(encoding="utf-8")
+        population_unit = blueprint.split("systemd.services.nas-authentik-blueprints = {", 1)[1].split(
+            "systemd.services.authentik-migrate = {", 1
+        )[0]
+        self.assertIn("install -d -m 0750 -o authentik -g authentik", blueprint)
+        self.assertIn("ExecStart = populateNativeBlueprints;", population_unit)
+        self.assertNotIn("ReadWritePaths", population_unit)
+
     def test_authentik_login_flow_routes_rewrite_to_the_prefixed_ui(self):
         for relative_path in (
             "modules/nas/config/caddy-bootstrap.nix",

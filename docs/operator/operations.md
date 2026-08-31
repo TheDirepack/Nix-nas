@@ -21,11 +21,10 @@ systemctl --failed
 ```bash
 nas-setup validate-config /path/to/first-run.json
 nas-setup prepare-first-start --config /path/to/first-run.json
-nas-setup first-run --config /path/to/first-run.json --confirm-plan-digest <digest>
 nas-setup status
 ```
 
-New-pool creation additionally requires `--allow-destructive-storage` and one exact `--confirm-storage-device` for every configured disk.
+Complete the workflow itself through the browser First start wizard; it confirms the plan digest and every storage device and runs the guarded job. New-pool creation additionally requires the wizard's destructive opt-in and one exact confirmed device per configured disk.
 
 ## Locked boot and secrets
 

@@ -6,77 +6,93 @@ import sys
 from typing import Any
 
 
-FAST_JOBS = {
-    "test",
-    "test-nonroot",
+PARALLEL_QUALIFICATION_JOBS = {
+    "static-code",
+    "static-shell",
+    "static-nix",
+    "unit",
     "security",
-    "caddy-validate",
-    "static",
-    "dependency-audit",
+    "nonroot",
+    "cockpit",
 }
-HEAVY_JOBS = {"build"}
-QUALIFICATION_JOBS = {"browser", "integration"}
+BASE_JOBS = {
+    "prerequisites",
+    *PARALLEL_QUALIFICATION_JOBS,
+    "qualification",
+    "prepare",
+    "browser",
+}
 SLOW_JOBS = {"source-fuzz"}
-INSTALLED_FUZZ_JOBS = {"installed-command-fuzz", "zap-fuzz"}
-CACHE_JOBS = {"cache-vm-bundles"}
-KNOWN_JOBS = frozenset(
-    FAST_JOBS
-    | HEAVY_JOBS
-    | QUALIFICATION_JOBS
-    | SLOW_JOBS
-    | INSTALLED_FUZZ_JOBS
-    | CACHE_JOBS
-    | {"coverage-diff", "installer"}
-)
+INSTALLED_SECURITY_JOBS = {"installed-security"}
+KNOWN_JOBS = frozenset(BASE_JOBS | SLOW_JOBS | INSTALLED_SECURITY_JOBS | {"coverage-diff", "integration", "installer"})
 
 
-def expected_jobs(event_name: str, ref: str, base_ref: str, test_tier: str) -> set[str]:
-    expected = set(FAST_JOBS)
+def _main_or_release_ref(ref: str) -> bool:
+    return ref == "refs/heads/main" or ref.startswith("refs/tags/v")
+
+
+def expected_jobs(
+    event_name: str,
+    ref: str,
+    base_ref: str,
+    test_tier: str,
+) -> set[str]:
+    # Every run performs shared prerequisite validation, fans out the independent
+    # qualification branches, joins them at one gate, prepares the reviewed
+    # products, and exercises the deterministic browser suite. The explicit
+    # fast dispatch tier skips only the expensive Nix/VM work inside prepare.
+    expected = set(BASE_JOBS)
+
     if event_name == "pull_request" and base_ref == "main":
         expected.add("coverage-diff")
-    if event_name != "workflow_dispatch" or test_tier != "fast":
-        expected.update(HEAVY_JOBS)
-    if event_name == "pull_request" or (event_name == "workflow_dispatch" and test_tier == "fast"):
-        expected.add("browser")
-    qualification_run = (
-        event_name == "schedule"
-        or (event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")))
+
+    # Full-stack QEMU and the official-ISO install tier qualify every commit.
+    # Long smart-fuzz searches run only when an operator explicitly requests
+    # the full dispatch tier after deterministic qualification has succeeded.
+    integration_run = (
+        event_name in {"pull_request", "schedule"}
+        or event_name == "push"
         or (event_name == "workflow_dispatch" and test_tier in {"full", "installer"})
     )
-    if qualification_run:
-        expected.update(QUALIFICATION_JOBS)
-    installer_run = (event_name == "workflow_dispatch" and test_tier in {"full", "installer"}) or (
-        event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
-    )
+    if integration_run:
+        expected.add("integration")
+
+    installer_run = event_name != "workflow_dispatch" or test_tier in {"full", "installer"}
     if installer_run:
         expected.add("installer")
-    if event_name != "workflow_dispatch" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v")):
-        expected.update(INSTALLED_FUZZ_JOBS)
-    if event_name == "schedule" or (
-        event_name == "push" and (ref == "refs/heads/main" or ref.startswith("refs/tags/v"))
-    ):
+
+    manual_full_dispatch = event_name == "workflow_dispatch" and test_tier == "full"
+    if manual_full_dispatch:
         expected.update(SLOW_JOBS)
+
+    release_qualification = event_name == "schedule" or (event_name == "push" and _main_or_release_ref(ref))
+    if release_qualification:
+        expected.update(INSTALLED_SECURITY_JOBS)
+
     return expected
 
 
-def summarize(needs: dict[str, Any], event_name: str, ref: str, base_ref: str, test_tier: str) -> tuple[str, list[str]]:
+def summarize(
+    needs: dict[str, Any],
+    event_name: str,
+    ref: str,
+    base_ref: str,
+    test_tier: str,
+) -> tuple[str, list[str]]:
     expected = expected_jobs(event_name, ref, base_ref, test_tier)
-    lines = ["## CI pipeline summary", "", "| Job | Result |", "| --- | --- |"]
+    lines = ["## CI pipeline summary", "", "| Stage | Result |", "| --- | --- |"]
     bad: list[str] = []
-    cache_warnings: list[str] = []
+
     for name, data in sorted(needs.items()):
         result = data.get("result", "skipped") if isinstance(data, dict) else "skipped"
         lines.append(f"| {name} | {result.upper()} |")
         if name in expected and result != "success":
             bad.append(f"{name}={result} (required)")
-        elif result in {"failure", "cancelled"} and name in CACHE_JOBS:
-            cache_warnings.append(f"{name}={result} (non-authoritative cache persistence warning)")
         elif result in {"failure", "cancelled"}:
             bad.append(f"{name}={result}")
+
     missing = sorted(expected - set(needs))
     bad.extend(f"{name}=missing (required)" for name in missing)
-    if cache_warnings:
-        lines.extend(["", "### Cache warnings", "", *[f"- {warning}" for warning in cache_warnings]])
     return "\n".join(lines) + "\n", bad
 
 
@@ -98,7 +114,10 @@ def main() -> int:
     else:
         sys.stdout.write(summary)
     if bad:
-        print("pipeline qualification incomplete: " + ", ".join(bad), file=sys.stderr)
+        print(
+            "pipeline qualification incomplete: " + ", ".join(bad),
+            file=sys.stderr,
+        )
         return 1
     return 0
 

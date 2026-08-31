@@ -16,8 +16,10 @@ The 2.2 test architecture is deliberately layered. Cheap source checks reject ma
 
 The local matrix `fast` command runs source and security checks only. The
 generated smart-fuzz tier is explicit (`test-matrix.py fuzz`) and should be run
-locally during pre-merge qualification. GitHub's fast workflow dispatch is
-narrower and may omit heavyweight generated testing. `all` additionally runs
+locally during pre-merge qualification. CI qualifies the full-stack QEMU
+matrix and the official-ISO installer tier on every pull-request commit;
+schedule and main pushes additionally run the installed adversarial
+qualification. `all` additionally runs
 the smart-fuzz, Nix configuration/negative-fixture matrix, built-browser,
 native NixOS VM, and official-ISO installer tiers. Each stage has an outer
 deadline; missing heavyweight tools or reviewed frontend artifacts are reported
@@ -98,9 +100,11 @@ duration:
 ./scripts/run-fuzz.py --duration-seconds 3600 --jobs 6
 ```
 
-This long-duration mode is intentionally local-only. It is not enabled by
-ordinary pull-request CI; the merge decision should attach the resulting
-logs/evidence from the local run. The runner places each suite's Hypothesis
+This long-duration mode is intentionally local-only. CI runs smart-fuzz
+suites only when an operator explicitly dispatches the `full` tier after
+deterministic qualification has succeeded; ordinary pull-request, push, and
+schedule runs never include them. The merge decision should attach the
+resulting logs/evidence from the local run. The runner places each suite's Hypothesis
 example database under its own system temporary-directory
 `nix-nas-hypothesis-*` directory by default. Set
 `HYPOTHESIS_STORAGE_DIRECTORY` when reproducing a specific shared corpus. Keep

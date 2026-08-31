@@ -364,10 +364,10 @@ PY_AI_PROVIDERS
         local local_stage root_stage previous transaction_dir runtime_base
         local bootstrap_token_reused=false
         local authentik_secret authentik_bootstrap_token authentik_bootstrap_password
-        local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash
-        local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token
+        ${lib.optionalString cfg.vaultwarden.enable ''local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash''}
+        ${lib.optionalString cfg.ai.enable ''local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token''}
         ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
-        local provider_id provider_env provider_key
+        ${lib.optionalString cfg.ai.enable ''local provider_id provider_env provider_key''}
         ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
         local state_bundle_signing_key
         sudo install -d -m 0711 -o root -g root /run/nas-secret-staging

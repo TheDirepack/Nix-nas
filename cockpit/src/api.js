@@ -123,7 +123,7 @@ export function startFirstRun(
     throw new Error("First-start storage devices are invalid.");
   }
   return apiInput(
-    ["first-run"],
+    ["first-start"],
     {
       password: secret,
       administrator: {username, name, email, password: administratorPassword},

@@ -94,6 +94,17 @@ def _secret_command(command: list[str] | tuple[str, ...]) -> bool:
     return bool(command) and pathlib.PurePath(str(command[0])).name == "nas-secrets"
 
 
+def _setup_entry() -> str:
+    """Resolve the nas-setup wrapper, not the bare Python entry point.
+
+    The cockpit API PATH also carries the unwrapped console Python
+    application, which shadows the appliance wrapper and its required
+    environment (ZFS tooling, pool/dataset names, KeePass database path).
+    The wrapper exports NAS_SETUP_BIN pointing at the real wrapper.
+    """
+    return os.environ.get("NAS_SETUP_BIN", "nas-setup")
+
+
 def operation_error(command: list[str] | tuple[str, ...], result: CommandResult) -> ApiError:
     reference = secrets.token_hex(6)
     detail = (
@@ -278,11 +289,11 @@ def static_links() -> dict[str, str]:
 
 def setup_status() -> dict[str, Any]:
     prepared = _json_command(
-        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
+        [_setup_entry(), "prepare-first-start", "--config", FIRST_RUN_CONFIG],
         optional=True,
         timeout_seconds=60,
     )
-    status = _json_command(["nas-setup", "status"], optional=True)
+    status = _json_command([_setup_entry(), "status"], optional=True)
     if prepared.get("ok") is False and "firstStart" not in status:
         status["firstStart"] = prepared
     return status
@@ -362,7 +373,7 @@ def managed_job_rows() -> list[dict[str, Any]]:
 
 def first_start_status() -> dict[str, Any]:
     return _json_command(
-        ["nas-setup", "prepare-first-start", "--config", FIRST_RUN_CONFIG],
+        [_setup_entry(), "prepare-first-start", "--config", FIRST_RUN_CONFIG],
         optional=True,
         timeout_seconds=60,
     )
@@ -411,10 +422,19 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         "--property=PrivateDevices=yes",
         "--property=ProtectHome=yes",
         "--property=ProtectSystem=strict",
-        "--property=ReadWritePaths=/var/lib/nas-setup /run/nas-secrets /run/nas-operations /run/lock /run/nas-first-start",
+        # /run/nas-secrets, /var/lib/nas-secrets and the ZFS control paths
+        # may not exist before the first-start transaction creates them;
+        # systemd fails namespace setup on missing ReadWritePaths unless they
+        # are marked optional.
+        "--property=ReadWritePaths=/var/lib/nas-setup /var/lib/nas-control /run/nas-control /run/lock /run/nas-first-start -/run/nas-secrets -/run/nas-operations -/var/lib/nas-secrets -/run/nas-authentik",
+        # The submitted job is the Cockpit-authorized root setup execution
+        # path; without this flag require_setup_operator fails closed for root.
+        "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
+        f"--property=Environment=NAS_PUBLIC_HOST={os.environ.get('NAS_PUBLIC_HOST', '')}",
+        "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token",
         "--property=TimeoutStartSec=6h",
         "--",
-        "nas-setup",
+        _setup_entry(),
         "run-first-start-job",
         "--request-file",
         str(request_path),
@@ -526,9 +546,9 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
 
 def reconcile_first_start(request: dict[str, Any]) -> dict[str, Any]:
     note = _json_string(request, "note", required=True, max_length=2048)
-    result = run(["nas-setup", "reconcile-first-run", "--note", note], check=False, timeout_seconds=60)
+    result = run([_setup_entry(), "reconcile-first-run", "--note", note], check=False, timeout_seconds=60)
     if result.returncode != 0:
-        raise operation_error(["nas-setup", "reconcile-first-run"], result)
+        raise operation_error([_setup_entry(), "reconcile-first-run"], result)
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as exc:

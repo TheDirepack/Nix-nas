@@ -6,7 +6,21 @@ import sys
 from pathlib import Path
 
 
-FIXES: tuple[tuple[str, str, str], ...] = ()
+RUNNER_EXCLUSION_STALE = """    excluded = set(args.exclude)
+    files = sorted(path for path in TESTS.glob(args.pattern) if path.name not in excluded)
+"""
+RUNNER_EXCLUSION_REPLACEMENT = """    excluded = set(args.exclude)
+    if args.coverage:
+        # The custom-input fuzz suite is owned by the dedicated fuzz stages and
+        # is intentionally excluded from the fast current-branch coverage run.
+        # Apply the same ownership while rebuilding an uncached main baseline.
+        excluded.add("test_fuzz_custom_inputs.py")
+    files = sorted(path for path in TESTS.glob(args.pattern) if path.name not in excluded)
+"""
+
+FIXES: tuple[tuple[str, str, str], ...] = (
+    ("scripts/run-unit-tests.py", RUNNER_EXCLUSION_STALE, RUNNER_EXCLUSION_REPLACEMENT),
+)
 
 
 def prepare(root: Path) -> int:

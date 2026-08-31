@@ -215,9 +215,19 @@ in
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
+        RuntimeDirectory = "nas-first-start";
+        RuntimeDirectoryMode = "0700";
         # Loopback bind only; Caddy forward-auth gates every external request.
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
-        ReadWritePaths = [ "/var/lib/nas-setup" ];
+        # prepare-first-start publishes the reviewable plan status for the
+        # wizard from this unit. Submission additionally performs the shared
+        # operation admission check and stages private worker inputs in /run.
+        ReadWritePaths = [
+          "/var/lib/nas-setup"
+          "/var/lib/nas-first-start"
+          "/run/nas-operations"
+          "/run/nas-first-start"
+        ];
       };
     };
 
@@ -426,10 +436,7 @@ in
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot copypartyDataDir ];
-      serviceConfig = {
-        StateDirectory = lib.mkForce "${cfg.zfsRoot}/copyparty";
-        StateDirectoryMode = lib.mkForce "0750";
-      };
+      serviceConfig.StateDirectory = lib.mkForce "";
     };
     systemd.services.syncthing = lib.mkIf cfg.syncthing.enable {
       requires = [ "nas-zfs-mount-guard.service" ];

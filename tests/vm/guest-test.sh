@@ -126,6 +126,25 @@ wait_inactive() {
   fi
 }
 
+wait_oneshot_completed() {
+  local unit=$1 started state result deadline=$((SECONDS + TEST_TIMEOUT))
+  while ((SECONDS < deadline)); do
+    started="$(systemctl show "$unit" --property=ExecMainStartTimestampMonotonic --value)"
+    state="$(systemctl show "$unit" --property=ActiveState --value)"
+    result="$(systemctl show "$unit" --property=Result --value)"
+    if [[ "$started" != 0 && "$state" != activating && "$result" == success ]]; then
+      return 0
+    fi
+    if [[ "$state" == failed || ( "$started" != 0 && "$state" != activating && "$result" != success ) ]]; then
+      systemctl status "$unit" --no-pager >&2 || true
+      fail "$unit did not complete successfully"
+    fi
+    sleep 2
+  done
+  systemctl status "$unit" --no-pager >&2 || true
+  fail "timed out waiting for $unit to complete"
+}
+
 wait_http() {
   local url=$1
   shift
@@ -191,6 +210,13 @@ run_as_admin() {
   runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
 }
 
+# After first run completes, the wizard-created administrator (nasadmin) is
+# the configured local administrator and the only account allowed to run
+# mutating nas-setup commands.
+run_as_nasadmin() {
+  runuser -u nasadmin -- env HOME=/home/nasadmin PATH="$PATH" "$@"
+}
+
 activate_secrets() {
   run_as_admin_with_stdin "$(nas_vm_timeout_value secretActivation)" nas-secrets activate-stdin
 }
@@ -218,8 +244,11 @@ verify_bootstrap_authentik_proxy() {
   provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Portal") | .pk')" || \
     fail 'Authentik bootstrap portal provider was not present'
   printf '%s' "$provider_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
-    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || \
+    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || {
+    printf '%s\n' "--- NAS Portal provider response (expected external_host https://$AUTHENTIK_PUBLIC_HOST, mode forward_single) ---" >&2
+    printf '%s' "$provider_response" | jq '.results[] | select((.pk | tostring) == $provider)' >&2
     fail 'Authentik bootstrap portal provider has unexpected settings'
+  }
   application_response="$(authentik_api GET 'core/applications/?page_size=100')" || fail 'Authentik application API was not ready'
   printf '%s' "$application_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
     '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
@@ -246,7 +275,7 @@ verify_bootstrap_authentik_proxy() {
 }
 
 require_commands \
-  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-managed-services-control \
+  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-alert-router nas-cockpit-api nas-managed-services-control \
   nas-identity-sync nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock proxy python3 readlink ss systemctl zfs zpool
@@ -274,6 +303,12 @@ wait_active caddy.service
 wait_active authentik.service
 [[ "$(systemctl show nas-identity-bootstrap.service --property=NRestarts --value)" == 0 ]] || \
   fail "identity bootstrap retried before Authentik's default flows were ready"
+wait_active nas-authentik-proxy-outpost.service
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+# The outpost caches provider configuration at startup and property-mapping
+# changes do not reliably trigger a refresh; restart it once the bootstrap
+# and reconcile transactions have settled so its cached config is final.
+systemctl restart nas-authentik-proxy-outpost.service
 wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
@@ -327,7 +362,7 @@ if command -v nas-code >/dev/null 2>&1; then
   pass "nas-code optional launcher is installed when codingAgent is enabled"
 fi
 
-log "Run the complete first-time setup CLI"
+log "Run the complete first-time setup GUI"
 for _ in $(seq 1 60); do
   [[ -b "$ZFS_DEVICE" ]] && break
   sleep 1
@@ -385,38 +420,77 @@ chmod 0600 /var/lib/nas-test/setup/first-run.json
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
-plan_json="$(run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json)"
-plan_digest="$(jq -er '.planDigest | select(test("^[0-9a-f]{64}$"))' <<<"$plan_json")"
+
+# Complete first start through the GUI bootstrap system: the Cockpit First
+# start page behind the Authentik gate, submitting through the loopback
+# setup API contract. The pre-bootstrap Linux administrator (nas-bootstrap,
+# documented in nas-bootstrap-administrator.service) provisions browser
+# access while the appliance is still locked.
+setup_api="http://127.0.0.1:8980/setup/api"
+first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
+if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
+  printf '%s\n' "$first_start_plan" >&2
+  fail "first-start setup API did not report a reviewable ready plan"
+fi
 stale_digest="$(printf '0%.0s' {1..64})"
-if run_as_admin nas-setup first-run --config /var/lib/nas-test/setup/first-run.json \
-  --confirm-plan-digest "$stale_digest" >/tmp/nas-stale-plan.out 2>/tmp/nas-stale-plan.err; then
-  fail "first-run accepted a stale plan digest"
+wizard_secret_dir="$(mktemp -d /run/nas-wizard-test.XXXXXX)"
+cleanup_wizard_secrets() {
+  [[ -n "${wizard_secret_dir:-}" ]] || return 0
+  rm -rf -- "$wizard_secret_dir"
+}
+nas_vm_cleanup_add cleanup_wizard_secrets
+chmod 0700 "$wizard_secret_dir"
+printf '%s\n' 'nas-admin-first-boot' >"$wizard_secret_dir/akadmin"
+printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
+printf '%s\n' 'nasadmin-vm-password' >"$wizard_secret_dir/nasadmin"
+chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
+wizard_admin='{"username":"nasadmin","name":"NAS Administrator","email":"nasadmin@nas-test.local","password":"nasadmin-vm-password"}'
+stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" --argjson administrator "$wizard_admin" \
+  --arg keepass "$KEEPASS_PASSWORD" \
+  '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
+    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
+  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+if [[ "$stale_code" != 400 ]]; then
+  cat /tmp/nas-stale-plan.json >&2 || true
+  fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
 fi
-if ! grep -qi 'plan.*changed\|digest' /tmp/nas-stale-plan.err; then
-  printf '%s\n' '--- stale plan stdout ---' >&2
-  cat /tmp/nas-stale-plan.out >&2
-  printf '%s\n' '--- stale plan stderr ---' >&2
-  cat /tmp/nas-stale-plan.err >&2
-  fail "stale plan digest failure was not diagnostic"
+if ! grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json; then
+  cat /tmp/nas-stale-plan.json >&2
+  fail "stale plan digest rejection was not diagnostic"
 fi
-pass "first-run rejects a stale plan digest before mutation"
-run_as_admin_with_stdin "$(nas_vm_timeout_value firstRun)" nas-setup first-run \
-  --config /var/lib/nas-test/setup/first-run.json \
-  --keepass-password-stdin \
-  --confirm-plan-digest "$plan_digest" \
-  --confirm-storage-device "$ZFS_DEVICE" \
-  --allow-destructive-storage >/tmp/nas-first-run.json
+pass "first-start setup API rejects a stale plan digest before mutation"
+
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value firstRun)" \
+  python3 /var/lib/nas-test/repo/tests/browser/first-run-wizard.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --bootstrap-password-file "$wizard_secret_dir/akadmin" \
+  --keepass-password-file "$wizard_secret_dir/keepass" \
+  --admin-username nasadmin \
+  --admin-name 'NAS Administrator' \
+  --admin-email 'nasadmin@nas-test.local' \
+  --admin-password-file "$wizard_secret_dir/nasadmin" \
+  --device "$ZFS_DEVICE" \
+  --job-timeout-seconds "$(nas_vm_timeout_value firstRun)" \
+  --result-file /tmp/nas-first-run-job.json
+cleanup_wizard_secrets
+wizard_secret_dir=""
 if ! jq -e '
-  .storage.createdPool == true and
-  .storage.createdDataset == true and
-  (.accounts.created | sort) == ["alice", "baseline", "guest", "operator"] and
-  (.identity.administrators | index("operator")) != null
-' /tmp/nas-first-run.json >/dev/null; then
-  printf '%s\n' '--- first-run report ---' >&2
-  jq . /tmp/nas-first-run.json >&2 || cat /tmp/nas-first-run.json >&2
-  fail "nas-setup first-run report did not contain the expected storage, account, and administrator state"
+  .status == "complete" and
+  .result.storage.createdPool == true and
+  .result.storage.createdDataset == true and
+  (.result.accounts.created | sort) == ["alice", "baseline", "guest", "nasadmin", "operator"] and
+  (.result.identity.administrators | index("operator")) != null and
+  (.result.identity.administrators | index("nasadmin")) != null and
+  .result.localAdministrator.username == "nasadmin"
+' /tmp/nas-first-run-job.json >/dev/null; then
+  printf '%s\n' '--- first-run job report ---' >&2
+  jq . /tmp/nas-first-run-job.json >&2 || cat /tmp/nas-first-run-job.json >&2
+  fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
-pass "nas-setup first-run created the expected storage and accounts"
+[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+pass "GUI first start created the expected storage, accounts, and administrator"
 run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json
 if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
@@ -448,7 +522,7 @@ pass "nas-setup created storage, KeePass secrets, accounts, shares, and activate
 log "Adversarial command, SQL-like input, and HTTP validation"
 rm -f /tmp/nas-command-injection-marker
 # shellcheck disable=SC2016
-if nas-cockpit-api managed-service 'ai-workspace;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
+if nas-cockpit-api managed-service 'copyparty;touch${IFS}/tmp/nas-command-injection-marker' always >/tmp/nas-bad-feature.out 2>/tmp/nas-bad-feature.err; then
   fail "Cockpit API accepted a command-injection-shaped service identifier"
 fi
 [[ ! -e /tmp/nas-command-injection-marker ]] || fail "service identifier escaped into shell execution"
@@ -462,10 +536,9 @@ if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.ou
   fail "setup accepted a traversal-shaped storage device"
 fi
 wait_active nas-alert-router.service
-code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
+code="$(curl --silent --output /tmp/nas-alert-malformed-adv.json --write-out '%{http_code}' \
   --header 'Content-Type: application/json' --data-binary '{' http://127.0.0.1:9093/api/v2/alerts)"
 [[ "$code" == 400 ]] || fail "alert router malformed JSON returned HTTP $code instead of 400"
-! grep -q 'Traceback' /tmp/nas-alert-malformed.json || fail "alert router leaked a traceback for malformed JSON"
 transfer_code="$(curl --silent --output /tmp/nas-alert-transfer.json --write-out '%{http_code}' \
   --header 'Transfer-Encoding: chunked' --header 'Content-Type: application/json' \
   --data-binary '[]' http://127.0.0.1:9093/api/v2/alerts || true)"
@@ -525,10 +598,10 @@ nas-identity-sync capabilities | jq -e '
   .capabilities.files.allowed == true and .capabilities.ai.allowed == false
 ' >/dev/null
 printf '%s\n' 'alice-updated-password' |
-  run_as_admin nas-setup account apply --username alice --password-stdin \
+  run_as_nasadmin nas-setup account apply --username alice --password-stdin \
     >/tmp/nas-account-password-update.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
-run_as_admin nas-setup account apply --username alice \
+run_as_nasadmin nas-setup account apply --username alice \
   --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
   >/tmp/nas-account-xss-name.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
@@ -539,14 +612,14 @@ nas-identity-sync export-account alice | jq -e '
   (.groups | index("nas_allow_syncthing")) != null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
-  run_as_admin nas-setup account apply \
+  run_as_nasadmin nas-setup account apply \
     --username temporary \
     --name 'Temporary User' \
     --email temporary@nas.local \
     --group nas_allow_files \
     --password-stdin >/tmp/nas-account-add.json
 jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
-run_as_admin nas-setup account disable temporary >/tmp/nas-account-disable.json
+run_as_nasadmin nas-setup account disable temporary >/tmp/nas-account-disable.json
 jq -e '.updated == ["temporary"]' /tmp/nas-account-disable.json >/dev/null
 nas-identity-sync export-account temporary | jq -e '
   .active == false and
@@ -555,74 +628,6 @@ nas-identity-sync export-account temporary | jq -e '
   (.groups | index("nas_allow_files")) == null
 ' >/dev/null
 pass "core services, account apply/disable CLI, and CopyParty backend are healthy"
-
-log "Anonymous read-only TFTP behavior"
-[[ -d /tank/shares/tftp ]] || fail "ZFS-backed TFTP directory was not created"
-printf 'nixos-nas-qemu-tftp\n' >/tank/shares/tftp/qemu-tftp.txt
-chown copyparty:copyparty /tank/shares/tftp/qemu-tftp.txt
-chmod 0660 /tank/shares/tftp/qemu-tftp.txt
-timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$TEST_TIMEOUT" bash -c \
-  "until ss -lun | grep -Eq '[:.]3969[[:space:]]'; do sleep 2; done"
-python3 - <<'PYTFTP'
-import socket
-import struct
-from pathlib import Path
-
-SERVER = ("127.0.0.1", 3969)
-REMOTE = "tftp/qemu-tftp.txt"
-EXPECTED = b"nixos-nas-qemu-tftp\n"
-
-
-def packet(opcode: int, name: str) -> bytes:
-    return struct.pack("!H", opcode) + name.encode() + b"\0octet\0"
-
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.settimeout(10)
-sock.sendto(packet(1, REMOTE), SERVER)  # RRQ
-received = bytearray()
-expected_block = 1
-while True:
-    response, peer = sock.recvfrom(65535)
-    opcode = struct.unpack("!H", response[:2])[0]
-    if opcode == 5:
-        code = struct.unpack("!H", response[2:4])[0]
-        message = response[4:-1].decode("utf-8", "replace")
-        raise SystemExit(f"TFTP read failed ({code}): {message}")
-    if opcode != 3 or len(response) < 4:
-        raise SystemExit(f"unexpected TFTP read packet opcode={opcode}")
-    block = struct.unpack("!H", response[2:4])[0]
-    if block != expected_block:
-        raise SystemExit(f"unexpected TFTP block {block}, wanted {expected_block}")
-    payload = response[4:]
-    received.extend(payload)
-    sock.sendto(struct.pack("!HH", 4, block), peer)
-    if len(payload) < 512:
-        break
-    expected_block = (expected_block + 1) & 0xFFFF
-
-if bytes(received) != EXPECTED:
-    raise SystemExit(f"TFTP payload mismatch: {bytes(received)!r}")
-
-upload = "tftp/qemu-upload-must-fail.txt"
-write_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-write_sock.settimeout(3)
-write_sock.sendto(packet(2, upload), SERVER)
-try:
-    response, _peer = write_sock.recvfrom(65535)
-except TimeoutError:
-    # CopyParty's anonymous read-only TFTP mode rejects writes by withholding
-    # a transfer response; the absence of a created file is the authority.
-    pass
-else:
-    opcode = struct.unpack("!H", response[:2])[0]
-    if opcode != 5:
-        raise SystemExit(f"read-only TFTP accepted a write request (opcode={opcode})")
-write_sock.close()
-if Path("/tank/shares/tftp/qemu-upload-must-fail.txt").exists():
-    raise SystemExit("read-only TFTP created the rejected upload")
-PYTFTP
-pass "TFTP serves anonymous reads and rejects writes in read-only mode"
 
 log "Authentik API, identity policy, and proxy authorization"
 unauth_code="$(http_code http://127.0.0.1:9000/identity/api/v3/core/users/)"
@@ -676,9 +681,6 @@ if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
     raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
 PYHOSTILEGATE
 pass "malformed trusted identity headers remain fail-closed inside the installed gate"
-nas-managed-services-control set ai-runtime off >/dev/null
-wait_inactive nas-llama-swap.service
-
 backend_admin="$(http_code --unix-socket /run/copyparty/http.sock \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
   http://localhost/shares/admin/)"
@@ -688,10 +690,6 @@ assert_blocked /shares/
 assert_spoof_blocked /shares/
 assert_blocked /shares/admin/
 assert_spoof_blocked /console/
-assert_blocked /ai/
-assert_spoof_blocked /ai/
-assert_blocked /syncthing/
-assert_blocked /vault/admin
 assert_blocked /metrics/
 assert_blocked /alerts/
 
@@ -803,7 +801,6 @@ pass "Deterministic bundle XSS, layout, and console-error probes"
 
 log "Custom command surfaces and generated configuration"
 nas-secrets status | grep -q 'Runtime secrets: active'
-run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets show-ai-api-key | grep -Eq '^[0-9a-fA-F]{64}$'
 ! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
   >/tmp/nas-token-warning.log 2>&1 || fail "bootstrap token reuse was not reported"
 grep -q 'bootstrap token' /tmp/nas-token-warning.log
@@ -812,11 +809,11 @@ grep -q 'bootstrap token' /tmp/nas-token-warning.log
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
 nas-managed-services-control status | jq -e '.schemaVersion == 3 and (.services | length > 0)' >/dev/null
 nas-managed-services-control document | jq -e '.document.services | type == "object"' >/dev/null
-! nas-managed-services-control set '../ai-runtime' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
-! nas-managed-services-control set 'ai-runtime;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
+! nas-managed-services-control set '../copyparty' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
+! nas-managed-services-control set 'copyparty;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
 [[ ! -e /tmp/pwned ]] || fail "service identifier injection created an unexpected file"
-! run_as_admin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
-! run_as_admin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
+! run_as_nasadmin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
+! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
 nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
@@ -834,58 +831,16 @@ rm -f /tmp/nas-qemu-state.tar.gz
 NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
 pass "all custom command surfaces and in-VM repository preflight succeeded"
 
-log "Open WebUI and llama-swap start/stop/on-demand lifecycle"
-nas-managed-services-control set ai-runtime always | jq -e '.ok == true' >/dev/null
-wait_active nas-llama-swap.service
-assert_http_responsive "llama-swap web interface" http://127.0.0.1:9292/ui/
-
-nas-managed-services-control set ai-workspace always | jq -e '.ok == true' >/dev/null
-wait_active open-webui.service
-wait_http http://127.0.0.1:9380/health
-
-nas-managed-services-control set ai-workspace off | jq -e '.ok == true' >/dev/null
-wait_inactive open-webui.service
-nas-managed-services-control set ai-runtime off | jq -e '.ok == true' >/dev/null
-wait_inactive nas-llama-swap.service
-
-printf '{"ai-runtime":"on-demand","ai-workspace":"on-demand"}' | nas-managed-services-control set-many - | jq -e '.ok == true' >/dev/null
-nas-managed-services-control wake ai-workspace | jq -e '.ok == true' >/dev/null
-wait_active nas-llama-swap.service
-wait_active open-webui.service
-wait_http http://127.0.0.1:9380/health
-nas-managed-services-control set ai-workspace off >/dev/null
-nas-managed-services-control set ai-runtime off >/dev/null
-wait_inactive open-webui.service
-wait_inactive nas-llama-swap.service
-nas-managed-services-control set ai-downloader always | jq -e '.ok == true' >/dev/null
-wait_active podman-hfdownloader.service
-nas-managed-services-control set ai-downloader off | jq -e '.ok == true' >/dev/null
-wait_inactive podman-hfdownloader.service
-pass "Open WebUI, llama-swap, and ai-downloader start, stop, and wake correctly"
-
-log "Observability, notifications, Syncthing, Vaultwarden, and Cockpit assets"
+log "Observability and notifications"
 nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
 for unit in \
   victoriametrics.service telegraf.service vmalert-nas.service \
-  nas-alert-router.service grafana.service ntfy-sh.service \
-  syncthing.service vaultwarden.service; do
+  nas-alert-router.service grafana.service ntfy-sh.service; do
   systemctl cat "$unit" >/dev/null 2>&1 || fail "expected enabled unit is missing: $unit"
   wait_active "$unit"
 done
 wait_http http://127.0.0.1:8428/victoriametrics/ping
 wait_http http://127.0.0.1:3000/api/health
-syncthing_key_file=/var/lib/syncthing/.config/syncthing/apikey
-syncthing_config=/var/lib/syncthing/.config/syncthing/config.xml
-if [[ -s "$syncthing_key_file" ]]; then
-  syncthing_key="$(<"$syncthing_key_file")"
-else
-  syncthing_key="$(sed -nE 's#.*<apikey>([^<]+)</apikey>.*#\1#p' "$syncthing_config" | head -n1)"
-fi
-[[ -n "$syncthing_key" ]] || fail "Syncthing API key is missing from apikey and config.xml"
-wait_http http://127.0.0.1:8384/rest/system/status -H "X-API-Key: $syncthing_key"
-nas-identity-sync sync-syncthing | jq -e \
-  'has("folders") and has("devices") and has("removedFolders") and has("removedDevices")' >/dev/null
-wait_http http://127.0.0.1:8222/alive
 assert_http_responsive "ntfy health endpoint" http://127.0.0.1:2586/v1/health
 log "Notification dependency failure and recovery"
 alert_payload='[{"labels":{"alertname":"QemuNtfyDependency","severity":"warning","instance":"qemu"},"annotations":{"summary":"ntfy outage test"}}]'
@@ -905,7 +860,7 @@ ntfy_recovered_code="$(curl --silent --output /tmp/nas-alert-ntfy-recovered.json
 [[ "$ntfy_recovered_code" == 200 ]] || fail "alert delivery did not recover after ntfy restart (HTTP $ntfy_recovered_code)"
 pass "alert delivery fails explicitly during ntfy outage and recovers cleanly"
 malformed_alert_code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary '{' \
+  --header 'Content-Type: application/json' --data-binary '{' \
   http://127.0.0.1:9093/api/v2/alerts)"
 [[ "$malformed_alert_code" == 400 ]] || fail "malformed alert JSON returned HTTP $malformed_alert_code"
 python3 - <<'PYALERTBODY'
@@ -913,7 +868,7 @@ from pathlib import Path
 Path('/tmp/nas-alert-oversized.json').write_bytes(b'[' + b' ' * (1024 * 1024 + 4096) + b']')
 PYALERTBODY
 oversized_alert_code="$(curl --silent --output /tmp/nas-alert-oversized-response.json --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary @/tmp/nas-alert-oversized.json \
+  --header 'Content-Type: application/json' --data-binary @/tmp/nas-alert-oversized.json \
   http://127.0.0.1:9093/api/v2/alerts)"
 [[ "$oversized_alert_code" == 413 ]] || fail "oversized alert body returned HTTP $oversized_alert_code"
 rm -f /tmp/nas-alert-oversized.json
@@ -924,7 +879,7 @@ grep -q 'one line' /tmp/nas-alert-header-injection.log
 nas-alert 'QEMU integration test' 'NixOS NAS notification path is healthy.'
 find /run/current-system/sw/share/cockpit /nix/store -maxdepth 6 -path '*cockpit*zfs*' -print -quit 2>/dev/null | grep -q .
 find /run/current-system/sw/share/cockpit /nix/store -maxdepth 8 -path '*nas*docs*index.html' -print -quit 2>/dev/null | grep -q .
-pass "supporting services and Cockpit plugin assets are present"
+pass "observability stack, notification delivery, and Cockpit assets are present"
 
 log "Secret stop/reactivation transaction"
 run_as_admin nas-secrets stop

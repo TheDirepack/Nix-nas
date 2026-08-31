@@ -1,0 +1,326 @@
+name: Merge build and release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+# Only duplicate release attempts for the same qualified source are serialized
+# here. Cross-source ordering is enforced explicitly by the ordering job using
+# main's first-parent history, because GitHub concurrency ordering is based on
+# queue-entry time rather than source-commit order.
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  eligibility:
+    name: Verify qualified merge source
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      eligible: ${{ steps.source.outputs.eligible }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+    steps:
+      - name: Require the exact merged pull request result on main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          printf 'source_sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          merged_prs="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/$REPOSITORY/commits/$SOURCE_SHA/pulls" \
+              --jq '[.[] | select(.merged_at != null and .base.ref == "main" and .merge_commit_sha == env.SOURCE_SHA)] | length'
+          )"
+          if (( merged_prs > 0 )); then
+            printf 'eligible=true\n' >> "$GITHUB_OUTPUT"
+            printf 'Qualified CI source %s is the merge result of %s main PR(s).\n' "$SOURCE_SHA" "$merged_prs"
+          else
+            printf 'eligible=false\n' >> "$GITHUB_OUTPUT"
+            printf 'Source %s is not the exact merge result of a main PR; no release will be published.\n' "$SOURCE_SHA"
+          fi
+
+  ordering:
+    name: Preserve main release source order
+    needs: [eligibility]
+    if: needs.eligibility.outputs.eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      SOURCE_SHA: ${{ needs.eligibility.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.eligibility.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Wait for the nearest earlier qualified merge release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 scripts/wait-release-predecessor.py \
+            --repository "$REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow ci.yml \
+            --poll-seconds 30 \
+            --timeout-seconds 19800
+
+  build:
+    name: Build release candidate from qualified source
+    needs: [eligibility, ordering]
+    if: >-
+      needs.eligibility.outputs.eligible == 'true' &&
+      needs.ordering.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    env:
+      SOURCE_SHA: ${{ needs.eligibility.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.eligibility.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize release paths
+        run: |
+          {
+            echo "RELEASE_PUBLICATION=$RUNNER_TEMP/release-publication"
+            echo "RELEASE_METADATA=$RUNNER_TEMP/release-publication/release-metadata.json"
+            echo "RELEASE_NOTES=$RUNNER_TEMP/release-publication/release-notes.md"
+            echo "RELEASE_OUT=$RUNNER_TEMP/release-publication/release-out"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: cockpit/package-lock.json
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable incremental Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
+      - name: Restore the exact Nix handoff qualified by CI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vm-bundle-handoff
+          path: ${{ runner.temp }}/vm-bundles
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Verify and import qualified CI build inputs
+        run: |
+          set -euo pipefail
+          ./scripts/vm-bundles.sh verify-handoff "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
+          ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
+          bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
+      - name: Fetch release tag history
+        run: git fetch --force --tags origin
+      - name: Stamp deterministic release version and Diceware bootstrap password
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RELEASE_PUBLICATION"
+          mkdir -p "$RELEASE_OUT"
+          bootstrap_password=""
+          for _ in {1..20}; do
+            bootstrap_password="$(nix develop .#test -c diceware -n 5 -d - -w en_eff --caps -r system)"
+            if (( ${#bootstrap_password} >= 20 )); then
+              break
+            fi
+          done
+          (( ${#bootstrap_password} >= 20 ))
+          python3 scripts/prepare_release.py \
+            --source-sha "$SOURCE_SHA" \
+            --metadata-out "$RELEASE_METADATA" \
+            --password "$bootstrap_password"
+          unset bootstrap_password
+      - name: Build and verify release Cockpit bundle
+        run: |
+          set -euo pipefail
+          npm --prefix cockpit ci --no-audit --no-fund
+          npm --prefix cockpit run build
+          node cockpit/build.js --check
+          node scripts/validate-cockpit-jsx.cjs
+          node --test tests/js/*.test.mjs
+      - name: Validate release metadata and automation contracts
+        run: |
+          set -euo pipefail
+          python3 scripts/check-version.py
+          nix develop .#test -c actionlint .github/workflows/ci.yml .github/workflows/release.yml
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern test_release_automation.py
+          nix develop .#test -c ./scripts/run-unit-tests.py --jobs 1 --pattern test_release_predecessor.py
+          ./scripts/nix-config-matrix.sh
+          ./scripts/evaluate-reference-configurations.sh
+      - name: Build release-specific NixOS closures from the qualified handoff
+        run: |
+          set -euo pipefail
+          nix build .#nixosConfigurations.nas-ci-ready.config.system.build.toplevel --show-trace -L --no-link
+          nix build .#nixosConfigurations.nas-qemu.config.system.build.toplevel --show-trace -L --no-link
+      - name: Commit or recover the exact release inputs
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["version"])')"
+          existing_tag="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["existing_tag"])')"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if [[ -n "$existing_tag" ]]; then
+            tagged_source="$(git rev-parse "${existing_tag}^{commit}^1")"
+            [[ "$tagged_source" == "$SOURCE_SHA" ]]
+            git reset --hard "${existing_tag}^{commit}"
+            echo "Recovered the exact stamped commit for $existing_tag."
+          else
+            git add -A
+            git diff --cached --check
+            git commit -m "chore(release): v${version}"
+          fi
+      - name: Package and verify source release
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RELEASE_OUT"
+          mkdir -p "$RELEASE_OUT"
+          NAS_PREFLIGHT_SKIP_TESTS=1 ./scripts/package-release.sh --source-only "$RELEASE_OUT"
+          mapfile -d '' assets < <(find "$RELEASE_OUT" -type f -print0 | sort -z)
+          ((${#assets[@]} >= 3))
+          printf 'Prepared %d release assets.\n' "${#assets[@]}"
+      - name: Prepare release notes and immutable candidate bundle
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(Path(os.environ["RELEASE_METADATA"]).read_text(encoding="utf-8"))
+          version = metadata["version"]
+          source_sha = metadata["source_sha"]
+          username = metadata["bootstrap_username"]
+          password = metadata["bootstrap_password"]
+          repository = os.environ["REPOSITORY"]
+          notes = f"""# NixOS NAS {version}
+
+          Automated release from qualified main merge [`{source_sha[:12]}`](https://github.com/{repository}/commit/{source_sha}).
+
+          ## First-boot Authentik credentials
+
+          - Username: `{username}`
+          - Password: `{password}`
+
+          This five-word Diceware bootstrap credential is intentionally release-specific and public. It is only for first-run Authentik setup and is retired by the normal setup workflow after the administrator account is established.
+
+          ## Artifact status
+
+          This is a **source-only development release**. The source merge completed the full CI pipeline before this workflow ran. This workflow then rebuilt the release-specific Cockpit and NixOS configuration deltas after stamping the release version and bootstrap credential, and packaged the exact release-only commit with its manifest, SHA-256 digest, and provenance metadata. The development branch keeps its fixed bootstrap password for repeatable testing.
+          """
+          Path(os.environ["RELEASE_NOTES"]).write_text(notes, encoding="utf-8")
+          PY
+          tag="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["tag"])')"
+          candidate_ref="refs/release-candidate/$tag"
+          git update-ref "$candidate_ref" HEAD
+          git bundle create "$RELEASE_PUBLICATION/release-candidate.bundle" "$candidate_ref"
+      - name: Retain immutable release publication inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-publication-${{ needs.eligibility.outputs.source_sha }}
+          if-no-files-found: error
+          retention-days: 1
+          path: ${{ runner.temp }}/release-publication
+
+  publish:
+    name: Publish verified release candidate
+    needs: [eligibility, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    env:
+      SOURCE_SHA: ${{ needs.eligibility.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.eligibility.outputs.source_sha }}
+          fetch-depth: 0
+      - name: Initialize release paths
+        run: |
+          {
+            echo "RELEASE_PUBLICATION=$RUNNER_TEMP/release-publication"
+            echo "RELEASE_METADATA=$RUNNER_TEMP/release-publication/release-metadata.json"
+            echo "RELEASE_NOTES=$RUNNER_TEMP/release-publication/release-notes.md"
+            echo "RELEASE_OUT=$RUNNER_TEMP/release-publication/release-out"
+          } >> "$GITHUB_ENV"
+      - name: Download immutable release publication inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-publication-${{ needs.eligibility.outputs.source_sha }}
+          path: ${{ runner.temp }}/release-publication
+      - name: Verify candidate commit and publish tag/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["version"])')"
+          tag="v${version}"
+          metadata_tag="$(python3 -c 'import json,os; print(json.load(open(os.environ["RELEASE_METADATA"]))["tag"])')"
+          [[ "$metadata_tag" == "$tag" ]]
+          candidate_ref="refs/release-candidate/$tag"
+          git fetch "$RELEASE_PUBLICATION/release-candidate.bundle" "$candidate_ref:$candidate_ref"
+          release_commit="$(git rev-parse "$candidate_ref^{commit}")"
+          tagged_source="$(git rev-parse "$candidate_ref^{commit}^1")"
+          [[ "$tagged_source" == "$SOURCE_SHA" ]]
+          [[ "$(git show "$release_commit:VERSION")" == "$version" ]]
+
+          git fetch --force --tags origin
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null 2>&1; then
+            tagged_commit="$(git rev-parse "${tag}^{commit}")"
+            tagged_source="$(git rev-parse "${tag}^{commit}^1")"
+            [[ "$tagged_commit" == "$release_commit" && "$tagged_source" == "$SOURCE_SHA" ]] || {
+              echo "Release tag $tag belongs to different release inputs." >&2
+              exit 1
+            }
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$tag" -m "NixOS NAS $version" "$release_commit"
+            git push origin "refs/tags/$tag"
+          fi
+
+          mapfile -d '' assets < <(find "$RELEASE_OUT" -type f -print0 | sort -z)
+          ((${#assets[@]} >= 3))
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release edit "$tag" --title "NixOS NAS $version" --notes-file "$RELEASE_NOTES"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "NixOS NAS $version" \
+              --notes-file "$RELEASE_NOTES" \
+              --verify-tag
+          fi

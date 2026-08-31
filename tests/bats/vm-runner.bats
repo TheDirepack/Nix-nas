@@ -13,6 +13,9 @@ setup() {
 
 @test "persistent-start cleanup disarms only after a healthy QEMU startup" {
   run "$persistent_lifecycle"
+  if [ "$status" -ne 0 ]; then
+    printf '%s\n' "$output"
+  fi
   [ "$status" -eq 0 ]
   [[ "$output" == *"Persistent QEMU lifecycle contract passed"* ]]
 }
