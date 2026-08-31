@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import email.message
 import io
 import json
 import os
@@ -41,7 +42,7 @@ class SetupApplicationRetirementTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             token_path = pathlib.Path(temporary) / "bootstrap-token"
             token_path.write_text("bootstrap-authority\n", encoding="utf-8")
-            forbidden = urllib.error.HTTPError("http://authentik", 403, "Forbidden", {}, None)
+            forbidden = urllib.error.HTTPError("http://authentik", 403, "Forbidden", email.message.Message(), None)
             with (
                 mock.patch.dict(os.environ, {"NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE": str(token_path)}),
                 mock.patch("urllib.request.urlopen", side_effect=forbidden),
