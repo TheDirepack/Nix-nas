@@ -139,6 +139,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("retire_bootstrap_runtime", setup)
         self.assertNotIn('run_root(["find", str(bootstrap_root), "-mindepth", "1", "-delete"])', setup)
         self.assertIn('"/^AUTHENTIK_BOOTSTRAP_/d"', setup)
+        blueprint = text("authentik/blueprints/nas-user-settings.yaml")
+        self.assertIn("authentik_core.view_token", blueprint)
+        self.assertIn("authentik_outposts.view_outpost", blueprint)
 
     def test_cockpit_is_isolated_until_authentik_can_authorize_it(self) -> None:
         base = text("modules/nas/internal/base.nix")

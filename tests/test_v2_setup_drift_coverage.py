@@ -16,6 +16,15 @@ from nas_operation_journal import JournalError  # noqa: E402
 
 
 class SetupDriftCoverageTests(unittest.TestCase):
+    def test_runtime_secret_readiness_uses_privileged_status_boundary(self) -> None:
+        with mock.patch.object(
+            setup,
+            "run_root_noninteractive",
+            return_value=setup.Completed(("test",), "", "", 0),
+        ) as privileged:
+            self.assertTrue(setup.runtime_secrets_ready())
+        privileged.assert_called_once_with(["test", "-f", "/run/nas-secrets/ready"], check=False)
+
     def test_existing_account_success_missing_and_error_shapes(self) -> None:
         with mock.patch.object(setup, "run_root", return_value=setup.Completed((), '{"username":"alice"}', "", 0)):
             self.assertEqual(setup.existing_account("alice"), {"username": "alice"})
@@ -38,7 +47,7 @@ class SetupDriftCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=True),
             mock.patch.object(setup, "share_directories_ready", return_value=True),
-            mock.patch.object(pathlib.Path, "is_file", return_value=False),
+            mock.patch.object(setup, "runtime_secrets_ready", return_value=False),
             mock.patch.object(setup, "identity_command_ready") as identity,
             mock.patch.object(setup, "service_policy_ready") as services,
         ):
@@ -55,7 +64,7 @@ class SetupDriftCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=True),
             mock.patch.object(setup, "share_directories_ready", return_value=True),
-            mock.patch.object(pathlib.Path, "is_file", return_value=True),
+            mock.patch.object(setup, "runtime_secrets_ready", return_value=True),
             mock.patch.object(setup, "identity_command_ready", return_value=True),
             mock.patch.object(setup, "service_policy_ready", return_value=False),
         ):
@@ -177,6 +186,7 @@ class SetupDriftCoverageTests(unittest.TestCase):
                 mock.patch.object(pathlib.Path, "exists", return_value=True),
                 mock.patch.object(setup, "pool_exists", return_value=True),
                 mock.patch.object(setup, "dataset_exists", return_value=True),
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=True),
                 mock.patch.object(setup, "load_json", return_value=None),
                 mock.patch.object(setup, "run_root_noninteractive", side_effect=results),
             ):
@@ -195,6 +205,7 @@ class SetupDriftCoverageTests(unittest.TestCase):
                 mock.patch.object(pathlib.Path, "exists", return_value=True),
                 mock.patch.object(setup, "pool_exists", return_value=True),
                 mock.patch.object(setup, "dataset_exists", return_value=True),
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=True),
                 mock.patch.object(setup, "load_json", return_value=None),
                 mock.patch.object(
                     setup,

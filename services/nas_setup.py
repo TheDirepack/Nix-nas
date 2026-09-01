@@ -236,6 +236,10 @@ def run_root_noninteractive(command: Sequence[str], **kwargs: Any) -> Completed:
     return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
 
 
+def runtime_secrets_ready() -> bool:
+    return run_root_noninteractive(["test", "-f", "/run/nas-secrets/ready"], check=False).returncode == 0
+
+
 def require_setup_operator() -> None:
     current = current_username()
     if os.geteuid() == 0 and os.environ.get("NAS_SETUP_ALLOW_ROOT") == "1":
@@ -1043,7 +1047,7 @@ def adopt_bootstrap_authentik_authority(keepass_password: str) -> dict[str, bool
             coordinated_child(["nas-secrets", "adopt-authentik-bootstrap-stdin"]),
             input_text=f"{keepass_password}\n{secret_key}\n{token}\n",
         )
-        if pathlib.Path("/run/nas-secrets/ready").is_file():
+        if runtime_secrets_ready():
             run_interactive_privileged(
                 coordinated_child(["nas-secrets", "activate-stdin"]), input_text=f"{keepass_password}\n"
             )
@@ -1159,7 +1163,7 @@ def reconcile_verified_storage_retry(
 
 
 def protected_stack_ready(_result: Any = None) -> bool:
-    if not pathlib.Path("/run/nas-secrets/ready").is_file():
+    if not runtime_secrets_ready():
         return False
     return (
         run_root_noninteractive(
@@ -1474,6 +1478,10 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                     lambda: run(["nas-preflight"], env=INSTALLED_PREFLIGHT_ENV) and {"passed": True},
                     postcondition=preflight_ready,
                 )
+            run_root(
+                ["systemctl", "reset-failed", "nas-health-alert@authentik-migrate.service.service"],
+                check=False,
+            )
             report_status = "complete" if preflight_ran else "complete-unverified"
             report = {
                 "schemaVersion": SCHEMA_VERSION,
@@ -1627,7 +1635,7 @@ def setup_authority_health(config: Mapping[str, Any]) -> dict[str, Any]:
         "managedServices": None,
         "shares": share_directories_ready(config.get("accounts", [])),
     }
-    if pathlib.Path("/run/nas-secrets/ready").is_file():
+    if runtime_secrets_ready():
         checks["identity"] = identity_command_ready(["nas-identity-sync", "status"])
         checks["managedServices"] = service_policy_ready(config.get("services", {}))
     required = [checks["keepassDatabase"], checks["pool"], checks["dataset"], checks["shares"]]
@@ -1763,7 +1771,7 @@ def status_report() -> dict[str, Any]:
     report: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
         "keepassDatabase": {"path": str(KEEPASS_DATABASE), "exists": KEEPASS_DATABASE.exists()},
-        "runtimeSecretsActive": pathlib.Path("/run/nas-secrets/ready").exists(),
+        "runtimeSecretsActive": runtime_secrets_ready(),
         "poolPresent": pool_exists(),
         "datasetPresent": dataset_exists(),
         "setupState": None,
