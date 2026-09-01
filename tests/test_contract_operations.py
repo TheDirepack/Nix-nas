@@ -94,6 +94,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("nas-zfs-mount-guard.service", seed)
         self.assertNotIn("RequiresMountsFor", seed)
         self.assertIn("nas-zfs-mount-guard.service", reconcile)
+        self.assertIn("systemd-tmpfiles --create --graceful --prefix", protected)
         self.assertIn("RequiresMountsFor", reconcile)
         self.assertIn("postgresql = {", protected)
         self.assertIn('requires = [ "nas-bootstrap-runtime-select.service" ];', protected)

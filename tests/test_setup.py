@@ -382,6 +382,7 @@ class StorageProvisioningTests(unittest.TestCase):
                 mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
                 mock.patch.object(setup, "run_interactive_privileged") as activate,
                 mock.patch.object(setup, "run_storage_host", return_value=setup.Completed((), "", "")) as storage,
+                mock.patch.object(setup, "run_root") as root,
             ):
                 self.assertEqual(
                     setup.prepare_storage_runtime("database-password", selected),
@@ -395,6 +396,7 @@ class StorageProvisioningTests(unittest.TestCase):
                 storage.call_args_list[1].args[0],
                 ["systemd-tmpfiles", "--create", "--prefix", str(setup.ZFS_ROOT / "nas-control")],
             )
+            root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
 
 
 class LocalAdministratorTests(unittest.TestCase):

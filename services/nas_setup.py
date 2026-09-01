@@ -90,6 +90,7 @@ STATE_PATH = pathlib.Path(os.environ.get("NAS_SETUP_STATE", "/var/lib/nas-setup/
 JOURNAL_PATH = pathlib.Path(os.environ.get("NAS_SETUP_JOURNAL", "/var/lib/nas-setup/first-run-journal.json"))
 FIRST_START_STATUS_PATH = pathlib.Path(os.environ.get("NAS_FIRST_START_STATUS", "/var/lib/nas-first-start/status.json"))
 MANAGED_SERVICES_CONTROL = os.environ.get("NAS_MANAGED_SERVICES_CONTROL", "nas-managed-services-control")
+MANAGED_SERVICES_DESIRED = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
 SETUP_OPERATION_CLASSES = (
     "appliance",
     "first-start",
@@ -768,11 +769,15 @@ def prepare_storage_runtime(keepass_password: str, encrypt_storage: bool | None 
         )
     run_storage_host(["nas-zfs-mount-check"])
     run_storage_host(["systemd-tmpfiles", "--create", "--prefix", str(ZFS_ROOT / "nas-control")])
+    # The initial seed runs before the new ZFS mount exists and is hidden by
+    # that mount. Re-run it against the permanent data root before any managed
+    # service reconciliation can observe a missing desired-state authority.
+    run_root(["systemctl", "restart", "nas-managed-services-seed.service"])
     return {"mounted": True, "runtimeDirectoriesPrepared": True}
 
 
 def storage_runtime_ready(_result: Any = None) -> bool:
-    return storage_ready() and (ZFS_ROOT / "nas-control").is_dir()
+    return storage_ready() and (ZFS_ROOT / "nas-control").is_dir() and MANAGED_SERVICES_DESIRED.is_file()
 
 
 def run_storage_host(

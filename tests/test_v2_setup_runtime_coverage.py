@@ -385,6 +385,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
             mock.patch.object(setup, "run_interactive_privileged") as activate,
             mock.patch.object(setup, "run_storage_host") as storage_host,
+            mock.patch.object(setup, "run_root") as root,
         ):
             result = setup.prepare_storage_runtime("pw")
         activate.assert_called_once_with(["nas-secrets", "activate-stdin"], input_text="pw\n")
@@ -395,6 +396,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 ["systemd-tmpfiles", "--create", "--prefix", "/tank/nas-control"],
             ],
         )
+        root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
         self.assertEqual(result, {"mounted": True, "runtimeDirectoriesPrepared": True})
 
     def test_plain_storage_runtime_preparation_does_not_activate_secrets(self) -> None:
@@ -403,6 +405,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "ZFS_ROOT", pathlib.Path("/tank")),
             mock.patch.object(setup, "run_interactive_privileged") as activate,
             mock.patch.object(setup, "run_storage_host"),
+            mock.patch.object(setup, "run_root"),
         ):
             setup.prepare_storage_runtime("pw")
         activate.assert_not_called()

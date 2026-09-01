@@ -136,7 +136,7 @@ in
         # the ZFS root so per-type app directories (postgresql, authentik,
         # nas-control, ...) exist behind the mount before any protected
         # service starts. Idempotent; no-op when the dirs already exist.
-        ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix ${cfg.zfsRoot}";
+        ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --graceful --prefix ${cfg.zfsRoot}";
       };
     };
 
