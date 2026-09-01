@@ -85,6 +85,8 @@ class TestApplicationChanges(unittest.TestCase):
         copyparty = content[content.index("systemd.services.copyparty = {") :]
         copyparty = copyparty[: copyparty.index("systemd.services.syncthing")]
         self.assertIn('serviceConfig.StateDirectory = lib.mkForce "";', copyparty)
+        self.assertIn("serviceConfig.WorkingDirectory = lib.mkForce copypartyDataDir;", copyparty)
+        self.assertIn("environment.XDG_CONFIG_HOME = lib.mkForce copypartyDataDir;", copyparty)
         self.assertNotIn("${cfg.zfsRoot}/copyparty", copyparty)
 
     def test_vaultwarden_statedirectory_override(self):
