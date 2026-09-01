@@ -57,6 +57,39 @@ class SetupApplicationRetirementTests(unittest.TestCase):
             forbidden.close()
 
 
+class BootstrapAccountRetirementTests(unittest.TestCase):
+    def test_persistent_bootstrap_environment_is_scrubbed_before_restart(self) -> None:
+        calls: list[tuple[str, list[str]]] = []
+
+        def record(kind: str):
+            def invoke(command, **_kwargs):
+                calls.append((kind, list(command)))
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            return invoke
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.object(setup, "current_coordination_token", return_value="a" * 32),
+            mock.patch.object(setup, "run_root", side_effect=record("root")),
+            mock.patch.object(setup, "run_admin", side_effect=record("admin")),
+            mock.patch.object(setup, "run_interactive_privileged", side_effect=record("activate")),
+        ):
+            result = setup.retire_bootstrap_runtime(pathlib.Path(temporary), "nasadmin", "keepass-password")
+
+        self.assertEqual(result, {"bootstrapRetired": True})
+        actions = [(kind, " ".join(command)) for kind, command in calls]
+        retire_user = next(index for index, item in enumerate(actions) if "retire-bootstrap nasadmin" in item[1])
+        retire_secret = next(
+            index for index, item in enumerate(actions) if "retire-authentik-bootstrap-stdin" in item[1]
+        )
+        scrub_environment = next(index for index, item in enumerate(actions) if "/^AUTHENTIK_BOOTSTRAP_/d" in item[1])
+        activate = next(index for index, item in enumerate(actions) if "activate-stdin" in item[1])
+        self.assertLess(retire_user, retire_secret)
+        self.assertLess(retire_secret, scrub_environment)
+        self.assertLess(scrub_environment, activate)
+
+
 class SetupConfigTests(unittest.TestCase):
     def base(self) -> dict:
         return {

@@ -632,9 +632,9 @@ def retire_bootstrap_runtime(
         coordinated_child(["nas-secrets", "retire-authentik-bootstrap-stdin"]),
         input_text=keepass_password + "\n",
     )
-    run_interactive_privileged(coordinated_child(["nas-secrets", "activate-stdin"]), input_text=keepass_password + "\n")
     # Keep the boot-side control-plane databases intact. Only remove the
-    # one-time Authentik environment values that could recreate akadmin.
+    # one-time Authentik environment values before activation can restart
+    # Authentik and recreate akadmin from them.
     run_root(
         [
             "sed",
@@ -643,6 +643,7 @@ def retire_bootstrap_runtime(
             str(bootstrap_root / "authentik/environment"),
         ]
     )
+    run_interactive_privileged(coordinated_child(["nas-secrets", "activate-stdin"]), input_text=keepass_password + "\n")
     return {"bootstrapRetired": True}
 
 
