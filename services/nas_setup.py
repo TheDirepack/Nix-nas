@@ -768,7 +768,7 @@ def prepare_storage_runtime(keepass_password: str, encrypt_storage: bool | None 
             input_text=keepass_password + "\n",
         )
     run_storage_host(["nas-zfs-mount-check"])
-    run_storage_host(["systemd-tmpfiles", "--create", "--prefix", str(ZFS_ROOT / "nas-control")])
+    run_storage_host(["systemd-tmpfiles", "--create", "--graceful", "--prefix", str(ZFS_ROOT)])
     # The initial seed runs before the new ZFS mount exists and is hidden by
     # that mount. Re-run it against the permanent data root before any managed
     # service reconciliation can observe a missing desired-state authority.

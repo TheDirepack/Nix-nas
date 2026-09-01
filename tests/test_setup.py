@@ -394,7 +394,7 @@ class StorageProvisioningTests(unittest.TestCase):
             self.assertEqual(storage.call_args_list[0].args[0], ["nas-zfs-mount-check"])
             self.assertEqual(
                 storage.call_args_list[1].args[0],
-                ["systemd-tmpfiles", "--create", "--prefix", str(setup.ZFS_ROOT / "nas-control")],
+                ["systemd-tmpfiles", "--create", "--graceful", "--prefix", str(setup.ZFS_ROOT)],
             )
             root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
 
