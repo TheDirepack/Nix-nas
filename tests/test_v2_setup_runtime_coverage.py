@@ -393,7 +393,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             [call.args[0] for call in storage_host.call_args_list],
             [
                 ["nas-zfs-mount-check"],
-                ["systemd-tmpfiles", "--create", "--graceful", "--prefix", "/tank"],
+                ["systemd-tmpfiles", "--create", "--graceful"],
             ],
         )
         root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
