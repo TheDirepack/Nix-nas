@@ -31,6 +31,9 @@ let
       umask 0077
 
       database=${lib.escapeShellArg cfg.secrets.keepassDatabase}
+      if [[ -n "''${NAS_KEEPASS_DATABASE:-}" ]]; then
+        database="$NAS_KEEPASS_DATABASE"
+      fi
       key_file=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
       secret_group=${lib.escapeShellArg cfg.secrets.keepassGroup}
       secret_root=${lib.escapeShellArg secretRoot}

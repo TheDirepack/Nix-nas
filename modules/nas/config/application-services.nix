@@ -59,24 +59,24 @@ let
     disable_startup_analytics = true;
     error_reporting.enabled = false;
   };
-  authentikEnvironment = {
-    AUTHENTIK_ENV = "production";
-    HOME = authentikDataDir;
-  };
-  authentikServiceConfig = {
-    User = "authentik";
-    Group = "authentik";
-    UMask = "0027";
-    WorkingDirectory = authentikDataDir;
-    EnvironmentFile = [ authentikRuntimeEnvironmentFile ];
-    NoNewPrivileges = true;
-    PrivateTmp = true;
-    ProtectHome = true;
-    ProtectSystem = "strict";
-    ReadWritePaths = [ authentikDataDir "/var/lib/authentik" ];
-    Restart = "on-failure";
-    RestartSec = "2s";
-  };
+authentikEnvironment = {
+      AUTHENTIK_ENV = "production";
+      HOME = authentikDataDir;
+    };
+    authentikServiceConfig = {
+      User = "authentik";
+      Group = "authentik";
+      UMask = "0027";
+      WorkingDirectory = authentikDataDir;
+      EnvironmentFile = [ authentikRuntimeEnvironmentFile ];
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ReadWritePaths = [ authentikDataDir "/var/lib/authentik" ];
+      Restart = "on-failure";
+      RestartSec = "2s";
+    };
   # cockpit's Python bridge dies on sd_bus_attach_event returning EINVAL
   # (libsystemd variant mismatch under Nix); upstream only tolerates EBUSY.
   # Tolerating EINVAL turns a fatal shared-session crash into a per-channel
@@ -269,9 +269,9 @@ in
       "L+ /var/lib/copyparty - - - - ${copypartyDataDir}"
     ];
 
-    services.postgresql = {
+services.postgresql = {
       enable = true;
-      dataDir = postgresqlDataDir;
+      dataDir = if config.nas.zfsEncryption.enable then "${bootstrapRuntimeRoot}/postgresql" else postgresqlDataDir;
       ensureDatabases = [ "authentik" ];
       ensureUsers = [
         {

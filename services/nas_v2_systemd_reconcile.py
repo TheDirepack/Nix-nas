@@ -445,14 +445,22 @@ def reconcile(
         restarted: set[str] = set()
         for unit in sorted(changed_units & owned):
             if unit in start:
-                _run_systemctl(systemctl, "restart", unit)
+                try:
+                    _run_systemctl(systemctl, "restart", unit)
+                except SystemdReconcileError as exc:
+                    print(f"warning: restart {unit} failed: {exc}", file=sys.stderr)
+                    continue
                 restarted.add(unit)
             else:
                 _run_systemctl(systemctl, "try-restart", unit, check=False)
 
         units_to_start = (start - previous_start) - restarted
         for unit in sorted(units_to_start):
-            _run_systemctl(systemctl, "start", unit)
+            try:
+                _run_systemctl(systemctl, "start", unit)
+            except SystemdReconcileError as exc:
+                print(f"warning: start {unit} failed: {exc}", file=sys.stderr)
+                continue
 
         state = {
             "schemaVersion": 1,

@@ -24,6 +24,13 @@
       PrivateDevices = false;
       ProtectHome = false;
       ProtectSystem = "yes";
+      ReadWritePaths = [
+        "/var/lib/nas-secrets"
+        "/var/lib/nas-setup"
+        "/var/lib/nas-control"
+        "/var/lib/postgresql"
+        "/run/nas-secrets"
+      ];
     };
   };
 }

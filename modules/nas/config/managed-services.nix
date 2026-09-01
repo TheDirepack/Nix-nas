@@ -195,7 +195,6 @@ in
     # adapter module. Keep only lifecycle/hardening shared by that finite job.
     systemd.services.nas-managed-services-authentik-reconcile = {
       description = "Apply Managed Services V2 Authentik projection";
-      wantedBy = [ "nas-protected-services.target" ];
       partOf = [ "nas-protected-services.target" ];
       requires = [ "nas-identity-sync.service" ];
       after = [
