@@ -64,8 +64,11 @@ wizard asks separately for the KeePassXC database password because it only
 unlocks the appliance secret database; it is not an account credential.
 KeePassXC, Authentik, and PostgreSQL remain under
 `/var/lib/nas-control-plane` on the system partition so they are available at
-the unlock boundary. Setup discards the temporary Authentik/PostgreSQL state
-and regenerates clean databases there; it never moves them onto ZFS.
+the unlock boundary. Setup discards any pre-existing `NAS.kdbx` and creates a
+fresh KeePassXC database with the password entered in the wizard. It also
+discards the temporary Authentik/PostgreSQL state and regenerates clean
+databases there; it never moves them onto ZFS. Recover any needed entries from
+an old database before beginning first setup because setup does not retain it.
 The Storage step includes an explicit ZFS encryption toggle, enabled by
 default. When enabled, setup creates the KeePassXC database first and uses its
 new dataset key to create the encrypted ZFS partition. Turning the toggle off

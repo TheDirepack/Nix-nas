@@ -163,6 +163,11 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("/tank/homes/nasadmin", guest)
         self.assertIn("findmnt -n -o FSTYPE -T /tank/homes/nasadmin", guest)
         self.assertIn("spawn runuser -u admin -- su - akadmin", guest)
+        self.assertIn("spawn runuser -u admin -- su - nasadmin", guest)
+        self.assertIn("discarded-bootstrap-keepass-password", guest)
+        self.assertIn("keepassxc-cli db-info --quiet", guest)
+        self.assertNotIn("keepassxc-cli db-info --quiet --pw-stdin", guest)
+        self.assertIn("state-bundle-signing-key", guest)
         self.assertNotIn("spawn su - akadmin", guest)
         self.assertIn(
             'wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"',

@@ -407,6 +407,12 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
+bootstrap_keepass_password='discarded-bootstrap-keepass-password'
+keepass_database='/var/lib/nas-control-plane/nas-secrets/NAS.kdbx'
+install -d -m 0700 -o akadmin -g users "$(dirname "$keepass_database")"
+printf '%s\n%s\n' "$bootstrap_keepass_password" "$bootstrap_keepass_password" |
+  runuser -u akadmin -- env HOME=/home/akadmin keepassxc-cli db-create --quiet --set-password "$keepass_database"
+[[ -f "$keepass_database" ]] || fail "bootstrap KeePass replacement fixture was not created"
 install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup
 printf '%s\n' 'alice-vm-password' >/var/lib/nas-test/setup/alice.password
 printf '%s\n' 'operator-vm-password' >/var/lib/nas-test/setup/operator.password
@@ -553,6 +559,32 @@ curl --fail --silent --show-error \
 [[ ! -e /home/nasadmin ]] || fail "permanent administrator data was created on the system partition"
 findmnt -n -o FSTYPE -T /tank/homes/nasadmin | grep -qx zfs || \
   fail "permanent administrator home is not backed by ZFS"
+expect <<'EXPECT_LINUX_ADMINISTRATOR'
+set timeout 15
+spawn runuser -u admin -- su - nasadmin -c {test "$(id -un)" = nasadmin}
+expect "Password:"
+send "nasadmin-vm-password\r"
+expect eof
+set status [lindex [wait] 3]
+exit $status
+EXPECT_LINUX_ADMINISTRATOR
+pass "the wizard-created administrator password authenticates the permanent Linux account"
+if printf '%s\n' "$bootstrap_keepass_password" |
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
+    >/dev/null 2>&1; then
+  fail "the discarded bootstrap KeePass password still unlocks the setup database"
+fi
+printf '%s\n' "$KEEPASS_PASSWORD" |
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
+    >/dev/null
+keepass_listing="$(printf '%s\n' "$KEEPASS_PASSWORD" |
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli ls --quiet --flatten \
+    "$keepass_database" 'NixOS NAS')"
+for required_keepass_entry in authentik-secret-key authentik-api-token state-bundle-signing-key; do
+  grep -Fxq "$required_keepass_entry" <<<"$keepass_listing" || \
+    fail "fresh KeePass database is missing $required_keepass_entry"
+done
+pass "setup replaced the bootstrap KeePass database and populated the fresh database"
 pass "GUI first start created the expected storage, accounts, and administrator"
 # This is a test-only static plan created by the disposable administrator.
 # Transfer it to the permanent administrator before verifying the idempotent

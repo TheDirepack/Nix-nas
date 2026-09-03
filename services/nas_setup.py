@@ -648,7 +648,9 @@ def retire_bootstrap_runtime(
             str(bootstrap_root / "authentik/environment"),
         ]
     )
-    run_interactive_privileged(coordinated_child(["nas-secrets", "activate-stdin"]), input_text=keepass_password + "\n")
+    run_interactive_privileged(
+        coordinated_child(["nas-secrets", "activate-setup-stdin"]), input_text=keepass_password + "\n"
+    )
     return {"bootstrapRetired": True}
 
 
@@ -667,12 +669,20 @@ def verify_or_create_database(password: str, create: bool) -> str:
             str(KEEPASS_DATABASE.parent),
         ]
     )
-    if KEEPASS_DATABASE.exists():
+    try:
+        existing_mode = KEEPASS_DATABASE.lstat().st_mode
+    except FileNotFoundError:
+        existing_mode = None
+    if existing_mode is not None and (stat.S_ISLNK(existing_mode) or not stat.S_ISREG(existing_mode)):
+        raise SetupError(f"KeePass database path is not a regular file: {KEEPASS_DATABASE}")
+    if existing_mode is not None and not create:
         run_admin(
-            ["keepassxc-cli", "db-info", "--quiet", "--pw-stdin", *key_args, str(KEEPASS_DATABASE)],
+            ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
             input_text=password + "\n",
         )
         return "existing"
+    if existing_mode is not None:
+        run_root(["rm", "--", str(KEEPASS_DATABASE)])
     if not create:
         raise SetupError(f"KeePass database does not exist: {KEEPASS_DATABASE}")
     create_args = ["keepassxc-cli", "db-create", "--quiet", "--set-password"]
@@ -682,6 +692,10 @@ def verify_or_create_database(password: str, create: bool) -> str:
     run_admin(create_args, input_text=f"{password}\n{password}\n")
     if not KEEPASS_DATABASE.exists():
         raise SetupError(f"KeePassXC did not create {KEEPASS_DATABASE}")
+    run_admin(
+        ["keepassxc-cli", "db-info", "--quiet", *key_args, str(KEEPASS_DATABASE)],
+        input_text=password + "\n",
+    )
     return "created"
 
 
@@ -768,7 +782,7 @@ def prepare_storage_runtime(keepass_password: str, encrypt_storage: bool | None 
         encrypt_storage = ZFS_ENCRYPTION
     if encrypt_storage:
         run_interactive_privileged(
-            coordinated_child(["nas-secrets", "activate-stdin"]),
+            coordinated_child(["nas-secrets", "activate-setup-stdin"]),
             input_text=keepass_password + "\n",
         )
     run_storage_host(["nas-zfs-mount-check"])
@@ -1162,14 +1176,12 @@ def reconcile_verified_storage_retry(
     return None
 
 
-def protected_stack_ready(_result: Any = None) -> bool:
+def setup_identity_stack_ready(_result: Any = None) -> bool:
     if not runtime_secrets_ready():
         return False
-    return (
-        run_root_noninteractive(
-            ["systemctl", "is-active", "--quiet", "nas-protected-services.target"], check=False
-        ).returncode
-        == 0
+    return all(
+        run_root_noninteractive(["systemctl", "is-active", "--quiet", unit], check=False).returncode == 0
+        for unit in ("authentik.service", "authentik-worker.service", "caddy.service")
     )
 
 
@@ -1381,11 +1393,11 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 "protected-service-activation",
                 lambda: (
                     run_interactive_privileged(
-                        coordinated_child(["nas-secrets", "activate-stdin"]), input_text=password + "\n"
+                        coordinated_child(["nas-secrets", "activate-setup-stdin"]), input_text=password + "\n"
                     )
                     and {"active": True}
                 ),
-                postcondition=protected_stack_ready,
+                postcondition=setup_identity_stack_ready,
             )
             progress("bootstrapping Authentik base identity roles")
             bootstrap_result = run_setup_stage(
@@ -1979,7 +1991,16 @@ def first_run(args: argparse.Namespace) -> dict[str, Any]:
         reservation_token = None
     try:
         with acquire_operation("first-start-v2", SETUP_OPERATION_CLASSES, reservation_token=reservation_token):
-            return _first_run_locked(args)
+            result = _first_run_locked(args)
+        run_root(["systemctl", "start", "nas-protected-services.target"])
+        if (
+            run_root_noninteractive(
+                ["systemctl", "is-active", "--quiet", "nas-protected-services.target"], check=False
+            ).returncode
+            != 0
+        ):
+            raise SetupError("Protected services did not become active after first-start released its locks")
+        return result
     except OperationBusyError as exc:
         raise SetupError(str(exc)) from exc
 
@@ -1999,7 +2020,12 @@ def build_parser() -> argparse.ArgumentParser:
     first.add_argument(
         "--keepass-password-stdin", action="store_true", help="Read one KeePass password line from stdin"
     )
-    first.add_argument("--create-database", action=argparse.BooleanOptionalAction, default=True)
+    first.add_argument(
+        "--create-database",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Replace any pre-existing KeePassXC database with a fresh setup database",
+    )
     first.add_argument(
         "--encrypt-storage",
         action=argparse.BooleanOptionalAction,

@@ -84,7 +84,7 @@ class BootstrapAccountRetirementTests(unittest.TestCase):
             index for index, item in enumerate(actions) if "retire-authentik-bootstrap-stdin" in item[1]
         )
         scrub_environment = next(index for index, item in enumerate(actions) if "/^AUTHENTIK_BOOTSTRAP_/d" in item[1])
-        activate = next(index for index, item in enumerate(actions) if "activate-stdin" in item[1])
+        activate = next(index for index, item in enumerate(actions) if "activate-setup-stdin" in item[1])
         self.assertLess(retire_user, retire_secret)
         self.assertLess(retire_secret, scrub_environment)
         self.assertLess(scrub_environment, activate)
@@ -547,7 +547,7 @@ class LocalAdministratorTests(unittest.TestCase):
         self.assertNotIn("promote_bootstrap_runtime", source)
         self.assertNotIn("operational-runtime-select", source)
 
-    def test_identity_database_regeneration_preserves_boot_side_keepass(self) -> None:
+    def test_identity_database_regeneration_does_not_replace_the_new_boot_side_keepass(self) -> None:
         calls: list[list[str]] = []
 
         def capture(command, **_kwargs):
@@ -712,19 +712,32 @@ class ConfiguredAdministratorTests(unittest.TestCase):
         self.assertEqual(len(plan["accounts"]), 1)
         self.assertEqual(plan["accounts"][0]["password"], "new-password")
 
-    def test_existing_keepass_database_checks_follow_directory_ownership_setup(self) -> None:
+    def test_existing_keepass_database_is_replaced_after_directory_ownership_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             database = pathlib.Path(tmp) / "secrets" / "NAS.kdbx"
             database.parent.mkdir()
             database.write_text("fixture", encoding="utf-8")
+
+            def root(command, **_kwargs):
+                if command[:2] == ["rm", "--"]:
+                    database.unlink()
+                return setup.Completed(tuple(command), "", "")
+
+            def admin(command, **_kwargs):
+                if "db-create" in command:
+                    database.write_text("fresh", encoding="utf-8")
+                return setup.Completed(tuple(command), "", "")
+
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
-                mock.patch.object(setup, "run_root") as run_root,
-                mock.patch.object(setup, "run_admin") as run_admin,
+                mock.patch.object(setup, "run_root", side_effect=root) as run_root,
+                mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
             ):
-                self.assertEqual(setup.verify_or_create_database("password", True), "existing")
-        self.assertEqual(run_root.call_args.args[0][0], "install")
-        self.assertEqual(run_admin.call_args.args[0][0], "keepassxc-cli")
+                self.assertEqual(setup.verify_or_create_database("password", True), "created")
+        self.assertEqual(run_root.call_args_list[0].args[0][0], "install")
+        self.assertEqual(run_root.call_args_list[1].args[0][:2], ["rm", "--"])
+        self.assertIn("db-create", run_admin.call_args_list[0].args[0])
+        self.assertIn("db-info", run_admin.call_args_list[1].args[0])
 
 
 class CliTests(unittest.TestCase):

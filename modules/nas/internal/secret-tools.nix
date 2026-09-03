@@ -383,6 +383,7 @@ PY_AI_PROVIDERS
       # Limit transient secret variables to the activation scope.
       command_activate() (
         set -Eeuo pipefail
+        local setup_activation="''${1:-false}"
         acquire_lock
         prompt_unlock
 
@@ -579,7 +580,16 @@ NTFY_ENV
         sudo systemctl reset-failed \
           postgresql.service postgresql-setup.service \
           authentik-migrate.service authentik-worker.service authentik.service caddy.service
-        if ! sudo systemctl start nas-protected-services.target; then
+        if [[ "$setup_activation" == true ]]; then
+          if ! sudo systemctl start postgresql.service \
+            || ! sudo systemctl start authentik-migrate.service \
+            || ! sudo systemctl start --job-mode=ignore-dependencies authentik.service \
+            || ! sudo systemctl start --job-mode=ignore-dependencies authentik-worker.service \
+            || ! sudo systemctl start --job-mode=ignore-dependencies caddy.service; then
+            echo "Setup identity services failed to start; inspect systemctl --failed." >&2
+            exit 71
+          fi
+        elif ! sudo systemctl start nas-protected-services.target; then
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71
         fi
@@ -812,7 +822,7 @@ NTFY_ENV
 
       enter_operation_coordinator() {
         case "''${1:-}" in
-          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
+          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|activate-setup-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
             local runner="''${NAS_OPERATION_RUNNER:-/run/current-system/sw/bin/nas-operation-run}"
             [[ -x "$runner" ]] || {
               echo "NAS operation coordinator is unavailable: $runner" >&2
@@ -836,6 +846,10 @@ NTFY_ENV
         activate-stdin)
           password_from_stdin=true
           command_activate
+          ;;
+        activate-setup-stdin)
+          password_from_stdin=true
+          command_activate true
           ;;
         status) command_status ;;
         stop) command_stop ;;

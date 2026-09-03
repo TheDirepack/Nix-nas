@@ -32,6 +32,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("printf '%s\\n' \"$keepass_password\" | keepassxc-cli", secrets)
         self.assertRegex(secrets, r"read\s+-r\s+-s")
         self.assertIn("activate-stdin)", secrets)
+        self.assertIn("activate-setup-stdin)", secrets)
+        self.assertIn("systemctl start --job-mode=ignore-dependencies authentik.service", secrets)
+        self.assertIn("systemctl start --job-mode=ignore-dependencies caddy.service", secrets)
         self.assertIn('superuser: "require"', unlock)
         self.assertIn("process.input", unlock)
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", secrets)
@@ -57,6 +60,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("shr-who: auth", system)
         self.assertIn('"shr-adm" = "@nas_admin";', services)
         self.assertIn('"idp-store" = 3;', services)
+
+    def test_copyparty_sandbox_uses_prepared_share_root_and_resolves_identity(self) -> None:
+        services = text("modules/nas/config/systemd-services.nix")
+        copyparty = services.split("copyparty = {", 1)[1].split("nas-vm-storage =", 1)[0]
+        self.assertIn('requires = [ "nas-copyparty-share-root.service" ];', copyparty)
+        self.assertNotIn("ExecStartPre", copyparty)
+        self.assertIn('BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];', copyparty)
 
     def test_user_settings_are_authentik_owned(self) -> None:
         proxy = text("modules/nas/config/reverse-proxy.nix")

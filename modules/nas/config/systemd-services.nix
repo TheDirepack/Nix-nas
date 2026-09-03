@@ -280,19 +280,12 @@ in
       serviceConfig = {
         RuntimeDirectoryMode = lib.mkOverride 90 "0750";
         UMask = lib.mkForce "0007";
-        ExecStartPre = lib.mkBefore (
-          [
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg shareRoot}"
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/users")}"
-          ]
-          ++ lib.optional cfg.tftp.enable
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/tftp")}"
-        );
         BindPaths = lib.mkOverride 90 [
           copypartyDataDir
           "/var/cache/copyparty"
           "${shareRoot}:${copypartyMountRoot}"
         ];
+        BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];
       };
     };
 

@@ -300,14 +300,19 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 self.assertEqual(setup.verify_or_create_database("pw", False), "existing")
             self.assertIn("nasadmin", root_run.call_args.args[0])
             self.assertIn("db-info", admin.call_args.args[0])
+            self.assertNotIn("--pw-stdin", admin.call_args.args[0])
             database.unlink()
             with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_root"):
                 with self.assertRaisesRegex(setup.SetupError, "does not exist"):
                     setup.verify_or_create_database("pw", False)
 
-            def create(_command: object, **kwargs: object) -> setup.Completed:
-                self.assertEqual(kwargs.get("input_text"), "pw\npw\n")
-                database.write_text("created", encoding="utf-8")
+            def create(command: list[str], **kwargs: object) -> setup.Completed:
+                if "db-create" in command:
+                    self.assertEqual(kwargs.get("input_text"), "pw\npw\n")
+                    database.write_text("created", encoding="utf-8")
+                else:
+                    self.assertIn("db-info", command)
+                    self.assertEqual(kwargs.get("input_text"), "pw\n")
                 return setup.Completed((), "", "")
 
             with (
@@ -316,7 +321,54 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 mock.patch.object(setup, "run_admin", side_effect=create) as create_admin,
             ):
                 self.assertEqual(setup.verify_or_create_database("pw", True), "created")
-            self.assertIn("--set-password", create_admin.call_args.args[0])
+            self.assertIn("--set-password", create_admin.call_args_list[0].args[0])
+            self.assertIn("db-info", create_admin.call_args_list[1].args[0])
+            self.assertNotIn("--pw-stdin", create_admin.call_args_list[1].args[0])
+
+    def test_create_keepass_database_replaces_a_regular_existing_database(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            database = pathlib.Path(raw) / "NAS.kdbx"
+            database.write_text("bootstrap database", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def root(command: list[str], **_kwargs: object) -> setup.Completed:
+                value = list(command)
+                calls.append(value)
+                if value[:2] == ["rm", "--"]:
+                    database.unlink()
+                return setup.Completed(tuple(value), "", "")
+
+            def admin(command: list[str], **_kwargs: object) -> setup.Completed:
+                value = list(command)
+                if "db-create" in value:
+                    self.assertFalse(database.exists())
+                    database.write_text("fresh database", encoding="utf-8")
+                return setup.Completed(tuple(value), "", "")
+
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "run_root", side_effect=root),
+                mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
+            ):
+                self.assertEqual(setup.verify_or_create_database("new-password", True), "created")
+
+            self.assertIn(["rm", "--", str(database)], calls)
+            self.assertEqual(database.read_text(encoding="utf-8"), "fresh database")
+            self.assertEqual(run_admin.call_args_list[-1].kwargs["input_text"], "new-password\n")
+
+    def test_create_keepass_database_rejects_non_regular_existing_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            database = pathlib.Path(raw) / "NAS.kdbx"
+            database.symlink_to("missing-target")
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "run_root"),
+                mock.patch.object(setup, "run_admin"),
+                self.assertRaisesRegex(setup.SetupError, "not a regular file"),
+            ):
+                setup.verify_or_create_database("pw", True)
 
     def test_verify_or_create_database_reports_failed_creation_and_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -388,7 +440,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "run_root") as root,
         ):
             result = setup.prepare_storage_runtime("pw")
-        activate.assert_called_once_with(["nas-secrets", "activate-stdin"], input_text="pw\n")
+        activate.assert_called_once_with(["nas-secrets", "activate-setup-stdin"], input_text="pw\n")
         self.assertEqual(
             [call.args[0] for call in storage_host.call_args_list],
             [
@@ -655,7 +707,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
                 mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
                 mock.patch.object(setup, "run_admin") as admin,
-                mock.patch.object(pathlib.Path, "is_file", return_value=False),
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=False),
                 mock.patch.object(setup, "run_interactive_privileged") as activate,
             ):
                 self.assertEqual({"adopted": True}, setup.adopt_bootstrap_authentik_authority("keepass"))
@@ -678,7 +730,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
                 mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
                 mock.patch.object(setup, "run_admin"),
-                mock.patch.object(pathlib.Path, "is_file", return_value=True),
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=True),
                 mock.patch.object(setup, "run_interactive_privileged") as activate,
             ):
                 setup.adopt_bootstrap_authentik_authority("keepass")
