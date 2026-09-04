@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import pathlib
+import pwd
 import stat
 import sys
 import tempfile
@@ -40,14 +41,18 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             self.assertEqual(setup.run(["bad"], check=False).returncode, 2)
 
     def test_admin_command_handles_admin_root_and_other_users(self) -> None:
+        account = pwd.struct_passwd((setup.ADMIN_USER, "x", 1000, 100, "", "/tank/homes/admin", "/bin/bash"))
         with mock.patch.object(setup, "current_username", return_value=setup.ADMIN_USER):
             self.assertEqual(setup.admin_command(["x"]), ["x"])
         with (
             mock.patch.object(setup, "current_username", return_value="root"),
             mock.patch.object(setup.os, "geteuid", return_value=0),
+            mock.patch.object(setup.pwd, "getpwnam", return_value=account),
         ):
             command = setup.admin_command(["x"])
         self.assertEqual(command[:4], ["runuser", "-u", setup.ADMIN_USER, "--"])
+        self.assertIn("HOME=/tank/homes/admin", command)
+        self.assertIn("--chdir=/tank/homes/admin", command)
         with (
             mock.patch.object(setup, "current_username", return_value="bob"),
             mock.patch.object(setup.os, "geteuid", return_value=1000),
@@ -89,14 +94,14 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             setup.run_root_noninteractive(["x"])
         self.assertEqual(run.call_args.args[0][:3], ["sudo", "-n", "--"])
 
-    def test_interactive_privileged_uses_root_only_with_explicit_root_mode(self) -> None:
+    def test_interactive_privileged_root_mode_uses_an_accessible_setup_directory(self) -> None:
         with (
             mock.patch.object(setup.os, "geteuid", return_value=0),
             mock.patch.dict(setup.os.environ, {"NAS_SETUP_ALLOW_ROOT": "1"}),
             mock.patch.object(setup, "run") as run,
         ):
             setup.run_interactive_privileged(["x"])
-        run.assert_called_once_with(["x"])
+        run.assert_called_once_with(["env", f"--chdir={setup.STATE_PATH.parent}", "x"])
         with mock.patch.object(setup.os, "geteuid", return_value=1000), mock.patch.object(setup, "run_admin") as admin:
             setup.run_interactive_privileged(["x"])
         admin.assert_called_once_with(["x"])
@@ -286,24 +291,84 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             root = pathlib.Path(raw)
             database = root / "NAS.kdbx"
             database.write_text("x", encoding="utf-8")
-            with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_admin") as admin:
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "run_root") as root_run,
+                mock.patch.object(setup, "run_admin") as admin,
+            ):
                 self.assertEqual(setup.verify_or_create_database("pw", False), "existing")
+            self.assertIn("nasadmin", root_run.call_args.args[0])
             self.assertIn("db-info", admin.call_args.args[0])
+            self.assertNotIn("--pw-stdin", admin.call_args.args[0])
             database.unlink()
-            with mock.patch.object(setup, "KEEPASS_DATABASE", database):
+            with mock.patch.object(setup, "KEEPASS_DATABASE", database), mock.patch.object(setup, "run_root"):
                 with self.assertRaisesRegex(setup.SetupError, "does not exist"):
                     setup.verify_or_create_database("pw", False)
 
-            def create(_command: object, **_kwargs: object) -> setup.Completed:
-                database.write_text("created", encoding="utf-8")
+            def create(command: list[str], **kwargs: object) -> setup.Completed:
+                if "db-create" in command:
+                    self.assertEqual(kwargs.get("input_text"), "pw\npw\n")
+                    database.write_text("created", encoding="utf-8")
+                else:
+                    self.assertIn("db-info", command)
+                    self.assertEqual(kwargs.get("input_text"), "pw\n")
                 return setup.Completed((), "", "")
 
             with (
                 mock.patch.object(setup, "KEEPASS_DATABASE", database),
                 mock.patch.object(setup, "run_root"),
-                mock.patch.object(setup, "run_admin", side_effect=create),
+                mock.patch.object(setup, "run_admin", side_effect=create) as create_admin,
             ):
                 self.assertEqual(setup.verify_or_create_database("pw", True), "created")
+            self.assertIn("--set-password", create_admin.call_args_list[0].args[0])
+            self.assertIn("db-info", create_admin.call_args_list[1].args[0])
+            self.assertNotIn("--pw-stdin", create_admin.call_args_list[1].args[0])
+
+    def test_create_keepass_database_replaces_a_regular_existing_database(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            database = pathlib.Path(raw) / "NAS.kdbx"
+            database.write_text("bootstrap database", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def root(command: list[str], **_kwargs: object) -> setup.Completed:
+                value = list(command)
+                calls.append(value)
+                if value[:2] == ["rm", "--"]:
+                    database.unlink()
+                return setup.Completed(tuple(value), "", "")
+
+            def admin(command: list[str], **_kwargs: object) -> setup.Completed:
+                value = list(command)
+                if "db-create" in value:
+                    self.assertFalse(database.exists())
+                    database.write_text("fresh database", encoding="utf-8")
+                return setup.Completed(tuple(value), "", "")
+
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "run_root", side_effect=root),
+                mock.patch.object(setup, "run_admin", side_effect=admin) as run_admin,
+            ):
+                self.assertEqual(setup.verify_or_create_database("new-password", True), "created")
+
+            self.assertIn(["rm", "--", str(database)], calls)
+            self.assertEqual(database.read_text(encoding="utf-8"), "fresh database")
+            self.assertEqual(run_admin.call_args_list[-1].kwargs["input_text"], "new-password\n")
+
+    def test_create_keepass_database_rejects_non_regular_existing_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            database = pathlib.Path(raw) / "NAS.kdbx"
+            database.symlink_to("missing-target")
+            with (
+                mock.patch.object(setup, "KEEPASS_DATABASE", database),
+                mock.patch.object(setup, "local_administrator_username", return_value="nasadmin"),
+                mock.patch.object(setup, "run_root"),
+                mock.patch.object(setup, "run_admin"),
+                self.assertRaisesRegex(setup.SetupError, "not a regular file"),
+            ):
+                setup.verify_or_create_database("pw", True)
 
     def test_verify_or_create_database_reports_failed_creation_and_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -355,15 +420,47 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=True),
             mock.patch.object(setup, "dataset_exists", return_value=False),
             mock.patch.object(setup, "ZFS_ENCRYPTION", True),
-            mock.patch.object(setup, "run_interactive_privileged") as privileged,
+            mock.patch.object(setup, "run_storage_host") as storage_host,
             mock.patch.object(setup, "run_root") as root,
         ):
             result = setup.setup_storage(
                 {"createPool": False}, keepass_password="pw", confirmed_devices=[], allow_destructive=False
             )
-        privileged.assert_called_once_with(["nas-zfs-create-encrypted-dataset"], input_text="pw\n")
+        storage_host.assert_called_once_with(["nas-zfs-create-encrypted-dataset"], input_text="pw\n")
         root.assert_not_called()
         self.assertTrue(result["encrypted"])
+
+    def test_storage_runtime_preparation_unlocks_encryption_then_applies_zfs_tmpfiles(self) -> None:
+        with (
+            mock.patch.object(setup, "ZFS_ENCRYPTION", True),
+            mock.patch.object(setup, "ZFS_ROOT", pathlib.Path("/tank")),
+            mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+            mock.patch.object(setup, "run_interactive_privileged") as activate,
+            mock.patch.object(setup, "run_storage_host") as storage_host,
+            mock.patch.object(setup, "run_root") as root,
+        ):
+            result = setup.prepare_storage_runtime("pw")
+        activate.assert_called_once_with(["nas-secrets", "activate-setup-stdin"], input_text="pw\n")
+        self.assertEqual(
+            [call.args[0] for call in storage_host.call_args_list],
+            [
+                ["nas-zfs-mount-check"],
+                ["systemd-tmpfiles", "--create", "--graceful"],
+            ],
+        )
+        root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
+        self.assertEqual(result, {"mounted": True, "runtimeDirectoriesPrepared": True})
+
+    def test_plain_storage_runtime_preparation_does_not_activate_secrets(self) -> None:
+        with (
+            mock.patch.object(setup, "ZFS_ENCRYPTION", False),
+            mock.patch.object(setup, "ZFS_ROOT", pathlib.Path("/tank")),
+            mock.patch.object(setup, "run_interactive_privileged") as activate,
+            mock.patch.object(setup, "run_storage_host"),
+            mock.patch.object(setup, "run_root"),
+        ):
+            setup.prepare_storage_runtime("pw")
+        activate.assert_not_called()
 
     def test_apply_accounts_validates_json_result_and_confirmation_flag(self) -> None:
         with (
@@ -468,6 +565,114 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         second = setup.setup_fingerprint(config, args, {"accounts": []}, "pw")
         self.assertNotEqual(first, second)
 
+    def test_installed_preflight_keeps_release_integrity_checks_without_developer_tooling(self) -> None:
+        self.assertEqual(setup.INSTALLED_PREFLIGHT_ENV["NAS_PREFLIGHT_VERIFY_MANIFEST"], "0")
+        self.assertEqual(setup.INSTALLED_PREFLIGHT_ENV["NAS_PREFLIGHT_REQUIRE_COMPLETE"], "0")
+        for name in ("COCKPIT_BUNDLE", "FUZZ", "NIX", "TESTS", "TOOLING"):
+            self.assertEqual(setup.INSTALLED_PREFLIGHT_ENV[f"NAS_PREFLIGHT_SKIP_{name}"], "1")
+        with mock.patch.object(setup, "run", return_value=setup.Completed(("nas-preflight",), "", "", 0)) as run:
+            self.assertTrue(setup.preflight_ready())
+        run.assert_called_once_with(["nas-preflight"], env=setup.INSTALLED_PREFLIGHT_ENV, check=False)
+
+    def test_verified_storage_retry_reconciles_only_healthy_matching_journal(self) -> None:
+        config = {
+            "storage": {
+                "createPool": True,
+                "devices": ["/dev/vdb"],
+                "topology": "single",
+                "ashift": 12,
+                "wipeDevices": True,
+            }
+        }
+        expected = {
+            "pool": setup.ZFS_POOL,
+            "dataset": setup.ZFS_DATASET,
+            "root": str(setup.ZFS_ROOT),
+            "creationRequest": {
+                "topology": "single",
+                "devices": ["/dev/vdb"],
+                "ashift": 12,
+                "wipeDevices": True,
+            },
+            "createdPool": True,
+            "createdDataset": True,
+            "encrypted": setup.ZFS_ENCRYPTION,
+            "recoveredAfterVerification": True,
+        }
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=True),
+            mock.patch.object(
+                setup,
+                "load_json",
+                return_value={
+                    "status": "manual-recovery-required",
+                    "currentStep": "storage",
+                    "fingerprint": "legacy-fingerprint",
+                },
+            ),
+            mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
+        ):
+            self.assertEqual(
+                "current-fingerprint",
+                setup.reconcile_verified_storage_retry(
+                    ("current-fingerprint", "legacy-fingerprint"), config["storage"]
+                ),
+            )
+        recover.assert_called_once_with(
+            setup.JOURNAL_PATH,
+            workflow="first-run-v2",
+            fingerprint="legacy-fingerprint",
+            step="storage",
+            result=expected,
+            replacement_fingerprint="current-fingerprint",
+        )
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=False),
+            mock.patch.object(setup, "load_json") as load,
+            mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
+        ):
+            self.assertIsNone(setup.reconcile_verified_storage_retry(("fingerprint",), config["storage"]))
+        load.assert_not_called()
+        recover.assert_not_called()
+
+    def test_verified_storage_retry_migrates_confirmation_after_later_failure(self) -> None:
+        journal_value = {
+            "workflow": "first-run-v2",
+            "fingerprint": "legacy",
+            "status": "failed",
+            "currentStep": "identity-bootstrap",
+            "steps": {
+                "storage": {"status": "complete", "result": {"createdPool": True}},
+                "identity-bootstrap": {"status": "failed"},
+            },
+        }
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=True),
+            mock.patch.object(setup, "load_json", return_value=journal_value),
+            mock.patch.object(setup.OperationJournal, "save") as save,
+        ):
+            self.assertEqual("current", setup.reconcile_verified_storage_retry(("current", "legacy"), {}))
+        self.assertEqual("current", journal_value["fingerprint"])
+        save.assert_called_once_with()
+
+    def test_verified_storage_retry_rejects_changed_transaction(self) -> None:
+        with (
+            mock.patch.object(setup, "storage_ready", return_value=True),
+            mock.patch.object(
+                setup,
+                "load_json",
+                return_value={
+                    "status": "manual-recovery-required",
+                    "currentStep": "storage",
+                    "fingerprint": "different",
+                },
+            ),
+            mock.patch.object(setup.OperationJournal, "complete_verified_recovery_step") as recover,
+        ):
+            with self.assertRaisesRegex(setup.JournalError, "different first-run-v2"):
+                setup.reconcile_verified_storage_retry(("current", "legacy"), {"createPool": True})
+        recover.assert_not_called()
+
     def test_install_runtime_identity_token_validates_and_installs(self) -> None:
         response = {"token": "runtime-token", "username": "service"}
         with (
@@ -488,6 +693,63 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
                 with self.assertRaises(setup.SetupError):
                     setup.install_runtime_identity_token("keepass")
 
+    def test_adopt_bootstrap_authentik_authority_imports_exact_running_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = root / "environment"
+            token_file = root / "api-token"
+            secret_key = "a" * 128
+            token = "b" * 64
+            environment.write_text(f"AUTHENTIK_SECRET_KEY={secret_key}\n", encoding="utf-8")
+            token_file.write_text(token, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+                mock.patch.object(setup, "run_admin") as admin,
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=False),
+                mock.patch.object(setup, "run_interactive_privileged") as activate,
+            ):
+                self.assertEqual({"adopted": True}, setup.adopt_bootstrap_authentik_authority("keepass"))
+            self.assertEqual(
+                ["nas-secrets", "adopt-authentik-bootstrap-stdin"],
+                admin.call_args.args[0],
+            )
+            self.assertEqual(f"keepass\n{secret_key}\n{token}\n", admin.call_args.kwargs["input_text"])
+            activate.assert_not_called()
+
+    def test_adopt_bootstrap_authentik_authority_reactivates_an_existing_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = root / "environment"
+            token_file = root / "api-token"
+            environment.write_text(f"AUTHENTIK_SECRET_KEY={'a' * 128}\n", encoding="utf-8")
+            token_file.write_text("b" * 64, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
+                mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
+                mock.patch.object(setup, "run_admin"),
+                mock.patch.object(setup, "runtime_secrets_ready", return_value=True),
+                mock.patch.object(setup, "run_interactive_privileged") as activate,
+            ):
+                setup.adopt_bootstrap_authentik_authority("keepass")
+            self.assertEqual("keepass\n", activate.call_args.kwargs["input_text"])
+
+    def test_adopt_bootstrap_authentik_authority_rejects_malformed_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = root / "environment"
+            token_file = root / "api-token"
+            environment.write_text("AUTHENTIK_SECRET_KEY=bad\n", encoding="utf-8")
+            token_file.write_text("b" * 64, encoding="utf-8")
+            with (
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_ENVIRONMENT", environment),
+                mock.patch.object(setup, "BOOTSTRAP_AUTHENTIK_TOKEN", token_file),
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "secret key is malformed"):
+                    setup.adopt_bootstrap_authentik_authority("keepass")
+
     def test_readiness_helpers_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             missing = pathlib.Path(raw) / "missing"
@@ -502,6 +764,21 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "dataset_exists", return_value=False),
         ):
             self.assertFalse(setup.storage_ready())
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=True),
+            mock.patch.object(
+                setup, "run_storage_host", return_value=setup.Completed((), "", "mount mismatch", 1)
+            ) as storage_host,
+        ):
+            self.assertFalse(setup.storage_ready())
+        storage_host.assert_called_once_with(["nas-zfs-mount-check"], check=False)
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=True),
+            mock.patch.object(setup, "dataset_exists", return_value=True),
+            mock.patch.object(setup, "run_storage_host", return_value=setup.Completed((), "", "")),
+        ):
+            self.assertTrue(setup.storage_ready())
         with mock.patch.object(setup, "run_root_noninteractive", return_value=setup.Completed((), "{", "", 0)):
             self.assertFalse(setup.identity_command_ready(["x"]))
         with mock.patch.object(

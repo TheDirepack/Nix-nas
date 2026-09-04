@@ -63,6 +63,15 @@ class TestWizardRouting(unittest.TestCase):
         self.assertIn("root * ${firstRunWizardStatic}/share/nas-portal-wizard", route)
         self.assertIn("file_server", route)
 
+    def test_detached_job_capabilities_survive_authentik_regeneration(self):
+        status = self.bootstrap.index("handle /setup/api/first-start/job/* {")
+        reboot = self.bootstrap.index("handle /setup/api/reboot {")
+        gated = self.bootstrap.index("handle /setup/api/* {")
+        self.assertLess(status, gated)
+        self.assertLess(reboot, gated)
+        self.assertNotIn("caddyForwardAuth", self.bootstrap[status:reboot])
+        self.assertIn("caddyForwardAuth", self.bootstrap[gated : gated + 180])
+
     def test_wizard_assets_are_served_under_the_setup_prefix(self):
         # Relative asset URLs in index.html resolve to /setup/first-run-wizard.*;
         # the stripped-prefix file server must be the only handler needed.

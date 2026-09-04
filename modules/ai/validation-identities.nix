@@ -92,6 +92,5 @@ in
       };
     };
 
-    users.users.${nas.adminUser}.extraGroups = lib.mkIf cfg.codingAgent.enable (lib.mkAfter [ "nas-code-agent" ]);
   };
 }

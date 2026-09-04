@@ -16,15 +16,13 @@ import subprocess
 from dataclasses import dataclass
 
 VERSION_RE = re.compile(r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)$")
-BOOTSTRAP_RE = re.compile(r'store_value authentik-bootstrap-password "([^"\n]+)"')
-AUTHENTIK_ENV_RE = re.compile(r"AUTHENTIK_BOOTSTRAP_PASSWORD=([A-Za-z0-9._~+/=:@-]+)")
+BOOTSTRAP_RE = re.compile(r'bootstrapPassword = "([^"\n]+)";')
 SAFE_SECRET_RE = re.compile(r"^[A-Za-z0-9._~+/=:@-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 BOOTSTRAP_USERNAME = "akadmin"
 RELEASE_EPOCH_PATH = pathlib.Path(".github/release-version-epoch.json")
 BOOTSTRAP_TARGETS = {
-    "modules/nas/internal/secret-tools.nix",
-    "modules/nas/config/application-services.nix",
+    "modules/nas/internal/base.nix",
 }
 
 
@@ -227,34 +225,20 @@ def validate_release_passphrase(password: str) -> None:
 def bootstrap_password_from_text(source: str, label: str) -> str:
     matches = BOOTSTRAP_RE.findall(source)
     if len(matches) != 1:
-        raise RuntimeError(f"expected exactly one Authentik bootstrap-password seed in {label}")
-    password = matches[0]
-    validate_bootstrap_password(password)
-    return password
-
-
-def application_bootstrap_password_from_text(source: str, label: str) -> str:
-    matches = AUTHENTIK_ENV_RE.findall(source)
-    if len(matches) != 1:
-        raise RuntimeError(f"expected exactly one AUTHENTIK_BOOTSTRAP_PASSWORD assignment in {label}")
+        raise RuntimeError(f"expected exactly one canonical bootstrapPassword in {label}")
     password = matches[0]
     validate_bootstrap_password(password)
     return password
 
 
 def discover_bootstrap_password(root: pathlib.Path) -> str:
-    secret_tools = (root / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
-    password = bootstrap_password_from_text(secret_tools, "secret-tools.nix")
-    application_services = (root / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
-    runtime_password = application_bootstrap_password_from_text(application_services, "application-services.nix")
-    if password != runtime_password:
-        raise RuntimeError("first-boot Authentik runtime does not use the same bootstrap password as nas-secrets")
-    return password
+    base = (root / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
+    return bootstrap_password_from_text(base, "base.nix")
 
 
 def bootstrap_password_from_tag(root: pathlib.Path, tag: str) -> str:
-    result = run_git(root, "show", f"{tag}:modules/nas/internal/secret-tools.nix")
-    return bootstrap_password_from_text(result.stdout, f"{tag}:secret-tools.nix")
+    result = run_git(root, "show", f"{tag}:modules/nas/internal/base.nix")
+    return bootstrap_password_from_text(result.stdout, f"{tag}:base.nix")
 
 
 def tracked_files_containing(root: pathlib.Path, needle: str) -> list[pathlib.Path]:

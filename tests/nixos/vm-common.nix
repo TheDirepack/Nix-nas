@@ -105,6 +105,7 @@ let
     text = ''
       ${builtins.readFile ../../scripts/lib/nas-vm-cleanup.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-process-cleanup.sh}
+      export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json
       ${builtins.readFile ../vm/timeout-budget.sh}
       ${builtins.readFile ../../scripts/lib/nas-vm-secret-input.sh}
       # Dedicated CI jobs have already qualified source tests, tooling, the
@@ -115,6 +116,11 @@ let
       export NAS_PREFLIGHT_SKIP_TOOLING=1
       export NAS_PREFLIGHT_SKIP_NIX=1
       export NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1
+
+      if [[ "''${1:-}" == "--setup-reboot-e2e" ]]; then
+        shift
+        exec python3 /var/lib/nas-test/repo/tests/vm/setup-reboot-e2e.py "$@"
+      fi
 
       ${builtins.readFile ../../scripts/lib/nas-vm-profile.sh}
       nas_vm_profile_install
@@ -215,12 +221,8 @@ in
     # The guest suite creates its first-run plan here; keep the installed
     # Cockpit status source aligned with the plan used by the test.
     firstStart.configFile = "/var/lib/nas-test/setup/first-run.json";
-    # The browser qualification logs into Cockpit through its direct PAM
-    # recovery listener. Keep this credential scoped to the disposable VM
-    # fixture; production configurations must provide their own root-only hash.
-    adminPasswordHashFile = lib.mkForce (toString (pkgs.writeText "vm-admin-password-hash" "$6$nixosnas$Hsg1F2Cw2J25Jj9ZMzgEC8uiPgOS.DP/A8Pi28n.oXWw.CuB529luz/tBoCaxVXkuP6NqDmqUUUf5scB1/7jU1"));
     zfsImportAtBoot = lib.mkForce false;
-    zfsEncryption.enable = lib.mkDefault false;
+    zfsEncryption.acknowledgeUnencrypted = lib.mkForce true;
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
     virtualization.enable = lib.mkForce false;
@@ -242,7 +244,7 @@ in
     power.ups.enable = lib.mkForce false;
   };
 
-  environment.systemPackages = [ guestTest secretAdversarialTest encryptedGuestTest reconfigureTest pkgs.parted pkgs.e2fsprogs ];
+  environment.systemPackages = [ guestTest secretAdversarialTest encryptedGuestTest reconfigureTest pkgs.parted pkgs.e2fsprogs pkgs.expect ];
 
   systemd.services.nas-vm-test-repository = {
     description = "Materialize the NAS source tree for in-VM validation";

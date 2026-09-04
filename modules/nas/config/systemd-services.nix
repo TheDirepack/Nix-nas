@@ -8,6 +8,8 @@ let
     authentikRuntimeApiTokenFile
     authentikRuntimeEnvironmentFile
     authentikPort
+    bootstrapUsername
+    bootstrapPassword
     caddyBackendUnits
     caddyCaExportDir
     caddyCaExportPath
@@ -50,14 +52,14 @@ in
         RemainAfterExit = true;
         ExecStart = pkgs.writeShellScript "nas-bootstrap-administrator" ''
           set -euo pipefail
-          if ! ${pkgs.glibc.bin}/bin/getent passwd nas-bootstrap >/dev/null 2>&1; then
-            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash nas-bootstrap || {
+          if ! ${pkgs.glibc.bin}/bin/getent passwd ${bootstrapUsername} >/dev/null 2>&1; then
+            ${pkgs.shadow}/bin/useradd --create-home --shell /run/current-system/sw/bin/bash ${bootstrapUsername} || {
               rc=$?
               [[ "$rc" -eq 9 ]] || exit "$rc"
             }
           fi
-          printf '%s\n' 'nas-bootstrap:nixos-nas-bootstrap' | ${pkgs.shadow}/bin/chpasswd
-          ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations nas-bootstrap
+          printf '%s\n' '${bootstrapUsername}:${bootstrapPassword}' | ${pkgs.shadow}/bin/chpasswd
+          ${pkgs.shadow}/bin/usermod --append --groups wheel,nas-administrators,nas-operations ${bootstrapUsername}
         '';
         NoNewPrivileges = false;
         UMask = "0077";
@@ -134,7 +136,7 @@ in
         # the ZFS root so per-type app directories (postgresql, authentik,
         # nas-control, ...) exist behind the mount before any protected
         # service starts. Idempotent; no-op when the dirs already exist.
-        ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix ${cfg.zfsRoot}";
+        ExecStartPost = "${pkgs.systemd}/bin/systemd-tmpfiles --create --graceful --prefix ${cfg.zfsRoot}";
       };
     };
 
@@ -188,9 +190,20 @@ in
       };
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync bootstrap";
+        ExecStart = pkgs.writeShellScript "nas-identity-bootstrap" ''
+          set -u
+          ${nasPythonApplication}/bin/nas-operation-run \
+            --action identity-bootstrap --class identity --class runtime -- \
+            ${nasIdentitySync}/bin/nas-identity-sync bootstrap
+          rc=$?
+          # An active first-start transaction owns bootstrap reconciliation.
+          # Treat its lock as a successful handoff so protected-service startup
+          # cannot wait on the transaction that is waiting for this unit.
+          [[ "$rc" -eq 0 || "$rc" -eq 75 ]] && exit 0
+          exit "$rc"
+        '';
         ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";
-        Restart = "on-abnormal";
+        Restart = "on-failure";
         RestartSec = "5s";
         NoNewPrivileges = true;
         PrivateTmp = true;
@@ -267,19 +280,12 @@ in
       serviceConfig = {
         RuntimeDirectoryMode = lib.mkOverride 90 "0750";
         UMask = lib.mkForce "0007";
-        ExecStartPre = lib.mkBefore (
-          [
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg shareRoot}"
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/users")}"
-          ]
-          ++ lib.optional cfg.tftp.enable
-            "+${pkgs.coreutils}/bin/install -d -m 2770 -o copyparty -g copyparty ${lib.escapeShellArg (shareRoot + "/tftp")}"
-        );
         BindPaths = lib.mkOverride 90 [
           copypartyDataDir
           "/var/cache/copyparty"
           "${shareRoot}:${copypartyMountRoot}"
         ];
+        BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];
       };
     };
 

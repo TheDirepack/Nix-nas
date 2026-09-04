@@ -35,6 +35,29 @@ class IdentitySyncCoverageTests(unittest.TestCase):
         with mock.patch.object(sync.secrets, "randbelow", return_value=0):
             self.assertEqual(sync._retry_delay(2, "bad"), 0.5)
 
+    def test_bootstrap_identity_retries_blueprint_startup_races(self) -> None:
+        with (
+            mock.patch.object(sync, "ensure_groups", side_effect=[sync.SyncError("race"), ["ready"]]) as groups,
+            mock.patch.object(sync, "ensure_portal_proxy", return_value={"portal": True}),
+            mock.patch.object(sync, "ensure_cockpit_launcher", return_value={"cockpit": True}),
+            mock.patch.object(sync, "ensure_setup_launcher", return_value={"setup": True}),
+            mock.patch.object(sync.time, "sleep") as sleep,
+        ):
+            result = sync.bootstrap_identity("token")
+        self.assertEqual(groups.call_count, 2)
+        sleep.assert_called_once()
+        self.assertEqual(result["groups"], ["ready"])
+
+    def test_bootstrap_identity_keeps_permanent_failures_bounded(self) -> None:
+        with (
+            mock.patch.object(sync, "ensure_groups", side_effect=sync.SyncError("invalid")) as groups,
+            mock.patch.object(sync.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "invalid"):
+                sync.bootstrap_identity("token")
+        self.assertEqual(groups.call_count, sync.BOOTSTRAP_RECONCILE_ATTEMPTS)
+        self.assertEqual(sleep.call_count, sync.BOOTSTRAP_RECONCILE_ATTEMPTS - 1)
+
     def test_http_json_success_empty_and_invalid_json(self) -> None:
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true}'

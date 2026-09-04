@@ -6,7 +6,9 @@ const isFinalVm = suite === "vm";
 // Playwright remains appropriate for DOM/XSS execution, layout, interaction,
 // accessibility, and final-VM browser behavior. Protocol-level HTTP probes use
 // curl in the VM harness instead of paying browser startup cost per request.
-const testMatch = isFinalVm ? "final-vm.spec.mjs" : ["ui-security.spec.mjs", "common-xss.spec.mjs"];
+const testMatch = isFinalVm
+  ? "final-vm.spec.mjs"
+  : ["ui-security.spec.mjs", "common-xss.spec.mjs", "first-run-wizard.spec.mjs"];
 
 export default defineConfig({
   testDir: ".",

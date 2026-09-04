@@ -415,6 +415,34 @@ wait_for_ssh() {
   return 1
 }
 
+run_setup_reboot_e2e() {
+  local ssh_key=$1 now deadline result
+  local -a ssh_args
+  mapfile -t ssh_args < <(ssh_options "$ssh_key")
+  log "Verifying completed setup across two clean reboots"
+  ssh "${ssh_args[@]}" \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
+    -p "$SSH_PORT" admin@127.0.0.1 \
+    'sudo -n nas-vm-guest-test --setup-reboot-e2e --start'
+  deadline="$(( $(date +%s) + $(nas_vm_timeout_value setupRebootLifecycle) ))"
+  while :; do
+    now="$(date +%s)"
+    if (( now >= deadline )); then
+      die "timed out waiting for the setup reboot E2E report"
+    fi
+    if result="$(ssh "${ssh_args[@]}" -o ConnectTimeout=5 -p "$SSH_PORT" admin@127.0.0.1 \
+      'sudo -n cat /var/lib/nas-test/setup-reboot-e2e-result.json' 2>/dev/null)"; then
+      if jq -e '.schemaVersion == 1 and .ok == true and .verifiedReboots == 2' <<<"$result" >/dev/null; then
+        printf '%s\n' "$result"
+        return 0
+      fi
+      printf '%s\n' "$result" >&2
+      die "setup reboot E2E reported a failure"
+    fi
+    sleep 3
+  done
+}
+
 sync_source_to_guest() {
   local source_stage=$1 ssh_key=$2
   local -a ssh_args
@@ -673,6 +701,8 @@ run_installer() {
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
       "sudo -n env NAS_TEST_TIMEOUT=$(nas_vm_ordinary_wait_seconds) nas-vm-guest-test /dev/vdb"
+
+  run_setup_reboot_e2e "$ssh_key"
 
   log "Exercising post-install activation, failed-candidate, and rollback paths"
   timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \

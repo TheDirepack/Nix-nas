@@ -19,6 +19,9 @@ let
     set -euo pipefail
     install -d -m 0750 -o authentik -g authentik ${lib.escapeShellArg blueprintDir}
     cp -a --no-preserve=ownership,mode ${lib.escapeShellArg "${nativeBlueprintDir}/."} ${lib.escapeShellArg blueprintDir}/
+    if [[ -e /var/lib/nas-setup/state.json ]]; then
+      rm -f -- ${lib.escapeShellArg "${blueprintDir}/nas-setup.yaml"}
+    fi
   '';
   reconcileScript = pkgs.writeShellScript "nas-v2-authentik-blueprint-apply" ''
     set -euo pipefail

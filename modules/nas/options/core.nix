@@ -13,16 +13,6 @@
         global memory limit and does not include ZFS ARC.
       '';
     };
-    adminUser = lib.mkOption {
-      type = lib.types.str;
-      default = "admin";
-      description = "Immutable Linux administrator identity used for NAS administration and Cockpit PAM. Application identities are managed in Authentik.";
-    };
-    adminPasswordHashFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Absolute path to a root-only Linux administrator password hash. Authentik manages application identities; KeePassXC does not alter the local PAM password.";
-    };
     hostPolicy = {
       mutableLocalPasswords = lib.mkOption {
         type = lib.types.bool;
@@ -107,7 +97,7 @@
     secrets = {
       keepassDatabase = lib.mkOption {
         type = lib.types.str;
-        default = "/var/lib/nas-secrets/NAS.kdbx";
+        default = "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx";
         description = "KeePassXC database containing machine secrets. The database password is entered interactively and is never persisted by this project.";
       };
       keepassKeyFile = lib.mkOption {

@@ -121,20 +121,33 @@ class WizardSecretInputTests(unittest.TestCase):
 
 
 class WizardFlowContractTests(unittest.TestCase):
-    def test_driver_targets_the_cockpit_first_start_page_and_documented_fields(self) -> None:
+    def test_login_waits_for_authentik_to_leave_the_authentication_flow(self) -> None:
+        wizard = load_wizard()
+        origin = "https://nas-test.local:8443"
+        self.assertFalse(
+            wizard.login_complete_url(
+                origin + "/identity/if/flow/default-authentication-flow/",
+                origin,
+            )
+        )
+        self.assertFalse(wizard.login_complete_url("https://attacker.invalid/setup/", origin))
+        self.assertTrue(wizard.login_complete_url(origin + "/identity/if/user/", origin))
+        self.assertTrue(wizard.login_complete_url(origin + "/setup/", origin))
+
+    def test_driver_targets_the_standalone_first_start_page_and_documented_fields(self) -> None:
         source = (ROOT / "tests" / "browser" / "first-run-wizard.py").read_text(encoding="utf-8")
-        self.assertIn("/console/cockpit/@localhost/nas/index.html#/setup", source)
+        self.assertIn('origin.rstrip("/") + "/setup/"', source)
         for field in (
-            "#first-start-keepass-password",
-            "#first-start-administrator-username",
-            "#first-start-administrator-name",
-            "#first-start-administrator-email",
-            "#first-start-administrator-password",
-            "#first-start-destructive",
+            "#wizard-keepass-password",
+            "#wizard-admin-username",
+            "#wizard-admin-name",
+            "#wizard-admin-email",
+            "#wizard-admin-password",
+            "#wizard-destructive",
         ):
             self.assertIn(field, source)
-        self.assertIn('input[id="first-start-device-', source)
-        self.assertIn('"Start"', source)
+        self.assertIn("#wizard-plan-devices", source)
+        self.assertIn('"Run setup"', source)
         self.assertIn("akadmin", source)
 
     def test_wizard_reads_every_password_file_before_touching_the_browser(self) -> None:
@@ -147,7 +160,7 @@ class WizardFlowContractTests(unittest.TestCase):
 
     def test_job_polling_treats_terminal_states_and_dumps_diagnostics(self) -> None:
         source = (ROOT / "tests" / "browser" / "first-run-wizard.py").read_text(encoding="utf-8")
-        self.assertIn('{"complete", "failed"}', source)
+        self.assertIn('{"complete", "complete-unverified", "failed"}', source)
         self.assertIn("browser_diagnostics(driver)", source)
         self.assertIn("--result-file", source)
 

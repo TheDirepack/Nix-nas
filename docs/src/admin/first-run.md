@@ -53,8 +53,32 @@ Do not copy a release password into `main`, and do not assume
 published release, use the credentials from the matching GitHub Release notes.
 
 The setup workflow creates the administrator you choose, verifies that account
-is an enabled `nas_admin` member, and then retires the bootstrap Authentik
-identity. Do not use the bootstrap identity for normal administration.
+as the first permanent Linux recovery administrator and as an enabled
+Authentik `nas_admin` member. Its Linux home is
+`<nas.zfsRoot>/homes/<username>`, never `/home/<username>`. Setup then removes
+the disposable local bootstrap account and retires the bootstrap Authentik
+identity. Do not use either bootstrap identity for normal administration.
+
+The initial Linux login uses the same `akadmin` credential as Authentik. The
+wizard asks separately for the KeePassXC database password because it only
+unlocks the appliance secret database; it is not an account credential.
+KeePassXC, Authentik, and PostgreSQL remain under
+`/var/lib/nas-control-plane` on the system partition so they are available at
+the unlock boundary. Setup discards any pre-existing `NAS.kdbx` and creates a
+fresh KeePassXC database with the password entered in the wizard. It also
+discards the temporary Authentik/PostgreSQL state and regenerates clean
+databases there; it never moves them onto ZFS. Recover any needed entries from
+an old database before beginning first setup because setup does not retain it.
+The Storage step includes an explicit ZFS encryption toggle, enabled by
+default. When enabled, setup creates the KeePassXC database first and uses its
+new dataset key to create the encrypted ZFS partition. Turning the toggle off
+is an explicit choice for that installation and is recorded in setup state.
+
+The browser wizard keeps this boundary out of the setup form: Authentik is the
+temporary access gate, not a separate configuration step. The wizard focuses
+on the administrator account, storage plan, and final confirmation. Host locale
+remains declarative NixOS configuration rather than a second mutable setup
+authority.
 
 Copy `setup/first-run.example.json` and edit it outside the Nix store. The file
 may define storage creation, Authentik accounts, reserved NAS groups, and initial
@@ -123,15 +147,18 @@ The workflow prompts once for the KeePass database password. It then:
 2. runs `nas-secrets init` idempotently;
 3. verifies existing ZFS storage or creates the explicitly confirmed pool and
    managed dataset;
-4. activates secrets and starts the protected service target;
-5. bootstraps reserved Authentik groups;
-6. creates or updates configured accounts and passwords;
-7. creates only the ZFS-backed personal directories required by file-enabled
+4. creates the permanent local recovery administrator with a private home on
+   that ZFS dataset and removes the disposable local bootstrap account;
+5. activates secrets and starts the protected service target;
+6. bootstraps reserved Authentik groups;
+7. creates or updates configured accounts and passwords, including the chosen
+   administrator;
+8. creates only the ZFS-backed personal directories required by file-enabled
    accounts, leaving CopyParty ACLs and volumes authoritative;
-8. reconciles managed Syncthing objects when enabled;
-9. applies requested feature lifecycle modes;
-10. runs mount, identity, and optional repository preflight checks; and
-11. writes a password-free completion report to
+9. reconciles managed Syncthing objects when enabled;
+10. applies requested feature lifecycle modes;
+11. runs mount, identity, and optional repository preflight checks; and
+12. writes a password-free completion report to
     `/var/lib/nas-setup/state.json`.
 
 ## First-start commands and automation
@@ -164,6 +191,11 @@ the development tree, or the five-word password published with an automated
 tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
 then retires that bootstrap identity. After protected services are ready, use
 Authentik through Caddy for all browser access.
+
+The Storage step links to Cockpit Storage for disk partitioning or pool import,
+and to the Cockpit terminal for advanced ZFS work. Return to the wizard and
+refresh the plan after changing the disk layout; the destructive operation
+still uses the reviewed device list and plan digest.
 
 ## New-pool safeguards
 

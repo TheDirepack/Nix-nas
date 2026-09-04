@@ -12,7 +12,9 @@ WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
+FIRST_RUN_BROWSER = ROOT / "tests" / "browser" / "first-run-wizard.py"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
+VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
@@ -52,6 +54,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         install_expect = (ROOT / "tests" / "vm" / "install.expect").read_text(encoding="utf-8")
         guest_suite = GUEST_SUITE.read_text(encoding="utf-8")
         guest_test = GUEST_TEST.read_text(encoding="utf-8")
+        first_run_browser = FIRST_RUN_BROWSER.read_text(encoding="utf-8")
         for mode in (
             "persistent-start",
             "persistent-test",
@@ -106,15 +109,73 @@ class VmSuiteWrapperTests(unittest.TestCase):
             "until systemctl is-active --quiet nas-authentik-proxy-outpost.service",
             qemu,
         )
+
         self.assertIn("./scripts/preflight.sh", guest_suite)
         self.assertIn("./scripts/run-fuzz.py", guest_suite)
         self.assertIn("nas-vm-guest-test /dev/vdb", guest_suite)
+        self.assertIn("args.keepass_password_file", first_run_browser)
+        self.assertNotIn("args.kee_pass_password_file", first_run_browser)
+        self.assertIn("def search_roots", first_run_browser)
+        self.assertIn('execute_script("return arguments[0].shadowRoot", child)', first_run_browser)
+        self.assertIn('origin.rstrip("/") + "/setup/"', first_run_browser)
+        self.assertIn('send("#wizard-admin-password-confirm"', first_run_browser)
+        self.assertIn('send("#wizard-keepass-password-confirm"', first_run_browser)
+        self.assertIn('click_button("Run setup")', first_run_browser)
+        self.assertIn(".pf-v6-c-alert.pf-m-danger", first_run_browser)
+        self.assertIn("--host-resolver-rules=MAP nas-test.local", first_run_browser)
+        self.assertNotIn("#first-start-", first_run_browser)
+        self.assertIn(
+            "export NAS_VM_TIMEOUT_BUDGET_FILE=/var/lib/nas-test/repo/tests/vm/timeout-budget.json",
+            VM_COMMON.read_text(encoding="utf-8"),
+        )
         self.assertIn("systemd-socket-activate", guest_test)
         self.assertIn("systemd-socket-proxyd", guest_test)
-        self.assertIn('public_address="$(getent ahostsv4 "$public_host"', guest_test)
+        self.assertIn('public_address="${NAS_BROWSER_HOST_ADDRESS:-127.0.0.1}"', guest_test)
         self.assertIn('"$activate_path" --listen "$public_address:$public_port"', guest_test)
         self.assertNotIn('"$activate_path" --accept --listen', guest_test)
         self.assertNotIn("--exit-idle-time=300s", guest_test)
+        self.assertIn("run_setup_reboot_e2e", qemu)
+        self.assertIn("setupRebootLifecycle", qemu)
+        self.assertIn("nas-vm-guest-test --setup-reboot-e2e --start", qemu)
+
+    def test_install_ready_reference_does_not_declaratively_synthesize_a_runtime_administrator(self) -> None:
+        ready = (ROOT / "tests/nixos/ready.nix").read_text(encoding="utf-8")
+        self.assertNotIn("users.users.admin", ready)
+        self.assertNotIn("users.users.akadmin", ready)
+        self.assertIn("hostPolicy.consoleRecoveryVerified = true;", ready)
+
+    def test_unencrypted_negative_fixture_explicitly_disables_the_default_encryption_capability(self) -> None:
+        fixture = (ROOT / "tests/nixos/invalid/installation-ready-unencrypted.nix").read_text(encoding="utf-8")
+        self.assertIn("zfsEncryption.enable = lib.mkForce false;", fixture)
+        self.assertIn("zfsEncryption.acknowledgeUnencrypted = lib.mkForce false;", fixture)
+
+    def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
+        guest = GUEST_TEST.read_text(encoding="utf-8")
+        self.assertIn('administrator="akadmin"', guest)
+        self.assertIn("/var/lib/nas-setup/local-administrator.json", guest)
+        self.assertIn("chown akadmin:users /var/lib/nas-test/setup/first-run.json", guest)
+        self.assertIn("chown -R nasadmin:users /var/lib/nas-test/setup", guest)
+        self.assertIn("install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup", guest)
+        self.assertIn('.result.localAdministrator.username == "nasadmin"', guest)
+        self.assertIn("getent passwd akadmin", guest)
+        self.assertIn("one-time Authentik setup application still exists after setup", guest)
+        self.assertIn("getent passwd nasadmin | cut -d: -f6", guest)
+        self.assertIn("/tank/homes/nasadmin", guest)
+        self.assertIn("findmnt -n -o FSTYPE -T /tank/homes/nasadmin", guest)
+        self.assertIn("spawn runuser -u admin -- su - akadmin", guest)
+        self.assertIn("spawn runuser -u admin -- su - nasadmin", guest)
+        self.assertIn("discarded-bootstrap-keepass-password", guest)
+        self.assertIn("keepassxc-cli db-info --quiet", guest)
+        self.assertNotIn("keepassxc-cli db-info --quiet --pw-stdin", guest)
+        self.assertIn("state-bundle-signing-key", guest)
+        self.assertNotIn("spawn su - akadmin", guest)
+        self.assertIn(
+            'wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"',
+            guest,
+        )
+        self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
+        self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
+        self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
 
     def test_persistent_controls_are_additive_to_existing_ci_modes(self) -> None:
         qemu = QEMU.read_text(encoding="utf-8")

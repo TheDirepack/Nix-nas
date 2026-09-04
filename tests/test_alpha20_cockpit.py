@@ -102,6 +102,36 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("allowDestructiveStorage", api)
         self.assertIn("Confirm maintenance action", operations)
         self.assertIn("first-start-destructive", setup_page)
+        self.assertIn("first-start-keepass-password-confirm", setup_page)
+        self.assertIn("password !== passwordConfirm", setup_page)
+
+    def test_setup_api_can_publish_expected_first_start_status(self) -> None:
+        application = text("modules/nas/config/application-services.nix")
+        account_tools = text("modules/nas/internal/account-tools.nix")
+        start = application.index("systemd.services.nas-setup-api = {")
+        end = application.index("};", start)
+        block = application[start:end]
+        for path in (
+            "/var/lib/nas-setup",
+            "/var/lib/nas-first-start",
+            "/run/nas-first-start",
+            "/run/nas-operations",
+        ):
+            self.assertIn(f'"{path}"', block)
+        self.assertIn("export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup", account_tools)
+        setup_start = account_tools.index("nasSetup = pkgs.writeShellApplication")
+        setup_end = account_tools.index("  mkPathAuthority =", setup_start)
+        self.assertIn("pkgs.shadow", account_tools[setup_start:setup_end])
+
+    def test_cockpit_python_bridge_patch_targets_installed_module(self) -> None:
+        application = text("modules/nas/config/application-services.nix")
+        start = application.index("cockpitPatched = pkgs.cockpit.overrideAttrs")
+        end = application.index("  cockpitWebService =", start)
+        block = application[start:end]
+        self.assertIn("postFixup", block)
+        self.assertIn("site-packages/cockpit/channels/dbus.py", block)
+        self.assertIn("errno.EINVAL", block)
+        self.assertNotIn("postPatch", block)
 
     def test_syncthing_reconcile_uses_a_durable_generation_journal(self) -> None:
         identity = text("services/nas_identity_sync.py")

@@ -140,6 +140,62 @@ class CockpitApiTests(unittest.TestCase):
         with self.assertRaisesRegex(api.ApiError, "job identifier"):
             api.first_start_job_status("../etc/passwd")
 
+    def test_first_start_reboot_requires_completed_setup_and_matching_job_capability(self) -> None:
+        completed = self.completed()
+        with (
+            mock.patch.object(api, "_setup_complete", return_value=False),
+            mock.patch.object(api, "first_start_job_status") as job_status,
+            mock.patch.object(api, "run") as run,
+        ):
+            with self.assertRaisesRegex(api.ApiError, "after first-start setup completes"):
+                api.reboot_after_first_start({"jobId": "a" * 24})
+        job_status.assert_not_called()
+        run.assert_not_called()
+
+        rejected = (
+            {},
+            {"jobId": "short"},
+            {"jobId": "a" * 24, "extra": True},
+        )
+        for request in rejected:
+            with (
+                self.subTest(request=request),
+                mock.patch.object(api, "_setup_complete", return_value=True),
+                mock.patch.object(api, "first_start_job_status") as job_status,
+                mock.patch.object(api, "run") as run,
+            ):
+                with self.assertRaisesRegex(api.ApiError, "completed first-start job"):
+                    api.reboot_after_first_start(request)
+            job_status.assert_not_called()
+            run.assert_not_called()
+
+        with (
+            mock.patch.object(api, "_setup_complete", return_value=True),
+            mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+            mock.patch.object(api, "run") as run,
+        ):
+            with self.assertRaisesRegex(api.ApiError, "completed first-start job"):
+                api.reboot_after_first_start({"jobId": "a" * 24})
+        run.assert_not_called()
+
+        with (
+            mock.patch.object(api, "_setup_complete", return_value=True),
+            mock.patch.object(api, "first_start_job_status", return_value={"status": "complete"}) as job_status,
+            mock.patch.object(api, "run", return_value=completed) as run,
+        ):
+            self.assertEqual(api.reboot_after_first_start({"jobId": "a" * 24}), {"rebooting": True})
+        job_status.assert_called_once_with("a" * 24)
+        run.assert_called_once_with(["systemctl", "reboot"], check=False, timeout_seconds=30)
+
+    def test_first_start_reboot_reports_systemd_failure(self) -> None:
+        with (
+            mock.patch.object(api, "_setup_complete", return_value=True),
+            mock.patch.object(api, "first_start_job_status", return_value={"status": "complete-unverified"}),
+            mock.patch.object(api, "run", return_value=self.completed(returncode=1)),
+        ):
+            with self.assertRaisesRegex(api.ApiError, "Unable to schedule"):
+                api.reboot_after_first_start({"jobId": "b" * 24})
+
     def test_json_helpers_reject_wrong_shapes_and_nul(self) -> None:
         with self.assertRaises(api.ApiError):
             api._json_string({"value": "bad\x00value"}, "value")

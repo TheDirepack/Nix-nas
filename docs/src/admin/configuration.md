@@ -10,23 +10,7 @@
 
 ## Installation checklist
 
-Complete these values before setting `nas.installationReady = true`:
-
-1. Replace `hardware-configuration.nix` with reviewed `nixos-generate-config` output.
-2. Set a stable eight-character `networking.hostId`, record it with recovery material, and do not change it after pool creation or import.
-3. Configure the boot loader for the installed firmware and partitions.
-4. Install at least one administrator SSH public key and a root-only password-hash file for local Cockpit/PAM access.
-5. Set the trusted network interfaces.
-6. Verify `zfsPool`, `zfsDataset`, `zfsRoot`, and the intended boot-import policy.
-7. Run `./scripts/preflight.sh` and the QEMU suite before deployment.
-
-A stable host ID can be derived once with:
-
-```console
-head -c 8 /etc/machine-id
-```
-
-For UEFI installations, enable systemd-boot only after confirming the EFI System Partition in `hardware-configuration.nix`. Configure GRUB instead when the target installation requires it.
+The step-by-step walkthrough, including this checklist with every item explained, is in [Install and set up](installation.md). All checklist items there must be complete before setting `nas.installationReady = true`.
 
 ## Important option behavior
 

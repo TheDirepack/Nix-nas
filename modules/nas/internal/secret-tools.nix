@@ -2,6 +2,7 @@ args:
 let
   inherit (args)
     authentikPort
+    bootstrapPassword
     cfg
     lib
     pkgs
@@ -318,7 +319,7 @@ PY_AI_PROVIDERS
           echo "Created KeePassXC item: Authentik NAS API token (initially the bootstrap token)"
         fi
         if ! has_secret authentik-bootstrap-password; then
-          store_value authentik-bootstrap-password "nas-admin-first-boot"
+          store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}
           echo "Created KeePassXC item: Authentik bootstrap administrator password"
         fi
         store_random_if_missing state-bundle-signing-key "NAS state bundle HMAC signing key" 32
@@ -350,6 +351,30 @@ PY_AI_PROVIDERS
         echo "Run: nas-secrets activate"
       }
 
+      command_adopt_authentik_bootstrap_stdin() {
+        acquire_lock
+        password_from_stdin=true
+        prompt_unlock
+        ensure_group
+        local secret_key token
+        IFS= read -r secret_key || { echo "Unable to read the Authentik bootstrap secret key." >&2; exit 1; }
+        IFS= read -r token || { echo "Unable to read the Authentik bootstrap token." >&2; exit 1; }
+        if IFS= read -r _; then
+          echo "Unexpected extra input while adopting Authentik bootstrap authority." >&2
+          exit 1
+        fi
+        require_secret_hex "$secret_key" 128 "Authentik bootstrap secret key"
+        require_secret_hex "$token" 64 "Authentik bootstrap token"
+        store_value authentik-secret-key "$secret_key"
+        store_value authentik-bootstrap-token "$token"
+        store_value authentik-api-token "$token"
+        if ! has_secret authentik-bootstrap-password; then
+          store_value authentik-bootstrap-password ${lib.escapeShellArg bootstrapPassword}
+        fi
+        unset secret_key token
+        echo "Adopted the running first-boot Authentik authority."
+      }
+
       install_secret() {
         local source="$1" target="$2" owner="$3" group="$4"
         sudo install -m 0400 -o "$owner" -g "$group" "$source" "$target"
@@ -358,6 +383,7 @@ PY_AI_PROVIDERS
       # Limit transient secret variables to the activation scope.
       command_activate() (
         set -Eeuo pipefail
+        local setup_activation="''${1:-false}"
         acquire_lock
         prompt_unlock
 
@@ -370,8 +396,8 @@ PY_AI_PROVIDERS
         ${lib.optionalString cfg.ai.enable ''local provider_id provider_env provider_key''}
         ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
         local state_bundle_signing_key
-        sudo install -d -m 0711 -o root -g root /run/nas-secret-staging
-        runtime_base="/run/nas-secret-staging/$(id -u)"
+        sudo install -d -m 0711 -o root -g root /run/nas-secret-runtime/staging
+        runtime_base="/run/nas-secret-runtime/staging/$(id -u)"
         sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$runtime_base"
         if [[ ! -d "$runtime_base" || -L "$runtime_base" || "$(stat -c '%u' "$runtime_base")" != "$(id -u)" || "$((8#$(stat -c '%a' "$runtime_base") & 8#077))" -ne 0 ]]; then
           echo "Refusing to stage secrets: a private user runtime directory is unavailable." >&2
@@ -382,8 +408,8 @@ PY_AI_PROVIDERS
           echo "Refusing to stage secrets: temporary directory is not mode 0700." >&2
           exit 70
         fi
-        sudo install -d -m 0700 -o root -g root /run/nas-secret-transactions
-        transaction_dir="$(sudo mktemp -d /run/nas-secret-transactions/transaction.XXXXXX)"
+        sudo install -d -m 0700 -o root -g root /run/nas-secret-runtime/transactions
+        transaction_dir="$(sudo mktemp -d /run/nas-secret-runtime/transactions/transaction.XXXXXX)"
         root_stage="$transaction_dir/new"
         previous="$transaction_dir/previous"
 
@@ -551,7 +577,19 @@ NTFY_ENV
 
         nas_secret_tx_swap
 
-        if ! sudo systemctl start nas-protected-services.target; then
+        sudo systemctl reset-failed \
+          postgresql.service postgresql-setup.service \
+          authentik-migrate.service authentik-worker.service authentik.service caddy.service
+        if [[ "$setup_activation" == true ]]; then
+          if ! sudo systemctl start postgresql.service \
+            || ! sudo systemctl start authentik-migrate.service \
+            || ! sudo systemctl start --job-mode=ignore-dependencies authentik.service \
+            || ! sudo systemctl start --job-mode=ignore-dependencies authentik-worker.service \
+            || ! sudo systemctl start --job-mode=ignore-dependencies caddy.service; then
+            echo "Setup identity services failed to start; inspect systemctl --failed." >&2
+            exit 71
+          fi
+        elif ! sudo systemctl start nas-protected-services.target; then
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71
         fi
@@ -784,7 +822,7 @@ NTFY_ENV
 
       enter_operation_coordinator() {
         case "''${1:-}" in
-          init|activate|activate-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
+          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|activate-setup-stdin|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
             local runner="''${NAS_OPERATION_RUNNER:-/run/current-system/sw/bin/nas-operation-run}"
             [[ -x "$runner" ]] || {
               echo "NAS operation coordinator is unavailable: $runner" >&2
@@ -803,10 +841,15 @@ NTFY_ENV
 
       case "''${1:-}" in
         init) command_init ;;
+        adopt-authentik-bootstrap-stdin) command_adopt_authentik_bootstrap_stdin ;;
         activate) command_activate ;;
         activate-stdin)
           password_from_stdin=true
           command_activate
+          ;;
+        activate-setup-stdin)
+          password_from_stdin=true
+          command_activate true
           ;;
         status) command_status ;;
         stop) command_stop ;;
@@ -826,7 +869,7 @@ NTFY_ENV
         show-zfs-key-stdin) command_show_zfs_key_stdin ;;
         show-authentik-bootstrap) command_show_authentik_bootstrap ;;
         *)
-          echo "Usage: nas-secrets {init|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
+          echo "Usage: nas-secrets {init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
           exit 2
           ;;
       esac

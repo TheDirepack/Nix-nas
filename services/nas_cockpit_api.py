@@ -33,6 +33,7 @@ from nas_operation_lock import (
 
 ZFS_POOL = os.environ.get("NAS_ZFS_POOL", "tank")
 ZFS_DATASET = os.environ.get("NAS_ZFS_DATASET", "tank/nas")
+ZFS_ROOT = pathlib.Path(os.environ.get("NAS_ZFS_ROOT", "/tank"))
 CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas"))
 PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
 FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
@@ -407,7 +408,12 @@ def _write_private_new(path: pathlib.Path, content: str) -> None:
         raise
 
 
-def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_path: pathlib.Path) -> None:
+def _start_first_start_unit(
+    job_id: str,
+    request_path: pathlib.Path,
+    password_path: pathlib.Path,
+    devices: list[str],
+) -> None:
     command = [
         "systemd-run",
         "--unit",
@@ -419,19 +425,21 @@ def _start_first_start_unit(job_id: str, request_path: pathlib.Path, password_pa
         "--property=UMask=0077",
         "--property=NoNewPrivileges=yes",
         "--property=PrivateTmp=yes",
-        "--property=PrivateDevices=yes",
-        "--property=ProtectHome=yes",
+        "--property=DevicePolicy=closed",
+        "--property=DeviceAllow=/dev/zfs rw",
+        *(f"--property=DeviceAllow={device} rw" for device in devices),
+        "--property=ProtectHome=read-only",
         "--property=ProtectSystem=strict",
-        # /run/nas-secrets, /var/lib/nas-secrets and the ZFS control paths
-        # may not exist before the first-start transaction creates them;
-        # systemd fails namespace setup on missing ReadWritePaths unless they
-        # are marked optional.
-        "--property=ReadWritePaths=/var/lib/nas-setup /var/lib/nas-control /run/nas-control /run/lock /run/nas-first-start -/run/nas-secrets -/run/nas-operations -/var/lib/nas-secrets -/run/nas-authentik",
+        "--property=RuntimeDirectory=nas-secret-runtime",
+        "--property=RuntimeDirectoryMode=0700",
+        "--property=RuntimeDirectoryPreserve=yes",
+        "--property=ReadWritePaths=/etc /var/lib/nas-control-plane /var/lib/nas-setup /var/lib/nas-first-start /run/nas-secret-runtime /run/nas-operations /run/lock /run/nas-first-start",
+        f"--property=ReadWritePaths=-{ZFS_ROOT}",
         # The submitted job is the Cockpit-authorized root setup execution
         # path; without this flag require_setup_operator fails closed for root.
         "--property=Environment=NAS_SETUP_ALLOW_ROOT=1",
         f"--property=Environment=NAS_PUBLIC_HOST={os.environ.get('NAS_PUBLIC_HOST', '')}",
-        "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token",
+        "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-secrets/authentik/bootstrap-token",
         "--property=TimeoutStartSec=6h",
         "--",
         _setup_entry(),
@@ -459,8 +467,14 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
     administrator_password = _json_string(administrator, "password", required=True, max_length=MAX_PASSWORD_LENGTH)
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
         raise ApiError("Administrator username is invalid")
+    if username == "akadmin":
+        raise ApiError("Administrator username is the reserved bootstrap identity")
     if any("\n" in value or "\r" in value for value in (name, email, administrator_password)):
         raise ApiError("Administrator details must be single-line values")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise ApiError("Administrator email is invalid")
+    if len(administrator_password) < 12:
+        raise ApiError("Administrator password must contain at least 12 characters")
     plan_digest = _json_string(request, "planDigest", required=True, max_length=64)
     if not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
         raise ApiError("Invalid first-start plan digest")
@@ -469,7 +483,12 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         raise ApiError("First-start devices contain duplicates")
     allow_destructive = request.get("allowDestructiveStorage", False)
     confirm_password_reapply = request.get("confirmPasswordReapply", False)
-    if not isinstance(allow_destructive, bool) or not isinstance(confirm_password_reapply, bool):
+    encrypt_storage = request.get("encryptStorage", True)
+    if (
+        not isinstance(allow_destructive, bool)
+        or not isinstance(confirm_password_reapply, bool)
+        or not isinstance(encrypt_storage, bool)
+    ):
         raise ApiError("First-start confirmation flags must be boolean")
 
     prepared = first_start_status()
@@ -514,6 +533,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
         "devices": devices,
         "allowDestructiveStorage": allow_destructive,
         "confirmPasswordReapply": confirm_password_reapply,
+        "encryptStorage": encrypt_storage,
     }
     try:
         _write_private_new(request_path, json.dumps(job, sort_keys=True) + "\n")
@@ -532,7 +552,7 @@ def start_first_start(request: dict[str, Any]) -> dict[str, Any]:
             )
             + "\n",
         )
-        _start_first_start_unit(job_id, request_path, password_path)
+        _start_first_start_unit(job_id, request_path, password_path, devices)
         return {"schemaVersion": 1, "jobId": job_id, "status": "submitted"}
     except Exception:
         request_path.unlink(missing_ok=True)
@@ -1215,11 +1235,28 @@ def _setup_complete() -> bool:
     return isinstance(state, dict) and state.get("status") in {"complete", "complete-unverified"}
 
 
+def reboot_after_first_start(request: dict[str, Any]) -> dict[str, bool]:
+    if not _setup_complete():
+        raise ApiError("Reboot is only offered after first-start setup completes")
+    if set(request) != {"jobId"}:
+        raise ApiError("A completed first-start job is required to reboot")
+    job_id = request.get("jobId")
+    if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{24}", job_id):
+        raise ApiError("A completed first-start job is required to reboot")
+    if first_start_job_status(job_id).get("status") not in {"complete", "complete-unverified"}:
+        raise ApiError("A completed first-start job is required to reboot")
+    completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
+    if completed.returncode != 0:
+        raise ApiError("Unable to schedule the reboot")
+    return {"rebooting": True}
+
+
 class SetupApiHandler(http.server.BaseHTTPRequestHandler):
     """Loopback-only JSON API for the first-start setup wizard.
 
-    Exposure is gated by Caddy forward-auth; the handlers reuse the exact
-    validation and job-submission path as the Cockpit first-start page.
+    Caddy forward-auth gates plans and submission. Job polling and reboot use
+    the submitted 96-bit job id as a narrow capability so the already-open
+    wizard survives replacement of the temporary Authentik database.
     """
 
     server_version = "nas-setup-api/1"
@@ -1265,12 +1302,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, start_first_start(request))
                 return
             if self.path == "/setup/api/reboot":
-                if not _setup_complete():
-                    raise ApiError("Reboot is only offered after first-start setup completes")
-                completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
-                if completed.returncode != 0:
-                    raise ApiError("Unable to schedule the reboot")
-                self._send_json(200, {"rebooting": True})
+                self._send_json(200, reboot_after_first_start(request))
                 return
             self._send_json(404, {"error": "Not found"})
         except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:

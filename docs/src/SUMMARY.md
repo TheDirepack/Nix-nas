@@ -4,6 +4,7 @@
 
 # Getting started
 
+- [Install and set up](admin/installation.md)
 - [Administrator configuration](admin/configuration.md)
   - [First start](admin/first-run.md)
   - [Locked-state unlock](locked-unlock.md)
