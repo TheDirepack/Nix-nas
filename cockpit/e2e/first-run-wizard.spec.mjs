@@ -48,7 +48,10 @@ async function fillAdministrator(page, {separateKeePass = false} = {}) {
 async function goToConfirmation(page) {
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByText("Review the storage plan published by the appliance")).toBeVisible();
-  await expect(page.getByRole("link", {name: "Open Storage"})).toHaveAttribute("href", "/console/storage");
+  await expect(page.getByRole("link", {name: "Open Storage"})).toHaveAttribute(
+    "href",
+    "/console/storage",
+  );
   await expect(page.getByRole("link", {name: "Open Terminal"})).toHaveAttribute(
     "href",
     "/console/system/terminal",
@@ -102,7 +105,9 @@ test("completes every first-start control through reboot", async ({page}) => {
     confirmPasswordReapply: false,
   });
   await page.getByRole("button", {name: "Reboot now"}).click();
-  await expect(page.getByText("This page will disconnect while the appliance restarts.")).toBeVisible();
+  await expect(
+    page.getByText("This page will disconnect while the appliance restarts."),
+  ).toBeVisible();
   expect(rebooted).toBe(true);
 });
 
@@ -150,7 +155,9 @@ test("validates entries, refreshes the plan, and safely retries a failed job", a
   await expect(page.getByText("Injected setup failure")).toBeVisible({timeout: 6_000});
   const retry = page.getByRole("button", {name: "Retry setup"});
   await expect(retry).toBeDisabled();
-  await page.getByLabel("I understand retrying may reapply administrator and account passwords").check();
+  await page
+    .getByLabel("I understand retrying may reapply administrator and account passwords")
+    .check();
   await retry.click();
   await expect(page.getByRole("button", {name: "Reboot now"})).toBeVisible();
   expect(jobRequests).toBeGreaterThan(0);
@@ -171,5 +178,7 @@ test("fits the viewport and has no serious accessibility violations", async ({pa
   const result = await new AxeBuilder({page})
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
-  expect(result.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
+  expect(
+    result.violations.filter((item) => ["serious", "critical"].includes(item.impact)),
+  ).toEqual([]);
 });
