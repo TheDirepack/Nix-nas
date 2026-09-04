@@ -90,11 +90,11 @@ test(
     const index = await wizard("src/index.jsx");
     assert.match(index, /emptyAdministrator = \{ username: ''/);
     assert.equal(await exists("src/api.js"), false, "obsolete API stub must not remain");
-      assert.equal(
-        await exists("src/forms/schema.json"),
-        false,
-        "obsolete form authority must not remain",
-      );
+    assert.equal(
+      await exists("src/forms/schema.json"),
+      false,
+      "obsolete form authority must not remain",
+    );
   },
 );
 
