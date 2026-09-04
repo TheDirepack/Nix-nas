@@ -48,12 +48,14 @@ async function fillAdministrator(page, {separateKeePass = false} = {}) {
 async function goToConfirmation(page) {
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByText("Review the storage plan published by the appliance")).toBeVisible();
-  await expect(
-    page.getByRole("link", {name: "Open Storage"}),
-  ).toHaveAttribute("href", "/console/storage");
-  await expect(
-    page.getByRole("link", {name: "Open Terminal"}),
-  ).toHaveAttribute("href", "/console/system/terminal");
+  await expect(page.getByRole("link", {name: "Open Storage"})).toHaveAttribute(
+    "href",
+    "/console/storage",
+  );
+  await expect(page.getByRole("link", {name: "Open Terminal"})).toHaveAttribute(
+    "href",
+    "/console/system/terminal",
+  );
   await page.getByLabel("I understand the listed devices will be wiped").check();
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByText("Finishing setup applies the reviewed plan")).toBeVisible();
@@ -176,7 +178,7 @@ test("fits the viewport and has no serious accessibility violations", async ({pa
   const result = await new AxeBuilder({page})
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
-  expect(
-    result.violations.filter((item) => ["serious", "critical"].includes(item.impact)),
-  ).toEqual([]);
+  expect(result.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual(
+    [],
+  );
 });
