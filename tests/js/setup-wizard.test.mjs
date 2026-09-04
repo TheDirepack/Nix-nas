@@ -67,19 +67,19 @@ test("wizard step components use exports that exist in react-core 6.1.0", async 
 test(
   "admin step keeps the KeePassXC unlock password distinct from account credentials",
   async () => {
-  const admin = await wizard("src/steps/AdminStep.jsx");
-  assert.match(admin, /KeePassXC/);
-  assert.doesNotMatch(admin, /useSamePassword|wizard-keepass-same/);
-  assert.match(admin, /It is not an account password/);
-  assert.match(admin, /wizard-keepass-password/);
-  assert.match(admin, /wizard-keepass-password-confirm/);
-  assert.match(
-    admin,
-    /wizard-admin-password-confirm/,
-    "administrator password needs a confirm field",
-  );
-  const confirm = await wizard("src/steps/ConfirmStep.jsx");
-  assert.match(confirm, /keePassPassword !== keePassPasswordConfirm/);
+    const admin = await wizard("src/steps/AdminStep.jsx");
+    assert.match(admin, /KeePassXC/);
+    assert.doesNotMatch(admin, /useSamePassword|wizard-keepass-same/);
+    assert.match(admin, /It is not an account password/);
+    assert.match(admin, /wizard-keepass-password/);
+    assert.match(admin, /wizard-keepass-password-confirm/);
+    assert.match(
+      admin,
+      /wizard-admin-password-confirm/,
+      "administrator password needs a confirm field",
+    );
+    const confirm = await wizard("src/steps/ConfirmStep.jsx");
+    assert.match(confirm, /keePassPassword !== keePassPasswordConfirm/);
     assert.match(confirm, /Enter and confirm the KeePassXC database password/);
   },
 );
@@ -87,14 +87,14 @@ test(
 test(
   "administrator username starts blank and obsolete setup authorities stay removed",
   async () => {
-  const index = await wizard("src/index.jsx");
-  assert.match(index, /emptyAdministrator = \{ username: ''/);
-  assert.equal(await exists("src/api.js"), false, "obsolete API stub must not remain");
-    assert.equal(
-      await exists("src/forms/schema.json"),
-      false,
-      "obsolete form authority must not remain",
-    );
+    const index = await wizard("src/index.jsx");
+    assert.match(index, /emptyAdministrator = \{ username: ''/);
+    assert.equal(await exists("src/api.js"), false, "obsolete API stub must not remain");
+      assert.equal(
+        await exists("src/forms/schema.json"),
+        false,
+        "obsolete form authority must not remain",
+      );
   },
 );
 
