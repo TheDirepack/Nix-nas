@@ -213,7 +213,12 @@ test("first-start rejects invalid administrator recovery details before spawning
     () =>
       startFirstRun(
         "correct horse battery staple",
-        {username: "nasadmin", name: "NAS Administrator", email: "invalid", password: "long-enough-password"},
+        {
+          username: "nasadmin",
+          name: "NAS Administrator",
+          email: "invalid",
+          password: "long-enough-password",
+        },
         options,
         spawn,
       ),
@@ -223,7 +228,12 @@ test("first-start rejects invalid administrator recovery details before spawning
     () =>
       startFirstRun(
         "correct horse battery staple",
-        {username: "nasadmin", name: "NAS Administrator", email: "admin@example.test", password: "short"},
+        {
+          username: "nasadmin",
+          name: "NAS Administrator",
+          email: "admin@example.test",
+          password: "short",
+        },
         options,
         spawn,
       ),
