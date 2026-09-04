@@ -48,14 +48,12 @@ async function fillAdministrator(page, {separateKeePass = false} = {}) {
 async function goToConfirmation(page) {
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByText("Review the storage plan published by the appliance")).toBeVisible();
-  await expect(page.getByRole("link", {name: "Open Storage"})).toHaveAttribute(
-    "href",
-    "/console/storage",
-  );
-  await expect(page.getByRole("link", {name: "Open Terminal"})).toHaveAttribute(
-    "href",
-    "/console/system/terminal",
-  );
+  await expect(
+    page.getByRole("link", {name: "Open Storage"}),
+  ).toHaveAttribute("href", "/console/storage");
+  await expect(
+    page.getByRole("link", {name: "Open Terminal"}),
+  ).toHaveAttribute("href", "/console/system/terminal");
   await page.getByLabel("I understand the listed devices will be wiped").check();
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByText("Finishing setup applies the reviewed plan")).toBeVisible();
