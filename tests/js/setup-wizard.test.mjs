@@ -64,7 +64,9 @@ test("wizard step components use exports that exist in react-core 6.1.0", async 
   }
 });
 
-test("admin step keeps the KeePassXC unlock password distinct from account credentials", async () => {
+test(
+  "admin step keeps the KeePassXC unlock password distinct from account credentials",
+  async () => {
   const admin = await wizard("src/steps/AdminStep.jsx");
   assert.match(admin, /KeePassXC/);
   assert.doesNotMatch(admin, /useSamePassword|wizard-keepass-same/);
@@ -78,15 +80,23 @@ test("admin step keeps the KeePassXC unlock password distinct from account crede
   );
   const confirm = await wizard("src/steps/ConfirmStep.jsx");
   assert.match(confirm, /keePassPassword !== keePassPasswordConfirm/);
-  assert.match(confirm, /Enter and confirm the KeePassXC database password/);
-});
+    assert.match(confirm, /Enter and confirm the KeePassXC database password/);
+  },
+);
 
-test("administrator username starts blank and obsolete setup authorities stay removed", async () => {
+test(
+  "administrator username starts blank and obsolete setup authorities stay removed",
+  async () => {
   const index = await wizard("src/index.jsx");
   assert.match(index, /emptyAdministrator = \{ username: ''/);
   assert.equal(await exists("src/api.js"), false, "obsolete API stub must not remain");
-  assert.equal(await exists("src/forms/schema.json"), false, "obsolete form authority must not remain");
-});
+    assert.equal(
+      await exists("src/forms/schema.json"),
+      false,
+      "obsolete form authority must not remain",
+    );
+  },
+);
 
 test("setup keeps only actionable administrator, storage, and confirmation steps", async () => {
   const storage = await wizard("src/steps/StorageStep.jsx");
