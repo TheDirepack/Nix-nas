@@ -785,6 +785,7 @@ def prepare_storage_runtime(keepass_password: str, encrypt_storage: bool | None 
             coordinated_child(["nas-secrets", "activate-setup-stdin"]),
             input_text=keepass_password + "\n",
         )
+        run_storage_host(["nas-zfs-unlock"])
     run_storage_host(["nas-zfs-mount-check"])
     run_storage_host(["systemd-tmpfiles", "--create", "--graceful"])
     # The initial seed runs before the new ZFS mount exists and is hidden by

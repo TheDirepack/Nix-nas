@@ -32,17 +32,14 @@ async function openWizard(page) {
   await expect(page.getByLabel("Username")).toBeVisible();
 }
 
-async function fillAdministrator(page, {separateKeePass = false} = {}) {
+async function fillAdministrator(page) {
   await page.getByLabel("Username").fill("nasadmin");
   await page.getByLabel("Full name").fill("NAS Administrator");
   await page.getByLabel("Email").fill("admin@example.test");
   await page.locator("#wizard-admin-password").fill("administrator-password");
   await page.locator("#wizard-admin-password-confirm").fill("administrator-password");
-  if (separateKeePass) {
-    await page.getByLabel("Use the same password for the KeePassXC database").uncheck();
-    await page.locator("#wizard-keepass-password").fill("keepass-password");
-    await page.locator("#wizard-keepass-password-confirm").fill("keepass-password");
-  }
+  await page.locator("#wizard-keepass-password").fill("keepass-password");
+  await page.locator("#wizard-keepass-password-confirm").fill("keepass-password");
 }
 
 async function goToConfirmation(page) {
@@ -84,7 +81,7 @@ test("completes every first-start control through reboot", async ({page}) => {
   await expect(page.getByRole("button", {name: "Cancel"})).toHaveCount(0);
   await page.getByLabel("Color theme").selectOption("dark");
   await expect(page.locator("html")).toHaveClass(/pf-v6-theme-dark/);
-  await fillAdministrator(page, {separateKeePass: true});
+  await fillAdministrator(page);
   await goToConfirmation(page);
   await expect(page.getByRole("button", {name: "Finish"})).toHaveCount(0);
 
@@ -102,6 +99,7 @@ test("completes every first-start control through reboot", async ({page}) => {
     planDigest: "a".repeat(64),
     devices: plan.storage.devices,
     allowDestructiveStorage: true,
+    encryptStorage: true,
     confirmPasswordReapply: false,
   });
   await page.getByRole("button", {name: "Reboot now"}).click();

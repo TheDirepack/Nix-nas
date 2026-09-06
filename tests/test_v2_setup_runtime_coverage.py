@@ -444,6 +444,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in storage_host.call_args_list],
             [
+                ["nas-zfs-unlock"],
                 ["nas-zfs-mount-check"],
                 ["systemd-tmpfiles", "--create", "--graceful"],
             ],

@@ -589,8 +589,10 @@ pass "GUI first start created the expected storage, accounts, and administrator"
 # This is a test-only static plan created by the disposable administrator.
 # Transfer it to the permanent administrator before verifying the idempotent
 # status path; browser-submitted production secrets are already deleted.
+# Run the status check as root so privileged authority checks (share
+# directories, runtime secrets) do not depend on a cached sudo timestamp.
 chown -R nasadmin:users /var/lib/nas-test/setup
-run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
+nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json
 if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
   /tmp/nas-first-start-status.json >/dev/null; then
