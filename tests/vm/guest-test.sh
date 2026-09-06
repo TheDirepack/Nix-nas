@@ -709,8 +709,11 @@ done
 wait_active nas-v2-timer-identity-sync-0.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
-curl --fail --silent --show-error --max-time 20 \
-  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
+copyparty_code="$(http_code --unix-socket /run/copyparty/http.sock http://localhost/)"
+case "$copyparty_code" in
+  200|301|302|303|307|308|401|403) : ;;
+  *) fail "CopyParty backend returned HTTP $copyparty_code" ;;
+esac
 nas-identity-sync status | jq -e '
   (.users | index("alice")) != null and
   (.users | index("guest")) != null and

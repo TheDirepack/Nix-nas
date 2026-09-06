@@ -257,7 +257,11 @@ for step in create keylocation fingerprint canmount unmount unload-key; do
   pass "failure after $step removes the newly-created encrypted dataset and temporary key"
 done
 zfs rename tank/nas-preserved tank/nas
-activate_secrets
+ls -la /run/lock/nas-secrets.lock /run/nas-operations/ /run/nas-secret-runtime/ >&2 || true
+activate_secrets >/tmp/nas-reactivate-matrix.log 2>&1 || {
+  cat /tmp/nas-reactivate-matrix.log >&2 || true
+  fail "secret reactivation after fault matrix failed"
+}
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
 wait_active nas-zfs-mount-guard.service
