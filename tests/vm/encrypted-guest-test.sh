@@ -51,8 +51,13 @@ wait_oneshot_completed() {
 }
 
 prime_nasadmin_sudo() {
-  printf '%s\n' "$(cat /var/lib/nas-test/setup/nasadmin.password)" |
-    runuser -u nasadmin -- sudo -S -v >/dev/null 2>&1 || fail "nasadmin sudo priming failed"
+  local prime_output
+  runuser -u nasadmin -- sudo -n -v >/dev/null 2>&1 && return 0
+  prime_output="$(printf '%s\n' "$(cat /var/lib/nas-test/setup/nasadmin.password)" |
+    runuser -u nasadmin -- sudo -S -v 2>&1)" || {
+    printf '%s\n' "$prime_output" >&2
+    fail "nasadmin sudo priming failed"
+  }
 }
 
 run_as_admin() {

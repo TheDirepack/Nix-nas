@@ -592,6 +592,15 @@ NTFY_ENV
         elif ! sudo systemctl start nas-protected-services.target; then
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71
+        else
+          # Secret-gated units skipped while locked are never retried by
+          # systemd, and target activation does not pull units without install
+          # wants. Converge them explicitly once their conditions hold.
+          for gated_unit in copyparty.service nas-on-demand-gate.service nas-v2-timer-identity-sync-0.timer ntfy-sh.service nas-alert-router.service grafana.service victoriametrics.service telegraf.service vmalert-nas.service; do
+            if sudo systemctl cat "$gated_unit" >/dev/null 2>&1; then
+              sudo systemctl start "$gated_unit" || exit 71
+            fi
+          done
         fi
 
         for unit in authentik.service authentik-worker.service caddy.service; do
