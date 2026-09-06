@@ -1992,7 +1992,6 @@ def ensure_secret_gated_services() -> None:
     # target activation does not pull units without install wants.
     for unit in (
         "copyparty.service",
-        "nas-on-demand-gate.service",
         "nas-v2-timer-identity-sync-0.timer",
         "ntfy-sh.service",
         "nas-alert-router.service",
