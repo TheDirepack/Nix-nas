@@ -636,6 +636,8 @@ EOF_BAD_CONFIG
 if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.out 2>/tmp/nas-bad-path.err; then
   fail "setup accepted a traversal-shaped storage device"
 fi
+ls -la /run/nas-secret-runtime/live/observability/ >&2 || true
+systemctl status nas-alert-router.service ntfy-sh.service --no-pager >&2 || true
 wait_active nas-alert-router.service
 code="$(curl --silent --output /tmp/nas-alert-malformed-adv.json --write-out '%{http_code}' \
   --header 'Content-Type: application/json' --data-binary '{' http://127.0.0.1:9093/api/v2/alerts)"

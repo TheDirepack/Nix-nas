@@ -391,19 +391,21 @@ class StorageProvisioningTests(unittest.TestCase):
             self.assertEqual(activate.call_count, int(selected))
             if selected:
                 self.assertEqual(activate.call_args.kwargs["input_text"], "database-password\n")
-                self.assertEqual(storage.call_args_list[0].args[0], ["nas-zfs-unlock"])
-                self.assertEqual(storage.call_args_list[1].args[0], ["nas-zfs-mount-check"])
+            self.assertEqual(storage.call_args_list[0].args[0], ["nas-zfs-mount-check"])
+            self.assertEqual(
+                storage.call_args_list[1].args[0],
+                ["systemd-tmpfiles", "--create", "--graceful"],
+            )
+            if selected:
                 self.assertEqual(
-                    storage.call_args_list[2].args[0],
-                    ["systemd-tmpfiles", "--create", "--graceful"],
+                    [call.args[0] for call in root.call_args_list],
+                    [
+                        ["systemctl", "start", "nas-zfs-unlock.service"],
+                        ["systemctl", "restart", "nas-managed-services-seed.service"],
+                    ],
                 )
             else:
-                self.assertEqual(storage.call_args_list[0].args[0], ["nas-zfs-mount-check"])
-                self.assertEqual(
-                    storage.call_args_list[1].args[0],
-                    ["systemd-tmpfiles", "--create", "--graceful"],
-                )
-            root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
+                root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
 
 
 class LocalAdministratorTests(unittest.TestCase):

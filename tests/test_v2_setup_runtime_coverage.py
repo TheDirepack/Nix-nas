@@ -444,12 +444,17 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in storage_host.call_args_list],
             [
-                ["nas-zfs-unlock"],
                 ["nas-zfs-mount-check"],
                 ["systemd-tmpfiles", "--create", "--graceful"],
             ],
         )
-        root.assert_called_once_with(["systemctl", "restart", "nas-managed-services-seed.service"])
+        self.assertEqual(
+            [call.args[0] for call in root.call_args_list],
+            [
+                ["systemctl", "start", "nas-zfs-unlock.service"],
+                ["systemctl", "restart", "nas-managed-services-seed.service"],
+            ],
+        )
         self.assertEqual(result, {"mounted": True, "runtimeDirectoriesPrepared": True})
 
     def test_plain_storage_runtime_preparation_does_not_activate_secrets(self) -> None:
