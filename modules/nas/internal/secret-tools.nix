@@ -400,7 +400,7 @@ PY_AI_PROVIDERS
         runtime_base="/run/nas-secret-runtime/staging/$(id -u)"
         sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$runtime_base"
         if [[ ! -d "$runtime_base" || -L "$runtime_base" || "$(stat -c '%u' "$runtime_base")" != "$(id -u)" || "$((8#$(stat -c '%a' "$runtime_base") & 8#077))" -ne 0 ]]; then
-          echo "Refusing to stage secrets: a private user runtime directory is unavailable." >&2
+          echo "Refusing to stage secrets: a private user runtime directory is unavailable: $runtime_base ($(stat -c '%a:%u:%g' "$runtime_base" 2>/dev/null || echo missing))" >&2
           exit 70
         fi
         local_stage="$(mktemp -d "$runtime_base/nas-secrets.XXXXXX")"

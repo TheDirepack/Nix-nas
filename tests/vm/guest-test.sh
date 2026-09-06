@@ -734,7 +734,11 @@ nas-identity-sync capabilities | jq -e '
 ' >/dev/null
 printf '%s\n' 'alice-updated-password' |
   run_as_nasadmin nas-setup account apply --username alice --password-stdin \
-    >/tmp/nas-account-password-update.json
+    >/tmp/nas-account-password-update.json 2>/tmp/nas-account-apply.err || {
+  cat /tmp/nas-account-apply.err >&2 || true
+  cat /tmp/nas-account-password-update.json >&2 || true
+  fail "alice password update failed"
+}
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
 run_as_nasadmin nas-setup account apply --username alice \
   --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
