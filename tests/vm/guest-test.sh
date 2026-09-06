@@ -216,11 +216,19 @@ setup_administrator() {
   printf '%s\n' "$administrator"
 }
 
+prime_nasadmin_sudo() {
+  [[ -f /var/lib/nas-test/setup/nasadmin.password ]] || return 0
+  id nasadmin >/dev/null 2>&1 || return 0
+  printf '%s\n' "$(cat /var/lib/nas-test/setup/nasadmin.password)" |
+    runuser -u nasadmin -- sudo -S -v >/dev/null 2>&1 || fail "nasadmin sudo priming failed"
+}
+
 run_as_admin() {
   local administrator home
   administrator="$(setup_administrator)"
   home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
   [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
+  prime_nasadmin_sudo
   runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" "$@"
 }
 
@@ -228,6 +236,7 @@ run_as_admin() {
 # the configured local administrator and the only account allowed to run
 # mutating nas-setup commands.
 run_as_nasadmin() {
+  prime_nasadmin_sudo
   runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
 }
 
@@ -241,6 +250,7 @@ run_as_admin_with_stdin() {
   administrator="$(setup_administrator)"
   home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
   [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
+  prime_nasadmin_sudo
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
     runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" \
       timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
@@ -417,6 +427,7 @@ install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup
 printf '%s\n' 'alice-vm-password' >/var/lib/nas-test/setup/alice.password
 printf '%s\n' 'operator-vm-password' >/var/lib/nas-test/setup/operator.password
 printf '%s\n' 'baseline-vm-password' >/var/lib/nas-test/setup/baseline.password
+printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
 chown akadmin:users /var/lib/nas-test/setup/*.password
 chmod 0600 /var/lib/nas-test/setup/*.password
 cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
@@ -486,9 +497,11 @@ nas_vm_cleanup_add cleanup_wizard_secrets
 chmod 0700 "$wizard_secret_dir"
 printf '%s\n' 'nas-admin-first-boot' >"$wizard_secret_dir/akadmin"
 printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
-printf '%s\n' 'nasadmin-vm-password' >"$wizard_secret_dir/nasadmin"
+cp /var/lib/nas-test/setup/nasadmin.password "$wizard_secret_dir/nasadmin"
 chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
-wizard_admin='{"username":"nasadmin","name":"NAS Administrator","email":"nasadmin@nas-test.local","password":"nasadmin-vm-password"}'
+IFS= read -r wizard_nasadmin_password <"$wizard_secret_dir/nasadmin"
+wizard_admin="$(jq -cn --arg password "$wizard_nasadmin_password" \
+  '{username: "nasadmin", name: "NAS Administrator", email: "nasadmin@nas-test.local", password: $password}')"
 IFS= read -r wizard_keepass_password <"$wizard_secret_dir/keepass"
 stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" --argjson administrator "$wizard_admin" \
   --arg keepass "$wizard_keepass_password" \
@@ -670,9 +683,12 @@ pass "Cockpit ZFS rollback wrapper restores data and creates a source marker"
 ! nas-zfs-lock >/tmp/nas-zfs-lock-disabled.log 2>&1 || fail "nas-zfs-lock succeeded with encryption disabled"
 grep -q 'is not encrypted' /tmp/nas-zfs-lock-disabled.log
 nas-zfs-unlock
-! printf '%s\n' "$KEEPASS_PASSWORD" | nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-disabled.log 2>&1 || \
+! printf '%s\n' "$KEEPASS_PASSWORD" | run_as_nasadmin nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-disabled.log 2>&1 || \
   fail "encrypted-dataset creation replaced an existing unencrypted dataset"
-grep -q 'already exists' /tmp/nas-zfs-create-disabled.log
+grep -q 'already exists' /tmp/nas-zfs-create-disabled.log || {
+  cat /tmp/nas-zfs-create-disabled.log >&2
+  fail "encrypted-dataset refusal did not report the existing dataset"
+}
 ! nas-ups-init-password >/tmp/nas-ups-disabled.log 2>&1 || fail "UPS password initialization succeeded while UPS support was disabled"
 grep -q 'Enable nas.power.ups' /tmp/nas-ups-disabled.log
 pass "the wizard's unencrypted choice is honored and cannot be changed destructively afterward"

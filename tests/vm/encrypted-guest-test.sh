@@ -97,6 +97,9 @@ cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
 EOFSETUP
 chown admin:users /var/lib/nas-test/setup/encrypted-first-run.json
 chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
+printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
+chown admin:users /var/lib/nas-test/setup/nasadmin.password
+chmod 0600 /var/lib/nas-test/setup/nasadmin.password
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
@@ -113,10 +116,12 @@ if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$
 fi
 plan_digest="$(jq -er '.planDigest' <<<"$first_start_plan")"
 stale_digest="$(printf '0%.0s' {1..64})"
+IFS= read -r wizard_nasadmin_password </var/lib/nas-test/setup/nasadmin.password
 stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
+  --arg admin_password "$wizard_nasadmin_password" \
   '{password: "nixos-nas-vm-test-password",
     administrator: {username: "nasadmin", name: "NAS Administrator",
-                    email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
+                    email: "nasadmin@nas-test.local", password: $admin_password},
     planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
@@ -132,9 +137,10 @@ grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json || {
 pass "first-start setup API rejects a stale plan digest before mutation"
 
 job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
+  --arg admin_password "$wizard_nasadmin_password" \
   '{password: "nixos-nas-vm-test-password",
     administrator: {username: "nasadmin", name: "NAS Administrator",
-                    email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
+                    email: "nasadmin@nas-test.local", password: $admin_password},
     planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 job_code="$(printf '%s' "$job_request" | curl --silent --show-error --max-time 60 \
@@ -198,6 +204,25 @@ pass "nas-setup created and activated the encrypted storage stack"
 grep -q 'already exists' /tmp/nas-zfs-create-existing.log
 pass "direct encrypted-dataset command refuses to modify an existing encryption root"
 
+# Post-setup authority belongs to the wizard-created administrator; only that
+# account can traverse the owner-only secret database.
+prime_nasadmin_sudo() {
+  printf '%s\n' "$(cat /var/lib/nas-test/setup/nasadmin.password)" |
+    runuser -u nasadmin -- sudo -S -v >/dev/null 2>&1 || fail "nasadmin sudo priming failed"
+}
+run_as_admin() {
+  prime_nasadmin_sudo
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
+}
+run_as_admin_with_stdin() {
+  local timeout_seconds=$1
+  shift
+  prime_nasadmin_sudo
+  nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
+    runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" \
+      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
+}
+
 log "Fault-inject every encrypted dataset bootstrap transition"
 # Keep the known-good encryption root out of the command's configured name while the
 # failure matrix repeatedly creates and tears down a brand-new tank/nas. Locking first
@@ -208,7 +233,8 @@ zfs rename tank/nas tank/nas-preserved
 [[ "$(zfs get -H -o value mounted tank/nas-preserved)" == "no" ]]
 for step in create keylocation fingerprint canmount unmount unload-key; do
   rm -f "/tmp/nas-zfs-fault-$step.out" "/tmp/nas-zfs-fault-$step.err"
-  if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+  prime_nasadmin_sudo
+  if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" \
     NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER="$step" \
     nas-zfs-create-encrypted-dataset \
     >"/tmp/nas-zfs-fault-$step.out" 2>"/tmp/nas-zfs-fault-$step.err"; then
