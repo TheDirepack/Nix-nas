@@ -216,7 +216,7 @@ in
     };
 
     nas-identity-sync = {
-      description = "Bootstrap and validate Authentik NAS identity policy";
+      description = "Validate Authentik NAS identity policy";
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       requires = [ "authentik.service" ];
@@ -233,12 +233,13 @@ in
         # runtime operation class. Retry the timer-triggered validation after
         # that transient coordination conflict instead of leaving the target
         # failed until the next timer tick.
+        # Bootstrap reconciliation runs pre-setup through
+        # nas-identity-bootstrap.service and inside the first-run transaction;
+        # the bootstrap token is retired by setup, so steady-state validation
+        # uses the scoped runtime token via status only.
         Restart = "on-failure";
         RestartSec = "5s";
-        ExecStart = [
-          "${nasIdentitySync}/bin/nas-identity-sync bootstrap"
-          "${nasIdentitySync}/bin/nas-identity-sync status"
-        ];
+        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync status";
         UMask = "0077";
       };
       environment.NAS_PUBLIC_HOST = cfg.identity.publicHost;

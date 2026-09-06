@@ -180,7 +180,7 @@ wait_active nas-zfs-mount-guard.service
 nas-zfs-mount-check
 [[ "$(zfs get -H -o value encryptionroot tank/nas)" == "tank/nas" ]]
 [[ "$(zfs get -H -o value keyformat tank/nas)" == "hex" ]]
-[[ "$(zfs get -H -o value keylocation tank/nas)" == "file:///run/nas-secrets/zfs/dataset-key" ]]
+[[ "$(zfs get -H -o value keylocation tank/nas)" == "file:///run/nas-secret-runtime/live/zfs/dataset-key" ]]
 [[ "$(zfs get -H -o value keystatus tank/nas)" == "available" ]]
 [[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
 [[ -f /run/nas-secrets/zfs/dataset-key ]]
