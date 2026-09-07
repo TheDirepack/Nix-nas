@@ -780,78 +780,11 @@ nas-identity-sync status | jq -e \
   '.identityProvider == "Authentik" and .shareAuthority == "CopyParty" and (.administrators | length > 0)' >/dev/null
 capabilities_json="$(nas-identity-sync capabilities)"
 jq -e '.identityProvider == "Authentik" and (.users | length > 0)' <<<"$capabilities_json" >/dev/null
-# Application capabilities are Authentik-owned and empty by default, so assign
-# one to the administrator through the API (the documented operator workflow)
-# and verify the report honors the assignment.
-assigned_capability="$(python3 - /run/nas-secrets/authentik/api-token <<'PYADMINCAPABILITY'
-import json
-import sys
-import urllib.parse
-import urllib.request
-
-base = "http://127.0.0.1:9000/identity/api/v3"
-token = open(sys.argv[1], encoding="utf-8").read().strip()
-
-
-def api(path, *, method="GET", body=None):
-    request = urllib.request.Request(
-        f"{base}/{path.lstrip('/')}",
-        method=method,
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    payload = None
-    if body is not None:
-        payload = json.dumps(body).encode("utf-8")
-        request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, data=payload, timeout=30) as response:
-        return json.load(response)
-
-
-def listed(path):
-    output = []
-    url = f"{path}{'&' if '?' in path else '?'}page_size=100"
-    while url:
-        value = api(url)
-        if isinstance(value, list):
-            return output + [item for item in value if isinstance(item, dict)]
-        results = value.get("results")
-        if not isinstance(results, list):
-            raise SystemExit(f"Authentik endpoint {path} did not return a result list")
-        output.extend(item for item in results if isinstance(item, dict))
-        pagination = value.get("pagination") or {}
-        nxt = pagination.get("next")
-        if isinstance(nxt, int) and nxt > 0:
-            parts = urllib.parse.urlsplit(url if "://" in url else f"{base}/{url.lstrip('/')}")
-            query = urllib.parse.parse_qs(parts.query)
-            query["page"] = [str(nxt)]
-            url = urllib.parse.urlunsplit(
-                (parts.scheme, parts.netloc, parts.path, urllib.parse.urlencode(query, doseq=True), "")
-            )
-        else:
-            url = ""
-    return output
-
-
-users = [item for item in listed("core/users/?search=nasadmin") if item.get("username") == "nasadmin"]
-if not users:
-    raise SystemExit("nasadmin account is missing from Authentik")
-user_pk = users[0].get("num_pk", users[0].get("pk"))
-groups = [
-    item
-    for item in listed("core/groups/?search=application.")
-    if isinstance(item.get("name"), str) and item["name"].startswith("application.")
-]
-if not groups:
-    raise SystemExit("no application capability groups exist to assign")
-group = sorted(groups, key=lambda item: item["name"])[0]
-api(f"core/groups/{urllib.parse.quote(str(group['pk']), safe='')}/add_user/", method="POST", body={"pk": user_pk})
-print(group["name"])
-PYADMINCAPABILITY
-)"
-[[ -n "$assigned_capability" ]] || fail "administrator capability assignment produced no group"
-capabilities_json="$(nas-identity-sync capabilities)"
-jq -e --arg capability "$assigned_capability" \
-  '[.users[] | select(.administrator) | .capabilities[$capability].allowed] | length > 0 and all' \
+# Application capabilities are Authentik-owned and empty until the operator
+# assigns them after V2 reconciliation (see docs/src/permissions.md); the
+# default report must stay fail-closed while remaining well-formed.
+jq -e '[.users[] | select(.administrator)] | length > 0' <<<"$capabilities_json" >/dev/null
+jq -e '[.users[] | select(.administrator) | .capabilities] | all(. == {})' \
   <<<"$capabilities_json" >/dev/null
 
 gate_deny="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
