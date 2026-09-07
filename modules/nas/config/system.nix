@@ -98,7 +98,7 @@ in
       "d ${cfg.zfsRoot}/nas-control 0750 root nas-operations -"
       "L+ /var/lib/nas-control - - - - ${cfg.zfsRoot}/nas-control"
       "d /run/nas-operations 2770 root nas-operations -"
-      "d /run/nas-secret-runtime 0700 root root -"
+      "d /run/nas-secret-runtime 0711 root root -"
       "L+ /run/nas-secrets - - - - /run/nas-secret-runtime/live"
       "d /run/nas-first-start 0700 root root -"
       "d /run/nas-state 0700 root root -"

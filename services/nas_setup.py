@@ -520,6 +520,7 @@ def finalize_local_administrator(administrator: Mapping[str, Any]) -> dict[str, 
     if KEEPASS_DATABASE.exists():
         run_root(["chown", f"{username}:users", str(KEEPASS_DATABASE)])
     atomic_write_json(ADMIN_STATE_PATH, value, mode=0o600)
+    run_root(["chown", f"{username}:users", str(ADMIN_STATE_PATH)])
     if username != BOOTSTRAP_ADMIN_USER:
         existing = run_root(["id", "--user", BOOTSTRAP_ADMIN_USER], check=False)
         if existing.returncode == 0:
