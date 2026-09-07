@@ -516,8 +516,10 @@ class LocalAdministratorTests(unittest.TestCase):
                 result = setup.finalize_local_administrator({"username": "nasadmin"})
                 persisted = json.loads(state.read_text(encoding="utf-8"))
         self.assertEqual(result, {"username": "nasadmin"})
-        retirement = run_root.call_args_list[2].args[0]
-        cleanup = run_root.call_args_list[3].args[0]
+        state_chown = run_root.call_args_list[1].args[0]
+        self.assertEqual(state_chown, ["chown", "nasadmin:users", str(state)])
+        retirement = run_root.call_args_list[3].args[0]
+        cleanup = run_root.call_args_list[4].args[0]
         self.assertEqual(retirement[:1], ["systemd-run"])
         self.assertIn("--property=ProtectHome=read-only", retirement)
         self.assertEqual(retirement[retirement.index("--") + 1 :], ["userdel", "akadmin"])
@@ -539,14 +541,15 @@ class LocalAdministratorTests(unittest.TestCase):
                     "run_root",
                     side_effect=[
                         setup.Completed(("chown",), "", ""),
+                        setup.Completed(("chown",), "", ""),
                         setup.Completed(("id",), "", "", 1),
                         setup.Completed(("rm",), "", ""),
                     ],
                 ) as run_root,
             ):
                 setup.finalize_local_administrator({"username": "nasadmin"})
-        self.assertEqual(len(run_root.call_args_list), 3)
-        cleanup = run_root.call_args_list[2].args[0]
+        self.assertEqual(len(run_root.call_args_list), 4)
+        cleanup = run_root.call_args_list[3].args[0]
         self.assertEqual(cleanup[cleanup.index("--") + 1 :][-1], "/home/akadmin")
 
     def test_control_plane_authorities_are_boot_side_and_never_zfs_promoted(self) -> None:

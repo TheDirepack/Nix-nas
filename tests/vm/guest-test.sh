@@ -733,16 +733,16 @@ nas-identity-sync capabilities | jq -e '
   .assignedApplicationCapabilities == []
 ' >/dev/null
 printf '%s\n' 'alice-updated-password' |
-  run_as_admin nas-setup account apply --username alice --password-stdin \
+  run_as_nasadmin nas-setup account apply --username alice --password-stdin \
     >/tmp/nas-account-password-update.json 2>/tmp/nas-account-apply.err || {
   cat /tmp/nas-account-apply.err >&2 || true
   cat /tmp/nas-account-password-update.json >&2 || true
   fail "alice password update failed"
 }
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
-  run_as_admin nas-setup account apply --username alice \
-    --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
-    >/tmp/nas-account-xss-name.json
+run_as_nasadmin nas-setup account apply --username alice \
+  --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
+  >/tmp/nas-account-xss-name.json
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
   .active == true and
@@ -752,15 +752,15 @@ nas-identity-sync export-account alice | jq -e '
   (.groups | index("nas_allow_syncthing")) == null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
-  run_as_admin nas-setup account apply \
+  run_as_nasadmin nas-setup account apply \
     --username temporary \
     --name 'Temporary User' \
-    --email [EMAIL] \
+    --email temporary@nas.local \
     --group nas_users \
-    --password-stdin >/tmp/nas-account-add.json \
-    && jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
-  run_as_admin nas-setup account disable temporary >/tmp/nas-account-disable.json \
-    && jq -e '.updated == ["temporary"]' /tmp/nas-account-disable.json >/dev/null
+    --password-stdin >/tmp/nas-account-add.json
+jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
+run_as_nasadmin nas-setup account disable temporary >/tmp/nas-account-disable.json
+jq -e '.updated == ["temporary"]' /tmp/nas-account-disable.json >/dev/null
 nas-identity-sync export-account temporary | jq -e '
   .active == false and
   (.groups | index("nas_disabled")) != null and
@@ -952,8 +952,8 @@ nas-managed-services-control document | jq -e '.document.services | type == "obj
 ! nas-managed-services-control set '../copyparty' always >/tmp/nas-service-injection.log 2>&1 || fail "path-like service identifier was accepted"
 ! nas-managed-services-control set 'copyparty;touch /tmp/pwned' always >>/tmp/nas-service-injection.log 2>&1 || fail "shell-like service identifier was accepted"
 [[ ! -e /tmp/pwned ]] || fail "service identifier injection created an unexpected file"
-! run_as_admin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
-! run_as_admin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
+! run_as_nasadmin nas-setup account apply --username '../operator' --disabled >/tmp/nas-account-injection.log 2>&1 || fail "path-like account username was accepted"
+! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
 nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
