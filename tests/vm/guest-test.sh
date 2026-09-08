@@ -57,15 +57,16 @@ stop_browser_port_forward() {
 }
 
 start_browser_port_forward() {
-  local public_host public_address public_port systemd_path systemd_root activate_path proxy_path
+  local public_address public_port systemd_path systemd_root activate_path proxy_path
   if [[ ! "$AUTHENTIK_PUBLIC_HOST" =~ :([0-9]+)$ ]]; then
     return 0
   fi
-  public_host="${AUTHENTIK_PUBLIC_HOST%:*}"
   public_port="${BASH_REMATCH[1]}"
   [[ "$public_port" != 443 ]] || return 0
-  public_address="$(getent ahostsv4 "$public_host" | awk 'NR == 1 { print $1; exit }')"
-  [[ -n "$public_address" ]] || fail "could not resolve the Authentik public host $public_host inside the VM"
+  # The VM maps the public test host back to its own HTTPS listener. Avoid
+  # resolver races with DHCP-provided addresses; callers may override it.
+  public_address="${NAS_BROWSER_HOST_ADDRESS:-127.0.0.1}"
+  export NAS_BROWSER_HOST_ADDRESS="$public_address"
   systemd_path="$(command -v systemctl)"
   systemd_root="$(dirname "$(dirname "$(readlink -f "$systemd_path")")")"
   activate_path="$systemd_root/bin/systemd-socket-activate"
@@ -206,15 +207,49 @@ assert_spoof_blocked() {
   esac
 }
 
+setup_administrator() {
+  local administrator
+  administrator="akadmin"
+  if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
+    administrator="$(jq -er '.username | strings' /var/lib/nas-setup/local-administrator.json)"
+  fi
+  printf '%s\n' "$administrator"
+}
+
+prime_nasadmin_sudo() {
+  local password
+  [[ -f /var/lib/nas-test/setup/nasadmin.password ]] || return 0
+  id nasadmin >/dev/null 2>&1 || return 0
+  runuser -u nasadmin -- sudo -n -v >/dev/null 2>&1 && return 0
+  password="$(cat /var/lib/nas-test/setup/nasadmin.password)"
+  NASADMIN_PASSWORD="$password" expect <<'EXPECT_SUDO' || fail "nasadmin sudo priming failed"
+set timeout 30
+spawn runuser -u nasadmin -- sudo -v
+expect {
+  -re "(?i)password.*:" { send "$env(NASADMIN_PASSWORD)\r"; exp_continue }
+  eof { }
+  timeout { exit 99 }
+}
+set status [lindex [wait] 3]
+exit $status
+EXPECT_SUDO
+}
+
 run_as_admin() {
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
+  local administrator home
+  administrator="$(setup_administrator)"
+  home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
+  [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
+  prime_nasadmin_sudo
+  runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" "$@"
 }
 
 # After first run completes, the wizard-created administrator (nasadmin) is
 # the configured local administrator and the only account allowed to run
 # mutating nas-setup commands.
 run_as_nasadmin() {
-  runuser -u nasadmin -- env HOME=/home/nasadmin PATH="$PATH" "$@"
+  prime_nasadmin_sudo
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
@@ -222,10 +257,14 @@ activate_secrets() {
 }
 
 run_as_admin_with_stdin() {
-  local timeout_seconds=$1
+  local timeout_seconds=$1 administrator home
   shift
+  administrator="$(setup_administrator)"
+  home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
+  [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
+  prime_nasadmin_sudo
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+    runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" \
       timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
 }
 
@@ -239,7 +278,7 @@ authentik_api() {
 }
 
 verify_bootstrap_authentik_proxy() {
-  local provider_id outpost_id code provider_response application_response group_response outpost_response
+  local provider_id setup_provider_id outpost_id code provider_response application_response group_response outpost_response
   provider_response="$(authentik_api GET 'providers/proxy/?page_size=100')" || fail 'Authentik provider API was not ready'
   provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Portal") | .pk')" || \
     fail 'Authentik bootstrap portal provider was not present'
@@ -253,6 +292,14 @@ verify_bootstrap_authentik_proxy() {
   printf '%s' "$application_response" | jq -e --arg provider "$provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST" \
     '.results[] | select(.slug == "nas-portal" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
     fail 'Authentik bootstrap portal application was not present'
+  setup_provider_id="$(printf '%s' "$provider_response" | jq -er '.results[] | select(.name == "NAS Setup") | .pk')" || \
+    fail 'Authentik bootstrap setup provider was not present'
+  printf '%s' "$provider_response" | jq -e --arg provider "$setup_provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST/setup/" \
+    '.results[] | select((.pk | tostring) == $provider and .external_host == $host and .mode == "forward_single")' >/dev/null || \
+    fail 'Authentik bootstrap setup provider has unexpected settings'
+  printf '%s' "$application_response" | jq -e --arg provider "$setup_provider_id" --arg host "https://$AUTHENTIK_PUBLIC_HOST/setup/" \
+    '.results[] | select(.slug == "nas-setup" and (.provider | tostring) == $provider and .meta_launch_url == $host)' >/dev/null || \
+    fail 'Authentik bootstrap setup application was not provider-backed'
   group_response="$(authentik_api GET 'core/groups/?include_users=true&page_size=100')" || fail 'Authentik group API was not ready'
   printf '%s' "$group_response" | jq -e \
     '.results[] | select(.name == "nas_admin") | (.users_obj // .users // []) | any(.username == "akadmin")' >/dev/null || \
@@ -264,11 +311,15 @@ verify_bootstrap_authentik_proxy() {
   printf '%s' "$outpost_response" | jq -e --arg provider "$provider_id" \
     '(.providers | map(tostring) | index($provider)) != null' >/dev/null || \
     fail 'Authentik embedded outpost was not assigned the portal provider'
+  printf '%s' "$outpost_response" | jq -e --arg provider "$setup_provider_id" \
+    '(.providers | map(tostring) | index($provider)) != null' >/dev/null || \
+    fail 'Authentik embedded outpost was not assigned the setup provider'
   printf '%s' "$outpost_response" | jq -e \
     --arg host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
     --arg browser_host "https://$AUTHENTIK_PUBLIC_HOST/identity/" \
     '.config.authentik_host == $host and .config.authentik_host_browser == $browser_host' >/dev/null || \
     fail 'Authentik embedded outpost has unexpected host settings'
+  wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" -H "Host: $PUBLIC_HOST"
   code="$(http_code -H "Host: $PUBLIC_HOST" "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" || true)"
   [[ "$code" == 204 ]] || fail "Authentik bootstrap proxy outpost did not become reachable (HTTP ${code:-none})"
   pass 'bootstrap Authentik portal provider, application, and outpost assignment are ready'
@@ -311,11 +362,21 @@ wait_oneshot_completed nas-managed-services-authentik-reconcile.service
 systemctl restart nas-authentik-proxy-outpost.service
 wait_active nas-authentik-proxy-outpost.service
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
+expect <<'EXPECT_LINUX_BOOTSTRAP'
+set timeout 15
+spawn runuser -u admin -- su - akadmin -c {test "$(id -un)" = akadmin}
+expect "Password:"
+send "nas-admin-first-boot\r"
+expect eof
+set status [lindex [wait] 3]
+exit $status
+EXPECT_LINUX_BOOTSTRAP
+pass "the initial Linux login uses the same akadmin development credential as Authentik"
 AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
 verify_bootstrap_authentik_proxy
-[[ -f /var/lib/nas-bootstrap/authentik/environment ]] || fail "first-boot Authentik environment is missing"
-[[ -f /var/lib/nas-bootstrap/authentik/api-token ]] || fail "first-boot Authentik API token is missing"
-[[ "$(readlink -f /run/nas-authentik/environment)" == "/var/lib/nas-bootstrap/authentik/environment" ]] || \
+[[ -f /var/lib/nas-control-plane/authentik/environment ]] || fail "first-boot Authentik environment is missing"
+[[ -f /var/lib/nas-control-plane/authentik/api-token ]] || fail "first-boot Authentik API token is missing"
+[[ "$(readlink -f /run/nas-authentik/environment)" == "/var/lib/nas-control-plane/authentik/environment" ]] || \
   fail "Authentik did not select the first-boot environment"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
 assert_no_502_authentik_redirect / "locked base route"
@@ -368,15 +429,22 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
-install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
+bootstrap_keepass_password='discarded-bootstrap-keepass-password'
+keepass_database='/var/lib/nas-control-plane/nas-secrets/NAS.kdbx'
+install -d -m 0700 -o akadmin -g users "$(dirname "$keepass_database")"
+printf '%s\n%s\n' "$bootstrap_keepass_password" "$bootstrap_keepass_password" |
+  runuser -u akadmin -- env HOME=/home/akadmin keepassxc-cli db-create --quiet --set-password "$keepass_database"
+[[ -f "$keepass_database" ]] || fail "bootstrap KeePass replacement fixture was not created"
+install -d -m 0700 -o akadmin -g users /var/lib/nas-test/setup
 printf '%s\n' 'alice-vm-password' >/var/lib/nas-test/setup/alice.password
 printf '%s\n' 'operator-vm-password' >/var/lib/nas-test/setup/operator.password
 printf '%s\n' 'baseline-vm-password' >/var/lib/nas-test/setup/baseline.password
-chown admin:users /var/lib/nas-test/setup/*.password
+printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
+chown akadmin:users /var/lib/nas-test/setup/*.password
 chmod 0600 /var/lib/nas-test/setup/*.password
 cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "storage": {
     "createPool": true,
     "device": "$ZFS_DEVICE",
@@ -387,14 +455,14 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
       "username": "operator",
       "name": "Second NAS Administrator",
       "email": "operator@nas.local",
-      "groups": ["nas_admin", "nas_allow_files", "nas_allow_ai", "nas_allow_vault", "nas_allow_syncthing"],
+      "groups": ["nas_admin"],
       "passwordFile": "/var/lib/nas-test/setup/operator.password"
     },
     {
       "username": "alice",
       "name": "Alice Example",
       "email": "alice@nas.local",
-      "groups": ["nas_users", "nas_allow_files", "nas_allow_vault", "nas_allow_syncthing"],
+      "groups": ["nas_users"],
       "passwordFile": "/var/lib/nas-test/setup/alice.password"
     },
     {
@@ -411,11 +479,10 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
       "groups": ["nas_guests"]
     }
   ],
-  "features": {},
   "runPreflight": true
 }
 EOFSETUP
-chown admin:users /var/lib/nas-test/setup/first-run.json
+chown akadmin:users /var/lib/nas-test/setup/first-run.json
 chmod 0600 /var/lib/nas-test/setup/first-run.json
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/first-run.json | jq -e '.accounts | length == 4'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
@@ -423,7 +490,7 @@ nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 
 # Complete first start through the GUI bootstrap system: the Cockpit First
 # start page behind the Authentik gate, submitting through the loopback
-# setup API contract. The pre-bootstrap Linux administrator (nas-bootstrap,
+# setup API contract. The pre-bootstrap Linux administrator (akadmin,
 # documented in nas-bootstrap-administrator.service) provisions browser
 # access while the appliance is still locked.
 setup_api="http://127.0.0.1:8980/setup/api"
@@ -442,11 +509,14 @@ nas_vm_cleanup_add cleanup_wizard_secrets
 chmod 0700 "$wizard_secret_dir"
 printf '%s\n' 'nas-admin-first-boot' >"$wizard_secret_dir/akadmin"
 printf '%s\n' "$KEEPASS_PASSWORD" >"$wizard_secret_dir/keepass"
-printf '%s\n' 'nasadmin-vm-password' >"$wizard_secret_dir/nasadmin"
+cp /var/lib/nas-test/setup/nasadmin.password "$wizard_secret_dir/nasadmin"
 chmod 0600 "$wizard_secret_dir/akadmin" "$wizard_secret_dir/keepass" "$wizard_secret_dir/nasadmin"
-wizard_admin='{"username":"nasadmin","name":"NAS Administrator","email":"nasadmin@nas-test.local","password":"nasadmin-vm-password"}'
+IFS= read -r wizard_nasadmin_password <"$wizard_secret_dir/nasadmin"
+wizard_admin="$(jq -cn --arg password "$wizard_nasadmin_password" \
+  '{username: "nasadmin", name: "NAS Administrator", email: "nasadmin@nas-test.local", password: $password}')"
+IFS= read -r wizard_keepass_password <"$wizard_secret_dir/keepass"
 stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" --argjson administrator "$wizard_admin" \
-  --arg keepass "$KEEPASS_PASSWORD" \
+  --arg keepass "$wizard_keepass_password" \
   '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
@@ -471,6 +541,7 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   --admin-name 'NAS Administrator' \
   --admin-email 'nasadmin@nas-test.local' \
   --admin-password-file "$wizard_secret_dir/nasadmin" \
+  --no-encrypt-storage \
   --device "$ZFS_DEVICE" \
   --job-timeout-seconds "$(nas_vm_timeout_value firstRun)" \
   --result-file /tmp/nas-first-run-job.json
@@ -480,6 +551,7 @@ if ! jq -e '
   .status == "complete" and
   .result.storage.createdPool == true and
   .result.storage.createdDataset == true and
+  .result.storage.encrypted == false and
   (.result.accounts.created | sort) == ["alice", "baseline", "guest", "nasadmin", "operator"] and
   (.result.identity.administrators | index("operator")) != null and
   (.result.identity.administrators | index("nasadmin")) != null and
@@ -489,9 +561,63 @@ if ! jq -e '
   jq . /tmp/nas-first-run-job.json >&2 || cat /tmp/nas-first-run-job.json >&2
   fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
-[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ -d /var/lib/nas-control-plane/authentik ]] || fail "Authentik moved off the system control partition"
+[[ -d /var/lib/nas-control-plane/postgresql ]] || fail "PostgreSQL moved off the system control partition"
+[[ -f /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "KeePassXC database moved off the system control partition"
+[[ ! -e /tank/authentik && ! -e /tank/postgresql && ! -e /tank/nas-secrets ]] || \
+  fail "unlock control data was copied onto the managed ZFS data partition"
+! grep -q '^AUTHENTIK_BOOTSTRAP_' /var/lib/nas-control-plane/authentik/environment || \
+  fail "retired Authentik bootstrap values remain in the persistent environment"
+runtime_authentik_token="$(< /run/nas-authentik/api-token)"
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $runtime_authentik_token" \
+  'http://127.0.0.1:9000/identity/api/v3/core/users/?username=akadmin' \
+  | jq -e '.pagination.count == 0' >/dev/null || fail "Authenik bootstrap account still exists after setup"
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $runtime_authentik_token" \
+  'http://127.0.0.1:9000/identity/api/v3/core/applications/?slug=nas-setup' \
+  | jq -e '.pagination.count == 0' >/dev/null || fail "one-time Authentik setup application still exists after setup"
+[[ "$(getent passwd nasadmin | cut -d: -f6)" == "/tank/homes/nasadmin" ]] || \
+  fail "permanent administrator home is not on the ZFS data root"
+[[ -d /tank/homes/nasadmin ]] || fail "permanent administrator ZFS home is missing"
+[[ ! -e /home/nasadmin ]] || fail "permanent administrator data was created on the system partition"
+findmnt -n -o FSTYPE -T /tank/homes/nasadmin | grep -qx zfs || \
+  fail "permanent administrator home is not backed by ZFS"
+expect <<'EXPECT_LINUX_ADMINISTRATOR'
+set timeout 15
+spawn runuser -u admin -- su - nasadmin -c {test "$(id -un)" = nasadmin}
+expect "Password:"
+send "nasadmin-vm-password\r"
+expect eof
+set status [lindex [wait] 3]
+exit $status
+EXPECT_LINUX_ADMINISTRATOR
+pass "the wizard-created administrator password authenticates the permanent Linux account"
+if printf '%s\n' "$bootstrap_keepass_password" |
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
+    >/dev/null 2>&1; then
+  fail "the discarded bootstrap KeePass password still unlocks the setup database"
+fi
+printf '%s\n' "$KEEPASS_PASSWORD" |
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli db-info --quiet "$keepass_database" \
+    >/dev/null
+keepass_listing="$(printf '%s\n' "$KEEPASS_PASSWORD" |
+  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin keepassxc-cli ls --quiet --flatten \
+    "$keepass_database" 'NixOS NAS')"
+for required_keepass_entry in authentik-secret-key authentik-api-token state-bundle-signing-key; do
+  grep -Fxq "$required_keepass_entry" <<<"$keepass_listing" || \
+    fail "fresh KeePass database is missing $required_keepass_entry"
+done
+pass "setup replaced the bootstrap KeePass database and populated the fresh database"
 pass "GUI first start created the expected storage, accounts, and administrator"
-run_as_admin nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
+# This is a test-only static plan created by the disposable administrator.
+# Transfer it to the permanent administrator before verifying the idempotent
+# status path; browser-submitted production secrets are already deleted.
+# Run the status check as root so privileged authority checks (share
+# directories, runtime secrets) do not depend on a cached sudo timestamp.
+chown -R nasadmin:users /var/lib/nas-test/setup
+nas-setup prepare-first-start --config /var/lib/nas-test/setup/first-run.json \
   >/tmp/nas-first-start-status.json
 if ! jq -e '.status == "complete" and .configPath == "/var/lib/nas-test/setup/first-run.json"' \
   /tmp/nas-first-start-status.json >/dev/null; then
@@ -530,11 +656,13 @@ if nas-setup account disable "' OR '1'='1" >/tmp/nas-bad-account.out 2>/tmp/nas-
   fail "account command accepted an SQL-injection-shaped username"
 fi
 cat >/tmp/nas-bad-path-config.json <<'EOF_BAD_CONFIG'
-{"schemaVersion":1,"storage":{"createPool":true,"devices":["../../dev/vdb"]}}
+{"schemaVersion":2,"storage":{"createPool":true,"devices":["../../dev/vdb"]}}
 EOF_BAD_CONFIG
 if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.out 2>/tmp/nas-bad-path.err; then
   fail "setup accepted a traversal-shaped storage device"
 fi
+ls -la /run/nas-secret-runtime/live/observability/ >&2 || true
+systemctl status nas-alert-router.service ntfy-sh.service --no-pager >&2 || true
 wait_active nas-alert-router.service
 code="$(curl --silent --output /tmp/nas-alert-malformed-adv.json --write-out '%{http_code}' \
   --header 'Content-Type: application/json' --data-binary '{' http://127.0.0.1:9093/api/v2/alerts)"
@@ -565,14 +693,17 @@ zfs destroy -r "$rollback_dataset"
 pass "Cockpit ZFS rollback wrapper restores data and creates a source marker"
 
 ! nas-zfs-lock >/tmp/nas-zfs-lock-disabled.log 2>&1 || fail "nas-zfs-lock succeeded with encryption disabled"
-grep -q 'zfsEncryption.enable is false' /tmp/nas-zfs-lock-disabled.log
-! nas-zfs-unlock >/tmp/nas-zfs-unlock-disabled.log 2>&1 || fail "nas-zfs-unlock succeeded with encryption disabled"
-grep -q 'zfsEncryption.enable is false' /tmp/nas-zfs-unlock-disabled.log
-! nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-disabled.log 2>&1 || fail "encrypted-dataset creation succeeded while disabled"
-grep -q 'Enable nas.zfsEncryption.enable' /tmp/nas-zfs-create-disabled.log
+grep -q 'is not encrypted' /tmp/nas-zfs-lock-disabled.log
+nas-zfs-unlock
+! printf '%s\n' "$KEEPASS_PASSWORD" | run_as_nasadmin nas-zfs-create-encrypted-dataset >/tmp/nas-zfs-create-disabled.log 2>&1 || \
+  fail "encrypted-dataset creation replaced an existing unencrypted dataset"
+grep -q 'already exists' /tmp/nas-zfs-create-disabled.log || {
+  cat /tmp/nas-zfs-create-disabled.log >&2
+  fail "encrypted-dataset refusal did not report the existing dataset"
+}
 ! nas-ups-init-password >/tmp/nas-ups-disabled.log 2>&1 || fail "UPS password initialization succeeded while UPS support was disabled"
 grep -q 'Enable nas.power.ups' /tmp/nas-ups-disabled.log
-pass "disabled ZFS encryption and UPS tools fail early without unreachable code"
+pass "the wizard's unencrypted choice is honored and cannot be changed destructively afterward"
 
 log "Verify first-run protected services and account population"
 [[ -f /run/nas-secrets/ready ]] || fail "first-run setup did not commit runtime secrets"
@@ -585,8 +716,11 @@ done
 wait_active nas-v2-timer-identity-sync-0.timer
 [[ -S /run/copyparty/http.sock ]] || fail "CopyParty Unix socket is missing"
 wait_http http://127.0.0.1:9000/identity/-/health/ready/
-curl --fail --silent --show-error --max-time 20 \
-  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
+copyparty_code="$(http_code --unix-socket /run/copyparty/http.sock http://localhost/)"
+case "$copyparty_code" in
+  200|301|302|303|307|308|401|403) : ;;
+  *) fail "CopyParty backend returned HTTP $copyparty_code" ;;
+esac
 nas-identity-sync status | jq -e '
   (.users | index("alice")) != null and
   (.users | index("guest")) != null and
@@ -595,11 +729,16 @@ nas-identity-sync status | jq -e '
 nas-identity-sync capabilities | jq -e '
   .users[] |
   select(.id == "alice") |
-  .capabilities.files.allowed == true and .capabilities.ai.allowed == false
+  .capabilities == {} and
+  .assignedApplicationCapabilities == []
 ' >/dev/null
 printf '%s\n' 'alice-updated-password' |
   run_as_nasadmin nas-setup account apply --username alice --password-stdin \
-    >/tmp/nas-account-password-update.json
+    >/tmp/nas-account-password-update.json 2>/tmp/nas-account-apply.err || {
+  cat /tmp/nas-account-apply.err >&2 || true
+  cat /tmp/nas-account-password-update.json >&2 || true
+  fail "alice password update failed"
+}
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-password-update.json >/dev/null
 run_as_nasadmin nas-setup account apply --username alice \
   --name '<img src=x onerror=document.body.dataset.nasXss=1>' \
@@ -607,16 +746,17 @@ run_as_nasadmin nas-setup account apply --username alice \
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
   .active == true and
-  (.groups | index("nas_allow_files")) != null and
-  (.groups | index("nas_allow_vault")) != null and
-  (.groups | index("nas_allow_syncthing")) != null
+  (.groups | index("nas_users")) != null and
+  (.groups | index("nas_allow_files")) == null and
+  (.groups | index("nas_allow_vault")) == null and
+  (.groups | index("nas_allow_syncthing")) == null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
   run_as_nasadmin nas-setup account apply \
     --username temporary \
     --name 'Temporary User' \
     --email temporary@nas.local \
-    --group nas_allow_files \
+    --group nas_users \
     --password-stdin >/tmp/nas-account-add.json
 jq -e '.account.created == ["temporary"]' /tmp/nas-account-add.json >/dev/null
 run_as_nasadmin nas-setup account disable temporary >/tmp/nas-account-disable.json
@@ -625,7 +765,7 @@ nas-identity-sync export-account temporary | jq -e '
   .active == false and
   (.groups | index("nas_disabled")) != null and
   (.groups | index("nas_admin")) == null and
-  (.groups | index("nas_allow_files")) == null
+  (.groups | index("nas_users")) == null
 ' >/dev/null
 pass "core services, account apply/disable CLI, and CopyParty backend are healthy"
 
@@ -640,7 +780,11 @@ nas-identity-sync status | jq -e \
   '.identityProvider == "Authentik" and .shareAuthority == "CopyParty" and (.administrators | length > 0)' >/dev/null
 capabilities_json="$(nas-identity-sync capabilities)"
 jq -e '.identityProvider == "Authentik" and (.users | length > 0)' <<<"$capabilities_json" >/dev/null
-jq -e '[.users[] | select(.administrator) | .capabilities[] | .allowed] | length > 0 and all' \
+# Application capabilities are Authentik-owned and empty until the operator
+# assigns them after V2 reconciliation (see docs/src/permissions.md); the
+# default report must stay fail-closed while remaining well-formed.
+jq -e '[.users[] | select(.administrator)] | length > 0' <<<"$capabilities_json" >/dev/null
+jq -e '[.users[] | select(.administrator) | .capabilities] | all(. == {})' \
   <<<"$capabilities_json" >/dev/null
 
 gate_deny="$(http_code --unix-socket /run/nas-on-demand/gate.sock \

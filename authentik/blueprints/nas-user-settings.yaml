@@ -18,6 +18,8 @@ entries:
         - authentik_core.add_group
         - authentik_core.change_group
         - authentik_core.enable_group_superuser
+        - authentik_core.view_token
+        - authentik_outposts.view_outpost
 
   - model: authentik_stages_prompt.prompt
     identifiers:

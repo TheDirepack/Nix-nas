@@ -27,6 +27,7 @@ import {setupModel} from "../view-model.js";
 export function SetupPage({data, mutate, busy}) {
   const model = setupModel(data || {});
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [administrator, setAdministrator] = useState({
     username: "",
     name: "",
@@ -48,6 +49,7 @@ export function SetupPage({data, mutate, busy}) {
       confirmPasswordReapply,
     });
     setPassword("");
+    setPasswordConfirm("");
     setAdministrator({...administrator, password: ""});
     setJob(value);
   };
@@ -113,6 +115,17 @@ export function SetupPage({data, mutate, busy}) {
                     type="password"
                     value={password}
                     onChange={(_e, value) => setPassword(value)}
+                  />
+                </FormGroup>
+                <FormGroup
+                  label="Confirm KeePassXC database password"
+                  fieldId="first-start-keepass-password-confirm"
+                >
+                  <TextInput
+                    id="first-start-keepass-password-confirm"
+                    type="password"
+                    value={passwordConfirm}
+                    onChange={(_e, value) => setPasswordConfirm(value)}
                   />
                 </FormGroup>
                 <FormGroup
@@ -196,6 +209,7 @@ export function SetupPage({data, mutate, busy}) {
                     busy ||
                     !model.ready ||
                     !password ||
+                    password !== passwordConfirm ||
                     !administrator.username ||
                     !administrator.name ||
                     !administrator.email ||

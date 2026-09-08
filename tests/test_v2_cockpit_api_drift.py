@@ -141,17 +141,47 @@ class CockpitApiDriftTests(unittest.TestCase):
 
     def test_start_first_start_unit_uses_hardened_transient_unit_and_reports_failure(self) -> None:
         with mock.patch.object(api, "run", return_value=CommandResult(0, "", "")) as run:
-            api._start_first_start_unit("a" * 24, pathlib.Path("/request"), pathlib.Path("/password"))
+            api._start_first_start_unit(
+                "a" * 24,
+                pathlib.Path("/request"),
+                pathlib.Path("/password"),
+                ["/dev/disk/by-id/test-disk"],
+            )
         command = run.call_args.args[0]
         self.assertEqual(command[:3], ["systemd-run", "--unit", f"nas-first-start-{'a' * 24}.service"])
         self.assertIn("--property=ProtectSystem=strict", command)
+        self.assertIn("--property=ProtectHome=read-only", command)
+        self.assertIn(
+            "--property=RuntimeDirectory=nas-secret-runtime",
+            command,
+        )
+        self.assertIn("--property=RuntimeDirectoryMode=0700", command)
+        self.assertIn("--property=RuntimeDirectoryPreserve=yes", command)
+        self.assertNotIn("--property=PrivateDevices=yes", command)
+        self.assertIn("--property=DevicePolicy=closed", command)
+        self.assertIn("--property=DeviceAllow=/dev/zfs rw", command)
+        self.assertIn("--property=DeviceAllow=/dev/disk/by-id/test-disk rw", command)
+        write_paths = next(value for value in command if value.startswith("--property=ReadWritePaths="))
+        writable = write_paths.split("=")[-1].split()
+        self.assertIn("/run/nas-secret-runtime", writable)
+        self.assertNotIn("/run", writable)
+        self.assertNotIn("/run/nas-secrets", writable)
+        self.assertIn("/var/lib/nas-first-start", write_paths)
+        self.assertIn("/var/lib/nas-control-plane", write_paths)
+        self.assertIn("/etc", writable)
+        self.assertNotIn("/home", writable)
+        self.assertIn("--property=ReadWritePaths=-/tank", command)
         self.assertIn("--property=Environment=NAS_SETUP_ALLOW_ROOT=1", command)
         self.assertTrue(any(item.startswith("--property=Environment=NAS_PUBLIC_HOST=") for item in command))
-        self.assertIn("--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token", command)
+        self.assertIn(
+            "--property=Environment=NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-secrets/authentik/bootstrap-token",
+            command,
+        )
+        self.assertEqual(command[command.index("--") + 1], api._setup_entry())
         self.assertIn("--password-file", command)
         with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):
             with self.assertRaises(api.ApiError):
-                api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"))
+                api._start_first_start_unit("b" * 24, pathlib.Path("/r"), pathlib.Path("/p"), ["/dev/test"])
 
     def prepared_first_start(self) -> dict[str, object]:
         return {
@@ -172,6 +202,30 @@ class CockpitApiDriftTests(unittest.TestCase):
     def test_start_first_start_rejects_bad_inputs_before_reservation(self) -> None:
         cases = [
             ({"password": "x\ny", "administrator": self.administrator(), "planDigest": "a" * 64}, "single line"),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "email": "not-an-email"},
+                    "planDigest": "a" * 64,
+                },
+                "email is invalid",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "password": "too-short"},
+                    "planDigest": "a" * 64,
+                },
+                "at least 12",
+            ),
+            (
+                {
+                    "password": "pw",
+                    "administrator": {**self.administrator(), "username": "akadmin"},
+                    "planDigest": "a" * 64,
+                },
+                "reserved bootstrap",
+            ),
             ({"password": "pw", "administrator": self.administrator(), "planDigest": "bad"}, "plan digest"),
             (
                 {
@@ -231,6 +285,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             "planDigest": "a" * 64,
             "devices": ["/dev/a", "/dev/b"],
             "allowDestructiveStorage": True,
+            "encryptStorage": False,
             "confirmPasswordReapply": True,
         }
         active = self.active()
@@ -249,6 +304,7 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(len(writes), 2)
         self.assertIn("reservation-token", writes[0][1])
         self.assertNotIn("db-password", writes[0][1])
+        self.assertFalse(json.loads(writes[0][1])["encryptStorage"])
         self.assertEqual(json.loads(writes[1][1])["keepass"], "db-password")
         self.assertEqual(json.loads(writes[1][1])["administrator"]["password"], "admin-password")
 

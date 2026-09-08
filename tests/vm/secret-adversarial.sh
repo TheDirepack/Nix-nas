@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
-DATABASE="${NAS_TEST_KEEPASS_DATABASE:-/var/lib/nas-secrets/NAS.kdbx}"
+DATABASE="${NAS_TEST_KEEPASS_DATABASE:-/var/lib/nas-control-plane/nas-secrets/NAS.kdbx}"
 GROUP="${NAS_TEST_KEEPASS_GROUP:-NixOS NAS}"
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -120,7 +120,7 @@ exercise_rejected_vault_value \
   "Vaultwarden administrator token has an unsafe or unexpected format"
 
 # The failed attempts must leave no staged secret files behind.
-if find /run/nas-secret-transactions /run/nas-secret-staging -type f -print -quit 2>/dev/null | grep -q .; then
+if find /run/nas-secret-runtime/transactions /run/nas-secret-runtime/staging -type f -print -quit 2>/dev/null | grep -q .; then
   fail "failed secret activation left staged secret files behind"
 fi
 

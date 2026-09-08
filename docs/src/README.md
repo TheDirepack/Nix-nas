@@ -6,7 +6,7 @@ This manual is installed with the NAS Cockpit package. It is organized around th
 
 | Goal | Start here |
 |---|---|
-| Install or finish first-start setup | [Administrator configuration](admin/configuration.md) → [First start](admin/first-run.md) |
+| Install or finish first-start setup | [Install and set up](admin/installation.md) → [First start](admin/first-run.md) |
 | Unlock the NAS after boot | [Locked-state unlock](locked-unlock.md) |
 | Add, disable, or change user access | [Accounts and access](admin/accounts.md) → [Permission model](permissions.md) |
 | Manage files, shares, ACLs, or WebDAV | [CopyParty](admin/copyparty.md) |

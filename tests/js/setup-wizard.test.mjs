@@ -14,18 +14,16 @@ const exists = async (name) => {
   }
 };
 
-const STEPS = [
-  "wizard-language",
-  "wizard-admin",
-  "wizard-authentik",
-  "wizard-storage",
-  "wizard-confirm",
-];
+const STEPS = ["wizard-admin", "wizard-storage", "wizard-confirm"];
 
 test("wizard entry mounts React and imports PatternFly global styles", async () => {
   const index = await wizard("src/index.jsx");
   assert.match(index, /createRoot/);
   assert.match(index, /@patternfly\/patternfly\/patternfly\.css/);
+  assert.match(index, /nas-setup-shell/);
+  assert.match(index, /pf-v6-theme-dark/);
+  assert.match(index, /Browser setting/);
+  assert.match(index, /prefers-color-scheme/);
 });
 
 test("wizard builds steps from WizardStep children with explicit ids", async () => {
@@ -45,7 +43,7 @@ test("wizard builds steps from WizardStep children with explicit ids", async () 
 });
 
 test("wizard step components use exports that exist in react-core 6.1.0", async () => {
-  for (const step of ["LanguageStep", "AdminStep", "AuthentikStep", "StorageStep", "ConfirmStep"]) {
+  for (const step of ["AdminStep", "StorageStep", "ConfirmStep"]) {
     const text = await wizard(`src/steps/${step}.jsx`);
     assert.match(
       text,
@@ -66,16 +64,76 @@ test("wizard step components use exports that exist in react-core 6.1.0", async 
   }
 });
 
-test("admin step gates the KeePassXC database password behind the shared-password toggle", async () => {
+test("admin step keeps the KeePassXC unlock password distinct from account credentials", async () => {
   const admin = await wizard("src/steps/AdminStep.jsx");
   assert.match(admin, /KeePassXC/);
-  assert.match(admin, /useSamePassword/);
+  assert.doesNotMatch(admin, /useSamePassword|wizard-keepass-same/);
+  assert.match(admin, /It is not an account password/);
   assert.match(admin, /wizard-keepass-password/);
+  assert.match(admin, /wizard-keepass-password-confirm/);
   assert.match(
     admin,
     /wizard-admin-password-confirm/,
     "administrator password needs a confirm field",
   );
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  assert.match(confirm, /keePassPassword !== keePassPasswordConfirm/);
+  assert.match(confirm, /Enter and confirm the KeePassXC database password/);
+});
+
+test("administrator username starts blank and obsolete setup authorities stay removed", async () => {
+  const index = await wizard("src/index.jsx");
+  assert.match(index, /emptyAdministrator = \{ username: ''/);
+  assert.equal(await exists("src/api.js"), false, "obsolete API stub must not remain");
+  assert.equal(
+    await exists("src/forms/schema.json"),
+    false,
+    "obsolete form authority must not remain",
+  );
+});
+
+test("setup keeps only actionable administrator, storage, and confirmation steps", async () => {
+  const storage = await wizard("src/steps/StorageStep.jsx");
+  assert.match(storage, /\/console\/storage/);
+  assert.match(storage, /\/console\/system\/terminal/);
+  assert.match(storage, /Refresh plan/);
+  assert.doesNotMatch(
+    await wizard("src/index.jsx"),
+    /AuthentikStep|wizard-authentik|Authentik Integration/,
+  );
+  assert.equal(
+    await exists("src/steps/AuthentikStep.jsx"),
+    false,
+    "removed Authentik step must not remain as dead UI",
+  );
+  assert.equal(
+    await exists("src/steps/LanguageStep.jsx"),
+    false,
+    "an unapplied locale step must not remain as dead UI",
+  );
+  assert.match(storage, /configuration-missing/);
+  assert.match(storage, /Storage plan not created yet/);
+  assert.match(storage, /variant="info"/);
+  assert.match(storage, /wizard-encrypt-storage/);
+  assert.match(storage, /Encrypt the ZFS data partition/);
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  assert.match(confirm, /encryptStorage/);
+  assert.match(confirm, /ZFS encryption/);
+  assert.match(confirm, /api\/reboot/);
+  assert.match(confirm, /JSON\.stringify\(\{ jobId \}\)/);
+});
+
+test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
+  const css = await wizard("src/wizard.css");
+  assert.match(css, /min-height: 100dvh/);
+  assert.match(css, /height: 100dvh/);
+  assert.match(css, /--pf-v6-c-wizard--Height: 100%/);
+  assert.match(css, /pf-v6-c-wizard__outer-wrap/);
+  assert.match(css, /@media \(prefers-color-scheme: dark\)/);
+  assert.match(css, /\.pf-v6-theme-dark/);
+  assert.match(css, /@media \(max-width: 40rem\)/);
+  assert.match(css, /--nas-setup-control-border/);
+  assert.match(css, /width: min\(100%, 52rem\)/);
 });
 
 test("wizard shell references only relative, locally served assets", async () => {
@@ -96,12 +154,15 @@ test("build script emits the reviewed dist layout the Nix derivation packages", 
   assert.ok(await exists("dist/assets"), "dist font assets must be committed");
 });
 
-test("committed bundle registers every step and the KeePassXC toggle", async () => {
+test("committed bundle registers every step and the storage setup links", async () => {
   const js = await wizard("dist/first-run-wizard.js");
   for (const id of STEPS) {
     assert.ok(js.includes(`"${id}"`), `bundle is missing step id ${id}`);
   }
-  assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC toggle");
+  assert.ok(js.includes("KeePassXC"), "bundle is missing the KeePassXC password fields");
+  assert.ok(js.includes("Browser setting"), "bundle is missing the browser theme option");
+  assert.ok(js.includes("Open Storage"), "bundle is missing the storage console link");
+  assert.ok(!js.includes("wizard-authentik"), "bundle still contains the removed Authentik step");
 });
 
 test("committed stylesheet carries the global tokens and core component rules", async () => {
@@ -113,6 +174,8 @@ test("committed stylesheet carries the global tokens and core component rules", 
   for (const rule of [".pf-v6-c-button{", ".pf-v6-c-wizard{", ".pf-v6-c-form-control{"]) {
     assert.ok(css.includes(rule), `stylesheet is missing ${rule}`);
   }
+  assert.ok(css.includes(".nas-setup-shell{"), "stylesheet is missing the setup shell");
+  assert.ok(css.includes(".pf-v6-theme-dark"), "stylesheet is missing dark-mode overrides");
 });
 
 test("dist index.html matches the reviewed source shell", async () => {

@@ -4,7 +4,7 @@ let
   cfg = config.nas.ai;
   nas = config.nas;
   lanHost = "${config.networking.hostName}.local";
-  secretRoot = "/run/nas-secrets";
+  secretRoot = "/run/nas-secret-runtime/live";
   aiSecretDir = "${secretRoot}/ai";
   imagePin = import ../../hfdownloader-image.nix;
   hostSystem = pkgs.stdenv.hostPlatform.system;

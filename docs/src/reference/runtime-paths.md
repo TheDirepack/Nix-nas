@@ -3,7 +3,7 @@
 | Path | Purpose | Persistence/backup |
 |---|---|---|
 | `/run/nas-secrets` | Decrypted runtime service material | tmpfs/runtime only; rebuilt from KeePassXC |
-| `/var/lib/nas-secrets/NAS.kdbx` | Default KeePassXC source database | Back up independently and in boot/system Restic job |
+| `/var/lib/nas-control-plane/nas-secrets/NAS.kdbx` | Default boot-side KeePassXC source database | Back up independently; it must remain available before ZFS unlock |
 | `/var/lib/authentik` | Authentik files | Restic; PostgreSQL also requires database backup/restore |
 | PostgreSQL `authentik` DB | Identities, groups, flows, applications | Consistent database backup required |
 | `/var/lib/copyparty/user.d` | Authoritative mutable CopyParty configuration | Restic |

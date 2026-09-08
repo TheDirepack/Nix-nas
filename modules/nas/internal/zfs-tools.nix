@@ -83,6 +83,8 @@ let
     name = "nas-zfs-mount-check";
     runtimeInputs = [
       pkgs.coreutils
+      pkgs.findutils
+      pkgs.jq
       pkgs.util-linux
     ];
     text = ''
@@ -93,6 +95,10 @@ let
       ${lib.optionalString cfg.zfsEncryption.enable ''
       expected_key_file=${lib.escapeShellArg zfsKeyPath}
       fingerprint_property=${lib.escapeShellArg zfsKeyFingerprintProperty}
+      expected_encryption=auto
+      if [[ -s /var/lib/nas-setup/state.json ]]; then
+        expected_encryption="$(${pkgs.jq}/bin/jq -er '.storage.encrypted | if . then "true" else "false" end' /var/lib/nas-setup/state.json)"
+      fi
       ''}
 
       mountpoint --quiet -- "$expected_root" || {
@@ -100,14 +106,16 @@ let
         exit 1
       }
 
-      actual_type="$(findmnt --noheadings --output FSTYPE --target "$expected_root" | xargs)"
-      actual_source="$(findmnt --noheadings --output SOURCE --target "$expected_root" | xargs)"
-      [[ "$actual_type" == "zfs" ]] || {
-        echo "$expected_root is mounted as '$actual_type', not ZFS" >&2
-        exit 1
-      }
-      [[ "$actual_source" == "$expected_dataset" ]] || {
-        echo "$expected_root is backed by '$actual_source', expected '$expected_dataset'" >&2
+      mount_rows="$(findmnt --raw --noheadings --output SOURCE,FSTYPE,TARGET --target "$expected_root")"
+      expected_mount_visible=false
+      while read -r actual_source actual_type actual_target; do
+        if [[ "$actual_source" == "$expected_dataset" && "$actual_type" == "zfs" && "$actual_target" == "$expected_root" ]]; then
+          expected_mount_visible=true
+          break
+        fi
+      done <<< "$mount_rows"
+      [[ "$expected_mount_visible" == true ]] || {
+        echo "$expected_root is not visibly backed by ZFS dataset '$expected_dataset': $mount_rows" >&2
         exit 1
       }
 
@@ -119,6 +127,14 @@ let
       }
 
       ${lib.optionalString cfg.zfsEncryption.enable ''
+      encryption_algorithm="$($real_zfs get -H -o value encryption "$expected_dataset")"
+      actual_encryption=true
+      [[ "$encryption_algorithm" == off ]] && actual_encryption=false
+      if [[ "$expected_encryption" != auto && "$actual_encryption" != "$expected_encryption" ]]; then
+        echo "$expected_dataset encryption state does not match the reviewed first-start choice" >&2
+        exit 1
+      fi
+      if [[ "$actual_encryption" == true ]]; then
       encryptionroot="$($real_zfs get -H -o value encryptionroot "$expected_dataset")"
       keyformat="$($real_zfs get -H -o value keyformat "$expected_dataset")"
       keylocation="$($real_zfs get -H -o value keylocation "$expected_dataset")"
@@ -145,6 +161,7 @@ let
         echo "$expected_dataset does not match the KeePassXC-staged ZFS key fingerprint" >&2
         exit 1
       }
+      fi
       ''}
     '';
   };
@@ -163,6 +180,13 @@ let
       if [[ "$encryption_enabled" != "1" ]]; then
         echo "nas.zfsEncryption.enable is false; no managed ZFS key is configured." >&2
         exit 1
+      fi
+      if [[ "$($real_zfs get -H -o value encryption "$dataset")" == off ]]; then
+        if [[ "$($real_zfs get -H -o value mounted "$dataset")" != yes ]]; then
+          $real_zfs mount "$dataset"
+        fi
+        mountpoint --quiet -- "$root"
+        exit 0
       fi
       [[ -r "$key_file" ]] || { echo "Missing staged ZFS key: $key_file" >&2; exit 1; }
       identity="$(stat -c '%a:%U:%G' "$key_file")"
@@ -201,9 +225,8 @@ let
       export PATH=/run/wrappers/bin:$PATH
       set -euo pipefail
       dataset=${lib.escapeShellArg cfg.zfsDataset}
-      encryption_enabled=${if cfg.zfsEncryption.enable then "1" else "0"}
-      if [[ "$encryption_enabled" != "1" ]]; then
-        echo "nas.zfsEncryption.enable is false; no managed ZFS key is configured." >&2
+      if [[ "$(${pkgs.zfs}/bin/zfs get -H -o value encryption "$dataset")" == off ]]; then
+        echo "$dataset is not encrypted; there is no ZFS key to unload." >&2
         exit 1
       fi
       sudo systemctl stop nas-protected-services.target
@@ -257,8 +280,8 @@ let
         exit 1
       fi
       actor="$(id -un)"
-      [[ "$actor" == ${lib.escapeShellArg cfg.adminUser} || ( "$actor" == root && "''${NAS_SETUP_ALLOW_ROOT:-}" == 1 ) ]] || {
-        echo "Run this as ${cfg.adminUser}; Cockpit may execute it as an explicitly authorized root setup operation." >&2
+      [[ " $(id -nG) " == *" nas-administrators "* || ( "$actor" == root && "''${NAS_SETUP_ALLOW_ROOT:-}" == 1 ) ]] || {
+        echo "Run this as the wizard-created Linux administrator; Cockpit may execute it as an explicitly authorized root setup operation." >&2
         exit 1
       }
       sudo -v
@@ -361,8 +384,8 @@ let
       [[ $# -eq 1 ]] || { echo "Usage: nas-zfs-export-recovery-key /absolute/output-file" >&2; exit 2; }
       output="$1"
       [[ "$output" == /* ]] || { echo "The output path must be absolute." >&2; exit 2; }
-      [[ "$(id -un)" == ${lib.escapeShellArg cfg.adminUser} ]] || {
-        echo "Run this as ${cfg.adminUser}; the KeePassXC database password will be requested interactively." >&2
+      [[ " $(id -nG) " == *" nas-administrators "* ]] || {
+        echo "Run this as the wizard-created Linux administrator; the KeePassXC database password will be requested interactively." >&2
         exit 1
       }
       if [[ -t 0 ]]; then

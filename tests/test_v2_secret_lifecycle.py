@@ -23,8 +23,11 @@ class V2SecretLifecycleTests(unittest.TestCase):
         activate = source.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
 
         self.assertIn("authentik.service authentik-worker.service caddy.service", activate)
-        self.assertNotIn("copyparty.service", activate)
         self.assertNotIn("/run/copyparty/http.sock", activate)
+        core, _, convergence = activate.partition("for gated_unit in")
+        self.assertIn("for gated_unit in", activate)
+        self.assertNotIn("copyparty.service", core)
+        self.assertIn("copyparty.service", convergence)
 
     def test_discarded_generation_helpers_do_not_return(self) -> None:
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")

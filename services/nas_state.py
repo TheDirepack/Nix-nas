@@ -138,7 +138,7 @@ def default_authorities() -> tuple[Authority, ...]:
         ),
         Authority(
             "keepass",
-            os.environ.get("NAS_KEEPASS_DATABASE", "/var/lib/nas-secrets/NAS.kdbx"),
+            os.environ.get("NAS_KEEPASS_DATABASE", "/var/lib/nas-control-plane/nas-secrets/NAS.kdbx"),
             sensitive=True,
         ),
         Authority("authentik-database", "postgresql://authentik", kind="database", sensitive=True),

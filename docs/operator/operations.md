@@ -14,6 +14,7 @@ systemctl --failed
 
 ## First installation
 
+- [Install and set up](../src/admin/installation.md)
 - [Administrator configuration](../src/admin/configuration.md)
 - [First start](../src/admin/first-run.md)
 - [Storage installation and recovery](../src/admin/storage-recovery.md)

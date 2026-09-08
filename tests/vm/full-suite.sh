@@ -120,6 +120,12 @@ printf '\n==> Deterministic security tier\n'
 printf '\n==> Nix configuration and negative-fixture suite\n'
 ./scripts/nix-config-matrix.sh
 
+# First-start runs the installed preflight against this checkout. Remove the
+# source-suite dependency trees before crossing into appliance validation so
+# setup sees the same clean repository that a release installation provides.
+nas_vm_js_deps_cleanup
+unset NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES
+
 printf '\n==> Full-stack appliance suite\n'
 run_appliance timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "${NAS_VM_FULL_SUITE_GUEST_TIMEOUT:-$(nas_vm_guest_watchdog_seconds)}" nas-vm-guest-test /dev/vdb

@@ -34,8 +34,13 @@ class SecretTransactionShellTests(unittest.TestCase):
                     #!/usr/bin/env bash
                     printf '%s\\n' "$*" >> "$NAS_TX_LOG"
                     case "$1" in
-                      is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 ]] ;;
-                      stop) [[ "${NAS_TX_STOP_FAIL:-0}" != 1 ]] ;;
+                      is-active) [[ "${NAS_TX_ACTIVE:-1}" == 1 && ! -e "$NAS_TX_INACTIVE_MARKER" ]] ;;
+                      stop)
+                        if [[ "${NAS_TX_STOP_FAIL:-0}" == 1 ]]; then
+                          [[ "${NAS_TX_STOP_LEFT_INACTIVE:-0}" != 1 ]] || touch "$NAS_TX_INACTIVE_MARKER"
+                          exit 1
+                        fi
+                        ;;
                       start) [[ "${NAS_TX_START_FAIL:-0}" != 1 ]] ;;
                       *) exit 0 ;;
                     esac
@@ -93,6 +98,7 @@ class SecretTransactionShellTests(unittest.TestCase):
                 export NAS_TX_LOG={work / "systemctl.log"!s}
                 export NAS_TX_MV_COUNT={work / "mv.count"!s}
                 export NAS_TX_PRIV_LOG={work / "priv.log"!s}
+                export NAS_TX_INACTIVE_MARKER={work / "inactive-after-stop"!s}
                 {shell_export}
                 source {LIBRARY!s}
                 {body}
@@ -279,7 +285,7 @@ class SecretTransactionShellTests(unittest.TestCase):
         # Activation stages secrets under a root-owned 0700 transaction directory that the
         # calling administrator cannot traverse. The physical validation checks must run
         # through the privilege wrapper; without elevation the layout is rejected exactly
-        # as root-owned /run/nas-secret-transactions rejects an unprivileged realpath.
+        # as root-owned /run/nas-secret-runtime/transactions rejects an unprivileged realpath.
         unprivileged = """mkdir -p tx/transaction.1/new tx/transaction.1/previous
 export NAS_TX_SIM_ELEVATE=0
 ! nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.1/previous" nas-protected-services.target "$PWD/tx/transaction.1"
@@ -342,6 +348,18 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
             set -e
             [[ $swap_rc -ne 0 && $cleanup_rc -eq 125 ]]
             [[ -f root/old && ! -e root/new && ! -e previous ]]
+            """
+        )
+        self.assert_ok(result)
+
+    def test_nonzero_stop_is_accepted_only_when_target_became_inactive(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_STOP_FAIL=1 NAS_TX_STOP_LEFT_INACTIVE=1
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            nas_secret_tx_swap
+            [[ -f root/new && -f previous/old ]]
+            grep -q '^is-active --quiet nas-protected-services.target$' systemctl.log
             """
         )
         self.assert_ok(result)

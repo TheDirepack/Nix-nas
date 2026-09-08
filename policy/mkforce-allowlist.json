@@ -48,6 +48,18 @@
       "setting": "serviceConfig.StateDirectory",
       "count": 1,
       "reason": "CopyParty data lives on the ZFS tank behind /var/lib/copyparty; reset the upstream StateDirectory directive so systemd does not replace or follow that runtime symlink."
+    },
+    {
+      "path": "modules/nas/config/application-services.nix",
+      "setting": "environment.XDG_CONFIG_HOME",
+      "count": 1,
+      "reason": "CopyParty's private root does not expose the host /var/lib/copyparty symlink; force its config root to the ZFS directory that is explicitly bound into the service namespace."
+    },
+    {
+      "path": "modules/nas/config/application-services.nix",
+      "setting": "serviceConfig.WorkingDirectory",
+      "count": 1,
+      "reason": "CopyParty's private root does not expose the upstream /var/lib/copyparty working directory; force the service to enter its directly bound ZFS data directory."
     }
   ]
 }

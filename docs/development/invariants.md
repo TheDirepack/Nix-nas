@@ -36,6 +36,8 @@ Local console, SSH, or hardware KVM and a local PAM administrator are the recove
 
 ## Storage
 
+- KeePassXC, Authentik, and PostgreSQL are unlock/control-plane authorities and remain on the system partition under `/var/lib/nas-control-plane`; they must never be promoted into the managed ZFS data root.
+- Permanent human home directories and user/application data belong on the managed ZFS partition. Temporary first-start Linux home data is retired with the bootstrap identity.
 - New pool creation requires explicit destructive opt-in and exact confirmation of every unique block device.
 - Dataset mount guards must verify the exact dataset and mountpoint before protected services start.
 - Snapshot restore creates a safety snapshot first.

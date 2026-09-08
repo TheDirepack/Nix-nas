@@ -128,6 +128,43 @@ class OperationJournal:
         journal.save()
         return journal
 
+    @classmethod
+    def complete_verified_recovery_step(
+        cls,
+        path: pathlib.Path,
+        *,
+        workflow: str,
+        fingerprint: str,
+        step: str,
+        result: Any,
+        replacement_fingerprint: str | None = None,
+    ) -> "OperationJournal":
+        existing = load_json(path)
+        if existing is None:
+            raise JournalError(f"No operation journal exists: {path}")
+        if existing.get("schemaVersion") != 1 or existing.get("workflow") != workflow:
+            raise JournalError(f"Another operation requires reconciliation: {path}")
+        if existing.get("fingerprint") != fingerprint:
+            raise JournalError(f"A different {workflow} operation is incomplete; reconcile or clear {path}")
+        record = existing.get("steps", {}).get(step)
+        if (
+            existing.get("status") != "manual-recovery-required"
+            or existing.get("currentStep") != step
+            or not isinstance(record, dict)
+            or record.get("status") != "failed"
+        ):
+            raise JournalError(f"{workflow} is not awaiting verified recovery of {step}: {path}")
+        record.update({"status": "complete", "completedAt": int(time.time()), "result": _journal_value(result)})
+        record.pop("error", None)
+        journal = cls(path, existing)
+        journal.value["currentStep"] = None
+        journal.value["status"] = "reconciled"
+        if replacement_fingerprint is not None:
+            journal.value["fingerprint"] = replacement_fingerprint
+        journal.value["verifiedRecoveryAt"] = int(time.time())
+        journal.save()
+        return journal
+
     def save(self) -> None:
         self.value["updatedAt"] = int(time.time())
         atomic_write_json(self.path, self.value)

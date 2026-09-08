@@ -48,6 +48,10 @@ cases=(
   'tests/nixos/invalid/tftp-privileged-port.nix|nas.tftp.internalPort must be unprivileged'
   'tests/nixos/invalid/replication-same-dataset.nix|nas.zfsReplication.enable requires a non-empty destination'
   'tests/nixos/invalid/firewall-without-networking.nix|nas.networking.firewall.enable requires nas.networking.enable.'
+  'tests/nixos/invalid/installation-ready-empty-trusted-interfaces.nix|Set nas.trustedInterfaces to the actual LAN interface before installation.'
+  'tests/nixos/invalid/installation-ready-zero-host-id.nix|networking.hostId must be a unique stable eight-hex-digit value.'
+  'tests/nixos/invalid/installation-ready-no-recovery.nix|installationReady requires an administrator SSH key with OpenSSH enabled'
+  'tests/nixos/invalid/installation-ready-unencrypted.nix|ZFS encryption is disabled. Enable nas.zfsEncryption.enable or explicitly set nas.zfsEncryption.acknowledgeUnencrypted = true'
 )
 
 for row in "${cases[@]}"; do

@@ -63,6 +63,7 @@ let
       export NAS_AUTHENTIK_URL=http://127.0.0.1:${toString authentikPort}${lib.removeSuffix "/" cfg.identity.authentikPath}
       export NAS_AUTHENTIK_TOKEN_FILE=${lib.escapeShellArg authentikApiTokenFile}
       export NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE="''${NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE:-${lib.escapeShellArg authentikBootstrapTokenFile}}"
+      export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}
       export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
       export NAS_SYNCTHING_CONFIG_DIR=${lib.escapeShellArg syncthingConfigDir}
@@ -90,7 +91,6 @@ nasSetup = pkgs.writeShellApplication {
     ];
     text = ''
       export PATH=/run/wrappers/bin:$PATH
-      export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_KEEPASS_KEY_FILE=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
@@ -99,6 +99,7 @@ nasSetup = pkgs.writeShellApplication {
       export NAS_ZFS_ENCRYPTION_ENABLE=${if cfg.zfsEncryption.enable then "1" else "0"}
       export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
+      export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}
       export NAS_SETUP_STATE=/var/lib/nas-setup/state.json
       export NAS_SETUP_JOURNAL=/var/lib/nas-setup/first-run-journal.json
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
@@ -180,7 +181,7 @@ nasSetup = pkgs.writeShellApplication {
       name = "keepass";
       source = cfg.secrets.keepassDatabase;
       sensitive = true;
-      owner = cfg.adminUser;
+      owner = null;
       group = "users";
       rootMode = "0600";
     })
@@ -408,9 +409,9 @@ nasSetup = pkgs.writeShellApplication {
       nasPythonApplication nasIdentitySync nasSetup nasUpdate
     ];
     text = ''
-      export NAS_ADMIN_USER=${lib.escapeShellArg cfg.adminUser}
       export NAS_ZFS_POOL=${lib.escapeShellArg cfg.zfsPool}
       export NAS_ZFS_DATASET=${lib.escapeShellArg cfg.zfsDataset}
+      export NAS_ZFS_ROOT=${lib.escapeShellArg cfg.zfsRoot}
       export NAS_CONFIG_DIR=${lib.escapeShellArg cfg.configurationDir}
       export NAS_IDENTITY_URL=${lib.escapeShellArg cfg.identity.authentikPath}
       export NAS_FIRST_RUN_CONFIG=${lib.escapeShellArg cfg.firstStart.configFile}

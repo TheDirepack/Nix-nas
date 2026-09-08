@@ -31,6 +31,7 @@ async function renderEditor(value) {
     jsx: "automatic",
     jsxImportSource: "react",
     bundle: true,
+    nodePaths: (process.env.NODE_PATH ?? "").split(path.delimiter).filter(Boolean),
     format: "cjs",
     platform: "node",
     write: false,

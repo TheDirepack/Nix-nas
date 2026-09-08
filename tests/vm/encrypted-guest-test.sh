@@ -50,8 +50,30 @@ wait_oneshot_completed() {
   fail "timed out waiting for $unit to complete"
 }
 
+prime_nasadmin_sudo() {
+  local password
+  runuser -u nasadmin -- sudo -n -v >/dev/null 2>&1 && return 0
+  password="$(cat /var/lib/nas-test/setup/nasadmin.password)"
+  NASADMIN_PASSWORD="$password" expect <<'EXPECT_SUDO' || fail "nasadmin sudo priming failed"
+set timeout 30
+spawn runuser -u nasadmin -- sudo -v
+expect {
+  -re "(?i)password.*:" { send "$env(NASADMIN_PASSWORD)\r"; exp_continue }
+  eof { }
+  timeout { exit 99 }
+}
+set status [lindex [wait] 3]
+exit $status
+EXPECT_SUDO
+}
+
 run_as_admin() {
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
+  if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
+    prime_nasadmin_sudo
+    runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
+  else
+    runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
+  fi
 }
 
 activate_secrets() {
@@ -61,9 +83,16 @@ activate_secrets() {
 run_as_admin_with_stdin() {
   local timeout_seconds=$1
   shift
-  nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
-      timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
+  if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
+    prime_nasadmin_sudo
+    nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
+      runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" \
+        timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
+  else
+    nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
+      runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+        timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
+  fi
 }
 
 log "Verify encrypted fixture starts locked"
@@ -97,6 +126,9 @@ cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
 EOFSETUP
 chown admin:users /var/lib/nas-test/setup/encrypted-first-run.json
 chmod 0600 /var/lib/nas-test/setup/encrypted-first-run.json
+printf '%s\n' 'nasadmin-vm-password' >/var/lib/nas-test/setup/nasadmin.password
+chown admin:users /var/lib/nas-test/setup/nasadmin.password
+chmod 0600 /var/lib/nas-test/setup/nasadmin.password
 run_as_admin nas-setup validate-config /var/lib/nas-test/setup/encrypted-first-run.json | jq -e '.storage.createPool == true'
 nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
@@ -113,12 +145,14 @@ if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$
 fi
 plan_digest="$(jq -er '.planDigest' <<<"$first_start_plan")"
 stale_digest="$(printf '0%.0s' {1..64})"
+IFS= read -r wizard_nasadmin_password </var/lib/nas-test/setup/nasadmin.password
 stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
+  --arg admin_password "$wizard_nasadmin_password" \
   '{password: "nixos-nas-vm-test-password",
     administrator: {username: "nasadmin", name: "NAS Administrator",
-                    email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
+                    email: "nasadmin@nas-test.local", password: $admin_password},
     planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+    allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
   -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
 if [[ "$stale_code" != 400 ]]; then
@@ -132,11 +166,12 @@ grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json || {
 pass "first-start setup API rejects a stale plan digest before mutation"
 
 job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEVICE\"]" \
+  --arg admin_password "$wizard_nasadmin_password" \
   '{password: "nixos-nas-vm-test-password",
     administrator: {username: "nasadmin", name: "NAS Administrator",
-                    email: "nasadmin@nas-test.local", password: "nasadmin-vm-password"},
+                    email: "nasadmin@nas-test.local", password: $admin_password},
     planDigest: $digest, devices: $devices,
-    allowDestructiveStorage: true, confirmPasswordReapply: false}')"
+    allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 job_code="$(printf '%s' "$job_request" | curl --silent --show-error --max-time 60 \
   -o /tmp/nas-first-run-submission.json -w '%{http_code}' \
   -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
@@ -172,7 +207,7 @@ if ! jq -e '
   jq . <<<"$job_result" >&2
   fail "encrypted first-start job report did not contain the expected storage state"
 fi
-[[ "$(getent passwd nas-bootstrap)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+[[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 pass "GUI first-start job created and activated the encrypted storage stack"
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
@@ -180,7 +215,7 @@ wait_active nas-zfs-mount-guard.service
 nas-zfs-mount-check
 [[ "$(zfs get -H -o value encryptionroot tank/nas)" == "tank/nas" ]]
 [[ "$(zfs get -H -o value keyformat tank/nas)" == "hex" ]]
-[[ "$(zfs get -H -o value keylocation tank/nas)" == "file:///run/nas-secrets/zfs/dataset-key" ]]
+[[ "$(zfs get -H -o value keylocation tank/nas)" == "file:///run/nas-secret-runtime/live/zfs/dataset-key" ]]
 [[ "$(zfs get -H -o value keystatus tank/nas)" == "available" ]]
 [[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
 [[ -f /run/nas-secrets/zfs/dataset-key ]]
@@ -208,8 +243,8 @@ zfs rename tank/nas tank/nas-preserved
 [[ "$(zfs get -H -o value mounted tank/nas-preserved)" == "no" ]]
 for step in create keylocation fingerprint canmount unmount unload-key; do
   rm -f "/tmp/nas-zfs-fault-$step.out" "/tmp/nas-zfs-fault-$step.err"
-  if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
-    NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER="$step" \
+  if nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" run_as_admin \
+    env NAS_TEST_FAULT_INJECTION=1 NAS_TEST_ZFS_BOOTSTRAP_FAIL_AFTER="$step" \
     nas-zfs-create-encrypted-dataset \
     >"/tmp/nas-zfs-fault-$step.out" 2>"/tmp/nas-zfs-fault-$step.err"; then
     fail "ZFS bootstrap fault injection unexpectedly succeeded after $step"
@@ -229,7 +264,11 @@ for step in create keylocation fingerprint canmount unmount unload-key; do
   pass "failure after $step removes the newly-created encrypted dataset and temporary key"
 done
 zfs rename tank/nas-preserved tank/nas
-activate_secrets
+ls -la /run/lock/nas-secrets.lock /run/nas-operations/ /run/nas-secret-runtime/ >&2 || true
+activate_secrets >/tmp/nas-reactivate-matrix.log 2>&1 || {
+  cat /tmp/nas-reactivate-matrix.log >&2 || true
+  fail "secret reactivation after fault matrix failed"
+}
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
 wait_active nas-zfs-mount-guard.service
@@ -259,6 +298,15 @@ nas-zfs-mount-check
 [[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
 pass "nas-zfs-lock and secret reactivation complete a full lock/unlock cycle"
 
+systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
+# The intentional lock window fails V2 reconciliation while the dataset is
+# unavailable, and its OnFailure handler cannot self-clear once recovery
+# succeeds. Anything besides that stale handler is an unexpected failure.
+if grep -Ev '(^$|nas-health-alert@|nas-v2-apply-failed\.service)' /tmp/nas-encrypted-failed | grep -q .; then
+  cat /tmp/nas-encrypted-failed >&2
+  fail "unexpected failed units remain"
+fi
+systemctl reset-failed nas-v2-apply-failed.service || true
 systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
 [[ ! -s /tmp/nas-encrypted-failed ]] || { cat /tmp/nas-encrypted-failed >&2; fail "unexpected failed units remain"; }
 printf '\nALL ENCRYPTED ZFS VM TESTS PASSED\n'

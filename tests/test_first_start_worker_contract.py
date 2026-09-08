@@ -20,7 +20,7 @@ class FirstStartWorkerContractTests(unittest.TestCase):
         self.assertIn('systemd.services."nas-first-start-"', policy)
         self.assertIn('overrideStrategy = "asDropin";', policy)
         self.assertIn("PrivateDevices = false;", policy)
-        self.assertIn("ProtectHome = false;", policy)
+        self.assertIn('ProtectHome = "read-only";', policy)
         self.assertIn('ProtectSystem = "yes";', policy)
         # The drop-in must be declared through NixOS systemd unit machinery,
         # not an etc file; explanatory comments may still mention the old

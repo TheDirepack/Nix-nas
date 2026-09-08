@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that user-visible release metadata matches VERSION."""
+"""Verify that user-visible project and package metadata matches VERSION."""
 
 from __future__ import annotations
 
@@ -17,6 +17,19 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def package_version(path: pathlib.Path) -> str | None:
+    package = json.loads(path.read_text(encoding="utf-8"))
+    version = package.get("version")
+    return version if isinstance(version, str) else None
+
+
+def require_package_version(relative: str) -> None:
+    path = ROOT / relative
+    actual = package_version(path)
+    if actual != VERSION:
+        fail(f"{relative} version is {actual!r}; expected {VERSION!r}")
+
+
 def main() -> int:
     expected_heading = f"# NixOS NAS {VERSION}"
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -26,9 +39,8 @@ def main() -> int:
     if f"> **Release status:** {VERSION}" not in readme:
         fail("README release status does not match VERSION")
 
-    package = json.loads((ROOT / "cockpit" / "package.json").read_text(encoding="utf-8"))
-    if package.get("version") != VERSION:
-        fail(f"cockpit/package.json version is {package.get('version')!r}; expected {VERSION!r}")
+    require_package_version("cockpit/package.json")
+    require_package_version("setup/first-run-wizard/package.json")
 
     lock = json.loads((ROOT / "cockpit" / "package-lock.json").read_text(encoding="utf-8"))
     root_package = lock.get("packages", {}).get("")

@@ -30,7 +30,7 @@
     zfsEncryption = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = false;
+        default = true;
         description = "Unlock nas.zfsDataset with a ZFS native-encryption key stored in the configured KeePassXC database.";
       };
       algorithm = lib.mkOption {

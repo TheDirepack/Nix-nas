@@ -95,6 +95,8 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         )[0]
         for unit in ("authentik-migrate.service", "authentik-worker.service", "authentik.service"):
             self.assertIn(f'"{unit}"', selector)
+        self.assertIn("/var/lib/nas-setup/local-administrator.json", selector)
+        self.assertIn('-o "$secret_owner" -g users "$target/nas-secrets"', selector)
 
     def test_v2_blueprint_root_preserves_native_nested_blueprints(self):
         blueprint = (ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix").read_text(encoding="utf-8")
@@ -185,6 +187,14 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         )
         self.assertIn("NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE = authentikRuntimeApiTokenFile;", services)
         self.assertIn("NAS_PUBLIC_HOST = cfg.identity.publicHost;", services)
+        self.assertIn("--action identity-bootstrap --class identity --class runtime", services)
+        self.assertIn('[[ "$rc" -eq 0 || "$rc" -eq 75 ]] && exit 0', services)
+        self.assertNotIn("while [[ ! -e /var/lib/nas-setup/state.json ]]", services)
+        self.assertIn('Restart = "on-failure";', services)
+        self.assertEqual(
+            3,
+            account_tools.count("export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}"),
+        )
         self.assertIn(
             'ExecStartPost = "${pkgs.systemd}/bin/systemctl start --no-block nas-authentik-proxy-outpost.service";',
             services,
