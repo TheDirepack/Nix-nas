@@ -146,7 +146,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
                 runtime._run = original_run
                 runtime.BACKUP_STAGING_ROOT = original_root
 
-            self.assertTrue(artifact.is_dir())
+            self.assertFalse(artifact.exists())
             self.assertFalse(paths_path.exists())
             self.assertFalse(state_path.exists())
 
@@ -212,8 +212,8 @@ class V2BackupRuntimeTests(unittest.TestCase):
             finally:
                 runtime._run = original_run
                 runtime.BACKUP_STAGING_ROOT = original_root
-            # stale dump should have been cleared, so artifact is empty after failure
-            self.assertEqual(list(artifact.iterdir()), [])
+            # stale dump should have been cleared, so no artifact remains after failure
+            self.assertFalse(artifact.exists())
             self.assertFalse(paths_path.exists())
 
     def test_artifact_outside_staging_is_rejected(self):

@@ -1,12 +1,17 @@
 """First-run setup wizard contracts - Nix packaging, Caddy routing, and repo wiring."""
 
+import hashlib
 import json
+import os
 import pathlib
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WIZARD = ROOT / "setup/first-run-wizard"
-WIZARD_DIST_ASSETS = ("index.html", "first-run-wizard.js", "first-run-wizard.css")
+WIZARD_DIST_ASSETS = ("index.html", "first-run-wizard.js", "first-run-wizard.css", "build-meta.json")
 
 
 class TestWizardPackaging(unittest.TestCase):
@@ -16,8 +21,14 @@ class TestWizardPackaging(unittest.TestCase):
         self.derivation = (ROOT / "modules/nas/internal/documentation-tools.nix").read_text(encoding="utf-8")
 
     def test_derivation_verifies_every_reviewed_asset(self):
-        self.assertIn("for asset in index.html first-run-wizard.js first-run-wizard.css", self.derivation)
+        self.assertIn(
+            "for asset in index.html first-run-wizard.js first-run-wizard.css build-meta.json",
+            self.derivation,
+        )
         self.assertIn('"$wizard_dist/$asset"', self.derivation)
+
+    def test_derivation_rejects_stale_or_tampered_output(self):
+        self.assertIn("build.js --check", self.derivation)
 
     def test_derivation_installs_the_full_bundle_tree(self):
         self.assertIn('install -d "$out/share/nas-portal-wizard"', self.derivation)
@@ -105,6 +116,123 @@ class TestWizardSource(unittest.TestCase):
         for source in (WIZARD / "src").rglob("*.js*"):
             text = source.read_text(encoding="utf-8")
             self.assertNotIn("nas-admin-first-boot", text, f"{source.name} embeds bootstrap credentials")
+
+
+class TestWizardBuildIntegrity(unittest.TestCase):
+    """The wizard must carry the same source-bound stale/tampered-output contract as Cockpit."""
+
+    def setUp(self):
+        self.helper = ROOT / "scripts" / "frontend-build-integrity.cjs"
+        self.build_js = (WIZARD / "build.js").read_text(encoding="utf-8")
+
+    def test_both_frontends_share_one_integrity_helper(self):
+        self.assertTrue(self.helper.is_file(), "the shared frontend build-integrity helper must exist")
+        self.assertIn("frontend-build-integrity", self.build_js)
+        cockpit = (ROOT / "cockpit" / "build.js").read_text(encoding="utf-8")
+        self.assertIn("frontend-build-integrity", cockpit)
+        self.assertNotIn('createHash("sha256")', self.build_js)
+
+    def test_ci_qualifies_the_wizard_lockfile_and_bundle(self):
+        qualification = (ROOT / "scripts" / "ci-qualification.sh").read_text(encoding="utf-8")
+        self.assertIn("setup/first-run-wizard", qualification)
+        self.assertIn("--prefix setup/first-run-wizard audit", qualification)
+        self.assertIn("setup/first-run-wizard/build.js --check", qualification)
+
+    def test_release_verifies_the_wizard_bundle(self):
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("setup/first-run-wizard", release)
+        self.assertIn("setup/first-run-wizard/build.js --check", release)
+
+    def stage_tree(self, raw: str) -> pathlib.Path:
+        """Copy the wizard tree (reusing installed modules) for destructive probes."""
+        staged = pathlib.Path(raw) / "wizard"
+        shutil.copytree(WIZARD, staged, ignore=shutil.ignore_patterns("node_modules"))
+        modules = WIZARD / "node_modules"
+        if modules.is_dir():
+            os.symlink(modules, staged / "node_modules")
+        return staged
+
+    def run_check(self, staged: pathlib.Path) -> subprocess.CompletedProcess[str]:
+        # Staged copies live outside the repository tree, so point them at the
+        # reviewed helper through the same override the Nix sandbox uses.
+        env = {**os.environ, "NAS_FRONTEND_INTEGRITY_HELPER": str(ROOT / "scripts" / "frontend-build-integrity.cjs")}
+        return subprocess.run(
+            ["node", "build.js", "--check"],
+            cwd=staged,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+
+    def dist_hashes(self, staged: pathlib.Path) -> dict[str, str]:
+        hashes = {}
+        for path in sorted((staged / "dist").rglob("*")):
+            if path.is_file() and not os.path.islink(path):
+                hashes[str(path.relative_to(staged))] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashes
+
+    def test_check_mode_rejects_stale_source_without_rewriting(self):
+        with tempfile.TemporaryDirectory(prefix="nas-wizard-probe-a-") as raw:
+            staged = self.stage_tree(raw)
+            before = self.dist_hashes(staged)
+            with (staged / "src" / "index.jsx").open("a", encoding="utf-8") as handle:
+                handle.write("\n// integrity probe\n")
+            result = self.run_check(staged)
+            self.assertNotEqual(result.returncode, 0, "--check must fail on stale source")
+            self.assertIn("stale", (result.stderr + result.stdout).lower())
+            self.assertEqual(before, self.dist_hashes(staged), "--check must never rewrite output")
+
+    def test_check_mode_rejects_tampered_output_without_rewriting(self):
+        with tempfile.TemporaryDirectory(prefix="nas-wizard-probe-b-") as raw:
+            staged = self.stage_tree(raw)
+            bundle = staged / "dist" / "first-run-wizard.js"
+            with bundle.open("ab") as handle:
+                handle.write(b"\n/* integrity probe */\n")
+            tampered = self.dist_hashes(staged)
+            result = self.run_check(staged)
+            self.assertNotEqual(result.returncode, 0, "--check must fail on tampered output")
+            output = result.stderr + result.stdout
+            self.assertTrue(
+                "match" in output.lower() or "stale" in output.lower(),
+                f"--check must report a metadata mismatch: {output[:500]}",
+            )
+            self.assertEqual(tampered, self.dist_hashes(staged), "--check must never rewrite output")
+
+    def test_check_mode_rejects_missing_metadata(self):
+        with tempfile.TemporaryDirectory(prefix="nas-wizard-probe-c-") as raw:
+            staged = self.stage_tree(raw)
+            (staged / "dist" / "build-meta.json").unlink()
+            result = self.run_check(staged)
+            self.assertNotEqual(result.returncode, 0, "--check must fail on missing build metadata")
+
+    def test_clean_build_restores_check_success(self):
+        modules = WIZARD / "node_modules"
+        if not (modules / "esbuild").exists():
+            self.skipTest("wizard build dependencies are not installed")
+        with tempfile.TemporaryDirectory(prefix="nas-wizard-probe-d-") as raw:
+            staged = self.stage_tree(raw)
+            with (staged / "src" / "index.jsx").open("a", encoding="utf-8") as handle:
+                handle.write("\n// integrity probe\n")
+            stale = self.run_check(staged)
+            self.assertNotEqual(stale.returncode, 0, "stale source must fail before rebuild")
+            built = subprocess.run(
+                ["node", "build.js"],
+                cwd=staged,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env={
+                    **os.environ,
+                    "NODE_ENV": "production",
+                    "NAS_FRONTEND_INTEGRITY_HELPER": str(ROOT / "scripts" / "frontend-build-integrity.cjs"),
+                },
+            )
+            self.assertEqual(built.returncode, 0, f"clean rebuild must succeed: {built.stderr[-2000:]}")
+            restored = self.run_check(staged)
+            self.assertEqual(restored.returncode, 0, f"--check must pass after rebuild: {restored.stderr[-2000:]}")
 
 
 if __name__ == "__main__":

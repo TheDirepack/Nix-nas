@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "sourceSha256": "1715db08bcadd069c48397bdc4e09182e26e649cb974e1575a6bcdcdee790264",
+  "sourceSha256": "ac03f94780cbb8f04ffacf0adbaf1951ff4a2e1df34122735e8e222be8cfd460",
   "inputs": [
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2",
     "node_modules/@patternfly/patternfly/assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2",
@@ -789,36 +789,20 @@
     "node_modules/react-dom/index.js",
     "node_modules/react-dropzone/dist/es/index.js",
     "node_modules/react-dropzone/dist/es/utils/index.js",
+    "node_modules/react/cjs/react-jsx-runtime.production.min.js",
     "node_modules/react/cjs/react.production.min.js",
     "node_modules/react/index.js",
+    "node_modules/react/jsx-runtime.js",
     "node_modules/scheduler/cjs/scheduler.production.min.js",
     "node_modules/scheduler/index.js",
     "node_modules/tabbable/dist/index.esm.js",
     "node_modules/tslib/tslib.es6.mjs",
-    "src/api.js",
-    "src/app.jsx",
-    "src/app.scss",
-    "src/cockpit-dark-theme.js",
-    "src/components/link-card.jsx",
-    "src/components/output-block.jsx",
-    "src/components/section-header.jsx",
-    "src/components/service-card.jsx",
-    "src/components/status-label.jsx",
-    "src/hooks/use-mutation.js",
-    "src/hooks/use-overview.js",
+    "src/http.js",
     "src/index.jsx",
-    "src/lib/format.js",
-    "src/pages/ai-page.jsx",
-    "src/pages/applications-page.jsx",
-    "src/pages/operations-page.jsx",
-    "src/pages/overview-page.jsx",
-    "src/pages/services-page.jsx",
-    "src/pages/setup-page.jsx",
-    "src/pages/source-page.jsx",
-    "src/schema-editor.jsx",
-    "src/schema-model.js",
-    "src/systemd.js",
-    "src/view-model.js"
+    "src/steps/AdminStep.jsx",
+    "src/steps/ConfirmStep.jsx",
+    "src/steps/StorageStep.jsx",
+    "src/wizard.css"
   ],
   "outputFiles": {
     "assets/RedHatDisplayVF-Italic-Y64TXBJP.woff2": {
@@ -853,25 +837,17 @@
       "bytes": 18452,
       "sha256": "322295638da2105dffff0eb18ee10ccffcac38888778b7b1b4624772d513e65d"
     },
-    "index.css": {
-      "bytes": 2277472,
-      "sha256": "a228bd5560fef1ebe2d8faa49d72d54d0127d4ff4696f443e192572bc81d5e65"
+    "first-run-wizard.css": {
+      "bytes": 2284660,
+      "sha256": "1b8727779dd351359f41296dc71d773995c8ebbfb7412f606f463834e78de227"
+    },
+    "first-run-wizard.js": {
+      "bytes": 243611,
+      "sha256": "8e1ba25207ab2ab71e3819516e0eb8227f48f68a5b8a60ee5ce1d71992db89fd"
     },
     "index.html": {
-      "bytes": 359,
-      "sha256": "2bf29db5f00d4f499b165025a7a00363abe24e06820a1e96a31a660ffbcb7fe2"
-    },
-    "index.js": {
-      "bytes": 358024,
-      "sha256": "09e18b2391eebe36fa13ce67271ccf913b89ba5217c9df3f693bbead9ce70d8d"
-    },
-    "index.js.LEGAL.txt": {
-      "bytes": 1209,
-      "sha256": "1a6eddc04139021f90f313ff74128669fbeb5350faa43a8734cafea3eae930a9"
-    },
-    "manifest.json": {
-      "bytes": 712,
-      "sha256": "43cffec899ebd1988b4b9364db4c77e1aa89347b6709fc343b0726bd2b51767d"
+      "bytes": 374,
+      "sha256": "3a8ba5a549ada4fbdbbfaa69b4cf77b37a37442403125271638b5eea3c6eb345"
     }
   }
 }

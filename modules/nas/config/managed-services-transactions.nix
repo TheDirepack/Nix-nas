@@ -13,6 +13,8 @@ let
   systemdManifestPath = "${systemdProjectionPath}/manifest.json";
   systemdStatePath = "/run/nas-control/systemd-reconciled.json";
   guardTimeoutSeconds = 300;
+  guardStateDir = "/run/nas-control/rollback-guard";
+  guardCurrentFile = "${guardStateDir}/current-guard-unit";
   firewalldProjectionPath = "/run/nas-control/firewalld";
   firewalldManifestPath = "${firewalldProjectionPath}/manifest.json";
   quadletRuntimePath = "/run/containers/systemd";
@@ -109,6 +111,28 @@ let
     # for a valid first transaction; leave all state untouched and fail closed.
     exit 1
   '';
+  rollbackWithGuard = pkgs.writeShellScript "nas-v2-rollback-with-guard" ''
+    set -euo pipefail
+    guard_file=${lib.escapeShellArg guardCurrentFile}
+    guard_unit=""
+    if [ -r "$guard_file" ]; then
+      guard_unit="$(${pkgs.coreutils}/bin/cat "$guard_file" 2>/dev/null | ${pkgs.coreutils}/bin/tr -d '\n' || true)"
+    fi
+    if [ -n "$guard_unit" ]; then
+      if ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
+        --state-dir ${lib.escapeShellArg guardStateDir} \
+        --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
+        fired --unit "$guard_unit" -- ${rollbackToApplied}; then
+        ${pkgs.coreutils}/bin/rm -f "$guard_file"
+        exit 0
+      else
+        status=$?
+        ${pkgs.coreutils}/bin/rm -f "$guard_file"
+        exit $status
+      fi
+    fi
+    exec ${rollbackToApplied}
+  '';
   guardUnitShell = ''
     guard_suffix="$(printf '%s' "$INVOCATION_ID" | ${pkgs.coreutils}/bin/tr -d '-' | ${pkgs.coreutils}/bin/cut -c1-12)"
     test -n "$guard_suffix"
@@ -117,6 +141,9 @@ let
 in
 {
   config = {
+    systemd.tmpfiles.rules = [
+      "d ${guardStateDir} 0755 root root -"
+    ];
     # The compiler records the exact desired revision while holding the same
     # authority lock used to parse services.yaml. These environment variables
     # opt the production entry point into that history transaction.
@@ -161,9 +188,12 @@ in
       # under the authority lock before committing the desired revision.
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} bootstrap
       ${guardUnitShell}
+      ${pkgs.coreutils}/bin/mkdir -p ${lib.escapeShellArg guardStateDir}
+      ${pkgs.coreutils}/bin/printf '%s' "$guard_unit" > ${lib.escapeShellArg guardCurrentFile}
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
+        --state-dir ${lib.escapeShellArg guardStateDir} \
         arm \
         --timeout ${toString guardTimeoutSeconds} \
         --systemd-run ${lib.escapeShellArg "${pkgs.systemd}/bin/systemd-run"} \
@@ -172,6 +202,8 @@ in
 
     # A normal failure gets the same rollback immediately; the transient timer
     # remains the crash/deadlock fallback when systemd never reaches OnFailure.
+    # The failed unit claims the durable guard so the later timer firing
+    # observes the terminal outcome instead of duplicating rollback.
     systemd.services.nas-managed-services-reconcile.onFailure = lib.mkAfter [
       "nas-v2-apply-failed.service"
     ];
@@ -179,7 +211,7 @@ in
       description = "Restore the last applied Managed Services V2 desired state";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = rollbackToApplied;
+        ExecStart = rollbackWithGuard;
       };
     };
 
@@ -226,7 +258,9 @@ in
       ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --unit "$guard_unit" \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
+        --state-dir ${lib.escapeShellArg guardStateDir} \
         cancel
+      ${pkgs.coreutils}/bin/rm -f ${lib.escapeShellArg guardCurrentFile}
       ${v2Python}/bin/python ${lib.escapeShellArgs historyArgs} clear-previous-applied
     '';
 

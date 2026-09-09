@@ -56,17 +56,69 @@ def _json_path(parts: Iterable[Any]) -> str:
     return rendered
 
 
-def _plain(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_plain(item) for item in value]
+MAX_YAML_DEPTH = 200
+MAX_YAML_NODES = 200_000
+
+
+def _plain_bounded(
+    value: Any,
+    ancestors: set[int],
+    path: tuple[Any, ...],
+    depth: int,
+    count: list[int],
+) -> Any:
+    # Ancestor IDs detect alias cycles; IDs are removed on exit so a shared
+    # anchor referenced from siblings (DAG) still expands by value. Expanded
+    # nodes count toward the budget so alias amplification fails predictably.
+    if isinstance(value, (Mapping, list)):
+        if id(value) in ancestors:
+            raise ManagedServicesV2Error(
+                "YAML alias cycle detected",
+                path=_json_path(path) if path else "$",
+                code="yaml-cycle",
+            )
+        if depth > MAX_YAML_DEPTH:
+            raise ManagedServicesV2Error(
+                f"YAML document exceeds maximum depth of {MAX_YAML_DEPTH}",
+                path=_json_path(path) if path else "$",
+                code="yaml-depth",
+            )
+        count[0] += 1
+        if count[0] > MAX_YAML_NODES:
+            raise ManagedServicesV2Error(
+                f"YAML document exceeds maximum of {MAX_YAML_NODES} nodes",
+                path=_json_path(path) if path else "$",
+                code="yaml-nodes",
+            )
+        ancestors.add(id(value))
+        try:
+            if isinstance(value, Mapping):
+                return {
+                    str(key): _plain_bounded(item, ancestors, path + (str(key),), depth + 1, count)
+                    for key, item in value.items()
+                }
+            return [
+                _plain_bounded(item, ancestors, path + (index,), depth + 1, count) for index, item in enumerate(value)
+            ]
+        finally:
+            ancestors.discard(id(value))
+    count[0] += 1
+    if count[0] > MAX_YAML_NODES:
+        raise ManagedServicesV2Error(
+            f"YAML document exceeds maximum of {MAX_YAML_NODES} nodes",
+            path=_json_path(path) if path else "$",
+            code="yaml-nodes",
+        )
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise ManagedServicesV2Error(
         f"YAML value of type {type(value).__name__} is not JSON-compatible",
         code="yaml-type",
     )
+
+
+def _plain(value: Any) -> Any:
+    return _plain_bounded(value, set(), (), 0, [0])
 
 
 def parse_yaml_text(text: str, *, source: str = "<memory>") -> dict[str, Any]:
@@ -97,7 +149,14 @@ def parse_yaml_text(text: str, *, source: str = "<memory>") -> dict[str, Any]:
             "Managed Services V2 desired state must not be empty (YAML null)",
             code="yaml-empty",
         )
-    plain = _plain(value)
+    try:
+        plain = _plain(value)
+    except RecursionError as exc:
+        raise ManagedServicesV2Error(
+            f"Unable to normalize YAML {source}: document nesting exceeds limits",
+            path="$",
+            code="yaml-depth",
+        ) from exc
     if not isinstance(plain, dict):
         raise ManagedServicesV2Error(
             "Managed Services V2 desired state must be a mapping/object",

@@ -225,6 +225,50 @@ def _verify_runtime(*, desired: dict[pathlib.PurePosixPath, bytes], firewall_cmd
         raise FirewalldReconcileError("firewalld reload omitted projected objects: " + " ".join(detail))
 
 
+def _policy_zone_refs(payload: bytes, *, target: pathlib.PurePosixPath) -> list[str]:
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError as exc:
+        raise FirewalldReconcileError(f"invalid projected policy {target.stem}: {exc}") from exc
+    refs: list[str] = []
+    for tag in ("ingress-zone", "egress-zone"):
+        for zone in root.findall(tag):
+            refs.append(_attr(zone, "name", label="ingress zone" if "ingress" in tag else "egress zone"))
+    return refs
+
+
+def _policy_priority(payload: bytes) -> int:
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError:
+        return 0
+    try:
+        return int(root.get("priority") or "0")
+    except ValueError:
+        return 0
+
+
+def _validate_desired_dependencies(desired: dict[pathlib.PurePosixPath, bytes]) -> None:
+    available_zones = {target.stem for target in desired if target.parts[0] == "zones"}
+    for target, payload in sorted(desired.items(), key=lambda item: str(item[0])):
+        if target.parts[0] != "policies":
+            continue
+        for ref in _policy_zone_refs(payload, target=target):
+            if ref.startswith("nv2z") and ref not in available_zones:
+                raise FirewalldReconcileError(
+                    f"projected policy {target.stem} references missing zone {ref}: INVALID_ZONE"
+                )
+
+
+def _creation_order(desired: dict[pathlib.PurePosixPath, bytes]) -> list[tuple[pathlib.PurePosixPath, bytes]]:
+    zones = sorted((t, p) for t, p in desired.items() if t.parts[0] == "zones")
+    policies = sorted(
+        ((t, p) for t, p in desired.items() if t.parts[0] == "policies"),
+        key=lambda item: (_policy_priority(item[1]), str(item[0])),
+    )
+    return [*zones, *policies]
+
+
 def reconcile(
     *,
     manifest_path: pathlib.Path,
@@ -233,17 +277,20 @@ def reconcile(
 ) -> dict[str, Any]:
     """Replace the complete V2 native namespace, reload firewalld, and verify it."""
     desired = _read_projection(manifest_path, projection_root)
+    _validate_desired_dependencies(desired)
     current_zones, current_policies = _current_owned(firewall_cmd)
 
     # The nv2* namespace is exclusively V2-owned. Recreate it from the validated
     # compiler IR so runtime/permanent drift cannot accumulate and no custom
-    # rollback bytes or file copying are required.
+    # rollback bytes or file copying are required. Zones precede policies so
+    # dependent policies never observe INVALID_ZONE; any mid-apply failure aborts
+    # before check-config/reload and a retry re-applies the full desired set.
     for name in sorted(current_policies):
         _permanent(firewall_cmd, f"--delete-policy={name}")
     for name in sorted(current_zones):
         _permanent(firewall_cmd, f"--delete-zone={name}")
 
-    for target, payload in sorted(desired.items(), key=lambda item: str(item[0])):
+    for target, payload in _creation_order(desired):
         if target.parts[0] == "zones":
             _apply_zone(firewall_cmd, target.stem, payload)
         else:
