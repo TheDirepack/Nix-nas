@@ -51,6 +51,13 @@ path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="
 PY
 }
 
+# Development preflight tolerates the known generated locations that documented
+# workflows create (both frontend dependency trees, Python bytecode caches, the
+# local Ruff cache). Release validation keeps strict staging: with
+# NAS_PREFLIGHT_VERIFY_MANIFEST=1 every forbidden artifact is rejected.
+if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
+  export NAS_STRUCTURE_STRICT=1
+fi
 step "repository structure" ./scripts/validate-structure.py
 step "V2 architecture boundary" ./scripts/check-architecture-boundary.py
 step "version metadata" ./scripts/check-version.py
