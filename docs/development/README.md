@@ -63,6 +63,7 @@ Executable comments explain only local constraints that would otherwise be easy 
 
 Useful supporting records:
 
+- [Project audit - 2026-09-07](project-audit-2026-09-07.md)
 - [External validation](external-validation.md)
 - [Privileged-service audit](root-service-audit.md)
 - [QEMU and installer validation](vm-testing.md)
