@@ -489,12 +489,13 @@ nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
 
 # Complete first start through the GUI bootstrap system: the Cockpit First
-# start page behind the Authentik gate, submitting through the loopback
-# setup API contract. The pre-bootstrap Linux administrator (akadmin,
-# documented in nas-bootstrap-administrator.service) provisions browser
-# access while the appliance is still locked.
-setup_api="http://127.0.0.1:8980/setup/api"
-first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
+# start page behind the Authentik gate, submitting through the permissioned
+# Unix-socket setup API contract. The pre-bootstrap Linux administrator
+# (akadmin, documented in nas-bootstrap-administrator.service) provisions
+# browser access while the appliance is still locked.
+setup_sock=/run/nas-setup-api/setup.sock
+setup_api="http://localhost/setup/api"
+first_start_plan="$(curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" "$setup_api/first-start")"
 if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
   printf '%s\n' "$first_start_plan" >&2
   fail "first-start setup API did not report a reviewable ready plan"
@@ -520,7 +521,7 @@ stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_
   '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
-  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
 if [[ "$stale_code" != 400 ]]; then
   cat /tmp/nas-stale-plan.json >&2 || true
   fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
@@ -530,6 +531,25 @@ if ! grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json; then
   fail "stale plan digest rejection was not diagnostic"
 fi
 pass "first-start setup API rejects a stale plan digest before mutation"
+
+# The Unix socket admits only the Caddy service identity and root. An
+# unprivileged local account and a representative compromised-service sandbox
+# must not read the setup plan directly.
+if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "unprivileged local user reached the setup API directly"
+fi
+if systemd-run --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
+  curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "sandboxed service identity reached the setup API directly"
+fi
+pass "unprivileged and sandboxed identities cannot reach the setup API directly"
+
+# Job identifiers in URLs no longer authorize; only the header capability does.
+if [[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
+  --unix-socket "$setup_sock" "$setup_api/first-start/job/aaaaaaaaaaaaaaaaaaaaaaaa")" != 404 ]]; then
+  fail "legacy job-id URL did not fail closed"
+fi
+pass "legacy job-id URLs fail closed"
 
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value firstRun)" \
@@ -562,6 +582,14 @@ if ! jq -e '
   fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+# Capability bytes must never reach backend or proxy logs.
+if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
+  fail "setup capability bytes reached the backend log"
+fi
+if grep '/setup/api' /var/log/caddy/access.log 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
+  fail "setup capability bytes reached the proxy log"
+fi
+pass "setup capability bytes are absent from backend and proxy logs"
 [[ -d /var/lib/nas-control-plane/authentik ]] || fail "Authentik moved off the system control partition"
 [[ -d /var/lib/nas-control-plane/postgresql ]] || fail "PostgreSQL moved off the system control partition"
 [[ -f /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "KeePassXC database moved off the system control partition"

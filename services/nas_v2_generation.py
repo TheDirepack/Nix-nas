@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 from collections.abc import Mapping
 from typing import Any
 
@@ -23,13 +24,37 @@ class GenerationError(RuntimeError):
 
 
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-_GENERATION_NAME_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?(?:-[2-9][0-9]*)?$")
+_GENERATION_SUFFIX_MIN = 2
+_GENERATION_SUFFIX_MAX = 9999
+_GENERATION_NAME_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?(?:-(?:[2-9]|[1-9][0-9]{1,3}))?$")
 
 
 def validate_revision(revision: str) -> str:
     if not isinstance(revision, str) or _REVISION_RE.fullmatch(revision) is None:
         raise GenerationError(f"invalid desired-state Git revision {revision!r}")
     return revision
+
+
+def format_generation_name(revision: str, index: int) -> str:
+    """Render the single allocator-owned directory name for a revision slot."""
+    revision = validate_revision(revision)
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or (index != 1 and not _GENERATION_SUFFIX_MIN <= index <= _GENERATION_SUFFIX_MAX)
+    ):
+        raise GenerationError(f"invalid generation index {index!r}")
+    return revision if index == 1 else f"{revision}-{index}"
+
+
+def parse_generation_name(name: str) -> tuple[str, int] | None:
+    """Split a generation directory name into its revision and slot index."""
+    if not isinstance(name, str) or _GENERATION_NAME_RE.fullmatch(name) is None:
+        return None
+    revision, separator, suffix = name.rpartition("-")
+    if not separator:
+        return name, 1
+    return revision, int(suffix)
 
 
 def allocate_generation(root: pathlib.Path, revision: str) -> pathlib.Path:
@@ -43,8 +68,8 @@ def allocate_generation(root: pathlib.Path, revision: str) -> pathlib.Path:
     root.mkdir(parents=True, exist_ok=True, mode=0o755)
     if root.is_symlink() or not root.is_dir():
         raise GenerationError(f"generation root must be a real directory: {root}")
-    for index in range(1, 10000):
-        name = revision if index == 1 else f"{revision}-{index}"
+    for index in range(1, _GENERATION_SUFFIX_MAX + 1):
+        name = format_generation_name(revision, index)
         candidate = root / name
         try:
             candidate.mkdir(mode=0o700)
@@ -130,7 +155,8 @@ def publish_generation(
         raise GenerationError("generation directory is outside the generation root") from exc
     if generation.is_symlink() or not generation.is_dir():
         raise GenerationError(f"generation must be a real directory: {generation}")
-    if not generation.name.startswith(expected_revision):
+    parsed = parse_generation_name(generation.name)
+    if parsed is None or parsed[0] != expected_revision:
         raise GenerationError("generation directory is not keyed by the expected desired-state revision")
 
     _seal_tree(generation)
@@ -191,9 +217,16 @@ def prune_generations(
 
 
 def discard_generation(path: pathlib.Path) -> None:
-    """Best-effort cleanup of one unpublished generation."""
+    """Best-effort cleanup of one unpublished generation.
+
+    Published generations are sealed read-only by publish_generation; cleanup
+    must never delete sealed output, so a candidate without owner-write
+    permission is refused. Callers must only pass unpublished candidates.
+    """
     try:
         if path.exists() and path.is_dir() and not path.is_symlink():
+            if not stat.S_IMODE(os.stat(path).st_mode) & 0o200:
+                return
             os.chmod(path, 0o700)
             for directory in (item for item in path.rglob("*") if item.is_dir()):
                 try:
@@ -209,6 +242,8 @@ __all__ = [
     "GenerationError",
     "allocate_generation",
     "discard_generation",
+    "format_generation_name",
+    "parse_generation_name",
     "publish_generation",
     "prune_generations",
     "validate_revision",

@@ -98,6 +98,9 @@ class CockpitApiDriftTests(unittest.TestCase):
                             "label": "Identity sync",
                             "managed": True,
                             "effective": True,
+                            "available": True,
+                            "runtimeAvailable": True,
+                            "verified": True,
                             "workloadKind": "job",
                             "units": [{"unit": "nas-identity-sync.service", "role": "owner"}],
                         }
@@ -358,6 +361,9 @@ class CockpitApiDriftTests(unittest.TestCase):
                             "label": "Identity sync",
                             "managed": True,
                             "effective": True,
+                            "available": True,
+                            "runtimeAvailable": True,
+                            "verified": True,
                             "workloadKind": "job",
                             "units": [{"unit": "nas-identity-sync.service", "role": "owner"}],
                         }
@@ -661,39 +667,59 @@ class CockpitApiDriftTests(unittest.TestCase):
                     self.assertTrue(result["ok"])
                 self.assertEqual(run.call_count, 3)
 
-            active = self.active()
+            # Direct pull/rebuild mutations are no longer supported; every deployment activation reaches nas-update
+            for operation in ("pull", "rebuild", "pull-rebuild"):
+                with (
+                    mock.patch.object(api, "CONFIG_DIR", root),
+                    mock.patch.object(api, "run") as run,
+                    mock.patch.object(api, "acquire_operation") as acquire,
+                ):
+                    with self.assertRaisesRegex(api.ApiError, "Unsupported"):
+                        api.source_control({"operation": operation})
+                    run.assert_not_called()
+                    acquire.assert_not_called()
+
+            # Guarded update activations reach nas-update via systemd units
             with (
                 mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
                 mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
             ):
-                result = api.source_control({"operation": "pull-rebuild"})
+                result = api.update_control({"operation": "preview"})
             self.assertTrue(result["ok"])
-            self.assertEqual(len(result["commands"]), 2)
-            self.assertEqual(run.call_args_list[0].kwargs["env"]["NAS_OPERATION_COORDINATION_TOKEN"], "coord-token")
+            self.assertEqual(result["unit"], "nas-update-preview.service")
+            run.assert_called_once_with(
+                ["systemctl", "start", "--no-block", "nas-update-preview.service"],
+                check=False,
+                timeout_seconds=60,
+            )
+            with (
+                mock.patch.object(api, "CONFIG_DIR", root),
+                mock.patch.object(api, "run", return_value=CommandResult(0, "ok", "")) as run,
+            ):
+                result = api.update_control({"operation": "apply"})
+            self.assertEqual(result["unit"], "nas-update-apply.service")
 
     def test_source_control_rejects_unknown_missing_directory_busy_and_failed_mutation(self) -> None:
         with self.assertRaisesRegex(api.ApiError, "Unsupported source-control"):
             api.source_control({"operation": "reset"})
+        with self.assertRaisesRegex(api.ApiError, "Unsupported"):
+            api.source_control({"operation": "pull"})
         with mock.patch.object(api, "CONFIG_DIR", pathlib.Path("/definitely/missing")):
             with self.assertRaisesRegex(api.ApiError, "does not exist"):
                 api.source_control({"operation": "status"})
+        with self.assertRaisesRegex(api.ApiError, "Unsupported"):
+            api.update_control({"operation": "reset"})
+        with mock.patch.object(api, "CONFIG_DIR", pathlib.Path("/definitely/missing")):
+            with self.assertRaisesRegex(api.ApiError, "does not exist"):
+                api.update_control({"operation": "preview"})
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             with (
                 mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", side_effect=OperationBusyError("busy")),
-            ):
-                with self.assertRaisesRegex(api.ApiError, "busy"):
-                    api.source_control({"operation": "pull"})
-            active = self.active()
-            with (
-                mock.patch.object(api, "CONFIG_DIR", root),
-                mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
                 mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")),
             ):
                 with self.assertRaises(api.ApiError):
-                    api.source_control({"operation": "rebuild"})
+                    api.update_control({"operation": "sync"})
 
     def test_build_parser_exposes_v2_managed_service_surface(self) -> None:
         parser = api.build_parser()

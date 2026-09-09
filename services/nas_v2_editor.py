@@ -231,6 +231,41 @@ def _status_units(service_id: str, service: dict[str, Any]) -> list[dict[str, st
     return units
 
 
+def _is_valid_effective_service(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    workload = entry.get("workload")
+    if not isinstance(workload, dict):
+        return False
+    kind = workload.get("kind")
+    if kind not in {"daemon", "job", "session"}:
+        return False
+    runtime = entry.get("runtime")
+    if not isinstance(runtime, dict):
+        return False
+    return True
+
+
+def _load_effective_value(effective_path: pathlib.Path) -> dict[str, Any] | None:
+    try:
+        raw = effective_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    if value.get("schemaVersion") != 3:
+        return None
+    services = value.get("services")
+    if not isinstance(services, dict):
+        return None
+    # Derived runtime is optional for validity but helps distinguish complete documents
+    return value
+
+
 def status(
     *,
     desired_path: pathlib.Path = DEFAULT_SPEC_PATH,
@@ -240,13 +275,22 @@ def status(
         desired = parse_yaml_text(_read_text(desired_path), source=str(desired_path))
     except ManagedServicesV2Error as exc:
         raise ManagedServicesEditorError(str(exc)) from exc
-    try:
-        effective_value = json.loads(effective_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        effective_value = {}
-    effective_services = effective_value.get("services") if isinstance(effective_value, dict) else {}
-    if not isinstance(effective_services, dict):
-        effective_services = {}
+    effective_value = _load_effective_value(effective_path)
+    # Stale/revision-inconsistent check via mtime: effective older than desired is stale
+    is_stale = False
+    if effective_value is not None:
+        try:
+            eff_mtime = effective_path.stat().st_mtime
+            des_mtime = desired_path.stat().st_mtime
+            if eff_mtime < des_mtime - 0.001:
+                is_stale = True
+        except OSError:
+            pass
+    effective_services: dict[str, Any] = {}
+    if effective_value is not None and not is_stale:
+        candidate = effective_value.get("services")
+        if isinstance(candidate, dict):
+            effective_services = candidate
     services = desired.get("services")
     if not isinstance(services, dict):
         raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
@@ -256,24 +300,45 @@ def status(
         service = services[service_id]
         if not isinstance(service, dict):
             continue
-        effective = effective_services.get(service_id)
-        effective_service = effective if isinstance(effective, dict) else service
-        workload = effective_service.get("workload")
+        entry = effective_services.get(service_id)
+        verified = entry is not None and _is_valid_effective_service(entry) and not is_stale
+        # Incomplete: missing entry already unverified; stale already handled
+        if verified:
+            effective_service = entry  # type: ignore[assignment]
+            workload = effective_service.get("workload")
+            effective_mode = _desired_mode(effective_service)
+            effective_flag = effective_service.get("enabled", True) is not False
+            available = True
+            runtime_available = True
+            workload_kind = workload.get("kind") if isinstance(workload, dict) else None
+            idle = workload.get("idleSeconds") if isinstance(workload, dict) else None
+            units = _status_units(service_id, effective_service)
+        else:
+            # Desired remains visible; compiled availability is unknown/false
+            workload = service.get("workload")
+            effective_mode = None
+            effective_flag = False
+            available = False
+            runtime_available = False
+            workload_kind = workload.get("kind") if isinstance(workload, dict) else None
+            idle = workload.get("idleSeconds") if isinstance(workload, dict) else None
+            units = _status_units(service_id, service)
         rows.append(
             {
                 "id": service_id,
                 "label": service.get("name", service_id),
                 "description": service.get("description", ""),
                 "requestedMode": _desired_mode(service),
-                "effectiveMode": _desired_mode(effective_service),
-                "effective": effective_service.get("enabled", True) is not False,
-                "available": True,
-                "runtimeAvailable": True,
+                "effectiveMode": effective_mode,
+                "effective": effective_flag,
+                "available": available,
+                "runtimeAvailable": runtime_available,
+                "verified": verified,
                 "managed": service.get("managed", True) is not False,
-                "workloadKind": workload.get("kind") if isinstance(workload, dict) else None,
+                "workloadKind": workload_kind,
                 "allowedModes": _allowed_modes(service),
-                "idleSeconds": workload.get("idleSeconds") if isinstance(workload, dict) else None,
-                "units": _status_units(service_id, effective_service),
+                "idleSeconds": idle,
+                "units": units,
             }
         )
     return {

@@ -122,6 +122,62 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             generation.discard_generation(candidate)
             self.assertFalse(candidate.exists())
 
+    def test_generation_name_contract_accepts_full_allocator_range(self) -> None:
+        for suffix in ("", "-2", "-9", "-10", "-19", "-100", "-999", "-1000", "-9999"):
+            with self.subTest(suffix=suffix or "<bare>"):
+                self.assertIsNotNone(
+                    generation._GENERATION_NAME_RE.fullmatch(REVISION + suffix),
+                    f"allocator suffix {suffix or '<bare>'} must be recognized",
+                )
+        for index in range(2, 10000):
+            name = generation.format_generation_name(REVISION, index)
+            self.assertIsNotNone(
+                generation._GENERATION_NAME_RE.fullmatch(name), f"allocated suffix -{index} must be recognized"
+            )
+
+    def test_generation_name_contract_rejects_invalid_suffixes(self) -> None:
+        for suffix in ("-0", "-1", "-01", "-1x", "-10000", "-", "-02", "--2"):
+            with self.subTest(suffix=suffix):
+                self.assertIsNone(
+                    generation._GENERATION_NAME_RE.fullmatch(REVISION + suffix),
+                    f"invalid suffix {suffix} must be rejected",
+                )
+
+    def test_format_and_parse_share_one_naming_contract(self) -> None:
+        for index in (1, 2, 9, 10, 19, 100, 999, 1000, 9998, 9999):
+            with self.subTest(index=index):
+                name = generation.format_generation_name(REVISION, index)
+                self.assertEqual((REVISION, index), generation.parse_generation_name(name))
+        self.assertIsNone(generation.parse_generation_name(REVISION + "-10x"))
+        self.assertIsNone(generation.parse_generation_name("not-a-generation"))
+        with self.assertRaises(generation.GenerationError):
+            generation.format_generation_name(REVISION, 0)
+        with self.assertRaises(generation.GenerationError):
+            generation.format_generation_name(REVISION, 10000)
+
+    def test_many_allocations_remain_bounded_preserving_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "nas-control"
+            root = runtime / "generations"
+            allocated = [generation.allocate_generation(root, REVISION) for _ in range(25)]
+            current = allocated[12]
+            (current / "effective.json").write_text("{}\n", encoding="utf-8")
+            generation.publish_generation(
+                current,
+                expected_revision=REVISION,
+                plan={"desiredRevision": REVISION},
+                generation_root=root,
+                current_link=runtime / "current",
+                compatibility_paths={runtime / "effective.json": pathlib.PurePosixPath("effective.json")},
+            )
+            removed = generation.prune_generations(root, current_link=runtime / "current", retain=3)
+            remaining = {path.name for path in root.iterdir() if path.is_dir() and not path.is_symlink()}
+            self.assertEqual(3, len(remaining))
+            self.assertIn(current.name, remaining)
+            self.assertEqual(len(allocated) - 3, len(removed))
+            self.assertEqual(current, (runtime / "current").resolve(strict=True))
+            self.assertEqual("{}\n", (runtime / "effective.json").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

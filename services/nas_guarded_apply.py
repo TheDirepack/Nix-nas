@@ -161,9 +161,7 @@ def _describe_service(service: str, systemctl: str) -> dict[str, Any]:
     }
 
 
-def _fired_wrapper(
-    *, unit: str, state_dir: str, systemctl: str, rollback: list[str]
-) -> list[str]:
+def _fired_wrapper(*, unit: str, state_dir: str, systemctl: str, rollback: list[str]) -> list[str]:
     return [
         sys.executable,
         os.path.abspath(__file__),
@@ -171,9 +169,9 @@ def _fired_wrapper(
         state_dir,
         "--systemctl",
         systemctl,
-        "fired",
         "--unit",
         unit,
+        "fired",
         "--",
         *rollback,
     ]
@@ -230,10 +228,12 @@ def arm(
             raise GuardedApplyError(f"rollback service is already active: {service}")
         if live["isFailed"] or live["activeState"] == "failed":
             raise GuardedApplyError(f"rollback service already failed before guard arming: {service}")
-        if live["result"] not in ("", "unknown"):
-            raise GuardedApplyError(
-                f"rollback service already fired before guard arming (result={live['result']}): {service}"
-            )
+        # A fresh unit name shows LoadState=not-found and no active timer;
+        # native Result is success in every state so it is never consulted.
+        # Refuse only a live timer that is already armed under this name.
+        timer_live = _describe_service(timer, systemctl)
+        if timer_live["activeState"] == "active":
+            raise GuardedApplyError(f"rollback timer is already armed: {timer}")
         payload = {
             "schemaVersion": SCHEMA_VERSION,
             "unit": unit,
@@ -305,10 +305,11 @@ def cancel(
         state = str(current.get("state", "unknown"))
         if state != ARMED:
             raise _terminal_error(state, unit)
-        stopped = _run([systemctl, "stop", timer], check=False)
-        if stopped.returncode != 0:
-            detail = (stopped.stderr or stopped.stdout).strip()[:4000]
-            raise GuardedApplyError(f"unable to cancel rollback timer {timer}: {detail}")
+        # Describe before stopping: stopping a --collect transient can garbage
+        # collect its own service, so a post-stop lookup alone cannot tell a
+        # never-fired service (loaded) from a fired one (not-found). The
+        # durable record decides that: rollback only runs after a claim, and
+        # a claim would be visible here under our lock.
         live = _describe_service(service, systemctl)
         if live["isActive"] or live["activeState"] in ("active", "activating"):
             raise GuardedApplyError(f"rollback service already started before guard cancellation: {service}")
@@ -323,23 +324,36 @@ def cancel(
             )
             _write_state(path, current)
             raise GuardedApplyError(f"rollback already failed for guard: {unit}")
-        if live["loadState"] == "not-found":
-            raise GuardedApplyError(
-                f"guard unit already collected for {unit}; cannot prove never-fired cancellation"
-            )
-        result_text = str(live.get("result", ""))
-        if result_text not in ("", "unknown"):
-            observed = COMPLETED if result_text == "success" else FAILED
+        stopped = _run([systemctl, "stop", timer], check=False)
+        if stopped.returncode != 0:
+            timer_live = _describe_service(timer, systemctl)
+            if timer_live["activeState"] == "active":
+                detail = (stopped.stderr or stopped.stdout).strip()[:4000]
+                raise GuardedApplyError(f"unable to cancel rollback timer {timer}: {detail}")
+            # The timer is already dead or gone with no active service and an
+            # armed durable record, so no rollback can have been claimed.
+        # Re-verify after the stop while still holding the guard lock. The
+        # fired handler cannot change durable state under our lock, so any
+        # terminal durable outcome would already have been observed above;
+        # a service that started in the gap is still active here because
+        # stopping the timer does not kill a running service.
+        after = _describe_service(service, systemctl)
+        if after["isActive"] or after["activeState"] in ("active", "activating"):
+            raise GuardedApplyError(f"rollback service already started before guard cancellation: {service}")
+        if after["isFailed"] or after["activeState"] == "failed":
             current.update(
                 {
-                    "state": observed,
+                    "state": FAILED,
                     "updatedAt": _now(),
-                    "detail": f"cancel observed fired rollback (result={result_text})",
-                    "live": live,
+                    "detail": "cancel observed failed rollback service",
+                    "live": after,
                 }
             )
             _write_state(path, current)
-            raise _terminal_error(observed, unit)
+            raise GuardedApplyError(f"rollback already failed for guard: {unit}")
+        # Stopping our own --collect timer garbage-collects its never-fired
+        # service, so LoadState=not-found here is the expected footprint of
+        # this cancellation, not evidence of a firing.
         current.update({"state": CANCELLED, "updatedAt": _now()})
         _write_state(path, current)
         return {"ok": True, "armed": False, "unit": unit, "timer": timer, "state": CANCELLED}
@@ -396,9 +410,7 @@ def fired(
             check=False,
         )
         exit_code = completed.returncode
-        tail = ((completed.stderr or "") + ("\n" if completed.stderr else "") + (completed.stdout or "")).strip()[
-            :4000
-        ]
+        tail = ((completed.stderr or "") + ("\n" if completed.stderr else "") + (completed.stdout or "")).strip()[:4000]
     except (OSError, subprocess.TimeoutExpired) as exc:
         exit_code = 127
         tail = str(exc)[:4000]

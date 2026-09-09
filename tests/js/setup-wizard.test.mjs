@@ -120,7 +120,7 @@ test("setup keeps only actionable administrator, storage, and confirmation steps
   assert.match(confirm, /encryptStorage/);
   assert.match(confirm, /ZFS encryption/);
   assert.match(confirm, /api\/reboot/);
-  assert.match(confirm, /JSON\.stringify\(\{ jobId \}\)/);
+  assert.match(confirm, /X-NAS-Setup-Capability/);
 });
 
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {

@@ -330,7 +330,7 @@ def _caddy_bytes(effective: dict[str, Any], projection: CaddyProjection) -> byte
         authentik_path=projection.authentik_path,
         lan_host=projection.lan_host,
     )
-    validate_caddyfile(content, caddy_bin=projection.caddy_bin)
+    validate_caddyfile(content, caddy_bin=projection.caddy_bin, lan_host=projection.lan_host)
     return content.encode("utf-8")
 
 

@@ -150,6 +150,7 @@ def main() -> int:
             history = record_desired(authority=desired, repository=history_repository, git_bin=git_bin)
             revision = str(history["head"])
             generation = allocate_generation(generation_root, revision)
+            published = False
             try:
                 generated_paths = replace(
                     paths,
@@ -188,11 +189,13 @@ def main() -> int:
                     current_link=current_link,
                     compatibility_paths=stable_paths,
                 )
-                prune_generations(generation_root, current_link=current_link, retain=3)
-                return 0
+                published = True
             except Exception:
-                discard_generation(generation)
+                if not published:
+                    discard_generation(generation)
                 raise
+            prune_generations(generation_root, current_link=current_link, retain=3)
+            return 0
         raise GenerationError("desired state changed repeatedly during compilation; retry reconciliation")
     except Exception as exc:
         print(f"V2 reconcile failed: {exc}", file=sys.stderr)

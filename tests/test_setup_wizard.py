@@ -75,13 +75,19 @@ class TestWizardRouting(unittest.TestCase):
         self.assertIn("file_server", route)
 
     def test_detached_job_capabilities_survive_authentik_regeneration(self):
-        status = self.bootstrap.index("handle /setup/api/first-start/job/* {")
+        status = self.bootstrap.index("handle /setup/api/first-start/job {")
         reboot = self.bootstrap.index("handle /setup/api/reboot {")
         gated = self.bootstrap.index("handle /setup/api/* {")
         self.assertLess(status, gated)
         self.assertLess(reboot, gated)
         self.assertNotIn("caddyForwardAuth", self.bootstrap[status:reboot])
         self.assertIn("caddyForwardAuth", self.bootstrap[gated : gated + 180])
+        self.assertNotIn("handle /setup/api/first-start/job/*", self.bootstrap)
+
+    def test_setup_api_reaches_only_the_permissioned_socket(self):
+        self.assertNotIn("8980", self.bootstrap)
+        self.assertNotIn("127.0.0.1:8980", self.bootstrap)
+        self.assertEqual(self.bootstrap.count("reverse_proxy unix//run/nas-setup-api/setup.sock"), 3)
 
     def test_wizard_assets_are_served_under_the_setup_prefix(self):
         # Relative asset URLs in index.html resolve to /setup/first-run-wizard.*;
@@ -116,6 +122,70 @@ class TestWizardSource(unittest.TestCase):
         for source in (WIZARD / "src").rglob("*.js*"):
             text = source.read_text(encoding="utf-8")
             self.assertNotIn("nas-admin-first-boot", text, f"{source.name} embeds bootstrap credentials")
+
+    def test_capability_never_touches_urls_storage_or_logs(self):
+        sources = {path: path.read_text(encoding="utf-8") for path in (WIZARD / "src").rglob("*.js*")}
+        combined = "\n".join(sources.values())
+        self.assertNotIn("api/first-start/job/", combined)
+        self.assertNotIn("localStorage", sources[WIZARD / "src/steps/ConfirmStep.jsx"])
+        self.assertNotIn("sessionStorage", combined)
+        self.assertIn("X-NAS-Setup-Capability", combined)
+        self.assertIn("api/first-start/resume", combined)
+        self.assertIn("wizard-job-document", combined)
+
+    def test_refresh_resumes_without_resubmitting(self):
+        confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")
+        self.assertIn("api/first-start/resume", confirm)
+        effect = confirm.split("if (job || resumeAttempted) return undefined;")[1].split(
+            "}, [job, resumeAttempted, resume]);"
+        )[0]
+        self.assertNotIn("submit(", effect)
+        self.assertNotIn("api/first-run", effect)
+
+    def test_completion_states_are_distinct_and_reboot_is_gated(self):
+        confirm = (WIZARD / "src/steps/ConfirmStep.jsx").read_text(encoding="utf-8")
+        self.assertIn('variant="warning"', confirm)
+        self.assertIn("Setup completed with unverified state", confirm)
+        self.assertIn('variant="success"', confirm)
+        self.assertIn("rebootAuthorized", confirm)
+        self.assertIn("Request reboot access", confirm)
+
+
+class TestSetupApiBoundary(unittest.TestCase):
+    """The setup backend listens on a Caddy-only Unix socket with bounded requests."""
+
+    def setUp(self):
+        self.services = (ROOT / "modules/nas/config/application-services.nix").read_text(encoding="utf-8")
+        start = self.services.index("systemd.services.nas-setup-api = {")
+        end = self.services.index("};", start)
+        self.unit = self.services[start:end]
+        self.backend = (ROOT / "services/nas_cockpit_api.py").read_text(encoding="utf-8")
+
+    def test_unit_serves_a_permissioned_socket(self):
+        self.assertIn("serve --socket-path /run/nas-setup-api/setup.sock", self.unit)
+        self.assertNotIn("--bind", self.unit)
+        self.assertNotIn("--port", self.unit)
+        self.assertNotIn("8980", self.unit)
+        self.assertIn('RuntimeDirectory = "nas-setup-api"', self.unit)
+        self.assertIn("NAS_CADDY_USER=", self.unit)
+        self.assertIn("NAS_CADDY_GROUP=", self.unit)
+
+    def test_unit_admits_only_unix_sockets(self):
+        self.assertIn('RestrictAddressFamilies = [ "AF_UNIX" ]', self.unit)
+        self.assertNotIn("AF_INET", self.unit)
+
+    def test_backend_has_no_tcp_listener_or_url_capability(self):
+        self.assertNotIn("ThreadingHTTPServer", self.backend)
+        self.assertNotIn("127.0.0.1:8980", self.backend)
+        self.assertNotIn("SETUP_API_JOB_RE", self.backend)
+        self.assertIn("SetupApiUnixServer", self.backend)
+        self.assertIn("X-NAS-Setup-Capability", self.backend)
+        self.assertIn("/setup/api/first-start/resume", self.backend)
+
+    def test_browser_flow_uses_page_state_not_url_capabilities(self):
+        script = (ROOT / "tests/browser/first-run-wizard.py").read_text(encoding="utf-8")
+        self.assertNotIn("first-start/job/${", script)
+        self.assertIn("wizard-job-document", script)
 
 
 class TestWizardBuildIntegrity(unittest.TestCase):

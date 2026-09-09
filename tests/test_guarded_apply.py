@@ -33,7 +33,7 @@ def _idle_systemctl(root: pathlib.Path, log: pathlib.Path) -> pathlib.Path:
 def _systemd_run(root: pathlib.Path, log: pathlib.Path) -> pathlib.Path:
     run = root / "systemd-run"
     run.write_text(
-        "#!/bin/sh\nset -eu\n" f'printf "systemd-run:%s\\n" "$*" >> {log}\n' "exit 0\n",
+        f'#!/bin/sh\nset -eu\nprintf "systemd-run:%s\\n" "$*" >> {log}\nexit 0\n',
         encoding="utf-8",
     )
     run.chmod(run.stat().st_mode | stat.S_IXUSR)
@@ -249,7 +249,7 @@ class GuardedApplyTests(unittest.TestCase):
             idle = _idle_systemctl(root, log)
             systemd_run = _systemd_run(root, log)
             marker = root / "rollback-ran"
-            rollback = self.executable(root / "rollback-marker", f'touch {marker}\nexit 0\n')
+            rollback = self.executable(root / "rollback-marker", f"touch {marker}\nexit 0\n")
             guarded.arm(
                 [str(rollback)],
                 unit="nas-test-rollback",
@@ -307,7 +307,7 @@ class GuardedApplyTests(unittest.TestCase):
             idle = _idle_systemctl(root, log)
             systemd_run = _systemd_run(root, log)
             marker = root / "rollback-ran"
-            rollback = self.executable(root / "rollback-slow", f'sleep 0.2\ntouch {marker}\nexit 0\n')
+            rollback = self.executable(root / "rollback-slow", f"sleep 0.2\ntouch {marker}\nexit 0\n")
             guarded.arm(
                 [str(rollback)],
                 unit="nas-test-rollback",

@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, useWizardContext } from '@patternfly/react-cor
 import { fetchJson } from '../http.js';
 
 const COMPLETE_STATUSES = new Set(['complete', 'complete-unverified']);
+const CAPABILITY_HEADER = 'X-NAS-Setup-Capability';
 
 const validate = (administrator, keePassPassword, keePassPasswordConfirm, plan, allowDestructive) => {
   if (!administrator.username || !administrator.name || !administrator.email) {
@@ -41,6 +42,18 @@ const validate = (administrator, keePassPassword, keePassPasswordConfirm, plan, 
   return '';
 };
 
+// Split the server-issued reboot capability out of a job document. The
+// capability lives only in component state: it is never rendered, never
+// persisted to browser storage, and never placed in URLs.
+const splitJobDocument = (value) => {
+  if (!value || typeof value !== 'object') return { job: null, capability: null };
+  const { capability, ...job } = value;
+  return {
+    job: typeof job.status === 'string' ? job : null,
+    capability: typeof capability === 'string' && capability ? capability : null,
+  };
+};
+
 const ConfirmStep = ({
   administrator,
   keePassPassword,
@@ -52,6 +65,9 @@ const ConfirmStep = ({
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [job, setJob] = React.useState(null);
+  const [capability, setCapability] = React.useState(null);
+  const [resuming, setResuming] = React.useState(false);
+  const [resumeAttempted, setResumeAttempted] = React.useState(false);
   const [rebooting, setRebooting] = React.useState(false);
   const [rebootRequested, setRebootRequested] = React.useState(false);
   const [confirmPasswordReapply, setConfirmPasswordReapply] = React.useState(false);
@@ -59,18 +75,51 @@ const ConfirmStep = ({
 
   const jobId = job?.jobId;
   const jobStatus = job?.status;
+  const isComplete = COMPLETE_STATUSES.has(jobStatus);
+  const rebootAuthorized = Boolean(capability) && isComplete;
+
+  const resume = React.useCallback(async () => {
+    setResuming(true);
+    setError('');
+    try {
+      const value = await fetchJson('api/first-start/resume', {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+      });
+      const { job: resumed, capability: resumedCapability } = splitJobDocument(value);
+      if (!resumed) throw new Error('The setup service returned an unusable job document.');
+      setJob(resumed);
+      setCapability(resumedCapability);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setResuming(false);
+      setResumeAttempted(true);
+    }
+  }, []);
+
+  // Recover the authorized active job after a refresh without resubmitting.
+  // This effect only resumes; destructive submission stays behind the button.
+  React.useEffect(() => {
+    if (job || resumeAttempted) return undefined;
+    resume();
+    return undefined;
+  }, [job, resumeAttempted, resume]);
 
   React.useEffect(() => {
-    if (!jobId || COMPLETE_STATUSES.has(jobStatus) || jobStatus === 'failed') return undefined;
+    if (!capability || !jobId || isComplete || jobStatus === 'failed') return undefined;
     const timer = window.setInterval(() => {
-      fetchJson(`api/first-start/job/${jobId}`)
+      fetchJson('api/first-start/job', {
+        headers: { Accept: 'application/json', [CAPABILITY_HEADER]: capability },
+      })
         .then((value) => {
-          if (value && value.jobId === jobId) setJob(value);
+          const { job: polled } = splitJobDocument(value);
+          if (polled && polled.jobId === jobId) setJob(polled);
         })
         .catch((reason) => setError(`Unable to refresh setup progress: ${reason.message || reason}`));
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [jobId, jobStatus]);
+  }, [capability, jobId, isComplete, jobStatus]);
 
   const submit = async () => {
     const problem = validate(
@@ -105,11 +154,10 @@ const ConfirmStep = ({
           confirmPasswordReapply,
         }),
       });
-      if (COMPLETE_STATUSES.has(value.status)) {
-        setJob({ jobId: '', status: value.status });
-      } else {
-        setJob(value);
-      }
+      const { job: submitted, capability: submittedCapability } = splitJobDocument(value);
+      if (!submitted) throw new Error('The setup service returned an unusable job document.');
+      setJob(submitted);
+      setCapability(submittedCapability);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -118,13 +166,17 @@ const ConfirmStep = ({
   };
 
   const reboot = async () => {
+    if (!capability) {
+      setError('Reboot needs a fresh setup authorization. Request reboot access first.');
+      return;
+    }
     setRebooting(true);
     setError('');
     try {
       await fetchJson('api/reboot', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId }),
+        headers: { 'Content-Type': 'application/json', [CAPABILITY_HEADER]: capability },
+        body: JSON.stringify({}),
       });
       setRebootRequested(true);
     } catch (reason) {
@@ -150,7 +202,12 @@ const ConfirmStep = ({
         <li>Devices: {Array.isArray(storage.devices) ? storage.devices.join(' ') : ''}</li>
       </ul>
       {error && <Alert variant="danger" isInline title={error} />}
-      {job && !COMPLETE_STATUSES.has(jobStatus) && (
+      {!job && resumeAttempted && !error && (
+        <Alert variant="info" isInline title="No running setup job">
+          No active setup job was found for this session. Starting setup below is the only way to create one.
+        </Alert>
+      )}
+      {job && !isComplete && (
         <Alert
           variant={jobStatus === 'failed' ? 'danger' : 'info'}
           isInline
@@ -167,10 +224,32 @@ const ConfirmStep = ({
           onChange={(_event, checked) => setConfirmPasswordReapply(checked)}
         />
       )}
-      {COMPLETE_STATUSES.has(jobStatus) && (
+      {jobStatus === 'complete' && (
         <Alert variant="success" isInline title="Setup completed">
           <p>Reboot the appliance to start the full service stack with the new accounts.</p>
         </Alert>
+      )}
+      {jobStatus === 'complete-unverified' && (
+        <Alert variant="warning" isInline title="Setup completed with unverified state">
+          <p>
+            The appliance reports completion, but the final state was not fully verified. Before rebooting,
+            compare the reviewed plan against the reported result, then run the recovery checks in the operator
+            manual. Reboot only when the completed state is confirmed.
+          </p>
+        </Alert>
+      )}
+      {isComplete && !rebootAuthorized && !rebootRequested && (
+        <Alert variant="warning" isInline title="Reboot needs fresh authorization">
+          <p>
+            This page load has no reboot authorization for the completed job. Request reboot access to resume the
+            authorized job, or reboot from the appliance console if browser authorization is unavailable.
+          </p>
+        </Alert>
+      )}
+      {isComplete && (
+        <pre id="wizard-job-document" style={{ display: 'none' }}>
+          {JSON.stringify(job)}
+        </pre>
       )}
       {rebootRequested && (
         <Alert variant="info" isInline title="Reboot requested">
@@ -182,8 +261,13 @@ const ConfirmStep = ({
           Back
         </Button>
         {!job && (
-          <Button variant="primary" onClick={submit} isDisabled={busy} isLoading={busy}>
+          <Button variant="primary" onClick={submit} isDisabled={busy || resuming} isLoading={busy}>
             {busy ? 'Starting setup' : 'Run setup'}
+          </Button>
+        )}
+        {!job && resumeAttempted && (
+          <Button variant="secondary" onClick={resume} isDisabled={busy || resuming} isLoading={resuming}>
+            {resuming ? 'Checking for setup' : 'Check for running setup'}
           </Button>
         )}
         {jobStatus === 'failed' && (
@@ -196,7 +280,12 @@ const ConfirmStep = ({
             {busy ? 'Retrying setup' : 'Retry setup'}
           </Button>
         )}
-        {COMPLETE_STATUSES.has(jobStatus) && (
+        {isComplete && !rebootAuthorized && !rebootRequested && (
+          <Button variant="secondary" onClick={resume} isDisabled={resuming} isLoading={resuming}>
+            {resuming ? 'Requesting access' : 'Request reboot access'}
+          </Button>
+        )}
+        {isComplete && rebootAuthorized && (
           <Button
             variant="primary"
             onClick={reboot}

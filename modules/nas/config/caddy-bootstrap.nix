@@ -46,20 +46,23 @@ https://${lanHost} {
     redir /setup /setup/ 308
   }
   # Rebuilding Authentik invalidates the temporary session while the detached
-  # job is still running. The unguessable 96-bit job id is a narrow capability
-  # for status and completed-job reboot only; submission remains Authentik-gated.
-  handle /setup/api/first-start/job/* {
-    reverse_proxy 127.0.0.1:8980
+  # job is still running. Job status and completed-job reboot authenticate
+  # with a server-issued header capability, never a job id in the URL, so the
+  # capability never reaches proxy logs. Submission and resume stay
+  # Authentik-gated through the route below.
+  # The socket path must match nas-setup-api.service (application-services.nix).
+  handle /setup/api/first-start/job {
+    reverse_proxy unix//run/nas-setup-api/setup.sock
   }
   handle /setup/api/reboot {
-    reverse_proxy 127.0.0.1:8980
+    reverse_proxy unix//run/nas-setup-api/setup.sock
   }
   # The wizard's submission API. Authentik-gated like the page itself; the
-  # port must match nas-setup-api.service (application-services.nix).
+  # socket path must match nas-setup-api.service (application-services.nix).
   handle /setup/api/* {
     route {
       ${caddyForwardAuth}
-      reverse_proxy 127.0.0.1:8980
+      reverse_proxy unix//run/nas-setup-api/setup.sock
     }
   }
   handle /setup/* {
@@ -118,17 +121,46 @@ EOCF
   fullCaddyImport = "import /etc/caddy/caddy_config";
   caddyPackage = config.services.caddy.package;
   runOptions = "--config ${activeCaddyPath} --adapter caddyfile";
+  managedPath = "/run/nas-control/caddy-managed.conf";
   renderActive = pkgs.writeShellScript "nas-caddy-bootstrap-select" ''
     set -euo pipefail
+    activeCaddyPath="${activeCaddyPath}"
+    managedPath="${managedPath}"
+    bootstrapImport="import ${bootstrapCaddyfile}"
+    fullImport=${lib.escapeShellArg fullCaddyImport}
+
+    select_bootstrap() {
+      printf '%s\n' "$bootstrapImport" > "$activeCaddyPath"
+    }
+    select_full() {
+      printf '%s\n' "$fullImport" > "$activeCaddyPath"
+    }
+    managed_is_valid() {
+      [[ -f "$managedPath" ]] || return 1
+      tmp=$(mktemp)
+      trap 'rm -f "$tmp"' RETURN
+      cat > "$tmp" <<EOF
+    {
+      admin off
+    }
+    import $managedPath
+    https://${lanHost} {
+      tls internal
+      import nas_v2_managed_paths
+    }
+    EOF
+      ${caddyPackage}/bin/caddy validate --config "$tmp" --adapter caddyfile >/dev/null 2>&1
+    }
+
     if [[ -f ${secretRoot}/ready && -f /var/lib/nas-setup/state.json ]]; then
       ${pkgs.systemd}/bin/systemctl start --no-block nas-managed-services-reconcile.service || true
-      if [[ -f /run/nas-control/caddy-managed.conf ]]; then
-        printf '%s\n' ${lib.escapeShellArg fullCaddyImport} > ${activeCaddyPath}
+      if managed_is_valid; then
+        select_full
       else
-        printf '%s\n' "import ${bootstrapCaddyfile}" > ${activeCaddyPath}
+        select_bootstrap
       fi
     else
-      printf '%s\n' "import ${bootstrapCaddyfile}" > ${activeCaddyPath}
+      select_bootstrap
     fi
     if ${pkgs.systemd}/bin/systemctl is-active --quiet caddy.service; then
       ${pkgs.systemd}/bin/systemctl reload caddy.service
@@ -161,7 +193,7 @@ in
     before = [ "caddy.service" ];
     serviceConfig = {
       Type = "oneshot";
-      RemainAfterExit = true;
+      RemainAfterExit = false;
       ExecStart = renderActive;
       NoNewPrivileges = true;
       PrivateTmp = true;
@@ -176,7 +208,11 @@ in
     description = "Rebuild the active Caddy config when secret activation changes";
     wantedBy = [ "multi-user.target" ];
     pathConfig = {
-      PathChanged = [ "${secretRoot}/ready" "/var/lib/nas-setup/state.json" ];
+      PathChanged = [
+        "${secretRoot}/ready"
+        "/var/lib/nas-setup/state.json"
+        "/run/nas-control/caddy-managed.conf"
+      ];
       Unit = "nas-caddy-bootstrap.service";
     };
   };

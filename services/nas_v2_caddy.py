@@ -334,15 +334,28 @@ def generate_caddyfile(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def validate_caddyfile(caddyfile: str, *, caddy_bin: str | None = None) -> None:
+def validate_caddyfile(caddyfile: str, *, caddy_bin: str | None = None, lan_host: str = "nas.local") -> None:
     binary = caddy_bin or shutil.which("caddy")
     if not binary:
         raise CaddyProjectionError("Caddy binary is required for configuration validation")
+    if not HOSTNAME_RE.fullmatch(lan_host):
+        raise CaddyProjectionError(f"Invalid appliance hostname {lan_host!r}")
     with tempfile.TemporaryDirectory(prefix="nas-v2-caddy-") as raw_tmp:
-        path = pathlib.Path(raw_tmp) / "Caddyfile"
-        path.write_text(caddyfile, encoding="utf-8")
+        tmp = pathlib.Path(raw_tmp)
+        generated = tmp / "caddy-managed.conf"
+        generated.write_text(caddyfile, encoding="utf-8")
+        wrapper = tmp / "Caddyfile"
+        wrapper.write_text(
+            "{\n  admin off\n}\n"
+            f"import {generated}\n"
+            f"https://{lan_host} {{\n"
+            f"  tls internal\n"
+            f"  import {PATH_SNIPPET}\n"
+            "}\n",
+            encoding="utf-8",
+        )
         result = subprocess.run(
-            [binary, "validate", "--config", str(path), "--adapter", "caddyfile"],
+            [binary, "validate", "--config", str(wrapper), "--adapter", "caddyfile"],
             capture_output=True,
             text=True,
             timeout=30,
