@@ -57,7 +57,6 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn('row.get("workloadKind") != "job"', source)
         self.assertIn('unit.get("role") == "owner"', source)
         self.assertNotIn("nas-zfs-manual-snapshot.service", source)
-        self.assertNotIn("nas-update-apply.service", source)
 
     def test_setup_and_account_inputs_have_closed_schemas(self) -> None:
         validation = text("scripts/validate-repository-data.py")

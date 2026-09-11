@@ -122,7 +122,8 @@ let
       if ${v2Python}/bin/python ${v2Source}/nas_guarded_apply.py \
         --state-dir ${lib.escapeShellArg guardStateDir} \
         --systemctl ${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"} \
-        fired --unit "$guard_unit" -- ${rollbackToApplied}; then
+        --unit "$guard_unit" \
+        fired -- ${rollbackToApplied}; then
         ${pkgs.coreutils}/bin/rm -f "$guard_file"
         exit 0
       else

@@ -465,7 +465,8 @@ class V2BackupCleanupExtendedTests(unittest.TestCase):
             finally:
                 backup._run = orig  # type: ignore[assignment]
                 backup.BACKUP_STAGING_ROOT = orig_root
-            self.assertEqual(list(artifact.iterdir()), [])
+            residue = list(staging.rglob("*")) if staging.exists() else []
+            self.assertEqual(residue, [])
             self.assertFalse(paths.exists())
             self.assertFalse(state.exists())
 

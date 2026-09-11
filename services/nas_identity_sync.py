@@ -746,6 +746,15 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
         raise SyncError("Authentik NAS automation role is missing; verify blueprint deployment")
     authentik_request(token, f"rbac/roles/{role['pk']}/add_user/", method="POST", body={"pk": user_pk})
 
+    outposts = authentik_list(token, "outposts/instances/?page_size=100")
+    embedded = [item for item in outposts if item.get("managed") == "goauthentik.io/outposts/embedded"]
+    if len(embedded) != 1 or not isinstance(embedded[0].get("pk"), str) or not embedded[0]["pk"]:
+        raise SyncError("Authentik must expose exactly one embedded outpost before runtime token handoff")
+    outpost_token_identifier = f"ak-outpost-{embedded[0]['pk']}-api"
+    outpost_key = authentik_request(token, f"core/tokens/{outpost_token_identifier}/view_key/")
+    if not isinstance(outpost_key, Mapping) or not isinstance(outpost_key.get("key"), str) or not outpost_key["key"]:
+        raise SyncError("Authentik embedded outpost token key is unavailable")
+
     tokens = authentik_list(token, f"core/tokens/?identifier={urllib.parse.quote(AUTOMATION_TOKEN_IDENTIFIER)}")
     if not any(item.get("identifier") == AUTOMATION_TOKEN_IDENTIFIER for item in tokens):
         authentik_request(
@@ -772,6 +781,7 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
         "role": AUTOMATION_ROLE,
         "username": AUTOMATION_USER,
         "token": runtime_token,
+        "outpostToken": outpost_key["key"],
     }
 
 

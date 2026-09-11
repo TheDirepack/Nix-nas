@@ -44,6 +44,8 @@ class ContractTests(unittest.TestCase):
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
         self.assertIn("authentik-bootstrap-token", secrets)
         self.assertIn("authentik-api-token", secrets)
+        self.assertIn("authentik-outpost-token", secrets)
+        self.assertIn("set-authentik-runtime-stdin", secrets)
         self.assertIn("authentik_token(bootstrap=True)", identity)
 
     def test_copyparty_is_the_only_share_authority(self) -> None:

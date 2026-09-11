@@ -11,6 +11,7 @@ let
     bootstrapPassword
     authentikRuntimeEnvironmentFile
     authentikRuntimeApiTokenFile
+    authentikOutpostTokenFile
     authentikPort
     authentikOutpostPort
     nasAuthentikBlueprints
@@ -125,15 +126,19 @@ let
   '';
   authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
     set -euo pipefail
-    token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
-    outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
-      -H "Authorization: Bearer $token" \
-      http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/outposts/instances/?page_size=100 \
-      | ${pkgs.jq}/bin/jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
-    outpost_token="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
-      -H "Authorization: Bearer $token" \
-      "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/core/tokens/ak-outpost-$outpost-api/view_key/" \
-      | ${pkgs.jq}/bin/jq -er '.key')"
+    if [[ -s ${lib.escapeShellArg authentikOutpostTokenFile} ]]; then
+      outpost_token="$(${pkgs.coreutils}/bin/cat ${lib.escapeShellArg authentikOutpostTokenFile})"
+    else
+      token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
+      outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
+        -H "Authorization: Bearer $token" \
+        http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/outposts/instances/?page_size=100 \
+        | ${pkgs.jq}/bin/jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
+      outpost_token="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
+        -H "Authorization: Bearer $token" \
+        "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/core/tokens/ak-outpost-$outpost-api/view_key/" \
+        | ${pkgs.jq}/bin/jq -er '.key')"
+    fi
     exec ${pkgs.util-linux}/bin/runuser --user authentik -- env \
       AUTHENTIK_HOST="http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}" \
       AUTHENTIK_HOST_BROWSER="https://${cfg.identity.publicHost}${cfg.identity.authentikPath}" \

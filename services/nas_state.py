@@ -62,6 +62,21 @@ class StateError(RuntimeError):
     """Expected appliance-state operation failure."""
 
 
+class _BoundedTarInfo(tarfile.TarInfo):
+    def _proc_pax(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        if self.size > MAX_ARCHIVE_METADATA_BYTES:
+            raise StateError("State bundle archive metadata is too large")
+        return getattr(super(), "_proc_pax")(archive)
+
+    def _proc_gnulong(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        limit = (
+            MAX_ARCHIVE_MEMBER_NAME_BYTES + 1 if self.type == tarfile.GNUTYPE_LONGNAME else MAX_ARCHIVE_METADATA_BYTES
+        )
+        if self.size > limit:
+            raise StateError("State bundle archive metadata or member name is too large")
+        return getattr(super(), "_proc_gnulong")(archive)
+
+
 @dataclass(frozen=True)
 class Authority:
     name: str
@@ -785,14 +800,20 @@ def safe_member_name(name: str) -> pathlib.PurePosixPath:
         raise StateError("Unsafe bundle path: empty or non-text name")
     if any(ord(character) < 32 or ord(character) == 127 for character in name):
         raise StateError("Unsafe bundle path: control character in member name")
-    encoded = name.encode("utf-8")
+    try:
+        encoded = name.encode("utf-8")
+    except UnicodeError as exc:
+        raise StateError("Unsafe bundle path: member name is not valid UTF-8") from exc
     if len(encoded) > MAX_ARCHIVE_MEMBER_NAME_BYTES:
         raise StateError("Unsafe bundle path: member name is too long")
     path = pathlib.PurePosixPath(name)
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise StateError(f"Unsafe bundle path: {name}")
-    if any(len(part.encode("utf-8")) > MAX_ARCHIVE_COMPONENT_BYTES for part in path.parts):
-        raise StateError("Unsafe bundle path: path component is too long")
+    try:
+        if any(len(part.encode("utf-8")) > MAX_ARCHIVE_COMPONENT_BYTES for part in path.parts):
+            raise StateError("Unsafe bundle path: path component is too long")
+    except UnicodeError as exc:
+        raise StateError("Unsafe bundle path: member name is not valid UTF-8") from exc
     return path
 
 
@@ -865,6 +886,19 @@ def extract_bundle(bundle: pathlib.Path, destination: pathlib.Path) -> None:
     def _record_created(path: pathlib.Path) -> None:
         created.append(path)
 
+    def _prepare_parent(path: pathlib.Path) -> None:
+        missing: list[pathlib.Path] = []
+        current = path
+        while current != destination and lstat_type(current) == 0:
+            missing.append(current)
+            current = current.parent
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StateError(f"Unable to prepare extraction destination: {exc}") from exc
+        for directory in reversed(missing):
+            _record_created(directory)
+
     def _cleanup_partial() -> None:
         for path in reversed(created):
             try:
@@ -883,7 +917,7 @@ def extract_bundle(bundle: pathlib.Path, destination: pathlib.Path) -> None:
 
     try:
         try:
-            archive = tarfile.open(bundle, "r:*")
+            archive = tarfile.open(bundle, "r:*", tarinfo=_BoundedTarInfo)
         except (tarfile.TarError, EOFError, OSError) as exc:
             raise StateError(f"Unable to inspect state bundle: {bundle}") from exc
         with archive:
@@ -899,7 +933,7 @@ def extract_bundle(bundle: pathlib.Path, destination: pathlib.Path) -> None:
                 if member.isdir():
                     if lstat_type(target) == 0:
                         try:
-                            target.parent.mkdir(parents=True, exist_ok=True)
+                            _prepare_parent(target.parent)
                             target.mkdir(exist_ok=False)
                             _record_created(target)
                         except FileExistsError as exc:
@@ -911,10 +945,7 @@ def extract_bundle(bundle: pathlib.Path, destination: pathlib.Path) -> None:
                     except OSError as exc:
                         raise StateError(f"Unable to extract state member: {member.name}") from exc
                     continue
-                try:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    raise StateError(f"Unable to extract state member: {member.name}") from exc
+                _prepare_parent(target.parent)
                 try:
                     source = archive.extractfile(member)
                 except (tarfile.TarError, EOFError, OSError) as exc:
@@ -1461,7 +1492,7 @@ def reapply_runtime_consumers(snapshot: Mapping[str, bool]) -> None:
 
 def expanded_bundle_size(bundle: pathlib.Path) -> int:
     try:
-        archive = tarfile.open(bundle, "r:*")
+        archive = tarfile.open(bundle, "r:*", tarinfo=_BoundedTarInfo)
     except (OSError, tarfile.TarError, EOFError) as exc:
         raise StateError(f"Unable to inspect state bundle: {bundle}") from exc
     seen: set[str] = set()

@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, useWizardContext } from '@patternfly/react-cor
 import { fetchJson } from '../http.js';
 
 const COMPLETE_STATUSES = new Set(['complete', 'complete-unverified']);
+const TERMINAL_STATUSES = new Set([...COMPLETE_STATUSES, 'failed']);
 const CAPABILITY_HEADER = 'X-NAS-Setup-Capability';
 
 const validate = (administrator, keePassPassword, keePassPasswordConfirm, plan, allowDestructive) => {
@@ -66,6 +67,7 @@ const ConfirmStep = ({
   const [error, setError] = React.useState('');
   const [job, setJob] = React.useState(null);
   const [capability, setCapability] = React.useState(null);
+  const [pollingInterrupted, setPollingInterrupted] = React.useState(false);
   const [resuming, setResuming] = React.useState(false);
   const [resumeAttempted, setResumeAttempted] = React.useState(false);
   const [rebooting, setRebooting] = React.useState(false);
@@ -76,6 +78,7 @@ const ConfirmStep = ({
   const jobId = job?.jobId;
   const jobStatus = job?.status;
   const isComplete = COMPLETE_STATUSES.has(jobStatus);
+  const isTerminal = TERMINAL_STATUSES.has(jobStatus);
   const rebootAuthorized = Boolean(capability) && isComplete;
 
   const resume = React.useCallback(async () => {
@@ -107,19 +110,31 @@ const ConfirmStep = ({
   }, [job, resumeAttempted, resume]);
 
   React.useEffect(() => {
-    if (!capability || !jobId || isComplete || jobStatus === 'failed') return undefined;
-    const timer = window.setInterval(() => {
-      fetchJson('api/first-start/job', {
-        headers: { Accept: 'application/json', [CAPABILITY_HEADER]: capability },
-      })
-        .then((value) => {
-          const { job: polled } = splitJobDocument(value);
-          if (polled && polled.jobId === jobId) setJob(polled);
-        })
-        .catch((reason) => setError(`Unable to refresh setup progress: ${reason.message || reason}`));
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [capability, jobId, isComplete, jobStatus]);
+    if (!capability || !jobId || isTerminal) return undefined;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const value = await fetchJson('api/first-start/job', {
+          headers: { Accept: 'application/json', [CAPABILITY_HEADER]: capability },
+        });
+        const { job: polled } = splitJobDocument(value);
+        if (!cancelled && polled && polled.jobId === jobId) {
+          setJob(polled);
+          setPollingInterrupted(false);
+        }
+      } catch (_reason) {
+        if (!cancelled) setPollingInterrupted(true);
+      } finally {
+        if (!cancelled) timer = window.setTimeout(poll, 2000);
+      }
+    };
+    timer = window.setTimeout(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [capability, jobId, isTerminal]);
 
   const submit = async () => {
     const problem = validate(
@@ -202,6 +217,12 @@ const ConfirmStep = ({
         <li>Devices: {Array.isArray(storage.devices) ? storage.devices.join(' ') : ''}</li>
       </ul>
       {error && <Alert variant="danger" isInline title={error} />}
+      {pollingInterrupted && !isComplete && (
+        <Alert variant="warning" isInline title="Reconnecting to setup progress">
+          Protected services are restarting. This page will keep checking the existing setup job without
+          resubmitting it.
+        </Alert>
+      )}
       {!job && resumeAttempted && !error && (
         <Alert variant="info" isInline title="No running setup job">
           No active setup job was found for this session. Starting setup below is the only way to create one.
@@ -246,7 +267,7 @@ const ConfirmStep = ({
           </p>
         </Alert>
       )}
-      {isComplete && (
+      {isTerminal && (
         <pre id="wizard-job-document" style={{ display: 'none' }}>
           {JSON.stringify(job)}
         </pre>

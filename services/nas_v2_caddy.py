@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -342,6 +343,10 @@ def validate_caddyfile(caddyfile: str, *, caddy_bin: str | None = None, lan_host
         raise CaddyProjectionError(f"Invalid appliance hostname {lan_host!r}")
     with tempfile.TemporaryDirectory(prefix="nas-v2-caddy-") as raw_tmp:
         tmp = pathlib.Path(raw_tmp)
+        data_home = tmp / "data"
+        config_home = tmp / "config"
+        data_home.mkdir(mode=0o700)
+        config_home.mkdir(mode=0o700)
         generated = tmp / "caddy-managed.conf"
         generated.write_text(caddyfile, encoding="utf-8")
         wrapper = tmp / "Caddyfile"
@@ -354,12 +359,15 @@ def validate_caddyfile(caddyfile: str, *, caddy_bin: str | None = None, lan_host
             "}\n",
             encoding="utf-8",
         )
+        environment = os.environ.copy()
+        environment.update({"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)})
         result = subprocess.run(
             [binary, "validate", "--config", str(wrapper), "--adapter", "caddyfile"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
+            env=environment,
         )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:4000]

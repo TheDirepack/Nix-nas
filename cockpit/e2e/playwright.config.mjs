@@ -8,7 +8,12 @@ const isFinalVm = suite === "vm";
 // curl in the VM harness instead of paying browser startup cost per request.
 const testMatch = isFinalVm
   ? "final-vm.spec.mjs"
-  :   ["ui-security.spec.mjs", "common-xss.spec.mjs", "first-run-wizard.spec.mjs", "schema-editor-a11y.spec.mjs"];
+  : [
+      "ui-security.spec.mjs",
+      "common-xss.spec.mjs",
+      "first-run-wizard.spec.mjs",
+      "schema-editor-a11y.spec.mjs",
+    ];
 
 export default defineConfig({
   testDir: ".",

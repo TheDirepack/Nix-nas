@@ -14,7 +14,6 @@ import os
 import pathlib
 import re
 import shutil
-import stat
 from collections.abc import Mapping
 from typing import Any
 
@@ -133,6 +132,23 @@ def _replace_symlink(path: pathlib.Path, target: str) -> None:
         shutil.rmtree(legacy, ignore_errors=True)
 
 
+def _validate_compatibility_paths(
+    compatibility_paths: Mapping[pathlib.Path, pathlib.PurePosixPath],
+    *,
+    current_link: pathlib.Path,
+) -> None:
+    """Validate the complete stable-link set before mutating the candidate."""
+    for stable, relative in compatibility_paths.items():
+        if stable.parent != current_link.parent:
+            raise GenerationError(f"compatibility path must share the current-link parent: {stable}")
+        if stable == current_link:
+            raise GenerationError("compatibility path must not replace the current-generation link")
+        if not isinstance(relative, pathlib.PurePosixPath) or relative.is_absolute() or not relative.parts:
+            raise GenerationError(f"invalid compatibility target for {stable}: {relative}")
+        if any(part in {".", ".."} for part in relative.parts):
+            raise GenerationError(f"invalid compatibility target for {stable}: {relative}")
+
+
 def publish_generation(
     generation: pathlib.Path,
     *,
@@ -159,6 +175,7 @@ def publish_generation(
     if parsed is None or parsed[0] != expected_revision:
         raise GenerationError("generation directory is not keyed by the expected desired-state revision")
 
+    _validate_compatibility_paths(compatibility_paths, current_link=current_link)
     _seal_tree(generation)
     _fsync_directory(generation_root)
 
@@ -166,8 +183,6 @@ def publish_generation(
     # one current-generation pointer.  The current link is switched last.
     current_name = current_link.name
     for stable, relative in compatibility_paths.items():
-        if stable.parent != current_link.parent:
-            raise GenerationError(f"compatibility path must share the current-link parent: {stable}")
         _replace_symlink(stable, f"{current_name}/{relative.as_posix()}")
 
     relative_generation = os.path.relpath(generation, current_link.parent)
@@ -216,24 +231,38 @@ def prune_generations(
     return removed
 
 
-def discard_generation(path: pathlib.Path) -> None:
-    """Best-effort cleanup of one unpublished generation.
+def _refuse_if_current(path: pathlib.Path, current_link: pathlib.Path) -> None:
+    if not current_link.exists() and not current_link.is_symlink():
+        return
+    try:
+        current = current_link.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise GenerationError("refusing generation cleanup because current cannot be resolved safely") from exc
+    if current == path:
+        raise GenerationError(f"refusing to discard current generation {path}")
 
-    Published generations are sealed read-only by publish_generation; cleanup
-    must never delete sealed output, so a candidate without owner-write
-    permission is refused. Callers must only pass unpublished candidates.
+
+def discard_generation(path: pathlib.Path, *, current_link: pathlib.Path) -> None:
+    """Best-effort cleanup of one candidate not selected by ``current``.
+
+    Sealing is a filesystem-integrity step, not publication bookkeeping. A
+    failed publication may therefore leave a sealed candidate that still must
+    be removed. The current symlink is the sole publication authority.
     """
     try:
         if path.exists() and path.is_dir() and not path.is_symlink():
-            if not stat.S_IMODE(os.stat(path).st_mode) & 0o200:
-                return
+            resolved = path.resolve(strict=True)
+            _refuse_if_current(resolved, current_link)
             os.chmod(path, 0o700)
             for directory in (item for item in path.rglob("*") if item.is_dir()):
                 try:
                     os.chmod(directory, 0o700)
                 except OSError:
                     pass
+            _refuse_if_current(resolved, current_link)
             shutil.rmtree(path)
+    except GenerationError:
+        raise
     except OSError:
         pass
 

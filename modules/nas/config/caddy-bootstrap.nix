@@ -122,48 +122,112 @@ EOCF
   caddyPackage = config.services.caddy.package;
   runOptions = "--config ${activeCaddyPath} --adapter caddyfile";
   managedPath = "/run/nas-control/caddy-managed.conf";
+  planPath = "/run/nas-control/plan.json";
+  desiredPath = "/var/lib/nas-control/services.yaml";
+  authorityLockPath = "/var/lib/nas-control/.services.yaml.lock";
+  historyRepoPath = "${cfg.zfsRoot}/nas-control/config-history.git";
+  selectorLockPath = "/run/nas-control/caddy-bootstrap.lock";
   renderActive = pkgs.writeShellScript "nas-caddy-bootstrap-select" ''
     set -euo pipefail
     activeCaddyPath="${activeCaddyPath}"
     managedPath="${managedPath}"
+    planPath="${planPath}"
+    desiredPath="${desiredPath}"
+    authorityLockPath="${authorityLockPath}"
+    historyRepoPath="${historyRepoPath}"
     bootstrapImport="import ${bootstrapCaddyfile}"
     fullImport=${lib.escapeShellArg fullCaddyImport}
 
+    exec 9>${lib.escapeShellArg selectorLockPath}
+    ${pkgs.util-linux}/bin/flock -x 9
+
+    write_active() {
+      local content="$1"
+      local tmp
+      tmp="$(${pkgs.coreutils}/bin/mktemp "$activeCaddyPath.XXXXXX")"
+      if ! ${pkgs.coreutils}/bin/printf '%s\n' "$content" > "$tmp" \
+        || ! ${pkgs.coreutils}/bin/chmod 0644 "$tmp" \
+        || ! ${pkgs.coreutils}/bin/mv -f "$tmp" "$activeCaddyPath"; then
+        ${pkgs.coreutils}/bin/rm -f "$tmp"
+        return 1
+      fi
+    }
     select_bootstrap() {
-      printf '%s\n' "$bootstrapImport" > "$activeCaddyPath"
+      write_active "$bootstrapImport"
     }
     select_full() {
-      printf '%s\n' "$fullImport" > "$activeCaddyPath"
+      write_active "$fullImport"
+    }
+    reload_caddy() {
+      ${caddyPackage}/bin/caddy reload ${runOptions} --force
+    }
+    reload_bootstrap() {
+      select_bootstrap
+      if ${pkgs.systemd}/bin/systemctl is-active --quiet caddy.service; then
+        if ! reload_caddy; then
+          ${pkgs.systemd}/bin/systemctl stop --no-block caddy.service
+          return 1
+        fi
+      fi
+    }
+    generated_is_current() {
+      [[ -f "$managedPath" && -f "$planPath" && -f "$desiredPath" ]] || return 1
+      local desired_revision head_revision applied_revision
+      desired_revision="$(${pkgs.jq}/bin/jq -er \
+        '.desiredRevision | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+        "$planPath" 2>/dev/null)" || return 1
+      head_revision="$(${pkgs.git}/bin/git --git-dir="$historyRepoPath" \
+        --work-tree="$(${pkgs.coreutils}/bin/dirname "$desiredPath")" \
+        rev-parse --verify HEAD 2>/dev/null)" || return 1
+      applied_revision="$(${pkgs.git}/bin/git --git-dir="$historyRepoPath" \
+        rev-parse --verify refs/nas/applied 2>/dev/null)" || return 1
+      [[ "$desired_revision" == "$head_revision" && "$desired_revision" == "$applied_revision" ]] || return 1
+      ${pkgs.git}/bin/git --git-dir="$historyRepoPath" \
+        --work-tree="$(${pkgs.coreutils}/bin/dirname "$desiredPath")" \
+        diff --quiet "$desired_revision" -- "$(${pkgs.coreutils}/bin/basename "$desiredPath")"
     }
     managed_is_valid() {
       [[ -f "$managedPath" ]] || return 1
-      tmp=$(mktemp)
-      trap 'rm -f "$tmp"' RETURN
-      cat > "$tmp" <<EOF
-    {
-      admin off
-    }
-    import $managedPath
-    https://${lanHost} {
-      tls internal
-      import nas_v2_managed_paths
-    }
-    EOF
-      ${caddyPackage}/bin/caddy validate --config "$tmp" --adapter caddyfile >/dev/null 2>&1
+      local validation_root tmp status
+      validation_root="$(${pkgs.coreutils}/bin/mktemp -d)"
+      tmp="$validation_root/Caddyfile"
+      if ! ${pkgs.coreutils}/bin/mkdir -p "$validation_root/data" "$validation_root/config" \
+        || ! ${pkgs.coreutils}/bin/printf '%s\n' "$fullImport" > "$tmp"; then
+        ${pkgs.coreutils}/bin/rm -rf "$validation_root"
+        return 1
+      fi
+      status=0
+      XDG_DATA_HOME="$validation_root/data" XDG_CONFIG_HOME="$validation_root/config" \
+        ${caddyPackage}/bin/caddy validate --config "$tmp" --adapter caddyfile >/dev/null 2>&1 || status=$?
+      ${pkgs.coreutils}/bin/rm -rf "$validation_root"
+      return "$status"
     }
 
+    # Load bootstrap before checking unlock state or invoking reconciliation.
+    # A failed reload cannot safely leave full routes in memory, so stop Caddy.
+    reload_bootstrap
+
     if [[ -f ${secretRoot}/ready && -f /var/lib/nas-setup/state.json ]]; then
-      ${pkgs.systemd}/bin/systemctl start --no-block nas-managed-services-reconcile.service || true
-      if managed_is_valid; then
-        select_full
-      else
-        select_bootstrap
+      if ${pkgs.systemd}/bin/systemctl start nas-managed-services-reconcile.service; then
+        # Share the editor/compiler authority lock while proving and loading the
+        # revision so a concurrent desired-state edit cannot race publication.
+        exec 8<"$authorityLockPath"
+        ${pkgs.util-linux}/bin/flock -x 8
+        # The start is synchronous. Bounded checks tolerate atomic publication
+        # becoming visible just after systemd reports the oneshot complete.
+        for attempt in 1 2 3; do
+          if generated_is_current && managed_is_valid; then
+            select_full
+            if ${pkgs.systemd}/bin/systemctl is-active --quiet caddy.service \
+              && ! reload_caddy; then
+              reload_bootstrap
+              exit 1
+            fi
+            exit 0
+          fi
+          ${pkgs.coreutils}/bin/sleep "$attempt"
+        done
       fi
-    else
-      select_bootstrap
-    fi
-    if ${pkgs.systemd}/bin/systemctl is-active --quiet caddy.service; then
-      ${pkgs.systemd}/bin/systemctl reload caddy.service
     fi
   '';
 in

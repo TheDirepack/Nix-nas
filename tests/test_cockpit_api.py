@@ -432,6 +432,47 @@ class SetupApiTransportTests(unittest.TestCase):
                 finally:
                     client.close()
 
+    def test_trickle_headers_and_body_cannot_hold_connection_slots_past_wall_clock_deadline(self) -> None:
+        prefixes = (
+            b"POST /setup/api/nope HTTP/1.1\r\nHost: x\r\nX-Trickle: ",
+            b"POST /setup/api/nope HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{",
+        )
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as directory:
+                with mock.patch.object(api, "SETUP_SOCKET_TIMEOUT_SECONDS", 0.4):
+                    server, socket_path = self.live_server(directory)
+                    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    client.settimeout(2)
+                    client.connect(socket_path)
+                    client.sendall(prefix)
+                    stopped = threading.Event()
+
+                    def trickle() -> None:
+                        while not stopped.wait(0.08):
+                            try:
+                                client.sendall(b"a")
+                            except (ConnectionResetError, BrokenPipeError, OSError):
+                                return
+
+                    sender = threading.Thread(target=trickle, daemon=True)
+                    sender.start()
+                    deadline = time.monotonic() + 1.2
+                    acquired: list[bool] = []
+                    while time.monotonic() < deadline:
+                        acquired = [
+                            server._connection_gate.acquire(blocking=False) for _ in range(api.SETUP_MAX_CONNECTIONS)
+                        ]
+                        for held in acquired:
+                            if held:
+                                server._connection_gate.release()
+                        if all(acquired):
+                            break
+                        time.sleep(0.02)
+                    self.assertTrue(all(acquired), "trickle connection retained a semaphore slot past its deadline")
+                    stopped.set()
+                    client.close()
+                    sender.join(1)
+
     def test_live_framing_statuses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, socket_path = self.live_server(directory)
@@ -459,6 +500,7 @@ class SetupApiCapabilityTests(unittest.TestCase):
         patches = (
             mock.patch.object(api, "SETUP_CAPABILITY_DIR", self.capability_dir),
             mock.patch.object(api, "SETUP_ACTIVE_JOB_PATH", self.active_job),
+            mock.patch.object(api, "SETUP_STATE_PATH", root / "state.json"),
         )
         for patch in patches:
             patch.start()
@@ -490,6 +532,56 @@ class SetupApiCapabilityTests(unittest.TestCase):
         with mock.patch.object(api, "first_start_job_status", side_effect=api.ApiError("gone")):
             self.assertIsNone(api.lookup_setup_capability(token, now=1000.0))
         self.assertEqual(list(self.capability_dir.glob("*.json")), [])
+
+    def test_cancelled_job_state_revokes_capability(self) -> None:
+        with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+            token = api.issue_setup_capability("a" * 24, now=1000.0)
+        with mock.patch.object(api, "first_start_job_status", return_value={"status": "cancelled"}):
+            self.assertIsNone(api.lookup_setup_capability(token, now=1001.0))
+        self.assertEqual(list(self.capability_dir.glob("*.json")), [])
+
+    def test_failed_job_remains_authorized_for_terminal_status_delivery(self) -> None:
+        with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+            token = api.issue_setup_capability("a" * 24, now=1000.0)
+        with mock.patch.object(api, "first_start_job_status", return_value={"status": "failed"}):
+            self.assertEqual(api.lookup_setup_capability(token, now=1001.0), "a" * 24)
+        self.assertTrue(api._capability_record_path(token).is_file())
+
+    def test_lookup_cannot_recreate_a_concurrently_revoked_capability(self) -> None:
+        with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+            token = api.issue_setup_capability("a" * 24, now=1000.0)
+        original_write = api._write_private_replace
+        lookup_writing = threading.Event()
+        allow_lookup_write = threading.Event()
+
+        def delayed_write(path, content):
+            if path == api._capability_record_path(token) and '"lastUsedAt": 1001.0' in content:
+                lookup_writing.set()
+                allow_lookup_write.wait(2)
+            return original_write(path, content)
+
+        lookup_result: list[object] = []
+        revoke_done = threading.Event()
+        with (
+            mock.patch.object(api, "_write_private_replace", side_effect=delayed_write),
+            mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+        ):
+            lookup = threading.Thread(
+                target=lambda: lookup_result.append(api.lookup_setup_capability(token, now=1001.0)), daemon=True
+            )
+            lookup.start()
+            self.assertTrue(lookup_writing.wait(1))
+            revoke = threading.Thread(
+                target=lambda: (api.revoke_setup_capability(token), revoke_done.set()), daemon=True
+            )
+            revoke.start()
+            time.sleep(0.1)
+            self.assertFalse(revoke_done.is_set(), "revocation was not serialized with capability refresh")
+            allow_lookup_write.set()
+            lookup.join(2)
+            revoke.join(2)
+        self.assertTrue(revoke_done.is_set())
+        self.assertFalse(api._capability_record_path(token).exists())
 
     def test_active_job_record_roundtrip_and_invalid_clearing(self) -> None:
         self.assertIsNone(api.read_active_setup_job())
@@ -610,14 +702,61 @@ class SetupApiCapabilityTests(unittest.TestCase):
             self.assertEqual(api.read_active_setup_job(), "a" * 24)
 
     def test_completed_submission_returns_no_capability(self) -> None:
-        prepared = {"schemaVersion": 1, "status": "complete"}
+        prepared = {
+            "schemaVersion": 1,
+            "status": "complete",
+            "planDigest": "c" * 64,
+            "completedAt": 1234,
+        }
+        api.SETUP_STATE_PATH.write_text(json.dumps(prepared), encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
             _, socket_path = self.live_server(directory)
             with mock.patch.object(api, "start_first_start", return_value=dict(prepared)):
                 status, body = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
             self.assertIn(b"200", status)
-            self.assertNotIn("capability", body)
+            self.assertRegex(body["capability"], r"^[0-9a-f]{48}$")
             self.assertIsNone(api.read_active_setup_job())
+            poll_status, _ = self.exchange(
+                socket_path,
+                "GET",
+                "/setup/api/first-start/job",
+                headers={"X-NAS-Setup-Capability": body["capability"]},
+            )
+            self.assertIn(b"401", poll_status)
+
+    def test_completed_association_is_plan_bound_and_expires(self) -> None:
+        completed = {"schemaVersion": 2, "status": "complete", "planDigest": "c" * 64, "completedAt": 1234}
+        api.SETUP_STATE_PATH.write_text(json.dumps(completed), encoding="utf-8")
+        token = api.issue_completed_setup_capability(completed, now=1000.0)
+        self.assertTrue(api.lookup_completed_setup_capability(token, now=1000.0 + 1700.0))
+        self.assertFalse(api.lookup_completed_setup_capability(token, now=1000.0 + 1700.0 + 1801.0))
+        token = api.issue_completed_setup_capability(completed, now=2000.0)
+        changed = {**completed, "planDigest": "d" * 64}
+        api.SETUP_STATE_PATH.write_text(json.dumps(changed), encoding="utf-8")
+        self.assertFalse(api.lookup_completed_setup_capability(token, now=2001.0))
+        self.assertEqual(list(self.capability_dir.glob("*.json")), [])
+
+    def test_completed_association_authorizes_reboot_without_a_job_and_is_revoked(self) -> None:
+        completed = {"schemaVersion": 2, "status": "complete", "planDigest": "c" * 64, "completedAt": 1234}
+        api.SETUP_STATE_PATH.write_text(json.dumps(completed), encoding="utf-8")
+        token = api.issue_completed_setup_capability(completed)
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(api, "first_start_job_status") as job_status,
+                mock.patch.object(api, "run", return_value=mock.Mock(returncode=0)),
+            ):
+                status, body = self.exchange(
+                    socket_path,
+                    "POST",
+                    "/setup/api/reboot",
+                    headers={"X-NAS-Setup-Capability": token},
+                    body={},
+                )
+            self.assertIn(b"200", status)
+            self.assertEqual(body, {"rebooting": True})
+            job_status.assert_not_called()
+            self.assertFalse(api.lookup_completed_setup_capability(token))
 
     def test_resume_recovers_active_job_with_fresh_capability(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

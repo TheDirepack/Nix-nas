@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import fcntl
 import grp
 import hashlib
 import http.server
@@ -26,7 +27,7 @@ import sys
 import syslog
 import tempfile
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import nas_ai_config as ai_config
 from nas_common import CommandResult, parse_systemd_show, run_command
@@ -1284,6 +1285,7 @@ SETUP_SOCKET_TIMEOUT_SECONDS = 30.0
 # Capability lifecycle bounds (A05): 30-minute inactivity, 24-hour absolute.
 SETUP_CAPABILITY_INACTIVITY_SECONDS = 30 * 60
 SETUP_CAPABILITY_LIFETIME_SECONDS = 24 * 60 * 60
+_SETUP_CAPABILITY_THREAD_LOCK = threading.RLock()
 
 
 class SetupApiError(ApiError):
@@ -1311,6 +1313,23 @@ def _capability_record_path(token: str) -> pathlib.Path:
     return SETUP_CAPABILITY_DIR / f"{digest}.json"
 
 
+@contextlib.contextmanager
+def _setup_capability_guard():
+    """Serialize capability state across both service threads and processes."""
+    with _SETUP_CAPABILITY_THREAD_LOCK:
+        SETUP_CAPABILITY_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(SETUP_CAPABILITY_DIR, 0o700)
+        lock_path = SETUP_CAPABILITY_DIR / ".lock"
+        flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+
 def _write_private_replace(path: pathlib.Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
@@ -1330,66 +1349,158 @@ def _write_private_replace(path: pathlib.Path, content: str) -> None:
     os.chmod(path, 0o600)
 
 
-def issue_setup_capability(job_id: str, *, now: float | None = None) -> str:
-    """Mint a header capability for a setup job; only its hash is persisted."""
-    moment = now if now is not None else _setup_now()
+def _issue_setup_capability_record(record: dict[str, Any]) -> str:
     token = secrets.token_hex(24)
-    record = {"schemaVersion": 1, "jobId": job_id, "issuedAt": moment, "lastUsedAt": moment}
     _write_private_replace(_capability_record_path(token), json.dumps(record, sort_keys=True) + "\n")
     return token
 
 
-def lookup_setup_capability(token: str, *, now: float | None = None) -> str | None:
-    """Resolve a capability to its job, refreshing inactivity, or revoke it."""
+def issue_setup_capability(job_id: str, *, now: float | None = None) -> str:
+    """Mint a header capability for one setup job; only its hash is persisted."""
+    if re.fullmatch(r"[0-9a-f]{24}", job_id) is None:
+        raise ApiError("Invalid first-start job identifier")
+    moment = now if now is not None else _setup_now()
+    record = {
+        "schemaVersion": 2,
+        "scope": "job-poll-reboot",
+        "jobId": job_id,
+        "issuedAt": moment,
+        "lastUsedAt": moment,
+    }
+    with _setup_capability_guard():
+        return _issue_setup_capability_record(record)
+
+
+def _completed_setup_identity() -> tuple[str, int] | None:
+    try:
+        state = json.loads(SETUP_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(state, dict) or state.get("status") not in {"complete", "complete-unverified"}:
+        return None
+    plan_digest = state.get("planDigest")
+    completed_at = state.get("completedAt")
+    if (
+        not isinstance(plan_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", plan_digest) is None
+        or isinstance(completed_at, bool)
+        or not isinstance(completed_at, int)
+    ):
+        return None
+    return plan_digest, completed_at
+
+
+def issue_completed_setup_capability(status: dict[str, Any], *, now: float | None = None) -> str:
+    """Mint reboot-only authority bound to the current durable completed plan."""
+    identity = _completed_setup_identity()
+    if (
+        status.get("status") not in {"complete", "complete-unverified"}
+        or identity is None
+        or status.get("planDigest") != identity[0]
+        or status.get("completedAt") != identity[1]
+    ):
+        raise ApiError("Completed setup state no longer matches the current setup plan")
+    moment = now if now is not None else _setup_now()
+    record = {
+        "schemaVersion": 2,
+        "scope": "completed-reboot",
+        "planDigest": identity[0],
+        "completedAt": identity[1],
+        "issuedAt": moment,
+        "lastUsedAt": moment,
+    }
+    with _setup_capability_guard():
+        return _issue_setup_capability_record(record)
+
+
+def _unlink_capability(path: pathlib.Path) -> None:
+    with contextlib.suppress(OSError):
+        path.unlink()
+
+
+def _lookup_setup_capability_record(
+    token: str, *, scopes: frozenset[str], now: float | None = None
+) -> dict[str, Any] | None:
     if not isinstance(token, str) or SETUP_CAPABILITY_RE.fullmatch(token) is None:
         return None
     moment = now if now is not None else _setup_now()
     path = _capability_record_path(token)
-    try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(record, dict) or record.get("schemaVersion") != 1:
-        with contextlib.suppress(OSError):
-            path.unlink()
-        return None
-    job_id = record.get("jobId")
-    issued_at = record.get("issuedAt")
-    used_at = record.get("lastUsedAt")
-    if (
-        not isinstance(job_id, str)
-        or re.fullmatch(r"[0-9a-f]{24}", job_id) is None
-        or not isinstance(issued_at, (int, float))
-        or not isinstance(used_at, (int, float))
-    ):
-        with contextlib.suppress(OSError):
-            path.unlink()
-        return None
-    if moment - issued_at > SETUP_CAPABILITY_LIFETIME_SECONDS or moment - used_at > SETUP_CAPABILITY_INACTIVITY_SECONDS:
-        with contextlib.suppress(OSError):
-            path.unlink()
-        return None
-    try:
-        first_start_job_status(job_id)
-    except ApiError:
-        with contextlib.suppress(OSError):
-            path.unlink()
-        return None
-    record["lastUsedAt"] = moment
-    try:
-        _write_private_replace(path, json.dumps(record, sort_keys=True) + "\n")
-    except OSError:
-        return None
-    return job_id
+    with _setup_capability_guard():
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(record, dict) or record.get("schemaVersion") not in {1, 2}:
+            _unlink_capability(path)
+            return None
+        scope = record.get("scope", "job-poll-reboot")
+        issued_at = record.get("issuedAt")
+        used_at = record.get("lastUsedAt")
+        if (
+            scope not in scopes
+            or isinstance(issued_at, bool)
+            or not isinstance(issued_at, (int, float))
+            or isinstance(used_at, bool)
+            or not isinstance(used_at, (int, float))
+            or moment - issued_at > SETUP_CAPABILITY_LIFETIME_SECONDS
+            or moment - used_at > SETUP_CAPABILITY_INACTIVITY_SECONDS
+        ):
+            if scope in scopes:
+                _unlink_capability(path)
+            return None
+        if scope == "job-poll-reboot":
+            job_id = record.get("jobId")
+            if not isinstance(job_id, str) or re.fullmatch(r"[0-9a-f]{24}", job_id) is None:
+                _unlink_capability(path)
+                return None
+            try:
+                job_status = first_start_job_status(job_id)
+            except ApiError:
+                _unlink_capability(path)
+                return None
+            if job_status.get("status") not in {
+                "pending",
+                "submitted",
+                "running",
+                "complete",
+                "complete-unverified",
+                "failed",
+            }:
+                _unlink_capability(path)
+                return None
+        elif scope == "completed-reboot":
+            identity = _completed_setup_identity()
+            if identity is None or record.get("planDigest") != identity[0] or record.get("completedAt") != identity[1]:
+                _unlink_capability(path)
+                return None
+        else:
+            _unlink_capability(path)
+            return None
+        record["lastUsedAt"] = moment
+        try:
+            _write_private_replace(path, json.dumps(record, sort_keys=True) + "\n")
+        except OSError:
+            return None
+        return record
+
+
+def lookup_setup_capability(token: str, *, now: float | None = None) -> str | None:
+    """Resolve a capability to its job, refreshing inactivity, or revoke it."""
+    record = _lookup_setup_capability_record(token, scopes=frozenset({"job-poll-reboot"}), now=now)
+    return str(record["jobId"]) if record is not None else None
+
+
+def lookup_completed_setup_capability(token: str, *, now: float | None = None) -> bool:
+    return _lookup_setup_capability_record(token, scopes=frozenset({"completed-reboot"}), now=now) is not None
 
 
 def revoke_setup_capability(token: str) -> None:
     if isinstance(token, str) and SETUP_CAPABILITY_RE.fullmatch(token) is not None:
-        with contextlib.suppress(OSError):
-            _capability_record_path(token).unlink()
+        with _setup_capability_guard():
+            _unlink_capability(_capability_record_path(token))
 
 
-def _revoke_matching_capabilities(job_id: str | None) -> int:
+def _revoke_matching_capabilities_unlocked(job_id: str | None) -> int:
     revoked = 0
     try:
         records = list(SETUP_CAPABILITY_DIR.glob("*.json"))
@@ -1408,11 +1519,37 @@ def _revoke_matching_capabilities(job_id: str | None) -> int:
 
 
 def revoke_job_capabilities(job_id: str) -> int:
-    return _revoke_matching_capabilities(job_id)
+    with _setup_capability_guard():
+        return _revoke_matching_capabilities_unlocked(job_id)
 
 
 def revoke_all_setup_capabilities() -> int:
-    return _revoke_matching_capabilities(None)
+    with _setup_capability_guard():
+        return _revoke_matching_capabilities_unlocked(None)
+
+
+def refresh_setup_capability(job_id: str, status: dict[str, Any], *, now: float | None = None) -> str:
+    """Atomically revoke prior job tokens and issue their replacement."""
+    moment = now if now is not None else _setup_now()
+    record = {
+        "schemaVersion": 2,
+        "scope": "job-poll-reboot",
+        "jobId": job_id,
+        "issuedAt": moment,
+        "lastUsedAt": moment,
+    }
+    if status.get("status") not in {
+        "pending",
+        "submitted",
+        "running",
+        "complete",
+        "complete-unverified",
+        "failed",
+    }:
+        raise ApiError("First-start job state cannot be authorized")
+    with _setup_capability_guard():
+        _revoke_matching_capabilities_unlocked(job_id)
+        return _issue_setup_capability_record(record)
 
 
 def record_active_setup_job(job_id: str) -> None:
@@ -1501,7 +1638,7 @@ class SetupApiUnixServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
     def __init__(self, socket_path: str, handler: Any) -> None:
         self._connection_gate = threading.Semaphore(SETUP_MAX_CONNECTIONS)
-        super().__init__(socket_path, handler)
+        super().__init__(cast(Any, socket_path), handler)
 
     def get_request(self) -> tuple[socket.socket, Any]:
         request, client_address = super().get_request()
@@ -1529,9 +1666,17 @@ class SetupApiUnixServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
             raise
 
     def process_request_thread(self, request: socket.socket, client_address: Any) -> None:
+        def expire_request() -> None:
+            with contextlib.suppress(OSError):
+                request.shutdown(socket.SHUT_RDWR)
+
+        deadline = threading.Timer(SETUP_SOCKET_TIMEOUT_SECONDS, expire_request)
+        deadline.daemon = True
+        deadline.start()
         try:
             super().process_request_thread(request, client_address)
         finally:
+            deadline.cancel()
             self._connection_gate.release()
 
 
@@ -1553,8 +1698,11 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
     def _api_error(self, exc: Exception) -> None:
         self._send_json(getattr(exc, "status", 400), {"error": str(exc)})
@@ -1597,6 +1745,15 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
             raise SetupApiError("Setup capability is missing, invalid, or expired", status=401)
         return job_id
 
+    def _authorize_reboot(self) -> str | None:
+        token = self.headers.get(SETUP_CAPABILITY_HEADER) or ""
+        if lookup_completed_setup_capability(token):
+            return None
+        job_id = lookup_setup_capability(token)
+        if job_id is None:
+            raise SetupApiError("Setup capability is missing, invalid, or expired", status=401)
+        return job_id
+
     def do_GET(self) -> None:  # noqa: N802 - http.server naming
         try:
             self._read_bounded_json()
@@ -1619,12 +1776,24 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                     revoke_all_setup_capabilities()
                     record_active_setup_job(result["jobId"])
                     result = {**result, "capability": issue_setup_capability(result["jobId"])}
+                elif result.get("status") in {"complete", "complete-unverified"}:
+                    revoke_all_setup_capabilities()
+                    clear_active_setup_job()
+                    result = {**result, "capability": issue_completed_setup_capability(result)}
                 self._send_json(200, result)
                 return
             if self.path == "/setup/api/first-start/resume":
                 job_id = read_active_setup_job()
                 if job_id is None:
-                    self._send_json(404, {"error": "No active setup job"})
+                    try:
+                        status = first_start_status()
+                    except (ApiError, OSError, ValueError, ai_config.AiConfigError):
+                        status = {}
+                    if status.get("status") in {"complete", "complete-unverified"}:
+                        revoke_all_setup_capabilities()
+                        self._send_json(200, {**status, "capability": issue_completed_setup_capability(status)})
+                        return
+                    self._send_json(404, {"error": "No resumable setup state"})
                     return
                 try:
                     status = first_start_job_status(job_id)
@@ -1637,7 +1806,16 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, {**status, "capability": issue_setup_capability(job_id)})
                 return
             if self.path == "/setup/api/reboot":
-                result = reboot_after_first_start({"jobId": self._authorized_job()})
+                job_id = self._authorize_reboot()
+                if job_id is None:
+                    if not _setup_complete():
+                        raise SetupApiError("Completed setup state is no longer valid", status=401)
+                    completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
+                    if completed.returncode != 0:
+                        raise ApiError("Unable to schedule the reboot")
+                    result = {"rebooting": True}
+                else:
+                    result = reboot_after_first_start({"jobId": job_id})
                 revoke_all_setup_capabilities()
                 clear_active_setup_job()
                 self._send_json(200, result)

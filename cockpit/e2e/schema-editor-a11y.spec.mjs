@@ -86,7 +86,9 @@ test("optional-field pickers expose distinct accessible names and stay operable 
   await page.keyboard.press("Tab");
   await expect(addButton).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(addRow.getByRole("combobox", {name: "Add optional field at root.child"})).toHaveCount(0);
+  await expect(
+    addRow.getByRole("combobox", {name: "Add optional field at root.child"}),
+  ).toHaveCount(0);
   await expect(addRow).toHaveCount(0);
   await expect(page.locator("legend", {hasText: "optA"}).first()).toBeVisible();
 

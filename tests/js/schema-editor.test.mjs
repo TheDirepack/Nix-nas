@@ -66,7 +66,9 @@ async function renderEditor(value, customSchema) {
 }
 
 function optionalPickerLabels(html) {
-  return [...html.matchAll(/aria-label="([^"]*Add optional field[^"]*)"/g)].map((match) => match[1]);
+  return [...html.matchAll(/aria-label="([^"]*Add optional field[^"]*)"/g)].map(
+    (match) => match[1],
+  );
 }
 
 // A small schema with an optional leaf and a nested object that also has an
@@ -127,9 +129,17 @@ test("root and nested optional-field pickers expose unique path-derived names", 
   const {html} = await renderEditor({child: {req: "x"}}, NESTED_SCHEMA);
   const labels = optionalPickerLabels(html);
   assert.ok(labels.length >= 2, `expected root and nested pickers, found: ${labels.join(", ")}`);
-  assert.equal(new Set(labels).size, labels.length, `picker names must be distinct: ${labels.join(", ")}`);
+  assert.equal(
+    new Set(labels).size,
+    labels.length,
+    `picker names must be distinct: ${labels.join(", ")}`,
+  );
   for (const label of labels) {
-    assert.match(label, /^Add optional field at \S+/, `picker name must derive from its schema path: ${label}`);
+    assert.match(
+      label,
+      /^Add optional field at \S+/,
+      `picker name must derive from its schema path: ${label}`,
+    );
   }
   assert.ok(
     labels.some((label) => label === "Add optional field at root"),
@@ -147,18 +157,36 @@ test("canonical schema pickers carry stable accessible names", async () => {
   const {html} = await renderEditor({});
   const labels = optionalPickerLabels(html);
   assert.ok(labels.length >= 1, "canonical schema must render at least one optional-field picker");
-  assert.equal(new Set(labels).size, labels.length, `picker names must be distinct: ${labels.join(", ")}`);
+  assert.equal(
+    new Set(labels).size,
+    labels.length,
+    `picker names must be distinct: ${labels.join(", ")}`,
+  );
 });
 
 test("optional-field picker markup stays keyboard operable", async () => {
   const {html} = await renderEditor({child: {req: "x"}}, NESTED_SCHEMA);
-  const selects = [...html.matchAll(/<select\b[^>]*aria-label="([^"]*Add optional field[^"]*)"[^>]*>/g)];
+  const selects = [
+    ...html.matchAll(/<select\b[^>]*aria-label="([^"]*Add optional field[^"]*)"[^>]*>/g),
+  ];
   assert.ok(selects.length >= 2, "root and nested pickers must render as labelled selects");
   for (const [tag] of selects) {
     assert.doesNotMatch(tag, /\bdisabled\b/, "picker must be focusable, not disabled");
     assert.doesNotMatch(tag, /tabindex="-1"/, "picker must stay in the tab order");
   }
-  assert.match(html, /<option[^>]*value="optA"/, "nested picker must offer its absent optional field");
-  assert.match(html, /<option[^>]*value="optB"/, "root picker must offer its absent optional field");
-  assert.match(html, />Add field<\/span><\/button>/, "adding the focused field must stay a button away");
+  assert.match(
+    html,
+    /<option[^>]*value="optA"/,
+    "nested picker must offer its absent optional field",
+  );
+  assert.match(
+    html,
+    /<option[^>]*value="optB"/,
+    "root picker must offer its absent optional field",
+  );
+  assert.match(
+    html,
+    />Add field<\/span><\/button>/,
+    "adding the focused field must stay a button away",
+  );
 });

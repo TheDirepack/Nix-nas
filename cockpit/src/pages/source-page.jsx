@@ -19,9 +19,21 @@ import {revisionModel} from "../view-model.js";
 
 const READ_ONLY = ["status", "diff", "log"];
 const UPDATE_OPS = [
-  {operation: "preview", label: "Validate candidate", description: "Build without activation via nas-update"},
-  {operation: "sync", label: "Fetch approved update", description: "Fast-forward to upstream via nas-update --sync"},
-  {operation: "apply", label: "Apply validated candidate", description: "Test, health-check, and switch via nas-update --apply"},
+  {
+    operation: "preview",
+    label: "Validate candidate",
+    description: "Build without activation via nas-update",
+  },
+  {
+    operation: "sync",
+    label: "Fetch approved update",
+    description: "Fast-forward to upstream via nas-update --sync",
+  },
+  {
+    operation: "apply",
+    label: "Apply validated candidate",
+    description: "Test, health-check, and switch via nas-update --apply",
+  },
 ];
 
 export function SourcePage({data, mutate, busy}) {
@@ -81,13 +93,19 @@ export function SourcePage({data, mutate, busy}) {
           {manualRecovery?.status === "manual-recovery-required" ? (
             <Alert variant="danger" isInline title="Manual recovery required">
               <p>{manualRecovery.reason || "Automatic rollback was incomplete."}</p>
-              <p>Candidate: {manualRecovery.candidateCommit || "unknown"} · System: {manualRecovery.oldSystem || "unknown"}</p>
-              {manualRecovery.stateSnapshot ? <p>State snapshot: {manualRecovery.stateSnapshot}</p> : null}
+              <p>
+                Candidate: {manualRecovery.candidateCommit || "unknown"} · System:{" "}
+                {manualRecovery.oldSystem || "unknown"}
+              </p>
+              {manualRecovery.stateSnapshot ? (
+                <p>State snapshot: {manualRecovery.stateSnapshot}</p>
+              ) : null}
             </Alert>
           ) : null}
           {applianceBusy ? (
             <Alert variant="info" isInline title="Update in progress">
-              nas-update is running. Progress, health checks, and journal are available in system logs.
+              nas-update is running. Progress, health checks, and journal are available in system
+              logs.
               {busy ? <Spinner size="sm" aria-label="Update in progress" /> : null}
             </Alert>
           ) : null}
@@ -106,7 +124,10 @@ export function SourcePage({data, mutate, busy}) {
             ))}
           </div>
           <Title headingLevel="h3">Guarded deployment via nas-update</Title>
-          <p>Candidate preparation, health checks, state capture, rollback, and recovery evidence belong exclusively to nas-update.</p>
+          <p>
+            Candidate preparation, health checks, state capture, rollback, and recovery evidence
+            belong exclusively to nas-update.
+          </p>
           <div className="nas-actions nas-actions--wrap">
             {UPDATE_OPS.map(({operation, label}) => (
               <Button

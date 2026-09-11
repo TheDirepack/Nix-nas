@@ -107,6 +107,30 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             self.assertFalse((runtime / "current").exists())
             self.assertFalse((runtime / "effective.json").exists())
 
+    def test_all_compatibility_paths_are_validated_before_sealing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "nas-control"
+            root = runtime / "generations"
+            candidate = generation.allocate_generation(root, REVISION)
+            (candidate / "effective.json").write_text("{}\n", encoding="utf-8")
+            outside = pathlib.Path(tmp) / "outside"
+
+            with self.assertRaisesRegex(generation.GenerationError, "share the current-link parent"):
+                generation.publish_generation(
+                    candidate,
+                    expected_revision=REVISION,
+                    plan={"desiredRevision": REVISION},
+                    generation_root=root,
+                    current_link=runtime / "current",
+                    compatibility_paths={
+                        runtime / "effective.json": pathlib.PurePosixPath("effective.json"),
+                        outside / "plan.json": pathlib.PurePosixPath("plan.json"),
+                    },
+                )
+
+            self.assertEqual(0o700, stat.S_IMODE(candidate.stat().st_mode))
+            self.assertFalse((runtime / "effective.json").exists())
+
     def test_invalid_revision_is_rejected_before_directory_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp) / "generations"
@@ -119,8 +143,37 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             root = pathlib.Path(tmp) / "generations"
             candidate = generation.allocate_generation(root, REVISION)
             (candidate / "file").write_text("staged\n", encoding="utf-8")
-            generation.discard_generation(candidate)
+            generation.discard_generation(candidate, current_link=pathlib.Path(tmp) / "current")
             self.assertFalse(candidate.exists())
+
+    def test_discard_removes_a_sealed_candidate_that_is_not_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "nas-control"
+            root = runtime / "generations"
+            current = generation.allocate_generation(root, "b" * 40)
+            candidate = generation.allocate_generation(root, REVISION)
+            (candidate / "nested").mkdir()
+            (candidate / "nested" / "file").write_text("staged\n", encoding="utf-8")
+            generation._seal_tree(candidate)
+            (runtime / "current").symlink_to(os.path.relpath(current, runtime))
+
+            generation.discard_generation(candidate, current_link=runtime / "current")
+
+            self.assertFalse(candidate.exists(), "filesystem mode must not be treated as publication state")
+
+    def test_discard_categorically_refuses_current_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "nas-control"
+            root = runtime / "generations"
+            candidate = generation.allocate_generation(root, REVISION)
+            (candidate / "file").write_text("published\n", encoding="utf-8")
+            generation._seal_tree(candidate)
+            (runtime / "current").symlink_to(os.path.relpath(candidate, runtime))
+
+            with self.assertRaisesRegex(generation.GenerationError, "current generation"):
+                generation.discard_generation(candidate, current_link=runtime / "current")
+
+            self.assertTrue(candidate.is_dir())
 
     def test_generation_name_contract_accepts_full_allocator_range(self) -> None:
         for suffix in ("", "-2", "-9", "-10", "-19", "-100", "-999", "-1000", "-9999"):

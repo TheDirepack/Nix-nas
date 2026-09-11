@@ -550,6 +550,18 @@ def prepare(
     inventory = _load_json(inventory_path)
     if inventory.get("schemaVersion") != 1 or not isinstance(inventory.get("resources"), list):
         raise BackupRuntimeError("compiled V2 backup inventory has an unsupported schema")
+    if state_path.exists():
+        prior_state = _load_json(state_path)
+        prior_snapshots = prior_state.get("snapshots")
+        prior_native_dumps = prior_state.get("nativeDumps", [])
+        if (
+            prior_state.get("schemaVersion") != 1
+            or not isinstance(prior_snapshots, list)
+            or not isinstance(prior_native_dumps, list)
+        ):
+            raise BackupRuntimeError("V2 backup runtime state has an unsupported schema")
+        if prior_snapshots or prior_native_dumps:
+            raise BackupRuntimeError("V2 backup cleanup is required before preparing another backup")
     runtime_paths: list[str] = []
     snapshots: list[dict[str, str]] = []
     native_dumps: list[dict[str, str]] = []
@@ -645,6 +657,7 @@ def prepare(
             try:
                 _destroy_snapshot_best_effort(reference)
                 remaining_snapshots.remove(snapshot)
+                _persist_runtime_state(state_path, remaining_snapshots, remaining_dumps)
             except BackupRuntimeError as destroy_exc:
                 failures.append(str(destroy_exc))
         for entry in reversed(list(native_dumps)):
@@ -653,6 +666,7 @@ def prepare(
                 if isinstance(artifact_path, str):
                     _remove_staged_artifact(artifact_path)
                 remaining_dumps.remove(entry)
+                _persist_runtime_state(state_path, remaining_snapshots, remaining_dumps)
             except BackupRuntimeError as artifact_exc:
                 failures.append(f"artifact {entry.get('artifactPath')!r}: {artifact_exc}")
             except OSError as artifact_exc:  # pragma: no cover

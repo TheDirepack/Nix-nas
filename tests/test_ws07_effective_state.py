@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -14,7 +16,11 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 import nas_v2_control as control  # noqa: E402
+import nas_v2_apply as v2apply  # noqa: E402
 import nas_v2_editor as editor  # noqa: E402
+import nas_v2_spec as v2spec  # noqa: E402
+
+SCHEMA = ROOT / "schemas" / "managed-services-v3.schema.json"
 
 SPEC = importlib.util.spec_from_file_location("nas_cockpit_api_ws07", SERVICES / "nas_cockpit_api.py")  # noqa: E402
 assert SPEC and SPEC.loader
@@ -53,27 +59,14 @@ def valid_desired_text() -> str:
 
 
 def valid_effective_content(desired_text: str | None = None) -> dict:
-    # Minimal valid effective that matches desired above
-    return {
-        "schemaVersion": 3,
-        "services": {
-            "demo": {
-                "enabled": True,
-                "workload": {"kind": "daemon", "activation": "persistent"},
-                "runtime": {"type": "systemd", "unit": "demo.service"},
-                "managed": True,
-                "name": "Demo",
-            },
-            "backup": {
-                "enabled": True,
-                "workload": {"kind": "job", "schedules": [{"calendar": "daily"}]},
-                "runtime": {"type": "systemd", "unit": "backup.service"},
-                "managed": True,
-                "name": "Backup",
-            },
-        },
-        "derived": {"runtime": {"demo": {"ownerUnit": "demo.service"}, "backup": {"ownerUnit": "backup.service"}}},
-    }
+    text = desired_text or valid_desired_text()
+    desired_bytes = text.encode("utf-8")
+    effective = v2spec.compile_document(
+        v2spec.parse_yaml_text(text, source="<test>"),
+        v2spec.load_schema(SCHEMA),
+    )
+    effective["provenance"] = {"desiredSha256": hashlib.sha256(desired_bytes).hexdigest()}
+    return effective
 
 
 class Ws07EffectiveStateTests(unittest.TestCase):
@@ -114,7 +107,16 @@ class Ws07EffectiveStateTests(unittest.TestCase):
             desired.write_text(valid_desired_text(), encoding="utf-8")
             incomplete = root / "effective.json"
             incomplete.write_text(
-                json.dumps({"schemaVersion": 3, "services": {"demo": valid_effective_content()["services"]["demo"]}}),
+                json.dumps(
+                    {
+                        "schemaVersion": 3,
+                        "provenance": valid_effective_content()["provenance"],
+                        "services": {"demo": valid_effective_content()["services"]["demo"]},
+                        "derived": {
+                            "runtime": {"demo": {"ownerUnit": "demo.service", "type": "systemd", "managed": True}}
+                        },
+                    }
+                ),
                 encoding="utf-8",
             )
             status = editor.status(desired_path=desired, effective_path=incomplete)
@@ -129,10 +131,12 @@ class Ws07EffectiveStateTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schemaVersion": 3,
+                        "provenance": valid_effective_content()["provenance"],
                         "services": {
                             "demo": {"enabled": True},
                             "backup": valid_effective_content()["services"]["backup"],
                         },
+                        "derived": valid_effective_content()["derived"],
                     }
                 ),
                 encoding="utf-8",
@@ -141,25 +145,91 @@ class Ws07EffectiveStateTests(unittest.TestCase):
             by_id2 = {row["id"]: row for row in status2["services"]}
             self.assertFalse(by_id2["demo"]["effective"])
 
-    def test_stale_effective_cannot_produce_verified_badge(self) -> None:
+    def test_equal_mtime_revision_mismatch_cannot_produce_verified_badge(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             desired = root / "services.yaml"
             desired.write_text(valid_desired_text(), encoding="utf-8")
             stale = root / "effective.json"
-            # Write valid then modify desired to add a new service without updating effective
             stale.write_text(json.dumps(valid_effective_content()), encoding="utf-8")
-            # Now add new service to desired, making effective stale
-            desired.write_text(
-                valid_desired_text()
-                + "  extra:\n    name: Extra\n    workload:\n      kind: daemon\n    runtime:\n      type: systemd\n      unit: extra.service\n",
-                encoding="utf-8",
-            )
+            desired.write_text("# exact bytes changed\n" + valid_desired_text(), encoding="utf-8")
+            timestamp = 1_800_000_000
+            desired.touch()
+            stale.touch()
+            os.utime(desired, (timestamp, timestamp))
+            os.utime(stale, (timestamp, timestamp))
             status = editor.status(desired_path=desired, effective_path=stale)
             by_id = {row["id"]: row for row in status["services"]}
-            self.assertIn("extra", by_id)
-            self.assertFalse(by_id["extra"]["effective"])
-            self.assertIsNone(by_id["extra"]["effectiveMode"])
+            self.assertFalse(by_id["demo"]["effective"])
+            self.assertIsNone(by_id["demo"]["effectiveMode"])
+
+    def test_missing_provenance_rejects_otherwise_valid_effective(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = write_services_yaml(root / "services.yaml", valid_desired_text())
+            value = valid_effective_content()
+            del value["provenance"]
+            effective = root / "effective.json"
+            effective.write_text(json.dumps(value), encoding="utf-8")
+
+            result = editor.status(desired_path=desired, effective_path=effective)
+
+            self.assertTrue(all(not row["verified"] for row in result["services"]))
+            self.assertTrue(all(row["units"] == [] for row in result["services"]))
+
+    def test_forged_runtime_or_workload_is_not_admitted(self) -> None:
+        for field, forged in (
+            ("runtime", {"type": "systemd", "unit": "forged.service"}),
+            ("workload", {"kind": "job", "schedules": []}),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                desired = write_services_yaml(root / "services.yaml", valid_desired_text())
+                value = valid_effective_content()
+                value["services"]["demo"][field] = forged
+                effective = root / "effective.json"
+                effective.write_text(json.dumps(value), encoding="utf-8")
+
+                result = editor.status(desired_path=desired, effective_path=effective)
+                demo = next(row for row in result["services"] if row["id"] == "demo")
+
+                self.assertFalse(demo["verified"])
+                self.assertEqual(demo["units"], [])
+
+    def test_missing_derived_runtime_fields_are_not_admitted(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = write_services_yaml(root / "services.yaml", valid_desired_text())
+            value = valid_effective_content()
+            del value["derived"]["runtime"]["demo"]["ownerUnit"]
+            effective = root / "effective.json"
+            effective.write_text(json.dumps(value), encoding="utf-8")
+
+            result = editor.status(desired_path=desired, effective_path=effective)
+            demo = next(row for row in result["services"] if row["id"] == "demo")
+
+            self.assertFalse(demo["verified"])
+            self.assertEqual(demo["units"], [])
+
+    def test_apply_publishes_exact_desired_provenance_in_effective_and_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = write_services_yaml(root / "services.yaml", valid_desired_text())
+            paths = v2apply.ApplyPaths(
+                desired=desired,
+                schema=SCHEMA,
+                platform=None,
+                effective=root / "effective.json",
+                plan=root / "plan.json",
+            )
+
+            v2apply.apply(paths)
+
+            expected = hashlib.sha256(desired.read_bytes()).hexdigest()
+            effective = json.loads(paths.effective.read_text(encoding="utf-8"))
+            plan = json.loads(paths.plan.read_text(encoding="utf-8"))
+            self.assertEqual(effective["provenance"], {"desiredSha256": expected})
+            self.assertEqual(plan["provenance"], effective["provenance"])
 
     def test_unverified_jobs_cannot_be_launched(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

@@ -28,7 +28,7 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
     def _fake_caddy_run(self, binary_has_import_check: bool = True):
         """Return a mock for subprocess.run that validates import context."""
 
-        def _run(args, capture_output=False, text=False, timeout=None, check=False):
+        def _run(args, capture_output=False, text=False, timeout=None, check=False, env=None):
             # args is [binary, "validate", "--config", wrapper, "--adapter", "caddyfile"]
             wrapper = pathlib.Path(args[3])
             content = wrapper.read_text(encoding="utf-8") if wrapper.is_file() else ""
@@ -63,6 +63,24 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, "Valid configuration", "")
 
         return _run
+
+    def test_validation_uses_isolated_writable_caddy_homes(self):
+        observed: dict[str, str] = {}
+
+        def inspect_environment(args, **kwargs):
+            environment = kwargs.get("env")
+            self.assertIsInstance(environment, dict)
+            assert isinstance(environment, dict)
+            for name in ("XDG_DATA_HOME", "XDG_CONFIG_HOME"):
+                path = pathlib.Path(environment[name])
+                self.assertTrue(path.is_dir())
+                observed[name] = path.name
+            return subprocess.CompletedProcess(args, 0, "Valid configuration", "")
+
+        with mock.patch.object(caddy.subprocess, "run", side_effect=inspect_environment):
+            caddy.validate_caddyfile("(nas_v2_managed_paths) {}\n", caddy_bin="/usr/bin/caddy")
+
+        self.assertEqual(observed, {"XDG_DATA_HOME": "data", "XDG_CONFIG_HOME": "config"})
 
     def test_invalid_path_snippet_is_rejected_before_publication(self):
         # Craft a generated file that contains invalid directive inside path snippet
@@ -124,11 +142,16 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
         # Must validate complete context, not mere existence
         self.assertIn("managed_is_valid", bootstrap_nix)
         self.assertIn("caddy validate", bootstrap_nix)
-        self.assertIn("import nas_v2_managed_paths", bootstrap_nix)
-        self.assertIn("tls internal", bootstrap_nix)
-        # Must start reconcile async
+        self.assertIn('fullCaddyImport = "import /etc/caddy/caddy_config"', bootstrap_nix)
+        # Establish bootstrap before synchronously reconciling; stale generated
+        # files from a previous revision must never authorize full selection.
         self.assertIn("nas-managed-services-reconcile.service", bootstrap_nix)
-        self.assertIn("start --no-block", bootstrap_nix)
+        self.assertNotIn("start --no-block", bootstrap_nix)
+        self.assertIn("generated_is_current", bootstrap_nix)
+        self.assertIn("refs/nas/applied", bootstrap_nix)
+        self.assertIn("desiredRevision", bootstrap_nix)
+        self.assertIn("flock", bootstrap_nix)
+        self.assertIn(".services.yaml.lock", bootstrap_nix)
         # Must fail closed: selects bootstrap when managed invalid
         self.assertIn("select_bootstrap", bootstrap_nix)
         self.assertIn("select_full", bootstrap_nix)
@@ -136,7 +159,33 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
         # Ensure no bare `[[ -f /run/nas-control/caddy-managed.conf ]]` without validation governs full selection
         selector_section = bootstrap_nix.split("nas-caddy-bootstrap-select")[1].split("systemd.services.caddy")[0]
         self.assertNotIn("if [[ -f /run/nas-control/caddy-managed.conf ]]; then", selector_section)
-        self.assertIn("if managed_is_valid", selector_section)
+        self.assertIn("if generated_is_current && managed_is_valid", selector_section)
+
+        bootstrap_selection = selector_section.index("select_bootstrap")
+        synchronous_reconcile = selector_section.index("systemctl start nas-managed-services-reconcile.service")
+        full_selection = selector_section.rindex("select_full")
+        self.assertLess(bootstrap_selection, synchronous_reconcile)
+        self.assertLess(synchronous_reconcile, full_selection)
+
+    def test_selector_confirms_fail_closed_reload_or_stops_caddy(self):
+        bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
+        selector = bootstrap_nix.split('pkgs.writeShellScript "nas-caddy-bootstrap-select"', 1)[1].split("'';", 1)[0]
+        self.assertIn("reload_bootstrap", selector)
+        reload_function = selector.split("reload_bootstrap()", 1)[1].split("generated_is_current()", 1)[0]
+        self.assertIn("caddy reload", selector)
+        self.assertIn("reload_caddy", reload_function)
+        self.assertIn("systemctl stop --no-block caddy.service", reload_function)
+        self.assertNotIn("systemctl reload caddy.service", selector)
+        self.assertIn("return 1", reload_function)
+
+    def test_full_selection_validates_the_actual_complete_import(self):
+        bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
+        selector = bootstrap_nix.split('pkgs.writeShellScript "nas-caddy-bootstrap-select"', 1)[1].split("'';", 1)[0]
+        validation = selector.split("managed_is_valid()", 1)[1].split("    reload_bootstrap\n", 1)[0]
+        self.assertIn("$fullImport", validation)
+        self.assertIn('caddy validate --config "$tmp" --adapter caddyfile', validation)
+        self.assertIn('XDG_DATA_HOME="$validation_root/data"', validation)
+        self.assertIn('XDG_CONFIG_HOME="$validation_root/config"', validation)
 
     def test_repeated_lock_transitions_execute_selection_each_time(self):
         bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
@@ -155,10 +204,11 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
 
     def test_locked_boot_never_selects_full_configuration(self):
         bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
-        # When ready or state.json missing, must select bootstrap regardless of managed file
         script = bootstrap_nix.split('pkgs.writeShellScript "nas-caddy-bootstrap-select"')[1]
-        # The else branch selects bootstrap
-        self.assertIn("else\n      select_bootstrap", script)
+        unlocked = script.index("if [[ -f ${secretRoot}/ready")
+        bootstrap_reload = script.rfind("reload_bootstrap", 0, unlocked)
+        self.assertGreaterEqual(bootstrap_reload, 0)
+        self.assertNotIn("select_full", script[bootstrap_reload:unlocked])
 
     def test_full_routes_disappear_after_relock_via_selector_execution(self):
         # Simulate selector execution across lock transitions with mocked systemctl/caddy

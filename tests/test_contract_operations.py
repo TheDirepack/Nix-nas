@@ -18,9 +18,10 @@ class ContractTests(unittest.TestCase):
         )[0]
         self.assertNotIn('before = [ "caddy.service" ];', reconcile)
 
-    def test_caddy_bootstrap_does_not_block_on_managed_services_reconciliation(self) -> None:
+    def test_caddy_bootstrap_waits_for_managed_services_reconciliation(self) -> None:
         bootstrap = text("modules/nas/config/caddy-bootstrap.nix")
-        self.assertIn("systemctl start --no-block nas-managed-services-reconcile.service || true", bootstrap)
+        self.assertIn("systemctl start nas-managed-services-reconcile.service", bootstrap)
+        self.assertNotIn("systemctl start --no-block nas-managed-services-reconcile.service", bootstrap)
 
     def test_zfs_replication_and_boot_recovery_roles_are_separate(self) -> None:
         options = text("modules/nas/options/storage.nix") + text("modules/nas/options/operations.nix")

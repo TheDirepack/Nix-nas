@@ -36,6 +36,57 @@ def _native_inventory(artifact: pathlib.Path) -> dict:
 
 
 class Ws03CleanupRecoveryTests(unittest.TestCase):
+    def test_second_prepare_preserves_retained_cleanup_obligations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            artifact.mkdir(parents=True)
+            residue = artifact / "partial.dump"
+            residue.write_bytes(b"retained-sensitive-bytes")
+            inventory_path = root / "inventory.json"
+            paths_path = root / "paths.txt"
+            state_path = root / "state.json"
+            inventory_path.write_text(json.dumps(_native_inventory(artifact)), encoding="utf-8")
+            retained_state = {
+                "schemaVersion": 1,
+                "snapshots": [{"dataset": "tank/data", "name": "retained-snapshot"}],
+                "nativeDumps": [
+                    {
+                        "source": "database",
+                        "preparationService": "database-dump",
+                        "preparationUnit": "nas-v2-database-dump.service",
+                        "artifactResource": "database-artifact",
+                        "artifactPath": str(artifact),
+                    }
+                ],
+            }
+            state_path.write_text(json.dumps(retained_state), encoding="utf-8")
+            paths_path.write_text("retained-runtime-path\n", encoding="utf-8")
+            original_run = backup._run
+            original_root = backup.BACKUP_STAGING_ROOT
+            backup.BACKUP_STAGING_ROOT = staging
+
+            def unexpected_run(argv: list[str]) -> str:
+                raise AssertionError(f"prepare must require cleanup before native work: {argv}")
+
+            backup._run = unexpected_run
+            try:
+                with self.assertRaisesRegex(backup.BackupRuntimeError, "cleanup.*required|required.*cleanup"):
+                    backup.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            finally:
+                backup._run = original_run
+                backup.BACKUP_STAGING_ROOT = original_root
+            self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), retained_state)
+            self.assertEqual(residue.read_bytes(), b"retained-sensitive-bytes")
+            self.assertEqual(paths_path.read_text(encoding="utf-8"), "retained-runtime-path\n")
+
     def test_partial_dump_failure_publishes_nothing_and_removes_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
@@ -313,6 +364,62 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             self.assertEqual(destroys.count("tank/b@snap-b"), 1)
             self.assertEqual(result["destroyed"], ["tank/a@snap-a"])
             self.assertFalse(state_path.exists())
+
+    def test_prepare_failure_cleanup_checkpoints_each_completed_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            inventory_path = root / "inventory.json"
+            paths_path = root / "paths.txt"
+            state_path = root / "state.json"
+            inventory_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "resources": [
+                            {"id": "a", "path": "/tank/a", "dataset": "tank/a", "consistency": "zfs-snapshot"},
+                            {"id": "b", "path": "/tank/b", "dataset": "tank/b", "consistency": "zfs-snapshot"},
+                            {"id": "c", "path": "/tank/c", "dataset": "tank/c", "consistency": "zfs-snapshot"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            original_run = backup._run
+            snapshots: list[str] = []
+
+            def fake_run(argv: list[str]) -> str:
+                if argv[:2] == ["/bin/zfs", "get"]:
+                    dataset = argv[-1]
+                    if dataset == "tank/c":
+                        raise backup.BackupRuntimeError("trigger preparation failure")
+                    return f"/{dataset}"
+                if argv[:2] == ["/bin/zfs", "snapshot"]:
+                    snapshots.append(argv[2])
+                    return ""
+                if argv[:2] == ["/bin/zfs", "destroy"]:
+                    if argv[2].startswith("tank/b@"):
+                        snapshots.remove(argv[2])
+                        return ""
+                    raise OSError("simulated interruption during preparation-failure cleanup")
+                raise AssertionError(f"unexpected command: {argv}")
+
+            backup._run = fake_run
+            try:
+                with self.assertRaisesRegex(OSError, "simulated interruption"):
+                    backup.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            finally:
+                backup._run = original_run
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(state["snapshots"]), 1)
+            self.assertEqual(state["snapshots"][0]["dataset"], "tank/a")
+            self.assertEqual(snapshots, [f"tank/a@{state['snapshots'][0]['name']}"])
+            self.assertFalse(paths_path.exists())
 
     def test_native_subprocess_fixture_partial_dump_is_cleaned(self):
         with tempfile.TemporaryDirectory() as tmp:

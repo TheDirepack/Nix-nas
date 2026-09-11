@@ -179,7 +179,7 @@ def main() -> int:
                     portal=generated_portal,
                 )
                 if result.get("desiredRevision") != revision:
-                    discard_generation(generation)
+                    discard_generation(generation, current_link=current_link)
                     continue
                 publish_generation(
                     generation,
@@ -192,7 +192,12 @@ def main() -> int:
                 published = True
             except Exception:
                 if not published:
-                    discard_generation(generation)
+                    try:
+                        discard_generation(generation, current_link=current_link)
+                    except GenerationError:
+                        # A failed durability sync may occur after the atomic
+                        # current switch. Never let cleanup delete that tree.
+                        pass
                 raise
             prune_generations(generation_root, current_link=current_link, retain=3)
             return 0

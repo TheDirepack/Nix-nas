@@ -142,10 +142,10 @@ which is consumed by the native NixOS test, the installed-QEMU wrapper, and the
 guest phase profiler. Add a phase or bounded wait there instead of changing one
 wrapper timeout independently.
 
-- locked boot: only static setup guidance is served while Authentik, Caddy,
-  Cockpit, CopyParty, and other protected services remain stopped; no browser
-  management endpoint is exposed while locked, and recovery remains console,
-  SSH, or hardware KVM with a local PAM administrator;
+- locked boot: the bootstrap Caddy configuration serves only static setup
+  guidance while Authentik, Cockpit, CopyParty, and other protected services
+  remain stopped; no browser management endpoint is exposed while locked, and
+  recovery remains console, SSH, or hardware KVM with a local PAM administrator;
 - a disposable `tank/nas` ZFS dataset mounted at `/tank`, including mount-source
   and filesystem-type checks;
 - disabled encryption and UPS command guards, including encryption/UPS guard behavior;

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import pathlib
+import re
+import shlex
 import stat
 import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -45,6 +48,34 @@ class GuardedApplyTests(unittest.TestCase):
         path.write_text("#!/bin/sh\nset -eu\n" + body, encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         return path
+
+    def test_nix_failure_handler_invocation_parses_unit_as_global_option(self) -> None:
+        source = (ROOT / "modules/nas/config/managed-services-transactions.nix").read_text(encoding="utf-8")
+        handler = source.split('pkgs.writeShellScript "nas-v2-rollback-with-guard"', 1)[1].split("guardUnitShell", 1)[0]
+        match = re.search(
+            r"nas_guarded_apply\.py\s+\\\n(?P<arguments>.*?)\s+--\s+\$\{rollbackToApplied\}",
+            handler,
+            re.DOTALL,
+        )
+        if match is None:
+            self.fail("rollback handler must invoke nas_guarded_apply.py")
+        rendered = match.group("arguments").replace("\\\n", " ")
+        rendered = rendered.replace("${lib.escapeShellArg guardStateDir}", "/tmp/guard-state")
+        rendered = rendered.replace(
+            '${lib.escapeShellArg "${pkgs.systemd}/bin/systemctl"}', "/run/current-system/sw/bin/systemctl"
+        )
+        rendered = rendered.replace('"$guard_unit"', "nas-test-rollback")
+        argv = shlex.split(rendered) + ["--", "/nix/store/rollback"]
+
+        with mock.patch.object(guarded, "fired", return_value={"ok": True, "state": guarded.COMPLETED}) as fired:
+            self.assertEqual(guarded.main(argv), 0)
+
+        fired.assert_called_once_with(
+            ["/nix/store/rollback"],
+            unit="nas-test-rollback",
+            systemctl="/run/current-system/sw/bin/systemctl",
+            state_dir="/tmp/guard-state",
+        )
 
     def test_arm_uses_real_systemd_run_with_transient_timer(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

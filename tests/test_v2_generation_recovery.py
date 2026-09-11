@@ -78,9 +78,9 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             discarded: list[str] = []
             real_discard = generation.discard_generation
 
-            def _spy_discard(path: pathlib.Path) -> None:
+            def _spy_discard(path: pathlib.Path, *, current_link: pathlib.Path) -> None:
                 discarded.append(path.name)
-                real_discard(path)
+                real_discard(path, current_link=current_link)
 
             def _flaky_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
                 raise generation.GenerationError("injected post-publication prune failure")
@@ -178,11 +178,62 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             self.assertEqual(generations / REV1, (runtime / "current").resolve(strict=True))
             self.assertEqual(EFFECTIVE_V1, (runtime / "effective.json").read_text(encoding="utf-8"))
 
+    def test_fsync_failure_after_sealing_removes_candidate_and_preserves_old_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "run"
+            repo = pathlib.Path(tmp) / "repo"
+            repo.mkdir()
+            old_current = _seed_current(runtime, REV1, EFFECTIVE_V1)
+
+            with (
+                mock.patch.dict(os.environ, _entry_env(runtime, repo), clear=False),
+                mock.patch.object(entry.sys, "argv", ["nas_v2_entry.py"]),
+                mock.patch.object(entry, "ensure_bootstrap_applied", return_value={}),
+                mock.patch.object(entry, "record_desired", return_value={"head": REV2}),
+                mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
+                mock.patch.object(generation, "_fsync_directory", side_effect=OSError("injected fsync failure")),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(1, entry.main())
+
+            self.assertFalse((runtime / "generations" / REV2).exists())
+            self.assertEqual(old_current, (runtime / "current").resolve(strict=True))
+            self.assertEqual(EFFECTIVE_V1, (runtime / "effective.json").read_text(encoding="utf-8"))
+
+    def test_compatibility_link_failure_after_sealing_removes_candidate_and_preserves_old_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp) / "run"
+            repo = pathlib.Path(tmp) / "repo"
+            repo.mkdir()
+            old_current = _seed_current(runtime, REV1, EFFECTIVE_V1)
+            real_replace = generation._replace_symlink
+
+            def _fail_plan_link(path: pathlib.Path, target: str) -> None:
+                if path == runtime / "plan.json":
+                    raise OSError("injected compatibility-link failure")
+                real_replace(path, target)
+
+            with (
+                mock.patch.dict(os.environ, _entry_env(runtime, repo), clear=False),
+                mock.patch.object(entry.sys, "argv", ["nas_v2_entry.py"]),
+                mock.patch.object(entry, "ensure_bootstrap_applied", return_value={}),
+                mock.patch.object(entry, "record_desired", return_value={"head": REV2}),
+                mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
+                mock.patch.object(generation, "_replace_symlink", side_effect=_fail_plan_link),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(1, entry.main())
+
+            self.assertFalse((runtime / "generations" / REV2).exists())
+            self.assertEqual(old_current, (runtime / "current").resolve(strict=True))
+            self.assertEqual(EFFECTIVE_V1, (runtime / "effective.json").read_text(encoding="utf-8"))
+
     def test_discard_never_removes_published_current_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = pathlib.Path(tmp) / "run"
             published = _seed_current(runtime, REV1, EFFECTIVE_V1)
-            generation.discard_generation(published)
+            with self.assertRaisesRegex(generation.GenerationError, "current generation"):
+                generation.discard_generation(published, current_link=runtime / "current")
             self.assertTrue(published.is_dir(), "cleanup must refuse a published current generation")
             self.assertEqual(published, (runtime / "current").resolve(strict=True))
             self.assertEqual(EFFECTIVE_V1, (runtime / "effective.json").read_text(encoding="utf-8"))

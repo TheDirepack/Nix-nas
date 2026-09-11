@@ -16,6 +16,68 @@ It is not an exhaustive review or a security, deployment, or hardware certificat
 - Authorized VM follow-up built and activated the disposable test guest. No production deployment or testing of the real installation occurred.
 - Source references use repository-relative paths and verified line ranges from the reviewed checkout; later edits can move them.
 
+## Remediation follow-up - 2026-09-09
+
+The overview, evidence table, finding details, and native follow-up below are the
+historical audit record for the reviewed baseline. They have not been rewritten
+as evidence for the remediation branch.
+
+Source-level corrections and regression coverage for A01-A22 are implemented on
+`audit/project-review-2026-09-07`, including its current uncommitted worktree.
+This is an implementation status, not closure or appliance qualification. There
+is no final fix revision to record while the remediation remains uncommitted.
+
+| Remediation area | Findings | Source status | Qualification still required |
+|---|---|---|---|
+| Firewall generation and replacement | A01-A03 | Corrected with regression coverage | Native firewalld activation, replacement/retry, and second-host IPv4/IPv6 allow/deny probes |
+| Setup trust, request bounds, capability lifecycle, and reconnect | A04-A06, A13 | Corrected with regression coverage | Installed proxy/socket boundary, abusive-client resource tests, browser reconnect, identity replacement, and reboot flow |
+| Backup cleanup and state import bounds | A07-A08, A15 | Corrected with regression coverage | Real native-dump/ZFS failure cleanup and installed-appliance restore drills |
+| Guarded updates and rollback | A09, A11 | Corrected with regression coverage | Native timer interleavings, failed candidate activation, health failure, rollback, and reachability checks |
+| Caddy lock selection and complete-context validation | A10, A20 | Corrected with regression coverage | Repeated installed-VM lock/unlock/relock, delayed/failed reconciliation, and route probes |
+| Effective state, parser, and generation lifecycle | A12, A16-A17, A19 | Corrected with regression coverage | Native activation/concurrency, filesystem-fault, and retention-stress qualification |
+| Frontend packaging, validation workflow, VM guidance, and accessibility | A14, A18, A21-A22 | Corrected with regression coverage | CI artifact handoff, browser accessibility, and installed-VM endpoint/locked-state checks |
+
+On 2026-09-09, the current remediation worktree ran:
+
+```bash
+env NAS_PREFLIGHT_SKIP_NIX=1 ./scripts/preflight.sh
+```
+
+All enabled source-level tiers completed successfully, including repository and
+documentation validation, Python behavior/contracts, JavaScript behavior,
+frontend bundle checks, Ruff, Pyright, and ShellCheck. The command reported
+`Preflight partial: 1 check(s) were not executed: nix`; therefore this is a
+source-preflight result only. Nix evaluation, native NixOS tests, QEMU suites,
+official-ISO install/reboot, and installed-appliance remediation drills remain
+outstanding. The earlier guest evidence below predates these corrections and
+does not qualify them.
+
+### Latest checkpoint - 2026-09-10
+
+The checkpoint also includes integration corrections found while advancing VM
+qualification. They support the audit acceptance work but do not add or close
+separate audit findings.
+
+The current uncommitted checkpoint passes source preflight, including 1,453
+Python tests and the JavaScript and static gates. A clean VM run also passed the
+first-run GUI, dedicated Authentik outpost credential, CopyParty activation,
+and account-operation phases. It later stopped in the Authentik phase at this
+harness assertion:
+
+```bash
+grep -q 'request_header -Remote-User' "$caddy_config"
+```
+
+The VM suite therefore remains incomplete. The failure is an assertion against
+the Caddy configuration path selected from `ExecStart`, after the preceding
+runtime checks passed; it does not by itself establish an Authentik runtime
+failure. Diagnose the active/imported configuration boundary and rerun from a
+clean VM before recording native closure.
+
+**Go/no-go:** do not close the findings for release or designate the result
+install-ready until the applicable native acceptance evidence above is recorded
+against a committed remediation revision and the release checklist passes.
+
 ## Evidence and validation limits
 
 Evidence labels distinguish what the audit actually establishes:

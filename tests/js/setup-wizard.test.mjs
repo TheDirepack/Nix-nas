@@ -123,6 +123,16 @@ test("setup keeps only actionable administrator, storage, and confirmation steps
   assert.match(confirm, /X-NAS-Setup-Capability/);
 });
 
+test("setup job polling tolerates the expected protected-service reconnect window", async () => {
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  assert.match(confirm, /pollingInterrupted/);
+  assert.match(confirm, /Reconnecting to setup progress/);
+  assert.match(confirm, /window\.setTimeout\(poll/);
+  assert.doesNotMatch(confirm, /Unable to refresh setup progress/);
+  assert.match(confirm, /TERMINAL_STATUSES/);
+  assert.match(confirm, /isTerminal && \(/);
+});
+
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
   const css = await wizard("src/wizard.css");
   assert.match(css, /min-height: 100dvh/);

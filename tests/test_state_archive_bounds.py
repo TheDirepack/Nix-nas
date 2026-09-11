@@ -121,9 +121,36 @@ class StateArchiveBoundTests(unittest.TestCase):
                 member.mtime = 0
                 member.pax_headers = {"comment": "x" * (256 * 1024)}
                 archive.addfile(member, io.BytesIO(b"y"))
-            with self.assertRaisesRegex(state.StateError, "metadata|header|too large"):
-                state.validate_bundle(bundle)
+            with mock.patch.object(
+                tarfile.TarInfo,
+                "_proc_pax",
+                side_effect=AssertionError("oversized metadata was materialized"),
+            ):
+                with self.assertRaisesRegex(state.StateError, "metadata|header|too large"):
+                    state.validate_bundle(bundle)
             self.assertFalse(any((pathlib.Path(self._tmp.name) / "runtime").glob("nas-state-validate.*")))
+
+    def test_gnu_long_name_rejected_before_payload_is_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            bundle = root / "gnu-long.tar"
+            with tarfile.open(bundle, "w", format=tarfile.GNU_FORMAT) as archive:
+                member = tarfile.TarInfo("payload/" + "a" * 5000)
+                member.size = 0
+                archive.addfile(member, io.BytesIO())
+
+            with mock.patch.object(
+                tarfile.TarInfo,
+                "_proc_gnulong",
+                side_effect=AssertionError("oversized GNU name was materialized"),
+            ):
+                with self.assertRaisesRegex(state.StateError, "metadata|name|too large"):
+                    state.validate_bundle(bundle)
+
+    def test_invalid_decoded_member_name_is_reported_as_state_error(self) -> None:
+        member = tarfile.TarInfo("payload/\udcff")
+        with self.assertRaisesRegex(state.StateError, "Unsafe bundle path"):
+            state.safe_member_name(member)
 
     def test_long_names_duplicates_unsupported_truncation_and_size_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -209,6 +236,7 @@ class StateArchiveBoundTests(unittest.TestCase):
             self.assertEqual(2, calls)
             self.assertFalse((destination / "payload" / "good-a").exists())
             self.assertFalse((destination / "payload" / "good-b").exists())
+            self.assertEqual([], list(destination.iterdir()))
 
     def test_bad_hmac_causes_no_restore_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

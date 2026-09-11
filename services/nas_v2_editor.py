@@ -17,7 +17,7 @@ import os
 import pathlib
 import tempfile
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, Iterator, TypeGuard
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
@@ -31,6 +31,7 @@ from nas_v2_spec import (
     compile_document,
     load_platform_capabilities,
     load_schema,
+    normalize,
     parse_yaml_text,
 )
 
@@ -217,11 +218,12 @@ def owner_unit(service_id: str, service: dict[str, Any]) -> str | None:
     return f"nas-v2-{service_id}.service"
 
 
-def _status_units(service_id: str, service: dict[str, Any]) -> list[dict[str, str]]:
-    units: list[dict[str, str]] = []
-    owner = owner_unit(service_id, service)
-    if owner is not None:
-        units.append({"unit": owner, "role": "owner"})
+def _status_units(
+    service_id: str,
+    service: dict[str, Any],
+    runtime_meta: dict[str, Any],
+) -> list[dict[str, str]]:
+    units = [{"unit": runtime_meta["ownerUnit"], "role": "owner"}]
     workload = service.get("workload")
     if isinstance(workload, dict) and workload.get("kind") == "job":
         schedules = workload.get("schedules", [])
@@ -231,8 +233,25 @@ def _status_units(service_id: str, service: dict[str, Any]) -> list[dict[str, st
     return units
 
 
-def _is_valid_effective_service(entry: Any) -> bool:
+def _contains_desired_value(effective: Any, desired: Any) -> bool:
+    if isinstance(desired, dict):
+        return isinstance(effective, dict) and all(
+            key in effective and _contains_desired_value(effective[key], value) for key, value in desired.items()
+        )
+    return effective == desired
+
+
+def _is_valid_effective_service(
+    entry: Any,
+    service_id: str,
+    desired: dict[str, Any],
+    runtime_meta: Any,
+) -> TypeGuard[dict[str, Any]]:
     if not isinstance(entry, dict):
+        return False
+    if not _contains_desired_value(entry, desired):
+        return False
+    if not isinstance(entry.get("enabled"), bool) or not isinstance(entry.get("managed"), bool):
         return False
     workload = entry.get("workload")
     if not isinstance(workload, dict):
@@ -240,13 +259,35 @@ def _is_valid_effective_service(entry: Any) -> bool:
     kind = workload.get("kind")
     if kind not in {"daemon", "job", "session"}:
         return False
-    runtime = entry.get("runtime")
-    if not isinstance(runtime, dict):
+    if kind == "daemon" and workload.get("activation") not in {"persistent", "on-demand"}:
         return False
-    return True
+    if workload.get("activation") == "on-demand" and (
+        not isinstance(workload.get("idleSeconds"), int) or workload["idleSeconds"] <= 0
+    ):
+        return False
+    if kind == "job" and not isinstance(workload.get("schedules"), list):
+        return False
+    runtime = entry.get("runtime")
+    runtime_type = runtime.get("type") if isinstance(runtime, dict) else None
+    if not isinstance(runtime_type, str) or not runtime_type:
+        return False
+    if not isinstance(runtime_meta, dict):
+        return False
+    expected_owner = owner_unit(service_id, entry)
+    return (
+        expected_owner is not None
+        and runtime_meta.get("ownerUnit") == expected_owner
+        and runtime_meta.get("type") == runtime_type
+        and runtime_meta.get("managed") is entry["managed"]
+    )
 
 
-def _load_effective_value(effective_path: pathlib.Path) -> dict[str, Any] | None:
+def _load_effective_value(
+    effective_path: pathlib.Path,
+    *,
+    desired_revision: str,
+    desired_services: dict[str, Any],
+) -> dict[str, Any] | None:
     try:
         raw = effective_path.read_text(encoding="utf-8")
     except OSError:
@@ -262,7 +303,15 @@ def _load_effective_value(effective_path: pathlib.Path) -> dict[str, Any] | None
     services = value.get("services")
     if not isinstance(services, dict):
         return None
-    # Derived runtime is optional for validity but helps distinguish complete documents
+    provenance = value.get("provenance")
+    if not isinstance(provenance, dict) or provenance.get("desiredSha256") != desired_revision:
+        return None
+    derived = value.get("derived")
+    runtime = derived.get("runtime") if isinstance(derived, dict) else None
+    if not isinstance(runtime, dict):
+        return None
+    if set(services) != set(desired_services) or set(runtime) != set(desired_services):
+        return None
     return value
 
 
@@ -272,28 +321,23 @@ def status(
     effective_path: pathlib.Path = DEFAULT_EFFECTIVE_PATH,
 ) -> dict[str, Any]:
     try:
-        desired = parse_yaml_text(_read_text(desired_path), source=str(desired_path))
+        desired_text = _read_text(desired_path)
+        desired = parse_yaml_text(desired_text, source=str(desired_path))
     except ManagedServicesV2Error as exc:
         raise ManagedServicesEditorError(str(exc)) from exc
-    effective_value = _load_effective_value(effective_path)
-    # Stale/revision-inconsistent check via mtime: effective older than desired is stale
-    is_stale = False
-    if effective_value is not None:
-        try:
-            eff_mtime = effective_path.stat().st_mtime
-            des_mtime = desired_path.stat().st_mtime
-            if eff_mtime < des_mtime - 0.001:
-                is_stale = True
-        except OSError:
-            pass
-    effective_services: dict[str, Any] = {}
-    if effective_value is not None and not is_stale:
-        candidate = effective_value.get("services")
-        if isinstance(candidate, dict):
-            effective_services = candidate
     services = desired.get("services")
     if not isinstance(services, dict):
         raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
+    normalized_services = normalize(desired).get("services")
+    if not isinstance(normalized_services, dict):
+        raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
+    effective_value = _load_effective_value(
+        effective_path,
+        desired_revision=_revision(desired_text),
+        desired_services=normalized_services,
+    )
+    effective_services = effective_value["services"] if effective_value is not None else {}
+    effective_runtime = effective_value["derived"]["runtime"] if effective_value is not None else {}
 
     rows: list[dict[str, Any]] = []
     for service_id in sorted(services):
@@ -301,10 +345,13 @@ def status(
         if not isinstance(service, dict):
             continue
         entry = effective_services.get(service_id)
-        verified = entry is not None and _is_valid_effective_service(entry) and not is_stale
-        # Incomplete: missing entry already unverified; stale already handled
-        if verified:
-            effective_service = entry  # type: ignore[assignment]
+        runtime_meta = effective_runtime.get(service_id)
+        expected_service = normalized_services.get(service_id)
+        if isinstance(expected_service, dict) and _is_valid_effective_service(
+            entry, service_id, expected_service, runtime_meta
+        ):
+            verified = True
+            effective_service = entry
             workload = effective_service.get("workload")
             effective_mode = _desired_mode(effective_service)
             effective_flag = effective_service.get("enabled", True) is not False
@@ -312,9 +359,10 @@ def status(
             runtime_available = True
             workload_kind = workload.get("kind") if isinstance(workload, dict) else None
             idle = workload.get("idleSeconds") if isinstance(workload, dict) else None
-            units = _status_units(service_id, effective_service)
+            assert isinstance(runtime_meta, dict)
+            units = _status_units(service_id, effective_service, runtime_meta)
         else:
-            # Desired remains visible; compiled availability is unknown/false
+            verified = False
             workload = service.get("workload")
             effective_mode = None
             effective_flag = False
@@ -322,7 +370,7 @@ def status(
             runtime_available = False
             workload_kind = workload.get("kind") if isinstance(workload, dict) else None
             idle = workload.get("idleSeconds") if isinstance(workload, dict) else None
-            units = _status_units(service_id, service)
+            units = []
         rows.append(
             {
                 "id": service_id,

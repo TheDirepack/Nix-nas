@@ -369,7 +369,7 @@ rollback() {
     echo "Deployment failed; reversing only deployment phases that were entered" >&2
     current_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
     if $persistent_switch_attempted || [[ -n "$old_profile" && "$current_profile" != "$old_profile" ]]; then
-      nixos-rebuild switch --rollback || rollback_errors+=("nixos generation rollback failed")
+      nixos-rebuild --rollback switch || rollback_errors+=("nixos generation rollback failed")
     fi
     if $runtime_activation_attempted; then
       "$old_system/bin/switch-to-configuration" switch || rollback_errors+=("old generation activation failed")
