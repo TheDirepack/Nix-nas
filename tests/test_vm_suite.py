@@ -100,6 +100,8 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn('tar --exclude=./.nas-source-selection.json -C "$source_stage" -cf - .', qemu)
         self.assertIn("git -C /var/lib/nas-test/repo config gc.auto 0", qemu)
         self.assertIn("nix develop path:/var/lib/nas-test/repo#test", qemu)
+        self.assertIn('if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then', qemu)
+        self.assertIn("GITHUB_ACTIONS=$github_actions", qemu)
         self.assertIn(
             "systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service",
             qemu,
