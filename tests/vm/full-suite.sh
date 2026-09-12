@@ -96,6 +96,7 @@ export NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES=1
 # the test and its assertions unchanged while giving the VM enough scheduling
 # headroom.
 export NAS_UNIT_TEST_TIMEOUT=300
+export NAS_UNIT_TEST_JOBS=2
 NAS_PREFLIGHT_REQUIRE_COMPLETE=1 ./scripts/preflight.sh
 
 if [[ "${NAS_FULL_SUITE_SKIP_FUZZ:-0}" == "1" ]]; then

@@ -220,7 +220,7 @@ def http_json(
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 time.sleep(_retry_delay(attempt, retry_after))
                 continue
-            raise SyncError(f"Authentik request failed with HTTP {exc.code} (reference {reference})") from exc
+            raise SyncError(f"Upstream request failed with HTTP {exc.code} (reference {reference})") from exc
         except urllib.error.URLError as exc:
             diagnostic(
                 f"nas-identity-sync: request {reference} unreachable "
@@ -231,9 +231,9 @@ def http_json(
             if attempt < max_attempts:
                 time.sleep(_retry_delay(attempt))
                 continue
-            raise SyncError(f"Unable to reach Authentik (reference {reference})") from exc
+            raise SyncError(f"Unable to reach upstream (reference {reference})") from exc
     else:  # pragma: no cover
-        raise SyncError(f"Unable to reach Authentik (reference {reference})") from last_error
+        raise SyncError(f"Unable to reach upstream (reference {reference})") from last_error
 
     if not payload:
         return None
@@ -241,7 +241,7 @@ def http_json(
         return json.loads(payload)
     except json.JSONDecodeError as exc:
         diagnostic(f"nas-identity-sync: request {reference} invalid-json endpoint={endpoint_label(url)}")
-        raise SyncError(f"Authentik returned invalid JSON (reference {reference})") from exc
+        raise SyncError(f"Upstream returned invalid JSON (reference {reference})") from exc
 
 
 def authentik_token(*, bootstrap: bool = False) -> str:

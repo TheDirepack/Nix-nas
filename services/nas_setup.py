@@ -29,6 +29,7 @@ import pathlib
 import pwd
 import re
 import secrets
+import socket
 import stat
 import subprocess
 import sys
@@ -234,6 +235,20 @@ def run_root_noninteractive(command: Sequence[str], **kwargs: Any) -> Completed:
             tuple(map(str, command)), "", "privileged status requires the configured local administrator", 1
         )
     return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
+
+
+def sync_syncthing_for_setup() -> dict[str, Any]:
+    run_root(["systemctl", "start", "syncthing.service"])
+    for attempt in range(60):
+        try:
+            connection = socket.create_connection(("127.0.0.1", 8384), timeout=2)
+            connection.close()
+            break
+        except OSError as exc:
+            if attempt == 59:
+                raise SetupError("Syncthing API did not become ready after service startup") from exc
+            time.sleep(1)
+    return json.loads(run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"])).stdout)
 
 
 def runtime_secrets_ready() -> bool:
@@ -1470,7 +1485,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 syncthing_result = run_setup_stage(
                     journal,
                     "syncthing",
-                    lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"])).stdout),
+                    sync_syncthing_for_setup,
                 )
             progress("applying Managed Services V2 lifecycle modes")
             service_result = run_setup_stage(

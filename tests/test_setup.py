@@ -57,6 +57,36 @@ class SetupApplicationRetirementTests(unittest.TestCase):
             forbidden.close()
 
 
+class SyncthingSetupTests(unittest.TestCase):
+    def test_sync_starts_syncthing_and_waits_for_its_api(self) -> None:
+        connection = mock.MagicMock()
+        identity_result = setup.Completed(("nas-identity-sync",), '{"folders": 1}', "")
+
+        def run_root(command, **_kwargs):
+            if command[:2] == ["systemctl", "start"]:
+                return setup.Completed(tuple(command), "", "")
+            return identity_result
+
+        with (
+            mock.patch.object(setup, "run_root", side_effect=run_root) as root,
+            mock.patch.object(setup, "current_coordination_token", return_value="a" * 32),
+            mock.patch.object(
+                setup.socket,
+                "create_connection",
+                side_effect=[ConnectionRefusedError(), connection],
+            ) as create_connection,
+            mock.patch.object(setup.time, "sleep") as sleep,
+        ):
+            result = setup.sync_syncthing_for_setup()
+
+        self.assertEqual(result, {"folders": 1})
+        self.assertEqual(root.call_args_list[0].args[0], ["systemctl", "start", "syncthing.service"])
+        self.assertIn("sync-syncthing", root.call_args_list[1].args[0])
+        self.assertEqual(create_connection.call_count, 2)
+        connection.close.assert_called_once_with()
+        sleep.assert_called_once()
+
+
 class BootstrapAccountRetirementTests(unittest.TestCase):
     def test_persistent_bootstrap_environment_is_scrubbed_before_restart(self) -> None:
         calls: list[tuple[str, list[str]]] = []
@@ -125,6 +155,7 @@ class SetupConfigTests(unittest.TestCase):
             self.assertNotIn('{"schemaVersion":1,"storage"', content, relative)
             self.assertNotIn('"groups": ["nas_admin", "nas_allow_', content, relative)
             self.assertNotIn('"groups": ["nas_users", "nas_allow_', content, relative)
+            self.assertNotIn("nas_allow_", content, relative)
 
     def test_account_config_accepts_only_base_identity_roles(self) -> None:
         value = setup_config.normalize_config(self.base())

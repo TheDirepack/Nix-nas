@@ -363,7 +363,10 @@ class SetupApiTransportTests(unittest.TestCase):
         client.settimeout(timeout)
         try:
             client.connect(socket_path)
-            client.sendall(payload)
+            try:
+                client.sendall(payload)
+            except (ConnectionResetError, BrokenPipeError):
+                return b""
             chunks = []
             try:
                 while True:

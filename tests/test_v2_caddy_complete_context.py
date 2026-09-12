@@ -186,6 +186,9 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
         self.assertIn('caddy validate --config "$tmp" --adapter caddyfile', validation)
         self.assertIn('XDG_DATA_HOME="$validation_root/data"', validation)
         self.assertIn('XDG_CONFIG_HOME="$validation_root/config"', validation)
+        self.assertIn("runuser -u ${config.services.caddy.user}", validation)
+        self.assertIn("-o ${config.services.caddy.user} -g ${config.services.caddy.group}", validation)
+        self.assertIn("config.services.caddy.logDir", bootstrap_nix)
 
     def test_repeated_lock_transitions_execute_selection_each_time(self):
         bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")

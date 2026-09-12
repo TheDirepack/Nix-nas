@@ -70,12 +70,22 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("ExecStartPre", copyparty)
         self.assertIn('BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];', copyparty)
 
+    def test_vaultwarden_uses_the_zfs_state_path_without_systemd_state_directory(self) -> None:
+        services = text("modules/nas/config/application-services.nix")
+        vaultwarden = services.split("systemd.services.vaultwarden", 1)[1].split("config.systemd.services", 1)[0]
+        self.assertIn('serviceConfig.StateDirectory = lib.mkForce "";', vaultwarden)
+        self.assertIn("serviceConfig.ReadWritePaths = [ vaultwardenDataDir ];", vaultwarden)
+        self.assertIn("vaultwardenDataDir", vaultwarden)
+
     def test_user_settings_are_authentik_owned(self) -> None:
         proxy = text("modules/nas/config/reverse-proxy.nix")
         blueprint = text("authentik/blueprints/nas-user-settings.yaml")
         account_tools = text("modules/nas/internal/account-tools.nix")
         self.assertIn("if/user/", proxy)
         self.assertIn("if/flow/nas-user-settings/", proxy)
+        settings_route = proxy.split("handle /settings/syncthing", 1)[1].split("redir /settings*", 1)[0]
+        self.assertIn(r"application\.syncthing\.access", settings_route)
+        self.assertNotIn(r"application\.syncthing\.admin", settings_route)
         self.assertIn("attributes.nasSyncthingDevices", blueprint)
         self.assertIn("user_creation_mode: never_create", blueprint)
         self.assertIn("nas-user-settings-validate-syncthing-devices", blueprint)

@@ -191,13 +191,17 @@ EOCF
       local validation_root tmp status
       validation_root="$(${pkgs.coreutils}/bin/mktemp -d)"
       tmp="$validation_root/Caddyfile"
-      if ! ${pkgs.coreutils}/bin/mkdir -p "$validation_root/data" "$validation_root/config" \
+      if ! ${pkgs.coreutils}/bin/install -d -m 0700 \
+        -o ${config.services.caddy.user} -g ${config.services.caddy.group} \
+        "$validation_root" "$validation_root/data" "$validation_root/config" \
         || ! ${pkgs.coreutils}/bin/printf '%s\n' "$fullImport" > "$tmp"; then
         ${pkgs.coreutils}/bin/rm -rf "$validation_root"
         return 1
       fi
       status=0
-      XDG_DATA_HOME="$validation_root/data" XDG_CONFIG_HOME="$validation_root/config" \
+      ${pkgs.util-linux}/bin/runuser -u ${config.services.caddy.user} -- \
+        ${pkgs.coreutils}/bin/env \
+        XDG_DATA_HOME="$validation_root/data" XDG_CONFIG_HOME="$validation_root/config" \
         ${caddyPackage}/bin/caddy validate --config "$tmp" --adapter caddyfile >/dev/null 2>&1 || status=$?
       ${pkgs.coreutils}/bin/rm -rf "$validation_root"
       return "$status"
@@ -263,7 +267,7 @@ in
       PrivateTmp = true;
       ProtectHome = true;
       ProtectSystem = "strict";
-      ReadWritePaths = [ "/run/nas-control" ];
+      ReadWritePaths = [ "/run/nas-control" config.services.caddy.logDir ];
       UMask = "0022";
     };
   };

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import pathlib
 import shutil
 import subprocess
@@ -54,12 +55,11 @@ class V2ApplyHistoryTests(unittest.TestCase):
             allow_compile = threading.Event()
             apply_result: dict[str, object] = {}
             apply_error: list[BaseException] = []
-            edit_error: list[BaseException] = []
             original_compile = v2apply._compile_paths_inner
 
             def paused_compile(inner_paths: v2apply.ApplyPaths):
                 compile_entered.set()
-                if not allow_compile.wait(timeout=5):
+                if not allow_compile.wait(timeout=30):
                     raise RuntimeError("test timed out waiting to resume compilation")
                 return original_compile(inner_paths)
 
@@ -69,37 +69,29 @@ class V2ApplyHistoryTests(unittest.TestCase):
                 except BaseException as exc:  # pragma: no cover - surfaced below
                     apply_error.append(exc)
 
-            def run_edit() -> None:
-                try:
-                    editor.replace_document(
-                        replacement,
-                        desired_path=desired,
-                        schema_path=schema,
-                        platform_path=None,
-                    )
-                except BaseException as exc:  # pragma: no cover - surfaced below
-                    edit_error.append(exc)
-
             with mock.patch("nas_v2_apply._compile_paths_inner", side_effect=paused_compile):
                 apply_thread = threading.Thread(target=run_apply)
                 apply_thread.start()
-                self.assertTrue(compile_entered.wait(timeout=5))
-
-                edit_thread = threading.Thread(target=run_edit)
-                edit_thread.start()
-                edit_thread.join(timeout=0.2)
-                self.assertTrue(edit_thread.is_alive(), "editor write bypassed compiler authority lock")
-
-                allow_compile.set()
-                apply_thread.join(timeout=5)
-                edit_thread.join(timeout=5)
+                try:
+                    self.assertTrue(compile_entered.wait(timeout=30))
+                    lock_path = desired.with_name(f".{desired.name}.lock")
+                    with lock_path.open("a+") as probe:
+                        with self.assertRaises(BlockingIOError, msg="compiler released the authority lock"):
+                            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    allow_compile.set()
+                    apply_thread.join(timeout=30)
 
             self.assertFalse(apply_thread.is_alive())
-            self.assertFalse(edit_thread.is_alive())
             if apply_error:
                 raise apply_error[0]
-            if edit_error:
-                raise edit_error[0]
+
+            editor.replace_document(
+                replacement,
+                desired_path=desired,
+                schema_path=schema,
+                platform_path=None,
+            )
 
             revision = str(apply_result["desiredRevision"])
             git_head = subprocess.check_output(

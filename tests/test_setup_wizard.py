@@ -62,6 +62,7 @@ class TestWizardRouting(unittest.TestCase):
 
     def setUp(self):
         self.bootstrap = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
+        self.full = (ROOT / "modules/nas/config/reverse-proxy.nix").read_text(encoding="utf-8")
 
     def test_bootstrap_imports_the_wizard_derivation(self):
         self.assertIn("firstRunWizardStatic", self.bootstrap)
@@ -83,6 +84,27 @@ class TestWizardRouting(unittest.TestCase):
         self.assertNotIn("caddyForwardAuth", self.bootstrap[status:reboot])
         self.assertIn("caddyForwardAuth", self.bootstrap[gated : gated + 180])
         self.assertNotIn("handle /setup/api/first-start/job/*", self.bootstrap)
+
+    def test_detached_job_capabilities_survive_full_config_transition(self):
+        status = self.full.index("handle /setup/api/first-start/job {")
+        reboot = self.full.index("handle /setup/api/reboot {")
+        fallback = self.full.index("# Authentik owns the appliance home page")
+        self.assertLess(status, fallback)
+        self.assertLess(reboot, fallback)
+        transition_routes = self.full[status:fallback]
+        self.assertEqual(transition_routes.count("reverse_proxy unix//run/nas-setup-api/setup.sock"), 2)
+        status_route = self.full[status:reboot]
+        reboot_end = self.full.index("\n      }", reboot) + len("\n      }")
+        reboot_route = self.full[reboot:reboot_end]
+        self.assertNotIn("caddyForwardAuth", status_route)
+        self.assertNotIn("caddyForwardAuth", reboot_route)
+        self.assertNotIn("handle /setup/api/*", self.full)
+        self.assertNotIn("handle /setup/*", self.full)
+
+    def test_full_proxy_redacts_setup_capabilities_from_access_logs(self):
+        self.assertIn("format filter {", self.full)
+        self.assertIn("request>headers>X-Nas-Setup-Capability delete", self.full)
+        self.assertIn("wrap json", self.full)
 
     def test_setup_api_reaches_only_the_permissioned_socket(self):
         self.assertNotIn("8980", self.bootstrap)

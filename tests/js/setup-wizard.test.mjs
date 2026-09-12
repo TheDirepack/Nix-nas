@@ -128,6 +128,7 @@ test("setup job polling tolerates the expected protected-service reconnect windo
   assert.match(confirm, /pollingInterrupted/);
   assert.match(confirm, /Reconnecting to setup progress/);
   assert.match(confirm, /window\.setTimeout\(poll/);
+  assert.doesNotMatch(confirm, /await resume\(false\)/);
   assert.doesNotMatch(confirm, /Unable to refresh setup progress/);
   assert.match(confirm, /TERMINAL_STATUSES/);
   assert.match(confirm, /isTerminal && \(/);

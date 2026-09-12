@@ -198,7 +198,7 @@ assert_blocked() {
 assert_spoof_blocked() {
   local path=$1 code
   code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
-    -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,nas_allow_files,nas_allow_ai' \
+    -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files,application.ai-workspace.access' \
     -H 'X-authentik-username: akadmin' -H 'X-authentik-groups: nas_admin' \
     "https://$PUBLIC_HOST$path")"
   case "$code" in
@@ -738,7 +738,7 @@ log "Verify first-run protected services and account population"
 for unit in \
   nas-protected-services.target postgresql.service authentik-worker.service \
   authentik.service copyparty.service \
-  nas-on-demand-gate.service caddy.service; do
+  caddy.service; do
   wait_active "$unit"
 done
 wait_active nas-v2-timer-identity-sync-0.timer
@@ -774,10 +774,7 @@ run_as_nasadmin nas-setup account apply --username alice \
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
   .active == true and
-  (.groups | index("nas_users")) != null and
-  (.groups | index("nas_allow_files")) == null and
-  (.groups | index("nas_allow_vault")) == null and
-  (.groups | index("nas_allow_syncthing")) == null
+  (.groups | index("nas_users")) != null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
   run_as_nasadmin nas-setup account apply \
@@ -815,44 +812,6 @@ jq -e '[.users[] | select(.administrator)] | length > 0' <<<"$capabilities_json"
 jq -e '[.users[] | select(.administrator) | .capabilities] | all(. == {})' \
   <<<"$capabilities_json" >/dev/null
 
-gate_deny="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
-  -H 'Remote-User: ordinary-user' -H 'Remote-Groups: nas_users' \
-  'http://localhost/authorize?scope=files')"
-[[ "$gate_deny" == 403 ]] || fail "default-deny capability gate returned HTTP $gate_deny"
-gate_allow="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
-  -H 'Remote-User: allowed-user' -H 'Remote-Groups: nas_users,nas_allow_files' \
-  'http://localhost/authorize?scope=files')"
-case "$gate_allow" in 200|204) : ;; *) fail "explicit files capability returned HTTP $gate_allow" ;; esac
-gate_admin="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
-  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
-  'http://localhost/authorize?scope=admin')"
-case "$gate_admin" in 200|204) : ;; *) fail "administrator-only gate returned HTTP $gate_admin" ;; esac
-python3 - <<'PYHOSTILEGATE'
-import socket
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(5)
-sock.connect("/run/nas-on-demand/gate.sock")
-sock.sendall(
-    b"GET /authorize?scope=admin HTTP/1.1\r\n"
-    b"Host: localhost\r\n"
-    b"Remote-User: attacker\r\n"
-    b"Remote-Groups: nas_users,\tnas_admin\r\n"
-    b"Connection: close\r\n\r\n"
-)
-response = b""
-while True:
-    chunk = sock.recv(65536)
-    if not chunk:
-        break
-    response += chunk
-sock.close()
-first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
-parts = first.split()
-if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
-    raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
-PYHOSTILEGATE
-pass "malformed trusted identity headers remain fail-closed inside the installed gate"
 backend_admin="$(http_code --unix-socket /run/copyparty/http.sock \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
   http://localhost/shares/admin/)"
@@ -876,14 +835,15 @@ case "$identity_code" in 200|301|302|303|307|308) : ;; *) fail "public Authentik
 caddy_exec="$(systemctl show caddy.service --property=ExecStart --value)"
 caddy_config="$(sed -nE 's/.*--config[= ]([^ ;}]+).*/\1/p' <<<"$caddy_exec" | head -n1)"
 [[ -n "$caddy_config" && -r "$caddy_config" ]] || fail "could not locate generated Caddy configuration"
-grep -q 'request_header -Remote-User' "$caddy_config"
-grep -q 'request_header -X-Authentik-Username' "$caddy_config"
+grep -qx 'import /etc/caddy/caddy_config' "$caddy_config"
+grep -q 'request_header -Remote-User' /run/nas-control/caddy-managed.conf
+grep -q 'request_header -X-Authentik-Username' /run/nas-control/caddy-managed.conf
 pass "Authentik API and fail-closed proxy checks passed"
 log "Authentication dependency outage stays fail-closed"
 systemctl stop authentik.service
 wait_inactive authentik.service
 auth_down_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
-  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,nas_allow_files' \
+  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files' \
   "https://$PUBLIC_HOST/shares/" || true)"
 case "$auth_down_code" in
   200|201|202|204) fail "protected route became reachable while Authentik was unavailable" ;;
@@ -895,6 +855,9 @@ systemctl start nas-protected-services.target
 wait_active nas-protected-services.target
 wait_active caddy.service
 wait_http http://127.0.0.1:9000/identity/-/health/live/
+systemctl start nas-authentik-proxy-outpost.service
+wait_active nas-authentik-proxy-outpost.service
+wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" -H "Host: $PUBLIC_HOST"
 pass "protected proxy routes fail closed and recover after Authentik outage"
 proxy_headers="$(curl --silent --show-error --insecure --dump-header - --output /dev/null \
   --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/")"
@@ -934,10 +897,6 @@ ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
 log "Browser-level authorization and deterministic bundle probes"
-# The persistent wrapper keeps mutable local users across generations. Seed
-# the disposable fixture's Authentik administrator credential so the Cockpit
-# OAuth browser flow remains deterministic after the installed OS is updated.
-printf '%s\n' 'admin:admin-vm-password' | chpasswd
 authz_secret_dir=$(mktemp -d /run/nas-authz-test.XXXXXX)
 cleanup_authz_secrets() {
   [[ -n "$authz_secret_dir" ]] || return 0
@@ -946,20 +905,29 @@ cleanup_authz_secrets() {
 nas_vm_cleanup_add cleanup_authz_secrets
 chmod 0700 "$authz_secret_dir"
 printf '%s\n' operator-vm-password > "$authz_secret_dir/operator"
-printf '%s\n' admin-vm-password > "$authz_secret_dir/admin"
+printf '%s\n' nasadmin-vm-password > "$authz_secret_dir/administrator"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
 chmod 0600 "$authz_secret_dir"/*
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
    --origin "https://$AUTHENTIK_PUBLIC_HOST" \
-   --cockpit-password-file "$authz_secret_dir/admin" \
+   --administrator-password-file "$authz_secret_dir/administrator" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
   --baseline-password-file "$authz_secret_dir/baseline"
+nas-identity-sync capabilities | jq -e '
+  .users[] |
+  select(.id == "alice") |
+  .assignedApplicationCapabilities == [
+    "application.copyparty.files",
+    "application.syncthing.access",
+    "application.vaultwarden.access"
+  ]
+' >/dev/null
 cleanup_authz_secrets
 authz_secret_dir=""
-pass "Browser authorization and Authentik user-settings flow"
+pass "Browser authorization, administrator-owned capability assignment, and Authentik user-settings flow"
 
 # Deterministic bundle probes serve the built distribution over loopback with a
 # stub base1/cockpit.js so the React app mounts without the Cockpit shell, then

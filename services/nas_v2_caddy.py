@@ -110,17 +110,16 @@ def _render_identity_auth(
         raise CaddyProjectionError("Unsafe Authentik upstream")
     if not authentik_path.startswith("/") or _ctl(authentik_path):
         raise CaddyProjectionError("Authentik path must be an absolute HTTP path")
-    prefix = authentik_path if authentik_path.endswith("/") else authentik_path + "/"
-    authentik_uri = prefix + "outpost.goauthentik.io/auth/caddy"
+    authentik_uri = "/outpost.goauthentik.io/auth/caddy"
     for header in IDENTITY_HEADERS:
         lines.append(f"{indent}request_header -{header}")
     lines.extend(
         [
             f"{indent}forward_auth {authentik_upstream} {{",
             f"{indent}  uri {_q(authentik_uri)}",
-            f"{indent}  header_up X-Original-URL {{http.request.scheme}}://{{http.request.host}}{{http.request.orig_uri}}",
+            f"{indent}  header_up X-Original-URL {{http.request.scheme}}://{{http.request.hostport}}{{http.request.orig_uri}}",
             f"{indent}  header_up X-Forwarded-Proto {{scheme}}",
-            f"{indent}  header_up X-Forwarded-Host {{host}}",
+            f"{indent}  header_up X-Forwarded-Host {{http.request.hostport}}",
             f"{indent}  header_up X-Forwarded-Uri {{uri}}",
             f"{indent}  copy_headers {' '.join(AUTHENTIK_COPY_HEADERS)}",
             f"{indent}}}",

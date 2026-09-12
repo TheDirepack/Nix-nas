@@ -1,4 +1,4 @@
-import cockpit from "cockpit";
+const cockpit = globalThis.cockpit;
 
 const SYSTEMD_NAME = "org.freedesktop.systemd1";
 const MANAGER_PATH = "/org/freedesktop/systemd1";

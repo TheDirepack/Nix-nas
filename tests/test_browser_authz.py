@@ -104,6 +104,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
     def test_cli_reads_all_password_files_before_first_browser_operation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
+            administrator = self.secret(root, "administrator", "administrator-secret")
             operator = self.secret(root, "operator", "operator-secret")
             alice = self.secret(root, "alice", "alice-secret")
             baseline = self.secret(root, "baseline", "baseline-secret")
@@ -114,8 +115,8 @@ class BrowserAuthzInputTests(unittest.TestCase):
                     "argv",
                     [
                         "authz.py",
-                        "--cockpit-password-file",
-                        str(operator),
+                        "--administrator-password-file",
+                        str(administrator),
                         "--operator-password-file",
                         str(operator),
                         "--alice-password-file",
@@ -132,7 +133,7 @@ class BrowserAuthzInputTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "first-browser-operation"):
                     self.authz.main()
-            first_browser.assert_called_once_with("https://nas-test.local", "admin", "operator-secret")
+            first_browser.assert_called_once_with("https://nas-test.local", "nasadmin", "administrator-secret")
 
     def test_browser_pins_the_vm_public_hostname_to_loopback(self) -> None:
         options = self.authz.webdriver.ChromeOptions()
@@ -315,6 +316,39 @@ class BrowserAuthzInputTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "expectedAllowed"):
                 self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
 
+    def test_allowed_route_rejects_launcher_fallback(self) -> None:
+        with mock.patch.object(
+            self.authz,
+            "fetch_status",
+            return_value={"status": 200, "url": "https://nas-test.local/identity/if/user/"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "expectedAllowed"):
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/shares/", True)])
+
+    def test_denied_route_rejects_new_authentication_flow(self) -> None:
+        with mock.patch.object(
+            self.authz,
+            "fetch_status",
+            return_value={"status": 200, "url": "https://nas-test.local/identity/if/flow/login/"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "expectedAllowed"):
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/console/", False)])
+
+    def test_personal_file_operations_write_read_and_delete_inside_own_volume(self) -> None:
+        responses = [
+            {"status": 201, "url": "https://nas-test.local/shares/users/alice/browser-e2e.txt", "body": ""},
+            {
+                "status": 200,
+                "url": "https://nas-test.local/shares/users/alice/browser-e2e.txt",
+                "body": "browser-e2e-alice",
+            },
+            {"status": 204, "url": "https://nas-test.local/shares/users/alice/browser-e2e.txt", "body": ""},
+        ]
+        with mock.patch.object(self.authz, "fetch_request", side_effect=responses) as request:
+            self.authz.verify_personal_file_operations(object(), "alice")
+        self.assertEqual([call.args[2] for call in request.call_args_list], ["PUT", "GET", "DELETE"])
+        self.assertTrue(all(call.args[1] == "/shares/users/alice/browser-e2e.txt" for call in request.call_args_list))
+
     def test_allowed_route_retries_copy_party_first_user_reload(self) -> None:
         with (
             mock.patch.object(
@@ -351,6 +385,25 @@ class BrowserAuthzInputTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, '"status": 503'):
                 self.authz.verify_routes(object(), [self.authz.RouteExpectation("/ai/", True)])
+
+    def test_administrator_assigns_application_capabilities_through_authentik_session(self) -> None:
+        driver = mock.MagicMock()
+        driver.execute_async_script.return_value = {"ok": True, "assigned": 3}
+        groups = [
+            "application.copyparty.files",
+            "application.syncthing.access",
+            "application.vaultwarden.access",
+        ]
+        with (
+            mock.patch.object(self.authz, "browser", return_value=driver),
+            mock.patch.object(self.authz, "login") as login,
+        ):
+            self.authz.assign_application_capabilities("https://nas-test.local", "nasadmin", "secret", "alice", groups)
+
+        login.assert_called_once_with(driver, "https://nas-test.local", "nasadmin", "secret", "/identity/if/user/")
+        self.assertIn("X-Authentik-Csrf", driver.execute_async_script.call_args.args[0])
+        self.assertEqual(driver.execute_async_script.call_args.args[1:], ("alice", groups))
+        driver.quit.assert_called_once_with()
 
 
 if __name__ == "__main__":

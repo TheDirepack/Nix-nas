@@ -24,6 +24,8 @@ let
     copypartyUserConfigDir
     lanHost
     nasCockpitApi
+    nasPythonApplication
+    nasSecrets
     postgresqlDataDir
     syncthingConfigDir
     syncthingDataDir
@@ -180,6 +182,7 @@ in
 
     systemd.services.nas-cockpit-sso = {
       description = "Cockpit web service behind the Caddy Authentik gate";
+      path = [ nasCockpitApi nasPythonApplication nasSecrets ];
       wantedBy = [ "multi-user.target" ];
       after = [ "nas-first-start.service" ];
       requires = [ "nas-first-start.service" ];
@@ -468,6 +471,8 @@ in
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
+      serviceConfig.StateDirectory = lib.mkForce "";
+      serviceConfig.ReadWritePaths = [ vaultwardenDataDir ];
     };
   };
 

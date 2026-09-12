@@ -14,6 +14,7 @@ GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
 FIRST_RUN_BROWSER = ROOT / "tests" / "browser" / "first-run-wizard.py"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
+QEMU_PROCESS = ROOT / "scripts" / "lib" / "nas-qemu-process.sh"
 VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
@@ -49,6 +50,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
     def test_wrapper_uses_the_existing_official_iso_lifecycle(self) -> None:
         wrapper = WRAPPER.read_text(encoding="utf-8")
         qemu = QEMU.read_text(encoding="utf-8")
+        qemu_process = QEMU_PROCESS.read_text(encoding="utf-8")
         final_browser = FINAL_BROWSER.read_text(encoding="utf-8")
         installer = (ROOT / "tests" / "vm" / "install-system.sh").read_text(encoding="utf-8")
         install_expect = (ROOT / "tests" / "vm" / "install.expect").read_text(encoding="utf-8")
@@ -70,6 +72,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("restore_persistent_baseline", qemu)
         self.assertIn("CACHE_MARKER_CONTENT=", qemu)
         self.assertIn("nas_qemu_pid_from_pidfile", qemu)
+        self.assertIn('executable="${executable% (deleted)}"', qemu_process)
         self.assertIn("QEMU source path is missing", qemu)
         self.assertIn("realpath", qemu)
         self.assertIn('qemu-img snapshot -c "$BASELINE_SNAPSHOT"', qemu)
@@ -176,6 +179,12 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
         self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
+
+    def test_vm_executes_the_canonical_guest_fixture_without_rewriting(self) -> None:
+        vm_common = VM_COMMON.read_text(encoding="utf-8")
+        self.assertIn("guestTestSource = builtins.readFile ../vm/guest-test.sh;", vm_common)
+        self.assertNotIn("guestTestRaw", vm_common)
+        self.assertNotIn("builtins.replaceStrings", vm_common)
 
     def test_persistent_controls_are_additive_to_existing_ci_modes(self) -> None:
         qemu = QEMU.read_text(encoding="utf-8")

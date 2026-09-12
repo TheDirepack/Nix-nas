@@ -103,7 +103,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
             mock.patch.object(sync.urllib.request, "urlopen", side_effect=error) as urlopen,
             mock.patch.object(sync.time, "sleep"),
         ):
-            with self.assertRaisesRegex(sync.SyncError, "Unable to reach Authentik"):
+            with self.assertRaisesRegex(sync.SyncError, "Unable to reach upstream"):
                 sync.http_json("https://example.test/api")
         self.assertEqual(urlopen.call_count, 3)
 

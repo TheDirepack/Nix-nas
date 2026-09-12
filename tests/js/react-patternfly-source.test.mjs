@@ -132,6 +132,15 @@ test("build follows the Starter Kit esbuild and Sass source-to-dist pattern", as
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("Cockpit runtime API uses the host script without a bare-module require", async () => {
+  const systemd = await source("src/systemd.js");
+  const build = await source("build.js");
+  const bundle = await source("dist/index.js");
+  assert.match(systemd, /globalThis\.cockpit/);
+  assert.doesNotMatch(build, /external:\s*\["cockpit"\]/);
+  assert.doesNotMatch(bundle, /Dynamic require of/);
+});
+
 test("manifest does not weaken Cockpit content security policy", async () => {
   const manifest = JSON.parse(await source("src/manifest.json"));
   assert.equal(manifest["content-security-policy"].includes("unsafe-inline"), false);
