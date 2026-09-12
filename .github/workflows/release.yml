@@ -117,7 +117,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: cockpit/package-lock.json
+          cache-dependency-path: |
+            cockpit/package-lock.json
+            setup/first-run-wizard/package-lock.json
       - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
@@ -168,6 +170,12 @@ jobs:
           node cockpit/build.js --check
           node scripts/validate-cockpit-jsx.cjs
           node --test tests/js/*.test.mjs
+      - name: Build and verify release wizard bundle
+        run: |
+          set -euo pipefail
+          npm --prefix setup/first-run-wizard ci --no-audit --no-fund
+          npm --prefix setup/first-run-wizard run build
+          node setup/first-run-wizard/build.js --check
       - name: Validate release metadata and automation contracts
         run: |
           set -euo pipefail

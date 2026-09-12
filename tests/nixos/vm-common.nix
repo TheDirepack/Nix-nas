@@ -13,70 +13,7 @@ let
   };
   authentikProxy = pkgs.authentik-outposts.proxy;
 
-  # The full-stack source harness still contains the final V1-era fixture
-  # vocabulary. Render its VM executable against the current V2 contracts:
-  # schema-v2 setup, base identity roles, canonical application capabilities,
-  # and no retired request-time gate. The browser/Caddy assertions below remain
-  # the request-time authorization coverage for those capabilities.
-  guestTestRaw = builtins.readFile ../vm/guest-test.sh;
-  guestTestSchemaV2 = builtins.replaceStrings
-    [
-      "\"schemaVersion\": 1"
-      "  \"features\": {},\n"
-      "\"groups\": [\"nas_admin\", \"nas_allow_files\", \"nas_allow_ai\", \"nas_allow_vault\", \"nas_allow_syncthing\"]"
-      "\"groups\": [\"nas_users\", \"nas_allow_files\", \"nas_allow_vault\", \"nas_allow_syncthing\"]"
-      "--group nas_allow_files"
-    ]
-    [
-      "\"schemaVersion\": 2"
-      ""
-      "\"groups\": [\"nas_admin\"]"
-      "\"groups\": [\"nas_users\"]"
-      "--group nas_users"
-    ]
-    guestTestRaw;
-  guestTestCanonicalGroups = builtins.replaceStrings
-    [ "nas_allow_files" "nas_allow_ai" "nas_allow_vault" "nas_allow_syncthing" ]
-    [
-      "application.copyparty.files"
-      "application.ai-workspace.access"
-      "application.vaultwarden.access"
-      "application.syncthing.access"
-    ]
-    guestTestSchemaV2;
-  guestTestWithoutGateUnit = builtins.replaceStrings
-    [ "  nas-on-demand-gate.service caddy.service; do" ]
-    [ "  caddy.service; do" ]
-    guestTestCanonicalGroups;
-  retiredGateStart = "gate_deny=\"$(http_code --unix-socket /run/nas-on-demand/gate.sock";
-  retiredGateEnd = "pass \"malformed trusted identity headers remain fail-closed inside the installed gate\"\n";
-  retiredGateStartParts = lib.splitString retiredGateStart guestTestWithoutGateUnit;
-  retiredGateTail =
-    if builtins.length retiredGateStartParts == 2
-    then builtins.elemAt retiredGateStartParts 1
-    else throw "ordinary VM fixture no longer contains the expected retired gate block start";
-  retiredGateEndParts = lib.splitString retiredGateEnd retiredGateTail;
-  guestTestWithoutRetiredGate =
-    if builtins.length retiredGateEndParts == 2
-    then (builtins.elemAt retiredGateStartParts 0) + (builtins.elemAt retiredGateEndParts 1)
-    else throw "ordinary VM fixture no longer contains the expected retired gate block end";
-  capabilityGrantMarker =
-    "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null\nnas-identity-sync status | jq -e '";
-  capabilityGrantBlock = builtins.concatStringsSep "\n" [
-    "  --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null"
-    "AUTHENTIK_BOOTSTRAP_TOKEN=\"$(< /run/nas-secrets/authentik/api-token)\""
-    "alice_pk=\"$(authentik_api GET 'core/users/?include_groups=true&page_size=100' | jq -er '.results[] | select(.username == \"alice\") | (.num_pk // .pk)')\""
-    "for capability_group in application.copyparty.files application.syncthing.access application.vaultwarden.access; do"
-    "  group_pk=\"$(authentik_api GET 'core/groups/?page_size=100' | jq -er --arg group \"$capability_group\" '.results[] | select(.name == $group) | .pk')\""
-    "  authentik_api POST \"core/groups/$group_pk/add_user/\" \"$(jq -cn --argjson pk \"$alice_pk\" '{pk: $pk}')\" >/dev/null"
-    "done"
-    "pass \"Alice application capabilities are assigned through canonical Authentik groups\""
-    "nas-identity-sync status | jq -e '"
-  ];
-  guestTestSource = builtins.replaceStrings
-    [ capabilityGrantMarker ]
-    [ capabilityGrantBlock ]
-    guestTestWithoutRetiredGate;
+  guestTestSource = builtins.readFile ../vm/guest-test.sh;
 
   guestTest = pkgs.writeShellApplication {
     name = "nas-vm-guest-test";
@@ -226,8 +163,6 @@ in
     autoUpdate.enable = lib.mkForce false;
     backup.enable = lib.mkForce false;
     virtualization.enable = lib.mkForce false;
-    # Non-core features are stripped from the appliance build for now
-    # (single revertible commit); flip these back to re-enable.
     tftp.enable = lib.mkForce false;
     alerting.enable = lib.mkForce true;
     observability = {
@@ -239,8 +174,8 @@ in
       enable = lib.mkForce false;
       modelDownloader.enable = lib.mkForce false;
     };
-    syncthing.enable = lib.mkForce false;
-    vaultwarden.enable = lib.mkForce false;
+    syncthing.enable = lib.mkForce true;
+    vaultwarden.enable = lib.mkForce true;
     power.ups.enable = lib.mkForce false;
   };
 

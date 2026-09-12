@@ -103,7 +103,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
             mock.patch.object(sync.urllib.request, "urlopen", side_effect=error) as urlopen,
             mock.patch.object(sync.time, "sleep"),
         ):
-            with self.assertRaisesRegex(sync.SyncError, "Unable to reach Authentik"):
+            with self.assertRaisesRegex(sync.SyncError, "Unable to reach upstream"):
                 sync.http_json("https://example.test/api")
         self.assertEqual(urlopen.call_count, 3)
 
@@ -200,19 +200,27 @@ class IdentitySyncCoverageTests(unittest.TestCase):
                 sync.ensure_groups("token")
 
     def test_provision_runtime_token_creates_service_account_binding_and_token(self) -> None:
-        calls: list[tuple[str, dict[str, object]]] = []
+        calls: list[tuple[str, str, dict[str, object]]] = []
+        outpost_pk = "embedded-outpost"
+        outpost_token_identifier = f"ak-outpost-{outpost_pk}-api"
 
         def listing(_token: str, path: str) -> list[dict[str, object]]:
             if path.startswith("core/users/"):
                 return []
             if path.startswith("rbac/roles/"):
                 return [{"pk": "role", "name": sync.AUTOMATION_ROLE}]
+            if path.startswith("outposts/instances/"):
+                return [{"pk": outpost_pk, "managed": "goauthentik.io/outposts/embedded"}]
+            if outpost_token_identifier in path:
+                return [{"pk": "outpost-token", "identifier": outpost_token_identifier}]
             if path.startswith("core/tokens/"):
                 return []
             raise AssertionError(path)
 
-        def request(_token: str, path: str, **kwargs: object) -> dict[str, object]:
-            calls.append((path, kwargs))
+        def request(request_token: str, path: str, **kwargs: object) -> dict[str, object]:
+            calls.append((request_token, path, kwargs))
+            if path == f"core/tokens/{outpost_token_identifier}/view_key/":
+                return {"key": "outpost-secret"}
             return {"user_pk": 42} if path == "core/users/service_account/" else {}
 
         with (
@@ -223,8 +231,38 @@ class IdentitySyncCoverageTests(unittest.TestCase):
             result = sync.provision_runtime_token("bootstrap")
         self.assertTrue(result["createdServiceAccount"])
         self.assertEqual(result["token"], "runtime-token")
-        self.assertTrue(any(path == "core/tokens/" for path, _ in calls))
-        self.assertTrue(any(path.endswith("/set_key/") for path, _ in calls))
+        self.assertEqual(result["outpostToken"], "outpost-secret")
+        self.assertTrue(any(path == "core/tokens/" for _, path, _ in calls))
+        self.assertTrue(any(path.endswith("/set_key/") for _, path, _ in calls))
+        self.assertIn(
+            ("bootstrap", f"core/tokens/{outpost_token_identifier}/view_key/", {}),
+            calls,
+        )
+        self.assertFalse(
+            any("assigned_by_roles" in path for _, path, _ in calls),
+            "object permission cannot bypass Authentik's token-owner queryset",
+        )
+
+    def test_provision_runtime_token_requires_one_embedded_outpost(self) -> None:
+        def listing(_token: str, path: str) -> list[dict[str, object]]:
+            if path.startswith("core/users/"):
+                return [{"pk": 42, "username": sync.AUTOMATION_USER}]
+            if path.startswith("rbac/roles/"):
+                return [{"pk": "role", "name": sync.AUTOMATION_ROLE}]
+            if path.startswith("outposts/instances/"):
+                return []
+            raise AssertionError(path)
+
+        with (
+            mock.patch.object(sync, "authentik_list", side_effect=listing),
+            mock.patch.object(sync, "authentik_request", return_value={}),
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "exactly one embedded outpost"):
+                sync.provision_runtime_token("bootstrap")
+
+    def test_automation_role_has_no_global_token_key_permission(self) -> None:
+        blueprint = (ROOT / "authentik/blueprints/nas-user-settings.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("authentik_core.view_token_key", blueprint)
 
     def test_provision_runtime_token_rejects_missing_role_or_bad_user_key(self) -> None:
         with (

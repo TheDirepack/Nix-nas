@@ -404,7 +404,31 @@ def _run(argv: list[str], timeout: int = 60) -> str:
     return result.stdout.strip()
 
 
-def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_bin: str) -> tuple[str, dict[str, str]]:
+_ABSENCE_MARKERS = ("does not exist", "no such", "not found", "no dataset", "dataset does not exist")
+
+
+def _zfs_snapshot_exists(zfs_bin: str, reference: str) -> bool:
+    try:
+        _run([zfs_bin, "list", reference])
+    except BackupRuntimeError as exc:
+        if any(marker in str(exc).lower() for marker in _ABSENCE_MARKERS):
+            return False
+        raise
+    return True
+
+
+def _persist_runtime_state(state_path: pathlib.Path, snapshots: list[Any], native_dumps: list[Any]) -> None:
+    state = {"schemaVersion": 1, "snapshots": list(snapshots), "nativeDumps": list(native_dumps)}
+    _write_atomic(state_path, (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"), 0o600)
+
+
+def _native_dump_path(
+    resource_id: str,
+    resource: dict[str, Any],
+    *,
+    systemctl_bin: str,
+    on_pending: Any = None,
+) -> tuple[str, dict[str, str]]:
     native_dump = resource.get("nativeDump")
     if not isinstance(native_dump, dict):
         raise BackupRuntimeError(f"backup resource {resource_id!r} is missing its compiled native-dump job mapping")
@@ -494,6 +518,15 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
                 raise BackupRuntimeError(f"unable to clean stale native-dump artifact {child!r}: {exc}") from exc
     except OSError as exc:
         raise BackupRuntimeError(f"unable to inspect native-dump artifact directory {artifact_path!r}: {exc}") from exc
+    pending: dict[str, str] = {
+        "source": resource_id,
+        "preparationService": preparation_service,
+        "preparationUnit": preparation_unit,
+        "artifactResource": artifact_resource,
+        "artifactPath": artifact_path,
+    }
+    if on_pending is not None:
+        on_pending(pending)
     _run([systemctl_bin, "restart", preparation_unit])
     try:
         produced = any(artifact.iterdir())
@@ -503,13 +536,7 @@ def _native_dump_path(resource_id: str, resource: dict[str, Any], *, systemctl_b
         raise BackupRuntimeError(
             f"native-dump preparation job {preparation_service!r} completed without producing data in {artifact_path!r}"
         )
-    return artifact_path, {
-        "source": resource_id,
-        "preparationService": preparation_service,
-        "preparationUnit": preparation_unit,
-        "artifactResource": artifact_resource,
-        "artifactPath": artifact_path,
-    }
+    return artifact_path, dict(pending)
 
 
 def prepare(
@@ -523,6 +550,18 @@ def prepare(
     inventory = _load_json(inventory_path)
     if inventory.get("schemaVersion") != 1 or not isinstance(inventory.get("resources"), list):
         raise BackupRuntimeError("compiled V2 backup inventory has an unsupported schema")
+    if state_path.exists():
+        prior_state = _load_json(state_path)
+        prior_snapshots = prior_state.get("snapshots")
+        prior_native_dumps = prior_state.get("nativeDumps", [])
+        if (
+            prior_state.get("schemaVersion") != 1
+            or not isinstance(prior_snapshots, list)
+            or not isinstance(prior_native_dumps, list)
+        ):
+            raise BackupRuntimeError("V2 backup runtime state has an unsupported schema")
+        if prior_snapshots or prior_native_dumps:
+            raise BackupRuntimeError("V2 backup cleanup is required before preparing another backup")
     runtime_paths: list[str] = []
     snapshots: list[dict[str, str]] = []
     native_dumps: list[dict[str, str]] = []
@@ -530,8 +569,25 @@ def prepare(
     dataset_mountpoints: dict[str, str] = {}
 
     def _persist_state() -> None:
-        state = {"schemaVersion": 1, "snapshots": list(snapshots), "nativeDumps": list(native_dumps)}
-        _write_atomic(state_path, (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"), 0o600)
+        _persist_runtime_state(state_path, snapshots, native_dumps)
+
+    def _track_native_pending(pending: dict[str, str]) -> None:
+        native_dumps.append(pending)
+        _persist_state()
+
+    def _destroy_snapshot_best_effort(reference: str) -> bool:
+        try:
+            _run([zfs_bin, "destroy", reference])
+        except BackupRuntimeError as destroy_exc:
+            try:
+                if not _zfs_snapshot_exists(zfs_bin, reference):
+                    return True
+            except BackupRuntimeError as probe_exc:
+                raise BackupRuntimeError(
+                    f"{reference}: {destroy_exc}; absence probe failed: {probe_exc}"
+                ) from destroy_exc
+            raise BackupRuntimeError(f"{reference}: {destroy_exc}") from destroy_exc
+        return True
 
     try:
         for resource in inventory["resources"]:
@@ -548,12 +604,16 @@ def prepare(
                 runtime_paths.append(path)
                 continue
             if consistency == "native-dump":
-                artifact_path, prepared = _native_dump_path(resource_id, resource, systemctl_bin=systemctl_bin)
+                artifact_path, prepared = _native_dump_path(
+                    resource_id, resource, systemctl_bin=systemctl_bin, on_pending=_track_native_pending
+                )
                 _runtime_safe_absolute_path(
                     artifact_path, label=f"backup resource {resource_id!r} native-dump artifactPath"
                 )
                 runtime_paths.append(artifact_path)
-                native_dumps.append(prepared)
+                # Pending entry was already persisted before the unit ran; refresh
+                # the tracked entry with the post-run result without duplicating it.
+                native_dumps[-1] = prepared
                 _persist_state()
                 continue
             if consistency != "zfs-snapshot":
@@ -574,11 +634,12 @@ def prepare(
             current = snapshots_by_dataset.get(dataset)
             if current is None:
                 name = f"nas-v2-restic-{time.time_ns()}-{os.getpid()}"
+                pending_snapshot = {"dataset": dataset, "name": name}
+                snapshots.append(pending_snapshot)
+                _persist_state()
                 _run([zfs_bin, "snapshot", f"{dataset}@{name}"])
                 snapshot_path = str(pathlib.PurePosixPath(path) / ".zfs" / "snapshot" / name)
-                snapshots.append({"dataset": dataset, "name": name})
                 snapshots_by_dataset[dataset] = (name, snapshot_path)
-                _persist_state()
             else:
                 _, snapshot_path = current
             runtime_paths.append(snapshot_path)
@@ -589,26 +650,34 @@ def prepare(
         return {"paths": unique_paths, "snapshots": snapshots, "nativeDumps": native_dumps}
     except Exception as exc:
         failures: list[str] = []
-        for snapshot in reversed(snapshots):
+        remaining_snapshots = list(snapshots)
+        remaining_dumps = list(native_dumps)
+        for snapshot in reversed(list(snapshots)):
+            reference = f"{snapshot['dataset']}@{snapshot['name']}"
             try:
-                _run([zfs_bin, "destroy", f"{snapshot['dataset']}@{snapshot['name']}"])
+                _destroy_snapshot_best_effort(reference)
+                remaining_snapshots.remove(snapshot)
+                _persist_runtime_state(state_path, remaining_snapshots, remaining_dumps)
             except BackupRuntimeError as destroy_exc:
-                failures.append(f"{snapshot['dataset']}@{snapshot['name']}: {destroy_exc}")
-        for entry in reversed(native_dumps):
+                failures.append(str(destroy_exc))
+        for entry in reversed(list(native_dumps)):
             try:
                 artifact_path = entry.get("artifactPath")
                 if isinstance(artifact_path, str):
                     _remove_staged_artifact(artifact_path)
+                remaining_dumps.remove(entry)
+                _persist_runtime_state(state_path, remaining_snapshots, remaining_dumps)
             except BackupRuntimeError as artifact_exc:
                 failures.append(f"artifact {entry.get('artifactPath')!r}: {artifact_exc}")
             except OSError as artifact_exc:  # pragma: no cover
                 failures.append(f"artifact {entry.get('artifactPath')!r}: {artifact_exc}")
         paths_path.unlink(missing_ok=True)
-        state_path.unlink(missing_ok=True)
         if failures:
+            _persist_runtime_state(state_path, remaining_snapshots, remaining_dumps)
             raise BackupRuntimeError(
                 f"backup preparation failed ({exc}); failed to clean snapshot(s)/artifact(s): {'; '.join(failures)}"
             ) from exc
+        state_path.unlink(missing_ok=True)
         raise
 
 
@@ -623,7 +692,9 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
         raise BackupRuntimeError("V2 backup runtime state has an unsupported schema")
     destroyed: list[str] = []
     failures: list[str] = []
-    for snapshot in reversed(snapshots):
+    outstanding_snapshots: list[Any] = list(snapshots)
+    outstanding_dumps: list[Any] = list(native_dumps)
+    for snapshot in reversed(list(snapshots)):
         if (
             not isinstance(snapshot, dict)
             or not isinstance(snapshot.get("dataset"), str)
@@ -635,19 +706,32 @@ def cleanup(*, state_path: pathlib.Path, paths_path: pathlib.Path, zfs_bin: str)
         try:
             _run([zfs_bin, "destroy", reference])
             destroyed.append(reference)
+            outstanding_snapshots.remove(snapshot)
+            _persist_runtime_state(state_path, outstanding_snapshots, outstanding_dumps)
         except BackupRuntimeError as exc:
-            failures.append(f"{reference}: {exc}")
+            try:
+                if not _zfs_snapshot_exists(zfs_bin, reference):
+                    destroyed.append(reference)
+                    outstanding_snapshots.remove(snapshot)
+                    _persist_runtime_state(state_path, outstanding_snapshots, outstanding_dumps)
+                else:
+                    failures.append(f"{reference}: {exc}")
+            except BackupRuntimeError as probe_exc:
+                failures.append(f"{reference}: {exc}; absence probe failed: {probe_exc}")
     # Clean native dump staged artifacts idempotently, rejecting escapes
-    for entry in reversed(native_dumps):
+    for entry in reversed(list(native_dumps)):
         if not isinstance(entry, dict) or not isinstance(entry.get("artifactPath"), str):
             failures.append("invalid native dump state entry")
             continue
         artifact_path = entry["artifactPath"]
         try:
             _remove_staged_artifact(artifact_path)
+            outstanding_dumps.remove(entry)
+            _persist_runtime_state(state_path, outstanding_snapshots, outstanding_dumps)
         except BackupRuntimeError as exc:
             failures.append(f"artifact {artifact_path!r}: {exc}")
     if failures:
+        _persist_runtime_state(state_path, outstanding_snapshots, outstanding_dumps)
         raise BackupRuntimeError("failed to clean V2 backup snapshot(s)/artifact(s): " + "; ".join(failures))
     state_path.unlink(missing_ok=True)
     paths_path.unlink(missing_ok=True)

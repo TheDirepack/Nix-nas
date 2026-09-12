@@ -189,7 +189,11 @@ def _set_link(
     projection_roots: tuple[pathlib.Path, ...],
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    current = _read_owned_link(target, projection_roots)
+    if target.is_symlink() and not target.exists():
+        target.unlink()
+        current = None
+    else:
+        current = _read_owned_link(target, projection_roots)
     if source is None:
         if current is not None:
             target.unlink()
@@ -272,6 +276,42 @@ def _state_link_keys(key: str, state: dict[str, Any]) -> set[str]:
     return set(value)
 
 
+def _discover_systemd_links(runtime_root: pathlib.Path) -> set[str]:
+    """Find links owned by V2 even if a killed reconcile missed its state write."""
+    discovered: set[str] = set()
+    try:
+        entries = list(runtime_root.iterdir())
+    except FileNotFoundError:
+        return discovered
+    except OSError as exc:
+        raise SystemdReconcileError(f"unable to inspect systemd runtime directory {runtime_root}: {exc}") from exc
+    for entry in entries:
+        if entry.is_symlink():
+            if entry.name.startswith("nas-v2-") and _UNIT.fullmatch(entry.name):
+                discovered.add(entry.name)
+            continue
+        if not entry.is_dir():
+            continue
+        relative = f"{entry.name}/50-nas-v2.conf"
+        if _DROPIN.fullmatch(relative) and (entry / "50-nas-v2.conf").is_symlink():
+            discovered.add(relative)
+    return discovered
+
+
+def _discover_quadlet_links(runtime_root: pathlib.Path) -> set[str]:
+    discovered: set[str] = set()
+    try:
+        entries = list(runtime_root.iterdir())
+    except FileNotFoundError:
+        return discovered
+    except OSError as exc:
+        raise SystemdReconcileError(f"unable to inspect Quadlet runtime directory {runtime_root}: {exc}") from exc
+    for entry in entries:
+        if entry.is_symlink() and entry.name.startswith("nas-v2-") and _QUADLET.fullmatch(entry.name):
+            discovered.add(entry.name)
+    return discovered
+
+
 def reconcile(
     *,
     manifest_path: pathlib.Path,
@@ -331,8 +371,10 @@ def reconcile(
     previous_quadlet_link_keys = _state_link_keys("quadletLinks", previous) if previous else set()
     current_links = {target: str(source) for target, source in sorted(links.items())}
     current_quadlet_links = {target: str(source) for target, source in sorted(quadlet_links.items())}
-    stale_links = previous_link_keys - set(links)
-    stale_quadlet_links = previous_quadlet_link_keys - set(quadlet_links)
+    stale_links = (previous_link_keys | _discover_systemd_links(systemd_runtime_dir)) - set(links)
+    stale_quadlet_links = (previous_quadlet_link_keys | _discover_quadlet_links(quadlet_runtime_dir)) - set(
+        quadlet_links
+    )
 
     fingerprints = manifest.get("fingerprints", {})
     if not isinstance(fingerprints, dict):
@@ -385,10 +427,14 @@ def reconcile(
     live_quadlet: dict[str, pathlib.Path | None] = {}
     for target_rel in sorted(systemd_targets):
         target_path, _ = _safe_target(systemd_runtime_dir, target_rel)
-        live_systemd[target_rel] = _read_owned_link(target_path, roots)
+        live_systemd[target_rel] = (
+            None if target_path.is_symlink() and not target_path.exists() else _read_owned_link(target_path, roots)
+        )
     for target_rel in sorted(quadlet_targets):
         target_path, _ = _safe_quadlet_target(quadlet_runtime_dir, target_rel)
-        live_quadlet[target_rel] = _read_owned_link(target_path, roots)
+        live_quadlet[target_rel] = (
+            None if target_path.is_symlink() and not target_path.exists() else _read_owned_link(target_path, roots)
+        )
 
     def rollback_links() -> None:
         for target_rel, source in live_systemd.items():

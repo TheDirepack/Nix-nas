@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -109,17 +110,16 @@ def _render_identity_auth(
         raise CaddyProjectionError("Unsafe Authentik upstream")
     if not authentik_path.startswith("/") or _ctl(authentik_path):
         raise CaddyProjectionError("Authentik path must be an absolute HTTP path")
-    prefix = authentik_path if authentik_path.endswith("/") else authentik_path + "/"
-    authentik_uri = prefix + "outpost.goauthentik.io/auth/caddy"
+    authentik_uri = "/outpost.goauthentik.io/auth/caddy"
     for header in IDENTITY_HEADERS:
         lines.append(f"{indent}request_header -{header}")
     lines.extend(
         [
             f"{indent}forward_auth {authentik_upstream} {{",
             f"{indent}  uri {_q(authentik_uri)}",
-            f"{indent}  header_up X-Original-URL {{http.request.scheme}}://{{http.request.host}}{{http.request.orig_uri}}",
+            f"{indent}  header_up X-Original-URL {{http.request.scheme}}://{{http.request.hostport}}{{http.request.orig_uri}}",
             f"{indent}  header_up X-Forwarded-Proto {{scheme}}",
-            f"{indent}  header_up X-Forwarded-Host {{host}}",
+            f"{indent}  header_up X-Forwarded-Host {{http.request.hostport}}",
             f"{indent}  header_up X-Forwarded-Uri {{uri}}",
             f"{indent}  copy_headers {' '.join(AUTHENTIK_COPY_HEADERS)}",
             f"{indent}}}",
@@ -334,19 +334,39 @@ def generate_caddyfile(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def validate_caddyfile(caddyfile: str, *, caddy_bin: str | None = None) -> None:
+def validate_caddyfile(caddyfile: str, *, caddy_bin: str | None = None, lan_host: str = "nas.local") -> None:
     binary = caddy_bin or shutil.which("caddy")
     if not binary:
         raise CaddyProjectionError("Caddy binary is required for configuration validation")
+    if not HOSTNAME_RE.fullmatch(lan_host):
+        raise CaddyProjectionError(f"Invalid appliance hostname {lan_host!r}")
     with tempfile.TemporaryDirectory(prefix="nas-v2-caddy-") as raw_tmp:
-        path = pathlib.Path(raw_tmp) / "Caddyfile"
-        path.write_text(caddyfile, encoding="utf-8")
+        tmp = pathlib.Path(raw_tmp)
+        data_home = tmp / "data"
+        config_home = tmp / "config"
+        data_home.mkdir(mode=0o700)
+        config_home.mkdir(mode=0o700)
+        generated = tmp / "caddy-managed.conf"
+        generated.write_text(caddyfile, encoding="utf-8")
+        wrapper = tmp / "Caddyfile"
+        wrapper.write_text(
+            "{\n  admin off\n}\n"
+            f"import {generated}\n"
+            f"https://{lan_host} {{\n"
+            f"  tls internal\n"
+            f"  import {PATH_SNIPPET}\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment.update({"XDG_DATA_HOME": str(data_home), "XDG_CONFIG_HOME": str(config_home)})
         result = subprocess.run(
-            [binary, "validate", "--config", str(path), "--adapter", "caddyfile"],
+            [binary, "validate", "--config", str(wrapper), "--adapter", "caddyfile"],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
+            env=environment,
         )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:4000]

@@ -209,7 +209,12 @@ function ObjectEditor({root, schema, value, onChange, path}) {
 
       {absentOptional.length ? (
         <div className="nas-schema-add-row">
-          <FormSelect value={fieldToAdd} onChange={(event) => setFieldToAdd(event.target.value)}>
+          <FormSelect
+            id={`nas-schema-add-${path.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`}
+            aria-label={`Add optional field at ${path}`}
+            value={fieldToAdd}
+            onChange={(event) => setFieldToAdd(event.target.value)}
+          >
             <FormSelectOption value="" label="Add optional field…" />
             {absentOptional.map((name) => (
               <FormSelectOption

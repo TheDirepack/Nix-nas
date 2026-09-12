@@ -151,3 +151,17 @@ export function activateSecrets(password, spawn = globalThis.cockpit?.spawn) {
   process.input(`${secret}\n`);
   return process;
 }
+
+export function sourceControl(operation, spawn = globalThis.cockpit?.spawn) {
+  if (!new Set(["status", "diff", "log"]).has(operation)) {
+    throw new Error("Unsupported source-control operation");
+  }
+  return apiInput(["source-control"], {operation}, spawn);
+}
+
+export function updateControl(operation, spawn = globalThis.cockpit?.spawn) {
+  if (!new Set(["preview", "sync", "apply"]).has(operation)) {
+    throw new Error("Unsupported update operation");
+  }
+  return apiInput(["update-control"], {operation}, spawn);
+}

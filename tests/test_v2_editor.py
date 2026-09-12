@@ -94,7 +94,7 @@ class V2EditorTests(unittest.TestCase):
             self.assertEqual(by_id["demo"]["requestedMode"], "off")
             self.assertEqual(by_id["second"]["requestedMode"], "always")
 
-    def test_scheduled_job_status_includes_generated_timer_units(self):
+    def test_unverified_scheduled_job_status_does_not_synthesize_units(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             desired = root / "services.yaml"
@@ -120,11 +120,7 @@ class V2EditorTests(unittest.TestCase):
             backup = result["services"][0]
             self.assertEqual(
                 backup["units"],
-                [
-                    {"unit": "backup.service", "role": "owner"},
-                    {"unit": "nas-v2-timer-backup-0.timer", "role": "schedule"},
-                    {"unit": "nas-v2-timer-backup-1.timer", "role": "schedule"},
-                ],
+                [],
             )
 
     def test_document_returns_same_yaml_parsed_value_and_schema(self) -> None:

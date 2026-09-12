@@ -11,6 +11,7 @@ let
     bootstrapPassword
     authentikRuntimeEnvironmentFile
     authentikRuntimeApiTokenFile
+    authentikOutpostTokenFile
     authentikPort
     authentikOutpostPort
     nasAuthentikBlueprints
@@ -23,6 +24,8 @@ let
     copypartyUserConfigDir
     lanHost
     nasCockpitApi
+    nasPythonApplication
+    nasSecrets
     postgresqlDataDir
     syncthingConfigDir
     syncthingDataDir
@@ -125,15 +128,19 @@ let
   '';
   authentikProxyOutpost = pkgs.writeShellScript "nas-authentik-proxy-outpost" ''
     set -euo pipefail
-    token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
-    outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
-      -H "Authorization: Bearer $token" \
-      http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/outposts/instances/?page_size=100 \
-      | ${pkgs.jq}/bin/jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
-    outpost_token="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
-      -H "Authorization: Bearer $token" \
-      "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/core/tokens/ak-outpost-$outpost-api/view_key/" \
-      | ${pkgs.jq}/bin/jq -er '.key')"
+    if [[ -s ${lib.escapeShellArg authentikOutpostTokenFile} ]]; then
+      outpost_token="$(${pkgs.coreutils}/bin/cat ${lib.escapeShellArg authentikOutpostTokenFile})"
+    else
+      token="$(${pkgs.coreutils}/bin/cat ${authentikRuntimeApiTokenFile})"
+      outpost="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
+        -H "Authorization: Bearer $token" \
+        http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/outposts/instances/?page_size=100 \
+        | ${pkgs.jq}/bin/jq -er '.results[] | select(.managed == "goauthentik.io/outposts/embedded") | .pk')"
+      outpost_token="$(${pkgs.curl}/bin/curl --fail --silent --show-error \
+        -H "Authorization: Bearer $token" \
+        "http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}api/v3/core/tokens/ak-outpost-$outpost-api/view_key/" \
+        | ${pkgs.jq}/bin/jq -er '.key')"
+    fi
     exec ${pkgs.util-linux}/bin/runuser --user authentik -- env \
       AUTHENTIK_HOST="http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}" \
       AUTHENTIK_HOST_BROWSER="https://${cfg.identity.publicHost}${cfg.identity.authentikPath}" \
@@ -175,6 +182,7 @@ in
 
     systemd.services.nas-cockpit-sso = {
       description = "Cockpit web service behind the Caddy Authentik gate";
+      path = [ nasCockpitApi nasPythonApplication nasSecrets ];
       wantedBy = [ "multi-user.target" ];
       after = [ "nas-first-start.service" ];
       requires = [ "nas-first-start.service" ];
@@ -202,7 +210,7 @@ in
       };
     };
     systemd.services.nas-setup-api = {
-      description = "Loopback first-start setup API for the Caddy-served setup wizard";
+      description = "Unix-socket first-start setup API for the Caddy-served setup wizard";
       wantedBy = [ "multi-user.target" ];
       # The wizard submits through this API before secrets exist, so the unit
       # must not wait for the protected stack. After the first successful
@@ -211,18 +219,26 @@ in
       after = [ "network.target" ];
       unitConfig.ConditionPathExists = [ "!/var/lib/nas-setup/state.json" ];
       serviceConfig = {
-        ExecStart = "${nasCockpitApi}/bin/nas-cockpit-api serve --bind 127.0.0.1 --port 8980";
+        ExecStart = "${nasCockpitApi}/bin/nas-cockpit-api serve --socket-path /run/nas-setup-api/setup.sock";
+        ExecStartPre = "${pkgs.coreutils}/bin/install -d -m 0750 -o root -g ${config.services.caddy.group} /run/nas-setup-api";
         Restart = "on-failure";
         RestartSec = "2s";
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        RuntimeDirectory = "nas-first-start";
-        RuntimeDirectoryMode = "0700";
-        # Loopback bind only. Caddy forward-auth gates plans and submission;
-        # an unguessable completed-job capability gates polling and reboot.
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" ];
+        RuntimeDirectory = "nas-setup-api";
+        RuntimeDirectoryMode = "0750";
+        Environment = [
+          "NAS_CADDY_USER=${config.services.caddy.user}"
+          "NAS_CADDY_GROUP=${config.services.caddy.group}"
+        ];
+        # Permissioned Unix socket only (no TCP). The directory and socket
+        # node admit the Caddy group; the backend additionally checks the
+        # peer service identity. Caddy forward-auth gates plans and
+        # submission; an unguessable completed-job capability gates polling
+        # and reboot.
+        RestrictAddressFamilies = [ "AF_UNIX" ];
         # prepare-first-start publishes the reviewable plan status for the
         # wizard from this unit. Submission additionally performs the shared
         # operation admission check and stages private worker inputs in /run.
@@ -231,6 +247,7 @@ in
           "/var/lib/nas-first-start"
           "/run/nas-operations"
           "/run/nas-first-start"
+          "/run/nas-setup-api"
         ];
       };
     };
@@ -454,6 +471,8 @@ in
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot vaultwardenDataDir vaultwardenBackupDir ];
+      serviceConfig.StateDirectory = lib.mkForce "";
+      serviceConfig.ReadWritePaths = [ vaultwardenDataDir ];
     };
   };
 

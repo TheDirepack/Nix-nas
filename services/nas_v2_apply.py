@@ -9,6 +9,7 @@ reload/reconcile action is permitted.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -38,7 +39,6 @@ from nas_v2_spec import (
     ManagedServicesV2Error,
     compile_document,
     load_schema,
-    parse_yaml,
     parse_yaml_text,
 )
 from nas_v2_systemd_native import SystemdProjectionError
@@ -314,8 +314,17 @@ def _compile_document_with_platform(
 
 def _compile_paths_inner(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
     schema = load_schema(paths.schema)
-    effective = _compile_document_with_platform(parse_yaml(paths.desired), schema, paths.platform)
-    return effective, build_plan(effective)
+    desired_bytes = paths.desired.read_bytes()
+    effective = _compile_document_with_platform(
+        parse_yaml_text(desired_bytes.decode("utf-8"), source=str(paths.desired)),
+        schema,
+        paths.platform,
+    )
+    provenance = {"desiredSha256": hashlib.sha256(desired_bytes).hexdigest()}
+    effective["provenance"] = provenance
+    plan = build_plan(effective)
+    plan["provenance"] = copy.deepcopy(provenance)
+    return effective, plan
 
 
 def compile_paths(paths: ApplyPaths) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -330,7 +339,7 @@ def _caddy_bytes(effective: dict[str, Any], projection: CaddyProjection) -> byte
         authentik_path=projection.authentik_path,
         lan_host=projection.lan_host,
     )
-    validate_caddyfile(content, caddy_bin=projection.caddy_bin)
+    validate_caddyfile(content, caddy_bin=projection.caddy_bin, lan_host=projection.lan_host)
     return content.encode("utf-8")
 
 
@@ -552,7 +561,10 @@ def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str
     schema = load_schema(paths.schema)
     document = parse_yaml_text(yaml_text, source="<draft>")
     effective = _compile_document_with_platform(document, schema, paths.platform)
+    provenance = {"desiredSha256": hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()}
+    effective["provenance"] = provenance
     plan = build_plan(effective)
+    plan["provenance"] = copy.deepcopy(provenance)
 
     with authority_lock(paths.desired):
         if paths.desired.is_dir():

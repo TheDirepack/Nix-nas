@@ -29,6 +29,7 @@ import pathlib
 import pwd
 import re
 import secrets
+import socket
 import stat
 import subprocess
 import sys
@@ -234,6 +235,20 @@ def run_root_noninteractive(command: Sequence[str], **kwargs: Any) -> Completed:
             tuple(map(str, command)), "", "privileged status requires the configured local administrator", 1
         )
     return run(["sudo", "-n", "--", *map(str, command)], **kwargs)
+
+
+def sync_syncthing_for_setup() -> dict[str, Any]:
+    run_root(["systemctl", "start", "syncthing.service"])
+    for attempt in range(60):
+        try:
+            connection = socket.create_connection(("127.0.0.1", 8384), timeout=2)
+            connection.close()
+            break
+        except OSError as exc:
+            if attempt == 59:
+                raise SetupError("Syncthing API did not become ready after service startup") from exc
+            time.sleep(1)
+    return json.loads(run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"])).stdout)
 
 
 def runtime_secrets_ready() -> bool:
@@ -1023,13 +1038,18 @@ def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise SetupError("nas-identity-sync returned invalid runtime-token JSON") from exc
-    if not isinstance(value, dict) or not isinstance(value.get("token"), str):
-        raise SetupError("nas-identity-sync did not return a runtime identity token")
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get("token"), str)
+        or not isinstance(value.get("outpostToken"), str)
+    ):
+        raise SetupError("nas-identity-sync did not return the runtime identity tokens")
     token = value.pop("token")
+    outpost_token = value.pop("outpostToken")
     try:
         run_admin(
-            coordinated_child(["nas-secrets", "set-authentik-token-stdin"]),
-            input_text=f"{keepass_password}\n{token}\n",
+            coordinated_child(["nas-secrets", "set-authentik-runtime-stdin"]),
+            input_text=f"{keepass_password}\n{token}\n{outpost_token}\n",
         )
         run_root(
             ["install", "-m", "0400", "-o", "root", "-g", "root", "/dev/stdin", str(BOOTSTRAP_AUTHENTIK_TOKEN)],
@@ -1041,6 +1061,7 @@ def install_runtime_identity_token(keepass_password: str) -> dict[str, Any]:
         return value
     finally:
         token = ""
+        outpost_token = ""
 
 
 def adopt_bootstrap_authentik_authority(keepass_password: str) -> dict[str, bool]:
@@ -1464,7 +1485,7 @@ def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
                 syncthing_result = run_setup_stage(
                     journal,
                     "syncthing",
-                    lambda: json.loads(run_root(coordinated_child(["nas-identity-sync", "sync-syncthing"])).stdout),
+                    sync_syncthing_for_setup,
                 )
             progress("applying Managed Services V2 lifecycle modes")
             service_result = run_setup_stage(

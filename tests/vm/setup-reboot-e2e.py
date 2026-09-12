@@ -214,7 +214,7 @@ def browser_sign_in(stage: str) -> None:
     with tempfile.TemporaryDirectory(prefix="nas-e2e-authz-", dir="/run") as directory:
         secrets = pathlib.Path(directory)
         values = {
-            "admin": "admin-vm-password",
+            "administrator": "nasadmin-vm-password",
             "operator": "operator-vm-password",
             "alice": "alice-updated-password",
             "baseline": "baseline-vm-password",
@@ -250,8 +250,8 @@ def browser_sign_in(stage: str) -> None:
                 str(REPO / "tests/browser/authz.py"),
                 "--origin",
                 PUBLIC_ORIGIN,
-                "--cockpit-password-file",
-                str(secrets / "admin"),
+                "--administrator-password-file",
+                str(secrets / "administrator"),
                 "--operator-password-file",
                 str(secrets / "operator"),
                 "--alice-password-file",

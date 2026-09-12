@@ -695,7 +695,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         recover.assert_not_called()
 
     def test_install_runtime_identity_token_validates_and_installs(self) -> None:
-        response = {"token": "runtime-token", "username": "service"}
+        response = {"token": "runtime-token", "outpostToken": "outpost-token", "username": "service"}
         with (
             mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
             mock.patch.object(setup, "run_root", return_value=setup.Completed((), json.dumps(response), "")),
@@ -704,9 +704,13 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         ):
             result = setup.install_runtime_identity_token("keepass")
         self.assertEqual(result, {"username": "service"})
-        self.assertIn("runtime-token", admin.call_args.kwargs["input_text"])
+        self.assertEqual(
+            admin.call_args.args[0],
+            ["nas-secrets", "set-authentik-runtime-stdin"],
+        )
+        self.assertEqual(admin.call_args.kwargs["input_text"], "keepass\nruntime-token\noutpost-token\n")
         privileged.assert_called_once()
-        for stdout in ("{", "{}", "[]"):
+        for stdout in ("{", "{}", "[]", '{"token":"runtime-token"}'):
             with (
                 mock.patch.object(setup, "coordinated_child", side_effect=lambda command: list(command)),
                 mock.patch.object(setup, "run_root", return_value=setup.Completed((), stdout, "")),

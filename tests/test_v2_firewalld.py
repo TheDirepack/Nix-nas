@@ -73,6 +73,44 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertIn('port="9092"', remote)
         self.assertNotIn('port="9090"', remote)
 
+    def test_remote_admin_is_explicit_port_allowlist(self):
+        files, _ = firewalld.compile_projection(self.effective(), lan_zone="nas-trusted")
+        remote = files[f"policies/{firewalld.remote_admin_policy_name()}.xml"].decode()
+        self.assertIn('target="CONTINUE"', remote)
+        self.assertNotIn('target="ACCEPT"', remote)
+        self.assertIn('ingress-zone name="nas-trusted"', remote)
+        self.assertIn('egress-zone name="HOST"', remote)
+        self.assertIn('port="22" protocol="tcp"', remote)
+        self.assertIn('port="443" protocol="tcp"', remote)
+
+    def test_world_policy_uses_valid_nonzero_priority(self):
+        files, _ = firewalld.compile_projection(self.effective(), lan_zone="nas-trusted")
+        world = files[f"policies/{firewalld.world_policy_name('worker')}.xml"].decode()
+        self.assertIn('priority="50"', world)
+        self.assertNotIn('priority="0"', world)
+
+    def test_no_generated_policy_uses_reserved_priority_zero(self):
+        import re
+
+        files, _ = firewalld.compile_projection(self.effective(), lan_zone="nas-trusted")
+        for target, payload in files.items():
+            for match in re.finditer(rb'priority="([^"]*)"', payload):
+                self.assertNotEqual(match.group(1).decode(), "0", f"reserved priority in {target}")
+
+    def test_outbound_allow_and_deny_with_exceptions_validate(self):
+        import copy
+
+        for outbound in ("allow", "deny"):
+            effective = copy.deepcopy(self.effective())
+            effective["services"]["worker"]["network"]["outboundDefault"] = outbound
+            files, _ = firewalld.compile_projection(effective, lan_zone="nas-trusted")
+            world = files[f"policies/{firewalld.world_policy_name('worker')}.xml"].decode()
+            expected = "ACCEPT" if outbound == "allow" else "DROP"
+            self.assertIn(f'target="{expected}"', world)
+            self.assertIn('priority="50"', world)
+            self.assertIn('destination address="203.0.113.0/24"', world)
+            self.assertIn('family="ipv6"', world)
+
     def test_disabled_host_listener_projects_no_firewall_opening(self):
         effective = self.effective()
         service = effective["services"]["worker"]

@@ -239,6 +239,60 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str, p
         raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
 
 
+def assign_application_capabilities(
+    origin: str,
+    administrator: str,
+    password: str,
+    username: str,
+    groups: list[str],
+) -> None:
+    driver = browser()
+    try:
+        login(driver, origin, administrator, password, "/identity/if/user/")
+        result = driver.execute_async_script(
+            """
+            const [username, groupNames, done] = arguments;
+            const csrf = document.cookie
+              .split('; ')
+              .find(cookie => cookie.startsWith('authentik_csrf='))
+              ?.split('=', 2)[1];
+            const request = async (path, options = {}) => {
+              const response = await fetch(`/identity/api/v3/${path}`, {
+                credentials: 'same-origin',
+                ...options,
+              });
+              if (!response.ok) {
+                throw new Error(`${options.method || 'GET'} ${path}: HTTP ${response.status}`);
+              }
+              return response.status === 204 ? null : response.json();
+            };
+            (async () => {
+              if (!csrf) throw new Error('Authentik CSRF cookie is unavailable');
+              const users = await request(`core/users/?username=${encodeURIComponent(username)}`);
+              const user = users.results.find(candidate => candidate.username === username);
+              if (!user) throw new Error(`Authentik user ${username} was not found`);
+              for (const groupName of groupNames) {
+                const groups = await request(`core/groups/?name=${encodeURIComponent(groupName)}`);
+                const group = groups.results.find(candidate => candidate.name === groupName);
+                if (!group) throw new Error(`Authentik group ${groupName} was not found`);
+                await request(`core/groups/${encodeURIComponent(group.pk)}/add_user/`, {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json', 'X-Authentik-Csrf': decodeURIComponent(csrf)},
+                  body: JSON.stringify({pk: user.num_pk ?? user.pk}),
+                });
+              }
+              done({ok: true, assigned: groupNames.length});
+            })().catch(error => done({ok: false, error: String(error)}));
+            """,
+            username,
+            groups,
+        )
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise RuntimeError(f"Authentik capability assignment failed: {result}")
+    finally:
+        driver.quit()
+
+
 def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
     login(driver, origin, username, password)
     cockpit_root = origin.rstrip("/") + "/console/"
@@ -371,13 +425,14 @@ def verify_cockpit_react_interactions(origin: str, username: str, password: str)
             driver.get(origin.rstrip("/") + "/console/cockpit/@localhost/nas/index.html")
             wait = WebDriverWait(driver, 90)
             wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
-            wait_for_page_text(driver, wait, "Maintenance actions", "Cockpit NAS page")
+            wait_for_page_text(driver, wait, "Protected services:", "Cockpit NAS page")
 
         browser_step(driver, "Cockpit NAS page", verify_page)
 
         def verify_actions() -> None:
             wait = WebDriverWait(driver, 90)
-            wait.until(lambda current: button_with_text(current, "Refresh")).click()
+            wait.until(lambda current: current.find_element(By.CSS_SELECTOR, "a[href='#/operations']")).click()
+            wait_for_page_text(driver, wait, "Operation coordinator", "Cockpit operations page")
             wait.until(first_maintenance_action).click()
             wait.until(lambda current: "Confirm maintenance action" in current.page_source)
             cancel = wait.until(lambda current: button_with_text(current, "Cancel"))
@@ -411,15 +466,17 @@ def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]
         url_path = urllib.parse.urlsplit(url).path
         identity_flow = "/identity/if/flow/" in url_path
         if expectation.allowed:
+            expected_path = expectation.path if expectation.path.endswith("/") else expectation.path + "/"
             return (
                 200 <= status < 400
                 and (not identity_flow or expectation.allowed_redirect_prefix is not None)
                 and (
-                    expectation.allowed_redirect_prefix is None
-                    or url_path.startswith(expectation.allowed_redirect_prefix)
+                    url_path.startswith(expectation.allowed_redirect_prefix)
+                    if expectation.allowed_redirect_prefix is not None
+                    else url_path in {expectation.path, expected_path} or url_path.startswith(expected_path)
                 )
             )
-        return status in {401, 403} or identity_flow
+        return status in {401, 403} and not identity_flow
 
     failures: list[dict[str, Any]] = []
     for expectation in expectations:
@@ -440,6 +497,39 @@ def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]
             failures.append({"path": expectation.path, "expectedAllowed": expectation.allowed, **result})
     if failures:
         raise RuntimeError(json.dumps(failures, indent=2, sort_keys=True))
+
+
+def fetch_request(driver: webdriver.Chrome, path: str, method: str, body: str | None = None) -> dict[str, Any]:
+    return driver.execute_async_script(
+        """
+        const done = arguments[arguments.length - 1];
+        const options = {method: arguments[1], credentials: 'include', redirect: 'follow'};
+        if (arguments[2] !== null) {
+          options.body = arguments[2];
+          options.headers = {'Content-Type': 'text/plain'};
+        }
+        fetch(arguments[0], options)
+          .then(async response => done({status: response.status, url: response.url, body: await response.text()}))
+          .catch(error => done({status: 0, url: '', body: '', error: String(error)}));
+        """,
+        path,
+        method,
+        body,
+    )
+
+
+def verify_personal_file_operations(driver: webdriver.Chrome, username: str) -> None:
+    path = f"/shares/users/{urllib.parse.quote(username, safe='')}/browser-e2e.txt"
+    content = f"browser-e2e-{username}"
+    written = fetch_request(driver, path, "PUT", content)
+    if int(written.get("status", 0)) not in {200, 201, 204}:
+        raise RuntimeError(f"personal file upload failed: {written!r}")
+    downloaded = fetch_request(driver, path, "GET")
+    if int(downloaded.get("status", 0)) != 200 or downloaded.get("body") != content:
+        raise RuntimeError(f"personal file download failed: {downloaded!r}")
+    deleted = fetch_request(driver, path, "DELETE")
+    if int(deleted.get("status", 0)) not in {200, 202, 204}:
+        raise RuntimeError(f"personal file deletion failed: {deleted!r}")
 
 
 def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
@@ -551,7 +641,12 @@ def verify_no_identity_markup_injection(driver: webdriver.Chrome, username: str)
 
 
 def run_account(
-    origin: str, username: str, password: str, expectations: list[RouteExpectation], settings: bool
+    origin: str,
+    username: str,
+    password: str,
+    expectations: list[RouteExpectation],
+    settings: bool,
+    personal_files: bool = False,
 ) -> None:
     driver = browser()
     try:
@@ -568,6 +663,12 @@ def run_account(
         browser_step(
             driver, f"Portal native share route ({username})", lambda: verify_native_share_route(driver, origin)
         )
+        if personal_files:
+            browser_step(
+                driver,
+                f"Personal file operations ({username})",
+                lambda: verify_personal_file_operations(driver, username),
+            )
         if settings:
             browser_step(driver, f"Portal settings form ({username})", lambda: verify_settings_form(driver, origin))
     finally:
@@ -601,7 +702,7 @@ def read_secret(path: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--origin", default="https://nas-test.local")
-    parser.add_argument("--cockpit-password-file")
+    parser.add_argument("--administrator-password-file")
     parser.add_argument("--operator-password-file")
     parser.add_argument("--alice-password-file")
     parser.add_argument("--baseline-password-file")
@@ -619,7 +720,7 @@ def main() -> int:
             "akadmin",
             password,
             [
-                RouteExpectation("/", True),
+                RouteExpectation("/", True, "/identity/if/user/"),
                 RouteExpectation("/setup", True),
                 RouteExpectation("/console/", True),
             ],
@@ -628,7 +729,7 @@ def main() -> int:
         print("bootstrap administrator browser authorization checks ok")
         return 0
     required_password_files = {
-        "--cockpit-password-file": args.cockpit_password_file,
+        "--administrator-password-file": args.administrator_password_file,
         "--operator-password-file": args.operator_password_file,
         "--alice-password-file": args.alice_password_file,
         "--baseline-password-file": args.baseline_password_file,
@@ -636,15 +737,26 @@ def main() -> int:
     missing_password_files = [name for name, path in required_password_files.items() if path is None]
     if missing_password_files:
         parser.error("missing required arguments: " + ", ".join(missing_password_files))
-    assert args.cockpit_password_file is not None
+    assert args.administrator_password_file is not None
     assert args.operator_password_file is not None
     assert args.alice_password_file is not None
     assert args.baseline_password_file is not None
-    cockpit_password = read_secret(args.cockpit_password_file)
+    administrator_password = read_secret(args.administrator_password_file)
     operator_password = read_secret(args.operator_password_file)
     alice_password = read_secret(args.alice_password_file)
     baseline_password = read_secret(args.baseline_password_file)
-    verify_cockpit_react_interactions(args.origin, "admin", cockpit_password)
+    verify_cockpit_react_interactions(args.origin, "nasadmin", administrator_password)
+    assign_application_capabilities(
+        args.origin,
+        "nasadmin",
+        administrator_password,
+        "alice",
+        [
+            "application.copyparty.files",
+            "application.syncthing.access",
+            "application.vaultwarden.access",
+        ],
+    )
     capability_routes = {
         "files": "/shares/",
         "webdav": "/dav/",
@@ -672,6 +784,9 @@ def main() -> int:
             RouteExpectation(capability_routes["ai"], True),
             RouteExpectation("/alerts/", True),
             RouteExpectation("/victoriametrics/", True),
+            RouteExpectation("/console/", True),
+            RouteExpectation("/shares/admin/", True),
+            RouteExpectation("/vault/admin/", True),
         ],
         True,
     )
@@ -691,15 +806,24 @@ def main() -> int:
             RouteExpectation(capability_routes["ai"], False),
             RouteExpectation("/alerts/", False),
             RouteExpectation("/victoriametrics/", False),
+            RouteExpectation("/console/", False),
+            RouteExpectation("/shares/admin/", False),
+            RouteExpectation("/vault/admin/", False),
         ],
-        False,
+        True,
+        True,
     )
     run_account(
         args.origin,
         "baseline",
         baseline_password,
         [RouteExpectation(path, False) for path in capability_routes.values()]
-        + [RouteExpectation("/syncthing/", False)],
+        + [
+            RouteExpectation("/syncthing/", False),
+            RouteExpectation("/console/", False),
+            RouteExpectation("/shares/admin/", False),
+            RouteExpectation("/vault/admin/", False),
+        ],
         False,
     )
     print("browser authorization, rendering, layout, and console checks ok")

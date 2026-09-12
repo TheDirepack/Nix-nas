@@ -2,8 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {resolve} from "node:path";
-import {registerHooks} from "node:module";
-import {pathToFileURL} from "node:url";
+import cockpit from "./systemd-cockpit-stub.mjs";
 
 const source = readFileSync(resolve(import.meta.dirname, "../../cockpit/src/systemd.js"), "utf8");
 
@@ -29,20 +28,7 @@ test("systemd snapshot merges live state without changing desired policy", () =>
   assert.doesNotMatch(source, /setManagedServiceMode/);
 });
 
-// cockpit/src/systemd.js imports the "cockpit" browser host object. Stub it
-// with a recorded fake D-Bus client so the module is testable under node:test.
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "cockpit") {
-      return {
-        shortCircuit: true,
-        url: pathToFileURL(new URL("./systemd-cockpit-stub.mjs", import.meta.url).pathname).href,
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-});
-
+globalThis.cockpit = cockpit;
 const {managedServiceUnitNames, mergeSystemdState, readSystemdState} =
   await import("../../cockpit/src/systemd.js");
 

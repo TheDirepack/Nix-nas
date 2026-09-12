@@ -210,6 +210,17 @@ case "$section" in
       npm --prefix cockpit run build || failed=1
     ci_run cockpit build-check "Production Cockpit bundle verification" \
       node cockpit/build.js --check || failed=1
+    # The first-run wizard carries the same source-bound stale/tampered-output
+    # contract through the shared frontend integrity helper. Check mode never
+    # rewrites output; a source change without a rebuild fails below.
+    ci_run cockpit wizard-source-contract "Wizard source renderer contract" \
+      node setup/first-run-wizard/build.js --check-source || failed=1
+    ci_run cockpit wizard-npm-audit "Fresh wizard npm vulnerability audit" \
+      npm --prefix setup/first-run-wizard audit --audit-level=high || failed=1
+    ci_run cockpit wizard-build "Production wizard bundle" \
+      npm --prefix setup/first-run-wizard run build || failed=1
+    ci_run cockpit wizard-build-check "Production wizard bundle verification" \
+      node setup/first-run-wizard/build.js --check || failed=1
     ;;
 
   *)
