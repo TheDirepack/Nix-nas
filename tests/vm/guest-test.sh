@@ -840,24 +840,37 @@ grep -q 'request_header -Remote-User' /run/nas-control/caddy-managed.conf
 grep -q 'request_header -X-Authentik-Username' /run/nas-control/caddy-managed.conf
 pass "Authentik API and fail-closed proxy checks passed"
 log "Authentication dependency outage stays fail-closed"
-systemctl stop authentik.service
+outage_preserved_units=(
+  nas-protected-services.target
+  caddy.service
+  copyparty.service
+  syncthing.service
+  vaultwarden.service
+  victoriametrics.service
+  nas-alert-router.service
+)
+systemctl stop --job-mode=ignore-dependencies authentik.service
 wait_inactive authentik.service
+for unit in "${outage_preserved_units[@]}"; do
+  systemctl is-active --quiet "$unit" || fail "$unit stopped during the isolated Authentik outage"
+done
 auth_down_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files' \
   "https://$PUBLIC_HOST/shares/" || true)"
 case "$auth_down_code" in
-  200|201|202|204) fail "protected route became reachable while Authentik was unavailable" ;;
-  *) : ;;
+  4??|5??) : ;;
+  000|"") fail "protected route lost its HTTP boundary while Authentik was unavailable" ;;
+  *) fail "protected route returned unexpected status $auth_down_code while Authentik was unavailable" ;;
 esac
 systemctl start authentik.service
 wait_active authentik.service
-systemctl start nas-protected-services.target
-wait_active nas-protected-services.target
-wait_active caddy.service
 wait_http http://127.0.0.1:9000/identity/-/health/live/
 systemctl start nas-authentik-proxy-outpost.service
 wait_active nas-authentik-proxy-outpost.service
 wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" -H "Host: $PUBLIC_HOST"
+for unit in "${outage_preserved_units[@]}"; do
+  systemctl is-active --quiet "$unit" || fail "$unit did not survive the isolated Authentik outage"
+done
 pass "protected proxy routes fail closed and recover after Authentik outage"
 proxy_headers="$(curl --silent --show-error --insecure --dump-header - --output /dev/null \
   --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/")"

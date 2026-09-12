@@ -707,6 +707,20 @@ class ContractTests(unittest.TestCase):
         outage = guest.split('log "Authentication dependency outage stays fail-closed"', 1)[1].split(
             'log "Firewall fail-closed behavior from an independent untrusted namespace"', 1
         )[0]
+        self.assertIn("systemctl stop --job-mode=ignore-dependencies authentik.service", outage)
+        self.assertNotIn("systemctl stop authentik.service", outage)
+        self.assertNotIn("systemctl start nas-protected-services.target", outage)
+        self.assertIn('000|"") fail "protected route lost its HTTP boundary', outage)
+        for unit in (
+            "nas-protected-services.target",
+            "caddy.service",
+            "copyparty.service",
+            "syncthing.service",
+            "vaultwarden.service",
+            "victoriametrics.service",
+            "nas-alert-router.service",
+        ):
+            self.assertIn(unit, outage)
         self.assertIn("systemctl start nas-authentik-proxy-outpost.service", outage)
         self.assertIn("wait_active nas-authentik-proxy-outpost.service", outage)
         self.assertIn("$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping", outage)
