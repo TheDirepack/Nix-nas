@@ -80,6 +80,13 @@ const ConfirmStep = ({
   const isComplete = COMPLETE_STATUSES.has(jobStatus);
   const isTerminal = TERMINAL_STATUSES.has(jobStatus);
   const rebootAuthorized = Boolean(capability) && isComplete;
+  const problem = validate(
+    administrator,
+    keePassPassword,
+    keePassPasswordConfirm,
+    plan,
+    allowDestructive,
+  );
 
   const resume = React.useCallback(async () => {
     setResuming(true);
@@ -94,7 +101,12 @@ const ConfirmStep = ({
       setJob(resumed);
       setCapability(resumedCapability);
     } catch (reason) {
-      setError(String(reason));
+      if (reason?.status === 404) {
+        setJob(null);
+        setCapability(null);
+      } else {
+        setError(String(reason));
+      }
     } finally {
       setResuming(false);
       setResumeAttempted(true);
@@ -137,13 +149,6 @@ const ConfirmStep = ({
   }, [capability, jobId, isTerminal]);
 
   const submit = async () => {
-    const problem = validate(
-      administrator,
-      keePassPassword,
-      keePassPasswordConfirm,
-      plan,
-      allowDestructive,
-    );
     if (problem) {
       setError(problem);
       return;
@@ -216,6 +221,7 @@ const ConfirmStep = ({
         <li>ZFS encryption: {encryptStorage ? 'Enabled' : 'Disabled'}</li>
         <li>Devices: {Array.isArray(storage.devices) ? storage.devices.join(' ') : ''}</li>
       </ul>
+      {!job && problem && <Alert variant="warning" isInline title={problem} />}
       {error && <Alert variant="danger" isInline title={error} />}
       {pollingInterrupted && !isComplete && (
         <Alert variant="warning" isInline title="Reconnecting to setup progress">
@@ -282,7 +288,12 @@ const ConfirmStep = ({
           Back
         </Button>
         {!job && (
-          <Button variant="primary" onClick={submit} isDisabled={busy || resuming} isLoading={busy}>
+          <Button
+            variant="primary"
+            onClick={submit}
+            isDisabled={busy || resuming || Boolean(problem)}
+            isLoading={busy}
+          >
             {busy ? 'Starting setup' : 'Run setup'}
           </Button>
         )}

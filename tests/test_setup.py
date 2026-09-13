@@ -114,7 +114,7 @@ class BootstrapAccountRetirementTests(unittest.TestCase):
             index for index, item in enumerate(actions) if "retire-authentik-bootstrap-stdin" in item[1]
         )
         scrub_environment = next(index for index, item in enumerate(actions) if "/^AUTHENTIK_BOOTSTRAP_/d" in item[1])
-        activate = next(index for index, item in enumerate(actions) if "activate-setup-stdin" in item[1])
+        activate = next(index for index, item in enumerate(actions) if "activate-stdin" in item[1])
         self.assertLess(retire_user, retire_secret)
         self.assertLess(retire_secret, scrub_environment)
         self.assertLess(scrub_environment, activate)

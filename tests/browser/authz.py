@@ -191,6 +191,19 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
         raise RuntimeError(f"{label} rendering validation failed: {json.dumps(failures, indent=2, sort_keys=True)}")
 
 
+def authenticated_destination_loaded(current: webdriver.Chrome, public_origin: str) -> bool:
+    url = current.current_url
+    if "/identity/if/flow/" in url or "/outpost.goauthentik.io/callback" in url:
+        return False
+    if url != public_origin and not url.startswith(public_origin + "/"):
+        return False
+    if current.execute_script("return document.readyState") not in {"interactive", "complete"}:
+        return False
+    if urllib.parse.urlsplit(url).path == "/identity/if/user/":
+        return "My applications" in rendered_text(current)
+    return True
+
+
 def login(driver: webdriver.Chrome, origin: str, username: str, password: str, path: str = "/") -> None:
     driver.get(origin.rstrip("/") + path)
     wait = WebDriverWait(driver, 60)
@@ -224,16 +237,8 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str, p
     first(driver, ['button[type="submit"]', 'input[type="submit"]']).click()
     public_origin = origin.rstrip("/")
 
-    def authenticated_portal_loaded(current: webdriver.Chrome) -> bool:
-        url = current.current_url
-        if "/identity/if/flow/" in url or "/outpost.goauthentik.io/callback" in url:
-            return False
-        if url != public_origin and not url.startswith(public_origin + "/"):
-            return False
-        return current.execute_script("return document.readyState") in {"interactive", "complete"}
-
     try:
-        wait.until(authenticated_portal_loaded)
+        wait.until(lambda current: authenticated_destination_loaded(current, public_origin))
     except TimeoutException as error:
         details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
         raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
@@ -699,6 +704,18 @@ def read_secret(path: str) -> str:
     return value
 
 
+def capability_routes(ai_enabled: bool) -> dict[str, str]:
+    routes = {
+        "files": "/shares/",
+        "webdav": "/dav/",
+        "vault": "/vault/",
+        "syncthing": "/settings/syncthing",
+    }
+    if ai_enabled:
+        routes["ai"] = "/ai/"
+    return routes
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--origin", default="https://nas-test.local")
@@ -708,6 +725,7 @@ def main() -> int:
     parser.add_argument("--baseline-password-file")
     parser.add_argument("--bootstrap-password-file")
     parser.add_argument("--bootstrap-only", action="store_true")
+    parser.add_argument("--ai-enabled", action="store_true")
     args = parser.parse_args()
     if args.bootstrap_only:
         if args.bootstrap_password_file is None:
@@ -757,59 +775,47 @@ def main() -> int:
             "application.vaultwarden.access",
         ],
     )
-    capability_routes = {
-        "files": "/shares/",
-        "webdav": "/dav/",
-        "ai": "/ai/",
-        "vault": "/vault/",
-        "syncthing": "/settings/syncthing",
-    }
+    routes = capability_routes(args.ai_enabled)
     common_allowed = [
-        RouteExpectation(capability_routes["files"], True),
-        RouteExpectation(capability_routes["vault"], True),
+        RouteExpectation(routes["files"], True),
+        RouteExpectation(routes["vault"], True),
     ]
+    operator_expectations = common_allowed + [
+        RouteExpectation(routes["webdav"], True),
+        RouteExpectation(routes["syncthing"], True, "/identity/if/flow/nas-user-settings/"),
+        RouteExpectation("/syncthing/", True),
+        RouteExpectation("/alerts/", True),
+        RouteExpectation("/victoriametrics/", True),
+        RouteExpectation("/console/", True),
+        RouteExpectation("/shares/admin/", True),
+        RouteExpectation("/vault/admin/", True),
+    ]
+    if args.ai_enabled:
+        operator_expectations.append(RouteExpectation(routes["ai"], True))
     run_account(
         args.origin,
         "operator",
         operator_password,
-        common_allowed
-        + [
-            RouteExpectation(capability_routes["webdav"], True),
-            RouteExpectation(
-                capability_routes["syncthing"],
-                True,
-                "/identity/if/flow/nas-user-settings/",
-            ),
-            RouteExpectation("/syncthing/", True),
-            RouteExpectation(capability_routes["ai"], True),
-            RouteExpectation("/alerts/", True),
-            RouteExpectation("/victoriametrics/", True),
-            RouteExpectation("/console/", True),
-            RouteExpectation("/shares/admin/", True),
-            RouteExpectation("/vault/admin/", True),
-        ],
+        operator_expectations,
         True,
     )
+    alice_expectations = common_allowed + [
+        RouteExpectation(routes["webdav"], False),
+        RouteExpectation(routes["syncthing"], True, "/identity/if/flow/nas-user-settings/"),
+        RouteExpectation("/syncthing/", False),
+        RouteExpectation("/alerts/", False),
+        RouteExpectation("/victoriametrics/", False),
+        RouteExpectation("/console/", False),
+        RouteExpectation("/shares/admin/", False),
+        RouteExpectation("/vault/admin/", False),
+    ]
+    if args.ai_enabled:
+        alice_expectations.append(RouteExpectation(routes["ai"], False))
     run_account(
         args.origin,
         "alice",
         alice_password,
-        common_allowed
-        + [
-            RouteExpectation(capability_routes["webdav"], False),
-            RouteExpectation(
-                capability_routes["syncthing"],
-                True,
-                "/identity/if/flow/nas-user-settings/",
-            ),
-            RouteExpectation("/syncthing/", False),
-            RouteExpectation(capability_routes["ai"], False),
-            RouteExpectation("/alerts/", False),
-            RouteExpectation("/victoriametrics/", False),
-            RouteExpectation("/console/", False),
-            RouteExpectation("/shares/admin/", False),
-            RouteExpectation("/vault/admin/", False),
-        ],
+        alice_expectations,
         True,
         True,
     )
@@ -817,7 +823,7 @@ def main() -> int:
         args.origin,
         "baseline",
         baseline_password,
-        [RouteExpectation(path, False) for path in capability_routes.values()]
+        [RouteExpectation(path, False) for path in routes.values()]
         + [
             RouteExpectation("/syncthing/", False),
             RouteExpectation("/console/", False),

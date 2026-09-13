@@ -854,13 +854,16 @@ wait_inactive authentik.service
 for unit in "${outage_preserved_units[@]}"; do
   systemctl is-active --quiet "$unit" || fail "$unit stopped during the isolated Authentik outage"
 done
-auth_down_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
+auth_down_response="$(curl --silent --show-error --insecure --output /dev/null \
+  --write-out '%{http_code} %{redirect_url}' --connect-timeout 3 --max-time 20 \
+  --resolve "$PUBLIC_HOST:443:127.0.0.1" \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files' \
   "https://$PUBLIC_HOST/shares/" || true)"
-case "$auth_down_code" in
+case "$auth_down_response" in
   4??|5??) : ;;
   000|"") fail "protected route lost its HTTP boundary while Authentik was unavailable" ;;
-  *) fail "protected route returned unexpected status $auth_down_code while Authentik was unavailable" ;;
+  301\ https://"$PUBLIC_HOST"/identity/*|302\ https://"$PUBLIC_HOST"/identity/*|303\ https://"$PUBLIC_HOST"/identity/*|307\ https://"$PUBLIC_HOST"/identity/*|308\ https://"$PUBLIC_HOST"/identity/*|301\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|302\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|303\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|307\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|308\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*) : ;;
+  *) fail "protected route returned an invalid denial response while Authentik was unavailable: $auth_down_response" ;;
 esac
 systemctl start authentik.service
 wait_active authentik.service

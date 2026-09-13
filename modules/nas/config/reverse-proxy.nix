@@ -98,13 +98,15 @@ in
         route {
           ${caddyForwardAuth}
           @missingSyncthingSettingsAccess {
-            not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)application\.syncthing\.access([[:space:]]*[|,]|$)
+            not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)(application\.syncthing\.access|nas_admin)([[:space:]]*[|,]|$)
           }
           respond @missingSyncthingSettingsAccess 403
           redir * ${cfg.identity.authentikPath}if/flow/nas-user-settings/
         }
       }
-      redir /settings* ${cfg.identity.authentikPath}if/user/
+      handle /settings* {
+        redir * ${cfg.identity.authentikPath}if/user/
+      }
 
       # Authentik owns the appliance home page and application launcher.
       handle {

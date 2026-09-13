@@ -379,6 +379,11 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn("reverse_proxy unix//run/demo/http.sock", rendered)
         self.assertIn('header_down X-Frame-Options "SAMEORIGIN"', rendered)
 
+    def test_syncthing_route_uses_the_loopback_upstream_host(self):
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        syncthing = seed.split('routes.web = (pathRoute [ "/syncthing" ]', 1)[1].split("};", 1)[0]
+        self.assertIn('requestHeaders.Host = "127.0.0.1:${toString syncthingGuiPort}";', syncthing)
+
     def test_static_request_headers_cannot_forge_trusted_identity(self):
         service = self.base_service()
         service["routes"] = {

@@ -664,9 +664,7 @@ def retire_bootstrap_runtime(
             str(bootstrap_root / "authentik/environment"),
         ]
     )
-    run_interactive_privileged(
-        coordinated_child(["nas-secrets", "activate-setup-stdin"]), input_text=keepass_password + "\n"
-    )
+    run_interactive_privileged(coordinated_child(["nas-secrets", "activate-stdin"]), input_text=keepass_password + "\n")
     return {"bootstrapRetired": True}
 
 

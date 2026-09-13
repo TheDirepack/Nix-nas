@@ -52,38 +52,50 @@ official-ISO install/reboot, and installed-appliance remediation drills remain
 outstanding. The earlier guest evidence below predates these corrections and
 does not qualify them.
 
-### Latest checkpoint - 2026-09-12
+### Latest checkpoint - 2026-09-13
 
-The uncommitted follow-up to `3c1a627` also includes integration corrections
+The follow-up to `4a13275` includes further corrections
 found while advancing VM qualification. They support the audit acceptance work
-but do not add or close separate audit findings. The corrections include:
+but do not add or close separate audit findings. In addition to the integration
+corrections already committed on the remediation branch, this checkpoint:
 
-- running the canonical V2 guest fixture without Nix-time rewriting, assigning
-  application capabilities through an administrator Authentik browser session,
-  and tightening browser allow/deny and personal-file checks;
-- fixing the Cockpit host API binding and service command path, operation-page
-  browser navigation, responsive action layout, and an unlabeled form field;
-- preserving detached setup job access across the final Caddy transition,
-  redacting its capability header, correcting Authentik outpost forwarding, and
-  validating the complete Caddy configuration as the Caddy service user;
-- starting and awaiting Syncthing during setup, preserving Vaultwarden's ZFS
-  state path, and restoring the proxy outpost after the Authentik outage drill;
-- accepting a deleted-but-running QEMU executable path and removing retired
-  gate and legacy capability vocabulary from the VM fixture.
+- uses the normal secret-activation path when first-start retires bootstrap
+  state, and starts only the units selected by the validated current V2
+  reconciliation state instead of a hard-coded service list;
+- keeps invalid setup submissions disabled with visible guidance and treats a
+  missing resumable setup job as an expected no-job result;
+- waits for the Authentik application page to finish rendering, makes browser
+  route expectations follow the enabled profile, and strengthens the outage
+  drill to accept only an HTTP failure or an identity redirect;
+- permits `nas_admin` to reach Syncthing user settings, prevents the generic
+  settings redirect from falling through, and sends Syncthing its loopback
+  upstream Host header; and
+- rebuilds the committed wizard bundle and adds focused source-level coverage
+  for these contracts.
 
-Latest clean VM runs passed Cockpit authorization, overview loading, navigation,
-and maintenance-dialog interaction before exposing responsive overflow and an
-unlabeled field at the browser quality gate. Those UI defects now pass focused
-coverage but still require an installed rerun. A subsequent clean run stopped
-earlier when resource starvation caused a unit-test timeout. The VM preflight
-now limits the Python unit runner to two workers while retaining its extended
-timeout; that capped configuration still needs a clean rerun. Do not treat the
-timeout as a product diagnosis or record full native qualification from these
-runs.
+Focused validation of this worktree passed 111 selected Python tests, 15 setup
+wizard Node tests, and the wizard stale-bundle check. These are targeted
+source-level results, not a complete preflight or native qualification.
 
-**Go/no-go:** do not close the findings for release or designate the result
-install-ready until the applicable native acceptance evidence above is recorded
-against a committed remediation revision and the release checklist passes.
+The latest clean QEMU run reached 1,468 source tests and passed the setup,
+Authentik-outage, firewall, and operator-browser phases. It then failed Alice's
+reused-session rendering check. The current browser readiness correction has
+focused coverage but has not passed a clean installed rerun. This run is not a
+green full-QEMU result, and phases after that failure are not claimed.
+
+A separate manual validation using the current source completed first-start
+setup. On its first encrypted reboot, the `tank` pool was not imported and the
+protected services remained locked. The locked-service outcome preserves the
+fail-closed boundary, but the missing pool import blocks encrypted-reboot and
+installed-appliance qualification. No root cause or correction for that failure
+is established by the current worktree.
+
+**Go/no-go:** no-go for audit closure, release qualification, or an
+install-ready designation. The critical path is to diagnose and correct the
+encrypted-reboot pool import, repeat that reboot through protected-service
+activation, rerun Alice's reused-session browser check, and then complete a
+clean full QEMU run against a committed remediation revision before applying
+the release checklist.
 
 ## Evidence and validation limits
 

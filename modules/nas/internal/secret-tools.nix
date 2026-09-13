@@ -387,7 +387,8 @@ PY_AI_PROVIDERS
         acquire_lock
         prompt_unlock
 
-        local local_stage root_stage previous transaction_dir runtime_base
+        local local_stage root_stage previous transaction_dir runtime_base v2_systemd_state
+        local -a v2_start_units=()
         local bootstrap_token_reused=false
         local authentik_secret authentik_bootstrap_token authentik_bootstrap_password authentik_outpost_token
         ${lib.optionalString cfg.vaultwarden.enable ''local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash''}
@@ -585,6 +586,25 @@ NTFY_ENV
         ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''install_secret "$local_stage/power/nut-webgui-server-key" "$root_stage/power/nut-webgui-server-key" root root''}
         sudo install -m 0400 -o root -g root /dev/null "$root_stage/ready"
 
+        v2_systemd_state=/run/nas-control/systemd-reconciled.json
+        if sudo test -f "$v2_systemd_state"; then
+          if ! sudo ${pkgs.jq}/bin/jq -e '
+            .schemaVersion == 1 and
+            (.startUnits | type == "array") and
+            all(.startUnits[]; type == "string")
+          ' "$v2_systemd_state" >/dev/null; then
+            echo "Refusing to activate secrets: Managed Services V2 runtime state is malformed." >&2
+            exit 70
+          fi
+          mapfile -t v2_start_units < <(sudo ${pkgs.jq}/bin/jq -r '.startUnits[]' "$v2_systemd_state")
+          for gated_unit in "''${v2_start_units[@]}"; do
+            [[ "$gated_unit" =~ ^[A-Za-z0-9_.@:-]+\.(service|socket|timer|path|target|mount)$ ]] || {
+              echo "Refusing to activate secrets: invalid V2 unit name: $gated_unit" >&2
+              exit 70
+            }
+          done
+        fi
+
         nas_secret_tx_swap
 
         sudo systemctl reset-failed \
@@ -603,13 +623,10 @@ NTFY_ENV
           echo "Protected service target failed to start; inspect systemctl --failed." >&2
           exit 71
         else
-          # Secret-gated units skipped while locked are never retried by
-          # systemd, and target activation does not pull units without install
-          # wants. Converge them explicitly once their conditions hold.
-          for gated_unit in copyparty.service nas-v2-timer-identity-sync-0.timer ntfy-sh.service nas-alert-router.service grafana.service victoriametrics.service telegraf.service vmalert-nas.service; do
-            if sudo systemctl cat "$gated_unit" >/dev/null 2>&1; then
-              sudo systemctl start "$gated_unit" || exit 71
-            fi
+          # Target activation does not pull V2-owned units. Restore only units
+          # selected by the current V2 projection after their secret gates hold.
+          for gated_unit in "''${v2_start_units[@]}"; do
+            sudo systemctl start "$gated_unit" || exit 71
           done
         fi
 

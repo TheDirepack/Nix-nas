@@ -83,9 +83,11 @@ class ContractTests(unittest.TestCase):
         account_tools = text("modules/nas/internal/account-tools.nix")
         self.assertIn("if/user/", proxy)
         self.assertIn("if/flow/nas-user-settings/", proxy)
-        settings_route = proxy.split("handle /settings/syncthing", 1)[1].split("redir /settings*", 1)[0]
+        settings_route = proxy.split("handle /settings/syncthing", 1)[1].split("handle /settings*", 1)[0]
         self.assertIn(r"application\.syncthing\.access", settings_route)
+        self.assertIn("nas_admin", settings_route)
         self.assertNotIn(r"application\.syncthing\.admin", settings_route)
+        self.assertIn("handle /settings* {", proxy)
         self.assertIn("attributes.nasSyncthingDevices", blueprint)
         self.assertIn("user_creation_mode: never_create", blueprint)
         self.assertIn("nas-user-settings-validate-syncthing-devices", blueprint)

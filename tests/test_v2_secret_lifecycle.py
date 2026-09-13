@@ -27,7 +27,10 @@ class V2SecretLifecycleTests(unittest.TestCase):
         core, _, convergence = activate.partition("for gated_unit in")
         self.assertIn("for gated_unit in", activate)
         self.assertNotIn("copyparty.service", core)
-        self.assertIn("copyparty.service", convergence)
+        self.assertIn("v2_systemd_state=/run/nas-control/systemd-reconciled.json", core)
+        self.assertIn(".startUnits", core)
+        self.assertIn("for gated_unit in \"''${v2_start_units[@]}\"", convergence)
+        self.assertNotIn("for gated_unit in copyparty.service", convergence)
 
     def test_discarded_generation_helpers_do_not_return(self) -> None:
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")

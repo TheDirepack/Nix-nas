@@ -104,7 +104,10 @@ let
         local-discovery = portListener "udp" syncthingDiscoveryPort;
       };
       routes.web = (pathRoute [ "/syncthing" ] (httpTarget syncthingGuiPort) (identity "admin")) // {
-        proxy.stripPrefix = "/syncthing";
+        proxy = {
+          stripPrefix = "/syncthing";
+          requestHeaders.Host = "127.0.0.1:${toString syncthingGuiPort}";
+        };
         portal = portal "Syncthing" "Files" "sync" 20;
       };
     };

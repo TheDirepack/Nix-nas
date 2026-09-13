@@ -452,6 +452,7 @@ class ContractTests(unittest.TestCase):
                     "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
                     "NAS_PREFLIGHT_SKIP_TESTS": "1",
                     "NAS_PREFLIGHT_SKIP_NIX": "1",
+                    "NAS_PREFLIGHT_SKIP_TOOLING": "1",
                 },
                 text=True,
                 capture_output=True,
@@ -711,6 +712,10 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("systemctl stop authentik.service", outage)
         self.assertNotIn("systemctl start nas-protected-services.target", outage)
         self.assertIn('000|"") fail "protected route lost its HTTP boundary', outage)
+        self.assertIn("--write-out '%{http_code} %{redirect_url}'", outage)
+        self.assertIn('https://"$PUBLIC_HOST"/identity/*', outage)
+        self.assertIn('https://"$AUTHENTIK_PUBLIC_HOST"/identity/*', outage)
+        self.assertIn('fail "protected route returned an invalid denial response', outage)
         for unit in (
             "nas-protected-services.target",
             "caddy.service",

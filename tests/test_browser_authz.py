@@ -290,6 +290,15 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.authz.discard_browser_log(driver)
         driver.get_log.assert_called_once_with("browser")
 
+    def test_portal_readiness_waits_for_applications_instead_of_loading_shell(self) -> None:
+        driver = mock.Mock()
+        driver.current_url = "https://nas-test.local/identity/if/user/"
+        driver.execute_script.return_value = "complete"
+        with mock.patch.object(self.authz, "rendered_text", return_value="Loading"):
+            self.assertFalse(self.authz.authenticated_destination_loaded(driver, "https://nas-test.local"))
+        with mock.patch.object(self.authz, "rendered_text", return_value="My applications\n0 applications available"):
+            self.assertTrue(self.authz.authenticated_destination_loaded(driver, "https://nas-test.local"))
+
     def test_discard_browser_log_ignores_unavailable_log(self) -> None:
         driver = mock.Mock()
         driver.get_log.side_effect = ValueError("log unavailable")
@@ -385,6 +394,12 @@ class BrowserAuthzInputTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, '"status": 503'):
                 self.authz.verify_routes(object(), [self.authz.RouteExpectation("/ai/", True)])
+
+    def test_capability_routes_omit_ai_when_the_profile_disables_it(self) -> None:
+        self.assertNotIn("ai", self.authz.capability_routes(ai_enabled=False))
+
+    def test_capability_routes_include_ai_when_the_profile_enables_it(self) -> None:
+        self.assertEqual(self.authz.capability_routes(ai_enabled=True)["ai"], "/ai/")
 
     def test_administrator_assigns_application_capabilities_through_authentik_session(self) -> None:
         driver = mock.MagicMock()

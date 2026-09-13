@@ -134,6 +134,15 @@ test("setup job polling tolerates the expected protected-service reconnect windo
   assert.match(confirm, /isTerminal && \(/);
 });
 
+test("confirmation blocks invalid setup input and treats an absent resumable job as normal", async () => {
+  const confirm = await wizard("src/steps/ConfirmStep.jsx");
+  assert.match(confirm, /const problem = validate\(/);
+  assert.match(confirm, /variant="warning"[^>]*title=\{problem\}/);
+  assert.match(confirm, /isDisabled=\{busy \|\| resuming \|\| Boolean\(problem\)\}/);
+  assert.match(confirm, /reason\?\.status === 404/);
+  assert.match(confirm, /title="No running setup job"/);
+});
+
 test("setup stylesheet provides a full-height responsive shell and dark-mode tokens", async () => {
   const css = await wizard("src/wizard.css");
   assert.match(css, /min-height: 100dvh/);
