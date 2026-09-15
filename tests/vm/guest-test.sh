@@ -792,6 +792,26 @@ nas-identity-sync export-account temporary | jq -e '
   (.groups | index("nas_admin")) == null and
   (.groups | index("nas_users")) == null
 ' >/dev/null
+for account in post-a post-b; do
+  printf '%s\n' "${account}-vm-password" |
+    run_as_nasadmin nas-setup account apply \
+      --username "$account" \
+      --name "Post-setup ${account}" \
+      --email "${account}@nas.local" \
+      --password-stdin >"/tmp/nas-account-${account}.json"
+  jq -e --arg account "$account" '.account.created == [$account]' "/tmp/nas-account-${account}.json" >/dev/null
+  nas-identity-sync export-account "$account" | jq -e '
+    .active == true and
+    .groups == ["nas_users"] and
+    .attributes.nasManagedBySetup == true and
+    (.attributes | has("nasSyncthingDevices") | not) and
+    (.attributes | has("nasSyncthingDevice") | not)
+  ' >/dev/null
+  [[ -d "/tank/shares/users/$account" ]] || fail "personal directory was not created for $account"
+done
+nas-identity-sync capabilities | jq -e '
+  [.users[] | select(.id == "post-a" or .id == "post-b") | .assignedApplicationCapabilities] == [[], []]
+' >/dev/null
 pass "core services, account apply/disable CLI, and CopyParty backend are healthy"
 
 log "Authentik API, identity policy, and proxy authorization"
@@ -800,6 +820,37 @@ case "$unauth_code" in 401|403) : ;; *) fail "Authentik API without a token retu
 token="$(cat /run/nas-secrets/authentik/api-token)"
 auth_code="$(http_code -H "Authorization: Bearer $token" http://127.0.0.1:9000/identity/api/v3/core/users/)"
 [[ "$auth_code" == 200 ]] || fail "Authentik API token returned HTTP $auth_code"
+post_a_device_home="$(mktemp -d /tmp/nas-post-a-device.XXXXXX)"
+post_b_device_home="$(mktemp -d /tmp/nas-post-b-device.XXXXXX)"
+HOME=/root syncthing generate --home "$post_a_device_home" >/dev/null
+HOME=/root syncthing generate --home "$post_b_device_home" >/dev/null
+post_a_device="$(HOME=/root syncthing device-id --home "$post_a_device_home")"
+post_b_device="$(HOME=/root syncthing device-id --home "$post_b_device_home")"
+rm -rf -- "$post_a_device_home" "$post_b_device_home"
+[[ "$post_a_device" != "$post_b_device" ]] || fail "generated post-setup Syncthing device IDs overlap"
+for account in post-a post-b; do
+  account_json="$(curl --silent --show-error --fail \
+    -H "Authorization: Bearer $token" \
+    "http://127.0.0.1:9000/identity/api/v3/core/users/?username=$account")"
+  account_pk="$(jq -er --arg account "$account" '.results[] | select(.username == $account) | .pk' \
+    <<<"$account_json")"
+  if [[ "$account" == post-a ]]; then
+    device_id="$post_a_device"
+  else
+    device_id="$post_b_device"
+  fi
+  attributes="$(jq -c --arg account "$account" --arg id "$device_id" --arg name "$account device" '
+    .results[] |
+    select(.username == $account) |
+    .attributes + {nasSyncthingDevices: [{deviceID: $id, name: $name, addresses: ["dynamic"]}]}
+  ' <<<"$account_json")"
+  curl --silent --show-error --fail \
+    -X PATCH \
+    -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    --data "$(jq -cn --argjson attributes "$attributes" '{attributes: $attributes}')" \
+    "http://127.0.0.1:9000/identity/api/v3/core/users/$account_pk/" >/dev/null
+done
 
 nas-identity-sync status | jq -e \
   '.identityProvider == "Authentik" and .shareAuthority == "CopyParty" and (.administrators | length > 0)' >/dev/null
@@ -924,14 +975,25 @@ printf '%s\n' operator-vm-password > "$authz_secret_dir/operator"
 printf '%s\n' nasadmin-vm-password > "$authz_secret_dir/administrator"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
+printf '%s\n' post-a-vm-password > "$authz_secret_dir/post-a"
+printf '%s\n' post-b-vm-password > "$authz_secret_dir/post-b"
 chmod 0600 "$authz_secret_dir"/*
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --identity-xss-only \
+  --alice-password-file "$authz_secret_dir/alice"
+run_as_nasadmin nas-setup account apply --username alice --name 'Alice Example' \
+  >/tmp/nas-account-xss-name-restore.json
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
    --origin "https://$AUTHENTIK_PUBLIC_HOST" \
    --administrator-password-file "$authz_secret_dir/administrator" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
-  --baseline-password-file "$authz_secret_dir/baseline"
+  --baseline-password-file "$authz_secret_dir/baseline" \
+  --post-a-password-file "$authz_secret_dir/post-a" \
+  --post-b-password-file "$authz_secret_dir/post-b"
 nas-identity-sync capabilities | jq -e '
   .users[] |
   select(.id == "alice") |
@@ -941,6 +1003,42 @@ nas-identity-sync capabilities | jq -e '
     "application.vaultwarden.access"
   ]
 ' >/dev/null
+run_as_nasadmin nas-setup account apply --username post-a --name 'Post-setup A updated' \
+  >/tmp/nas-account-post-a-update.json
+nas-identity-sync capabilities | jq -e '
+  .users[] |
+  select(.id == "post-a") |
+  .assignedApplicationCapabilities == [
+    "application.copyparty.files",
+    "application.syncthing.access"
+  ]
+' >/dev/null
+nas-identity-sync sync-syncthing >/tmp/nas-post-setup-syncthing.json
+if [[ -f /var/lib/syncthing/.config/syncthing/apikey ]]; then
+  syncthing_api_key="$(tr -d '\n' </var/lib/syncthing/.config/syncthing/apikey)"
+else
+  syncthing_api_key="$(sed -n 's:.*<apikey>\([^<]*\)</apikey>.*:\1:p' \
+    /var/lib/syncthing/.config/syncthing/config.xml | head -n1)"
+fi
+[[ -n "$syncthing_api_key" ]] || fail "Syncthing API key is unavailable"
+curl --silent --show-error --fail -H "X-API-Key: $syncthing_api_key" \
+  http://127.0.0.1:8384/rest/config/folders >/tmp/nas-post-setup-syncthing-folders.json
+jq -e --arg a "$post_a_device" --arg b "$post_b_device" '
+  (map(select(.id == "nas-post-a-backup")) | length) == 1 and
+  (map(select(.id == "nas-post-b-backup")) | length) == 1 and
+  (map(select(.id == "nas-post-a-backup"))[0] |
+    .path == "/tank/shares/users/post-a/syncthing" and
+    [.devices[].deviceID] == [$a]) and
+  (map(select(.id == "nas-post-b-backup"))[0] |
+    .path == "/tank/shares/users/post-b/syncthing" and
+    [.devices[].deviceID] == [$b])
+' /tmp/nas-post-setup-syncthing-folders.json >/dev/null ||
+  fail "post-setup Syncthing folders are not isolated by user path and device"
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --administrator-password-file "$authz_secret_dir/administrator" \
+  --syncthing-admin-only
 cleanup_authz_secrets
 authz_secret_dir=""
 pass "Browser authorization, administrator-owned capability assignment, and Authentik user-settings flow"

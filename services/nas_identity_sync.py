@@ -1025,6 +1025,22 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     state = load_state()
     old_folders = {str(value) for value in state.get("folders", [])}
     old_devices = {str(value) for value in state.get("devices", [])}
+    observed_folders = object_by_identifier(
+        syncthing_request("/rest/config/folders"),
+        "id",
+        label="folder",
+    )
+    observed_devices = object_by_identifier(
+        syncthing_request("/rest/config/devices"),
+        "deviceID",
+        label="device",
+    )
+    unmanaged_folders = sorted(folders.keys() & observed_folders.keys() - old_folders)
+    unmanaged_devices = sorted(devices.keys() & observed_devices.keys() - old_devices)
+    if unmanaged_folders:
+        raise SyncError("Refusing to replace unmanaged Syncthing folder(s): " + ", ".join(unmanaged_folders))
+    if unmanaged_devices:
+        raise SyncError("Refusing to replace unmanaged Syncthing device(s): " + ", ".join(unmanaged_devices))
     generation = syncthing_generation(folders, devices)
     journal: dict[str, Any] = {
         "schemaVersion": 1,

@@ -118,6 +118,11 @@ def first_maintenance_action(driver: webdriver.Chrome) -> Any:
 
 VIEWPORTS = ((320, 720), (768, 900), (1280, 900), (1920, 1080))
 ALLOWED_ROUTE_RETRY_ATTEMPTS = 30
+COCKPIT_ROUTE_RETRY_ATTEMPTS = 3
+COCKPIT_SESSION_ATTEMPTS = 2
+COCKPIT_TRANSIENT_HTTP_ERRORS = tuple(f"HTTP ERROR {status}" for status in (401, 403, 502, 503))
+AUTHENTIK_LOGIN_ATTEMPTS = 2
+AUTHENTIK_TRANSIENT_HTTP_STATUSES = (502, 503, 504)
 
 
 def expected_cockpit_shell_entry(entry: dict[str, Any]) -> bool:
@@ -148,7 +153,10 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
             const visible = element => {
               const style = getComputedStyle(element);
               const rect = element.getBoundingClientRect();
-              return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+              const rendered = element.checkVisibility
+                ? element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})
+                : style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+              return rendered && rect.width > 0 && rect.height > 0;
             };
             const interactive = Array.from(document.querySelectorAll(
               'a[href],button,input,select,textarea,[role="button"],[role="link"]'
@@ -160,6 +168,31 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
               }
               return [];
             });
+            const visibleOverflow = [];
+            const scanVisibleOverflow = (root, rootViewport) => {
+              for (const element of root.querySelectorAll('*')) {
+                const rect = element.getBoundingClientRect();
+                if (visible(element) && rect.right > rootViewport + 1) {
+                  visibleOverflow.push({
+                    tag: element.tagName,
+                    text: (element.innerText || element.getAttribute('aria-label') || '').trim().slice(0, 80),
+                    left: rect.left,
+                    right: rect.right,
+                  });
+                }
+                if (element.shadowRoot) scanVisibleOverflow(element.shadowRoot, rootViewport);
+                if (element.tagName === 'IFRAME') {
+                  try {
+                    if (element.contentDocument) {
+                      scanVisibleOverflow(element.contentDocument, element.contentDocument.documentElement.clientWidth);
+                    }
+                  } catch (_error) {
+                    // Cross-origin frames are intentionally inaccessible.
+                  }
+                }
+              }
+            };
+            scanVisibleOverflow(document, viewport);
             const ids = Array.from(document.querySelectorAll('[id]')).map(element => element.id).filter(Boolean);
             const duplicates = [...new Set(ids.filter((value, index) => ids.indexOf(value) !== index))];
             return {
@@ -167,11 +200,15 @@ def verify_rendering_quality(driver: webdriver.Chrome, label: str) -> None:
               documentWidth: document.documentElement.scrollWidth,
               bodyWidth: document.body ? document.body.scrollWidth : 0,
               overflow,
+              visibleOverflow: visibleOverflow.slice(0, 20),
               duplicates,
             };
             """
         )
-        if result["documentWidth"] > result["viewport"] + 1 or result["bodyWidth"] > result["viewport"] + 1:
+        document_overflow = (
+            result["documentWidth"] > result["viewport"] + 1 or result["bodyWidth"] > result["viewport"] + 1
+        )
+        if document_overflow and result["visibleOverflow"]:
             failures.append({"viewport": [width, height], "reason": "horizontal-overflow", **result})
         if result["overflow"]:
             failures.append({"viewport": [width, height], "reason": "interactive-control-overflow", **result})
@@ -204,7 +241,7 @@ def authenticated_destination_loaded(current: webdriver.Chrome, public_origin: s
     return True
 
 
-def login(driver: webdriver.Chrome, origin: str, username: str, password: str, path: str = "/") -> None:
+def _login_once(driver: webdriver.Chrome, origin: str, username: str, password: str, path: str) -> None:
     driver.get(origin.rstrip("/") + path)
     wait = WebDriverWait(driver, 60)
     wait.until(lambda current: "/identity/" in current.current_url)
@@ -236,12 +273,49 @@ def login(driver: webdriver.Chrome, origin: str, username: str, password: str, p
     password_input.send_keys(password)
     first(driver, ['button[type="submit"]', 'input[type="submit"]']).click()
     public_origin = origin.rstrip("/")
+    wait.until(lambda current: authenticated_destination_loaded(current, public_origin))
 
-    try:
-        wait.until(lambda current: authenticated_destination_loaded(current, public_origin))
-    except TimeoutException as error:
-        details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
-        raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
+
+def transient_authentik_login_error(diagnostics: dict[str, Any]) -> bool:
+    if urllib.parse.urlsplit(str(diagnostics.get("url", ""))).path != "/identity/if/flow/default-authentication-flow/":
+        return False
+    if "Response returned an error code" not in str(diagnostics.get("body", "")):
+        return False
+    endpoint = "/identity/api/v3/flows/executor/default-authentication-flow/"
+    for entry in diagnostics.get("console", []):
+        message = str(entry.get("message", ""))
+        if endpoint not in message:
+            continue
+        if any(
+            f"status of {status}" in message or f"{status} POST" in message
+            for status in AUTHENTIK_TRANSIENT_HTTP_STATUSES
+        ):
+            return True
+    return False
+
+
+def reset_browser_session(driver: webdriver.Chrome, origin: str) -> None:
+    driver.get("about:blank")
+    driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+    driver.execute_cdp_cmd(
+        "Storage.clearDataForOrigin",
+        {"origin": origin.rstrip("/"), "storageTypes": "all"},
+    )
+
+
+def login(driver: webdriver.Chrome, origin: str, username: str, password: str, path: str = "/") -> None:
+    for attempt in range(AUTHENTIK_LOGIN_ATTEMPTS):
+        try:
+            _login_once(driver, origin, username, password, path)
+            return
+        except TimeoutException as error:
+            diagnostics = browser_diagnostics(driver)
+            if attempt + 1 < AUTHENTIK_LOGIN_ATTEMPTS and transient_authentik_login_error(diagnostics):
+                reset_browser_session(driver, origin)
+                time.sleep(1)
+                continue
+            details = json.dumps(diagnostics, indent=2, sort_keys=True)
+            raise RuntimeError(f"Authentik browser login did not complete for {username!r}:\n{details}") from error
 
 
 def assign_application_capabilities(
@@ -276,11 +350,20 @@ def assign_application_capabilities(
               const users = await request(`core/users/?username=${encodeURIComponent(username)}`);
               const user = users.results.find(candidate => candidate.username === username);
               if (!user) throw new Error(`Authentik user ${username} was not found`);
-              for (const groupName of groupNames) {
-                const groups = await request(`core/groups/?name=${encodeURIComponent(groupName)}`);
-                const group = groups.results.find(candidate => candidate.name === groupName);
-                if (!group) throw new Error(`Authentik group ${groupName} was not found`);
-                await request(`core/groups/${encodeURIComponent(group.pk)}/add_user/`, {
+              const groups = await request('core/groups/?ordering=name&page_size=100');
+              const capabilityGroups = groups.results.filter(group => group.attributes?.nasManagedCapability === true);
+              const requested = new Set(groupNames);
+              for (const groupName of requested) {
+                if (!capabilityGroups.some(group => group.name === groupName)) {
+                  throw new Error(`Authentik group ${groupName} was not found`);
+                }
+              }
+              const current = new Set((user.groups || []).map(String));
+              for (const group of capabilityGroups) {
+                const assigned = current.has(String(group.pk));
+                const desired = requested.has(group.name);
+                if (assigned === desired) continue;
+                await request(`core/groups/${encodeURIComponent(group.pk)}/${desired ? 'add_user' : 'remove_user'}/`, {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json', 'X-Authentik-Csrf': decodeURIComponent(csrf)},
                   body: JSON.stringify({pk: user.num_pk ?? user.pk}),
@@ -298,16 +381,37 @@ def assign_application_capabilities(
         driver.quit()
 
 
-def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
-    login(driver, origin, username, password)
-    cockpit_root = origin.rstrip("/") + "/console/"
-    driver.get(cockpit_root)
-    wait = WebDriverWait(driver, 60)
-    wait.until(
-        lambda current: (
-            current.current_url.startswith(origin.rstrip("/") + "/console/") and not login_form_visible(current)
-        )
+def cockpit_destination_loaded(driver: webdriver.Chrome, origin: str) -> bool:
+    return (
+        driver.current_url.startswith(origin.rstrip("/") + "/console/")
+        and not login_form_visible(driver)
+        and not any(marker in driver.page_source for marker in COCKPIT_TRANSIENT_HTTP_ERRORS)
     )
+
+
+def cockpit_login(driver: webdriver.Chrome, origin: str, username: str, password: str) -> None:
+    cockpit_root = origin.rstrip("/") + "/console/"
+    wait = WebDriverWait(driver, 60)
+    for session_attempt in range(COCKPIT_SESSION_ATTEMPTS):
+        login(driver, origin, username, password)
+        persistent_403 = True
+        for route_attempt in range(COCKPIT_ROUTE_RETRY_ATTEMPTS):
+            driver.get(cockpit_root)
+            wait.until(lambda current: current.current_url.startswith(cockpit_root) and not login_form_visible(current))
+            if cockpit_destination_loaded(driver, origin):
+                return
+            persistent_403 = persistent_403 and "HTTP ERROR 403" in driver.page_source
+            if not any(marker in driver.page_source for marker in COCKPIT_TRANSIENT_HTTP_ERRORS):
+                break
+            if route_attempt + 1 < COCKPIT_ROUTE_RETRY_ATTEMPTS:
+                time.sleep(1)
+        if not persistent_403 or session_attempt + 1 >= COCKPIT_SESSION_ATTEMPTS:
+            break
+        print("VM-BROWSER-RECOVERY: restarting persistently denied Cockpit session", file=sys.stderr, flush=True)
+        reset_browser_session(driver, origin)
+        time.sleep(1)
+    details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
+    raise RuntimeError(f"Cockpit route did not become ready for {username!r}:\n{details}")
 
 
 def callback_return_matches(expected_path: str, returned_path: str) -> bool:
@@ -342,7 +446,9 @@ def verify_launcher_opens_console(origin: str, username: str, password: str) -> 
         wait = WebDriverWait(driver, 60)
         launcher_link = wait.until(lambda current: first(current, ['a[href="/console/"]', 'a[href$="/console/"]']))
         browser_step(driver, "Launcher opens Cockpit", launcher_link.click)
-        wait.until(lambda current: urllib.parse.urlsplit(current.current_url).path == "/console/")
+        wait.until(
+            lambda current: callback_return_matches("/console/", urllib.parse.urlsplit(current.current_url).path)
+        )
     finally:
         driver.quit()
 
@@ -464,6 +570,30 @@ def fetch_status(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
     )
 
 
+def fetch_outpost_identity(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
+    return driver.execute_async_script(
+        """
+        const done = arguments[arguments.length - 1];
+        fetch('/outpost.goauthentik.io/auth/caddy', {
+          credentials: 'include',
+          headers: {
+            'X-Original-URL': new URL(arguments[0], window.location.origin).href,
+            'X-Forwarded-Host': window.location.host,
+            'X-Forwarded-Proto': window.location.protocol.slice(0, -1),
+            'X-Forwarded-Uri': arguments[0],
+          },
+          redirect: 'manual',
+        }).then(response => done({
+          status: response.status,
+          username: response.headers.get('X-Authentik-Username') || '',
+          groups: response.headers.get('X-Authentik-Groups') || '',
+          entitlements: response.headers.get('X-Authentik-Entitlements') || '',
+        })).catch(error => done({status: 0, error: String(error)}));
+        """,
+        path,
+    )
+
+
 def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]) -> None:
     def matches(expectation: RouteExpectation, result: dict[str, Any]) -> bool:
         status = int(result.get("status", 0))
@@ -499,20 +629,31 @@ def verify_routes(driver: webdriver.Chrome, expectations: list[RouteExpectation]
             time.sleep(1)
             result = fetch_status(driver, expectation.path)
         if not matches(expectation, result):
-            failures.append({"path": expectation.path, "expectedAllowed": expectation.allowed, **result})
+            failure = {"path": expectation.path, "expectedAllowed": expectation.allowed, **result}
+            if expectation.allowed and int(result.get("status", 0)) == 403:
+                failure["outpostIdentity"] = fetch_outpost_identity(driver, expectation.path)
+            failures.append(failure)
     if failures:
         raise RuntimeError(json.dumps(failures, indent=2, sort_keys=True))
 
 
-def fetch_request(driver: webdriver.Chrome, path: str, method: str, body: str | None = None) -> dict[str, Any]:
+def fetch_request(
+    driver: webdriver.Chrome,
+    path: str,
+    method: str,
+    body: str | None = None,
+    *,
+    replace: bool = False,
+) -> dict[str, Any]:
     return driver.execute_async_script(
         """
         const done = arguments[arguments.length - 1];
-        const options = {method: arguments[1], credentials: 'include', redirect: 'follow'};
+        const options = {method: arguments[1], credentials: 'include', redirect: 'follow', headers: {}};
         if (arguments[2] !== null) {
           options.body = arguments[2];
-          options.headers = {'Content-Type': 'text/plain'};
+          options.headers['Content-Type'] = 'text/plain';
         }
+        if (arguments[3]) options.headers.Replace = '1';
         fetch(arguments[0], options)
           .then(async response => done({status: response.status, url: response.url, body: await response.text()}))
           .catch(error => done({status: 0, url: '', body: '', error: String(error)}));
@@ -520,6 +661,7 @@ def fetch_request(driver: webdriver.Chrome, path: str, method: str, body: str | 
         path,
         method,
         body,
+        replace,
     )
 
 
@@ -535,6 +677,103 @@ def verify_personal_file_operations(driver: webdriver.Chrome, username: str) -> 
     deleted = fetch_request(driver, path, "DELETE")
     if int(deleted.get("status", 0)) not in {200, 202, 204}:
         raise RuntimeError(f"personal file deletion failed: {deleted!r}")
+
+
+def verify_cross_user_file_access_blocked(driver: webdriver.Chrome, origin: str, username: str) -> None:
+    path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
+    for method, body in (("GET", None), ("PUT", "cross-user-overwrite"), ("DELETE", None)):
+        result = authenticated_https_request(driver, origin, path, method, body)
+        if int(result.get("status", 0)) not in {401, 403, 404}:
+            raise RuntimeError(f"cross-user {method} unexpectedly succeeded: {result!r}")
+
+
+def verify_administrator_syncthing_folders(driver: webdriver.Chrome, usernames: list[str]) -> None:
+    result = fetch_request(driver, "/syncthing/rest/config/folders", "GET")
+    if int(result.get("status", 0)) != 200:
+        raise RuntimeError(f"administrator could not inspect Syncthing folders: {result!r}")
+    try:
+        folders = json.loads(str(result.get("body", "")))
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Syncthing folder response was not JSON") from error
+    by_id = {item.get("id"): item for item in folders if isinstance(item, dict)} if isinstance(folders, list) else {}
+    device_sets: list[set[str]] = []
+    for username in usernames:
+        folder = by_id.get(f"nas-{username}-backup")
+        expected_path = f"/tank/shares/users/{username}/syncthing"
+        if not isinstance(folder, dict) or folder.get("path") != expected_path:
+            raise RuntimeError(f"administrator did not see the isolated Syncthing folder for {username}: {folder!r}")
+        devices = {
+            str(device.get("deviceID"))
+            for device in folder.get("devices", [])
+            if isinstance(device, dict) and device.get("deviceID")
+        }
+        if not devices:
+            raise RuntimeError(f"Syncthing folder for {username} has no assigned devices")
+        device_sets.append(devices)
+    if any(left & right for index, left in enumerate(device_sets) for right in device_sets[index + 1 :]):
+        raise RuntimeError("isolated Syncthing folders share a user device")
+
+
+def verify_copy_party_user_isolation(
+    origin: str,
+    administrator: tuple[str, str],
+    accounts: list[tuple[str, str]],
+) -> None:
+    contents = {username: f"copy-party-isolation-{username}" for username, _password in accounts}
+    for username, password in accounts:
+        driver = browser()
+        try:
+            login(driver, origin, username, password)
+            verify_routes(driver, [RouteExpectation("/shares/", True)])
+            path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
+            written = fetch_request(driver, path, "PUT", contents[username])
+            if int(written.get("status", 0)) not in {200, 201, 204}:
+                raise RuntimeError(f"personal isolation sentinel upload failed for {username}: {written!r}")
+        finally:
+            driver.quit()
+
+    for attacker, password in accounts:
+        for victim, _victim_password in accounts:
+            if attacker == victim:
+                continue
+            driver = browser()
+            try:
+                login(driver, origin, attacker, password)
+                verify_routes(driver, [RouteExpectation("/shares/", True)])
+                verify_cross_user_file_access_blocked(driver, origin, victim)
+            finally:
+                driver.quit()
+
+    admin_username, admin_password = administrator
+    driver = browser()
+    try:
+        login(driver, origin, admin_username, admin_password)
+        verify_routes(driver, [RouteExpectation("/syncthing/", True), RouteExpectation("/shares/admin/", True)])
+        for username, _password in accounts:
+            path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
+            downloaded = fetch_request(driver, path, "GET")
+            if int(downloaded.get("status", 0)) != 200 or downloaded.get("body") != contents[username]:
+                raise RuntimeError(f"administrator could not read {username}'s personal file: {downloaded!r}")
+            contents[username] = f"copy-party-administrator-update-{username}"
+            written = fetch_request(driver, path, "PUT", contents[username], replace=True)
+            if int(written.get("status", 0)) not in {200, 201, 204}:
+                raise RuntimeError(f"administrator could not update {username}'s personal file: {written!r}")
+    finally:
+        driver.quit()
+
+    for username, password in accounts:
+        driver = browser()
+        try:
+            login(driver, origin, username, password)
+            path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
+            downloaded = fetch_request(driver, path, "GET")
+            if int(downloaded.get("status", 0)) != 200 or downloaded.get("body") != contents[username]:
+                raise RuntimeError(f"personal isolation sentinel changed for {username}: {downloaded!r}")
+            deleted = fetch_request(driver, path, "DELETE")
+            if int(deleted.get("status", 0)) not in {200, 202, 204}:
+                raise RuntimeError(f"personal isolation sentinel deletion failed for {username}: {deleted!r}")
+        finally:
+            driver.quit()
 
 
 def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
@@ -587,6 +826,44 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         )
 
 
+def authenticated_https_request(
+    driver: webdriver.Chrome,
+    origin: str,
+    path: str,
+    method: str,
+    body: str | None = None,
+) -> dict[str, Any]:
+    parsed = urllib.parse.urlsplit(origin)
+    if parsed.scheme != "https" or not parsed.hostname or not path.startswith("/"):
+        raise ValueError("authenticated browser probe requires an HTTPS origin and root-relative path")
+    address = os.environ.get("NAS_BROWSER_HOST_ADDRESS", "").strip() or parsed.hostname
+    cookies = "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in driver.get_cookies())
+    headers = {"Host": parsed.netloc, "Cookie": cookies}
+    payload = body.encode() if body is not None else None
+    if payload is not None:
+        headers["Content-Type"] = "text/plain"
+    connection = _PinnedHTTPSConnection(
+        parsed.hostname,
+        address,
+        port=parsed.port or 443,
+        timeout=30,
+        context=ssl._create_unverified_context(),
+    )
+    try:
+        connection.request(method, path, body=payload, headers=headers)
+        response = connection.getresponse()
+        response_body = response.read().decode(errors="replace")
+        location = response.getheader("Location")
+        response_url = (
+            urllib.parse.urljoin(origin.rstrip("/") + path, location) if location else origin.rstrip("/") + path
+        )
+        return {"status": response.status, "url": response_url, "body": response_body}
+    except (OSError, TimeoutError, http.client.HTTPException) as error:
+        raise RuntimeError(f"authenticated browser probe failed: {error}") from error
+    finally:
+        connection.close()
+
+
 def native_share_response(origin: str) -> dict[str, Any]:
     parsed = urllib.parse.urlsplit(origin)
     headers = {"Accept": "text/html"}
@@ -623,26 +900,46 @@ def verify_native_share_route(_driver: webdriver.Chrome, origin: str) -> None:
         raise RuntimeError("CopyParty native share route was intercepted by Authentik")
 
 
-def verify_no_identity_markup_injection(driver: webdriver.Chrome, username: str) -> None:
+def verify_no_identity_markup_injection(
+    driver: webdriver.Chrome,
+    username: str,
+    *,
+    require_hostile_display_name: bool = False,
+) -> None:
     if username != "alice":
         return
     result = driver.execute_script(
         """
-        return {
-          injectedImage: Boolean(document.querySelector('img[src="x"]')),
-          executionMarker: document.body?.dataset?.nasXss || null,
+        const result = {injectedImage: false, executionMarker: null};
+        const scan = root => {
+          result.injectedImage ||= Boolean(root.querySelector('img[src="x"]'));
+          result.executionMarker ||= root.body?.dataset?.nasXss || null;
+          for (const element of root.querySelectorAll('*')) {
+            if (element.shadowRoot) scan(element.shadowRoot);
+            if (element.tagName === 'IFRAME') {
+              try {
+                if (element.contentDocument) scan(element.contentDocument);
+              } catch (_error) {
+                // Cross-origin frames are intentionally inaccessible.
+              }
+            }
+          }
         };
+        scan(document);
+        return result;
         """
     )
     if result["injectedImage"] or result["executionMarker"]:
         raise RuntimeError(f"portal executed identity-derived HTML: {result!r}")
     hostile_display_name = "<img src=x onerror=document.body.dataset.nasXss=1>"
-    text = rendered_text(driver)
-    if hostile_display_name not in text:
-        raise RuntimeError(
-            "portal did not render the hostile identity display name as inert text: "
-            f"url={safe_browser_url(driver.current_url)!r} text={text[:2000]!r}"
-        )
+    if require_hostile_display_name:
+        identity = fetch_request(driver, "/identity/api/v3/core/users/me/", "GET")
+        try:
+            identity_body = json.loads(str(identity.get("body", "")))
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"current-user identity response was not JSON: {identity!r}") from error
+        if int(identity.get("status", 0)) != 200 or identity_body.get("user", {}).get("name") != hostile_display_name:
+            raise RuntimeError(f"current-user identity did not contain the hostile display name: {identity!r}")
 
 
 def run_account(
@@ -723,8 +1020,12 @@ def main() -> int:
     parser.add_argument("--operator-password-file")
     parser.add_argument("--alice-password-file")
     parser.add_argument("--baseline-password-file")
+    parser.add_argument("--post-a-password-file")
+    parser.add_argument("--post-b-password-file")
     parser.add_argument("--bootstrap-password-file")
     parser.add_argument("--bootstrap-only", action="store_true")
+    parser.add_argument("--identity-xss-only", action="store_true")
+    parser.add_argument("--syncthing-admin-only", action="store_true")
     parser.add_argument("--ai-enabled", action="store_true")
     args = parser.parse_args()
     if args.bootstrap_only:
@@ -746,11 +1047,38 @@ def main() -> int:
         )
         print("bootstrap administrator browser authorization checks ok")
         return 0
+    if args.identity_xss_only:
+        if args.alice_password_file is None:
+            parser.error("--identity-xss-only requires --alice-password-file")
+        password = read_secret(args.alice_password_file)
+        driver = browser()
+        try:
+            login(driver, args.origin, "alice", password)
+            verify_no_identity_markup_injection(driver, "alice", require_hostile_display_name=True)
+        finally:
+            driver.quit()
+        print("hostile identity display name remained inert")
+        return 0
+    if args.syncthing_admin_only:
+        if args.administrator_password_file is None:
+            parser.error("--syncthing-admin-only requires --administrator-password-file")
+        password = read_secret(args.administrator_password_file)
+        driver = browser()
+        try:
+            login(driver, args.origin, "nasadmin", password)
+            verify_routes(driver, [RouteExpectation("/syncthing/", True)])
+            verify_administrator_syncthing_folders(driver, ["post-a", "post-b"])
+        finally:
+            driver.quit()
+        print("administrator Syncthing folder visibility checks ok")
+        return 0
     required_password_files = {
         "--administrator-password-file": args.administrator_password_file,
         "--operator-password-file": args.operator_password_file,
         "--alice-password-file": args.alice_password_file,
         "--baseline-password-file": args.baseline_password_file,
+        "--post-a-password-file": args.post_a_password_file,
+        "--post-b-password-file": args.post_b_password_file,
     }
     missing_password_files = [name for name, path in required_password_files.items() if path is None]
     if missing_password_files:
@@ -759,10 +1087,14 @@ def main() -> int:
     assert args.operator_password_file is not None
     assert args.alice_password_file is not None
     assert args.baseline_password_file is not None
+    assert args.post_a_password_file is not None
+    assert args.post_b_password_file is not None
     administrator_password = read_secret(args.administrator_password_file)
     operator_password = read_secret(args.operator_password_file)
     alice_password = read_secret(args.alice_password_file)
     baseline_password = read_secret(args.baseline_password_file)
+    post_a_password = read_secret(args.post_a_password_file)
+    post_b_password = read_secret(args.post_b_password_file)
     verify_cockpit_react_interactions(args.origin, "nasadmin", administrator_password)
     assign_application_capabilities(
         args.origin,
@@ -831,6 +1163,70 @@ def main() -> int:
             RouteExpectation("/vault/admin/", False),
         ],
         False,
+    )
+    denied_expectations = [RouteExpectation(path, False) for path in routes.values()] + [
+        RouteExpectation("/syncthing/", False),
+        RouteExpectation("/console/", False),
+        RouteExpectation("/shares/admin/", False),
+        RouteExpectation("/vault/admin/", False),
+    ]
+    assign_application_capabilities(args.origin, "nasadmin", administrator_password, "post-a", [])
+    assign_application_capabilities(args.origin, "nasadmin", administrator_password, "post-b", [])
+    run_account(args.origin, "post-a", post_a_password, denied_expectations, False)
+    run_account(args.origin, "post-b", post_b_password, denied_expectations, False)
+    assign_application_capabilities(
+        args.origin,
+        "nasadmin",
+        administrator_password,
+        "post-a",
+        ["application.copyparty.files", "application.syncthing.access"],
+    )
+    assign_application_capabilities(
+        args.origin,
+        "nasadmin",
+        administrator_password,
+        "post-b",
+        ["application.copyparty.files", "application.syncthing.access"],
+    )
+    post_a_expectations = [
+        RouteExpectation(routes["files"], True),
+        RouteExpectation(routes["syncthing"], True, "/identity/if/flow/nas-user-settings/"),
+        RouteExpectation("/syncthing/", False),
+        RouteExpectation("/console/", False),
+        RouteExpectation("/shares/admin/", False),
+        RouteExpectation("/vault/admin/", False),
+    ] + [RouteExpectation(path, False) for name, path in routes.items() if name not in {"files", "syncthing"}]
+    run_account(args.origin, "post-a", post_a_password, post_a_expectations, True)
+    run_account(
+        args.origin,
+        "post-b",
+        post_b_password,
+        [
+            RouteExpectation(routes["files"], True),
+            RouteExpectation(routes["syncthing"], True, "/identity/if/flow/nas-user-settings/"),
+        ]
+        + [RouteExpectation(path, False) for name, path in routes.items() if name not in {"files", "syncthing"}]
+        + [
+            RouteExpectation("/syncthing/", False),
+            RouteExpectation("/console/", False),
+            RouteExpectation("/shares/admin/", False),
+            RouteExpectation("/vault/admin/", False),
+        ],
+        False,
+    )
+    assign_application_capabilities(args.origin, "nasadmin", administrator_password, "post-b", [])
+    run_account(args.origin, "post-b", post_b_password, denied_expectations, False)
+    assign_application_capabilities(
+        args.origin,
+        "nasadmin",
+        administrator_password,
+        "post-b",
+        ["application.copyparty.files", "application.syncthing.access"],
+    )
+    verify_copy_party_user_isolation(
+        args.origin,
+        ("nasadmin", administrator_password),
+        [("post-a", post_a_password), ("post-b", post_b_password)],
     )
     print("browser authorization, rendering, layout, and console checks ok")
     return 0

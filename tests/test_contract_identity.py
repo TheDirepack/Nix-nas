@@ -77,6 +77,14 @@ class ContractTests(unittest.TestCase):
         self.assertIn("serviceConfig.ReadWritePaths = [ vaultwardenDataDir ];", vaultwarden)
         self.assertIn("vaultwardenDataDir", vaultwarden)
 
+    def test_vaultwarden_web_route_requires_its_access_capability(self) -> None:
+        seed = text("modules/nas/config/managed-services-seed-v2.nix")
+        self.assertIn(
+            '(pathRoute [ "/vault" ] (httpTarget vaultwardenPort) (identity "access"))',
+            seed,
+        )
+        self.assertNotIn('(pathRoute [ "/vault" ] (httpTarget vaultwardenPort) { mode = "upstream"; })', seed)
+
     def test_user_settings_are_authentik_owned(self) -> None:
         proxy = text("modules/nas/config/reverse-proxy.nix")
         blueprint = text("authentik/blueprints/nas-user-settings.yaml")

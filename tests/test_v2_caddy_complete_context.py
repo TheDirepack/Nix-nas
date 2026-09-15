@@ -190,6 +190,11 @@ class CaddyCompleteContextValidationTests(unittest.TestCase):
         self.assertIn("-o ${config.services.caddy.user} -g ${config.services.caddy.group}", validation)
         self.assertIn("config.services.caddy.logDir", bootstrap_nix)
 
+    def test_bootstrap_selector_does_not_require_caddy_log_directory_before_caddy_starts(self):
+        bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
+        service = bootstrap_nix.split("systemd.services.nas-caddy-bootstrap", 1)[1].split("systemd.paths", 1)[0]
+        self.assertIn('"-${config.services.caddy.logDir}"', service)
+
     def test_repeated_lock_transitions_execute_selection_each_time(self):
         bootstrap_nix = (ROOT / "modules/nas/config/caddy-bootstrap.nix").read_text(encoding="utf-8")
         # Simulate selector script execution across 4 transitions: unlocked, locked, unlocked-again, relocked

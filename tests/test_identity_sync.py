@@ -257,6 +257,55 @@ class IdentityModelTests(unittest.TestCase):
             with self.assertRaisesRegex(identity_model.SyncError, "conflicting Authentik definitions"):
                 identity_model.desired_syncthing(model, pathlib.Path(raw))
 
+    def test_syncthing_device_cannot_be_claimed_by_multiple_users(self) -> None:
+        device_id = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+        attrs = {"nasSyncthingDevices": [json.dumps({"id": device_id, "name": "Shared"})]}
+        groups = frozenset({"application.syncthing.access"})
+        model = identity_model.IdentityModel(
+            (
+                identity_model.User("alice", "alice@example.test", "Alice", groups, attrs),
+                identity_model.User("bob", "bob@example.test", "Bob", groups, attrs),
+            ),
+            (),
+            ("admin",),
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(identity_model.SyncError, "claimed by multiple users: alice, bob"):
+                identity_model.desired_syncthing(model, pathlib.Path(raw))
+
+    def test_syncthing_personal_folders_and_devices_are_disjoint(self) -> None:
+        alice_device = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+        bob_device = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+        groups = frozenset({"application.syncthing.access"})
+        model = identity_model.IdentityModel(
+            (
+                identity_model.User(
+                    "alice",
+                    "alice@example.test",
+                    "Alice",
+                    groups,
+                    {"nasSyncthingDevices": [json.dumps({"id": alice_device, "name": "Alice laptop"})]},
+                ),
+                identity_model.User(
+                    "bob",
+                    "bob@example.test",
+                    "Bob",
+                    groups,
+                    {"nasSyncthingDevices": [json.dumps({"id": bob_device, "name": "Bob laptop"})]},
+                ),
+            ),
+            (),
+            ("admin",),
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            folders, devices = identity_model.desired_syncthing(model, root)
+        self.assertEqual(set(devices), {alice_device, bob_device})
+        self.assertEqual(folders["nas-alice-backup"]["path"], str(root / "users/alice/syncthing"))
+        self.assertEqual(folders["nas-bob-backup"]["path"], str(root / "users/bob/syncthing"))
+        self.assertEqual(folders["nas-alice-backup"]["devices"], [{"deviceID": alice_device}])
+        self.assertEqual(folders["nas-bob-backup"]["devices"], [{"deviceID": bob_device}])
+
     def test_build_model_requires_explicit_enabled_nas_admin(self) -> None:
         with self.assertRaisesRegex(identity_model.SyncError, "No enabled members of nas_admin"):
             identity_model.build_model(

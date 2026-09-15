@@ -269,15 +269,35 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         devices = {device_id: {"deviceID": device_id, "name": "Alice"}}
         identity = identity_model.IdentityModel((), (), ("admin",))
         calls: list[tuple[str, str, object]] = []
+        observed_folders = {
+            "old-folder": {"id": "old-folder", "path": "/old"},
+            "manual-folder": {"id": "manual-folder", "path": "/manual"},
+        }
+        observed_devices = {
+            "OLD-DEVICE": {"deviceID": "OLD-DEVICE", "name": "Old"},
+            "MANUAL-DEVICE": {"deviceID": "MANUAL-DEVICE", "name": "Manual"},
+        }
 
         def request(path: str, *, method: str = "GET", body: object = None) -> object:
             calls.append((path, method, body))
             if path == "/rest/config/folders":
-                return list(folders.values())
+                return list(observed_folders.values())
             if path == "/rest/config/devices":
-                return list(devices.values())
+                return list(observed_devices.values())
             if path == "/rest/config/restart-required":
                 return {"requiresRestart": True}
+            if path.startswith("/rest/config/folders/"):
+                folder_id = path.rsplit("/", 1)[1]
+                if method == "PUT":
+                    observed_folders[folder_id] = dict(body)  # type: ignore[arg-type]
+                elif method == "DELETE":
+                    observed_folders.pop(folder_id, None)
+            if path.startswith("/rest/config/devices/"):
+                observed_device_id = path.rsplit("/", 1)[1]
+                if method == "PUT":
+                    observed_devices[observed_device_id] = dict(body)  # type: ignore[arg-type]
+                elif method == "DELETE":
+                    observed_devices.pop(observed_device_id, None)
             return {}
 
         with tempfile.TemporaryDirectory() as raw:
@@ -302,6 +322,10 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             self.assertEqual(committed["devices"], [device_id])
             self.assertIn(("/rest/system/restart", "POST", None), calls)
             self.assertTrue(any(path.endswith("old-folder") and method == "DELETE" for path, method, _ in calls))
+            self.assertIn("manual-folder", observed_folders)
+            self.assertIn("MANUAL-DEVICE", observed_devices)
+            self.assertFalse(any("manual-folder" in path and method != "GET" for path, method, _ in calls))
+            self.assertFalse(any("MANUAL-DEVICE" in path and method != "GET" for path, method, _ in calls))
 
     def test_reconcile_syncthing_retains_still_referenced_device(self) -> None:
         identity = identity_model.IdentityModel((), (), ("admin",))
@@ -330,6 +354,42 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                 result = sync.reconcile_syncthing(identity)
             self.assertEqual(result["removedDevices"], 0)
             self.assertEqual(json.loads(state.read_text(encoding="utf-8"))["devices"], ["OLD"])
+
+    def test_reconcile_syncthing_rejects_unmanaged_collisions_before_mutation(self) -> None:
+        identity = identity_model.IdentityModel((), (), ("admin",))
+        folders = {"nas-alice-backup": {"id": "nas-alice-backup", "path": "/shares/users/alice/syncthing"}}
+        devices = {"DEVICE": {"deviceID": "DEVICE", "name": "Alice"}}
+        for observed_folders, observed_devices, message in (
+            ([{"id": "nas-alice-backup", "path": "/manual"}], [], "unmanaged Syncthing folder"),
+            ([], [{"deviceID": "DEVICE", "name": "Manual"}], "unmanaged Syncthing device"),
+        ):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                state = root / "state.json"
+                journal = root / "journal.json"
+                state.write_text('{"schemaVersion":2,"folders":[],"devices":[]}', encoding="utf-8")
+                calls: list[tuple[str, str]] = []
+
+                def request(path: str, *, method: str = "GET", body: object = None) -> object:
+                    calls.append((path, method))
+                    if path == "/rest/config/folders":
+                        return observed_folders
+                    if path == "/rest/config/devices":
+                        return observed_devices
+                    return {}
+
+                with (
+                    mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                    mock.patch.object(sync, "STATE_PATH", state),
+                    mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal),
+                    mock.patch.object(sync, "desired_syncthing", return_value=(folders, devices)),
+                    mock.patch.object(sync, "ensure_syncthing_folder"),
+                    mock.patch.object(sync, "syncthing_request", side_effect=request),
+                ):
+                    with self.assertRaisesRegex(sync.SyncError, message):
+                        sync.reconcile_syncthing(identity)
+                self.assertFalse(any(method != "GET" for _, method in calls))
+                self.assertFalse(journal.exists())
 
     def test_atomic_write_and_remove_are_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

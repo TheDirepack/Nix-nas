@@ -267,7 +267,7 @@ in
       PrivateTmp = true;
       ProtectHome = true;
       ProtectSystem = "strict";
-      ReadWritePaths = [ "/run/nas-control" config.services.caddy.logDir ];
+      ReadWritePaths = [ "/run/nas-control" "-${config.services.caddy.logDir}" ];
       UMask = "0022";
     };
   };

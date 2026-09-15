@@ -129,7 +129,7 @@ let
       routes = {
         admin = (pathRoute [ "/vault/admin" ] (httpTarget vaultwardenPort) (identity "admin")) // { portal.visible = false; };
         oidc = (pathRoute [ "/vault/identity/connect/oidc" "/vault/identity/connect/oidc-signin" ] (httpTarget vaultwardenPort) (identity "access")) // { portal.visible = false; };
-        web = (pathRoute [ "/vault" ] (httpTarget vaultwardenPort) { mode = "upstream"; }) // {
+        web = (pathRoute [ "/vault" ] (httpTarget vaultwardenPort) (identity "access")) // {
           portal = portal "Vaultwarden" "Home" "lock" 30;
         };
       };

@@ -218,6 +218,8 @@ def browser_sign_in(stage: str) -> None:
             "operator": "operator-vm-password",
             "alice": "alice-updated-password",
             "baseline": "baseline-vm-password",
+            "post-a": "post-a-vm-password",
+            "post-b": "post-b-vm-password",
         }
         for name, value in values.items():
             path = secrets / name
@@ -258,6 +260,10 @@ def browser_sign_in(stage: str) -> None:
                 str(secrets / "alice"),
                 "--baseline-password-file",
                 str(secrets / "baseline"),
+                "--post-a-password-file",
+                str(secrets / "post-a"),
+                "--post-b-password-file",
+                str(secrets / "post-b"),
             ]
             result = subprocess.run(
                 command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, env=environment
