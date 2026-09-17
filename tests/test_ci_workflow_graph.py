@@ -211,10 +211,17 @@ class CiWorkflowGraphTests(unittest.TestCase):
         cockpit = self.serialized(self.jobs["cockpit"])
         prepare = self.serialized(self.jobs["prepare"])
         self.assertIn("Production Cockpit bundle", self.qualification_script)
+        self.assertIn("npm --prefix setup/first-run-wizard ci", cockpit)
         self.assertIn("cockpit-bundle", cockpit)
+        self.assertIn("setup/first-run-wizard/package-lock.json", cockpit)
+        self.assertIn("setup/first-run-wizard/dist", cockpit)
         self.assertIn("retention-days': '1", cockpit)
         self.assertIn("Restore reviewed Cockpit bundle", prepare)
         self.assertIn("cockpit-bundle", prepare)
+        self.assertIn(
+            "git add -f cockpit/package-lock.json cockpit/dist setup/first-run-wizard/package-lock.json setup/first-run-wizard/dist",
+            prepare,
+        )
         self.assertNotIn("npm --prefix cockpit run build", prepare)
         self.assertNotIn("cockpit/node_modules", prepare)
 

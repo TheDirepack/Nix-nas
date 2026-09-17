@@ -452,6 +452,7 @@ class ContractTests(unittest.TestCase):
                     "NAS_PREFLIGHT_REQUIRE_COMPLETE": "0",
                     "NAS_PREFLIGHT_SKIP_TESTS": "1",
                     "NAS_PREFLIGHT_SKIP_NIX": "1",
+                    "NAS_PREFLIGHT_SKIP_TOOLING": "1",
                 },
                 text=True,
                 capture_output=True,
@@ -632,7 +633,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("dry-activate", reconfigure)
         self.assertIn("test --flake", reconfigure)
         self.assertIn("switch --flake", reconfigure)
-        self.assertIn("switch --rollback", reconfigure)
+        self.assertIn("--rollback switch", reconfigure)
+        self.assertNotIn("switch --rollback", reconfigure)
+        updater = text("scripts/update-nas.sh")
+        self.assertIn("nixos-rebuild --rollback switch", updater)
+        self.assertNotIn("nixos-rebuild switch --rollback", updater)
         self.assertIn("intentional QEMU rejected-candidate test", reconfigure)
         self.assertIn("nas-generation-test", reconfigure)
         self.assertIn("post-switch-console.log", host)
@@ -663,10 +668,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("openssh.authorizedKeys.keys", vm_common)
         self.assertIn("TestFixtureOnlyKeyMaterial", text("tests/nixos/qemu-installed.nix"))
         self.assertIn("NAS_INSTALL_SSH_PUBLIC_KEY", text("tests/vm/install-system.sh"))
+
         self.assertIn("nas-secrets activate-stdin", guest)
         self.assertIn("first-run-wizard.py", guest)
         self.assertIn("run_as_nasadmin nas-setup account apply", guest)
-        self.assertIn("/authorize?scope=files", guest)
+        self.assertIn("administrator-owned capability assignment", guest)
         self.assertIn("nas-managed-services-control status", guest)
         self.assertIn("nas-managed-services-control document", guest)
         self.assertIn("nas-managed-services-control set ", guest)
@@ -696,6 +702,33 @@ class ContractTests(unittest.TestCase):
         integration_import = integration_job.index("Verify and import prepared Nix handoff")
         integration_run = integration_job.index("Run ${{ matrix.vm }} NixOS VM integration")
         self.assertLess(integration_import, integration_run)
+
+    def test_authentik_outage_drill_restores_the_proxy_outpost(self):
+        guest = text("tests/vm/guest-test.sh")
+        outage = guest.split('log "Authentication dependency outage stays fail-closed"', 1)[1].split(
+            'log "Firewall fail-closed behavior from an independent untrusted namespace"', 1
+        )[0]
+        self.assertIn("systemctl stop --job-mode=ignore-dependencies authentik.service", outage)
+        self.assertNotIn("systemctl stop authentik.service", outage)
+        self.assertNotIn("systemctl start nas-protected-services.target", outage)
+        self.assertIn('000|"") fail "protected route lost its HTTP boundary', outage)
+        self.assertIn("--write-out '%{http_code} %{redirect_url}'", outage)
+        self.assertIn('https://"$PUBLIC_HOST"/identity/*', outage)
+        self.assertIn('https://"$AUTHENTIK_PUBLIC_HOST"/identity/*', outage)
+        self.assertIn('fail "protected route returned an invalid denial response', outage)
+        for unit in (
+            "nas-protected-services.target",
+            "caddy.service",
+            "copyparty.service",
+            "syncthing.service",
+            "vaultwarden.service",
+            "victoriametrics.service",
+            "nas-alert-router.service",
+        ):
+            self.assertIn(unit, outage)
+        self.assertIn("systemctl start nas-authentik-proxy-outpost.service", outage)
+        self.assertIn("wait_active nas-authentik-proxy-outpost.service", outage)
+        self.assertIn("$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping", outage)
 
 
 if __name__ == "__main__":

@@ -214,10 +214,12 @@ def browser_sign_in(stage: str) -> None:
     with tempfile.TemporaryDirectory(prefix="nas-e2e-authz-", dir="/run") as directory:
         secrets = pathlib.Path(directory)
         values = {
-            "admin": "admin-vm-password",
+            "administrator": "nasadmin-vm-password",
             "operator": "operator-vm-password",
             "alice": "alice-updated-password",
             "baseline": "baseline-vm-password",
+            "post-a": "post-a-vm-password",
+            "post-b": "post-b-vm-password",
         }
         for name, value in values.items():
             path = secrets / name
@@ -250,14 +252,18 @@ def browser_sign_in(stage: str) -> None:
                 str(REPO / "tests/browser/authz.py"),
                 "--origin",
                 PUBLIC_ORIGIN,
-                "--cockpit-password-file",
-                str(secrets / "admin"),
+                "--administrator-password-file",
+                str(secrets / "administrator"),
                 "--operator-password-file",
                 str(secrets / "operator"),
                 "--alice-password-file",
                 str(secrets / "alice"),
                 "--baseline-password-file",
                 str(secrets / "baseline"),
+                "--post-a-password-file",
+                str(secrets / "post-a"),
+                "--post-b-password-file",
+                str(secrets / "post-b"),
             ]
             result = subprocess.run(
                 command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, env=environment

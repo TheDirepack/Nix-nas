@@ -44,6 +44,8 @@ MAX_ARCHIVE_MEMBERS = int(os.environ.get("NAS_STATE_MAX_ARCHIVE_MEMBERS", "10000
 MAX_ARCHIVE_BYTES = int(os.environ.get("NAS_STATE_MAX_ARCHIVE_BYTES", str(20 * 1024 * 1024 * 1024)))
 MAX_ARCHIVE_MEMBER_NAME_BYTES = 4096
 MAX_ARCHIVE_COMPONENT_BYTES = 255
+MAX_ARCHIVE_METADATA_BYTES = int(os.environ.get("NAS_STATE_MAX_ARCHIVE_METADATA_BYTES", str(64 * 1024)))
+MAX_ARCHIVE_COPY_CHUNK = 1024 * 1024
 ROLLBACK_RETAIN_COUNT = max(1, int(os.environ.get("NAS_STATE_ROLLBACK_RETAIN_COUNT", "5")))
 ROLLBACK_RETAIN_SECONDS = max(0, int(os.environ.get("NAS_STATE_ROLLBACK_RETAIN_SECONDS", str(30 * 24 * 60 * 60))))
 COMMAND_OUTPUT_LIMIT = max(4096, int(os.environ.get("NAS_STATE_COMMAND_OUTPUT_BYTES", str(256 * 1024))))
@@ -58,6 +60,21 @@ DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
 class StateError(RuntimeError):
     """Expected appliance-state operation failure."""
+
+
+class _BoundedTarInfo(tarfile.TarInfo):
+    def _proc_pax(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        if self.size > MAX_ARCHIVE_METADATA_BYTES:
+            raise StateError("State bundle archive metadata is too large")
+        return getattr(super(), "_proc_pax")(archive)
+
+    def _proc_gnulong(self, archive: tarfile.TarFile) -> tarfile.TarInfo:
+        limit = (
+            MAX_ARCHIVE_MEMBER_NAME_BYTES + 1 if self.type == tarfile.GNUTYPE_LONGNAME else MAX_ARCHIVE_METADATA_BYTES
+        )
+        if self.size > limit:
+            raise StateError("State bundle archive metadata or member name is too large")
+        return getattr(super(), "_proc_gnulong")(archive)
 
 
 @dataclass(frozen=True)
@@ -783,56 +800,197 @@ def safe_member_name(name: str) -> pathlib.PurePosixPath:
         raise StateError("Unsafe bundle path: empty or non-text name")
     if any(ord(character) < 32 or ord(character) == 127 for character in name):
         raise StateError("Unsafe bundle path: control character in member name")
-    encoded = name.encode("utf-8")
+    try:
+        encoded = name.encode("utf-8")
+    except UnicodeError as exc:
+        raise StateError("Unsafe bundle path: member name is not valid UTF-8") from exc
     if len(encoded) > MAX_ARCHIVE_MEMBER_NAME_BYTES:
         raise StateError("Unsafe bundle path: member name is too long")
     path = pathlib.PurePosixPath(name)
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise StateError(f"Unsafe bundle path: {name}")
-    if any(len(part.encode("utf-8")) > MAX_ARCHIVE_COMPONENT_BYTES for part in path.parts):
-        raise StateError("Unsafe bundle path: path component is too long")
+    try:
+        if any(len(part.encode("utf-8")) > MAX_ARCHIVE_COMPONENT_BYTES for part in path.parts):
+            raise StateError("Unsafe bundle path: path component is too long")
+    except UnicodeError as exc:
+        raise StateError("Unsafe bundle path: member name is not valid UTF-8") from exc
     return path
 
 
+def _pax_metadata_size(member: tarfile.TarInfo) -> int:
+    total = 0
+    for key, value in member.pax_headers.items():
+        total += len(key.encode("utf-8", errors="replace"))
+        total += len(str(value).encode("utf-8", errors="replace"))
+        total += 2
+        if total > MAX_ARCHIVE_METADATA_BYTES:
+            break
+    return total
+
+
+def _check_streamed_header(member: tarfile.TarInfo, *, index: int, seen: set[str], total: int) -> tuple[str, int]:
+    if index > MAX_ARCHIVE_MEMBERS:
+        raise StateError("State bundle contains too many archive members")
+    if _pax_metadata_size(member) > MAX_ARCHIVE_METADATA_BYTES:
+        raise StateError(f"State bundle archive metadata is too large: {member.name}")
+    normalized = safe_member_name(member.name).as_posix()
+    if normalized in seen:
+        raise StateError(f"State bundle contains duplicate path: {normalized}")
+    seen.add(normalized)
+    if not (member.isdir() or member.isreg()):
+        raise StateError(f"State bundle contains unsupported archive object: {member.name}")
+    total += max(0, member.size)
+    if total > MAX_ARCHIVE_BYTES:
+        raise StateError("State bundle exceeds the extraction size limit")
+    return normalized, total
+
+
+def _next_member(archive: tarfile.TarFile) -> tarfile.TarInfo | None:
+    try:
+        return archive.next()
+    except (tarfile.TarError, EOFError, OSError) as exc:
+        raise StateError(f"State bundle is truncated or unreadable: {exc}") from exc
+
+
+def _copy_bounded(source: Any, handle: Any, *, member_size: int, total_before: int, member_name: str) -> int:
+    written = 0
+    while True:
+        try:
+            chunk = source.read(MAX_ARCHIVE_COPY_CHUNK)
+        except (OSError, EOFError, tarfile.TarError) as exc:
+            raise StateError(f"State bundle member is truncated: {member_name}") from exc
+        if not chunk:
+            break
+        if total_before + written + len(chunk) > MAX_ARCHIVE_BYTES:
+            raise StateError("State bundle exceeds the extraction size limit")
+        try:
+            handle.write(chunk)
+        except OSError as exc:
+            raise StateError(f"Unable to extract state member: {member_name}") from exc
+        written += len(chunk)
+    if written != max(0, member_size):
+        raise StateError(f"State bundle member is truncated: {member_name}")
+    return written
+
+
 def extract_bundle(bundle: pathlib.Path, destination: pathlib.Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
+    destination_preexisted = lstat_type(destination) != 0
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StateError(f"Unable to prepare extraction destination: {exc}") from exc
     seen: set[str] = set()
     total = 0
-    with tarfile.open(bundle, "r:*") as archive:
-        members = archive.getmembers()
-        if len(members) > MAX_ARCHIVE_MEMBERS:
-            raise StateError("State bundle contains too many archive members")
-        for member in members:
-            normalized = safe_member_name(member.name).as_posix()
-            if normalized in seen:
-                raise StateError(f"State bundle contains duplicate path: {normalized}")
-            seen.add(normalized)
-            if not (member.isdir() or member.isreg()):
-                raise StateError(f"State bundle contains unsupported archive object: {member.name}")
-            total += max(0, member.size)
-            if total > MAX_ARCHIVE_BYTES:
-                raise StateError("State bundle exceeds the extraction size limit")
-        for member in members:
-            relative = safe_member_name(member.name)
-            target = destination.joinpath(*relative.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if member.isdir():
-                target.mkdir(exist_ok=True)
-                os.chmod(target, member.mode & 0o777)
-                continue
-            source = archive.extractfile(member)
-            if source is None:
-                raise StateError(f"Unable to extract state member: {member.name}")
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-            fd = os.open(target, flags, member.mode & 0o777)
+    created: list[pathlib.Path] = []
+
+    def _record_created(path: pathlib.Path) -> None:
+        created.append(path)
+
+    def _prepare_parent(path: pathlib.Path) -> None:
+        missing: list[pathlib.Path] = []
+        current = path
+        while current != destination and lstat_type(current) == 0:
+            missing.append(current)
+            current = current.parent
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise StateError(f"Unable to prepare extraction destination: {exc}") from exc
+        for directory in reversed(missing):
+            _record_created(directory)
+
+    def _cleanup_partial() -> None:
+        for path in reversed(created):
             try:
-                with os.fdopen(fd, "wb") as handle:
-                    shutil.copyfileobj(source, handle, length=1024 * 1024)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            finally:
-                source.close()
-            os.chmod(target, member.mode & 0o777)
+                mode = lstat_type(path)
+                if mode == 0:
+                    continue
+                if stat.S_ISDIR(mode):
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+                elif stat.S_ISREG(mode):
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+    try:
+        try:
+            archive = tarfile.open(bundle, "r:*", tarinfo=_BoundedTarInfo)
+        except (tarfile.TarError, EOFError, OSError) as exc:
+            raise StateError(f"Unable to inspect state bundle: {bundle}") from exc
+        with archive:
+            index = 0
+            while True:
+                member = _next_member(archive)
+                if member is None:
+                    break
+                index += 1
+                normalized, total = _check_streamed_header(member, index=index, seen=seen, total=total)
+                relative = pathlib.PurePosixPath(normalized)
+                target = destination.joinpath(*relative.parts)
+                if member.isdir():
+                    if lstat_type(target) == 0:
+                        try:
+                            _prepare_parent(target.parent)
+                            target.mkdir(exist_ok=False)
+                            _record_created(target)
+                        except FileExistsError as exc:
+                            raise StateError(f"State bundle contains duplicate path: {normalized}") from exc
+                        except OSError as exc:
+                            raise StateError(f"Unable to extract state member: {member.name}") from exc
+                    try:
+                        os.chmod(target, member.mode & 0o777)
+                    except OSError as exc:
+                        raise StateError(f"Unable to extract state member: {member.name}") from exc
+                    continue
+                _prepare_parent(target.parent)
+                try:
+                    source = archive.extractfile(member)
+                except (tarfile.TarError, EOFError, OSError) as exc:
+                    raise StateError(f"State bundle member is truncated: {member.name}") from exc
+                if source is None:
+                    raise StateError(f"Unable to extract state member: {member.name}")
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                try:
+                    fd = os.open(target, flags, member.mode & 0o777)
+                except FileExistsError as exc:
+                    source.close()
+                    raise StateError(f"State bundle contains duplicate path: {normalized}") from exc
+                except OSError as exc:
+                    source.close()
+                    raise StateError(f"Unable to extract state member: {member.name}") from exc
+                _record_created(target)
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        try:
+                            _copy_bounded(
+                                source,
+                                handle,
+                                member_size=member.size,
+                                total_before=total - max(0, member.size),
+                                member_name=member.name,
+                            )
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                        except StateError:
+                            raise
+                        except OSError as exc:
+                            raise StateError(f"Unable to extract state member: {member.name}") from exc
+                finally:
+                    source.close()
+                try:
+                    os.chmod(target, member.mode & 0o777)
+                except OSError as exc:
+                    raise StateError(f"Unable to extract state member: {member.name}") from exc
+    except StateError:
+        _cleanup_partial()
+        raise
+    except (OSError, EOFError, tarfile.TarError) as exc:
+        _cleanup_partial()
+        raise StateError(f"State bundle extraction failed: {exc}") from exc
+    _ = destination_preexisted
 
 
 def _require_type(value: Any, expected: type, field: str) -> None:
@@ -1334,15 +1492,24 @@ def reapply_runtime_consumers(snapshot: Mapping[str, bool]) -> None:
 
 def expanded_bundle_size(bundle: pathlib.Path) -> int:
     try:
-        with tarfile.open(bundle, "r:*") as archive:
-            members = archive.getmembers()
-    except (OSError, tarfile.TarError) as exc:
+        archive = tarfile.open(bundle, "r:*", tarinfo=_BoundedTarInfo)
+    except (OSError, tarfile.TarError, EOFError) as exc:
         raise StateError(f"Unable to inspect state bundle: {bundle}") from exc
-    if len(members) > MAX_ARCHIVE_MEMBERS:
-        raise StateError("State bundle contains too many archive members")
-    total = sum(max(0, item.size) for item in members)
-    if total > MAX_ARCHIVE_BYTES:
-        raise StateError("State bundle exceeds the extraction size limit")
+    seen: set[str] = set()
+    total = 0
+    try:
+        with archive:
+            index = 0
+            while True:
+                member = _next_member(archive)
+                if member is None:
+                    break
+                index += 1
+                _, total = _check_streamed_header(member, index=index, seen=seen, total=total)
+    except StateError:
+        raise
+    except (OSError, EOFError, tarfile.TarError) as exc:
+        raise StateError(f"Unable to inspect state bundle: {bundle}") from exc
     return total
 
 

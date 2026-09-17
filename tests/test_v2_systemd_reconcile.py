@@ -238,6 +238,102 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertTrue((runtime / "nas-v2-demo.service").is_symlink())
             self.assertIn("daemon-reload", log.read_text(encoding="utf-8"))
 
+    def test_unrecorded_dropin_from_interrupted_reconcile_is_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            projection = root / "projection"
+            projection.mkdir()
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, None)
+            runtime = root / "systemd"
+            dropin_dir = runtime / "copyparty.service.d"
+            dropin_dir.mkdir(parents=True)
+            stale_generation = root / "generations" / ("a" * 40) / "systemd" / "units"
+            stale_generation.mkdir(parents=True)
+            stale_source = stale_generation / "copyparty.service.d" / "50-nas-v2.conf"
+            stale_source.parent.mkdir()
+            stale_source.write_text("[Unit]\n", encoding="utf-8")
+            stale_link = dropin_dir / "50-nas-v2.conf"
+            stale_link.symlink_to(stale_source)
+            state = root / "state.json"
+            state.write_text("{}\n", encoding="utf-8")
+            systemctl, log = self.make_systemctl(root)
+
+            result = self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=systemctl,
+                log=log,
+            )
+
+            self.assertFalse(result["noop"])
+            self.assertFalse(stale_link.exists())
+            self.assertFalse(dropin_dir.exists())
+            self.assertIn("daemon-reload", log.read_text(encoding="utf-8"))
+
+    def test_unrecorded_direct_v2_unit_from_interrupted_reconcile_is_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            projection = root / "projection"
+            projection.mkdir()
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, None)
+            runtime = root / "systemd"
+            runtime.mkdir()
+            stale_source = root / "generations" / ("a" * 40) / "systemd" / "units" / "nas-v2-orphan.service"
+            stale_source.parent.mkdir(parents=True)
+            stale_source.write_text("[Service]\nExecStart=/bin/true\n", encoding="utf-8")
+            stale_link = runtime / "nas-v2-orphan.service"
+            stale_link.symlink_to(stale_source)
+            state = root / "state.json"
+            state.write_text("{}\n", encoding="utf-8")
+            systemctl, log = self.make_systemctl(root)
+
+            result = self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=systemctl,
+                log=log,
+            )
+
+            self.assertFalse(result["noop"])
+            self.assertFalse(stale_link.exists())
+            self.assertIn("daemon-reload", log.read_text(encoding="utf-8"))
+
+    def test_unrecorded_broken_dropin_is_removed_after_generation_pruning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            projection = root / "projection"
+            projection.mkdir()
+            manifest = projection / "manifest.json"
+            self.write_manifest(manifest, None)
+            runtime = root / "systemd"
+            dropin_dir = runtime / "copyparty.service.d"
+            dropin_dir.mkdir(parents=True)
+            stale_link = dropin_dir / "50-nas-v2.conf"
+            stale_link.symlink_to(root / "generations" / ("a" * 40) / "systemd" / "missing.conf")
+            state = root / "state.json"
+            state.write_text("{}\n", encoding="utf-8")
+            systemctl, log = self.make_systemctl(root)
+
+            result = self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=systemctl,
+                log=log,
+            )
+
+            self.assertFalse(result["noop"])
+            self.assertFalse(stale_link.is_symlink())
+            self.assertFalse(dropin_dir.exists())
+            self.assertIn("daemon-reload", log.read_text(encoding="utf-8"))
+
     def test_removed_owned_unit_is_stopped_and_unlinked(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

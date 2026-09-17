@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import {createHash} from "node:crypto";
-import {copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync} from "node:fs";
-import {join, relative, resolve} from "node:path";
+import {copyFileSync, existsSync, mkdirSync, readFileSync, rmSync} from "node:fs";
+import {join, resolve} from "node:path";
+import {createRequire} from "node:module";
 import process from "node:process";
 
 const root = resolve(import.meta.dirname);
@@ -14,43 +14,31 @@ if (!validModes.has(mode) || process.argv.length > 3) {
   process.exit(2);
 }
 
+// Source hashing and bundle verification are shared with the first-run
+// wizard through scripts/frontend-build-integrity.cjs. The Nix sandbox
+// overrides the location because only selected paths enter the store.
+const require = createRequire(import.meta.url);
+const integrity = require(
+  process.env.NAS_FRONTEND_INTEGRITY_HELPER || join(root, "..", "scripts", "frontend-build-integrity.cjs"),
+);
+
 function files(directory) {
-  const result = [];
-  if (!existsSync(directory)) return result;
-  for (const name of readdirSync(directory)) {
-    const path = join(directory, name);
-    if (statSync(path).isDirectory()) result.push(...files(path));
-    else result.push(path);
-  }
-  return result.sort();
+  return integrity.listFiles(directory);
 }
 
 function sourceHash() {
-  const hash = createHash("sha256");
   const inputs = [...files(source), join(root, "package.json"), join(root, "build.js")];
   const lock = join(root, "package-lock.json");
   if (existsSync(lock)) inputs.push(lock);
-  for (const path of inputs.sort()) {
-    hash.update(relative(root, path));
-    hash.update("\0");
-    hash.update(readFileSync(path));
-    hash.update("\0");
-  }
-  return hash.digest("hex");
+  return integrity.sourceHash(root, inputs);
 }
 
 function fileDigest(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  return integrity.fileDigest(path);
 }
 
 function outputRecords() {
-  const records = {};
-  for (const path of files(output)) {
-    const name = relative(output, path).replaceAll("\\", "/");
-    if (name === "build-meta.json" || name === "README.md") continue;
-    records[name] = {bytes: statSync(path).size, sha256: fileDigest(path)};
-  }
-  return records;
+  return integrity.outputRecords(output, ["README.md"]);
 }
 
 function verifyReferencedAssets() {
@@ -114,8 +102,6 @@ async function build() {
     entryPoints: [join(source, "index.jsx")],
     assetNames: "assets/[name]-[hash]",
     legalComments: "external",
-    // The cockpit host module is provided by cockpit-ws at runtime.
-    external: ["cockpit"],
     loader: {
       ".js": "jsx", ".jsx": "jsx",
       ".woff": "file", ".woff2": "file", ".svg": "file",
@@ -138,33 +124,34 @@ async function build() {
     const result = await esbuild.build(options);
     copyAssets();
     verifyReferencedAssets();
-    writeFileSync(join(output, "build-meta.json"), JSON.stringify({
+    integrity.writeBuildMeta({
+      outputDir: output,
       schemaVersion: 2,
       sourceSha256: sourceHash(),
       inputs: Object.keys(result.metafile.inputs).sort(),
       outputFiles: outputRecords(),
-    }, null, 2) + "\n");
+    });
   }
 }
 
 function check() {
   sourceCheck();
   if (!existsSync(join(root, "package-lock.json"))) throw new Error("cockpit/package-lock.json is required for a complete bundle check");
-  for (const name of ["index.html", "manifest.json", "index.js", "index.css", "build-meta.json"]) {
-    const path = join(output, name);
-    if (!existsSync(path) || statSync(path).size === 0) throw new Error(`cockpit/dist/${name} is missing or empty; run npm ci && npm run build`);
-  }
-  const metadata = JSON.parse(readFileSync(join(output, "build-meta.json"), "utf8"));
-  if (metadata.schemaVersion !== 2 || metadata.sourceSha256 !== sourceHash()) {
-    throw new Error("cockpit/dist is stale or has unsupported build metadata; rebuild the React/PatternFly bundle");
-  }
-  const current = outputRecords();
-  if (JSON.stringify(current) !== JSON.stringify(metadata.outputFiles)) {
-    throw new Error("cockpit/dist output bytes do not match the reviewed build metadata");
-  }
-  verifyReferencedAssets();
-  const html = readFileSync(join(output, "index.html"), "utf8");
-  if (!html.includes('src="index.js"') || !html.includes('href="index.css"')) throw new Error("Cockpit distribution entry point is invalid");
+  integrity.checkBundle({
+    label: "cockpit",
+    sourceSha256: sourceHash(),
+    outputDir: output,
+    schemaVersion: 2,
+    requiredAssets: ["index.html", "manifest.json", "index.js", "index.css", "build-meta.json"],
+    exclude: ["README.md"],
+    missingHint: "run npm ci && npm run build",
+    staleHint: "rebuild the React/PatternFly bundle",
+    extraVerify: () => {
+      verifyReferencedAssets();
+      const html = readFileSync(join(output, "index.html"), "utf8");
+      if (!html.includes('src="index.js"') || !html.includes('href="index.css"')) throw new Error("Cockpit distribution entry point is invalid");
+    },
+  });
 }
 
 if (mode === "--check-source" || mode === "check-source") sourceCheck();

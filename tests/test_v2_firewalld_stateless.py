@@ -92,7 +92,7 @@ class V2StatelessFirewalldTests(unittest.TestCase):
                 root,
                 files={
                     "zones/nv2z0123456789ab.xml": b"<zone/>\n",
-                    "policies/nv2h0123456789ab.xml": b"<policy target='DROP' priority='0'/>\n",
+                    "policies/nv2h0123456789ab.xml": b"<policy target='DROP' priority='-50'/>\n",
                 },
             )
             completed = mock.Mock(returncode=0, stdout="", stderr="")
@@ -154,6 +154,164 @@ class V2StatelessFirewalldTests(unittest.TestCase):
         with mock.patch.object(firewalld, "_run", side_effect=[running, zones, policies]):
             with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "omitted projected objects"):
                 firewalld._verify_runtime(desired=desired, firewall_cmd="firewall-cmd")
+
+    def _dependency_aware_permanent(self, calls: list[tuple[str, ...]] | None = None, *, fail_after: int | None = None):
+        created_zones: set[str] = set()
+        created_policies: set[str] = set()
+        order: list[str] = []
+        counter = {"n": 0}
+        if calls is None:
+            calls = []
+
+        def fake(firewall_cmd: str, *args: str, check: bool = True):
+            assert firewall_cmd == "firewall-cmd"
+            counter["n"] += 1
+            if fail_after is not None and counter["n"] > fail_after:
+                raise firewalld.FirewalldReconcileError("injected mid-apply failure")
+            calls.append(args)
+            if len(args) == 1 and args[0].startswith("--new-zone="):
+                name = args[0].removeprefix("--new-zone=")
+                created_zones.add(name)
+                order.append(f"zone:{name}")
+            elif len(args) == 1 and args[0].startswith("--new-policy="):
+                name = args[0].removeprefix("--new-policy=")
+                created_policies.add(name)
+                order.append(f"policy:{name}")
+            elif len(args) == 2 and args[1].startswith("--add-ingress-zone="):
+                zone = args[1].removeprefix("--add-ingress-zone=")
+                if zone.startswith("nv2z") and zone not in created_zones:
+                    raise firewalld.FirewalldReconcileError(
+                        f"INVALID_ZONE: policy {args[0]} references missing zone {zone}"
+                    )
+            elif len(args) == 2 and args[1].startswith("--add-egress-zone="):
+                zone = args[1].removeprefix("--add-egress-zone=")
+                if zone.startswith("nv2z") and zone not in created_zones:
+                    raise firewalld.FirewalldReconcileError(
+                        f"INVALID_ZONE: policy {args[0]} references missing zone {zone}"
+                    )
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        fake.created_zones = created_zones  # type: ignore[attr-defined]
+        fake.created_policies = created_policies  # type: ignore[attr-defined]
+        fake.order = order  # type: ignore[attr-defined]
+        return fake
+
+    def test_reconcile_creates_zones_before_dependent_policies(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection, manifest = self.projection(
+                root,
+                files={
+                    "zones/nv2z0123456789ab.xml": b"<zone><interface name='nv2bridge'/></zone>\n",
+                    "policies/nv2h0123456789ab.xml": (
+                        b"<policy target='DROP' priority='-50'>"
+                        b"<ingress-zone name='nv2z0123456789ab'/>"
+                        b"<egress-zone name='HOST'/>"
+                        b"</policy>\n"
+                    ),
+                },
+            )
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            calls: list[tuple[str, ...]] = []
+            fake = self._dependency_aware_permanent(calls)
+            with (
+                mock.patch.object(firewalld, "_current_owned", return_value=(set(), set())),
+                mock.patch.object(firewalld, "_permanent", side_effect=fake),
+                mock.patch.object(firewalld, "_run", return_value=completed),
+                mock.patch.object(firewalld, "_verify_runtime") as verify,
+            ):
+                result = firewalld.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    firewall_cmd="firewall-cmd",
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(fake.order[:2], ["zone:nv2z0123456789ab", "policy:nv2h0123456789ab"])
+            verify.assert_called_once()
+
+    def test_reconcile_rejects_policy_referencing_missing_zone_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection, manifest = self.projection(
+                root,
+                files={
+                    "policies/nv2h0123456789ab.xml": (
+                        b"<policy target='DROP' priority='-50'>"
+                        b"<ingress-zone name='nv2zffffffffffff'/>"
+                        b"<egress-zone name='HOST'/>"
+                        b"</policy>\n"
+                    ),
+                },
+            )
+            calls: list[tuple[str, ...]] = []
+            fake = self._dependency_aware_permanent(calls)
+            with (
+                mock.patch.object(firewalld, "_current_owned", return_value=(set(), set())),
+                mock.patch.object(firewalld, "_permanent", side_effect=fake),
+                mock.patch.object(firewalld, "_run") as run,
+            ):
+                with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "missing zone|INVALID_ZONE"):
+                    firewalld.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        firewall_cmd="firewall-cmd",
+                    )
+            self.assertEqual(calls, [])
+            run.assert_not_called()
+
+    def test_reconcile_retry_converges_after_mid_apply_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            files = {
+                "zones/nv2z0123456789ab.xml": b"<zone><interface name='nv2bridge'/></zone>\n",
+                "policies/nv2h0123456789ab.xml": (
+                    b"<policy target='DROP' priority='-50'>"
+                    b"<ingress-zone name='nv2z0123456789ab'/>"
+                    b"<egress-zone name='HOST'/>"
+                    b"</policy>\n"
+                ),
+            }
+            projection, manifest = self.projection(root, files=files)
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            failing_calls: list[tuple[str, ...]] = []
+            failing = self._dependency_aware_permanent(failing_calls, fail_after=1)
+            with (
+                mock.patch.object(firewalld, "_current_owned", return_value=(set(), set())),
+                mock.patch.object(firewalld, "_permanent", side_effect=failing),
+                mock.patch.object(firewalld, "_run", return_value=completed) as run,
+                mock.patch.object(firewalld, "_verify_runtime") as verify,
+            ):
+                with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "injected mid-apply failure"):
+                    firewalld.reconcile(
+                        manifest_path=manifest,
+                        projection_root=projection,
+                        firewall_cmd="firewall-cmd",
+                    )
+            run.assert_not_called()
+            verify.assert_not_called()
+            retry_calls: list[tuple[str, ...]] = []
+            retry = self._dependency_aware_permanent(retry_calls)
+            with (
+                mock.patch.object(
+                    firewalld, "_current_owned", return_value=(failing.created_zones, failing.created_policies)
+                ),
+                mock.patch.object(firewalld, "_permanent", side_effect=retry),
+                mock.patch.object(firewalld, "_run", return_value=completed) as retry_run,
+                mock.patch.object(firewalld, "_verify_runtime") as retry_verify,
+            ):
+                result = firewalld.reconcile(
+                    manifest_path=manifest,
+                    projection_root=projection,
+                    firewall_cmd="firewall-cmd",
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(retry.order[:2], ["zone:nv2z0123456789ab", "policy:nv2h0123456789ab"])
+            for args in retry_calls:
+                for token in args:
+                    self.assertNotIn("ACCEPT", token)
+            retry_run.assert_any_call(["firewall-cmd", "--check-config"])
+            retry_run.assert_any_call(["firewall-cmd", "--reload"])
+            retry_verify.assert_called_once()
 
 
 if __name__ == "__main__":

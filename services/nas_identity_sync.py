@@ -75,6 +75,9 @@ SYNCTHING_ENABLED = os.environ.get("NAS_SYNCTHING_ENABLE", "0") == "1"
 PUBLIC_HOST = os.environ.get("NAS_PUBLIC_HOST", "").strip()
 DEFAULT_FLOW_WAIT_SECONDS = 90.0
 BOOTSTRAP_RECONCILE_ATTEMPTS = 4
+REQUIRED_PROXY_SCOPES = ("openid", "email", "profile", "entitlements", "ak_proxy")
+SYNCTHING_VERIFY_ATTEMPTS = 5
+SYNCTHING_VERIFY_INTERVAL_SECONDS = 0.5
 
 
 def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
@@ -220,7 +223,7 @@ def http_json(
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 time.sleep(_retry_delay(attempt, retry_after))
                 continue
-            raise SyncError(f"Authentik request failed with HTTP {exc.code} (reference {reference})") from exc
+            raise SyncError(f"Upstream request failed with HTTP {exc.code} (reference {reference})") from exc
         except urllib.error.URLError as exc:
             diagnostic(
                 f"nas-identity-sync: request {reference} unreachable "
@@ -231,9 +234,9 @@ def http_json(
             if attempt < max_attempts:
                 time.sleep(_retry_delay(attempt))
                 continue
-            raise SyncError(f"Unable to reach Authentik (reference {reference})") from exc
+            raise SyncError(f"Unable to reach upstream (reference {reference})") from exc
     else:  # pragma: no cover
-        raise SyncError(f"Unable to reach Authentik (reference {reference})") from last_error
+        raise SyncError(f"Unable to reach upstream (reference {reference})") from last_error
 
     if not payload:
         return None
@@ -241,7 +244,7 @@ def http_json(
         return json.loads(payload)
     except json.JSONDecodeError as exc:
         diagnostic(f"nas-identity-sync: request {reference} invalid-json endpoint={endpoint_label(url)}")
-        raise SyncError(f"Authentik returned invalid JSON (reference {reference})") from exc
+        raise SyncError(f"Upstream returned invalid JSON (reference {reference})") from exc
 
 
 def authentik_token(*, bootstrap: bool = False) -> str:
@@ -378,6 +381,29 @@ def default_flows(token: str) -> dict[str, Any]:
         time.sleep(1)
 
 
+def default_proxy_property_mappings(token: str) -> list[Any]:
+    """Wait for the scope mappings required by forward-auth identity headers."""
+    deadline = time.monotonic() + DEFAULT_FLOW_WAIT_SECONDS
+    while True:
+        mappings = authentik_list(token, "propertymappings/provider/scope/")
+        by_scope = {
+            str(item.get("scope_name")): item
+            for item in mappings
+            if isinstance(item, Mapping) and item.get("scope_name")
+        }
+        missing = [scope for scope in REQUIRED_PROXY_SCOPES if not isinstance(by_scope.get(scope), Mapping)]
+        if not missing:
+            property_mappings = [by_scope[scope].get("pk") for scope in REQUIRED_PROXY_SCOPES]
+            if all(value is not None for value in property_mappings):
+                return property_mappings
+            missing = [
+                scope for scope, value in zip(REQUIRED_PROXY_SCOPES, property_mappings, strict=True) if value is None
+            ]
+        if time.monotonic() >= deadline:
+            raise SyncError("Authentik default proxy scope mapping(s) are missing: " + ", ".join(missing))
+        time.sleep(1)
+
+
 def _ensure_proxy_application(
     token: str,
     *,
@@ -390,12 +416,14 @@ def _ensure_proxy_application(
 ) -> dict[str, Any]:
     """Reconcile one Authentik proxy application as a staged transaction."""
     flows = default_flows(token)
+    property_mappings = default_proxy_property_mappings(token)
     provider_payload: dict[str, Any] = {
         "name": provider_name,
         "mode": "forward_single",
         "external_host": external_host,
         "internal_host": internal_host,
         "internal_host_ssl_validation": False,
+        "property_mappings": property_mappings,
     }
     for field, slug in {
         "authentication_flow": "default-authentication-flow",
@@ -746,6 +774,15 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
         raise SyncError("Authentik NAS automation role is missing; verify blueprint deployment")
     authentik_request(token, f"rbac/roles/{role['pk']}/add_user/", method="POST", body={"pk": user_pk})
 
+    outposts = authentik_list(token, "outposts/instances/?page_size=100")
+    embedded = [item for item in outposts if item.get("managed") == "goauthentik.io/outposts/embedded"]
+    if len(embedded) != 1 or not isinstance(embedded[0].get("pk"), str) or not embedded[0]["pk"]:
+        raise SyncError("Authentik must expose exactly one embedded outpost before runtime token handoff")
+    outpost_token_identifier = f"ak-outpost-{embedded[0]['pk']}-api"
+    outpost_key = authentik_request(token, f"core/tokens/{outpost_token_identifier}/view_key/")
+    if not isinstance(outpost_key, Mapping) or not isinstance(outpost_key.get("key"), str) or not outpost_key["key"]:
+        raise SyncError("Authentik embedded outpost token key is unavailable")
+
     tokens = authentik_list(token, f"core/tokens/?identifier={urllib.parse.quote(AUTOMATION_TOKEN_IDENTIFIER)}")
     if not any(item.get("identifier") == AUTOMATION_TOKEN_IDENTIFIER for item in tokens):
         authentik_request(
@@ -772,6 +809,7 @@ def provision_runtime_token(token: str) -> dict[str, Any]:
         "role": AUTOMATION_ROLE,
         "username": AUTOMATION_USER,
         "token": runtime_token,
+        "outpostToken": outpost_key["key"],
     }
 
 
@@ -940,30 +978,40 @@ def verify_syncthing_configuration(
     removed_folders: set[str],
     removed_devices: set[str],
 ) -> None:
-    observed_folders = object_by_identifier(
-        syncthing_request("/rest/config/folders"),
-        "id",
-        label="folder",
-    )
-    observed_devices = object_by_identifier(
-        syncthing_request("/rest/config/devices"),
-        "deviceID",
-        label="device",
-    )
-    for folder_id, expected in folders.items():
-        observed = observed_folders.get(folder_id)
-        if observed is None or not expected_subset(observed, expected):
-            raise SyncError(f"Syncthing folder {folder_id} did not converge to the desired configuration")
-    for device_id, expected in devices.items():
-        observed = observed_devices.get(device_id)
-        if observed is None or not expected_subset(observed, expected):
-            raise SyncError(f"Syncthing device {device_id} did not converge to the desired configuration")
-    unexpected_folders = sorted(removed_folders & observed_folders.keys())
-    unexpected_devices = sorted(removed_devices & observed_devices.keys())
-    if unexpected_folders:
-        raise SyncError("Syncthing retained removed managed folder(s): " + ", ".join(unexpected_folders))
-    if unexpected_devices:
-        raise SyncError("Syncthing retained removed managed device(s): " + ", ".join(unexpected_devices))
+    for attempt in range(SYNCTHING_VERIFY_ATTEMPTS):
+        observed_folders = object_by_identifier(
+            syncthing_request("/rest/config/folders"),
+            "id",
+            label="folder",
+        )
+        observed_devices = object_by_identifier(
+            syncthing_request("/rest/config/devices"),
+            "deviceID",
+            label="device",
+        )
+        error = ""
+        for folder_id, expected in folders.items():
+            observed = observed_folders.get(folder_id)
+            if observed is None or not expected_subset(observed, expected):
+                error = f"Syncthing folder {folder_id} did not converge to the desired configuration"
+                break
+        if not error:
+            for device_id, expected in devices.items():
+                observed = observed_devices.get(device_id)
+                if observed is None or not expected_subset(observed, expected):
+                    error = f"Syncthing device {device_id} did not converge to the desired configuration"
+                    break
+        unexpected_folders = sorted(removed_folders & observed_folders.keys())
+        unexpected_devices = sorted(removed_devices & observed_devices.keys())
+        if not error and unexpected_folders:
+            error = "Syncthing retained removed managed folder(s): " + ", ".join(unexpected_folders)
+        if not error and unexpected_devices:
+            error = "Syncthing retained removed managed device(s): " + ", ".join(unexpected_devices)
+        if not error:
+            return
+        if attempt + 1 >= SYNCTHING_VERIFY_ATTEMPTS:
+            raise SyncError(error)
+        time.sleep(SYNCTHING_VERIFY_INTERVAL_SECONDS)
 
 
 def ensure_syncthing_folder(path: pathlib.Path) -> None:
@@ -1008,6 +1056,29 @@ def ensure_syncthing_folder(path: pathlib.Path) -> None:
             os.close(descriptor)
 
 
+def interrupted_syncthing_ownership(state: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    try:
+        journal = load_json(SYNCTHING_JOURNAL_PATH)
+    except JournalError as exc:
+        raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}") from exc
+    if journal is None or journal.get("phase") == "committed":
+        return set(), set()
+    if journal.get("schemaVersion") != 1 or journal.get("phase") not in {"prepared", "mutated"}:
+        raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
+    if journal.get("previousState") != state:
+        raise SyncError("Syncthing reconciliation journal does not match committed ownership state")
+    desired = journal.get("desired")
+    if not isinstance(desired, dict):
+        raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
+    folders = desired.get("folders")
+    devices = desired.get("devices")
+    if not isinstance(folders, dict) or not isinstance(devices, dict):
+        raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
+    if journal.get("generation") != syncthing_generation(folders, devices):
+        raise SyncError("Syncthing reconciliation journal generation does not match its desired configuration")
+    return {str(value) for value in folders}, {str(value) for value in devices}
+
+
 def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     if not SYNCTHING_ENABLED:
         return {"folders": 0, "devices": 0, "removedFolders": 0, "removedDevices": 0}
@@ -1015,6 +1086,25 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     state = load_state()
     old_folders = {str(value) for value in state.get("folders", [])}
     old_devices = {str(value) for value in state.get("devices", [])}
+    interrupted_folders, interrupted_devices = interrupted_syncthing_ownership(state)
+    old_folders.update(interrupted_folders)
+    old_devices.update(interrupted_devices)
+    observed_folders = object_by_identifier(
+        syncthing_request("/rest/config/folders"),
+        "id",
+        label="folder",
+    )
+    observed_devices = object_by_identifier(
+        syncthing_request("/rest/config/devices"),
+        "deviceID",
+        label="device",
+    )
+    unmanaged_folders = sorted(folders.keys() & observed_folders.keys() - old_folders)
+    unmanaged_devices = sorted(devices.keys() & observed_devices.keys() - old_devices)
+    if unmanaged_folders:
+        raise SyncError("Refusing to replace unmanaged Syncthing folder(s): " + ", ".join(unmanaged_folders))
+    if unmanaged_devices:
+        raise SyncError("Refusing to replace unmanaged Syncthing device(s): " + ", ".join(unmanaged_devices))
     generation = syncthing_generation(folders, devices)
     journal: dict[str, Any] = {
         "schemaVersion": 1,

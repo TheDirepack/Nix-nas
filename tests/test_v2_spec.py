@@ -466,6 +466,46 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         effective = self.compile({"schemaVersion": 3, "services": {}})
         self.assertEqual(effective["services"], {})
 
+    def test_yaml_graph_cycle_depth_and_node_budgets_fail_closed(self):
+        with self.assertRaises(v2.ManagedServicesV2Error) as ctx:
+            v2.parse_yaml_text("loop: &loop [*loop]\n", source="<test>")
+        self.assertEqual(ctx.exception.code, "yaml-cycle")
+
+        deep = v2.MAX_YAML_DEPTH + 50
+        nested: object = 1
+        for _ in range(deep):
+            nested = [nested]
+        with self.assertRaises(v2.ManagedServicesV2Error) as ctx:
+            v2._plain(nested)
+        self.assertEqual(ctx.exception.code, "yaml-depth")
+
+        wide = [1] * (v2.MAX_YAML_NODES + 1000)
+        with self.assertRaises(v2.ManagedServicesV2Error) as ctx:
+            v2._plain(wide)
+        self.assertEqual(ctx.exception.code, "yaml-nodes")
+
+    def test_yaml_graph_fixtures_fail_closed(self):
+        fixture_root = ROOT / "tests" / "fixtures" / "v2_yaml_graph"
+        cases = {
+            "cycle-min.yaml": "yaml-cycle",
+            "depth-min.yaml": "yaml-depth",
+            "nodes-min.yaml": "yaml-nodes",
+        }
+        for name, code in cases.items():
+            text = (fixture_root / name).read_text(encoding="utf-8")
+            with self.assertRaises(v2.ManagedServicesV2Error) as ctx:
+                v2.parse_yaml_text(text, source=f"<{name}>")
+            self.assertEqual(ctx.exception.code, code, name)
+
+    def test_valid_acyclic_aliases_preserved(self):
+        parsed = v2.parse_yaml_text("base: &b [1, 2]\nfirst: *b\nsecond: *b\n", source="<test>")
+        self.assertEqual(parsed, {"base": [1, 2], "first": [1, 2], "second": [1, 2]})
+        fixture_root = ROOT / "tests" / "fixtures" / "v2_yaml_graph"
+        text = (fixture_root / "alias-acyclic-valid.yaml").read_text(encoding="utf-8")
+        parsed = v2.parse_yaml_text(text, source="<alias-acyclic-valid>")
+        self.assertEqual(parsed["first"], parsed["base"])
+        self.assertEqual(parsed["second"], parsed["base"])
+
     def test_truncated_authority_leaves_previous_effective_untouched(self):
         import json
         import tempfile

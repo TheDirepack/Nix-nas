@@ -51,6 +51,13 @@ path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="
 PY
 }
 
+# Development preflight tolerates the known generated locations that documented
+# workflows create (both frontend dependency trees, Python bytecode caches, the
+# local Ruff cache). Release validation keeps strict staging: with
+# NAS_PREFLIGHT_VERIFY_MANIFEST=1 every forbidden artifact is rejected.
+if [[ "${NAS_PREFLIGHT_VERIFY_MANIFEST:-0}" == "1" ]]; then
+  export NAS_STRUCTURE_STRICT=1
+fi
 step "repository structure" ./scripts/validate-structure.py
 step "V2 architecture boundary" ./scripts/check-architecture-boundary.py
 step "version metadata" ./scripts/check-version.py
@@ -104,7 +111,8 @@ fi
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
   step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
     --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py \
-    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_property_invariants.py \
+    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_fuzz_custom_inputs.py \
+    --exclude test_property_invariants.py \
     --exclude test_secret_security_fuzz.py
   step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_core.py'
   step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_matrix.py'

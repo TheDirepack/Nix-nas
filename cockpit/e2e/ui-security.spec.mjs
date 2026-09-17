@@ -228,7 +228,7 @@ async function installCockpitMock(page, behavior = {}) {
         return promise;
       };
       globalThis.cockpit = {
-        spawn(args) {
+        spawn(args, options) {
           globalThis.__nas_spawn_calls.push([...args]);
           if (
             args[0] === "nas-cockpit-api" &&
@@ -257,7 +257,17 @@ async function installCockpitMock(page, behavior = {}) {
             value = {ok: true, feature: args[2], mode: args[3]};
           if (args[0] === "nas-cockpit-api" && args[1] === "action")
             value = {ok: true, action: args[2], output: "ok"};
-          const promise = Promise.resolve(JSON.stringify(value));
+          if (args[0] === "nas-managed-services-control" && args[1] === "document") {
+            value = {
+              ok: true,
+              revision: "a".repeat(64),
+              yaml: "schemaVersion: 3\nservices: {}\n",
+              document: {schemaVersion: 3, services: {}},
+              schema: {},
+            };
+          }
+          const output = JSON.stringify(value);
+          const promise = Promise.resolve(output);
           promise.input = () => {};
           promise.stream = () => promise;
           return promise;

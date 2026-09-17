@@ -18,9 +18,10 @@ class ContractTests(unittest.TestCase):
         )[0]
         self.assertNotIn('before = [ "caddy.service" ];', reconcile)
 
-    def test_caddy_bootstrap_does_not_block_on_managed_services_reconciliation(self) -> None:
+    def test_caddy_bootstrap_waits_for_managed_services_reconciliation(self) -> None:
         bootstrap = text("modules/nas/config/caddy-bootstrap.nix")
-        self.assertIn("systemctl start --no-block nas-managed-services-reconcile.service || true", bootstrap)
+        self.assertIn("systemctl start nas-managed-services-reconcile.service", bootstrap)
+        self.assertNotIn("systemctl start --no-block nas-managed-services-reconcile.service", bootstrap)
 
     def test_zfs_replication_and_boot_recovery_roles_are_separate(self) -> None:
         options = text("modules/nas/options/storage.nix") + text("modules/nas/options/operations.nix")
@@ -64,9 +65,17 @@ class ContractTests(unittest.TestCase):
     def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
         zfs_tools = text("modules/nas/internal/zfs-tools.nix")
         encrypted_guest = text("tests/vm/encrypted-guest-test.sh")
+        exporter = zfs_tools.split("nasZfsExportRecoveryKey =", 1)[1].split("in\n{", 1)[0]
         self.assertIn("pkgs.findutils", zfs_tools)
         self.assertIn("if [[ -t 0 ]]; then", zfs_tools)
         self.assertIn("show-zfs-key-stdin", zfs_tools)
+        self.assertIn('encryption "$dataset"', exporter)
+        self.assertIn('encryptionroot "$dataset"', exporter)
+        self.assertIn('keyformat "$dataset"', exporter)
+        self.assertIn('keylocation "$dataset"', exporter)
+        self.assertIn("zfsKeyFingerprintProperty", exporter)
+        self.assertIn('stored_fingerprint" == "$key_fingerprint', exporter)
+        self.assertLess(exporter.index("stored_fingerprint"), exporter.index('tmp="$(mktemp)"'))
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_zfs_mount_check_accepts_the_expected_mount_inside_a_stacked_namespace(self) -> None:
@@ -263,6 +272,14 @@ class ContractTests(unittest.TestCase):
             self.assertIn("planDigest", guest)
             self.assertIn("stale", guest.lower())
         self.assertIn("prepare-first-start", text("tests/vm/guest-test.sh"))
+
+    def test_encrypted_vm_waits_for_reconciliation_before_each_lock_drill(self) -> None:
+        guest = text("tests/vm/encrypted-guest-test.sh")
+        self.assertIn("wait_reconciliation_idle()", guest)
+        self.assertIn("systemctl start nas-managed-services-reconcile.service", guest)
+        self.assertIn("wait_oneshot_completed nas-managed-services-reconcile.service", guest)
+        self.assertIn("[[ ! -e /run/nas-control/reconcile.pending ]]", guest)
+        self.assertEqual(guest.count("wait_reconciliation_idle"), 3)
 
     def test_update_snapshots_have_bounded_retention(self) -> None:
         update = text("scripts/update-nas.sh")

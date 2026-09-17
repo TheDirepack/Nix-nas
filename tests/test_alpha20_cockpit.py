@@ -38,6 +38,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("nas-cockpit-sso", application)
         self.assertIn("--local-session", application)
         self.assertIn("cockpit-bridge", application)
+        self.assertIn("path = [ nasCockpitApi nasPythonApplication nasSecrets ];", application)
         self.assertIn("--no-tls", application)
         self.assertIn('partOf = [ "nas-first-start.service" ];', application)
         self.assertNotIn("settings.bearer", application)

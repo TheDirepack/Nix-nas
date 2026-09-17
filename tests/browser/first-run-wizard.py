@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import ssl
 import stat
@@ -239,36 +238,35 @@ def fill_wizard(
     click_button("Run setup")
 
 
+def read_job_document(driver: webdriver.Chrome) -> dict[str, Any]:
+    """Read the completed job document rendered by the wizard page.
+
+    The page polls with its own in-memory capability, so this probe never
+    handles job identifiers or capabilities itself.
+    """
+    try:
+        element = driver.find_element(By.CSS_SELECTOR, "#wizard-job-document")
+        text = element.get_attribute("textContent") or ""
+    except WebDriverException:
+        return {}
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def wait_for_job(driver: webdriver.Chrome, timeout_seconds: int) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
-    job_id = ""
     last_job: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        if not job_id:
-            body = driver.find_element(By.TAG_NAME, "body").text
-            match = re.search(r"Setup job ([A-Za-z0-9._-]+):", body)
-            if match:
-                job_id = match.group(1)
-            danger_alerts = driver.find_elements(By.CSS_SELECTOR, ".pf-v6-c-alert.pf-m-danger")
-            errors = [alert.text.strip() for alert in danger_alerts if alert.is_displayed() and alert.text.strip()]
-            if errors:
-                raise RuntimeError(f"first-start submission failed: {' | '.join(errors)}")
-        if not job_id:
-            time.sleep(2)
-            continue
-        response = driver.execute_async_script(
-            """
-            const done = arguments[arguments.length - 1];
-            fetch(`api/first-start/job/${arguments[0]}`, {headers: {Accept: 'application/json'}})
-              .then(async (result) => done({ok: result.ok, status: result.status, value: await result.json()}))
-              .catch((error) => done({ok: false, status: 0, value: {error: String(error)}}));
-            """,
-            job_id,
-        )
-        if isinstance(response, dict) and response.get("ok") and isinstance(response.get("value"), dict):
-            last_job = response["value"]
-            if last_job.get("status") in {"complete", "complete-unverified", "failed"}:
-                return last_job
+        danger_alerts = driver.find_elements(By.CSS_SELECTOR, ".pf-v6-c-alert.pf-m-danger")
+        errors = [alert.text.strip() for alert in danger_alerts if alert.is_displayed() and alert.text.strip()]
+        if errors:
+            raise RuntimeError(f"first-start submission failed: {' | '.join(errors)}")
+        last_job = read_job_document(driver)
+        if last_job.get("status") in {"complete", "complete-unverified", "failed"}:
+            return last_job
         time.sleep(2)
     details = json.dumps(browser_diagnostics(driver), indent=2, sort_keys=True)
     raise RuntimeError(

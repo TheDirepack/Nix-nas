@@ -66,6 +66,17 @@ class VmPreflightScopeTests(unittest.TestCase):
         appliance = full_suite.index("==> Full-stack appliance suite")
         self.assertLess(cleanup, appliance)
 
+    def test_full_suite_caps_unit_workers_only_outside_github_actions(self) -> None:
+        full_suite = FULL_SUITE.read_text(encoding="utf-8")
+        self.assertIn('if [[ "${GITHUB_ACTIONS:-false}" != "true" ]]; then', full_suite)
+        self.assertIn('export NAS_UNIT_TEST_JOBS="${NAS_UNIT_TEST_JOBS:-2}"', full_suite)
+
+        guard = full_suite.index('if [[ "${GITHUB_ACTIONS:-false}" != "true" ]]; then')
+        assignment = full_suite.index('export NAS_UNIT_TEST_JOBS="${NAS_UNIT_TEST_JOBS:-2}"')
+        guard_end = full_suite.index("fi", assignment)
+        self.assertLess(guard, assignment)
+        self.assertLess(assignment, guard_end)
+
 
 if __name__ == "__main__":
     unittest.main()
