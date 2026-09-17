@@ -391,6 +391,55 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                 self.assertFalse(any(method != "GET" for _, method in calls))
                 self.assertFalse(journal.exists())
 
+    def test_reconcile_syncthing_resumes_objects_recorded_by_interrupted_journal(self) -> None:
+        identity = identity_model.IdentityModel((), (), ("admin",))
+        folders = {"nas-alice-backup": {"id": "nas-alice-backup", "path": "/shares/users/alice/syncthing"}}
+        devices = {"DEVICE": {"deviceID": "DEVICE", "name": "Alice"}}
+        observed_folders = {key: dict(value) for key, value in folders.items()}
+        observed_devices = {key: dict(value) for key, value in devices.items()}
+
+        def request(path: str, *, method: str = "GET", body: object = None) -> object:
+            if path == "/rest/config/folders":
+                return list(observed_folders.values())
+            if path == "/rest/config/devices":
+                return list(observed_devices.values())
+            if path == "/rest/config/restart-required":
+                return {"requiresRestart": False}
+            return {}
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state = root / "state.json"
+            journal = root / "journal.json"
+            previous_state = {"folders": [], "devices": []}
+            journal.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "phase": "mutated",
+                        "generation": sync.syncthing_generation(folders, devices),
+                        "previousState": previous_state,
+                        "desired": {"folders": folders, "devices": devices},
+                        "retainedDevices": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                mock.patch.object(sync, "STATE_PATH", state),
+                mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal),
+                mock.patch.object(sync, "desired_syncthing", return_value=(folders, devices)),
+                mock.patch.object(sync, "ensure_syncthing_folder"),
+                mock.patch.object(sync, "syncthing_request", side_effect=request),
+            ):
+                result = sync.reconcile_syncthing(identity)
+
+            self.assertEqual(result["folders"], 1)
+            self.assertEqual(result["devices"], 1)
+            self.assertFalse(journal.exists())
+            self.assertEqual(json.loads(state.read_text(encoding="utf-8"))["folders"], ["nas-alice-backup"])
+
     def test_atomic_write_and_remove_are_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = pathlib.Path(raw) / "state.json"

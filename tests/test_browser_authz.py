@@ -547,6 +547,30 @@ class BrowserAuthzInputTests(unittest.TestCase):
         self.authz.discard_browser_log(driver)
         driver.get_log.assert_called_once_with("browser")
 
+    def test_cockpit_discards_shell_logs_after_the_nas_page_loads(self) -> None:
+        driver = mock.Mock()
+        events = []
+
+        def run_stage(_driver, label, operation):
+            if label in {"Cockpit NAS page", "Cockpit rendering and console"}:
+                operation()
+
+        with (
+            mock.patch.object(self.authz, "browser", return_value=driver),
+            mock.patch.object(self.authz, "browser_step", side_effect=run_stage),
+            mock.patch.object(self.authz, "WebDriverWait"),
+            mock.patch.object(self.authz, "wait_for_page_text"),
+            mock.patch.object(self.authz, "discard_browser_log", side_effect=lambda _driver: events.append("discard")),
+            mock.patch.object(
+                self.authz,
+                "verify_rendering_quality",
+                side_effect=lambda _driver, _label: events.append("render"),
+            ),
+        ):
+            self.authz.verify_cockpit_react_interactions("https://nas-test.local", "nasadmin", "secret")
+
+        self.assertEqual(events, ["discard", "render"])
+
     def test_login_retries_transient_authentik_flow_502(self) -> None:
         driver = mock.Mock()
         diagnostics = {
@@ -783,46 +807,128 @@ class BrowserAuthzInputTests(unittest.TestCase):
             {
                 "id": "nas-post-a-backup",
                 "path": "/tank/shares/users/post-a/syncthing",
-                "devices": [{"deviceID": "device-a"}],
+                "devices": [{"deviceID": "local-device"}, {"deviceID": "device-a"}],
             },
             {
                 "id": "nas-post-b-backup",
                 "path": "/tank/shares/users/post-b/syncthing",
-                "devices": [{"deviceID": "device-b"}],
+                "devices": [{"deviceID": "local-device"}, {"deviceID": "device-b"}],
             },
         ]
         driver = object()
         with mock.patch.object(
             self.authz,
-            "fetch_request",
-            return_value={
-                "status": 200,
-                "url": "https://nas-test.local/syncthing/",
-                "body": self.authz.json.dumps(folders),
-            },
+            "fetch_syncthing_request",
+            side_effect=[
+                {
+                    "status": 200,
+                    "url": "https://nas-test.local/syncthing/",
+                    "body": self.authz.json.dumps({"myID": "local-device"}),
+                },
+                {
+                    "status": 200,
+                    "url": "https://nas-test.local/syncthing/",
+                    "body": self.authz.json.dumps(folders),
+                },
+            ],
         ) as request:
             self.authz.verify_administrator_syncthing_folders(driver, ["post-a", "post-b"])
-        request.assert_called_once_with(driver, "/syncthing/rest/config/folders", "GET")
+        self.assertEqual(
+            request.call_args_list,
+            [
+                mock.call(driver, "/syncthing/rest/system/status"),
+                mock.call(driver, "/syncthing/rest/config/folders"),
+            ],
+        )
+
+    def test_syncthing_browser_request_mirrors_ui_csrf_cookie_and_header(self) -> None:
+        driver = mock.Mock()
+        driver.current_url = "https://nas-test.local:8443/identity/if/user/"
+        driver.get_cookies.return_value = [
+            {"name": "authentik_session", "value": "session-value", "path": "/"},
+            {"name": "CSRF-Token-ABC2345", "value": "csrf-value", "path": "/syncthing/"},
+        ]
+        driver.execute_async_script.return_value = {
+            "status": 200,
+            "url": "https://nas-test.local:8443/syncthing/rest/config/folders",
+            "body": "[]",
+        }
+
+        result = self.authz.fetch_syncthing_request(driver, "/syncthing/rest/config/folders")
+
+        self.assertEqual(result["status"], 200)
+        driver.get.assert_called_once_with("https://nas-test.local:8443/syncthing/")
+        script_call = driver.execute_async_script.call_args
+        self.assertIn("headers[arguments[1]] = arguments[2]", script_call.args[0])
+        self.assertEqual(
+            script_call.args[1:],
+            ("/syncthing/rest/config/folders", "X-CSRF-Token-ABC2345", "csrf-value"),
+        )
+
+    def test_syncthing_browser_request_requires_ui_csrf_cookie(self) -> None:
+        driver = mock.Mock()
+        driver.current_url = "https://nas-test.local:8443/identity/if/user/"
+        driver.get_cookies.return_value = [{"name": "authentik_session", "value": "session-value", "path": "/"}]
+
+        with self.assertRaisesRegex(RuntimeError, "Syncthing CSRF cookie is unavailable"):
+            self.authz.fetch_syncthing_request(driver, "/syncthing/rest/config/folders")
+
+        driver.execute_async_script.assert_not_called()
 
     def test_administrator_syncthing_probe_rejects_shared_user_device(self) -> None:
         folders = [
             {
                 "id": f"nas-{username}-backup",
                 "path": f"/tank/shares/users/{username}/syncthing",
-                "devices": [{"deviceID": "shared-device"}],
+                "devices": [{"deviceID": "local-device"}, {"deviceID": "shared-device"}],
             }
             for username in ("post-a", "post-b")
         ]
         with mock.patch.object(
             self.authz,
-            "fetch_request",
-            return_value={
-                "status": 200,
-                "url": "https://nas-test.local/syncthing/",
-                "body": self.authz.json.dumps(folders),
-            },
+            "fetch_syncthing_request",
+            side_effect=[
+                {
+                    "status": 200,
+                    "url": "https://nas-test.local/syncthing/",
+                    "body": self.authz.json.dumps({"myID": "local-device"}),
+                },
+                {
+                    "status": 200,
+                    "url": "https://nas-test.local/syncthing/",
+                    "body": self.authz.json.dumps(folders),
+                },
+            ],
         ):
             with self.assertRaisesRegex(RuntimeError, "share a user device"):
+                self.authz.verify_administrator_syncthing_folders(object(), ["post-a", "post-b"])
+
+    def test_administrator_syncthing_probe_requires_local_device(self) -> None:
+        folders = [
+            {
+                "id": f"nas-{username}-backup",
+                "path": f"/tank/shares/users/{username}/syncthing",
+                "devices": [{"deviceID": f"device-{username}"}],
+            }
+            for username in ("post-a", "post-b")
+        ]
+        with mock.patch.object(
+            self.authz,
+            "fetch_syncthing_request",
+            side_effect=[
+                {
+                    "status": 200,
+                    "url": "https://nas-test.local/syncthing/",
+                    "body": self.authz.json.dumps({"myID": "local-device"}),
+                },
+                {
+                    "status": 200,
+                    "url": "https://nas-test.local/syncthing/",
+                    "body": self.authz.json.dumps(folders),
+                },
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "does not include the local device"):
                 self.authz.verify_administrator_syncthing_folders(object(), ["post-a", "post-b"])
 
     def test_copy_party_isolation_denies_peers_and_allows_administrator(self) -> None:

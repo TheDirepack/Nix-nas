@@ -29,6 +29,15 @@ class V2StateAuthorityContractTests(unittest.TestCase):
         self.assertIn("NAS_STATE_REGISTRY_REQUIRED=1", wrapper)
         self.assertNotIn("NAS_FEATURE_STATE_ROOT", wrapper)
 
+    def test_keepass_restore_has_a_fail_closed_fallback_owner(self) -> None:
+        account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
+        keepass = account_tools.split('name = "keepass";', 1)[1].split("})", 1)[0]
+
+        self.assertIn('owner = "root";', keepass)
+        self.assertIn('group = "users";', keepass)
+        self.assertIn('rootMode = "0600";', keepass)
+        self.assertNotIn("owner = null;", keepass)
+
     def test_development_fallback_has_one_v2_managed_services_authority(self) -> None:
         with mock.patch.dict(
             "os.environ",

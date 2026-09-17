@@ -296,7 +296,10 @@ class IdentitySyncCoverageTests(unittest.TestCase):
 
     def test_verify_syncthing_configuration_reports_non_convergence_and_retention(self) -> None:
         responses = [[{"id": "folder", "type": "sendonly"}], [{"deviceID": "device"}]]
-        with mock.patch.object(sync, "syncthing_request", side_effect=responses):
+        with (
+            mock.patch.object(sync, "syncthing_request", side_effect=responses),
+            mock.patch.object(sync, "SYNCTHING_VERIFY_ATTEMPTS", 1),
+        ):
             with self.assertRaisesRegex(sync.SyncError, "did not converge"):
                 sync.verify_syncthing_configuration(
                     {"folder": {"id": "folder", "type": "receiveonly"}},
@@ -305,9 +308,44 @@ class IdentitySyncCoverageTests(unittest.TestCase):
                     removed_devices=set(),
                 )
         responses = [[{"id": "old"}], []]
-        with mock.patch.object(sync, "syncthing_request", side_effect=responses):
+        with (
+            mock.patch.object(sync, "syncthing_request", side_effect=responses),
+            mock.patch.object(sync, "SYNCTHING_VERIFY_ATTEMPTS", 1),
+        ):
             with self.assertRaisesRegex(sync.SyncError, "retained removed managed folder"):
                 sync.verify_syncthing_configuration({}, {}, removed_folders={"old"}, removed_devices=set())
+
+    def test_verify_syncthing_configuration_waits_for_complete_readback_convergence(self) -> None:
+        responses = [
+            [{"id": "folder", "label": "Old"}],
+            [{"deviceID": "device"}],
+            [{"id": "folder", "label": "Updated"}],
+            [{"deviceID": "device"}],
+        ]
+        with (
+            mock.patch.object(sync, "syncthing_request", side_effect=responses) as request,
+            mock.patch.object(sync.time, "sleep") as sleep,
+        ):
+            sync.verify_syncthing_configuration(
+                {"folder": {"id": "folder", "label": "Updated"}},
+                {"device": {"deviceID": "device"}},
+                removed_folders=set(),
+                removed_devices=set(),
+            )
+
+        self.assertEqual(request.call_count, 4)
+        sleep.assert_called_once_with(0.5)
+
+    def test_verify_syncthing_configuration_rejects_invalid_readback_without_retry(self) -> None:
+        with (
+            mock.patch.object(sync, "syncthing_request", return_value={}) as request,
+            mock.patch.object(sync.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "did not return a list"):
+                sync.verify_syncthing_configuration({}, {}, removed_folders=set(), removed_devices=set())
+
+        request.assert_called_once_with("/rest/config/folders")
+        sleep.assert_not_called()
 
     def test_ensure_syncthing_folder_rejects_paths_outside_expected_tree(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

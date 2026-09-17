@@ -181,7 +181,7 @@ nasSetup = pkgs.writeShellApplication {
       name = "keepass";
       source = cfg.secrets.keepassDatabase;
       sensitive = true;
-      owner = null;
+      owner = "root";
       group = "users";
       rootMode = "0600";
     })

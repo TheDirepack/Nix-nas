@@ -294,7 +294,6 @@ def desired_syncthing(
             "rescanIntervalS": 3600,
             "pullerMaxPendingKiB": 16384,
             "scanProgressIntervalS": -1,
-            "weakHashThresholdPct": 101,
             "versioning": {"type": "staggered", "params": {"cleanInterval": "3600", "maxAge": "31536000"}},
         }
     return folders, devices

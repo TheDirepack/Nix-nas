@@ -87,6 +87,7 @@ test("managed services editor is generated from the canonical schema with YAML a
   const schemaModel = await source("src/schema-model.js");
   assert.match(services, /<SchemaEditor schema=\{document\.schema\} value=\{formValue\}/);
   assert.match(services, /replaceManagedServicesJsonDocument/);
+  assert.match(services, /document\.revision/);
   assert.match(services, /Advanced YAML/);
   assert.match(schemaEditor, /additionalProperties/);
   assert.match(schemaEditor, /variantOptions/);

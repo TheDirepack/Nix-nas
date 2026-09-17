@@ -60,17 +60,22 @@ async function goToConfirmation(page) {
 
 test("completes every first-start control through reboot", async ({page}) => {
   const submissions = [];
+  const capability = "d".repeat(48);
+  const requestedPaths = [];
   let rebooted = false;
   await mockSetupApi(page, async ({request, pathname}) => {
+    requestedPaths.push(pathname);
     if (request.method() === "GET" && pathname.endsWith("/first-start")) return plan;
     if (request.method() === "POST" && pathname.endsWith("/first-run")) {
       submissions.push(request.postDataJSON());
-      return {schemaVersion: 1, jobId: "b".repeat(24), status: "submitted"};
+      return {schemaVersion: 1, jobId: "b".repeat(24), status: "submitted", capability};
     }
-    if (pathname.endsWith(`/job/${"b".repeat(24)}`)) {
+    if (request.method() === "GET" && pathname.endsWith("/first-start/job")) {
+      expect(request.headers()["x-nas-setup-capability"]).toBe(capability);
       return {schemaVersion: 1, jobId: "b".repeat(24), status: "complete-unverified"};
     }
     if (request.method() === "POST" && pathname.endsWith("/reboot")) {
+      expect(request.headers()["x-nas-setup-capability"]).toBe(capability);
       rebooted = true;
       return {rebooting: true};
     }
@@ -107,10 +112,13 @@ test("completes every first-start control through reboot", async ({page}) => {
     page.getByText("This page will disconnect while the appliance restarts."),
   ).toBeVisible();
   expect(rebooted).toBe(true);
+  expect(requestedPaths.some((pathname) => /\/job\/[0-9a-f]{24}$/.test(pathname))).toBe(false);
 });
 
 test("validates entries, refreshes the plan, and safely retries a failed job", async ({page}) => {
   const submissions = [];
+  const failedCapability = "e".repeat(48);
+  const completedCapability = "f".repeat(48);
   let planRequests = 0;
   let jobRequests = 0;
   await mockSetupApi(page, async ({request, pathname}) => {
@@ -121,10 +129,13 @@ test("validates entries, refreshes the plan, and safely retries a failed job", a
     }
     if (request.method() === "POST" && pathname.endsWith("/first-run")) {
       submissions.push(request.postDataJSON());
-      if (submissions.length === 1) return {jobId: "c".repeat(24), status: "submitted"};
-      return {status: "complete"};
+      if (submissions.length === 1) {
+        return {jobId: "c".repeat(24), status: "submitted", capability: failedCapability};
+      }
+      return {jobId: "d".repeat(24), status: "complete", capability: completedCapability};
     }
-    if (pathname.endsWith(`/job/${"c".repeat(24)}`)) {
+    if (request.method() === "GET" && pathname.endsWith("/first-start/job")) {
+      expect(request.headers()["x-nas-setup-capability"]).toBe(failedCapability);
       jobRequests += 1;
       return {jobId: "c".repeat(24), status: "failed", message: "Injected setup failure"};
     }
@@ -142,15 +153,15 @@ test("validates entries, refreshes the plan, and safely retries a failed job", a
   await page.getByRole("button", {name: "Refresh plan"}).click();
   await expect(page.getByText("/dev/disk/by-id/disk-one")).toBeVisible();
   await page.getByRole("button", {name: "Next"}).click();
-  await page.getByRole("button", {name: "Run setup"}).click();
   await expect(page.getByText("Use a valid administrator username.")).toBeVisible();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
 
   await page.getByRole("button", {name: "Back"}).click();
   await page.getByRole("button", {name: "Back"}).click();
   await fillAdministrator(page);
   await goToConfirmation(page);
   await page.getByRole("button", {name: "Run setup"}).click();
-  await expect(page.getByText("Injected setup failure")).toBeVisible({timeout: 6_000});
+  await expect(page.getByText("Injected setup failure", {exact: true})).toBeVisible({timeout: 6_000});
   const retry = page.getByRole("button", {name: "Retry setup"});
   await expect(retry).toBeDisabled();
   await page

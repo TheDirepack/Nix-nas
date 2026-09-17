@@ -690,8 +690,12 @@ NTFY_ENV
         acquire_lock
         prompt_unlock
         local bootstrap api
-        bootstrap="$(get_secret authentik-bootstrap-token)"
         api="$(get_secret authentik-api-token)"
+        if ! has_secret authentik-bootstrap-token; then
+          echo "Authentik bootstrap token is retired; runtime API token is separate."
+          return 0
+        fi
+        bootstrap="$(get_secret authentik-bootstrap-token)"
         if [[ "$bootstrap" == "$api" ]]; then
           echo "WARNING: Authentik runtime API token is still the bootstrap token." >&2
           return 1

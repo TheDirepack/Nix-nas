@@ -297,15 +297,7 @@ def static_links() -> dict[str, str]:
 
 
 def setup_status() -> dict[str, Any]:
-    prepared = _json_command(
-        [_setup_entry(), "prepare-first-start", "--config", FIRST_RUN_CONFIG],
-        optional=True,
-        timeout_seconds=60,
-    )
-    status = _json_command([_setup_entry(), "status"], optional=True)
-    if prepared.get("ok") is False and "firstStart" not in status:
-        status["firstStart"] = prepared
-    return status
+    return _json_command([_setup_entry(), "status"], optional=True)
 
 
 def identity_status() -> dict[str, Any]:

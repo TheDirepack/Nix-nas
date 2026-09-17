@@ -99,6 +99,57 @@ class ManagedServicesV2ListenerTargetPortTests(unittest.TestCase):
         self.assertIn('PublishPort="8080:80/tcp"', rendered)
         self.assertNotIn('PublishPort="8080:8080/tcp"', rendered)
 
+    def test_routed_listener_binds_only_to_the_route_loopback_host(self) -> None:
+        effective, service = self.service()
+        service["listeners"] = {
+            "web": {
+                "protocol": "tcp",
+                "exposure": {"port": 8080},
+                "targetPort": 80,
+                "firewall": False,
+            }
+        }
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
+            }
+        }
+        rendered = quadlet.render_quadlet(
+            effective,
+            "demo",
+            service,
+            unit_lines=[],
+            service_lines=[],
+        ).decode()
+        self.assertIn('PublishPort="127.0.0.1:8080:80/tcp"', rendered)
+        self.assertNotIn('PublishPort="8080:80/tcp"', rendered)
+
+    def test_http_route_does_not_loopback_bind_udp_listener_on_same_port(self) -> None:
+        effective, service = self.service()
+        service["listeners"] = {
+            "discovery": {
+                "protocol": "udp",
+                "exposure": {"port": 8080},
+                "targetPort": 8081,
+                "firewall": True,
+            }
+        }
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
+            }
+        }
+        rendered = quadlet.render_quadlet(
+            effective,
+            "demo",
+            service,
+            unit_lines=[],
+            service_lines=[],
+        ).decode()
+        self.assertIn('PublishPort="8080:8081/udp"', rendered)
+        self.assertIn('PublishPort="127.0.0.1:8080:8080/tcp"', rendered)
+        self.assertNotIn('PublishPort="127.0.0.1:8080:8081/udp"', rendered)
+
     def test_listener_without_target_port_keeps_same_port_mapping(self) -> None:
         effective, service = self.service()
         service["listeners"] = {

@@ -69,14 +69,12 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertIn(["nas-update", "--status", "--json"], calls)
         self.assertTrue(any(call[:2] == ["nas-setup", "prepare-first-start"] for call in calls))
 
-    def test_setup_status_merges_prepare_error_only_when_needed(self) -> None:
-        prepared = {"ok": False, "error": "missing plan"}
-        with mock.patch.object(api, "_json_command", side_effect=[prepared, {"status": "incomplete"}]):
+    def test_setup_status_is_read_only_and_preserves_first_start_state(self) -> None:
+        status = {"status": "incomplete", "firstStart": {"status": "known"}}
+        with mock.patch.object(api, "_json_command", return_value=status) as command:
             result = api.setup_status()
-        self.assertEqual(result["firstStart"], prepared)
-        with mock.patch.object(api, "_json_command", side_effect=[prepared, {"firstStart": {"status": "known"}}]):
-            result = api.setup_status()
-        self.assertEqual(result["firstStart"]["status"], "known")
+        self.assertEqual(result, status)
+        command.assert_called_once_with([api._setup_entry(), "status"], optional=True)
 
     def test_ai_configuration_fails_closed(self) -> None:
         with mock.patch.object(api.ai_config, "load_config", side_effect=api.ai_config.AiConfigError("bad")):

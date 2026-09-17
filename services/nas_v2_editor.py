@@ -15,6 +15,7 @@ import io
 import json
 import os
 import pathlib
+import stat
 import tempfile
 from contextlib import contextmanager
 from typing import Any, Iterator, TypeGuard
@@ -76,12 +77,19 @@ def _load_round_trip(text: str) -> Any:
 
 
 def _read_text(path: pathlib.Path) -> str:
-    if path.is_dir():
-        raise ManagedServicesEditorError(
-            f"Managed Services V2 authority must be one YAML file, not a directory: {path}"
-        )
     try:
-        return path.read_text(encoding="utf-8")
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise ManagedServicesEditorError(
+                f"Managed Services V2 authority must be one YAML file: a regular non-symlink file, not {path}"
+            )
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+        current = os.fstat(descriptor)
+        if current.st_dev != before.st_dev or current.st_ino != before.st_ino or not stat.S_ISREG(current.st_mode):
+            os.close(descriptor)
+            raise ManagedServicesEditorError("Managed Services V2 authority changed while it was opened")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            return handle.read()
     except OSError as exc:
         raise ManagedServicesEditorError(f"Unable to read Managed Services V2 authority: {exc}") from exc
 

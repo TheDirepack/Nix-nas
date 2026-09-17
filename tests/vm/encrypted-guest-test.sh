@@ -50,6 +50,13 @@ wait_oneshot_completed() {
   fail "timed out waiting for $unit to complete"
 }
 
+wait_reconciliation_idle() {
+  systemctl start nas-managed-services-reconcile.service
+  wait_oneshot_completed nas-managed-services-reconcile.service
+  wait_inactive nas-managed-services-reconcile.service
+  [[ ! -e /run/nas-control/reconcile.pending ]] || fail "managed-services reconciliation remains pending"
+}
+
 prime_nasadmin_sudo() {
   local password
   runuser -u nasadmin -- sudo -n -v >/dev/null 2>&1 && return 0
@@ -265,6 +272,7 @@ log "Fault-inject every encrypted dataset bootstrap transition"
 # Keep the known-good encryption root out of the command's configured name while the
 # failure matrix repeatedly creates and tears down a brand-new tank/nas. Locking first
 # means the preserved dataset is unmounted and no protected consumer can write to it.
+wait_reconciliation_idle
 run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
 zfs rename tank/nas tank/nas-preserved
@@ -311,6 +319,7 @@ cmp -s /tmp/nas-zfs-recovery.key /run/nas-secrets/zfs/dataset-key
 pass "recovery-key export matches the staged KeePassXC key"
 
 log "Lock the dataset and prove reactivation restores it"
+wait_reconciliation_idle
 run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
 wait_inactive nas-zfs-mount-guard.service

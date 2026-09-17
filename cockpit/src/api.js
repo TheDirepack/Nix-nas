@@ -17,6 +17,13 @@ export function parseJsonOutput(output) {
   return JSON.parse(output);
 }
 
+function sha256(value, label) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error(`${label} must be a lowercase SHA-256 digest.`);
+  }
+  return value;
+}
+
 export function api(args, spawn = globalThis.cockpit?.spawn) {
   return requireSpawn(spawn)(["nas-cockpit-api", ...args], {
     superuser: "require",
@@ -40,24 +47,27 @@ export function managedServicesDocument(spawn = globalThis.cockpit?.spawn) {
   }).then(parseJsonOutput);
 }
 
-export function replaceManagedServicesDocument(yaml, spawn = globalThis.cockpit?.spawn) {
+export function replaceManagedServicesDocument(yaml, revision, spawn = globalThis.cockpit?.spawn) {
   if (typeof yaml !== "string" || yaml.length === 0) {
     throw new Error("Managed Services V2 YAML must not be empty.");
   }
-  const process = requireSpawn(spawn)(["nas-managed-services-control", "replace-document", "-"], {
-    superuser: "require",
-    err: "message",
-  });
+  const process = requireSpawn(spawn)(
+    ["nas-managed-services-control", "replace-document", "-", sha256(revision, "Revision")],
+    {
+      superuser: "require",
+      err: "message",
+    },
+  );
   process.input(yaml);
   return process.then(parseJsonOutput);
 }
 
-export function replaceManagedServicesJsonDocument(document, spawn = globalThis.cockpit?.spawn) {
+export function replaceManagedServicesJsonDocument(document, revision, spawn = globalThis.cockpit?.spawn) {
   if (document === null || typeof document !== "object" || Array.isArray(document)) {
     throw new Error("Managed Services V2 schema editor value must be an object.");
   }
   const process = requireSpawn(spawn)(
-    ["nas-managed-services-control", "replace-json-document", "-"],
+    ["nas-managed-services-control", "replace-json-document", "-", sha256(revision, "Revision")],
     {
       superuser: "require",
       err: "message",

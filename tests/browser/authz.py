@@ -537,6 +537,8 @@ def verify_cockpit_react_interactions(origin: str, username: str, password: str)
             wait = WebDriverWait(driver, 90)
             wait_for_page_text(driver, wait, "NAS Overview", "Cockpit NAS page")
             wait_for_page_text(driver, wait, "Protected services:", "Cockpit NAS page")
+            # Cockpit shell pages loaded before this boundary own their diagnostics.
+            discard_browser_log(driver)
 
         browser_step(driver, "Cockpit NAS page", verify_page)
 
@@ -687,8 +689,44 @@ def verify_cross_user_file_access_blocked(driver: webdriver.Chrome, origin: str,
             raise RuntimeError(f"cross-user {method} unexpectedly succeeded: {result!r}")
 
 
+def fetch_syncthing_request(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
+    driver.get(urllib.parse.urljoin(driver.current_url, "/syncthing/"))
+    csrf_cookies = [
+        (str(cookie.get("name", "")), str(cookie.get("value", "")))
+        for cookie in driver.get_cookies()
+        if str(cookie.get("name", "")).startswith("CSRF-Token-")
+    ]
+    if len(csrf_cookies) != 1:
+        raise RuntimeError("Syncthing CSRF cookie is unavailable")
+    cookie_name, token = csrf_cookies[0]
+    return driver.execute_async_script(
+        """
+        const done = arguments[arguments.length - 1];
+        const headers = {};
+        headers[arguments[1]] = arguments[2];
+        fetch(arguments[0], {method: 'GET', credentials: 'include', redirect: 'follow', headers})
+          .then(async response => done({status: response.status, url: response.url, body: await response.text()}))
+          .catch(error => done({status: 0, url: '', body: '', error: String(error)}));
+        """,
+        path,
+        f"X-{cookie_name}",
+        token,
+    )
+
+
 def verify_administrator_syncthing_folders(driver: webdriver.Chrome, usernames: list[str]) -> None:
-    result = fetch_request(driver, "/syncthing/rest/config/folders", "GET")
+    status_result = fetch_syncthing_request(driver, "/syncthing/rest/system/status")
+    if int(status_result.get("status", 0)) != 200:
+        raise RuntimeError(f"administrator could not inspect Syncthing status: {status_result!r}")
+    try:
+        status = json.loads(str(status_result.get("body", "")))
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Syncthing status response was not JSON") from error
+    local_device = str(status.get("myID", "")).strip() if isinstance(status, dict) else ""
+    if not local_device:
+        raise RuntimeError("Syncthing status response did not include the local device")
+
+    result = fetch_syncthing_request(driver, "/syncthing/rest/config/folders")
     if int(result.get("status", 0)) != 200:
         raise RuntimeError(f"administrator could not inspect Syncthing folders: {result!r}")
     try:
@@ -707,9 +745,12 @@ def verify_administrator_syncthing_folders(driver: webdriver.Chrome, usernames: 
             for device in folder.get("devices", [])
             if isinstance(device, dict) and device.get("deviceID")
         }
-        if not devices:
+        if local_device not in devices:
+            raise RuntimeError(f"Syncthing folder for {username} does not include the local device")
+        user_devices = devices - {local_device}
+        if not user_devices:
             raise RuntimeError(f"Syncthing folder for {username} has no assigned devices")
-        device_sets.append(devices)
+        device_sets.append(user_devices)
     if any(left & right for index, left in enumerate(device_sets) for right in device_sets[index + 1 :]):
         raise RuntimeError("isolated Syncthing folders share a user device")
 

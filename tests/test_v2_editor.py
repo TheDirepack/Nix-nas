@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -15,6 +16,31 @@ import nas_v2_editor as editor  # noqa: E402
 
 
 class V2EditorTests(unittest.TestCase):
+    def test_desired_authority_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            target = self.write_desired(root)
+            link = root / "linked-services.yaml"
+            link.symlink_to(target)
+            with self.assertRaisesRegex(editor.ManagedServicesEditorError, "regular non-symlink"):
+                editor.read_document(desired_path=link, schema_path=SCHEMA)
+
+    def test_desired_authority_replacement_during_open_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_desired(root)
+            replacement = root / "replacement.yaml"
+            replacement.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            original_open = editor.os.open
+
+            def replace_then_open(path: pathlib.Path, flags: int) -> int:
+                editor.os.replace(replacement, authority)
+                return original_open(path, flags)
+
+            with mock.patch.object(editor.os, "open", side_effect=replace_then_open):
+                with self.assertRaisesRegex(editor.ManagedServicesEditorError, "changed while it was opened"):
+                    editor.read_document(desired_path=authority, schema_path=SCHEMA)
+
     def write_desired(self, root: pathlib.Path, *, idle: bool = True) -> pathlib.Path:
         path = root / "services.yaml"
         idle_line = "      idleSeconds: 300\n" if idle else ""

@@ -40,6 +40,14 @@ class V2SecretLifecycleTests(unittest.TestCase):
         self.assertNotIn("nas-keepass-validate", source)
         self.assertNotIn("nas-secret-fault-test", source)
 
+    def test_authentik_token_check_accepts_retired_bootstrap_authority(self) -> None:
+        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+        check = source.split("command_check_authentik_token() {", 1)[1].split("command_set_authentik_token() {", 1)[0]
+
+        self.assertIn("if ! has_secret authentik-bootstrap-token; then", check)
+        self.assertIn("Authentik bootstrap token is retired", check)
+        self.assertIn('if [[ "$bootstrap" == "$api" ]]', check)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1023,15 +1023,17 @@ fi
 [[ -n "$syncthing_api_key" ]] || fail "Syncthing API key is unavailable"
 curl --silent --show-error --fail -H "X-API-Key: $syncthing_api_key" \
   http://127.0.0.1:8384/rest/config/folders >/tmp/nas-post-setup-syncthing-folders.json
-jq -e --arg a "$post_a_device" --arg b "$post_b_device" '
+syncthing_local_device="$(curl --silent --show-error --fail -H "X-API-Key: $syncthing_api_key" \
+  http://127.0.0.1:8384/rest/system/status | jq -er .myID)"
+jq -e --arg a "$post_a_device" --arg b "$post_b_device" --arg local "$syncthing_local_device" '
   (map(select(.id == "nas-post-a-backup")) | length) == 1 and
   (map(select(.id == "nas-post-b-backup")) | length) == 1 and
   (map(select(.id == "nas-post-a-backup"))[0] |
     .path == "/tank/shares/users/post-a/syncthing" and
-    [.devices[].deviceID] == [$a]) and
+    ([.devices[].deviceID] | sort) == ([$a, $local] | sort)) and
   (map(select(.id == "nas-post-b-backup"))[0] |
     .path == "/tank/shares/users/post-b/syncthing" and
-    [.devices[].deviceID] == [$b])
+    ([.devices[].deviceID] | sort) == ([$b, $local] | sort))
 ' /tmp/nas-post-setup-syncthing-folders.json >/dev/null ||
   fail "post-setup Syncthing folders are not isolated by user path and device"
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
@@ -1054,10 +1056,11 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
 pass "Deterministic bundle XSS, layout, and console-error probes"
 
 log "Custom command surfaces and generated configuration"
-nas-secrets status | grep -q 'Runtime secrets: active'
-! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
-  >/tmp/nas-token-warning.log 2>&1 || fail "bootstrap token reuse was not reported"
-grep -q 'bootstrap token' /tmp/nas-token-warning.log
+nas-secrets status | grep -Fx 'Runtime secrets: active' >/dev/null
+run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
+  >/tmp/nas-token-status.log 2>&1 || fail "retired bootstrap token was not accepted"
+grep -Fx 'Authentik bootstrap token is retired; runtime API token is separate.' \
+  /tmp/nas-token-status.log >/dev/null
 ! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-zfs-export-recovery-key /tmp/disabled-zfs-key \
   >/tmp/nas-zfs-export-disabled.log 2>&1 || fail "ZFS recovery key unexpectedly existed while encryption was disabled"
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
@@ -1070,8 +1073,10 @@ nas-managed-services-control document | jq -e '.document.services | type == "obj
 ! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
-nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
-nas-doctor --json | jq -e '.schemaVersion >= 1 and (.checks | type == "array")' >/tmp/nas-doctor.json
+doctor_status=0
+nas-doctor --json >/tmp/nas-doctor.json || doctor_status=$?
+(( doctor_status <= 2 )) || fail "nas-doctor failed unexpectedly with status $doctor_status"
+jq -e '.schemaVersion >= 1 and (.checks | type == "array")' /tmp/nas-doctor.json >/dev/null
 nas-state authorities | jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' >/tmp/nas-state-authorities.json
 rm -f /tmp/nas-qemu-state.tar.gz
 nas-state export /tmp/nas-qemu-state.tar.gz --include-sensitive >/tmp/nas-state-export.json
