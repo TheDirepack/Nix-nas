@@ -208,10 +208,12 @@ class VmSuiteWrapperTests(unittest.TestCase):
 
     def test_installed_smoke_allows_only_the_disabled_optional_launcher_to_be_absent(self) -> None:
         installed = INSTALLED_ADVERSARIAL.read_text(encoding="utf-8")
+        vm_common = VM_COMMON.read_text(encoding="utf-8")
         self.assertIn('OPTIONAL_INSTALLED_COMMANDS = frozenset({"nas-code"})', installed)
         self.assertIn("if name in OPTIONAL_INSTALLED_COMMANDS:", installed)
         self.assertIn('raise RuntimeError(f"installed custom command is missing: {name}")', installed)
         self.assertIn('"smoke": os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1"', installed)
+        self.assertIn("pkgs.python3", vm_common)
 
     def test_vm_executes_the_canonical_guest_fixture_without_rewriting(self) -> None:
         vm_common = VM_COMMON.read_text(encoding="utf-8")

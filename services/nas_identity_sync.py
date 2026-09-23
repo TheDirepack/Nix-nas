@@ -187,7 +187,7 @@ def http_json(
     method: str = "GET",
     body: Any | None = None,
     headers: dict[str, str] | None = None,
-    timeout: float = 15.0,
+    timeout: float = 30.0,
 ) -> Any:
     data = None
     request_headers = {"Accept": "application/json"}

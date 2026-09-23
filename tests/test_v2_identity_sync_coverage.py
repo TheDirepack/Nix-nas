@@ -65,6 +65,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
             self.assertEqual(sync.http_json("https://example.test/api", headers={"X-Test": "yes"}), {"ok": True})
         request = urlopen.call_args.args[0]
         self.assertEqual(request.headers["X-test"], "yes")
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 30.0)
 
         empty = mock.MagicMock()
         empty.__enter__.return_value.read.return_value = b""

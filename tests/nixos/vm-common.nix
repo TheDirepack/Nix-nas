@@ -191,7 +191,16 @@ in
     power.ups.enable = lib.mkForce false;
   };
 
-  environment.systemPackages = [ guestTest secretAdversarialTest encryptedGuestTest reconfigureTest pkgs.parted pkgs.e2fsprogs pkgs.expect ];
+  environment.systemPackages = [
+    guestTest
+    secretAdversarialTest
+    encryptedGuestTest
+    reconfigureTest
+    pkgs.parted
+    pkgs.e2fsprogs
+    pkgs.expect
+    pkgs.python3
+  ];
   environment.etc = {
     "nas-test/oci-vm-probe-v1.tar".source = testOciImageV1;
     "nas-test/oci-vm-probe-v2.tar".source = testOciImageV2;

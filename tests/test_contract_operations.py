@@ -57,7 +57,9 @@ class ContractTests(unittest.TestCase):
         for code in (71, 72, 73):
             self.assertIn(f"exit {code}", secrets)
         self.assertNotIn("seq 1 90", secrets)
-        self.assertIn("/bin/timeout 90s", authentik)
+        self.assertIn("/bin/timeout 180s", authentik)
+        self.assertIn("--retry 180", authentik)
+        self.assertIn('TimeoutStartSec = "4min";', authentik)
         self.assertIn('blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";', authentik)
         blueprints = text("modules/nas/internal/account-tools.nix")
         self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)

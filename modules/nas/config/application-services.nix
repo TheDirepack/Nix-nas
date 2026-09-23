@@ -347,11 +347,12 @@ in
         RuntimeDirectoryMode = "0750";
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
         ExecStart = "${pkgs.authentik}/bin/ak server";
+        TimeoutStartSec = "4min";
         ExecStartPost = pkgs.writeShellScript "authentik-ready" ''
-          exec ${pkgs.coreutils}/bin/timeout 90s ${pkgs.curl}/bin/curl \
+          exec ${pkgs.coreutils}/bin/timeout 180s ${pkgs.curl}/bin/curl \
             --fail --silent --show-error \
             --connect-timeout 1 --max-time 2 \
-            --retry 90 --retry-delay 1 --retry-connrefused --retry-all-errors \
+            --retry 180 --retry-delay 1 --retry-connrefused --retry-all-errors \
             http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/
         '';
       };
