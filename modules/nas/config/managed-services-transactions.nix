@@ -168,7 +168,8 @@ in
     };
     systemd.paths.nas-managed-services-dirty = {
       description = "Notice Managed Services V2 desired-state changes";
-      wantedBy = [ "multi-user.target" ];
+      wantedBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
       pathConfig = {
         PathChanged = desiredPath;
         Unit = "nas-managed-services-dirty.service";

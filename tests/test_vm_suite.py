@@ -184,9 +184,21 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
 
+    def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
+        adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
+        self.assertIn("activate_secrets_with_retry()", adversarial)
+        self.assertIn('if [[ "$rc" -ne 75 ]]; then', adversarial)
+        self.assertIn("sleep 1", adversarial)
+        self.assertIn("/tmp/nas-secret-adversarial.out /tmp/nas-secret-adversarial.err", adversarial)
+        self.assertIn(
+            "/tmp/nas-secret-adversarial-recovery.out /tmp/nas-secret-adversarial-recovery.err",
+            adversarial,
+        )
+
     def test_secret_adversarial_uses_the_promoted_local_administrator(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
         self.assertIn("/var/lib/nas-setup/local-administrator.json", adversarial)
+        self.assertIn('cd "$administrator_home"', adversarial)
         self.assertIn('runuser -u "$administrator" -- env HOME="$administrator_home"', adversarial)
         self.assertNotIn("runuser -u admin", adversarial)
         self.assertNotIn("  authentik-bootstrap-token \\", adversarial)

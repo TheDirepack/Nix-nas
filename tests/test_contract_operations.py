@@ -247,6 +247,15 @@ class ContractTests(unittest.TestCase):
         self.assertIn("--action syncthing-sync --class identity --class runtime --", syncthing_sync)
         self.assertIn("RestartForceExitStatus = [ 75 ];", syncthing_sync)
         self.assertIn('RestartSec = "5s";', syncthing_sync)
+        guest = text("tests/vm/guest-test.sh")
+        self.assertIn(
+            "systemctl show nas-syncthing-sync.service --property=ExecMainStatus --value",
+            guest,
+        )
+        self.assertNotIn(
+            "systemctl show nas-syncthing-sync.service --property=NRestarts --value",
+            guest,
+        )
 
     def test_state_wrapper_is_profile_aware_private_and_excludes_regenerable_metrics(self) -> None:
         account = text("modules/nas/internal/account-tools.nix")
@@ -287,6 +296,34 @@ class ContractTests(unittest.TestCase):
         self.assertIn("wait_oneshot_completed nas-managed-services-reconcile.service", guest)
         self.assertIn("[[ ! -e /run/nas-control/reconcile.pending ]]", guest)
         self.assertEqual(guest.count("wait_reconciliation_idle"), 3)
+
+    def test_managed_services_reconciliation_stops_with_protected_storage(self) -> None:
+        managed = text("modules/nas/config/managed-services.nix")
+        transactions = text("modules/nas/config/managed-services-transactions.nix")
+        zfs_tools = text("modules/nas/internal/zfs-tools.nix")
+        encrypted_guest = text("tests/vm/encrypted-guest-test.sh")
+
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile", 1
+        )[0]
+        base_reconcile_path = managed.split("systemd.paths.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.services.nas-managed-services-authentik-reconcile", 1
+        )[0]
+        dirty_path = transactions.split("systemd.paths.nas-managed-services-dirty = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile.pathConfig", 1
+        )[0]
+        for unit in (reconcile, base_reconcile_path, dirty_path):
+            self.assertIn('wantedBy = [ "nas-protected-services.target" ];', unit)
+            self.assertIn('partOf = [ "nas-protected-services.target" ];', unit)
+            self.assertNotIn('wantedBy = [ "multi-user.target" ];', unit)
+        self.assertIn(
+            "systemctl stop nas-managed-services-dirty.path nas-managed-services-reconcile.path",
+            zfs_tools,
+        )
+        self.assertIn("wait_inactive nas-managed-services-dirty.path", encrypted_guest)
+        self.assertIn("wait_inactive nas-managed-services-reconcile.path", encrypted_guest)
+        self.assertNotIn("stale handler", encrypted_guest)
+        self.assertNotIn("systemctl reset-failed nas-v2-apply-failed.service", encrypted_guest)
 
     def test_update_snapshots_have_bounded_retention(self) -> None:
         update = text("scripts/update-nas.sh")

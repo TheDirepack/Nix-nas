@@ -19,7 +19,28 @@ administrator_home="$(getent passwd "$administrator" | cut -d: -f6)"
   fail "configured local administrator home is unavailable"
 
 run_as_administrator() {
-  runuser -u "$administrator" -- env HOME="$administrator_home" PATH="$PATH" "$@"
+  (
+    cd "$administrator_home"
+    runuser -u "$administrator" -- env HOME="$administrator_home" PATH="$PATH" "$@"
+  )
+}
+
+activate_secrets_with_retry() {
+  local stdout=$1 stderr=$2 rc retries=30
+  while ((retries > 0)); do
+    if printf '%s\n' "$KEEPASS_PASSWORD" |
+      run_as_administrator nas-secrets activate-stdin >"$stdout" 2>"$stderr"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    if [[ "$rc" -ne 75 ]]; then
+      return "$rc"
+    fi
+    ((retries -= 1))
+    sleep 1
+  done
+  return 75
 }
 
 kp_show() {
@@ -60,12 +81,11 @@ exercise_rejected_vault_value() {
   [[ -n "$original" ]] || fail "original $key is empty"
   before="$(runtime_digest)"
   kp_set "$key" "$malicious" || fail "unable to inject adversarial value into $key"
-  set +e
-  printf '%s\n' "$KEEPASS_PASSWORD" |
-    run_as_administrator nas-secrets activate-stdin \
-      >/tmp/nas-secret-adversarial.out 2>/tmp/nas-secret-adversarial.err
-  rc=$?
-  set -e
+  if activate_secrets_with_retry /tmp/nas-secret-adversarial.out /tmp/nas-secret-adversarial.err; then
+    rc=0
+  else
+    rc=$?
+  fi
   if [[ $rc -eq 0 ]]; then
     kp_set "$key" "$original" || true
     fail "activation accepted adversarial KeePass value for $key"
@@ -121,9 +141,11 @@ fi
 
 # A clean activation after restoring all KDBX values proves the negative tests did not
 # poison the lock, operation coordinator, transaction state, or service lifecycle.
-printf '%s\n' "$KEEPASS_PASSWORD" |
-  run_as_administrator nas-secrets activate-stdin \
-    >/tmp/nas-secret-adversarial-recovery.out
+activate_secrets_with_retry \
+  /tmp/nas-secret-adversarial-recovery.out /tmp/nas-secret-adversarial-recovery.err || {
+  cat /tmp/nas-secret-adversarial-recovery.err >&2
+  fail "clean activation after adversarial tests failed"
+}
 [[ -f /run/nas-secrets/ready ]] || fail "clean activation after adversarial tests did not commit"
 systemctl is-active --quiet nas-protected-services.target || fail "protected target did not recover after clean activation"
 pass "secret vault corruption tests leave the appliance recoverable"

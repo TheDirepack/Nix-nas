@@ -1014,7 +1014,6 @@ nas-identity-sync capabilities | jq -e '
   ]
 ' >/dev/null
 nas-identity-sync sync-syncthing >/tmp/nas-post-setup-syncthing.json
-sync_restarts_before="$(systemctl show nas-syncthing-sync.service --property=NRestarts --value)"
 rm -f /run/nas-vm-syncthing-lock-held
 nas-operation-run --action vm-syncthing-lock-collision --class runtime -- \
   sh -c 'touch /run/nas-vm-syncthing-lock-held; sleep 10' &
@@ -1023,7 +1022,7 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
   "$TEST_TIMEOUT" bash -c 'until [[ -e /run/nas-vm-syncthing-lock-held ]]; do sleep 1; done'
 systemctl start --no-block nas-syncthing-sync.service
 sync_deadline=$((SECONDS + TEST_TIMEOUT))
-while (( $(systemctl show nas-syncthing-sync.service --property=NRestarts --value) <= sync_restarts_before )); do
+while [[ "$(systemctl show nas-syncthing-sync.service --property=ExecMainStatus --value)" != 75 ]]; do
   ((SECONDS < sync_deadline)) || {
     systemctl status nas-syncthing-sync.service --no-pager >&2 || true
     fail "Syncthing sync did not retry runtime-lock contention"

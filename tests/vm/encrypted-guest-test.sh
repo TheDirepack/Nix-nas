@@ -322,6 +322,8 @@ log "Lock the dataset and prove reactivation restores it"
 wait_reconciliation_idle
 run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
+wait_inactive nas-managed-services-dirty.path
+wait_inactive nas-managed-services-reconcile.path
 wait_inactive nas-zfs-mount-guard.service
 wait_inactive nas-zfs-unlock.service
 [[ "$(zfs get -H -o value keystatus tank/nas)" == "unavailable" ]]
@@ -335,15 +337,6 @@ nas-zfs-mount-check
 [[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
 pass "nas-zfs-lock and secret reactivation complete a full lock/unlock cycle"
 
-systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
-# The intentional lock window fails V2 reconciliation while the dataset is
-# unavailable, and its OnFailure handler cannot self-clear once recovery
-# succeeds. Anything besides that stale handler is an unexpected failure.
-if grep -Ev '(^$|nas-health-alert@|nas-v2-apply-failed\.service)' /tmp/nas-encrypted-failed | grep -q .; then
-  cat /tmp/nas-encrypted-failed >&2
-  fail "unexpected failed units remain"
-fi
-systemctl reset-failed nas-v2-apply-failed.service || true
 systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
 [[ ! -s /tmp/nas-encrypted-failed ]] || { cat /tmp/nas-encrypted-failed >&2; fail "unexpected failed units remain"; }
 printf '\nALL ENCRYPTED ZFS VM TESTS PASSED\n'

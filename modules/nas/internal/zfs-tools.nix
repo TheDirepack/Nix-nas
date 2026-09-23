@@ -229,6 +229,7 @@ let
         echo "$dataset is not encrypted; there is no ZFS key to unload." >&2
         exit 1
       fi
+      sudo systemctl stop nas-managed-services-dirty.path nas-managed-services-reconcile.path
       sudo systemctl stop nas-protected-services.target
       zfs_retry() {
         local label=$1
