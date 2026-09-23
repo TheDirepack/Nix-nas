@@ -423,6 +423,62 @@ def run_process(command: list[str], *, timeout: int) -> subprocess.CompletedProc
     )
 
 
+def run_process_to_private_file(
+    command: list[str], target: pathlib.Path, *, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    try:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        raise StateError(f"Unable to create private command output: {target}") from exc
+    stderr_result: list[str] = []
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            process = subprocess.Popen(
+                command,
+                stdout=output,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            assert process.stderr is not None
+            stderr_thread = threading.Thread(
+                target=_drain_bounded,
+                args=(process.stderr,),
+                kwargs={"limit": COMMAND_OUTPUT_LIMIT, "result": stderr_result},
+                daemon=True,
+            )
+            stderr_thread.start()
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+                raise StateError(f"Command timed out: {command[0]}") from exc
+            finally:
+                stderr_thread.join()
+                process.stderr.close()
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    if process.returncode != 0:
+        target.unlink(missing_ok=True)
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        "",
+        stderr_result[0] if stderr_result else "",
+    )
+
+
 def database_command(variable: str, default: list[str], placeholder: str, value: str) -> list[str]:
     raw = os.environ.get(variable)
     if raw is None:
@@ -449,14 +505,12 @@ def dump_database(target: pathlib.Path) -> None:
             "pg_dump",
             "--format=custom",
             "--no-owner",
-            "--file",
-            "{output}",
             "authentik",
         ],
         "{output}",
-        str(target),
+        "/dev/stdout",
     )
-    result = run_process(command, timeout=1800)
+    result = run_process_to_private_file(command, target, timeout=1800)
     if result.returncode != 0:
         raise StateError("Authentik database export failed")
 
@@ -502,14 +556,12 @@ def database_comparison_digest() -> str:
                 "--no-privileges",
                 "--inserts",
                 "--rows-per-insert=1",
-                "--file",
-                "{output}",
                 "authentik",
             ],
             "{output}",
-            str(output),
+            "/dev/stdout",
         )
-        result = run_process(command, timeout=1800)
+        result = run_process_to_private_file(command, output, timeout=1800)
         if result.returncode != 0:
             raise StateError("Authentik database comparison export failed")
         digest = hashlib.sha256()
@@ -648,6 +700,8 @@ def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integrat
         for unit in (
             "authentik.service",
             "authentik-worker.service",
+            "nas-authentik-proxy-outpost.service",
+            "postgresql.service",
             "nas-v2-timer-identity-sync-0.timer",
             "caddy.service",
         ):
@@ -673,6 +727,8 @@ def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integrat
     return (
         "authentik.service",
         "authentik-worker.service",
+        "nas-authentik-proxy-outpost.service",
+        "postgresql.service",
         "nas-v2-timer-identity-sync-0.timer",
         "copyparty.service",
         "syncthing.service",
@@ -687,6 +743,14 @@ def should_quiesce_export() -> bool:
         and os.environ.get("NAS_STATE_ALLOW_UNPRIVILEGED") != "1"
         and os.environ.get("NAS_STATE_EXPORT_QUIESCE", "1") == "1"
     )
+
+
+def prepare_database_export(registry: Iterable[Authority], unit_snapshot: Mapping[str, bool]) -> None:
+    if not any(authority.kind == "database" for authority in registry):
+        return
+    if not unit_snapshot.get("postgresql.service"):
+        raise StateError("PostgreSQL was not active before state export quiesce")
+    run_systemctl("start", "postgresql.service")
 
 
 def validate_staging_limits(staging: pathlib.Path) -> tuple[int, int]:
@@ -714,6 +778,7 @@ def export_bundle(output: pathlib.Path, *, include_sensitive: bool, quiesce: boo
         quiesced_units = export_quiesce_units()
         unit_snapshot = capture_unit_state(quiesced_units)
         stop_active_units(unit_snapshot)
+        prepare_database_export(registry, unit_snapshot)
     try:
         with state_temporary_directory("nas-state-export.") as temporary:
             staging = pathlib.Path(temporary)

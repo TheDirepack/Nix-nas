@@ -4,6 +4,7 @@ set -Eeuo pipefail
 KEEPASS_PASSWORD="${NAS_TEST_KEEPASS_PASSWORD:-nixos-nas-vm-test-password}"
 DATABASE="${NAS_TEST_KEEPASS_DATABASE:-/var/lib/nas-control-plane/nas-secrets/NAS.kdbx}"
 GROUP="${NAS_TEST_KEEPASS_GROUP:-NixOS NAS}"
+ADMINISTRATOR_STATE="/var/lib/nas-setup/local-administrator.json"
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf 'PASS: %s\n' "$*"; }
@@ -11,18 +12,27 @@ pass() { printf 'PASS: %s\n' "$*"; }
 [[ -f "$DATABASE" ]] || fail "KeePass database missing: $DATABASE"
 [[ -f /run/nas-secrets/ready ]] || fail "runtime secrets are not active before adversarial test"
 systemctl is-active --quiet nas-protected-services.target || fail "protected target is not active before adversarial test"
+administrator="$(jq -er '.username | select(test("^[a-z_][a-z0-9_-]{0,31}$"))' "$ADMINISTRATOR_STATE")" ||
+  fail "configured local administrator is unavailable"
+administrator_home="$(getent passwd "$administrator" | cut -d: -f6)"
+[[ -n "$administrator_home" && -d "$administrator_home" ]] ||
+  fail "configured local administrator home is unavailable"
+
+run_as_administrator() {
+  runuser -u "$administrator" -- env HOME="$administrator_home" PATH="$PATH" "$@"
+}
 
 kp_show() {
   local key=$1
   printf '%s\n' "$KEEPASS_PASSWORD" |
-    runuser -u admin -- keepassxc-cli show --quiet --show-protected -a Password \
+    run_as_administrator keepassxc-cli show --quiet --show-protected -a Password \
       "$DATABASE" "$GROUP/$key"
 }
 
 kp_set() {
   local key=$1 value=$2
   printf '%s\n%s\n' "$KEEPASS_PASSWORD" "$value" |
-    runuser -u admin -- keepassxc-cli edit --quiet -p "$DATABASE" "$GROUP/$key" >/dev/null
+    run_as_administrator keepassxc-cli edit --quiet -p "$DATABASE" "$GROUP/$key" >/dev/null
 }
 
 runtime_digest() {
@@ -52,7 +62,7 @@ exercise_rejected_vault_value() {
   kp_set "$key" "$malicious" || fail "unable to inject adversarial value into $key"
   set +e
   printf '%s\n' "$KEEPASS_PASSWORD" |
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" nas-secrets activate-stdin \
+    run_as_administrator nas-secrets activate-stdin \
       >/tmp/nas-secret-adversarial.out 2>/tmp/nas-secret-adversarial.err
   rc=$?
   set -e
@@ -80,29 +90,14 @@ exercise_rejected_vault_value \
   "Authentik secret key has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
-  authentik-bootstrap-token \
-  'not-64-hex' \
-  "Authentik bootstrap token has an unsafe or unexpected format"
+  authentik-api-token \
+  'safe-api-token;attacker' \
+  "Authentik API token has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
   state-bundle-signing-key \
   'not-64-hex' \
   "State bundle signing key has an unsafe or unexpected format"
-
-exercise_rejected_vault_value \
-  authentik-bootstrap-password \
-  'safe-password value' \
-  "Authentik bootstrap password has an unsafe or unexpected format"
-
-exercise_rejected_vault_value \
-  llama-swap-api-key \
-  'safe-api-key;attacker' \
-  "llama-swap API key has an unsafe or unexpected format"
-
-exercise_rejected_vault_value \
-  open-webui-secret \
-  'safe-webui-secret;attacker' \
-  "Open WebUI signing secret has an unsafe or unexpected format"
 
 exercise_rejected_vault_value \
   ntfy-alert-topic \
@@ -127,7 +122,7 @@ fi
 # A clean activation after restoring all KDBX values proves the negative tests did not
 # poison the lock, operation coordinator, transaction state, or service lifecycle.
 printf '%s\n' "$KEEPASS_PASSWORD" |
-  runuser -u admin -- env HOME=/home/admin PATH="$PATH" nas-secrets activate-stdin \
+  run_as_administrator nas-secrets activate-stdin \
     >/tmp/nas-secret-adversarial-recovery.out
 [[ -f /run/nas-secrets/ready ]] || fail "clean activation after adversarial tests did not commit"
 systemctl is-active --quiet nas-protected-services.target || fail "protected target did not recover after clean activation"

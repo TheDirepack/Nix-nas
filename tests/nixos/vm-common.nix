@@ -12,6 +12,18 @@ let
       );
   };
   authentikProxy = pkgs.authentik-outposts.proxy;
+  testOciImage = tag: body: pkgs.dockerTools.buildLayeredImage {
+    name = "localhost/nas-v2-vm-probe";
+    inherit tag;
+    contents = [ pkgs.busybox ];
+    extraCommands = ''
+      mkdir -p www
+      printf '%s\n' ${lib.escapeShellArg body} > www/index.html
+    '';
+    config.Cmd = [ "/bin/httpd" "-f" "-p" "8080" "-h" "/www" ];
+  };
+  testOciImageV1 = testOciImage "v1" "nas-v2-oci-v1";
+  testOciImageV2 = testOciImage "v2" "nas-v2-oci-v2";
 
   guestTestSource = builtins.readFile ../vm/guest-test.sh;
 
@@ -180,6 +192,10 @@ in
   };
 
   environment.systemPackages = [ guestTest secretAdversarialTest encryptedGuestTest reconfigureTest pkgs.parted pkgs.e2fsprogs pkgs.expect ];
+  environment.etc = {
+    "nas-test/oci-vm-probe-v1.tar".source = testOciImageV1;
+    "nas-test/oci-vm-probe-v2.tar".source = testOciImageV2;
+  };
 
   systemd.services.nas-vm-test-repository = {
     description = "Materialize the NAS source tree for in-VM validation";

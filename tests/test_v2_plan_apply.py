@@ -83,6 +83,36 @@ class ManagedServicesV2PlanApplyTests(unittest.TestCase):
         self.assertEqual(timers[0]["schedule"]["randomizedDelaySeconds"], 900)
         self.assertTrue(timers[1]["schedule"]["persistent"])
 
+    def test_oci_session_runtime_metadata_propagates_to_plan(self) -> None:
+        document = {
+            "schemaVersion": 3,
+            "services": {
+                "workspace": {
+                    "name": "Workspace",
+                    "workload": {"kind": "session"},
+                    "runtime": {"type": "oci", "image": "example.invalid/workspace:1"},
+                }
+            },
+        }
+
+        plan = v2plan.build_plan(v2.compile_document(document, self.schema))
+
+        self.assertEqual(
+            plan["runtime"],
+            [
+                {
+                    "action": "ensure-runtime",
+                    "service": "workspace",
+                    "runtimeType": "oci",
+                    "ownerUnit": "nas-v2-workspace.service",
+                    "enabled": True,
+                    "managed": True,
+                    "workloadKind": "session",
+                    "activation": None,
+                }
+            ],
+        )
+
     def test_save_and_apply_preserves_yaml_comments_and_materializes_derived_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

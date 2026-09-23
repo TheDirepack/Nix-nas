@@ -85,7 +85,10 @@ test("managed services document replacement sends YAML only over stdin with revi
     ],
     ["input", yaml],
   ]);
-  assert.throws(() => replaceManagedServicesDocument("", "a".repeat(64), spawn), /must not be empty/);
+  assert.throws(
+    () => replaceManagedServicesDocument("", "a".repeat(64), spawn),
+    /must not be empty/,
+  );
 });
 
 test("schema editor replacement sends only the JSON document over stdin with revision CAS", async () => {
@@ -97,7 +100,9 @@ test("schema editor replacement sends only the JSON document over stdin with rev
     return process;
   };
   const document = {schemaVersion: 3, services: {}};
-  assert.deepEqual(await replaceManagedServicesJsonDocument(document, "b".repeat(64), spawn), {ok: true});
+  assert.deepEqual(await replaceManagedServicesJsonDocument(document, "b".repeat(64), spawn), {
+    ok: true,
+  });
   assert.deepEqual(calls, [
     [
       "spawn",
@@ -106,7 +111,10 @@ test("schema editor replacement sends only the JSON document over stdin with rev
     ],
     ["input", JSON.stringify(document)],
   ]);
-  assert.throws(() => replaceManagedServicesJsonDocument([], "b".repeat(64), spawn), /must be an object/);
+  assert.throws(
+    () => replaceManagedServicesJsonDocument([], "b".repeat(64), spawn),
+    /must be an object/,
+  );
 });
 
 test("managed service mode validates identifiers and fixed modes before spawning", async () => {

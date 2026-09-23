@@ -26,6 +26,60 @@ def minimal_service(*, kind: str = "daemon", runtime: dict | None = None) -> dic
     }
 
 
+def runtime_cases() -> dict[str, tuple[dict, dict, str]]:
+    return {
+        "systemd": (
+            {"type": "systemd", "unit": "example.service"},
+            {"type": "systemd", "unit": "example.service"},
+            "example.service",
+        ),
+        "exec": (
+            {"type": "exec", "command": ["/bin/true"]},
+            {
+                "type": "exec",
+                "command": ["/bin/true"],
+                "environment": {},
+                "identity": {"mode": "dynamic"},
+                "restart": "on-failure",
+            },
+            "nas-v2-example.service",
+        ),
+        "python": (
+            {"type": "python", "entrypoint": {"module": "example.main"}},
+            {
+                "type": "python",
+                "interpreter": "/run/current-system/sw/bin/python3",
+                "dependencies": {"requireHashes": True},
+                "environment": {},
+                "identity": {"mode": "dynamic"},
+                "restart": "on-failure",
+                "entrypoint": {"module": "example.main", "args": []},
+            },
+            "nas-v2-example.service",
+        ),
+        "quadlet": (
+            {"type": "quadlet", "source": "/var/lib/nas-control/apps/example/example.container"},
+            {"type": "quadlet", "source": "/var/lib/nas-control/apps/example/example.container"},
+            "nas-v2-example.service",
+        ),
+        "compose": (
+            {"type": "compose", "source": "/var/lib/nas-control/apps/example/compose.yaml"},
+            {"type": "compose", "source": "/var/lib/nas-control/apps/example/compose.yaml"},
+            "nas-v2-example.target",
+        ),
+        "vm": (
+            {"type": "vm", "source": "/var/lib/nas-control/apps/example/domain.xml"},
+            {"type": "vm", "source": "/var/lib/nas-control/apps/example/domain.xml"},
+            "nas-v2-example.service",
+        ),
+        "oci": (
+            {"type": "oci", "image": "example.invalid/example:1"},
+            {"type": "oci", "image": "example.invalid/example:1", "command": [], "pull": "missing"},
+            "nas-v2-example.service",
+        ),
+    }
+
+
 class ManagedServicesV2SpecTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -72,6 +126,28 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         self.assertEqual(normalized["sandbox"]["mode"], "strict")
         self.assertTrue(normalized["sandbox"]["readOnlyRoot"])
         self.assertTrue(normalized["sandbox"]["noNewPrivileges"])
+
+    def test_all_runtime_types_normalize_and_derive_native_owner(self) -> None:
+        for runtime_type, (runtime, expected_runtime, owner_unit) in runtime_cases().items():
+            with self.subTest(runtime_type=runtime_type):
+                effective = self.compile(
+                    {"schemaVersion": 3, "services": {"example": minimal_service(runtime=runtime)}}
+                )
+                self.assertEqual(effective["services"]["example"]["runtime"], expected_runtime)
+                self.assertEqual(
+                    effective["derived"]["runtime"]["example"],
+                    {"type": runtime_type, "ownerUnit": owner_unit, "managed": True},
+                )
+
+    def test_session_workloads_reject_every_non_oci_runtime(self) -> None:
+        for runtime_type, (runtime, _, _) in runtime_cases().items():
+            if runtime_type == "oci":
+                continue
+            with self.subTest(runtime_type=runtime_type):
+                service = minimal_service(kind="session", runtime=runtime)
+                with self.assertRaisesRegex(v2.ManagedServicesV2Error, "direct OCI") as raised:
+                    self.compile({"schemaVersion": 3, "services": {"example": service}})
+                self.assertEqual(raised.exception.code, "runtime-session")
 
     def test_managed_path_symlink_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,8 +427,10 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
                 self.compile(mutated)
 
     def test_session_workload_defaults_to_isolated_deny_network(self):
-        service = minimal_service()
-        service["workload"] = {"kind": "session"}
+        service = minimal_service(
+            kind="session",
+            runtime={"type": "oci", "image": "example.invalid/session:1"},
+        )
         effective = self.compile({"schemaVersion": 3, "services": {"example": service}})
         network = effective["services"]["example"]["network"]
         self.assertEqual(network["mode"], "isolated")

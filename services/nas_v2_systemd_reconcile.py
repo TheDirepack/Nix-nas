@@ -398,7 +398,8 @@ def reconcile(
     if previous and not topology_changed and not lifecycle_changed and not fingerprint_changed:
         return {"stopped": [], "changed": [], "started": [], "noop": True}
 
-    units_to_stop = (previous_owned - owned) | (previous_start - start) | stop
+    retired_units = previous_owned - owned
+    units_to_stop = retired_units | (previous_start - start) | stop
     changed_units: set[str] = set()
     for target_rel, digest in current_hashes.items():
         if previous_hashes.get(target_rel) != digest:
@@ -466,6 +467,8 @@ def reconcile(
     try:
         for unit in sorted(units_to_stop):
             _run_systemctl(systemctl, "stop", unit)
+        for unit in sorted(retired_units):
+            _run_systemctl(systemctl, "reset-failed", unit, check=False)
 
         for target_rel, source in links.items():
             target_path, _ = _safe_target(systemd_runtime_dir, target_rel)

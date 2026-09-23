@@ -358,6 +358,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 log=log,
             )
             self.write_manifest(manifest, None)
+            log.write_text("", encoding="utf-8")
             self.run_reconcile(
                 manifest=manifest,
                 projection=projection,
@@ -368,7 +369,50 @@ class V2SystemdReconcileTests(unittest.TestCase):
             )
 
             self.assertFalse((runtime / "nas-v2-demo.service").exists())
-            self.assertIn("stop nas-v2-demo.service", log.read_text(encoding="utf-8"))
+            commands = log.read_text(encoding="utf-8").splitlines()
+            self.assertIn("stop nas-v2-demo.service", commands)
+            self.assertIn("reset-failed nas-v2-demo.service", commands)
+            self.assertLess(
+                commands.index("stop nas-v2-demo.service"),
+                commands.index("reset-failed nas-v2-demo.service"),
+            )
+
+    def test_unloaded_retired_unit_does_not_abort_failed_state_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            source = units / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            runtime = root / "systemd"
+            runtime.mkdir()
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+
+            self.write_manifest(manifest, source)
+            self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=systemctl,
+                log=log,
+            )
+            self.write_manifest(manifest, None)
+            fail_ctl, fail_log = self.make_systemctl(root, fail_on={"reset-failed nas-v2-demo.service"})
+            self.run_reconcile(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=state,
+                systemctl=fail_ctl,
+                log=fail_log,
+            )
+
+            self.assertFalse((runtime / "nas-v2-demo.service").exists())
+            self.assertIn("reset-failed nas-v2-demo.service", fail_log.read_text(encoding="utf-8"))
 
     def test_quadlet_source_is_linked_and_change_restarts_generated_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -525,6 +569,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertTrue((runtime / "nas-v2-demo.service").is_symlink())
             self.assertEqual((runtime / "nas-v2-demo.service").resolve(), before_target)
             self.assertEqual(state.read_text(encoding="utf-8"), before_state)
+            self.assertNotIn("reset-failed nas-v2-demo.service", fail_log.read_text(encoding="utf-8"))
 
     def test_rollback_failure_reports_manual_recovery(self):
         with tempfile.TemporaryDirectory() as tmp:

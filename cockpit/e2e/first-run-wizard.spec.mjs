@@ -161,7 +161,9 @@ test("validates entries, refreshes the plan, and safely retries a failed job", a
   await fillAdministrator(page);
   await goToConfirmation(page);
   await page.getByRole("button", {name: "Run setup"}).click();
-  await expect(page.getByText("Injected setup failure", {exact: true})).toBeVisible({timeout: 6_000});
+  await expect(page.getByText("Injected setup failure", {exact: true})).toBeVisible({
+    timeout: 6_000,
+  });
   const retry = page.getByRole("button", {name: "Retry setup"});
   await expect(retry).toBeDisabled();
   await page

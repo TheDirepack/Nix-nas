@@ -231,6 +231,7 @@ class ContractTests(unittest.TestCase):
         system = text("modules/nas/config/system.nix")
         identities = text("modules/nas/config/identities.nix")
         secrets = text("modules/nas/internal/secret-tools.nix")
+        services = text("modules/nas/config/systemd-services.nix")
         update = text("scripts/update-nas.sh")
         package = text("pyproject.toml")
         self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
@@ -241,6 +242,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("enter_operation_coordinator", secrets)
         self.assertIn("operation_class=update", update)
         self.assertNotIn("exec 8>/run/nas-operations/appliance.lock", update)
+        syncthing_sync = services.split("nas-syncthing-sync =", 1)[1].split("nas-caddy-ca-export =", 1)[0]
+        self.assertIn("nas-operation-run", syncthing_sync)
+        self.assertIn("--action syncthing-sync --class identity --class runtime --", syncthing_sync)
+        self.assertIn("RestartForceExitStatus = [ 75 ];", syncthing_sync)
+        self.assertIn('RestartSec = "5s";', syncthing_sync)
 
     def test_state_wrapper_is_profile_aware_private_and_excludes_regenerable_metrics(self) -> None:
         account = text("modules/nas/internal/account-tools.nix")
@@ -271,6 +277,7 @@ class ContractTests(unittest.TestCase):
             self.assertIn("/setup/api", guest)
             self.assertIn("planDigest", guest)
             self.assertIn("stale", guest.lower())
+            self.assertIn("systemd-run --collect --pipe --wait", guest)
         self.assertIn("prepare-first-start", text("tests/vm/guest-test.sh"))
 
     def test_encrypted_vm_waits_for_reconciliation_before_each_lock_drill(self) -> None:

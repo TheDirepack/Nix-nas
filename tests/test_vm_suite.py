@@ -12,6 +12,8 @@ WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
+SECRET_ADVERSARIAL = ROOT / "tests" / "vm" / "secret-adversarial.sh"
+INSTALLED_ADVERSARIAL = ROOT / "tests" / "vm" / "adversarial-installed.py"
 FIRST_RUN_BROWSER = ROOT / "tests" / "browser" / "first-run-wizard.py"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
 QEMU_PROCESS = ROOT / "scripts" / "lib" / "nas-qemu-process.sh"
@@ -181,6 +183,23 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
         self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
+
+    def test_secret_adversarial_uses_the_promoted_local_administrator(self) -> None:
+        adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
+        self.assertIn("/var/lib/nas-setup/local-administrator.json", adversarial)
+        self.assertIn('runuser -u "$administrator" -- env HOME="$administrator_home"', adversarial)
+        self.assertNotIn("runuser -u admin", adversarial)
+        self.assertNotIn("  authentik-bootstrap-token \\", adversarial)
+        self.assertNotIn("  authentik-bootstrap-password \\", adversarial)
+        self.assertNotIn("  llama-swap-api-key \\", adversarial)
+        self.assertNotIn("  open-webui-secret \\", adversarial)
+
+    def test_installed_smoke_allows_only_the_disabled_optional_launcher_to_be_absent(self) -> None:
+        installed = INSTALLED_ADVERSARIAL.read_text(encoding="utf-8")
+        self.assertIn('OPTIONAL_INSTALLED_COMMANDS = frozenset({"nas-code"})', installed)
+        self.assertIn("if name in OPTIONAL_INSTALLED_COMMANDS:", installed)
+        self.assertIn('raise RuntimeError(f"installed custom command is missing: {name}")', installed)
+        self.assertIn('"smoke": os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1"', installed)
 
     def test_vm_executes_the_canonical_guest_fixture_without_rewriting(self) -> None:
         vm_common = VM_COMMON.read_text(encoding="utf-8")

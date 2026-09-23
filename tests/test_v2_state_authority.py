@@ -38,6 +38,35 @@ class V2StateAuthorityContractTests(unittest.TestCase):
         self.assertIn('rootMode = "0600";', keepass)
         self.assertNotIn("owner = null;", keepass)
 
+    def test_copyparty_registry_uses_canonical_zfs_authority_not_public_symlink(self) -> None:
+        account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
+        copyparty = account_tools.split('name = "copyparty";', 1)[1].split("})", 1)[0]
+
+        self.assertIn("copypartyDataDir", account_tools.split("inherit (args)", 1)[1].split(";", 1)[0])
+        self.assertIn("source = copypartyDataDir;", copyparty)
+        self.assertNotIn('source = "/var/lib/copyparty";', copyparty)
+
+    def test_generated_registry_avoids_vaultwarden_and_dynamic_user_symlink_roots(self) -> None:
+        account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
+        inherited = account_tools.split("inherit (args)", 1)[1].split(";", 1)[0]
+        vaultwarden = account_tools.split('name = "vaultwarden";', 1)[1].split("})", 1)[0]
+        ntfy = account_tools.split('name = "ntfy";', 1)[1].split("})", 1)[0]
+
+        self.assertIn("vaultwardenDataDir", inherited)
+        self.assertIn("source = vaultwardenDataDir;", vaultwarden)
+        self.assertNotIn('source = "/var/lib/vaultwarden";', vaultwarden)
+        self.assertIn('source = "/var/lib/private/ntfy-sh";', ntfy)
+        self.assertNotIn('source = "/var/lib/ntfy-sh";', ntfy)
+
+    def test_grafana_registry_captures_mutable_database_not_immutable_package_links(self) -> None:
+        account_tools = (ROOT / "modules/nas/internal/account-tools.nix").read_text(encoding="utf-8")
+        grafana = account_tools.split('name = "grafana";', 1)[1].split("})", 1)[0]
+
+        self.assertIn('source = "/var/lib/grafana/grafana.db";', grafana)
+        self.assertIn("optional = true;", grafana)
+        self.assertIn('rootMode = "0600";', grafana)
+        self.assertNotIn('source = "/var/lib/grafana";', grafana)
+
     def test_development_fallback_has_one_v2_managed_services_authority(self) -> None:
         with mock.patch.dict(
             "os.environ",

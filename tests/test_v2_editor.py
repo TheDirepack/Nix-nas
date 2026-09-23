@@ -15,6 +15,18 @@ if str(SERVICES) not in sys.path:
 import nas_v2_editor as editor  # noqa: E402
 
 
+def runtime_cases() -> dict[str, dict]:
+    return {
+        "systemd": {"type": "systemd", "unit": "demo.service"},
+        "exec": {"type": "exec", "command": ["/bin/true"]},
+        "python": {"type": "python", "entrypoint": {"module": "demo.main"}},
+        "quadlet": {"type": "quadlet", "source": "/var/lib/nas-control/apps/demo/demo.container"},
+        "compose": {"type": "compose", "source": "/var/lib/nas-control/apps/demo/compose.yaml"},
+        "vm": {"type": "vm", "source": "/var/lib/nas-control/apps/demo/domain.xml"},
+        "oci": {"type": "oci", "image": "example.invalid/editor-roundtrip:1"},
+    }
+
+
 class V2EditorTests(unittest.TestCase):
     def test_desired_authority_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -187,6 +199,25 @@ class V2EditorTests(unittest.TestCase):
             reparsed = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
             self.assertEqual(reparsed["services"]["demo"]["network"]["lanAccess"], True)
 
+    def test_schema_editor_round_trips_all_runtime_types(self) -> None:
+        for runtime_type, runtime in runtime_cases().items():
+            with self.subTest(runtime_type=runtime_type), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                desired = self.write_desired(root)
+                value = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+                value["services"]["demo"]["runtime"] = runtime
+
+                result = editor.replace_document_value(
+                    value,
+                    desired_path=desired,
+                    schema_path=SCHEMA,
+                    platform_path=None,
+                )
+
+                self.assertTrue(result["ok"])
+                reparsed = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+                self.assertEqual(reparsed["services"]["demo"]["runtime"], runtime)
+
     def test_invalid_schema_editor_value_never_replaces_authority(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
@@ -251,8 +282,8 @@ class V2EditorTests(unittest.TestCase):
                 "    workload:\n"
                 "      kind: session\n"
                 "    runtime:\n"
-                "      type: systemd\n"
-                "      unit: sess.service\n",
+                "      type: oci\n"
+                "      image: example.invalid/session:1\n",
                 encoding="utf-8",
             )
             editor.set_service_mode(

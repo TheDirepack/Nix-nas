@@ -689,12 +689,19 @@ def semantic_validate(
                     path=f"$.services.{service_id}.workload",
                     code="workload-lifecycle",
                 )
-        elif kind == "session" and ("activation" in workload or "schedules" in workload or "idleSeconds" in workload):
-            raise ManagedServicesV2Error(
-                "Session workloads cannot declare daemon/job lifecycle fields",
-                path=f"$.services.{service_id}.workload",
-                code="workload-lifecycle",
-            )
+        elif kind == "session":
+            if "activation" in workload or "schedules" in workload or "idleSeconds" in workload:
+                raise ManagedServicesV2Error(
+                    "Session workloads cannot declare daemon/job lifecycle fields",
+                    path=f"$.services.{service_id}.workload",
+                    code="workload-lifecycle",
+                )
+            if service["runtime"]["type"] != "oci":
+                raise ManagedServicesV2Error(
+                    "Session workloads require direct OCI runtime",
+                    path=f"$.services.{service_id}.runtime.type",
+                    code="runtime-session",
+                )
 
         if platform_capabilities is not None:
             missing = sorted(set(service["requiresCapabilities"]) - platform_capabilities)
@@ -741,12 +748,6 @@ def semantic_validate(
                     f"Isolated service {service_id!r} requires a V2-managed runtime with a stable V2 bridge; runtime {runtime_type!r} is not implemented",
                     path=f"$.services.{service_id}.network.mode",
                     code="network-isolated-runtime",
-                )
-            if kind == "session" and runtime_type in {"quadlet", "compose"}:
-                raise ManagedServicesV2Error(
-                    f"Session service {service_id!r} with isolated networking currently requires direct OCI runtime",
-                    path=f"$.services.{service_id}.runtime.type",
-                    code="network-session-runtime",
                 )
             if kind == "session" and (service["routes"] or service["listeners"]):
                 raise ManagedServicesV2Error(

@@ -79,7 +79,7 @@ class V2NetworkSemanticTests(unittest.TestCase):
         candidate["network"] = {"mode": "isolated"}
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "direct OCI") as raised:
             self.compile({"schemaVersion": 3, "services": {"example": candidate}})
-        self.assertEqual(raised.exception.code, "network-session-runtime")
+        self.assertEqual(raised.exception.code, "runtime-session")
 
     def test_vlan_requires_isolated_network_mode(self):
         candidate = service()

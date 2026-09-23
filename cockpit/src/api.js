@@ -62,7 +62,11 @@ export function replaceManagedServicesDocument(yaml, revision, spawn = globalThi
   return process.then(parseJsonOutput);
 }
 
-export function replaceManagedServicesJsonDocument(document, revision, spawn = globalThis.cockpit?.spawn) {
+export function replaceManagedServicesJsonDocument(
+  document,
+  revision,
+  spawn = globalThis.cockpit?.spawn,
+) {
   if (document === null || typeof document !== "object" || Array.isArray(document)) {
     throw new Error("Managed Services V2 schema editor value must be an object.");
   }

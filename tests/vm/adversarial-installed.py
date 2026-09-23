@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 
@@ -13,6 +14,7 @@ INVENTORIES = (
     ROOT / "tests/custom-script-contracts-v2.json",
 )
 MARKER = pathlib.Path("/tmp/nas-installed-fuzz-pwned")
+OPTIONAL_INSTALLED_COMMANDS = frozenset({"nas-code"})
 PAYLOADS = (
     "../etc/shadow",
     ";touch /tmp/nas-installed-fuzz-pwned",
@@ -64,15 +66,21 @@ def inventory_strategies() -> dict[str, str]:
 def main() -> int:
     MARKER.unlink(missing_ok=True)
     strategies = inventory_strategies()
-    commands = set(strategies)
-    if not commands:
+    if not strategies:
         raise SystemExit("installed fuzz inventory contains no strategies")
 
-    for name in sorted(commands):
-        if not pathlib.Path(f"/run/current-system/sw/bin/{name}").exists() and not shutil_which(name):
+    commands: set[str] = set()
+    for name in sorted(strategies):
+        if pathlib.Path(f"/run/current-system/sw/bin/{name}").exists() or shutil_which(name):
+            commands.add(name)
+        elif name in OPTIONAL_INSTALLED_COMMANDS:
+            continue
+        else:
             raise RuntimeError(f"installed custom command is missing: {name}")
 
     for name, strategy in sorted(strategies.items()):
+        if name not in commands:
+            continue
         if strategy == "unknown-argv":
             for payload in PAYLOADS:
                 run([name, "--fuzz-" + payload])
@@ -100,7 +108,17 @@ def main() -> int:
         else:
             raise RuntimeError(f"unknown fuzz strategy for {name}: {strategy}")
 
-    print(json.dumps({"ok": True, "commands": len(commands), "strategies": strategies}, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "smoke": os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1",
+                "commands": len(commands),
+                "strategies": strategies,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 

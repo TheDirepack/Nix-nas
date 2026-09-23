@@ -186,7 +186,7 @@ job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEV
 if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
   fail "unprivileged local user reached the setup API directly"
 fi
-if systemd-run --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
+if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
   curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
   fail "sandboxed service identity reached the setup API directly"
 fi

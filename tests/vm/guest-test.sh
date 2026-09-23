@@ -538,7 +538,7 @@ pass "first-start setup API rejects a stale plan digest before mutation"
 if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
   fail "unprivileged local user reached the setup API directly"
 fi
-if systemd-run --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
+if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
   curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
   fail "sandboxed service identity reached the setup API directly"
 fi
@@ -1014,6 +1014,34 @@ nas-identity-sync capabilities | jq -e '
   ]
 ' >/dev/null
 nas-identity-sync sync-syncthing >/tmp/nas-post-setup-syncthing.json
+sync_restarts_before="$(systemctl show nas-syncthing-sync.service --property=NRestarts --value)"
+rm -f /run/nas-vm-syncthing-lock-held
+nas-operation-run --action vm-syncthing-lock-collision --class runtime -- \
+  sh -c 'touch /run/nas-vm-syncthing-lock-held; sleep 10' &
+sync_lock_holder=$!
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$TEST_TIMEOUT" bash -c 'until [[ -e /run/nas-vm-syncthing-lock-held ]]; do sleep 1; done'
+systemctl start --no-block nas-syncthing-sync.service
+sync_deadline=$((SECONDS + TEST_TIMEOUT))
+while (( $(systemctl show nas-syncthing-sync.service --property=NRestarts --value) <= sync_restarts_before )); do
+  ((SECONDS < sync_deadline)) || {
+    systemctl status nas-syncthing-sync.service --no-pager >&2 || true
+    fail "Syncthing sync did not retry runtime-lock contention"
+  }
+  sleep 1
+done
+wait "$sync_lock_holder"
+rm -f /run/nas-vm-syncthing-lock-held
+sync_deadline=$((SECONDS + TEST_TIMEOUT))
+while [[ "$(systemctl show nas-syncthing-sync.service --property=ActiveState --value)" != inactive ||
+  "$(systemctl show nas-syncthing-sync.service --property=Result --value)" != success ]]; do
+  ((SECONDS < sync_deadline)) || {
+    systemctl status nas-syncthing-sync.service --no-pager >&2 || true
+    fail "Syncthing sync did not recover after runtime-lock contention"
+  }
+  sleep 1
+done
+pass "scheduled Syncthing sync retries runtime-lock contention and recovers"
 if [[ -f /var/lib/syncthing/.config/syncthing/apikey ]]; then
   syncthing_api_key="$(tr -d '\n' </var/lib/syncthing/.config/syncthing/apikey)"
 else
@@ -1077,18 +1105,139 @@ doctor_status=0
 nas-doctor --json >/tmp/nas-doctor.json || doctor_status=$?
 (( doctor_status <= 2 )) || fail "nas-doctor failed unexpectedly with status $doctor_status"
 jq -e '.schemaVersion >= 1 and (.checks | type == "array")' /tmp/nas-doctor.json >/dev/null
-nas-state authorities | jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' >/tmp/nas-state-authorities.json
+nas-state authorities >/tmp/nas-state-authorities.json
+jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' /tmp/nas-state-authorities.json >/dev/null
 rm -f /tmp/nas-qemu-state.tar.gz
 nas-state export /tmp/nas-qemu-state.tar.gz --include-sensitive >/tmp/nas-state-export.json
 [[ "$(stat -c '%a:%U:%G' /tmp/nas-qemu-state.tar.gz)" == "600:root:root" ]] || fail "state bundle permissions are unsafe"
-nas-state validate /tmp/nas-qemu-state.tar.gz | jq -e '.schemaVersion >= 1' >/tmp/nas-state-validate.json
-nas-state diff /tmp/nas-qemu-state.tar.gz --json | jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' >/tmp/nas-state-diff.json
+wait_active nas-authentik-proxy-outpost.service
+wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"
+nas-state validate /tmp/nas-qemu-state.tar.gz >/tmp/nas-state-validate.json
+jq -e '.schemaVersion >= 1' /tmp/nas-state-validate.json >/dev/null
+diff_status=0
+nas-state diff /tmp/nas-qemu-state.tar.gz --json >/tmp/nas-state-diff.json || diff_status=$?
+(( diff_status <= 2 )) || fail "nas-state diff failed unexpectedly with status $diff_status"
+jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' /tmp/nas-state-diff.json >/dev/null
 ! nas-state restore /tmp/nas-qemu-state.tar.gz --confirm-host "$PUBLIC_HOST" >/tmp/nas-state-dry-restore.log 2>&1 || \
   fail "state restore mutated without --apply"
 grep -q 'Restore requires --apply' /tmp/nas-state-dry-restore.log
 rm -f /tmp/nas-qemu-state.tar.gz
 NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
 pass "all custom command surfaces and in-VM repository preflight succeeded"
+
+log "Unknown OCI service lifecycle"
+podman load --input /etc/nas-test/oci-vm-probe-v1.tar >/tmp/nas-v2-oci-load-v1.log
+podman load --input /etc/nas-test/oci-vm-probe-v2.tar >/tmp/nas-v2-oci-load-v2.log
+podman image exists localhost/nas-v2-vm-probe:v1
+podman image exists localhost/nas-v2-vm-probe:v2
+nas-managed-services-control document >/tmp/nas-v2-oci-original.json
+oci_revision="$(jq -er .revision /tmp/nas-v2-oci-original.json)"
+jq '.document
+  | .services["vm-oci-probe"] = {
+      "name": "VM OCI lifecycle probe",
+      "enabled": true,
+      "workload": {"kind": "daemon", "activation": "persistent"},
+      "runtime": {
+        "type": "oci",
+        "image": "localhost/nas-v2-vm-probe:v1",
+        "pull": "never"
+      },
+      "authorization": {
+        "capabilities": [{"id": "access", "title": "Access VM OCI lifecycle probe"}]
+      },
+      "network": {"mode": "isolated"},
+      "listeners": {
+        "http": {
+          "protocol": "tcp",
+          "exposure": {"port": 18088},
+          "targetPort": 8080,
+          "firewall": false
+        }
+      },
+      "routes": {
+        "web": {
+          "target": {"type": "http", "host": "127.0.0.1", "port": 18088},
+          "exposure": {"type": "path", "paths": ["/vm-oci-probe/"]},
+          "auth": {"mode": "identity", "capability": "access"}
+        }
+      }
+    }' /tmp/nas-v2-oci-original.json >/tmp/nas-v2-oci-create.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-create.json >/tmp/nas-v2-oci-create-result.json
+wait_active nas-v2-vm-oci-probe.service
+[[ -L /run/containers/systemd/nas-v2-vm-oci-probe.container ]] || fail "OCI Quadlet projection is missing"
+[[ -L /run/containers/systemd/nas-v2-net-vm-oci-probe.network ]] || fail "OCI isolated-network projection is missing"
+grep -F 'Image="localhost/nas-v2-vm-probe:v1"' /run/containers/systemd/nas-v2-vm-oci-probe.container >/dev/null
+grep -F 'PublishPort="127.0.0.1:18088:8080/tcp"' /run/containers/systemd/nas-v2-vm-oci-probe.container >/dev/null
+podman network exists nas-v2-vm-oci-probe
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v1" ]] ||
+  fail "created OCI service did not serve the v1 image"
+oci_route_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/vm-oci-probe/")"
+case "$oci_route_code" in
+  301|302|303|307|308) ;;
+  *) fail "identity-protected OCI route did not redirect to authentication (HTTP $oci_route_code)" ;;
+esac
+systemctl start nas-managed-services-authentik-reconcile.service
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+grep -F 'application.vm-oci-probe.access' /var/lib/authentik/blueprints/nas-managed-services-v2.yaml >/dev/null
+pass "unknown OCI service created with native Quadlet, route, and authorization projections"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq '.services["vm-oci-probe"].runtime.image = "localhost/nas-v2-vm-probe:v2"' \
+  /tmp/nas-v2-oci-create.json >/tmp/nas-v2-oci-update.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-update.json >/tmp/nas-v2-oci-update-result.json
+wait_active nas-v2-vm-oci-probe.service
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] ||
+  fail "updated OCI service did not serve the v2 image"
+pass "unknown OCI service update restarted the native runtime"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq '.services["vm-oci-probe"].runtime.image = "localhost/nas-v2-vm-probe:missing"' \
+  /tmp/nas-v2-oci-update.json >/tmp/nas-v2-oci-failing.json
+if nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-failing.json >/tmp/nas-v2-oci-failing-result.log 2>&1; then
+  fail "OCI update with a missing offline image unexpectedly succeeded"
+fi
+wait_oneshot_completed nas-v2-apply-failed.service
+wait_active nas-v2-vm-oci-probe.service
+grep -F 'Image="localhost/nas-v2-vm-probe:v2"' /run/containers/systemd/nas-v2-vm-oci-probe.container >/dev/null
+nas-managed-services-control document | jq -e \
+  '.document.services["vm-oci-probe"].runtime.image == "localhost/nas-v2-vm-probe:v2"' >/dev/null
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] ||
+  fail "failed OCI update did not restore the applied v2 runtime"
+pass "failed OCI update restored desired and live applied state"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq .document /tmp/nas-v2-oci-original.json >/tmp/nas-v2-oci-remove.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-remove.json >/tmp/nas-v2-oci-remove-result.json
+wait_inactive nas-v2-vm-oci-probe.service
+! systemctl --failed --no-legend --plain | grep -Fq 'nas-v2-vm-oci-probe.service' ||
+  fail "removed OCI service retained failed systemd state"
+[[ ! -e /run/containers/systemd/nas-v2-vm-oci-probe.container ]] || fail "removed OCI Quadlet projection remains"
+[[ ! -e /run/containers/systemd/nas-v2-net-vm-oci-probe.network ]] || fail "removed OCI network projection remains"
+[[ ! -e /run/systemd/generator/nas-v2-vm-oci-probe.service ]] || fail "removed OCI generated unit remains"
+! podman container exists systemd-nas-v2-vm-oci-probe || fail "removed OCI container remains"
+! podman network exists nas-v2-vm-oci-probe || fail "removed OCI network remains"
+! grep -Fq '/vm-oci-probe/' /run/nas-control/caddy-managed.conf || fail "removed OCI route remains"
+systemctl start nas-managed-services-authentik-reconcile.service
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+grep -B3 -F 'name: "application.vm-oci-probe.access"' /var/lib/authentik/blueprints/nas-managed-services-v2.yaml |
+  grep -Fq 'state: absent' || fail "removed OCI authorization capability tombstone is missing"
+jq -e '(.groups | index("application.vm-oci-probe.access")) == null' \
+  /var/lib/nas-control/authentik-v2-objects.json >/dev/null ||
+  fail "removed OCI authorization capability remains in the object manifest"
+AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
+authentik_api GET 'core/groups/?name=application.vm-oci-probe.access&page_size=100' \
+  >/tmp/nas-v2-oci-authentik-groups.json
+jq -e '[.results[] | select(.name == "application.vm-oci-probe.access")] | length == 0' \
+  /tmp/nas-v2-oci-authentik-groups.json >/dev/null ||
+  fail "removed OCI authorization capability remains installed in Authentik"
+pass "unknown OCI service removal cleaned native runtime, route, and authorization projections"
 
 log "Observability and notifications"
 nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
@@ -1136,8 +1285,9 @@ pass "installed alert router rejects malformed and oversized notifier input"
   fail "nas-alert accepted a CRLF header-injection title"
 grep -q 'one line' /tmp/nas-alert-header-injection.log
 nas-alert 'QEMU integration test' 'NixOS NAS notification path is healthy.'
-find /run/current-system/sw/share/cockpit /nix/store -maxdepth 6 -path '*cockpit*zfs*' -print -quit 2>/dev/null | grep -q .
-find /run/current-system/sw/share/cockpit /nix/store -maxdepth 8 -path '*nas*docs*index.html' -print -quit 2>/dev/null | grep -q .
+find /nix/store -maxdepth 4 -type d -path '/nix/store/*-cockpit-zfs-*/share/cockpit/zfs' -print -quit | grep -q .
+find /nix/store -maxdepth 8 -type f \
+  -path '/nix/store/*-cockpit-nas-management/share/cockpit/nas/docs/index.html' -print -quit | grep -q .
 pass "observability stack, notification delivery, and Cockpit assets are present"
 
 log "Secret stop/reactivation transaction"
