@@ -10,6 +10,7 @@ import socket
 import ssl
 import stat
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -21,6 +22,10 @@ from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
+
+
+BROWSER_QUIT_TIMEOUT_SECONDS = 10.0
+BROWSER_FORCE_QUIT_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,38 @@ def browser() -> webdriver.Chrome:
     for argument in arguments:
         options.add_argument(argument)
     return webdriver.Chrome(service=Service(executable_path=chromedriver), options=options)
+
+
+def close_browser(driver: webdriver.Chrome) -> None:
+    finished = threading.Event()
+    errors: list[Exception] = []
+
+    def quit_browser() -> None:
+        try:
+            driver.quit()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=quit_browser, name="webdriver-quit", daemon=True)
+    thread.start()
+    if finished.wait(BROWSER_QUIT_TIMEOUT_SECONDS):
+        if errors:
+            raise errors[0]
+        return
+
+    process = getattr(getattr(driver, "service", None), "process", None)
+    if process is not None and process.poll() is None:
+        process.terminate()
+    if not finished.wait(BROWSER_FORCE_QUIT_TIMEOUT_SECONDS):
+        if process is not None and process.poll() is None:
+            process.kill()
+        if not finished.wait(BROWSER_FORCE_QUIT_TIMEOUT_SECONDS):
+            raise RuntimeError("WebDriver quit remained blocked after chromedriver termination")
+    print(
+        "VM-BROWSER-CLEANUP: forced chromedriver termination after WebDriver quit blocked", file=sys.stderr, flush=True
+    )
 
 
 def search_roots(driver: webdriver.Chrome) -> Iterator[Any]:
@@ -378,7 +415,7 @@ def assign_application_capabilities(
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise RuntimeError(f"Authentik capability assignment failed: {result}")
     finally:
-        driver.quit()
+        close_browser(driver)
 
 
 def cockpit_destination_loaded(driver: webdriver.Chrome, origin: str) -> bool:
@@ -436,7 +473,7 @@ def verify_callback_return_paths(origin: str, username: str, password: str, path
             if not callback_return_matches(path, returned_path):
                 raise RuntimeError(f"Authentik callback returned {returned_path!r}, expected {path!r}")
         finally:
-            driver.quit()
+            close_browser(driver)
 
 
 def verify_launcher_opens_console(origin: str, username: str, password: str) -> None:
@@ -450,7 +487,7 @@ def verify_launcher_opens_console(origin: str, username: str, password: str) -> 
             lambda current: callback_return_matches("/console/", urllib.parse.urlsplit(current.current_url).path)
         )
     finally:
-        driver.quit()
+        close_browser(driver)
 
 
 def safe_browser_url(url: str) -> str:
@@ -557,7 +594,7 @@ def verify_cockpit_react_interactions(origin: str, username: str, password: str)
             driver, "Cockpit rendering and console", lambda: verify_rendering_quality(driver, "Cockpit NAS page")
         )
     finally:
-        driver.quit()
+        close_browser(driver)
 
 
 def fetch_status(driver: webdriver.Chrome, path: str) -> dict[str, Any]:
@@ -771,7 +808,7 @@ def verify_copy_party_user_isolation(
             if int(written.get("status", 0)) not in {200, 201, 204}:
                 raise RuntimeError(f"personal isolation sentinel upload failed for {username}: {written!r}")
         finally:
-            driver.quit()
+            close_browser(driver)
 
     for attacker, password in accounts:
         for victim, _victim_password in accounts:
@@ -783,7 +820,7 @@ def verify_copy_party_user_isolation(
                 verify_routes(driver, [RouteExpectation("/shares/", True)])
                 verify_cross_user_file_access_blocked(driver, origin, victim)
             finally:
-                driver.quit()
+                close_browser(driver)
 
     admin_username, admin_password = administrator
     driver = browser()
@@ -800,7 +837,7 @@ def verify_copy_party_user_isolation(
             if int(written.get("status", 0)) not in {200, 201, 204}:
                 raise RuntimeError(f"administrator could not update {username}'s personal file: {written!r}")
     finally:
-        driver.quit()
+        close_browser(driver)
 
     for username, password in accounts:
         driver = browser()
@@ -814,7 +851,7 @@ def verify_copy_party_user_isolation(
             if int(deleted.get("status", 0)) not in {200, 202, 204}:
                 raise RuntimeError(f"personal isolation sentinel deletion failed for {username}: {deleted!r}")
         finally:
-            driver.quit()
+            close_browser(driver)
 
 
 def verify_settings_form(driver: webdriver.Chrome, origin: str) -> None:
@@ -1015,7 +1052,7 @@ def run_account(
         if settings:
             browser_step(driver, f"Portal settings form ({username})", lambda: verify_settings_form(driver, origin))
     finally:
-        driver.quit()
+        close_browser(driver)
 
 
 def read_secret(path: str) -> str:
@@ -1097,7 +1134,7 @@ def main() -> int:
             login(driver, args.origin, "alice", password)
             verify_no_identity_markup_injection(driver, "alice", require_hostile_display_name=True)
         finally:
-            driver.quit()
+            close_browser(driver)
         print("hostile identity display name remained inert")
         return 0
     if args.syncthing_admin_only:
@@ -1110,7 +1147,7 @@ def main() -> int:
             verify_routes(driver, [RouteExpectation("/syncthing/", True)])
             verify_administrator_syncthing_folders(driver, ["post-a", "post-b"])
         finally:
-            driver.quit()
+            close_browser(driver)
         print("administrator Syncthing folder visibility checks ok")
         return 0
     required_password_files = {

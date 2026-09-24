@@ -4,6 +4,7 @@ import importlib.util
 import pathlib
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from contextlib import redirect_stderr
@@ -100,6 +101,18 @@ class BrowserAuthzInputTests(unittest.TestCase):
         path.write_text(value + "\n", encoding="utf-8")
         path.chmod(0o600)
         return path
+
+    def test_browser_cleanup_terminates_chromedriver_when_quit_blocks(self) -> None:
+        release = threading.Event()
+        driver = mock.Mock()
+        driver.quit.side_effect = lambda: release.wait(1)
+        driver.service.process.poll.return_value = None
+        driver.service.process.terminate.side_effect = release.set
+
+        with mock.patch.object(self.authz, "BROWSER_QUIT_TIMEOUT_SECONDS", 0.01):
+            self.authz.close_browser(driver)
+
+        driver.service.process.terminate.assert_called_once_with()
 
     def test_cli_reads_all_password_files_before_first_browser_operation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
