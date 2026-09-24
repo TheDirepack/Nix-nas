@@ -227,4 +227,17 @@ in
       fi
     '';
   };
+
+  systemd.services.nas-vm-setup-reboot-e2e = {
+    description = "Resume the VM setup reboot lifecycle";
+    wantedBy = [ "multi-user.target" ];
+    wants = [ "network-online.target" "nas-vm-test-repository.service" ];
+    after = [ "network-online.target" "nas-vm-test-repository.service" ];
+    unitConfig.ConditionPathExists = "/var/lib/nas-test/setup-reboot-e2e-state.json";
+    serviceConfig = {
+      Type = "oneshot";
+      TimeoutStartSec = "20min";
+      ExecStart = "${guestTest}/bin/nas-vm-guest-test --setup-reboot-e2e --resume";
+    };
+  };
 }

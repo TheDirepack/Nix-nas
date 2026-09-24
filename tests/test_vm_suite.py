@@ -12,6 +12,7 @@ WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
+ENCRYPTED_GUEST_TEST = ROOT / "tests" / "vm" / "encrypted-guest-test.sh"
 SECRET_ADVERSARIAL = ROOT / "tests" / "vm" / "secret-adversarial.sh"
 INSTALLED_ADVERSARIAL = ROOT / "tests" / "vm" / "adversarial-installed.py"
 FIRST_RUN_BROWSER = ROOT / "tests" / "browser" / "first-run-wizard.py"
@@ -181,8 +182,16 @@ class VmSuiteWrapperTests(unittest.TestCase):
             guest,
         )
         self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
-        self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
+        self.assertIn('runuser -u "$administrator" -- env -C "$home" HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
+
+    def test_guest_administrator_commands_enter_the_administrator_home(self) -> None:
+        guest = GUEST_TEST.read_text(encoding="utf-8")
+        encrypted_guest = ENCRYPTED_GUEST_TEST.read_text(encoding="utf-8")
+        self.assertEqual(guest.count('env -C "$home" HOME="$home"'), 2)
+        self.assertEqual(guest.count("env -C /tank/homes/nasadmin HOME=/tank/homes/nasadmin"), 1)
+        self.assertEqual(encrypted_guest.count("env -C /tank/homes/nasadmin HOME=/tank/homes/nasadmin"), 2)
+        self.assertEqual(encrypted_guest.count("env -C /home/admin HOME=/home/admin"), 2)
 
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")

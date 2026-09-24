@@ -77,9 +77,9 @@ EXPECT_SUDO
 run_as_admin() {
   if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
     prime_nasadmin_sudo
-    runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
+    runuser -u nasadmin -- env -C /tank/homes/nasadmin HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
   else
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
+    runuser -u admin -- env -C /home/admin HOME=/home/admin PATH="$PATH" "$@"
   fi
 }
 
@@ -93,11 +93,11 @@ run_as_admin_with_stdin() {
   if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
     prime_nasadmin_sudo
     nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-      runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" \
+      runuser -u nasadmin -- env -C /tank/homes/nasadmin HOME=/tank/homes/nasadmin PATH="$PATH" \
         timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
   else
     nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-      runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+      runuser -u admin -- env -C /home/admin HOME=/home/admin PATH="$PATH" \
         timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
   fi
 }

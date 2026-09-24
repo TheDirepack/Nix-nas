@@ -23,7 +23,6 @@ from typing import Any
 REPO = pathlib.Path("/var/lib/nas-test/repo")
 STATE = pathlib.Path("/var/lib/nas-test/setup-reboot-e2e-state.json")
 RESULT = pathlib.Path("/var/lib/nas-test/setup-reboot-e2e-result.json")
-UNIT = pathlib.Path("/etc/systemd/system/nas-vm-setup-reboot-e2e.service")
 SENTINEL = pathlib.Path("/tank/shares/e2e-reboot-sentinel.txt")
 PUBLIC_ORIGIN = "https://nas-test.local:8443"
 REQUIRED_UNITS = (
@@ -194,7 +193,7 @@ def verify_services(stage: str) -> None:
         ),
         "Syncthing",
     )
-    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8222/alive"), "Vaultwarden")
+    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8222/vault/alive"), "Vaultwarden")
     wait_http(
         ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8428/victoriametrics/ping"), "VictoriaMetrics"
     )
@@ -283,21 +282,7 @@ def browser_sign_in(stage: str) -> None:
 
 def schedule_reboot(next_phase: str) -> None:
     write_json(STATE, {"schemaVersion": 1, "phase": next_phase})
-    require(("systemctl", "daemon-reload"))
-    require(("systemctl", "enable", UNIT.name))
     require(("systemd-run", f"--unit=nas-vm-setup-reboot-e2e-{next_phase}", "--on-active=3s", "systemctl", "reboot"))
-
-
-def install_resume_unit() -> None:
-    command = "/run/current-system/sw/bin/nas-vm-guest-test --setup-reboot-e2e --resume"
-    UNIT.write_text(
-        "[Unit]\nDescription=NAS VM setup reboot E2E continuation\n"
-        "Wants=network-online.target\nAfter=network-online.target\nConditionPathExists=" + str(STATE) + "\n\n"
-        "[Service]\nType=oneshot\nExecStart=" + command + "\n\n"
-        "[Install]\nWantedBy=multi-user.target\n",
-        encoding="utf-8",
-    )
-    UNIT.chmod(0o644)
 
 
 def start() -> None:
@@ -305,7 +290,6 @@ def start() -> None:
         raise CheckError("setup reboot E2E evidence already exists; use a fresh disposable VM")
     SENTINEL.parent.mkdir(mode=0o2770, parents=True, exist_ok=True)
     SENTINEL.write_text("setup-reboot-e2e\n", encoding="utf-8")
-    install_resume_unit()
     verify_services("initial setup")
     schedule_reboot("after-first-reboot")
 
@@ -326,10 +310,8 @@ def resume() -> None:
         if phase == "after-second-reboot":
             verify_services("the second reboot")
             browser_sign_in("the second reboot")
-            require(("systemctl", "disable", UNIT.name))
-            UNIT.unlink(missing_ok=True)
-            require(("systemctl", "daemon-reload"))
             finish(True, phase="complete", verifiedReboots=2)
+            STATE.unlink()
             return
         raise CheckError(f"unexpected setup reboot lifecycle phase: {phase!r}")
     except Exception as error:
