@@ -241,7 +241,7 @@ run_as_admin() {
   home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
   [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
   prime_nasadmin_sudo
-  runuser -u "$administrator" -- env -C "$home" HOME="$home" PATH="$PATH" "$@"
+  runuser -u "$administrator" -- env -C / HOME="$home" PATH="$PATH" "$@"
 }
 
 # After first run completes, the wizard-created administrator (nasadmin) is
@@ -249,7 +249,7 @@ run_as_admin() {
 # mutating nas-setup commands.
 run_as_nasadmin() {
   prime_nasadmin_sudo
-  runuser -u nasadmin -- env -C /tank/homes/nasadmin HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
+  runuser -u nasadmin -- env -C / HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
@@ -264,7 +264,7 @@ run_as_admin_with_stdin() {
   [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
   prime_nasadmin_sudo
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u "$administrator" -- env -C "$home" HOME="$home" PATH="$PATH" \
+    runuser -u "$administrator" -- env -C / HOME="$home" PATH="$PATH" \
       timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
 }
 
