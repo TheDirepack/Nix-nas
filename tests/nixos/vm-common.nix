@@ -233,6 +233,7 @@ in
     wantedBy = [ "multi-user.target" ];
     wants = [ "network-online.target" "nas-vm-test-repository.service" ];
     after = [ "network-online.target" "nas-vm-test-repository.service" ];
+    environment.PATH = "/run/current-system/sw/bin:/run/wrappers/bin";
     unitConfig.ConditionPathExists = "/var/lib/nas-test/setup-reboot-e2e-state.json";
     serviceConfig = {
       Type = "oneshot";

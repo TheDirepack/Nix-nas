@@ -36,6 +36,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('ConditionPathExists = "/var/lib/nas-test/setup-reboot-e2e-state.json"', fixture)
         self.assertIn('"${guestTest}/bin/nas-vm-guest-test --setup-reboot-e2e --resume"', fixture)
         self.assertIn('wantedBy = [ "multi-user.target" ]', fixture)
+        self.assertIn('environment.PATH = "/run/current-system/sw/bin:/run/wrappers/bin"', fixture)
         self.assertIn('f"--unit=nas-vm-setup-reboot-e2e-{next_phase}"', source)
         self.assertIn('after = [ "network-online.target" "nas-vm-test-repository.service" ]', fixture)
         self.assertNotIn('UNIT = pathlib.Path("/etc/systemd/system/', source)
