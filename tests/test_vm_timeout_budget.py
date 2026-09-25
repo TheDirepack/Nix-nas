@@ -51,6 +51,12 @@ class VmTimeoutBudgetTests(unittest.TestCase):
         self.assertIn("nas_vm_guest_watchdog_seconds", qemu)
         self.assertIn("nas_vm_timeout_value", GUEST_TEST.read_text(encoding="utf-8"))
 
+    def test_native_full_stack_driver_allows_follow_on_checks_after_the_guest_suite(self) -> None:
+        integration = INTEGRATION.read_text(encoding="utf-8")
+        self.assertIn("globalTimeout = 2 * 60 * 60;", integration)
+        self.assertIn('timeoutBudget.timeouts.secretAdversarial', integration)
+        self.assertIn('timeoutBudget.timeouts.installedSmoke', integration)
+
     def test_outer_budgets_are_derived_from_guest_and_follow_on_phases(self) -> None:
         helper_script = """
 source "$1"
