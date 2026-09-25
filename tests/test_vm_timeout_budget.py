@@ -54,8 +54,8 @@ class VmTimeoutBudgetTests(unittest.TestCase):
     def test_native_full_stack_driver_allows_follow_on_checks_after_the_guest_suite(self) -> None:
         integration = INTEGRATION.read_text(encoding="utf-8")
         self.assertIn("globalTimeout = 2 * 60 * 60;", integration)
-        self.assertIn('timeoutBudget.timeouts.secretAdversarial', integration)
-        self.assertIn('timeoutBudget.timeouts.installedSmoke', integration)
+        self.assertIn("timeoutBudget.timeouts.secretAdversarial", integration)
+        self.assertIn("timeoutBudget.timeouts.installedSmoke", integration)
 
     def test_outer_budgets_are_derived_from_guest_and_follow_on_phases(self) -> None:
         helper_script = """
