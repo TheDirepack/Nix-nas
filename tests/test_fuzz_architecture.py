@@ -55,8 +55,10 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
     def test_long_custom_input_fuzzer_is_owned_by_final_fuzz_tier(self) -> None:
         orchestrator = (ROOT / "scripts/run-fuzz.py").read_text(encoding="utf-8")
         qualification = (ROOT / "scripts/ci-qualification.sh").read_text(encoding="utf-8")
+        preflight = (ROOT / "scripts/preflight.sh").read_text(encoding="utf-8")
         self.assertIn('"custom-inputs": unittest_suite("custom-inputs", "tests.test_fuzz_custom_inputs")', orchestrator)
         self.assertIn("--exclude test_fuzz_custom_inputs.py", qualification)
+        self.assertIn("--exclude test_fuzz_custom_inputs.py", preflight)
 
     def test_executable_layer_is_a_contract_check_not_payload_fuzzer(self) -> None:
         source = (ROOT / "scripts/fuzz-executables.py").read_text(encoding="utf-8")

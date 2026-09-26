@@ -194,10 +194,51 @@ FORBIDDEN_DIR_NAMES = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache
 ALLOWED_GENERATED_DIRS = {ROOT / "cockpit" / "dist", ROOT / "setup" / "first-run-wizard" / "dist"}
 FORBIDDEN_FILE_NAMES = {".coverage", "coverage.json"}
 
+# Development validation tolerates only known generated locations, which the
+# documented workflows create (frontend `npm ci` for both frontends,
+# `python -m unittest` bytecode caches, local `ruff` cache). See
+# _dev_allowed_prefixes and the `__pycache__` rule in _is_dev_allowed.
+# Anything else with a forbidden name still fails. Strict release staging
+# (NAS_STRUCTURE_STRICT=1) allows none of these.
+STRICT_ENV_VAR = "NAS_STRUCTURE_STRICT"
+
 
 def fail(message: str) -> None:
     print(f"structure error: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def _dev_allowed_prefixes(root: pathlib.Path) -> set[pathlib.Path]:
+    return {
+        root / "cockpit" / "node_modules",
+        root / "setup" / "first-run-wizard" / "node_modules",
+        root / ".ruff_cache",
+    }
+
+
+def _is_dev_allowed(root: pathlib.Path, path: pathlib.Path) -> bool:
+    if any(path == allowed or allowed in path.parents for allowed in _dev_allowed_prefixes(root)):
+        return True
+    pycache_parents = {root / "services", root / "tests", root / "scripts"}
+    if path.name == "__pycache__" and any(path == parent or parent in path.parents for parent in pycache_parents):
+        return True
+    return False
+
+
+def find_forbidden_dirs(root: pathlib.Path, *, strict: bool) -> list[str]:
+    ignored_dir_parts = {".git", ".opencode", ".direnv", ".venv"}
+    allowed_generated_dirs = set(ALLOWED_GENERATED_DIRS)
+    if os.environ.get("NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES") == "1":
+        allowed_generated_dirs.add(ROOT / "cockpit" / "node_modules")
+    return sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_dir()
+        and path.name in FORBIDDEN_DIR_NAMES
+        and not any(path == allowed or allowed in path.parents for allowed in allowed_generated_dirs)
+        and not (not strict and _is_dev_allowed(root, path))
+        and not any(part in ignored_dir_parts for part in path.parts)
+    )
 
 
 def main() -> int:
@@ -218,27 +259,18 @@ def main() -> int:
     if unexpected:
         fail("root documentation must be grouped under docs/: " + ", ".join(unexpected))
 
-    ignored_dir_parts = {".git", ".opencode", ".direnv", ".venv"}
-    allowed_generated_dirs = set(ALLOWED_GENERATED_DIRS)
-    if os.environ.get("NAS_PREFLIGHT_ALLOW_COCKPIT_NODE_MODULES") == "1":
-        allowed_generated_dirs.add(ROOT / "cockpit" / "node_modules")
-    forbidden_dirs = sorted(
-        str(path.relative_to(ROOT))
-        for path in ROOT.rglob("*")
-        if path.is_dir()
-        and path.name in FORBIDDEN_DIR_NAMES
-        and not any(path == allowed or allowed in path.parents for allowed in allowed_generated_dirs)
-        and not any(part in ignored_dir_parts for part in path.parts)
-    )
+    strict = os.environ.get(STRICT_ENV_VAR) == "1"
+    forbidden_dirs = find_forbidden_dirs(ROOT, strict=strict)
     if forbidden_dirs:
         fail("generated/cache directories are present: " + ", ".join(forbidden_dirs))
 
+    ignored_file_dir_parts = {".git", ".opencode", ".direnv", ".venv"}
     generated_files = sorted(
         str(path.relative_to(ROOT))
         for path in ROOT.rglob("*")
         if path.is_file()
         and (path.name in FORBIDDEN_FILE_NAMES or any(part.endswith(".egg-info") for part in path.parts))
-        and not any(part in ignored_dir_parts for part in path.parts)
+        and not any(part in ignored_file_dir_parts for part in path.parts)
     )
     if generated_files:
         fail("generated files are present: " + ", ".join(generated_files))

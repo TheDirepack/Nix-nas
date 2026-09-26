@@ -6,6 +6,7 @@ let
     authentikPort
     aiStorageRoot
     cfg
+    copypartyDataDir
     copypartyUserConfigDir
     lib
     llamaCppPackage
@@ -17,12 +18,9 @@ let
     pkgs
     shareRoot
     syncthingConfigDir
-    systemStateVersion
     vaultwardenBackupDir
+    vaultwardenDataDir
   ;
-  vaultwardenStateDirectory =
-    if lib.versionOlder systemStateVersion "24.11" then "bitwarden_rs" else "vaultwarden";
-  vaultwardenDataDir = "/var/lib/${vaultwardenStateDirectory}";
 
   nasPythonApplication = pkgs.python3Packages.buildPythonApplication {
     pname = "nixos-nas-control";
@@ -149,7 +147,7 @@ nasSetup = pkgs.writeShellApplication {
     })
     (mkPathAuthority {
       name = "copyparty";
-      source = "/var/lib/copyparty";
+      source = copypartyDataDir;
       sensitive = true;
       owner = "copyparty";
       group = "copyparty";
@@ -181,7 +179,7 @@ nasSetup = pkgs.writeShellApplication {
       name = "keepass";
       source = cfg.secrets.keepassDatabase;
       sensitive = true;
-      owner = null;
+      owner = "root";
       group = "users";
       rootMode = "0600";
     })
@@ -233,11 +231,12 @@ nasSetup = pkgs.writeShellApplication {
   ++ lib.optionals (cfg.observability.enable && cfg.observability.grafana.enable) [
     (mkPathAuthority {
       name = "grafana";
-      source = "/var/lib/grafana";
+      source = "/var/lib/grafana/grafana.db";
       sensitive = true;
+      optional = true;
       owner = "grafana";
       group = "grafana";
-      rootMode = "0700";
+      rootMode = "0600";
     })
   ]
   ++ lib.optionals (cfg.observability.enable && cfg.alerting.enable) [
@@ -252,7 +251,7 @@ nasSetup = pkgs.writeShellApplication {
   ++ lib.optionals cfg.observability.ntfy.enable [
     (mkPathAuthority {
       name = "ntfy";
-      source = "/var/lib/ntfy-sh";
+      source = "/var/lib/private/ntfy-sh";
       sensitive = true;
       owner = "ntfy-sh";
       group = "ntfy-sh";
@@ -309,6 +308,8 @@ nasSetup = pkgs.writeShellApplication {
   stateQuiesceUnits = [
     "authentik.service"
     "authentik-worker.service"
+    "nas-authentik-proxy-outpost.service"
+    "postgresql.service"
     "nas-v2-timer-identity-sync-0.timer"
     "copyparty.service"
     "caddy.service"

@@ -198,7 +198,7 @@ assert_blocked() {
 assert_spoof_blocked() {
   local path=$1 code
   code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
-    -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,nas_allow_files,nas_allow_ai' \
+    -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files,application.ai-workspace.access' \
     -H 'X-authentik-username: akadmin' -H 'X-authentik-groups: nas_admin' \
     "https://$PUBLIC_HOST$path")"
   case "$code" in
@@ -241,7 +241,7 @@ run_as_admin() {
   home="$(getent passwd "$administrator" | awk -F: 'NR == 1 { print $6; exit }')"
   [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
   prime_nasadmin_sudo
-  runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" "$@"
+  runuser -u "$administrator" -- env -C / HOME="$home" PATH="$PATH" "$@"
 }
 
 # After first run completes, the wizard-created administrator (nasadmin) is
@@ -249,7 +249,7 @@ run_as_admin() {
 # mutating nas-setup commands.
 run_as_nasadmin() {
   prime_nasadmin_sudo
-  runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
+  runuser -u nasadmin -- env -C / HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
 }
 
 activate_secrets() {
@@ -264,7 +264,7 @@ run_as_admin_with_stdin() {
   [[ -n "$home" ]] || fail "configured local administrator is unavailable: $administrator"
   prime_nasadmin_sudo
   nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-    runuser -u "$administrator" -- env HOME="$home" PATH="$PATH" \
+    runuser -u "$administrator" -- env -C / HOME="$home" PATH="$PATH" \
       timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
 }
 
@@ -489,12 +489,13 @@ nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
 
 # Complete first start through the GUI bootstrap system: the Cockpit First
-# start page behind the Authentik gate, submitting through the loopback
-# setup API contract. The pre-bootstrap Linux administrator (akadmin,
-# documented in nas-bootstrap-administrator.service) provisions browser
-# access while the appliance is still locked.
-setup_api="http://127.0.0.1:8980/setup/api"
-first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
+# start page behind the Authentik gate, submitting through the permissioned
+# Unix-socket setup API contract. The pre-bootstrap Linux administrator
+# (akadmin, documented in nas-bootstrap-administrator.service) provisions
+# browser access while the appliance is still locked.
+setup_sock=/run/nas-setup-api/setup.sock
+setup_api="http://localhost/setup/api"
+first_start_plan="$(curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" "$setup_api/first-start")"
 if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
   printf '%s\n' "$first_start_plan" >&2
   fail "first-start setup API did not report a reviewable ready plan"
@@ -520,7 +521,7 @@ stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_
   '{password: $keepass, administrator: $administrator, planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
-  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
 if [[ "$stale_code" != 400 ]]; then
   cat /tmp/nas-stale-plan.json >&2 || true
   fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
@@ -530,6 +531,25 @@ if ! grep -qi 'stale\|no longer matches' /tmp/nas-stale-plan.json; then
   fail "stale plan digest rejection was not diagnostic"
 fi
 pass "first-start setup API rejects a stale plan digest before mutation"
+
+# The Unix socket admits only the Caddy service identity and root. An
+# unprivileged local account and a representative compromised-service sandbox
+# must not read the setup plan directly.
+if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "unprivileged local user reached the setup API directly"
+fi
+if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
+  curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "sandboxed service identity reached the setup API directly"
+fi
+pass "unprivileged and sandboxed identities cannot reach the setup API directly"
+
+# Job identifiers in URLs no longer authorize; only the header capability does.
+if [[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
+  --unix-socket "$setup_sock" "$setup_api/first-start/job/aaaaaaaaaaaaaaaaaaaaaaaa")" != 404 ]]; then
+  fail "legacy job-id URL did not fail closed"
+fi
+pass "legacy job-id URLs fail closed"
 
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value firstRun)" \
@@ -562,6 +582,14 @@ if ! jq -e '
   fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+# Capability bytes must never reach backend or proxy logs.
+if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
+  fail "setup capability bytes reached the backend log"
+fi
+if grep '/setup/api' /var/log/caddy/access.log 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
+  fail "setup capability bytes reached the proxy log"
+fi
+pass "setup capability bytes are absent from backend and proxy logs"
 [[ -d /var/lib/nas-control-plane/authentik ]] || fail "Authentik moved off the system control partition"
 [[ -d /var/lib/nas-control-plane/postgresql ]] || fail "PostgreSQL moved off the system control partition"
 [[ -f /var/lib/nas-control-plane/nas-secrets/NAS.kdbx ]] || fail "KeePassXC database moved off the system control partition"
@@ -710,7 +738,7 @@ log "Verify first-run protected services and account population"
 for unit in \
   nas-protected-services.target postgresql.service authentik-worker.service \
   authentik.service copyparty.service \
-  nas-on-demand-gate.service caddy.service; do
+  caddy.service; do
   wait_active "$unit"
 done
 wait_active nas-v2-timer-identity-sync-0.timer
@@ -746,10 +774,7 @@ run_as_nasadmin nas-setup account apply --username alice \
 jq -e '.account.updated == ["alice"]' /tmp/nas-account-xss-name.json >/dev/null
 nas-identity-sync export-account alice | jq -e '
   .active == true and
-  (.groups | index("nas_users")) != null and
-  (.groups | index("nas_allow_files")) == null and
-  (.groups | index("nas_allow_vault")) == null and
-  (.groups | index("nas_allow_syncthing")) == null
+  (.groups | index("nas_users")) != null
 ' >/dev/null
 printf '%s\n' 'temporary-password' |
   run_as_nasadmin nas-setup account apply \
@@ -767,6 +792,26 @@ nas-identity-sync export-account temporary | jq -e '
   (.groups | index("nas_admin")) == null and
   (.groups | index("nas_users")) == null
 ' >/dev/null
+for account in post-a post-b; do
+  printf '%s\n' "${account}-vm-password" |
+    run_as_nasadmin nas-setup account apply \
+      --username "$account" \
+      --name "Post-setup ${account}" \
+      --email "${account}@nas.local" \
+      --password-stdin >"/tmp/nas-account-${account}.json"
+  jq -e --arg account "$account" '.account.created == [$account]' "/tmp/nas-account-${account}.json" >/dev/null
+  nas-identity-sync export-account "$account" | jq -e '
+    .active == true and
+    .groups == ["nas_users"] and
+    .attributes.nasManagedBySetup == true and
+    (.attributes | has("nasSyncthingDevices") | not) and
+    (.attributes | has("nasSyncthingDevice") | not)
+  ' >/dev/null
+  [[ -d "/tank/shares/users/$account" ]] || fail "personal directory was not created for $account"
+done
+nas-identity-sync capabilities | jq -e '
+  [.users[] | select(.id == "post-a" or .id == "post-b") | .assignedApplicationCapabilities] == [[], []]
+' >/dev/null
 pass "core services, account apply/disable CLI, and CopyParty backend are healthy"
 
 log "Authentik API, identity policy, and proxy authorization"
@@ -775,6 +820,37 @@ case "$unauth_code" in 401|403) : ;; *) fail "Authentik API without a token retu
 token="$(cat /run/nas-secrets/authentik/api-token)"
 auth_code="$(http_code -H "Authorization: Bearer $token" http://127.0.0.1:9000/identity/api/v3/core/users/)"
 [[ "$auth_code" == 200 ]] || fail "Authentik API token returned HTTP $auth_code"
+post_a_device_home="$(mktemp -d /tmp/nas-post-a-device.XXXXXX)"
+post_b_device_home="$(mktemp -d /tmp/nas-post-b-device.XXXXXX)"
+HOME=/root syncthing generate --home "$post_a_device_home" >/dev/null
+HOME=/root syncthing generate --home "$post_b_device_home" >/dev/null
+post_a_device="$(HOME=/root syncthing device-id --home "$post_a_device_home")"
+post_b_device="$(HOME=/root syncthing device-id --home "$post_b_device_home")"
+rm -rf -- "$post_a_device_home" "$post_b_device_home"
+[[ "$post_a_device" != "$post_b_device" ]] || fail "generated post-setup Syncthing device IDs overlap"
+for account in post-a post-b; do
+  account_json="$(curl --silent --show-error --fail \
+    -H "Authorization: Bearer $token" \
+    "http://127.0.0.1:9000/identity/api/v3/core/users/?username=$account")"
+  account_pk="$(jq -er --arg account "$account" '.results[] | select(.username == $account) | .pk' \
+    <<<"$account_json")"
+  if [[ "$account" == post-a ]]; then
+    device_id="$post_a_device"
+  else
+    device_id="$post_b_device"
+  fi
+  attributes="$(jq -c --arg account "$account" --arg id "$device_id" --arg name "$account device" '
+    .results[] |
+    select(.username == $account) |
+    .attributes + {nasSyncthingDevices: [{deviceID: $id, name: $name, addresses: ["dynamic"]}]}
+  ' <<<"$account_json")"
+  curl --silent --show-error --fail \
+    -X PATCH \
+    -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    --data "$(jq -cn --argjson attributes "$attributes" '{attributes: $attributes}')" \
+    "http://127.0.0.1:9000/identity/api/v3/core/users/$account_pk/" >/dev/null
+done
 
 nas-identity-sync status | jq -e \
   '.identityProvider == "Authentik" and .shareAuthority == "CopyParty" and (.administrators | length > 0)' >/dev/null
@@ -787,44 +863,6 @@ jq -e '[.users[] | select(.administrator)] | length > 0' <<<"$capabilities_json"
 jq -e '[.users[] | select(.administrator) | .capabilities] | all(. == {})' \
   <<<"$capabilities_json" >/dev/null
 
-gate_deny="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
-  -H 'Remote-User: ordinary-user' -H 'Remote-Groups: nas_users' \
-  'http://localhost/authorize?scope=files')"
-[[ "$gate_deny" == 403 ]] || fail "default-deny capability gate returned HTTP $gate_deny"
-gate_allow="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
-  -H 'Remote-User: allowed-user' -H 'Remote-Groups: nas_users,nas_allow_files' \
-  'http://localhost/authorize?scope=files')"
-case "$gate_allow" in 200|204) : ;; *) fail "explicit files capability returned HTTP $gate_allow" ;; esac
-gate_admin="$(http_code --unix-socket /run/nas-on-demand/gate.sock \
-  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
-  'http://localhost/authorize?scope=admin')"
-case "$gate_admin" in 200|204) : ;; *) fail "administrator-only gate returned HTTP $gate_admin" ;; esac
-python3 - <<'PYHOSTILEGATE'
-import socket
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(5)
-sock.connect("/run/nas-on-demand/gate.sock")
-sock.sendall(
-    b"GET /authorize?scope=admin HTTP/1.1\r\n"
-    b"Host: localhost\r\n"
-    b"Remote-User: attacker\r\n"
-    b"Remote-Groups: nas_users,\tnas_admin\r\n"
-    b"Connection: close\r\n\r\n"
-)
-response = b""
-while True:
-    chunk = sock.recv(65536)
-    if not chunk:
-        break
-    response += chunk
-sock.close()
-first = response.split(b"\r\n", 1)[0].decode("ascii", "replace")
-parts = first.split()
-if len(parts) < 2 or parts[1] not in {"400", "401", "403", "503"}:
-    raise SystemExit(f"control-character group header was not rejected fail-closed: {first!r}")
-PYHOSTILEGATE
-pass "malformed trusted identity headers remain fail-closed inside the installed gate"
 backend_admin="$(http_code --unix-socket /run/copyparty/http.sock \
   -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin' \
   http://localhost/shares/admin/)"
@@ -848,25 +886,45 @@ case "$identity_code" in 200|301|302|303|307|308) : ;; *) fail "public Authentik
 caddy_exec="$(systemctl show caddy.service --property=ExecStart --value)"
 caddy_config="$(sed -nE 's/.*--config[= ]([^ ;}]+).*/\1/p' <<<"$caddy_exec" | head -n1)"
 [[ -n "$caddy_config" && -r "$caddy_config" ]] || fail "could not locate generated Caddy configuration"
-grep -q 'request_header -Remote-User' "$caddy_config"
-grep -q 'request_header -X-Authentik-Username' "$caddy_config"
+grep -qx 'import /etc/caddy/caddy_config' "$caddy_config"
+grep -q 'request_header -Remote-User' /run/nas-control/caddy-managed.conf
+grep -q 'request_header -X-Authentik-Username' /run/nas-control/caddy-managed.conf
 pass "Authentik API and fail-closed proxy checks passed"
 log "Authentication dependency outage stays fail-closed"
-systemctl stop authentik.service
+outage_preserved_units=(
+  nas-protected-services.target
+  caddy.service
+  copyparty.service
+  syncthing.service
+  vaultwarden.service
+  victoriametrics.service
+  nas-alert-router.service
+)
+systemctl stop --job-mode=ignore-dependencies authentik.service
 wait_inactive authentik.service
-auth_down_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
-  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,nas_allow_files' \
+for unit in "${outage_preserved_units[@]}"; do
+  systemctl is-active --quiet "$unit" || fail "$unit stopped during the isolated Authentik outage"
+done
+auth_down_response="$(curl --silent --show-error --insecure --output /dev/null \
+  --write-out '%{http_code} %{redirect_url}' --connect-timeout 3 --max-time 20 \
+  --resolve "$PUBLIC_HOST:443:127.0.0.1" \
+  -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files' \
   "https://$PUBLIC_HOST/shares/" || true)"
-case "$auth_down_code" in
-  200|201|202|204) fail "protected route became reachable while Authentik was unavailable" ;;
-  *) : ;;
+case "$auth_down_response" in
+  4??|5??) : ;;
+  000|"") fail "protected route lost its HTTP boundary while Authentik was unavailable" ;;
+  301\ https://"$PUBLIC_HOST"/identity/*|302\ https://"$PUBLIC_HOST"/identity/*|303\ https://"$PUBLIC_HOST"/identity/*|307\ https://"$PUBLIC_HOST"/identity/*|308\ https://"$PUBLIC_HOST"/identity/*|301\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|302\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|303\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|307\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*|308\ https://"$AUTHENTIK_PUBLIC_HOST"/identity/*) : ;;
+  *) fail "protected route returned an invalid denial response while Authentik was unavailable: $auth_down_response" ;;
 esac
 systemctl start authentik.service
 wait_active authentik.service
-systemctl start nas-protected-services.target
-wait_active nas-protected-services.target
-wait_active caddy.service
 wait_http http://127.0.0.1:9000/identity/-/health/live/
+systemctl start nas-authentik-proxy-outpost.service
+wait_active nas-authentik-proxy-outpost.service
+wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping" -H "Host: $PUBLIC_HOST"
+for unit in "${outage_preserved_units[@]}"; do
+  systemctl is-active --quiet "$unit" || fail "$unit did not survive the isolated Authentik outage"
+done
 pass "protected proxy routes fail closed and recover after Authentik outage"
 proxy_headers="$(curl --silent --show-error --insecure --dump-header - --output /dev/null \
   --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/")"
@@ -906,10 +964,6 @@ ip link del nust-host >/dev/null 2>&1 || true
 pass "untrusted interface cannot reach SSH, HTTP(S), Cockpit, or Syncthing while trusted-zone services remain available"
 
 log "Browser-level authorization and deterministic bundle probes"
-# The persistent wrapper keeps mutable local users across generations. Seed
-# the disposable fixture's Authentik administrator credential so the Cockpit
-# OAuth browser flow remains deterministic after the installed OS is updated.
-printf '%s\n' 'admin:admin-vm-password' | chpasswd
 authz_secret_dir=$(mktemp -d /run/nas-authz-test.XXXXXX)
 cleanup_authz_secrets() {
   [[ -n "$authz_secret_dir" ]] || return 0
@@ -918,20 +972,105 @@ cleanup_authz_secrets() {
 nas_vm_cleanup_add cleanup_authz_secrets
 chmod 0700 "$authz_secret_dir"
 printf '%s\n' operator-vm-password > "$authz_secret_dir/operator"
-printf '%s\n' admin-vm-password > "$authz_secret_dir/admin"
+printf '%s\n' nasadmin-vm-password > "$authz_secret_dir/administrator"
 printf '%s\n' alice-updated-password > "$authz_secret_dir/alice"
 printf '%s\n' baseline-vm-password > "$authz_secret_dir/baseline"
+printf '%s\n' post-a-vm-password > "$authz_secret_dir/post-a"
+printf '%s\n' post-b-vm-password > "$authz_secret_dir/post-b"
 chmod 0600 "$authz_secret_dir"/*
 timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
   "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --identity-xss-only \
+  --alice-password-file "$authz_secret_dir/alice"
+run_as_nasadmin nas-setup account apply --username alice --name 'Alice Example' \
+  >/tmp/nas-account-xss-name-restore.json
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
    --origin "https://$AUTHENTIK_PUBLIC_HOST" \
-   --cockpit-password-file "$authz_secret_dir/admin" \
+   --administrator-password-file "$authz_secret_dir/administrator" \
   --operator-password-file "$authz_secret_dir/operator" \
   --alice-password-file "$authz_secret_dir/alice" \
-  --baseline-password-file "$authz_secret_dir/baseline"
+  --baseline-password-file "$authz_secret_dir/baseline" \
+  --post-a-password-file "$authz_secret_dir/post-a" \
+  --post-b-password-file "$authz_secret_dir/post-b"
+nas-identity-sync capabilities | jq -e '
+  .users[] |
+  select(.id == "alice") |
+  .assignedApplicationCapabilities == [
+    "application.copyparty.files",
+    "application.syncthing.access",
+    "application.vaultwarden.access"
+  ]
+' >/dev/null
+run_as_nasadmin nas-setup account apply --username post-a --name 'Post-setup A updated' \
+  >/tmp/nas-account-post-a-update.json
+nas-identity-sync capabilities | jq -e '
+  .users[] |
+  select(.id == "post-a") |
+  .assignedApplicationCapabilities == [
+    "application.copyparty.files",
+    "application.syncthing.access"
+  ]
+' >/dev/null
+nas-identity-sync sync-syncthing >/tmp/nas-post-setup-syncthing.json
+rm -f /run/nas-vm-syncthing-lock-held
+nas-operation-run --action vm-syncthing-lock-collision --class runtime -- \
+  sh -c 'touch /run/nas-vm-syncthing-lock-held; sleep 10' &
+sync_lock_holder=$!
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$TEST_TIMEOUT" bash -c 'until [[ -e /run/nas-vm-syncthing-lock-held ]]; do sleep 1; done'
+systemctl start --no-block nas-syncthing-sync.service
+sync_deadline=$((SECONDS + TEST_TIMEOUT))
+while [[ "$(systemctl show nas-syncthing-sync.service --property=ExecMainStatus --value)" != 75 ]]; do
+  ((SECONDS < sync_deadline)) || {
+    systemctl status nas-syncthing-sync.service --no-pager >&2 || true
+    fail "Syncthing sync did not retry runtime-lock contention"
+  }
+  sleep 1
+done
+wait "$sync_lock_holder"
+rm -f /run/nas-vm-syncthing-lock-held
+sync_deadline=$((SECONDS + TEST_TIMEOUT))
+while [[ "$(systemctl show nas-syncthing-sync.service --property=ActiveState --value)" != inactive ||
+  "$(systemctl show nas-syncthing-sync.service --property=Result --value)" != success ]]; do
+  ((SECONDS < sync_deadline)) || {
+    systemctl status nas-syncthing-sync.service --no-pager >&2 || true
+    fail "Syncthing sync did not recover after runtime-lock contention"
+  }
+  sleep 1
+done
+pass "scheduled Syncthing sync retries runtime-lock contention and recovers"
+if [[ -f /var/lib/syncthing/.config/syncthing/apikey ]]; then
+  syncthing_api_key="$(tr -d '\n' </var/lib/syncthing/.config/syncthing/apikey)"
+else
+  syncthing_api_key="$(sed -n 's:.*<apikey>\([^<]*\)</apikey>.*:\1:p' \
+    /var/lib/syncthing/.config/syncthing/config.xml | head -n1)"
+fi
+[[ -n "$syncthing_api_key" ]] || fail "Syncthing API key is unavailable"
+curl --silent --show-error --fail -H "X-API-Key: $syncthing_api_key" \
+  http://127.0.0.1:8384/rest/config/folders >/tmp/nas-post-setup-syncthing-folders.json
+syncthing_local_device="$(curl --silent --show-error --fail -H "X-API-Key: $syncthing_api_key" \
+  http://127.0.0.1:8384/rest/system/status | jq -er .myID)"
+jq -e --arg a "$post_a_device" --arg b "$post_b_device" --arg local "$syncthing_local_device" '
+  (map(select(.id == "nas-post-a-backup")) | length) == 1 and
+  (map(select(.id == "nas-post-b-backup")) | length) == 1 and
+  (map(select(.id == "nas-post-a-backup"))[0] |
+    .path == "/tank/shares/users/post-a/syncthing" and
+    ([.devices[].deviceID] | sort) == ([$a, $local] | sort)) and
+  (map(select(.id == "nas-post-b-backup"))[0] |
+    .path == "/tank/shares/users/post-b/syncthing" and
+    ([.devices[].deviceID] | sort) == ([$b, $local] | sort))
+' /tmp/nas-post-setup-syncthing-folders.json >/dev/null ||
+  fail "post-setup Syncthing folders are not isolated by user path and device"
+timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+  "$(nas_vm_timeout_value browserAuthorization)" python3 /var/lib/nas-test/repo/tests/browser/authz.py \
+  --origin "https://$AUTHENTIK_PUBLIC_HOST" \
+  --administrator-password-file "$authz_secret_dir/administrator" \
+  --syncthing-admin-only
 cleanup_authz_secrets
 authz_secret_dir=""
-pass "Browser authorization and Authentik user-settings flow"
+pass "Browser authorization, administrator-owned capability assignment, and Authentik user-settings flow"
 
 # Deterministic bundle probes serve the built distribution over loopback with a
 # stub base1/cockpit.js so the React app mounts without the Cockpit shell, then
@@ -944,10 +1083,11 @@ timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" 
 pass "Deterministic bundle XSS, layout, and console-error probes"
 
 log "Custom command surfaces and generated configuration"
-nas-secrets status | grep -q 'Runtime secrets: active'
-! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
-  >/tmp/nas-token-warning.log 2>&1 || fail "bootstrap token reuse was not reported"
-grep -q 'bootstrap token' /tmp/nas-token-warning.log
+nas-secrets status | grep -Fx 'Runtime secrets: active' >/dev/null
+run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-secrets check-authentik-token \
+  >/tmp/nas-token-status.log 2>&1 || fail "retired bootstrap token was not accepted"
+grep -Fx 'Authentik bootstrap token is retired; runtime API token is separate.' \
+  /tmp/nas-token-status.log >/dev/null
 ! run_as_admin_with_stdin "$(nas_vm_ordinary_wait_seconds)" nas-zfs-export-recovery-key /tmp/disabled-zfs-key \
   >/tmp/nas-zfs-export-disabled.log 2>&1 || fail "ZFS recovery key unexpectedly existed while encryption was disabled"
 [[ ! -e /tmp/disabled-zfs-key ]] || fail "disabled ZFS recovery-key test left an output file"
@@ -960,20 +1100,143 @@ nas-managed-services-control document | jq -e '.document.services | type == "obj
 ! run_as_nasadmin nas-setup account apply --username 'operator;touch /tmp/nas-account-pwned' --disabled >>/tmp/nas-account-injection.log 2>&1 || fail "shell-like account username was accepted"
 [[ ! -e /tmp/nas-account-pwned ]] || fail "account username injection created an unexpected file"
 nas-cockpit-api overview | jq -e '.protectedReady == true and (.services | length > 0)' >/dev/null
-nas-cockpit-api action health | jq -e '.ok == true' >/dev/null
-nas-doctor --json | jq -e '.schemaVersion >= 1 and (.checks | type == "array")' >/tmp/nas-doctor.json
-nas-state authorities | jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' >/tmp/nas-state-authorities.json
+doctor_status=0
+nas-doctor --json >/tmp/nas-doctor.json || doctor_status=$?
+(( doctor_status <= 2 )) || fail "nas-doctor failed unexpectedly with status $doctor_status"
+jq -e '.schemaVersion >= 1 and (.checks | type == "array")' /tmp/nas-doctor.json >/dev/null
+nas-state authorities >/tmp/nas-state-authorities.json
+jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' /tmp/nas-state-authorities.json >/dev/null
 rm -f /tmp/nas-qemu-state.tar.gz
 nas-state export /tmp/nas-qemu-state.tar.gz --include-sensitive >/tmp/nas-state-export.json
 [[ "$(stat -c '%a:%U:%G' /tmp/nas-qemu-state.tar.gz)" == "600:root:root" ]] || fail "state bundle permissions are unsafe"
-nas-state validate /tmp/nas-qemu-state.tar.gz | jq -e '.schemaVersion >= 1' >/tmp/nas-state-validate.json
-nas-state diff /tmp/nas-qemu-state.tar.gz --json | jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' >/tmp/nas-state-diff.json
+wait_active nas-authentik-proxy-outpost.service
+wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"
+nas-state validate /tmp/nas-qemu-state.tar.gz >/tmp/nas-state-validate.json
+jq -e '.schemaVersion >= 1' /tmp/nas-state-validate.json >/dev/null
+diff_status=0
+nas-state diff /tmp/nas-qemu-state.tar.gz --json >/tmp/nas-state-diff.json || diff_status=$?
+(( diff_status <= 2 )) || fail "nas-state diff failed unexpectedly with status $diff_status"
+jq -e '.schemaVersion >= 1 and (.authorities | length > 0)' /tmp/nas-state-diff.json >/dev/null
 ! nas-state restore /tmp/nas-qemu-state.tar.gz --confirm-host "$PUBLIC_HOST" >/tmp/nas-state-dry-restore.log 2>&1 || \
   fail "state restore mutated without --apply"
 grep -q 'Restore requires --apply' /tmp/nas-state-dry-restore.log
 rm -f /tmp/nas-qemu-state.tar.gz
 NAS_PREFLIGHT_VERIFY_MANIFEST=0 nas-preflight
 pass "all custom command surfaces and in-VM repository preflight succeeded"
+
+log "Unknown OCI service lifecycle"
+podman load --input /etc/nas-test/oci-vm-probe-v1.tar >/tmp/nas-v2-oci-load-v1.log
+podman load --input /etc/nas-test/oci-vm-probe-v2.tar >/tmp/nas-v2-oci-load-v2.log
+podman image exists localhost/nas-v2-vm-probe:v1
+podman image exists localhost/nas-v2-vm-probe:v2
+nas-managed-services-control document >/tmp/nas-v2-oci-original.json
+oci_revision="$(jq -er .revision /tmp/nas-v2-oci-original.json)"
+jq '.document
+  | .services["vm-oci-probe"] = {
+      "name": "VM OCI lifecycle probe",
+      "enabled": true,
+      "workload": {"kind": "daemon", "activation": "persistent"},
+      "runtime": {
+        "type": "oci",
+        "image": "localhost/nas-v2-vm-probe:v1",
+        "pull": "never"
+      },
+      "authorization": {
+        "capabilities": [{"id": "access", "title": "Access VM OCI lifecycle probe"}]
+      },
+      "network": {"mode": "isolated"},
+      "listeners": {
+        "http": {
+          "protocol": "tcp",
+          "exposure": {"port": 18088},
+          "targetPort": 8080,
+          "firewall": false
+        }
+      },
+      "routes": {
+        "web": {
+          "target": {"type": "http", "host": "127.0.0.1", "port": 18088},
+          "exposure": {"type": "path", "paths": ["/vm-oci-probe/"]},
+          "auth": {"mode": "identity", "capability": "access"}
+        }
+      }
+    }' /tmp/nas-v2-oci-original.json >/tmp/nas-v2-oci-create.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-create.json >/tmp/nas-v2-oci-create-result.json
+wait_active nas-v2-vm-oci-probe.service
+[[ -L /run/containers/systemd/nas-v2-vm-oci-probe.container ]] || fail "OCI Quadlet projection is missing"
+[[ -L /run/containers/systemd/nas-v2-net-vm-oci-probe.network ]] || fail "OCI isolated-network projection is missing"
+grep -F 'Image="localhost/nas-v2-vm-probe:v1"' /run/containers/systemd/nas-v2-vm-oci-probe.container >/dev/null
+grep -F 'PublishPort="127.0.0.1:18088:8080/tcp"' /run/containers/systemd/nas-v2-vm-oci-probe.container >/dev/null
+podman network exists nas-v2-vm-oci-probe
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v1" ]] ||
+  fail "created OCI service did not serve the v1 image"
+oci_route_code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/vm-oci-probe/")"
+case "$oci_route_code" in
+  301|302|303|307|308) ;;
+  *) fail "identity-protected OCI route did not redirect to authentication (HTTP $oci_route_code)" ;;
+esac
+systemctl start nas-managed-services-authentik-reconcile.service
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+grep -F 'application.vm-oci-probe.access' /var/lib/authentik/blueprints/nas-managed-services-v2.yaml >/dev/null
+pass "unknown OCI service created with native Quadlet, route, and authorization projections"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq '.services["vm-oci-probe"].runtime.image = "localhost/nas-v2-vm-probe:v2"' \
+  /tmp/nas-v2-oci-create.json >/tmp/nas-v2-oci-update.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-update.json >/tmp/nas-v2-oci-update-result.json
+wait_active nas-v2-vm-oci-probe.service
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] ||
+  fail "updated OCI service did not serve the v2 image"
+pass "unknown OCI service update restarted the native runtime"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq '.services["vm-oci-probe"].runtime.image = "localhost/nas-v2-vm-probe:missing"' \
+  /tmp/nas-v2-oci-update.json >/tmp/nas-v2-oci-failing.json
+if nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-failing.json >/tmp/nas-v2-oci-failing-result.log 2>&1; then
+  fail "OCI update with a missing offline image unexpectedly succeeded"
+fi
+wait_oneshot_completed nas-v2-apply-failed.service
+wait_active nas-v2-vm-oci-probe.service
+grep -F 'Image="localhost/nas-v2-vm-probe:v2"' /run/containers/systemd/nas-v2-vm-oci-probe.container >/dev/null
+nas-managed-services-control document | jq -e \
+  '.document.services["vm-oci-probe"].runtime.image == "localhost/nas-v2-vm-probe:v2"' >/dev/null
+wait_http http://127.0.0.1:18088
+[[ "$(curl --fail --silent --show-error http://127.0.0.1:18088)" == "nas-v2-oci-v2" ]] ||
+  fail "failed OCI update did not restore the applied v2 runtime"
+pass "failed OCI update restored desired and live applied state"
+
+oci_revision="$(nas-managed-services-control document | jq -er .revision)"
+jq .document /tmp/nas-v2-oci-original.json >/tmp/nas-v2-oci-remove.json
+nas-managed-services-control replace-json-document - "$oci_revision" \
+  </tmp/nas-v2-oci-remove.json >/tmp/nas-v2-oci-remove-result.json
+wait_inactive nas-v2-vm-oci-probe.service
+! systemctl --failed --no-legend --plain | grep -Fq 'nas-v2-vm-oci-probe.service' ||
+  fail "removed OCI service retained failed systemd state"
+[[ ! -e /run/containers/systemd/nas-v2-vm-oci-probe.container ]] || fail "removed OCI Quadlet projection remains"
+[[ ! -e /run/containers/systemd/nas-v2-net-vm-oci-probe.network ]] || fail "removed OCI network projection remains"
+[[ ! -e /run/systemd/generator/nas-v2-vm-oci-probe.service ]] || fail "removed OCI generated unit remains"
+! podman container exists systemd-nas-v2-vm-oci-probe || fail "removed OCI container remains"
+! podman network exists nas-v2-vm-oci-probe || fail "removed OCI network remains"
+! grep -Fq '/vm-oci-probe/' /run/nas-control/caddy-managed.conf || fail "removed OCI route remains"
+systemctl start nas-managed-services-authentik-reconcile.service
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+grep -B3 -F 'name: "application.vm-oci-probe.access"' /var/lib/authentik/blueprints/nas-managed-services-v2.yaml |
+  grep -Fq 'state: absent' || fail "removed OCI authorization capability tombstone is missing"
+jq -e '(.groups | index("application.vm-oci-probe.access")) == null' \
+  /var/lib/nas-control/authentik-v2-objects.json >/dev/null ||
+  fail "removed OCI authorization capability remains in the object manifest"
+AUTHENTIK_BOOTSTRAP_TOKEN="$(< /run/nas-authentik/api-token)"
+authentik_api GET 'core/groups/?name=application.vm-oci-probe.access&page_size=100' \
+  >/tmp/nas-v2-oci-authentik-groups.json
+jq -e '[.results[] | select(.name == "application.vm-oci-probe.access")] | length == 0' \
+  /tmp/nas-v2-oci-authentik-groups.json >/dev/null ||
+  fail "removed OCI authorization capability remains installed in Authentik"
+pass "unknown OCI service removal cleaned native runtime, route, and authorization projections"
 
 log "Observability and notifications"
 nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
@@ -1021,8 +1284,9 @@ pass "installed alert router rejects malformed and oversized notifier input"
   fail "nas-alert accepted a CRLF header-injection title"
 grep -q 'one line' /tmp/nas-alert-header-injection.log
 nas-alert 'QEMU integration test' 'NixOS NAS notification path is healthy.'
-find /run/current-system/sw/share/cockpit /nix/store -maxdepth 6 -path '*cockpit*zfs*' -print -quit 2>/dev/null | grep -q .
-find /run/current-system/sw/share/cockpit /nix/store -maxdepth 8 -path '*nas*docs*index.html' -print -quit 2>/dev/null | grep -q .
+find /nix/store -maxdepth 4 -type d -path '/nix/store/*-cockpit-zfs-*/share/cockpit/zfs' -print -quit | grep -q .
+find /nix/store -maxdepth 8 -type f \
+  -path '/nix/store/*-cockpit-nas-management/share/cockpit/nas/docs/index.html' -print -quit | grep -q .
 pass "observability stack, notification delivery, and Cockpit assets are present"
 
 log "Secret stop/reactivation transaction"

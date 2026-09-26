@@ -132,8 +132,12 @@ export function OperationsPage({data, mutate, busy}) {
                 <FormSelectOption value="all" label="all (also app data)" />
               </FormSelect>
             </FormGroup>
-            <FormGroup label="rclone remote (empty = auto from provider)">
+            <FormGroup
+              label="rclone remote (empty = auto from provider)"
+              fieldId="backup-rclone-remote"
+            >
               <TextInput
+                id="backup-rclone-remote"
                 value={remoteDraft.rcloneRemote}
                 onChange={(_e, value) => setRemoteDraft({...remoteDraft, rcloneRemote: value})}
                 placeholder="gdrive:nas-backup / s3:bucket/prefix"

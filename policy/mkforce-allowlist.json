@@ -46,8 +46,8 @@
     {
       "path": "modules/nas/config/application-services.nix",
       "setting": "serviceConfig.StateDirectory",
-      "count": 1,
-      "reason": "CopyParty data lives on the ZFS tank behind /var/lib/copyparty; reset the upstream StateDirectory directive so systemd does not replace or follow that runtime symlink."
+      "count": 2,
+      "reason": "CopyParty and Vaultwarden data live on the ZFS tank behind /var/lib symlinks; reset their upstream StateDirectory directives so systemd does not replace or follow those runtime symlinks."
     },
     {
       "path": "modules/nas/config/application-services.nix",

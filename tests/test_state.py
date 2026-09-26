@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -681,6 +682,49 @@ class StateBundleTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TEST_DATABASE_COMMAND": "[]"}, clear=True):
             with self.assertRaisesRegex(state.StateError, "nonempty JSON command array"):
                 state.database_command("TEST_DATABASE_COMMAND", ["x"], "{x}", "value")
+
+    def test_database_dump_streams_into_root_opened_private_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            private = root / "private"
+            private.mkdir(mode=0o700)
+            target = private / "authentik.pgdump"
+            command = json.dumps(
+                [
+                    sys.executable,
+                    "-c",
+                    ("import sys; assert sys.argv[1] == '/dev/stdout'; sys.stdout.buffer.write(b'PGDMPfixture')"),
+                    "{output}",
+                ]
+            )
+
+            with mock.patch.dict(os.environ, {"NAS_STATE_PG_DUMP_COMMAND": command}, clear=False):
+                state.dump_database(target)
+
+            self.assertEqual(target.read_bytes(), b"PGDMPfixture")
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+    def test_database_export_restarts_snapshotted_postgresql_after_application_quiesce(self) -> None:
+        registry = (state.Authority("authentik-database", "postgresql://authentik", kind="database"),)
+        snapshot = {"authentik.service": True, "postgresql.service": True}
+
+        with mock.patch.object(state, "run_systemctl", return_value=self.completed()) as systemctl:
+            state.prepare_database_export(registry, snapshot)
+
+        systemctl.assert_called_once_with("start", "postgresql.service")
+
+    def test_dynamic_export_quiesce_snapshots_database_and_identity_proxy_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            effective = pathlib.Path(temporary) / "effective.json"
+            effective.write_text(
+                json.dumps({"services": {}, "derived": {"runtime": {}}}),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"NAS_V2_EFFECTIVE": str(effective)}, clear=False):
+                units = state.export_quiesce_units()
+
+        self.assertIn("postgresql.service", units)
+        self.assertIn("nas-authentik-proxy-outpost.service", units)
 
     def test_post_restore_validation_triggers_rollback_when_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

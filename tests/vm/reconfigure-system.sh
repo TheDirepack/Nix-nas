@@ -67,7 +67,7 @@ candidate_system="$(readlink -f /run/current-system)"
 grep -qx 'candidate-generation' /etc/nas-generation-test || fail "candidate generation marker is missing"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "candidate switch damaged persistent state"
 
-rebuild switch --rollback
+rebuild --rollback switch
 [[ "$(readlink -f /run/current-system)" != "$candidate_system" ]] || fail "nixos-rebuild --rollback left candidate active"
 [[ ! -e /etc/nas-generation-test ]] || fail "rollback left candidate generation marker active"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "rollback damaged persistent state"

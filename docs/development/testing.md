@@ -150,7 +150,7 @@ Behavioral adversarial tests additionally send SQL-, shell-, traversal-, CRLF-, 
 
 CI records branch coverage over the control-plane services and applies both an aggregate floor and service-specific floors with `scripts/check-coverage.py`. Every service module has an explicit floor, including alert routing, diagnostics, structured logging, state migration, and operation locking. Floors are regression guards rather than quality scores: raising them should follow added behavioral coverage, not exclusion of difficult branches.
 
-`tests/test_e2e_v2_lifecycle.py` is the single deterministic E2E that proves the full V2 pipeline (YAML -> effective -> plan -> Caddy/systemd/network/backup/authentik) for all runtimes (systemd, exec, quadlet, compose, vm, job, session) in one place. It complements the per-adapter unit tests and the VM guest suite (`tests/vm/guest-test.sh`) which validates the live appliance.
+`tests/test_e2e_v2_lifecycle.py` is the single deterministic E2E that proves the full V2 pipeline (YAML -> effective -> plan -> Caddy/systemd/network/backup/authentik) across systemd, exec, quadlet, compose, VM, job, and OCI session services. Focused specification and editor tests cover normalization and round trips for every runtime type. The VM guest suite (`tests/vm/guest-test.sh`) additionally loads test-only OCI images without registry access and validates create, update, failed-update rollback, and removal through the installed control plane.
 
 ```bash
 ./scripts/run-unit-tests.py --coverage coverage.json --quiet --jobs 4
@@ -203,6 +203,8 @@ The heavyweight matrix deliberately uses different system lifecycle paths:
 The reinstall, failed-candidate, candidate-switch, rollback, and final reconfiguration stages keep a persistence sentinel so an installer or activation path that accidentally destroys unrelated state fails the test. The rejected candidate must leave `/run/current-system` unchanged; the rollback drill must remove a candidate-only `/etc` marker; and the second reboot verifies that the restored reviewed generation remains bootable and persistent.
 
 The guest suite deliberately checks states that must never occur: protected services running while secrets are locked; a Cockpit listener or browser management route available while locked; unauthenticated or spoofed identities receiving protected access; destructive setup without exact confirmation; hostile identifiers reaching shell execution; SQL-shaped usernames passing account validation; traversal-shaped device paths; malformed alert requests producing tracebacks; unsafe state/archive members; stale operation residue; and recovery/rollback inconsistencies. It must also prove that initial static setup guidance cannot unlock secrets or create an authenticated Cockpit session, and that post-activation Cockpit access passes through Caddy and Authentik.
+
+The installed guest also exercises a service identifier absent from the Nix seed. It loads two VM-only BusyBox images from the Nix store, creates an identity-protected routed OCI service with revision-CAS document replacement, updates the running image, verifies that an offline missing-image activation restores both desired and live applied state, and removes the service and its Quadlet, systemd, Caddy, Authentik, and container projections.
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
 

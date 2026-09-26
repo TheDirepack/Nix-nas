@@ -8,6 +8,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "tests/vm/setup-reboot-e2e.py"
+VM_FIXTURE = ROOT / "tests/nixos/vm-common.nix"
 
 
 class SetupRebootE2eContracts(unittest.TestCase):
@@ -26,15 +27,22 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn("lib/systemd/systemd-socket-proxyd", source)
         self.assertIn('"--resolve"', source)
         self.assertIn('"nas-test.local:8443:127.0.0.1"', source)
+        self.assertIn('"http://127.0.0.1:8222/vault/alive"', source)
+        self.assertIn('require(("zpool", "import", "-N", "tank"))', source)
+        self.assertIn('input_text="nixos-nas-vm-test-password\\n"', source)
+        self.assertIn("activate_after_reboot()", source)
 
-    def test_runner_resumes_through_a_transient_vm_only_systemd_unit(self) -> None:
+    def test_runner_resumes_through_the_vm_only_systemd_unit(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
-        self.assertIn("nas-vm-setup-reboot-e2e.service", source)
-        self.assertIn("nas-vm-guest-test --setup-reboot-e2e --resume", source)
-        self.assertIn("WantedBy=multi-user.target", source)
+        fixture = VM_FIXTURE.read_text(encoding="utf-8")
+        self.assertIn("systemd.services.nas-vm-setup-reboot-e2e", fixture)
+        self.assertIn('ConditionPathExists = "/var/lib/nas-test/setup-reboot-e2e-state.json"', fixture)
+        self.assertIn('"${guestTest}/bin/nas-vm-guest-test --setup-reboot-e2e --resume"', fixture)
+        self.assertIn('wantedBy = [ "multi-user.target" ]', fixture)
+        self.assertIn("path = [ config.system.path ];", fixture)
         self.assertIn('f"--unit=nas-vm-setup-reboot-e2e-{next_phase}"', source)
-        self.assertIn("After=network-online.target", source)
-        self.assertIn('"systemctl", "disable", UNIT.name', source)
+        self.assertIn('after = [ "network-online.target" "nas-vm-test-repository.service" ]', fixture)
+        self.assertNotIn('UNIT = pathlib.Path("/etc/systemd/system/', source)
 
 
 if __name__ == "__main__":

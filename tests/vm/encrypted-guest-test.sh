@@ -50,6 +50,13 @@ wait_oneshot_completed() {
   fail "timed out waiting for $unit to complete"
 }
 
+wait_reconciliation_idle() {
+  systemctl start nas-managed-services-reconcile.service
+  wait_oneshot_completed nas-managed-services-reconcile.service
+  wait_inactive nas-managed-services-reconcile.service
+  [[ ! -e /run/nas-control/reconcile.pending ]] || fail "managed-services reconciliation remains pending"
+}
+
 prime_nasadmin_sudo() {
   local password
   runuser -u nasadmin -- sudo -n -v >/dev/null 2>&1 && return 0
@@ -68,11 +75,12 @@ EXPECT_SUDO
 }
 
 run_as_admin() {
+  # Keep cwd off /tank so the encryption-root lock can unmount the dataset.
   if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
     prime_nasadmin_sudo
-    runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
+    runuser -u nasadmin -- env -C / HOME=/tank/homes/nasadmin PATH="$PATH" "$@"
   else
-    runuser -u admin -- env HOME=/home/admin PATH="$PATH" "$@"
+    runuser -u admin -- env -C / HOME=/home/admin PATH="$PATH" "$@"
   fi
 }
 
@@ -86,11 +94,11 @@ run_as_admin_with_stdin() {
   if [[ -r /var/lib/nas-setup/local-administrator.json ]]; then
     prime_nasadmin_sudo
     nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-      runuser -u nasadmin -- env HOME=/tank/homes/nasadmin PATH="$PATH" \
+      runuser -u nasadmin -- env -C / HOME=/tank/homes/nasadmin PATH="$PATH" \
         timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
   else
     nas_vm_run_with_secret_stdin "$KEEPASS_PASSWORD" \
-      runuser -u admin -- env HOME=/home/admin PATH="$PATH" \
+      runuser -u admin -- env -C / HOME=/home/admin PATH="$PATH" \
         timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" "$timeout_seconds" "$@"
   fi
 }
@@ -134,11 +142,12 @@ nas_setup_path="$(readlink -f "$(command -v nas-setup)")"
 [[ $nas_setup_path == /nix/store/*-nas-setup/bin/nas-setup ]] || fail "nas-setup resolves to unexpected package: $nas_setup_path"
 
 # Complete first start through the GUI bootstrap system's submission contract:
-# the loopback setup API that the Cockpit First start page posts to. The
-# encrypted leg has no browser, so it exercises the same validation and
-# job-submission path directly.
-setup_api="http://127.0.0.1:8980/setup/api"
-first_start_plan="$(curl --fail --silent --show-error --max-time 60 "$setup_api/first-start")"
+# the permissioned Unix-socket setup API that the Cockpit First start page
+# posts to. The encrypted leg has no browser, so it exercises the same
+# validation and job-submission path directly.
+setup_sock=/run/nas-setup-api/setup.sock
+setup_api="http://localhost/setup/api"
+first_start_plan="$(curl --fail --silent --show-error --max-time 60 --unix-socket "$setup_sock" "$setup_api/first-start")"
 if ! jq -e '.status == "ready" and (.planDigest | test("^[0-9a-f]{64}$"))' <<<"$first_start_plan" >/dev/null; then
   printf '%s\n' "$first_start_plan" >&2
   fail "first-start setup API did not report a reviewable ready plan"
@@ -154,7 +163,7 @@ stale_request="$(jq -cn --arg digest "$stale_digest" --argjson devices "[\"$ZFS_
     planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
 stale_code="$(printf '%s' "$stale_request" | curl --silent --show-error --max-time 60 -o /tmp/nas-stale-plan.json \
-  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+  -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
 if [[ "$stale_code" != 400 ]]; then
   cat /tmp/nas-stale-plan.json >&2 || true
   fail "first-start API accepted a stale plan digest (HTTP $stale_code)"
@@ -172,18 +181,37 @@ job_request="$(jq -cn --arg digest "$plan_digest" --argjson devices "[\"$ZFS_DEV
                     email: "nasadmin@nas-test.local", password: $admin_password},
     planDigest: $digest, devices: $devices,
     allowDestructiveStorage: true, encryptStorage: true, confirmPasswordReapply: false}')"
+# The Unix socket admits only the Caddy service identity and root. An
+# unprivileged local account and a representative compromised-service sandbox
+# must not read the setup plan directly.
+if runuser -u nobody -- curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "unprivileged local user reached the setup API directly"
+fi
+if systemd-run --collect --pipe --wait -p DynamicUser=yes -p RestrictAddressFamilies=AF_UNIX -- \
+  curl --silent --show-error --max-time 10 --unix-socket "$setup_sock" "$setup_api/first-start" >/dev/null 2>&1; then
+  fail "sandboxed service identity reached the setup API directly"
+fi
+pass "unprivileged and sandboxed identities cannot reach the setup API directly"
 job_code="$(printf '%s' "$job_request" | curl --silent --show-error --max-time 60 \
   -o /tmp/nas-first-run-submission.json -w '%{http_code}' \
-  -H 'Content-Type: application/json' --data-binary @- "$setup_api/first-run")"
+  -H 'Content-Type: application/json' --data-binary @- --unix-socket "$setup_sock" "$setup_api/first-run")"
 if [[ "$job_code" != 200 ]]; then
   cat /tmp/nas-first-run-submission.json >&2 || true
   fail "encrypted first-start job submission failed (HTTP ${job_code:-none})"
 fi
 job_submission="$(< /tmp/nas-first-run-submission.json)"
 job_id="$(jq -er '.jobId | select(test("^[0-9a-f]{24}$"))' <<<"$job_submission")"
+job_capability="$(jq -er '.capability | select(test("^[0-9a-f]{48}$"))' <<<"$job_submission")"
+# Job identifiers in URLs no longer authorize; only the header capability does.
+if [[ "$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
+  --unix-socket "$setup_sock" "$setup_api/first-start/job/$job_id")" != 404 ]]; then
+  fail "legacy job-id URL did not fail closed"
+fi
 job_result=""
 for _ in $(seq 1 "$(nas_vm_timeout_value firstRun)"); do
-  job_result="$(curl --fail --silent --show-error --max-time 30 "$setup_api/first-start/job/$job_id")" || {
+  job_result="$(curl --fail --silent --show-error --max-time 30 \
+    -H "X-NAS-Setup-Capability: $job_capability" \
+    --unix-socket "$setup_sock" "$setup_api/first-start/job")" || {
     job_result=""
     sleep 2
     continue
@@ -208,6 +236,14 @@ if ! jq -e '
   fail "encrypted first-start job report did not contain the expected storage state"
 fi
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
+# Capability bytes must never reach backend or proxy logs.
+if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
+  fail "setup capability bytes reached the backend log"
+fi
+if grep '/setup/api' /var/log/caddy/access.log 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
+  fail "setup capability bytes reached the proxy log"
+fi
+pass "setup capability bytes are absent from backend and proxy logs"
 pass "GUI first-start job created and activated the encrypted storage stack"
 wait_active nas-protected-services.target
 wait_active nas-zfs-unlock.service
@@ -237,6 +273,7 @@ log "Fault-inject every encrypted dataset bootstrap transition"
 # Keep the known-good encryption root out of the command's configured name while the
 # failure matrix repeatedly creates and tears down a brand-new tank/nas. Locking first
 # means the preserved dataset is unmounted and no protected consumer can write to it.
+wait_reconciliation_idle
 run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
 zfs rename tank/nas tank/nas-preserved
@@ -283,8 +320,11 @@ cmp -s /tmp/nas-zfs-recovery.key /run/nas-secrets/zfs/dataset-key
 pass "recovery-key export matches the staged KeePassXC key"
 
 log "Lock the dataset and prove reactivation restores it"
+wait_reconciliation_idle
 run_as_admin nas-zfs-lock
 wait_inactive nas-protected-services.target
+wait_inactive nas-managed-services-dirty.path
+wait_inactive nas-managed-services-reconcile.path
 wait_inactive nas-zfs-mount-guard.service
 wait_inactive nas-zfs-unlock.service
 [[ "$(zfs get -H -o value keystatus tank/nas)" == "unavailable" ]]
@@ -298,15 +338,6 @@ nas-zfs-mount-check
 [[ "$(zfs get -H -o value mounted tank/nas)" == "yes" ]]
 pass "nas-zfs-lock and secret reactivation complete a full lock/unlock cycle"
 
-systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
-# The intentional lock window fails V2 reconciliation while the dataset is
-# unavailable, and its OnFailure handler cannot self-clear once recovery
-# succeeds. Anything besides that stale handler is an unexpected failure.
-if grep -Ev '(^$|nas-health-alert@|nas-v2-apply-failed\.service)' /tmp/nas-encrypted-failed | grep -q .; then
-  cat /tmp/nas-encrypted-failed >&2
-  fail "unexpected failed units remain"
-fi
-systemctl reset-failed nas-v2-apply-failed.service || true
 systemctl --failed --no-legend --plain | grep -Ev '(^$|nas-health-alert@)' >/tmp/nas-encrypted-failed || true
 [[ ! -s /tmp/nas-encrypted-failed ]] || { cat /tmp/nas-encrypted-failed >&2; fail "unexpected failed units remain"; }
 printf '\nALL ENCRYPTED ZFS VM TESTS PASSED\n'

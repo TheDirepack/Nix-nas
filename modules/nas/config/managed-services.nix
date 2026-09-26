@@ -118,7 +118,8 @@ in
     # generation publication belongs to managed-services-generations.
     systemd.services.nas-managed-services-reconcile = {
       description = "Compile and activate Managed Services V2 desired state";
-      wantedBy = [ "multi-user.target" ];
+      wantedBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
       requires = [
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
@@ -184,7 +185,8 @@ in
 
     systemd.paths.nas-managed-services-reconcile = {
       description = "Watch the Managed Services V2 desired-state authority";
-      wantedBy = [ "multi-user.target" ];
+      wantedBy = [ "nas-protected-services.target" ];
+      partOf = [ "nas-protected-services.target" ];
       pathConfig = {
         PathChanged = desiredPath;
         Unit = "nas-managed-services-reconcile.service";

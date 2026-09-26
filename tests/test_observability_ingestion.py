@@ -7,6 +7,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "observability-line-protocol.txt"
 OBSERVABILITY = ROOT / "modules" / "nas" / "config" / "observability.nix"
+SYSTEMD_SERVICES = ROOT / "modules" / "nas" / "config" / "systemd-services.nix"
 
 
 _FIELD_RE = re.compile(r"^(?P<measurement>[^, ]+)(?:,[^ ]+)? (?P<fields>[^ ]+)(?: [0-9]+)?$")
@@ -70,6 +71,12 @@ class ObservabilityIngestionContractTests(unittest.TestCase):
         self.assertIn("zfs_arc_size", series)
         self.assertIn("upsd_load_percent", series)
         self.assertIn("upsd_battery_charge", series)
+
+    def test_grafana_service_can_traverse_the_private_observability_secret_directory(self) -> None:
+        source = SYSTEMD_SERVICES.read_text(encoding="utf-8")
+        grafana = source.split("grafana = lib.mkIf", 1)[1].split("victoriametrics = lib.mkIf", 1)[0]
+
+        self.assertIn('SupplementaryGroups = [ "nas-observability" ];', grafana)
 
 
 if __name__ == "__main__":

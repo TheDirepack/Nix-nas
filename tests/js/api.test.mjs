@@ -67,7 +67,7 @@ test("managed services status and document use the canonical V2 control CLI", as
   ]);
 });
 
-test("managed services document replacement sends YAML only over stdin", async () => {
+test("managed services document replacement sends YAML only over stdin with revision CAS", async () => {
   const calls = [];
   const spawn = (command, options) => {
     const process = Promise.resolve('{"ok":true}');
@@ -76,19 +76,22 @@ test("managed services document replacement sends YAML only over stdin", async (
     return process;
   };
   const yaml = "schemaVersion: 3\nservices: {}\n";
-  assert.deepEqual(await replaceManagedServicesDocument(yaml, spawn), {ok: true});
+  assert.deepEqual(await replaceManagedServicesDocument(yaml, "a".repeat(64), spawn), {ok: true});
   assert.deepEqual(calls, [
     [
       "spawn",
-      ["nas-managed-services-control", "replace-document", "-"],
+      ["nas-managed-services-control", "replace-document", "-", "a".repeat(64)],
       {superuser: "require", err: "message"},
     ],
     ["input", yaml],
   ]);
-  assert.throws(() => replaceManagedServicesDocument("", spawn), /must not be empty/);
+  assert.throws(
+    () => replaceManagedServicesDocument("", "a".repeat(64), spawn),
+    /must not be empty/,
+  );
 });
 
-test("schema editor replacement sends only the JSON document over stdin", async () => {
+test("schema editor replacement sends only the JSON document over stdin with revision CAS", async () => {
   const calls = [];
   const spawn = (command, options) => {
     const process = Promise.resolve('{"ok":true}');
@@ -97,16 +100,21 @@ test("schema editor replacement sends only the JSON document over stdin", async 
     return process;
   };
   const document = {schemaVersion: 3, services: {}};
-  assert.deepEqual(await replaceManagedServicesJsonDocument(document, spawn), {ok: true});
+  assert.deepEqual(await replaceManagedServicesJsonDocument(document, "b".repeat(64), spawn), {
+    ok: true,
+  });
   assert.deepEqual(calls, [
     [
       "spawn",
-      ["nas-managed-services-control", "replace-json-document", "-"],
+      ["nas-managed-services-control", "replace-json-document", "-", "b".repeat(64)],
       {superuser: "require", err: "message"},
     ],
     ["input", JSON.stringify(document)],
   ]);
-  assert.throws(() => replaceManagedServicesJsonDocument([], spawn), /must be an object/);
+  assert.throws(
+    () => replaceManagedServicesJsonDocument([], "b".repeat(64), spawn),
+    /must be an object/,
+  );
 });
 
 test("managed service mode validates identifiers and fixed modes before spawning", async () => {

@@ -541,7 +541,7 @@ run_installer() {
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
   local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
-  local ssh_key ssh_key_dir full_suite_skip_fuzz
+  local ssh_key ssh_key_dir full_suite_skip_fuzz github_actions=false
   local -a accel network_args ssh_args
   os_disk="$STATE_DIR/nixos-nas-os.qcow2"
   data_disk="$STATE_DIR/nixos-nas-zfs.qcow2"
@@ -666,6 +666,9 @@ run_installer() {
     # its lifecycle and must not let this process's EXIT trap stop it.
     nas_qemu_disarm_cleanup
     full_suite_skip_fuzz="${NAS_QEMU_SKIP_FUZZ:-0}"
+    if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+      github_actions=true
+    fi
     sync_source_to_guest "$source_stage" "$ssh_key"
     if [[ "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test || "$marker_id" != "$source_id" ]]; then
       rebuild_guest_source "$ssh_key"
@@ -687,7 +690,7 @@ run_installer() {
            sudo -n systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service &&
            (sudo -n systemctl start nas-authentik-proxy-outpost.service || true) &&
            sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do sleep 1; done' &&
-           sudo -n env NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
+           sudo -n env GITHUB_ACTIONS=$github_actions NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
              nix develop path:/var/lib/nas-test/repo#test -c \
              bash /var/lib/nas-test/repo/tests/vm/full-suite.sh"
     fi

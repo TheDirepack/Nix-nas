@@ -438,6 +438,8 @@ A session is an explicitly created finite runtime instance, useful for disposabl
 
 The V2 definition describes how to provision/session-template the runtime, resources, mounts, network, and dependencies.
 
+Session workloads require the direct OCI runtime. Other runtime adapters represent shared or persistent owners and cannot provide the per-instance lifecycle boundary required by sessions.
+
 Authentication, identity validation, and permission to start a session remain outside V2 and are enforced by the authenticated launch path.
 
 V2 must not maintain an identity/session authorization database.
@@ -630,6 +632,8 @@ V2 must never infer that removing a service means deleting persistent VM disks.
 ### 10.7 Direct OCI
 
 Direct OCI execution exists for cases where static Quadlet is insufficient, especially dynamically parameterized disposable sessions.
+
+All `workload.kind: session` definitions must use `runtime.type: oci`.
 
 It must remain generic and minimal.
 

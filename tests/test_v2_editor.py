@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -14,7 +15,44 @@ if str(SERVICES) not in sys.path:
 import nas_v2_editor as editor  # noqa: E402
 
 
+def runtime_cases() -> dict[str, dict]:
+    return {
+        "systemd": {"type": "systemd", "unit": "demo.service"},
+        "exec": {"type": "exec", "command": ["/bin/true"]},
+        "python": {"type": "python", "entrypoint": {"module": "demo.main"}},
+        "quadlet": {"type": "quadlet", "source": "/var/lib/nas-control/apps/demo/demo.container"},
+        "compose": {"type": "compose", "source": "/var/lib/nas-control/apps/demo/compose.yaml"},
+        "vm": {"type": "vm", "source": "/var/lib/nas-control/apps/demo/domain.xml"},
+        "oci": {"type": "oci", "image": "example.invalid/editor-roundtrip:1"},
+    }
+
+
 class V2EditorTests(unittest.TestCase):
+    def test_desired_authority_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            target = self.write_desired(root)
+            link = root / "linked-services.yaml"
+            link.symlink_to(target)
+            with self.assertRaisesRegex(editor.ManagedServicesEditorError, "regular non-symlink"):
+                editor.read_document(desired_path=link, schema_path=SCHEMA)
+
+    def test_desired_authority_replacement_during_open_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_desired(root)
+            replacement = root / "replacement.yaml"
+            replacement.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
+            original_open = editor.os.open
+
+            def replace_then_open(path: pathlib.Path, flags: int) -> int:
+                editor.os.replace(replacement, authority)
+                return original_open(path, flags)
+
+            with mock.patch.object(editor.os, "open", side_effect=replace_then_open):
+                with self.assertRaisesRegex(editor.ManagedServicesEditorError, "changed while it was opened"):
+                    editor.read_document(desired_path=authority, schema_path=SCHEMA)
+
     def write_desired(self, root: pathlib.Path, *, idle: bool = True) -> pathlib.Path:
         path = root / "services.yaml"
         idle_line = "      idleSeconds: 300\n" if idle else ""
@@ -94,7 +132,7 @@ class V2EditorTests(unittest.TestCase):
             self.assertEqual(by_id["demo"]["requestedMode"], "off")
             self.assertEqual(by_id["second"]["requestedMode"], "always")
 
-    def test_scheduled_job_status_includes_generated_timer_units(self):
+    def test_unverified_scheduled_job_status_does_not_synthesize_units(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             desired = root / "services.yaml"
@@ -120,11 +158,7 @@ class V2EditorTests(unittest.TestCase):
             backup = result["services"][0]
             self.assertEqual(
                 backup["units"],
-                [
-                    {"unit": "backup.service", "role": "owner"},
-                    {"unit": "nas-v2-timer-backup-0.timer", "role": "schedule"},
-                    {"unit": "nas-v2-timer-backup-1.timer", "role": "schedule"},
-                ],
+                [],
             )
 
     def test_document_returns_same_yaml_parsed_value_and_schema(self) -> None:
@@ -164,6 +198,25 @@ class V2EditorTests(unittest.TestCase):
             self.assertIn("mode: isolated", text)
             reparsed = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
             self.assertEqual(reparsed["services"]["demo"]["network"]["lanAccess"], True)
+
+    def test_schema_editor_round_trips_all_runtime_types(self) -> None:
+        for runtime_type, runtime in runtime_cases().items():
+            with self.subTest(runtime_type=runtime_type), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                desired = self.write_desired(root)
+                value = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+                value["services"]["demo"]["runtime"] = runtime
+
+                result = editor.replace_document_value(
+                    value,
+                    desired_path=desired,
+                    schema_path=SCHEMA,
+                    platform_path=None,
+                )
+
+                self.assertTrue(result["ok"])
+                reparsed = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+                self.assertEqual(reparsed["services"]["demo"]["runtime"], runtime)
 
     def test_invalid_schema_editor_value_never_replaces_authority(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -229,8 +282,8 @@ class V2EditorTests(unittest.TestCase):
                 "    workload:\n"
                 "      kind: session\n"
                 "    runtime:\n"
-                "      type: systemd\n"
-                "      unit: sess.service\n",
+                "      type: oci\n"
+                "      image: example.invalid/session:1\n",
                 encoding="utf-8",
             )
             editor.set_service_mode(

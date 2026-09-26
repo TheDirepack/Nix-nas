@@ -391,7 +391,9 @@ in
             --retry 30 --retry-delay 2 --retry-connrefused --retry-all-errors \
             http://127.0.0.1:${toString syncthingGuiPort}/rest/noauth/health
         '';
-        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
+        ExecStart = "${nasPythonApplication}/bin/nas-operation-run --action syncthing-sync --class identity --class runtime -- ${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
+        RestartForceExitStatus = [ 75 ];
+        RestartSec = "5s";
       };
     };
 
@@ -458,7 +460,10 @@ in
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = [ "${secretRoot}/ready" "${observabilitySecretDir}/grafana-secret-key" ];
-      serviceConfig.BindReadOnlyPaths = [ observabilitySecretDir ];
+      serviceConfig = {
+        BindReadOnlyPaths = [ observabilitySecretDir ];
+        SupplementaryGroups = [ "nas-observability" ];
+      };
     };
 
     victoriametrics = lib.mkIf cfg.observability.enable {

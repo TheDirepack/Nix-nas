@@ -191,7 +191,7 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
     return result
 
 
-def replace_from_source(source: str) -> dict[str, Any]:
+def replace_from_source(source: str, expected_revision: str) -> dict[str, Any]:
     try:
         text = sys.stdin.read() if source == "-" else pathlib.Path(source).read_text(encoding="utf-8")
         result = replace_document(
@@ -199,6 +199,7 @@ def replace_from_source(source: str) -> dict[str, Any]:
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
             platform_path=_editor_platform_path(),
+            expected_revision=expected_revision,
         )
         _reconcile()
         return result
@@ -206,7 +207,7 @@ def replace_from_source(source: str) -> dict[str, Any]:
         raise ControlError(str(exc)) from exc
 
 
-def replace_json_from_source(source: str) -> dict[str, Any]:
+def replace_json_from_source(source: str, expected_revision: str) -> dict[str, Any]:
     try:
         value = _read_json_document(source)
         result = replace_document_value(
@@ -214,6 +215,7 @@ def replace_json_from_source(source: str) -> dict[str, Any]:
             desired_path=DESIRED_PATH,
             schema_path=SCHEMA_PATH,
             platform_path=_editor_platform_path(),
+            expected_revision=expected_revision,
         )
         _reconcile()
         return result
@@ -233,6 +235,12 @@ def reconcile() -> dict[str, Any]:
     return {"ok": True, "status": status()}
 
 
+def _revision_argument(value: str) -> str:
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise argparse.ArgumentTypeError("revision must be a lowercase SHA-256 digest")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -249,12 +257,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     replace_parser = sub.add_parser("replace-document", help="Validate, replace, and reconcile the desired YAML")
     replace_parser.add_argument("source", help="YAML file or - for standard input")
+    replace_parser.add_argument("revision", type=_revision_argument)
 
     replace_json_parser = sub.add_parser(
         "replace-json-document",
         help="Validate a schema-editor JSON value, render YAML, replace authority, and reconcile",
     )
     replace_json_parser.add_argument("source", help="JSON object file or - for standard input")
+    replace_json_parser.add_argument("revision", type=_revision_argument)
     return parser
 
 
@@ -272,9 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "set-many":
             result = set_modes(_read_mode_document(args.source))
         elif args.command == "replace-document":
-            result = replace_from_source(args.source)
+            result = replace_from_source(args.source, args.revision)
         elif args.command == "replace-json-document":
-            result = replace_json_from_source(args.source)
+            result = replace_json_from_source(args.source, args.revision)
         else:
             raise AssertionError(f"Unhandled command {args.command!r}")
         print(json.dumps(result, indent=2, sort_keys=True))
