@@ -70,6 +70,13 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("ExecStartPre", copyparty)
         self.assertIn('BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];', copyparty)
 
+    def test_syncthing_waits_for_its_zfs_share_namespace(self) -> None:
+        services = text("modules/nas/config/systemd-services.nix")
+        syncthing = services.split("syncthing = lib.mkIf cfg.syncthing.enable {", 1)[1].split("syncthing-init =", 1)[0]
+        self.assertIn('requires = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service" ];', syncthing)
+        self.assertIn('after = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service"', syncthing)
+        self.assertIn('ReadWritePaths = [ syncthingDataDir "${shareRoot}/users" ];', syncthing)
+
     def test_vaultwarden_uses_the_zfs_state_path_without_systemd_state_directory(self) -> None:
         services = text("modules/nas/config/application-services.nix")
         vaultwarden = services.split("systemd.services.vaultwarden", 1)[1].split("config.systemd.services", 1)[0]

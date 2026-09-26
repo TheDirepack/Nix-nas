@@ -353,8 +353,8 @@ in
         STNODEFAULTFOLDER = "1";
         GOMEMLIMIT = "192MiB";
       };
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" "network-online.target" ];
+      requires = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service" ];
+      after = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service" "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig = {
         RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
