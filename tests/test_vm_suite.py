@@ -193,6 +193,17 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertEqual(encrypted_guest.count("env -C / HOME=/tank/homes/nasadmin"), 2)
         self.assertEqual(encrypted_guest.count("env -C / HOME=/home/admin"), 2)
 
+    def test_installer_qualifies_pinned_old_packages_before_current_generation(self) -> None:
+        qemu = QEMU.read_text(encoding="utf-8")
+        reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("NAS_TEST_PACKAGE_UPGRADE=$package_upgrade", qemu)
+        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", reconfigure)
+        self.assertIn("--override-input nixpkgs", reconfigure)
+        self.assertIn("syncthing-$older_version", reconfigure)
+        self.assertIn("syncthing-$current_version", reconfigure)
+        self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
+
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
         self.assertIn("activate_secrets_with_retry()", adversarial)

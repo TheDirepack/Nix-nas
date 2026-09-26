@@ -99,6 +99,14 @@ than booting a test-driver machine directly. It:
 10. runs an in-place `nixos-rebuild test` from the staged source and checks `nas-doctor` again;
 11. powers the VM off after a successful run.
 
+CI then runs a second, fresh installation. After the installed VM completes its
+setup and reboot checks, it switches to the pinned June 2026 NixOS 26.05 package
+set, checks Syncthing 2.0.15 and the distinct system generation, and switches
+back to the reviewed lock. The check compares the desired services document,
+KeePassXC database, and installer sentinel before and after the upgrade. CI
+repeats the final browser and security checks on the updated installation.
+Use `NAS_QEMU_PACKAGE_UPGRADE=1 ./scripts/qemu-test.sh installer` for this path.
+
 Run it with:
 
 ```bash

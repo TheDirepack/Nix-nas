@@ -4,6 +4,8 @@ set -Eeuo pipefail
 SOURCE="${NAS_TEST_SOURCE:-/var/lib/nas-test/repo}"
 SENTINEL="${NAS_TEST_INSTALL_SENTINEL:-/var/lib/nas-install-test/reinstall-sentinel}"
 TIMEOUT="${NAS_TEST_REBUILD_TIMEOUT:-1800}"
+PACKAGE_UPGRADE="${NAS_TEST_PACKAGE_UPGRADE:-0}"
+OLDER_NIXPKGS_REV=36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -14,6 +16,35 @@ rebuild() {
 
 [[ -f "$SOURCE/flake.nix" ]] || fail "reviewed source flake is missing: $SOURCE"
 [[ "$(cat "$SENTINEL" 2>/dev/null || true)" == preserve-me ]] || fail "installer persistence sentinel is missing"
+[[ "$PACKAGE_UPGRADE" == 0 || "$PACKAGE_UPGRADE" == 1 ]] || fail "invalid package upgrade test mode"
+
+if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
+  log "Switch to pinned older NixOS packages and promote back to the reviewed lock"
+  older_version="$(nix eval --raw --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV" \
+    "path:$SOURCE#nixosConfigurations.nas-qemu.pkgs.syncthing.version")"
+  current_version="$(nix eval --raw "path:$SOURCE#nixosConfigurations.nas-qemu.pkgs.syncthing.version")"
+  [[ "$older_version" != "$current_version" ]] || fail "older and reviewed Syncthing packages are identical"
+  [[ "$older_version" == 2.0.15 ]] || fail "pinned older Syncthing package changed: $older_version"
+  baseline_document="$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)"
+  baseline_database="$(sha256sum /var/lib/nas-control-plane/nas-secrets/NAS.kdbx | cut -d ' ' -f1)"
+  current_system="$(readlink -f /run/current-system)"
+  rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"
+  older_system="$(readlink -f /run/current-system)"
+  [[ "$older_system" != "$current_system" ]] || fail "older package set did not activate a distinct generation"
+  systemctl show --property=ExecStart --value syncthing.service | grep -q "syncthing-$older_version" ||
+    fail "older generation does not contain the pinned Syncthing package"
+  [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "older package activation destroyed the persistence sentinel"
+  rebuild switch --flake "path:$SOURCE#nas-qemu"
+  [[ "$(readlink -f /run/current-system)" == "$current_system" ]] || fail "reviewed generation was not restored"
+  systemctl show --property=ExecStart --value syncthing.service | grep -q "syncthing-$current_version" ||
+    fail "reviewed generation does not contain the newer Syncthing package"
+  [[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$baseline_document" ]] ||
+    fail "package upgrade changed the desired-state authority"
+  [[ "$(sha256sum /var/lib/nas-control-plane/nas-secrets/NAS.kdbx | cut -d ' ' -f1)" == "$baseline_database" ]] ||
+    fail "package upgrade changed the KeePassXC authority"
+  [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "package upgrade destroyed the persistence sentinel"
+  nas-doctor --json >/tmp/nas-post-package-upgrade-doctor.json
+fi
 
 log "Reviewed configuration dry-activate, test, and switch"
 rebuild dry-activate --flake "path:$SOURCE#nas-qemu"

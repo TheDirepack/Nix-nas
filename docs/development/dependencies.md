@@ -33,3 +33,10 @@ The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as 
 ## Open WebUI
 
 Open WebUI is the only non-GPU package admitted by the Nix unfree-package predicate. Keep the exception exact to the `open-webui` package name; broader unfree enablement would bypass the appliance dependency review boundary.
+
+## Upgrade qualification pin
+
+The official-ISO upgrade rehearsal pins nixpkgs revision
+`36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac` (NixOS 26.05, June 30,
+2026). It provides Syncthing 2.0.15, older than the reviewed lock's package.
+Keep the revision immutable so CI exercises the same old-to-new transition.

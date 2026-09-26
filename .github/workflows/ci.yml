@@ -804,6 +804,12 @@ jobs:
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
         run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
+      - name: Qualify older-to-newer NixOS package upgrade on a fresh installation
+        env:
+          NAS_QEMU_PACKAGE_UPGRADE: "1"
+        run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
+      - name: Check the upgraded VM browser and security surfaces
+        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Collect final-VM console evidence
         if: always()
         run: |
