@@ -28,6 +28,9 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('"--resolve"', source)
         self.assertIn('"nas-test.local:8443:127.0.0.1"', source)
         self.assertIn('"http://127.0.0.1:8222/vault/alive"', source)
+        self.assertIn('require(("zpool", "import", "-N", "tank"))', source)
+        self.assertIn('input_text="nixos-nas-vm-test-password\\n"', source)
+        self.assertIn("activate_after_reboot()", source)
 
     def test_runner_resumes_through_the_vm_only_systemd_unit(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")

@@ -148,14 +148,41 @@ def syncthing_api_key() -> str:
     raise CheckError("Syncthing API key is unavailable")
 
 
+def activate_after_reboot() -> None:
+    status = json.loads(require(("nas-setup", "status")))
+    if (
+        status.get("runtimeSecretsActive")
+        or run("systemctl", "is-active", "--quiet", "nas-protected-services.target").returncode == 0
+    ):
+        raise CheckError("protected services or runtime secrets remained active across the locked reboot")
+    require(("zpool", "import", "-N", "tank"))
+    result = run(
+        "runuser",
+        "-u",
+        "nasadmin",
+        "--",
+        "env",
+        "-C",
+        "/",
+        "HOME=/tank/homes/nasadmin",
+        "nas-secrets",
+        "activate-stdin",
+        input_text="nixos-nas-vm-test-password\n",
+        timeout=600,
+    )
+    if result.returncode:
+        raise CheckError(f"post-reboot secret activation failed ({result.returncode}): {result.stderr[-1200:]}")
+
+
 def verify_services(stage: str) -> None:
     status = require(("nas-setup", "status"))
     try:
         setup = json.loads(status)
     except json.JSONDecodeError as error:
         raise CheckError("nas-setup status did not return JSON") from error
-    if not all(setup.get(key) is True for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")):
-        raise CheckError(f"setup is not complete after {stage}: {setup}")
+    health = {key: setup.get(key) for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")}
+    if not all(value is True for value in health.values()):
+        raise CheckError(f"setup is not complete after {stage}: {health}")
     if not SENTINEL.is_file() or SENTINEL.read_text(encoding="utf-8") != "setup-reboot-e2e\n":
         raise CheckError(f"ZFS-backed setup sentinel did not survive {stage}")
     require(("zpool", "status", "-x", "tank"))
@@ -303,11 +330,13 @@ def resume() -> None:
     try:
         phase = read_state().get("phase")
         if phase == "after-first-reboot":
+            activate_after_reboot()
             verify_services("the first reboot")
             browser_sign_in("the first reboot")
             schedule_reboot("after-second-reboot")
             return
         if phase == "after-second-reboot":
+            activate_after_reboot()
             verify_services("the second reboot")
             browser_sign_in("the second reboot")
             finish(True, phase="complete", verifiedReboots=2)
