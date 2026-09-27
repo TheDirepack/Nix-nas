@@ -29,6 +29,7 @@ REQUIRED_UNITS = (
     "nas-protected-services.target",
     "caddy.service",
     "authentik.service",
+    "nas-cockpit-sso.service",
     "copyparty.service",
     "syncthing.service",
     "vaultwarden.service",
@@ -257,6 +258,11 @@ def verify_services(stage: str) -> None:
     )
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/api/health"), "Grafana")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:2586/v1/health"), "ntfy")
+    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9092/console/"), "Cockpit")
+    wait_http(
+        ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9010/outpost.goauthentik.io/ping"),
+        "Authentik proxy outpost",
+    )
 
 
 def browser_sign_in(stage: str) -> None:
@@ -326,8 +332,9 @@ def browser_sign_in(stage: str) -> None:
                 command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, env=environment
             )
             if result.returncode:
+                detail = result.stderr or result.stdout
                 raise CheckError(
-                    f"authenticated browser checks failed after {stage}: {(result.stderr or result.stdout)[-2400:]}"
+                    f"authenticated browser checks failed after {stage}: {detail[:1100]}\n{detail[-1900:]}"
                 )
         finally:
             proxy.terminate()
