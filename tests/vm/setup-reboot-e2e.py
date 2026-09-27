@@ -101,7 +101,24 @@ def wait_active(unit: str, timeout_seconds: int = 180) -> None:
             return
         time.sleep(2)
     status = run("systemctl", "status", "--no-pager", unit, timeout=30)
-    raise CheckError(f"timed out waiting for {unit} to become active: {status.stdout[-1200:]}")
+    failed = run("systemctl", "--failed", "--no-pager", timeout=30)
+    journal = run(
+        "journalctl",
+        "-b",
+        "-u",
+        "nas-managed-services-reconcile.service",
+        "-u",
+        "nas-v2-apply-failed.service",
+        "-n",
+        "70",
+        "--no-pager",
+        timeout=30,
+    )
+    raise CheckError(
+        f"timed out waiting for {unit} to become active: {status.stdout[-1200:]}\n"
+        f"failed units: {failed.stdout[-1000:]}\n"
+        f"reconcile journal: {journal.stdout[-5500:]}"
+    )
 
 
 def wait_http(command: tuple[str, ...], label: str, timeout_seconds: int = 180) -> None:

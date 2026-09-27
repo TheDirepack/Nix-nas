@@ -816,6 +816,8 @@ jobs:
           mkdir -p final-vm-evidence
           cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
             final-vm-evidence/browser-console.log 2>/dev/null || true
+          cp ~/.cache/nixos-nas-qemu/state/installed-console.log \
+            final-vm-evidence/installed-console.log 2>/dev/null || true
       - name: Retain final-VM failure evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -203,6 +203,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("syncthing-$older_version", reconfigure)
         self.assertIn("syncthing-$current_version", reconfigure)
         self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
+        self.assertIn("final-vm-evidence/installed-console.log", workflow)
 
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
