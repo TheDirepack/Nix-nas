@@ -29,6 +29,7 @@ REQUIRED_UNITS = (
     "nas-protected-services.target",
     "caddy.service",
     "authentik.service",
+    "nas-authentik-proxy-outpost.service",
     "nas-cockpit-sso.service",
     "copyparty.service",
     "syncthing.service",
@@ -167,7 +168,6 @@ def syncthing_api_key() -> str:
 
 
 def activate_after_reboot() -> None:
-    wait_active("nas-authentik-proxy-outpost.service", timeout_seconds=120)
     status = json.loads(require(("nas-setup", "status")))
     if (
         status.get("runtimeSecretsActive")
@@ -204,6 +204,7 @@ def activate_after_reboot() -> None:
             f"failed units: {failed.stdout[-1200:]}\n"
             f"activation journal: {journal.stdout[-7000:]}"
         )
+    wait_active("nas-authentik-proxy-outpost.service", timeout_seconds=120)
 
 
 def verify_services(stage: str) -> None:

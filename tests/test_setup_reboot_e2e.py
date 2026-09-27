@@ -65,6 +65,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('"syncthing.service"', source)
         self.assertIn('"vaultwarden.service"', source)
         self.assertIn('"grafana.service"', source)
+        self.assertIn('"nas-authentik-proxy-outpost.service"', source)
         self.assertIn('"nas-cockpit-sso.service"', source)
         self.assertIn('"nas-managed-services-control", "status"', source)
         self.assertIn('"tests/browser/authz.py"', source)
