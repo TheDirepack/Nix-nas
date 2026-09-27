@@ -402,8 +402,8 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" "caddy.service" ];
-      requires = [ "caddy.service" ];
-      after = [ "caddy.service" ];
+      # Caddy's startup selector awaits V2 reconciliation, which may start
+      # Vaultwarden; only the persisted CA file can gate this export.
       before = [ "vaultwarden.service" ];
       unitConfig.ConditionPathExists = "${secretRoot}/ready";
       serviceConfig = {

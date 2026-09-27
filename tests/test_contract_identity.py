@@ -84,6 +84,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn("serviceConfig.ReadWritePaths = [ vaultwardenDataDir ];", vaultwarden)
         self.assertIn("vaultwardenDataDir", vaultwarden)
 
+    def test_caddy_ca_export_does_not_wait_on_caddy_during_reconciliation(self) -> None:
+        services = text("modules/nas/config/systemd-services.nix")
+        ca_export = services.split("nas-caddy-ca-export = lib.mkIf cfg.vaultwarden.enable {", 1)[1].split(
+            "vaultwarden = lib.mkIf cfg.vaultwarden.enable {", 1
+        )[0]
+        vaultwarden = services.split("vaultwarden = lib.mkIf cfg.vaultwarden.enable {", 1)[1].split(
+            "backup-vaultwarden =", 1
+        )[0]
+        self.assertNotIn('requires = [ "caddy.service" ];', ca_export)
+        self.assertNotIn('after = [ "caddy.service" ];', ca_export)
+        self.assertIn("[[ -r ${caddyInternalCaPath} ]]", ca_export)
+        self.assertIn('before = [ "vaultwarden.service" ];', ca_export)
+        self.assertIn('requires = [ "nas-caddy-ca-export.service" "nas-zfs-mount-guard.service" ];', vaultwarden)
+
     def test_vaultwarden_web_route_requires_its_access_capability(self) -> None:
         seed = text("modules/nas/config/managed-services-seed-v2.nix")
         self.assertIn(
