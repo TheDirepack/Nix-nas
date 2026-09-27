@@ -149,6 +149,7 @@ def syncthing_api_key() -> str:
 
 
 def activate_after_reboot() -> None:
+    wait_active("nas-authentik-proxy-outpost.service", timeout_seconds=120)
     status = json.loads(require(("nas-setup", "status")))
     if (
         status.get("runtimeSecretsActive")
@@ -175,21 +176,15 @@ def activate_after_reboot() -> None:
         journal = run(
             "journalctl",
             "-b",
-            "-u",
-            "nas-protected-services.target",
-            "-u",
-            "nas-managed-services-reconcile.service",
-            "-u",
-            "nas-zfs-mount-guard.service",
             "-n",
-            "60",
+            "90",
             "--no-pager",
             timeout=30,
         )
         raise CheckError(
             f"post-reboot secret activation failed ({result.returncode}): {result.stderr[-600:]}\n"
             f"failed units: {failed.stdout[-1200:]}\n"
-            f"activation journal: {journal.stdout[-3200:]}"
+            f"activation journal: {journal.stdout[-7000:]}"
         )
 
 

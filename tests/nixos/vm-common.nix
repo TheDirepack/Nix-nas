@@ -231,8 +231,8 @@ in
   systemd.services.nas-vm-setup-reboot-e2e = {
     description = "Resume the VM setup reboot lifecycle";
     wantedBy = [ "multi-user.target" ];
-    wants = [ "network-online.target" "nas-vm-test-repository.service" ];
-    after = [ "network-online.target" "nas-vm-test-repository.service" ];
+    wants = [ "network-online.target" "nas-vm-test-repository.service" "nas-bootstrap-runtime-select.service" ];
+    after = [ "network-online.target" "nas-vm-test-repository.service" "nas-bootstrap-runtime-select.service" ];
     path = [ config.system.path ];
     unitConfig.ConditionPathExists = "/var/lib/nas-test/setup-reboot-e2e-state.json";
     serviceConfig = {

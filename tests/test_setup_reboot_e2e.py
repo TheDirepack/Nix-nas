@@ -46,8 +46,10 @@ class SetupRebootE2eContracts(unittest.TestCase):
         with (
             mock.patch.object(runner, "require", side_effect=require),
             mock.patch.object(runner, "run", side_effect=run),
+            mock.patch.object(runner, "wait_active") as wait_active,
         ):
             runner.activate_after_reboot()
+        wait_active.assert_called_once_with("nas-authentik-proxy-outpost.service", timeout_seconds=120)
         self.assertEqual(calls[0], ("nas-setup", "status"))
         self.assertEqual(calls[2], ("zpool", "import", "-N", "tank"))
         self.assertEqual(
@@ -83,7 +85,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('wantedBy = [ "multi-user.target" ]', fixture)
         self.assertIn("path = [ config.system.path ];", fixture)
         self.assertIn('f"--unit=nas-vm-setup-reboot-e2e-{next_phase}"', source)
-        self.assertIn('after = [ "network-online.target" "nas-vm-test-repository.service" ]', fixture)
+        self.assertIn('"nas-bootstrap-runtime-select.service" ];', fixture)
         self.assertNotIn('UNIT = pathlib.Path("/etc/systemd/system/', source)
 
 
