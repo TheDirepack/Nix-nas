@@ -48,6 +48,18 @@ class ContractTests(unittest.TestCase):
         self.assertIn("set-authentik-runtime-stdin", secrets)
         self.assertIn("authentik_token(bootstrap=True)", identity)
 
+    def test_secret_reactivation_restores_proxy_outpost_after_authentik(self) -> None:
+        secrets = text("modules/nas/internal/secret-tools.nix")
+        activation = secrets.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
+        self.assertLess(
+            activation.index("http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/"),
+            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
+        )
+        self.assertLess(
+            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
+            activation.index("nas_secret_tx_commit"),
+        )
+
     def test_copyparty_is_the_only_share_authority(self) -> None:
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
         system = text("modules/nas/config/system.nix")

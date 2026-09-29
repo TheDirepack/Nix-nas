@@ -663,6 +663,15 @@ NTFY_ENV
           fi
         done
 
+        if [[ "$setup_activation" != true ]]; then
+          # Restarting Authentik stops its required outpost; the boot target
+          # does not pull that unit back in during runtime activation.
+          if ! sudo systemctl start nas-authentik-proxy-outpost.service; then
+            echo "Authentik proxy outpost failed to restart after activation." >&2
+            exit 71
+          fi
+        fi
+
         nas_secret_tx_commit
         echo "Runtime service secrets activated. Authentik remains the identity source of truth."
       )
