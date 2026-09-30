@@ -22,6 +22,31 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_reconfigure_prints_failed_doctor_report_and_preserves_status(self) -> None:
+        source = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        self.assertIn("check_doctor() {", source)
+        function = source.split("check_doctor() {", 1)[1].split("\n}", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            report = pathlib.Path(directory) / "doctor.json"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'nas-doctor() { echo \'{"status":"critical"}\'; return 2; }\n'
+                    + "check_doctor() {"
+                    + function
+                    + '\n}\ncheck_doctor "$1"',
+                    "test",
+                    str(report),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('"status":"critical"', result.stderr)
+            self.assertEqual(report.read_text(), '{"status":"critical"}\n')
+
     def _stage(self, source: pathlib.Path, cache: pathlib.Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", str(QEMU), "stage-source"],

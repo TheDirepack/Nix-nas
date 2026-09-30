@@ -13,6 +13,14 @@ rebuild() {
   timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
     "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false
 }
+check_doctor() {
+  local report="$1" status=0
+  nas-doctor --json >"$report" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    cat "$report" >&2
+    return "$status"
+  fi
+}
 
 [[ -f "$SOURCE/flake.nix" ]] || fail "reviewed source flake is missing: $SOURCE"
 [[ "$(cat "$SENTINEL" 2>/dev/null || true)" == preserve-me ]] || fail "installer persistence sentinel is missing"
@@ -43,7 +51,7 @@ if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
   [[ "$(sha256sum /var/lib/nas-control-plane/nas-secrets/NAS.kdbx | cut -d ' ' -f1)" == "$baseline_database" ]] ||
     fail "package upgrade changed the KeePassXC authority"
   [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "package upgrade destroyed the persistence sentinel"
-  nas-doctor --json >/tmp/nas-post-package-upgrade-doctor.json
+  check_doctor /tmp/nas-post-package-upgrade-doctor.json
 fi
 
 log "Reviewed configuration dry-activate, test, and switch"
@@ -53,7 +61,7 @@ rebuild switch --flake "path:$SOURCE#nas-qemu"
 reviewed_system="$(readlink -f /run/current-system)"
 [[ -n "$reviewed_system" ]] || fail "could not identify reviewed system generation"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "reviewed switch destroyed unrelated persistent state"
-nas-doctor --json >/tmp/nas-post-reconfigure-doctor.json
+check_doctor /tmp/nas-post-reconfigure-doctor.json
 
 work="$(mktemp -d /var/tmp/nas-reconfigure-test.XXXXXX)"
 trap 'rm -rf "$work"' EXIT
@@ -107,5 +115,5 @@ log "Return to the reviewed configuration after rollback drill"
 rebuild switch --flake "path:$SOURCE#nas-qemu"
 [[ ! -e /etc/nas-generation-test ]] || fail "reviewed generation retained candidate-only marker"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "final reviewed switch damaged persistent state"
-nas-doctor --json >/tmp/nas-post-rollback-doctor.json
+check_doctor /tmp/nas-post-rollback-doctor.json
 printf '{"ok":true,"invalidCandidateRejected":true,"rollbackVerified":true}\n'
