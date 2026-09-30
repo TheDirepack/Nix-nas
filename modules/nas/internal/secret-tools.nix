@@ -690,6 +690,9 @@ NTFY_ENV
 
       command_stop() {
         acquire_lock
+        # Path-triggered Caddy selection must see the locked state before
+        # stopping units can publish changes that trigger reconciliation.
+        sudo rm -f "$secret_root/ready"
         sudo systemctl stop nas-protected-services.target
         sudo rm -rf "$secret_root"
         echo "Protected services stopped and runtime secrets removed. KeePassXC was not modified."

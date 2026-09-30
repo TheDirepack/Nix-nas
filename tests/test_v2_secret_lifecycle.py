@@ -1,12 +1,43 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class V2SecretLifecycleTests(unittest.TestCase):
+    def test_stop_revokes_readiness_before_systemd_can_reactivate_dependencies(self) -> None:
+        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+        stop = source.split("command_stop() {", 1)[1].split("command_check_authentik_token() {", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / "secrets"
+            root.mkdir()
+            (root / "ready").touch()
+            (root / "credential").touch()
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'set -euo pipefail\nsecret_root="$1"\n'
+                    "acquire_lock() { :; }\n"
+                    "sudo() {\n"
+                    '  if [[ "$1" == systemctl ]]; then\n'
+                    '    [[ ! -e "$secret_root/ready" ]] || return 91\n'
+                    '    [[ -e "$secret_root/credential" ]] || return 92\n'
+                    '  else "$@"; fi\n'
+                    "}\ncommand_stop() {" + stop + '\ncommand_stop\n[[ ! -e "$secret_root" ]]',
+                    "stop-test",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_secret_activation_remains_keepass_backed_and_transactional(self) -> None:
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
         activate = source.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
