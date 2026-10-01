@@ -136,6 +136,16 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("nasUserSettings", account_tools)
         self.assertFalse((ROOT / "services" / "nas_user_settings.py").exists())
 
+    def test_staged_syncthing_blueprint_is_self_contained_and_inert(self) -> None:
+        blueprint = text("authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml")
+        self.assertIn('blueprints.goauthentik.io/instantiate: "false"', blueprint)
+        self.assertIn("attributes.nasSyncthingDevices", blueprint)
+        self.assertIn("nas-user-settings-validate-syncthing-devices", blueprint)
+        self.assertIn("name: nas-user-settings-profile", blueprint)
+        self.assertIn("name: nas-user-settings-write", blueprint)
+        self.assertIn("slug: nas-user-settings", blueprint)
+        self.assertEqual(blueprint.count("!Find ["), 4)
+
     def test_authentik_blueprint_expressions_are_valid_python(self) -> None:
         blueprint = text("authentik/blueprints/nas-user-settings.yaml")
 
