@@ -70,7 +70,7 @@
       alertRouterPort = lib.mkOption {
         type = lib.types.port;
         default = 9093;
-        description = "Loopback Alertmanager web/API port. The legacy option name is retained for configuration compatibility.";
+        description = "Loopback Alertmanager web/API port.";
       };
       alertNtfyBridgePort = lib.mkOption {
         type = lib.types.port;
