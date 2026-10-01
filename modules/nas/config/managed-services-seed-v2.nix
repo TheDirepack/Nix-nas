@@ -223,14 +223,14 @@ let
     };
   }
   // lib.optionalAttrs (cfg.observability.enable && cfg.alerting.enable) {
-    alert-router = (daemon "nas-alert-router.service" "NAS alert router") // {
-      authorization.capabilities = adminCapability "View alert routing";
+    alertmanager = (daemon "alertmanager.service" "Alertmanager notification router") // {
+      authorization.capabilities = adminCapability "View Alertmanager";
       routes.web = (pathRoute [ "/alerts/" ] (httpTarget cfg.observability.alertRouterPort) (identity "admin")) // {
         portal = portal "Alerts" "Monitoring" "bell" 70;
       };
     };
     vmalert = (daemon "vmalert-nas.service" "VictoriaMetrics alert evaluator") // {
-      dependencies = [ (depends "victoriametrics" "started") (depends "alert-router" "started") ];
+      dependencies = [ (depends "victoriametrics" "started") (depends "alertmanager" "started") ];
     };
   }
   // lib.optionalAttrs (cfg.observability.enable && cfg.observability.grafana.enable) {
