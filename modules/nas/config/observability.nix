@@ -354,7 +354,7 @@ in
           "datasource.url" = victoriaMetricsUrl;
           "remoteRead.url" = victoriaMetricsUrl;
           "remoteWrite.url" = victoriaMetricsUrl;
-          "notifier.url" = [ "http://127.0.0.1:${toString obs.alertRouterPort}" ];
+          "notifier.url" = [ "http://127.0.0.1:${toString obs.alertmanagerPort}" ];
           "httpListenAddr" = "127.0.0.1:${toString obs.vmalertPort}";
           "evaluationInterval" = "30s";
           rule = lib.mkOverride 90 [ rules ];
@@ -364,7 +364,7 @@ in
       services.prometheus.alertmanager = lib.mkIf cfg.alerting.enable {
         enable = true;
         listenAddress = "127.0.0.1";
-        port = obs.alertRouterPort;
+        port = obs.alertmanagerPort;
         webExternalUrl = "https://${lanHost}/alerts/";
         extraFlags = [
           "--cluster.listen-address="
