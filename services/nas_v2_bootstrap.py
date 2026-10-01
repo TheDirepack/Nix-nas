@@ -21,6 +21,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+from nas_io import fsync_directory as _fsync_directory
 from nas_v2_spec import ManagedServicesV2Error, compile_document, load_platform_capabilities, load_schema
 
 
@@ -131,14 +132,6 @@ def _validate(
     schema = load_schema(schema_path)
     capabilities = None if platform_path is None else load_platform_capabilities(platform_path)
     compile_document(document, schema, platform_capabilities=capabilities)
-
-
-def _fsync_directory(directory: pathlib.Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _atomic_dump(path: pathlib.Path, document: CommentedMap) -> None:
