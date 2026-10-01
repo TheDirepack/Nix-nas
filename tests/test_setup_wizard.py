@@ -15,24 +15,23 @@ WIZARD_DIST_ASSETS = ("index.html", "first-run-wizard.js", "first-run-wizard.css
 
 
 class TestWizardPackaging(unittest.TestCase):
-    """The firstRunWizardStatic derivation must package the committed bundle."""
+    """The firstRunWizardStatic derivation builds and verifies the locked source."""
 
     def setUp(self):
         self.derivation = (ROOT / "modules/nas/internal/documentation-tools.nix").read_text(encoding="utf-8")
 
     def test_derivation_verifies_every_reviewed_asset(self):
-        self.assertIn(
-            "for asset in index.html first-run-wizard.js first-run-wizard.css build-meta.json",
-            self.derivation,
-        )
-        self.assertIn('"$wizard_dist/$asset"', self.derivation)
+        self.assertIn("node build.js --check", self.derivation)
+        build = (WIZARD / "build.js").read_text()
+        for asset in WIZARD_DIST_ASSETS:
+            self.assertIn(asset, build)
 
     def test_derivation_rejects_stale_or_tampered_output(self):
         self.assertIn("build.js --check", self.derivation)
 
     def test_derivation_installs_the_full_bundle_tree(self):
         self.assertIn('install -d "$out/share/nas-portal-wizard"', self.derivation)
-        self.assertIn('cp -R "$wizard_dist/." "$out/share/nas-portal-wizard/"', self.derivation)
+        self.assertIn('cp -R ${wizardBundle}/. "$out/share/nas-portal-wizard/"', self.derivation)
 
     def test_derivation_is_exported_through_nas_internal(self):
         self.assertIn("firstRunWizardStatic", self.derivation.split("in", 1)[-1])

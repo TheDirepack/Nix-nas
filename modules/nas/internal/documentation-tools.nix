@@ -86,55 +86,45 @@ let
     mdbook build "$work" --dest-dir "$out/share/cockpit/nas/docs"
   '';
 
-  mkFrontendSource = name: source:
-    pkgs.runCommandNoCC "${name}-source" { } ''
-      mkdir -p "$out"
-      cp -R ${source}/. "$out/"
-      chmod -R u+w "$out"
-      cp ${../../../scripts/frontend-build-integrity.cjs} "$out/frontend-build-integrity.cjs"
-    '';
+  mkFrontendBundle = name: source:
+    let
+      frontendSource = pkgs.lib.cleanSourceWith {
+        src = source;
+        filter = path: type: !(builtins.elem (baseNameOf path) [ "node_modules" "dist" ]);
+      };
+      stagedSource = pkgs.runCommandNoCC "${name}-source" { } ''
+        mkdir -p "$out"
+        cp -R ${frontendSource}/. "$out/"
+        chmod -R u+w "$out"
+        cp ${../../../scripts/frontend-build-integrity.cjs} "$out/frontend-build-integrity.cjs"
+      '';
+    in pkgs.buildNpmPackage {
+      pname = name;
+      version = pkgs.lib.removeSuffix "\n" (builtins.readFile ../../../VERSION);
+      src = stagedSource;
+      npmDeps = pkgs.importNpmLock { npmRoot = frontendSource; };
+      npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+      NODE_ENV = "production";
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+      npmFlags = [ "--include=dev" ];
+      dontNpmBuild = true;
+      buildPhase = ''
+        runHook preBuild
+        export NAS_FRONTEND_INTEGRITY_HELPER="$PWD/frontend-build-integrity.cjs"
+        npm run build
+        node build.js --check
+        runHook postBuild
+      '';
+      installPhase = ''
+        runHook preInstall
+        mkdir -p "$out"
+        cp -R dist/. "$out/"
+        runHook postInstall
+      '';
+    };
 
-  cockpitSource = mkFrontendSource "cockpit-nas" ../../../cockpit;
-  cockpitBundle = pkgs.buildNpmPackage {
-    pname = "cockpit-nas-bundle";
-    version = "0.1.0";
-    src = cockpitSource;
-    npmDeps = pkgs.importNpmLock { npmRoot = ../../../cockpit; };
-    npmConfigHook = pkgs.importNpmLock.npmConfigHook;
-    dontNpmBuild = true;
-    buildPhase = ''
-      runHook preBuild
-      NAS_FRONTEND_INTEGRITY_HELPER="$PWD/frontend-build-integrity.cjs" npm run build
-      runHook postBuild
-    '';
-    installPhase = ''
-      runHook preInstall
-      mkdir -p "$out"
-      cp -R dist/. "$out/"
-      runHook postInstall
-    '';
-  };
-
-  wizardSource = mkFrontendSource "first-run-wizard" ../../../setup/first-run-wizard;
-  wizardBundle = pkgs.buildNpmPackage {
-    pname = "first-run-wizard-bundle";
-    version = "0.1.0";
-    src = wizardSource;
-    npmDeps = pkgs.importNpmLock { npmRoot = ../../../setup/first-run-wizard; };
-    npmConfigHook = pkgs.importNpmLock.npmConfigHook;
-    dontNpmBuild = true;
-    buildPhase = ''
-      runHook preBuild
-      NAS_FRONTEND_INTEGRITY_HELPER="$PWD/frontend-build-integrity.cjs" npm run build
-      runHook postBuild
-    '';
-    installPhase = ''
-      runHook preInstall
-      mkdir -p "$out"
-      cp -R dist/. "$out/"
-      runHook postInstall
-    '';
-  };
+  cockpitBundle = mkFrontendBundle "cockpit-nas-bundle" ../../../cockpit;
+  wizardBundle = mkFrontendBundle "first-run-wizard-bundle" ../../../setup/first-run-wizard;
 
   cockpitNasPlugin =
     let
