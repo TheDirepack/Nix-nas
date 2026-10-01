@@ -326,7 +326,7 @@ verify_bootstrap_authentik_proxy() {
 }
 
 require_commands \
-  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-alert-router nas-cockpit-api nas-managed-services-control \
+  curl findmnt firewall-cmd getent git ip jq keepassxc-cli nas-alert nas-cockpit-api nas-managed-services-control \
   nas-identity-sync nas-operation-run nas-preflight nas-secrets nas-setup nas-update nas-ups-init-password \
   nas-zfs-create-encrypted-dataset nas-zfs-export-recovery-key nas-zfs-lock \
   nas-zfs-mount-check nas-zfs-unlock proxy python3 readlink ss systemctl zfs zpool
@@ -689,17 +689,12 @@ EOF_BAD_CONFIG
 if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.out 2>/tmp/nas-bad-path.err; then
   fail "setup accepted a traversal-shaped storage device"
 fi
-ls -la /run/nas-secret-runtime/live/observability/ >&2 || true
-systemctl status nas-alert-router.service ntfy-sh.service --no-pager >&2 || true
-wait_active nas-alert-router.service
+systemctl status alertmanager.service alertmanager-ntfy.service ntfy-sh.service --no-pager >&2 || true
+wait_active alertmanager.service
 code="$(curl --silent --output /tmp/nas-alert-malformed-adv.json --write-out '%{http_code}' \
   --header 'Content-Type: application/json' --data-binary '{' http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$code" == 400 ]] || fail "alert router malformed JSON returned HTTP $code instead of 400"
-transfer_code="$(curl --silent --output /tmp/nas-alert-transfer.json --write-out '%{http_code}' \
-  --header 'Transfer-Encoding: chunked' --header 'Content-Type: application/json' \
-  --data-binary '[]' http://127.0.0.1:9093/api/v2/alerts || true)"
-[[ "$transfer_code" == 400 ]] || fail "alert router accepted ambiguous transfer encoding (HTTP $transfer_code)"
-pass "hostile identifiers, traversal, and malformed alert requests fail closed"
+[[ "$code" == 400 ]] || fail "Alertmanager malformed JSON returned HTTP $code instead of 400"
+pass "hostile identifiers, traversal, and malformed Alertmanager requests fail closed"
 
 log "Cockpit ZFS rollback wrapper"
 rollback_wrapper="$(find /nix/store -maxdepth 3 -type f -path '*/bin/zfs' \
@@ -898,7 +893,8 @@ outage_preserved_units=(
   syncthing.service
   vaultwarden.service
   victoriametrics.service
-  nas-alert-router.service
+  alertmanager.service
+  alertmanager-ntfy.service
 )
 systemctl stop --job-mode=ignore-dependencies authentik.service
 wait_inactive authentik.service
@@ -1242,11 +1238,12 @@ log "Observability and notifications"
 nas-managed-services-control set grafana always | jq -e '.ok == true' >/dev/null
 for unit in \
   victoriametrics.service telegraf.service vmalert-nas.service \
-  nas-alert-router.service grafana.service ntfy-sh.service; do
+  alertmanager.service alertmanager-ntfy.service grafana.service ntfy-sh.service; do
   systemctl cat "$unit" >/dev/null 2>&1 || fail "expected enabled unit is missing: $unit"
   wait_active "$unit"
 done
 wait_http http://127.0.0.1:8428/victoriametrics/ping
+wait_http http://127.0.0.1:9093/-/ready
 wait_http http://127.0.0.1:3000/api/health
 assert_http_responsive "ntfy health endpoint" http://127.0.0.1:2586/v1/health
 log "Notification dependency failure and recovery"
@@ -1256,30 +1253,26 @@ wait_inactive ntfy-sh.service
 ntfy_down_code="$(curl --silent --output /tmp/nas-alert-ntfy-down.json --write-out '%{http_code}' \
   -H 'Content-Type: application/json' --data-binary "$alert_payload" \
   http://127.0.0.1:9093/api/v2/alerts || true)"
-[[ "$ntfy_down_code" == 502 ]] || fail "alert router did not surface ntfy outage as HTTP 502 (got $ntfy_down_code)"
-! grep -q 'Traceback' /tmp/nas-alert-ntfy-down.json || fail "alert router leaked a traceback during ntfy outage"
+[[ "$ntfy_down_code" == 200 ]] || fail "Alertmanager did not accept an alert during ntfy outage (HTTP $ntfy_down_code)"
+systemctl is-active --quiet alertmanager.service || fail "Alertmanager stopped during ntfy outage"
+curl --fail --silent --show-error http://127.0.0.1:9093/api/v2/alerts | \
+  jq -e '.[] | select(.labels.alertname == "QemuNtfyDependency")' >/dev/null || \
+  fail "Alertmanager did not retain the alert during ntfy outage"
 systemctl start ntfy-sh.service
 wait_active ntfy-sh.service
 wait_http http://127.0.0.1:2586/v1/health
+systemctl restart alertmanager-ntfy.service
+wait_active alertmanager-ntfy.service
 ntfy_recovered_code="$(curl --silent --output /tmp/nas-alert-ntfy-recovered.json --write-out '%{http_code}' \
   -H 'Content-Type: application/json' --data-binary "$alert_payload" \
   http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$ntfy_recovered_code" == 200 ]] || fail "alert delivery did not recover after ntfy restart (HTTP $ntfy_recovered_code)"
-pass "alert delivery fails explicitly during ntfy outage and recovers cleanly"
+[[ "$ntfy_recovered_code" == 200 ]] || fail "Alertmanager did not accept an alert after ntfy restart (HTTP $ntfy_recovered_code)"
+pass "Alertmanager remains available during ntfy outage and the ntfy bridge recovers cleanly"
 malformed_alert_code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
   --header 'Content-Type: application/json' --data-binary '{' \
   http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$malformed_alert_code" == 400 ]] || fail "malformed alert JSON returned HTTP $malformed_alert_code"
-python3 - <<'PYALERTBODY'
-from pathlib import Path
-Path('/tmp/nas-alert-oversized.json').write_bytes(b'[' + b' ' * (1024 * 1024 + 4096) + b']')
-PYALERTBODY
-oversized_alert_code="$(curl --silent --output /tmp/nas-alert-oversized-response.json --write-out '%{http_code}' \
-  --header 'Content-Type: application/json' --data-binary @/tmp/nas-alert-oversized.json \
-  http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$oversized_alert_code" == 413 ]] || fail "oversized alert body returned HTTP $oversized_alert_code"
-rm -f /tmp/nas-alert-oversized.json
-pass "installed alert router rejects malformed and oversized notifier input"
+[[ "$malformed_alert_code" == 400 ]] || fail "malformed Alertmanager JSON returned HTTP $malformed_alert_code"
+pass "Alertmanager rejects malformed alert input"
 ! nas-alert $'Injected title\r\nX-NAS-Test: injected' 'must not send' >/tmp/nas-alert-header-injection.log 2>&1 || \
   fail "nas-alert accepted a CRLF header-injection title"
 grep -q 'one line' /tmp/nas-alert-header-injection.log
