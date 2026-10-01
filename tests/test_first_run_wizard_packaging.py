@@ -18,10 +18,10 @@ class FirstRunWizardPackagingTests(unittest.TestCase):
                 (wizard_dist / asset).is_file(),
                 f"setup/first-run-wizard/dist/{asset} must be tracked",
             )
-        self.assertIn("setup/first-run-wizard/dist", tools)
+        self.assertIn('mkFrontendBundle "first-run-wizard-bundle" ../../../setup/first-run-wizard', tools)
         self.assertIn("firstRunWizardStatic", tools)
-        self.assertIn("first-run-wizard.js", tools)
-        self.assertIn("first-run-wizard.css", tools)
+        self.assertIn("node build.js --check", tools)
+        self.assertIn("cp -R ${wizardBundle}/.", tools)
         self.assertNotIn("lib/web/portal-static/setup.html", tools)
 
 

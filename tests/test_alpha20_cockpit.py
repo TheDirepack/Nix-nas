@@ -87,7 +87,9 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "index.css",
             "build-meta.json",
         ):
-            self.assertIn(asset, packaging)
+            self.assertIn(asset, build)
+        self.assertIn("node build.js --check", packaging)
+        self.assertIn("cp -R ${cockpitBundle}/.", packaging)
         self.assertIn("cockpit/build.js --check-source", preflight)
         self.assertIn("cockpit/build.js --check", preflight)
         self.assertNotIn("unsafe-inline", text("cockpit/src/manifest.json"))
