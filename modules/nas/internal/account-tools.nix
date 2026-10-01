@@ -380,8 +380,10 @@ let
     mkdir -p "$out/share/authentik/blueprints"
     cp -a ${pkgs.authentik.src}/blueprints/. "$out/share/authentik/blueprints/"
     chmod -R u+w "$out/share/authentik/blueprints"
-    install -m 0444 ${../../../authentik/blueprints/nas-user-settings.yaml} \
+    install -m 0444 ${../../../authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml} \
       "$out/share/authentik/blueprints/nas-user-settings.yaml"
+    install -m 0444 ${../../../authentik/blueprints/nas-automation.yaml} \
+      "$out/share/authentik/blueprints/nas-automation.yaml"
     install -m 0444 ${../../../authentik/blueprints/nas-setup.yaml} \
       "$out/share/authentik/blueprints/nas-setup.yaml"
   '';
