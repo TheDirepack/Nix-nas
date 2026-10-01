@@ -21,6 +21,7 @@
     ./config/reverse-proxy.nix
     ./config/caddy-bootstrap.nix
     ./config/observability.nix
+    ./config/alertmanager-ntfy.nix
     ./config/storage-monitoring.nix
     ./config/systemd-services.nix
     ./config/schedules.nix

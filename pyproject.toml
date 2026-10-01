@@ -10,7 +10,6 @@ requires-python = ">=3.12"
 
 [project.scripts]
 nas-ai-config = "nas_ai_config:main"
-nas-alert-router = "nas_alert_router:main"
 nas-cockpit-api = "nas_cockpit_api:main"
 nas-code-agent = "nas_coding_agent:main"
 nas-doctor = "nas_doctor:main"
@@ -29,7 +28,6 @@ version = {file = ["VERSION"]}
 package-dir = {"" = "services"}
 py-modules = [
   "nas_ai_config",
-  "nas_alert_router",
   "nas_common",
   "nas_cockpit_api",
   "nas_coding_agent",
@@ -90,7 +88,6 @@ select = ["E4", "E7", "E9", "F"]
 [tool.ruff.lint.per-file-ignores]
 "scripts/fuzz.py" = ["E402"]
 "tests/test_adversarial_security.py" = ["E402"]
-"tests/test_alert_router.py" = ["E402"]
 "tests/test_coding_agent.py" = ["E402"]
 "tests/test_common.py" = ["E402"]
 "tests/test_doctor.py" = ["E402"]

@@ -1178,7 +1178,8 @@ They may appear as referenceable dependency nodes/capabilities, but V2 does not 
 - VictoriaMetrics;
 - Telegraf;
 - vmalert;
-- alert router;
+- Alertmanager;
+- alertmanager-ntfy;
 - Grafana;
 - ntfy;
 - NUT WebGUI;

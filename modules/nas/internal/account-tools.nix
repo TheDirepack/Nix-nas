@@ -31,13 +31,11 @@ let
     dependencies = with pkgs.python3Packages; [
       defusedxml
       jsonschema
-      pyjwt
       pyyaml
       ruamel-yaml
     ];
     pythonImportsCheck = [
       "nas_ai_config"
-      "nas_alert_router"
       "nas_cockpit_api"
       "nas_doctor"
       "nas_identity_sync"
@@ -51,7 +49,6 @@ let
     ];
     doCheck = false;
   };
-  nasAlertRouter = "${nasPythonApplication}/bin/nas-alert-router";
   nasIdentitySyncScript = "${nasPythonApplication}/bin/nas-identity-sync";
   nasIdentityPython = pkgs.python3;
   nasIdentitySync = pkgs.writeShellApplication {
@@ -70,7 +67,7 @@ let
   };
 
   nasSetupScript = "${nasPythonApplication}/bin/nas-setup";
-nasSetup = pkgs.writeShellApplication {
+  nasSetup = pkgs.writeShellApplication {
     name = "nas-setup";
     runtimeInputs = [
       pkgs.coreutils
@@ -239,15 +236,6 @@ nasSetup = pkgs.writeShellApplication {
       rootMode = "0600";
     })
   ]
-  ++ lib.optionals (cfg.observability.enable && cfg.alerting.enable) [
-    (mkPathAuthority {
-      name = "alert-router";
-      source = "/var/lib/nas-alert-router";
-      owner = "nas-observability";
-      group = "nas-observability";
-      rootMode = "0700";
-    })
-  ]
   ++ lib.optionals cfg.observability.ntfy.enable [
     (mkPathAuthority {
       name = "ntfy";
@@ -317,7 +305,6 @@ nasSetup = pkgs.writeShellApplication {
   ++ lib.optional cfg.syncthing.enable "syncthing.service"
   ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
   ++ lib.optionals (cfg.observability.enable && cfg.observability.grafana.enable) [ "grafana.service" ]
-  ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) "nas-alert-router.service"
   ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
   ++ lib.optionals cfg.ai.enable [ "nas-llama-swap.service" "open-webui.service" ]
   ++ lib.optional (cfg.ai.enable && cfg.ai.codingAgent.enable) "nas-ai-coding-sessions.target"
@@ -391,13 +378,12 @@ nasSetup = pkgs.writeShellApplication {
 
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''
     mkdir -p "$out/share/authentik/blueprints"
-    # Authentik's worker expects its built-in system/bootstrap blueprint below
-    # the configured root. Preserve that package tree and layer the repository
-    # blueprint into the same immutable runtime bundle.
     cp -a ${pkgs.authentik.src}/blueprints/. "$out/share/authentik/blueprints/"
     chmod -R u+w "$out/share/authentik/blueprints"
-    install -m 0444 ${../../../authentik/blueprints/nas-user-settings.yaml} \
+    install -m 0444 ${../../../authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml} \
       "$out/share/authentik/blueprints/nas-user-settings.yaml"
+    install -m 0444 ${../../../authentik/blueprints/nas-automation.yaml} \
+      "$out/share/authentik/blueprints/nas-automation.yaml"
     install -m 0444 ${../../../authentik/blueprints/nas-setup.yaml} \
       "$out/share/authentik/blueprints/nas-setup.yaml"
   '';
@@ -419,9 +405,6 @@ nasSetup = pkgs.writeShellApplication {
       export NAS_FIRST_START_STATUS=/var/lib/nas-first-start/status.json
       export NAS_PUBLIC_HOST=${lib.escapeShellArg cfg.identity.publicHost}
       export NAS_AUTHENTIK_BOOTSTRAP_TOKEN_FILE=/run/nas-authentik/api-token
-      # runtimeInputs also carries the unwrapped console Python application
-      # whose bin/nas-setup shadows the appliance wrapper; point subprocesses
-      # at the wrapper explicitly so first-start jobs get the real environment.
       export NAS_SETUP_BIN=${nasSetup}/bin/nas-setup
       exec ${nasCockpitApiScript} "$@"
     '';
@@ -430,7 +413,7 @@ nasSetup = pkgs.writeShellApplication {
 in
 {
   inherit
-    nasPythonApplication nasAlertRouter nasIdentitySyncScript nasIdentityPython nasIdentitySync
+    nasPythonApplication nasIdentitySyncScript nasIdentityPython nasIdentitySync
     nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
     nasCockpitApiScript nasCockpitApi
   ;

@@ -76,7 +76,7 @@ sudo NAS_LIVE_CONFIRM=RESTIC_DRILL \
 
 ## Observability and alert routing
 
-The drill writes and queries a synthetic Influx line-protocol series in VictoriaMetrics, checks vmalert rules, injects and queries a temporary NAS alert-router notification, verifies configured retention flags, and polls ntfy when enabled.
+The drill writes and queries a synthetic Influx line-protocol series in VictoriaMetrics, checks vmalert rules, injects and queries a temporary Alertmanager alert, verifies configured retention flags, and polls ntfy when enabled.
 
 ```bash
 sudo NAS_NTFY_TOPIC_FILE=/run/nas-secrets/observability/ntfy-topic \

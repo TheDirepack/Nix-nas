@@ -723,7 +723,8 @@ class ContractTests(unittest.TestCase):
             "syncthing.service",
             "vaultwarden.service",
             "victoriametrics.service",
-            "nas-alert-router.service",
+            "alertmanager.service",
+            "alertmanager-ntfy.service",
         ):
             self.assertIn(unit, outage)
         self.assertIn("systemctl start nas-authentik-proxy-outpost.service", outage)

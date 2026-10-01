@@ -15,7 +15,6 @@ except ImportError:
     HAS_HYPOTHESIS = False
 else:
     HAS_HYPOTHESIS = True
-    import nas_alert_router as alert_router
     import nas_v2_spec as v2_spec
     import nas_common as common
     import nas_logging as nas_logging
@@ -98,33 +97,6 @@ if HAS_HYPOTHESIS:
 
             encoded = json.dumps(sanitized)
             self.assertLess(len(encoded), 2_000_000)
-
-        @settings(max_examples=250, deadline=None)
-        @given(
-            alertname=st.text(max_size=2000),
-            instance=st.text(max_size=2000),
-            description=st.text(max_size=8000),
-            severity=st.text(max_size=100),
-        )
-        def test_alert_normalization_is_bounded(
-            self, alertname: str, instance: str, description: str, severity: str
-        ) -> None:
-            alert = alert_router.normalize_alert(
-                {
-                    "labels": {"alertname": alertname, "instance": instance, "severity": severity},
-                    "annotations": {"description": description},
-                }
-            )
-            self.assertLessEqual(len(alert.title), 256)
-            self.assertLessEqual(len(alert.message), 4096)
-            self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in alert.title))
-            self.assertTrue(
-                all(
-                    not any(ord(character) < 32 or ord(character) == 127 for character in value)
-                    for value in alert.labels.values()
-                )
-            )
-            self.assertIn(alert.severity, {"critical", "warning", "info"})
 
         @settings(max_examples=120, deadline=None)
         @given(st.from_regex(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,12}", fullmatch=True))

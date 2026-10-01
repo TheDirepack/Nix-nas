@@ -29,7 +29,6 @@ except ImportError:
 else:
     HAS_HYPOTHESIS = True
     import nas_ai_config as ai_config
-    import nas_alert_router as alert_router
     import nas_cockpit_api as cockpit_api
     import nas_coding_agent as coding_agent
     import nas_common as common
@@ -59,7 +58,6 @@ else:
 SERVICE_INPUT_MODULES = frozenset(
     {
         "nas_ai_config",
-        "nas_alert_router",
         "nas_cockpit_api",
         "nas_coding_agent",
         "nas_common",
@@ -264,14 +262,7 @@ if HAS_HYPOTHESIS:
 
         @settings(max_examples=180, deadline=None)
         @given(HOSTILE_TEXT)
-        def test_setup_and_alert_inputs_remain_bounded(self, value: str) -> None:
-            expected_boundary_error(
-                alert_router.normalize_alert,
-                {
-                    "labels": {"alertname": value, "severity": value},
-                    "annotations": {"summary": value, "description": value},
-                },
-            )
+        def test_setup_inputs_remain_bounded(self, value: str) -> None:
             expected_boundary_error(setup.validate_service_request, {value: "on-demand"})
             expected_boundary_error(
                 setup.validate_storage_request,

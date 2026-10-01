@@ -10,7 +10,7 @@
 | Managed Services V2 | `managed-services.nix`, `managed-services-seed-v2.nix`, `managed-services-helpers.nix`, `managed-services-lifecycle.nix`, `managed-services-authentik-blueprint.nix`, `managed-services-backup-profile.nix`, `managed-services-compose-import.nix`, `managed-services-generations.nix`, `managed-services-network-platform.nix`, `managed-services-transactions.nix` (all under `modules/nas/config/`) | Single complete V3 seed (baseline + operations + backup + platform), seed-once bootstrap, finite reconciliation; no continuous regeneration. Shared helpers (`daemon`, `job`, `portListener`, etc.) live once in `managed-services-helpers.nix`; generations, transactions, backup, network, compose-import, and blueprint fragments are split per concern but aggregated in the seed. |
 | Proxy/auth | `modules/nas/config/reverse-proxy.nix`, `caddy-bootstrap.nix`, `modules/nas/internal/caddy-helpers.nix`, `services/nas_v2_caddy.py` | Caddy + Authentik trusted-header and request-time authorization boundary. `caddy-bootstrap.nix` selects static setup guidance before activation and the managed configuration after it; app routes are data in `services.yaml`, not Caddy branches. |
 | Storage | `modules/nas/config/storage-monitoring.nix`, `modules/nas/internal/zfs-tools.nix` | ZFS, snapshots, restore verification, replication, and Restic integration. |
-| Observability | `modules/nas/config/observability.nix` | VictoriaMetrics, Telegraf, vmalert, NAS alert router, optional Grafana/ntfy. |
+| Observability | `modules/nas/config/observability.nix`, `alertmanager-ntfy.nix`, `scripts/lib/render-alertmanager-ntfy-config.py` | VictoriaMetrics, Telegraf, vmalert, upstream Alertmanager, optional Grafana/ntfy bridge and runtime credentials. |
 | Identity/capability policy | `services/nas_v2_authentik_blueprint.py`, `schemas/managed-services-v3.schema.json` | Appliance identity capability/group contract; V2 creates `application.<service>.<capability>` objects, never assignments. |
 | Coding agent | `modules/ai/coding-agent.nix`, `services/nas_coding_agent.py` | Transient `nas-code-agent` sandbox, `pi-coding-agent` package, workspace-allowlisted `nas-code` launcher, llama-swap client-credential isolation. |
 | Command packaging | `modules/nas/internal/account-tools.nix` | Installs Python tools (`nas-managed-services`, `nas-managed-services-control`, `nas-code-agent`), finite V2 control aliases, portal assets, and Authentik blueprint. |
@@ -29,13 +29,12 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_identity_sync.py` | Authentik and Syncthing I/O/reconciliation entry point | `test_identity_sync.py` |
 | `nas_identity_model.py` | Pure identity, account-plan, and Syncthing desired-state model | `test_identity_sync.py` |
 | `nas_cockpit_api.py` | Fixed privileged action allow-list for the Authentik-authorized Cockpit session | `test_cockpit_api.py` |
-| `nas_operation_lock.py` | Shared cross-process conflict classes and reconnect-safe active-operation metadata | `test_operation_lock.py`, `test_cockpit_api.py` |
+| `nas_operation_lock.py` | One cross-process mutation flock; class labels constrain nested work and active metadata is advisory | `test_operation_lock.py`, `test_cockpit_api.py` |
 | `nas_operation_journal.py` | Durable resumable-operation phases and manual-recovery stop semantics | `test_setup.py`, `test_identity_sync.py` |
 | `nas_state.py` | Signed profile-aware state export, drift, validation, rollback, and restore | `test_state.py`, `test_v2_state_authority.py` |
 | `nas_doctor.py` | Unified appliance diagnostics and V2 desired/effective drift detection (absorbs legacy state-authority migration checks) | `test_doctor.py` |
 | `nas_syncthing_devices.py` | Narrow user-attribute parser/validator | `test_syncthing_devices.py` |
 | `nas_common.py` | Shared appliance parsing and policy helpers | `test_common.py`, `test_contract_identity.py` |
-| `nas_alert_router.py` | Bounded vmalert notification routing, status, deduplication, and optional ntfy delivery | `test_alert_router.py` |
 | `nas_logging.py` | Redacted bounded JSON operation records for journald | `test_logging.py` |
 | `nas_v2_spec.py` | YAML 1.2 parsing (rejects empty/null), V3 schema validation, normalization, semantic validation, and effective-state compilation | `test_v2_spec.py` |
 | `nas_v2_bootstrap.py` | Seed-once: validates one complete V3 seed and atomically creates `services.yaml` once (with flock) | `test_v2_bootstrap.py`, `test_v2_seed_aggregation.py` |

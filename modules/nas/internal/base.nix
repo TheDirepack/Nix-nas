@@ -108,7 +108,8 @@ let
   managementPorts =
     lib.optional cfg.observability.enable cfg.observability.victoriaMetricsPort
     ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) cfg.observability.vmalertPort
-    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) cfg.observability.alertRouterPort
+    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) cfg.observability.alertmanagerPort
+    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable && cfg.observability.ntfy.enable) cfg.observability.alertNtfyBridgePort
     ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) cfg.observability.grafana.port
     ++ lib.optional (cfg.observability.ntfy.enable) cfg.observability.ntfy.port
     ++ lib.optional (cfg.power.ups.enable && cfg.power.ups.web.enable) cfg.power.ups.web.port;

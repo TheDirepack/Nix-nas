@@ -31,6 +31,10 @@ let
       set -euo pipefail
       umask 0077
 
+      # Nix substitutes the immutable library store path.
+      # shellcheck disable=SC1091
+      source ${../../../scripts/lib/nas-secret-runtime.sh}
+
       database=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       key_file=${lib.escapeShellArg (if cfg.secrets.keepassKeyFile == null then "" else cfg.secrets.keepassKeyFile)}
       secret_group=${lib.escapeShellArg cfg.secrets.keepassGroup}
@@ -164,38 +168,6 @@ let
         get_secret "$1"
       }
 
-      require_secret_atom() {
-        local value="$1" label="$2" minimum="''${3:-8}" maximum="''${4:-4096}"
-        if (( ''${#value} < minimum || ''${#value} > maximum )) || [[ ! "$value" =~ ^[A-Za-z0-9._~+/=:@-]+$ ]]; then
-          echo "$label has an unsafe or unexpected format in KeePassXC." >&2
-          return 1
-        fi
-      }
-
-      require_secret_hex() {
-        local value="$1" expected="$2" label="$3"
-        if (( ''${#value} != expected )) || [[ ! "$value" =~ ^[0-9A-Fa-f]+$ ]]; then
-          echo "$label has an unsafe or unexpected format in KeePassXC." >&2
-          return 1
-        fi
-      }
-
-      require_ntfy_topic() {
-        local value="$1"
-        if (( ''${#value} < 8 || ''${#value} > 128 )) || [[ ! "$value" =~ ^[A-Za-z0-9_-]+$ ]]; then
-          echo "ntfy alert topic has an unsafe or unexpected format in KeePassXC." >&2
-          return 1
-        fi
-      }
-
-      require_huggingface_token() {
-        local value="$1"
-        [[ -z "$value" || "$value" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || {
-          echo "Hugging Face token has an unsafe or unexpected format in KeePassXC." >&2
-          return 1
-        }
-      }
-
       validate_ai_provider_id() {
         [[ "''${1:-}" =~ ^[a-z][a-z0-9-]{0,47}$ ]] || {
           echo "AI provider ID must use lowercase letters, digits, and hyphens." >&2
@@ -253,7 +225,7 @@ PY_AI_PROVIDERS
         trap 'rm -f "$temp"' RETURN
         grep -v -E "^''${env_name}=" "$existing" > "$temp" || true
         printf '%s=%s\n' "$env_name" "$value" >> "$temp"
-        sudo install -m 0400 -o nas-ai -g nas-ai "$temp" "$existing"
+        install_secret "$temp" "$existing" nas-ai nas-ai
         rm -f "$temp"
         trap - RETURN
         if [[ -z "''${NAS_SKIP_LLAMA_SWAP_RESTART:-}" ]] && systemctl is-active --quiet nas-llama-swap.service; then
@@ -270,7 +242,7 @@ PY_AI_PROVIDERS
         temp="$(mktemp "$secret_root/.llama-swap.env.XXXXXX")"
         trap 'rm -f "$temp"' RETURN
         grep -v -E "^''${env_name}=" "$existing" > "$temp" || true
-        sudo install -m 0400 -o nas-ai -g nas-ai "$temp" "$existing"
+        install_secret "$temp" "$existing" nas-ai nas-ai
         rm -f "$temp"
         trap - RETURN
         if [[ -z "''${NAS_SKIP_LLAMA_SWAP_RESTART:-}" ]] && systemctl is-active --quiet nas-llama-swap.service; then
@@ -373,11 +345,6 @@ PY_AI_PROVIDERS
         fi
         unset secret_key token
         echo "Adopted the running first-boot Authentik authority."
-      }
-
-      install_secret() {
-        local source="$1" target="$2" owner="$3" group="$4"
-        sudo install -m 0400 -o "$owner" -g "$group" "$source" "$target"
       }
 
       # Limit transient secret variables to the activation scope.

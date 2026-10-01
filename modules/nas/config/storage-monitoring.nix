@@ -194,9 +194,6 @@ in
         ++ lib.optionals (cfg.networking.enable && cfg.networking.firewall.enable) [
           "/var/lib/nas-firewall"
         ]
-        ++ lib.optionals cfg.observability.enable [
-          "/var/lib/nas-alert-router"
-        ]
         ++ lib.optionals (cfg.observability.enable && cfg.observability.grafana.enable) [
           "/var/lib/grafana"
         ]

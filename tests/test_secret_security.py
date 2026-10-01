@@ -44,12 +44,7 @@ class SecretVaultRenderingTests(unittest.TestCase):
         )
 
     def run_helper(self, function: str, *arguments: str) -> subprocess.CompletedProcess[str]:
-        helpers = rendered_shell_helpers(
-            "require_secret_atom",
-            "require_secret_hex",
-            "require_ntfy_topic",
-            "require_huggingface_token",
-        )
+        helpers = "source " + shlex.quote(str(ROOT / "scripts/lib/nas-secret-runtime.sh")) + "\n"
         command = f"{function} " + " ".join(shlex.quote(value) for value in arguments)
         return subprocess.run(
             ["bash", "-c", "set -Eeuo pipefail\n" + helpers + command],
@@ -154,7 +149,8 @@ class SecretVaultRenderingTests(unittest.TestCase):
 
     def test_secret_install_permissions_remain_owner_read_only(self) -> None:
         source = SECRET_TOOLS.read_text(encoding="utf-8")
-        self.assertIn('sudo install -m 0400 -o "$owner" -g "$group" "$source" "$target"', source)
+        library = (ROOT / "scripts/lib/nas-secret-runtime.sh").read_text(encoding="utf-8")
+        self.assertIn('sudo install -m 0400 -o "$owner" -g "$group" -- "$source" "$target"', library)
         self.assertIn('find "$local_stage" -type f -exec chmod 0600 {} +', source)
         self.assertIn('sudo install -m 0400 -o root -g root /dev/null "$root_stage/ready"', source)
 
