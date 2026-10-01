@@ -24,7 +24,6 @@ except ImportError:
 else:
     HAS_HYPOTHESIS = True
 
-    import nas_alert_router as alerts
     import nas_common as common
     import nas_identity_model as identity
     import nas_setup_config as setup_config
@@ -142,39 +141,6 @@ if HAS_HYPOTHESIS:
             self.assertLessEqual(len(device["name"]), syncthing.MAX_DEVICE_NAME)
             self.assertLessEqual(len(device["addresses"]), syncthing.MAX_ADDRESSES)
 
-        @settings(max_examples=350, deadline=None, suppress_health_check=[HealthCheck.too_slow])
-        @given(
-            alertname=st.text(max_size=2000),
-            severity=st.text(max_size=2000),
-            summary=st.text(max_size=4000),
-            description=st.text(max_size=8000),
-        )
-        def test_alert_normalization_is_bounded_and_control_safe(
-            self, alertname: str, severity: str, summary: str, description: str
-        ) -> None:
-            target(max(map(len, (alertname, severity, summary, description))), label="alert-field-length")
-            raw = {
-                "labels": {"alertname": alertname, "severity": severity},
-                "annotations": {"summary": summary, "description": description},
-                "startsAt": "2026-08-06T12:00:00Z",
-            }
-            try:
-                alert = alerts.normalize_alert(raw)
-            except alerts.AlertRouterError:
-                event("alert:rejected")
-                return
-            event("alert:accepted")
-            self.assertLessEqual(len(alert.title), 256)
-            self.assertLessEqual(len(alert.message), 4096)
-            self.assertFalse(any(ord(character) < 32 or ord(character) == 127 for character in alert.title))
-            self.assertTrue(all(len(key) <= 128 and len(value) <= 512 for key, value in alert.labels.items()))
-            self.assertTrue(
-                all(
-                    not any(ord(character) < 32 or ord(character) == 127 for character in value)
-                    for value in alert.labels.values()
-                )
-            )
-
         @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(json_values(max_leaves=60))
         def test_setup_config_never_returns_unsafe_account_identifiers(self, accounts: object) -> None:
@@ -224,7 +190,6 @@ if HAS_HYPOTHESIS:
         @given(st.text(max_size=8192), st.text(max_size=1024))
         def test_caddy_header_and_path_are_control_safe(self, raw_header: str, raw_path: str) -> None:
             target(len(raw_header) + len(raw_path), label="caddy-input-length")
-            # Header names must be rejected if they contain controls
             try:
                 caddy._header_name(raw_header)  # type: ignore[attr-defined]
             except caddy.CaddyProjectionError:
@@ -248,16 +213,15 @@ if HAS_HYPOTHESIS:
             event("cdi:accepted" if is_cdi else "cdi:rejected")
             if is_cdi:
                 left, _, qualifier = raw.partition("=")
-                self.assertNotRegex(left, r"^/")  # never a leading-slash device path
-                self.assertEqual(1, left.count("/"))  # single vendor/class separator
-                self.assertNotIn("/", qualifier)  # CDI qualifier grammar forbids slash
+                self.assertNotRegex(left, r"^/")
+                self.assertEqual(1, left.count("/"))
+                self.assertNotIn("/", qualifier)
                 self.assertIn("=", raw)
 
         @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(bounded_paths(prefix="/tank"), st.text(max_size=2048))
         def test_state_path_containment_is_strict(self, safe: str, raw: str) -> None:
             target(len(safe), label="path-length")
-            # safe path should always hash without symlink error when it exists
             self.assertTrue(safe.startswith("/tank/"))
             try:
                 state.safe_member_name(raw)

@@ -78,7 +78,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
             "nas-managed-session",
         ):
             self.assertIn(entrypoint, pyproject)
-        for retired in ("nas-feature-control", "nas-managed-service", "nas-migrate-state"):
+        for retired in ("nas-feature-control", "nas-managed-service", "nas-migrate-state", "nas-alert-router"):
             self.assertNotIn(f'{retired} = "', pyproject)
 
     def test_preflight_and_release_publication_distinguish_complete_evidence(self) -> None:
@@ -125,13 +125,25 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn('system.stateVersion = "26.05";', text("local.nix"))
         self.assertIn('[ "x86_64-linux" ]', text("modules/nas/internal/base.nix"))
 
-    def test_victoriametrics_stack_has_no_prometheus_runtime_dependencies(self) -> None:
+    def test_victoriametrics_stack_uses_upstream_alertmanager(self) -> None:
         observability = text("modules/nas/config/observability.nix")
+        integration = text("modules/nas/config/alertmanager-ntfy.nix")
+        seed = text("modules/nas/config/managed-services-seed-v2.nix")
+        active_source = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in (ROOT / "modules", ROOT / "services")
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix in {".nix", ".py"}
+        )
         self.assertIn("services.victoriametrics", observability)
         self.assertIn("services.telegraf", observability)
-        self.assertIn("systemd.services.nas-alert-router", observability)
-        self.assertNotIn("services.prometheus", observability)
-        self.assertNotIn("prometheus-alertmanager", observability)
+        self.assertIn("services.prometheus.alertmanager", observability)
+        self.assertIn("services.prometheus.alertmanager-ntfy", observability)
+        self.assertIn('daemon "alertmanager.service"', seed)
+        self.assertIn('credentialPath = "/run/nas-alertmanager-ntfy/config.yml";', integration)
+        self.assertIn("nas-alertmanager-ntfy-config", integration)
+        self.assertNotIn("nas-alert-router", active_source)
+        self.assertFalse((ROOT / "services/nas_alert_router.py").exists())
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
         state = text("services/nas_state.py")

@@ -483,14 +483,8 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
-      after = [ "victoriametrics.service" "nas-alert-router.service" ];
-      requires = [ "victoriametrics.service" "nas-alert-router.service" ];
-    };
-
-    nas-alert-router = lib.mkIf (cfg.observability.enable && cfg.alerting.enable) {
-      onFailure = failureAlert;
-      wantedBy = lib.mkOverride 90 [ ];
-      partOf = [ "nas-protected-services.target" ];
+      after = [ "victoriametrics.service" "alertmanager.service" ];
+      requires = [ "victoriametrics.service" "alertmanager.service" ];
     };
 
     ntfy-sh = lib.mkIf cfg.observability.ntfy.enable {

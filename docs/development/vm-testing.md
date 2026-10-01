@@ -173,7 +173,7 @@ wrapper timeout independently.
 - adversarial command-shaped identifiers, SQL-like account names, traversal-shaped setup paths, and malformed alert HTTP bodies fail closed without side effects or tracebacks;
 - a repeated declarative installation preserves unrelated persistent state and the booted system survives an in-place rebuild/test;
 - llama-swap and Open WebUI in Always, Off, and On-demand/wake modes;
-- VictoriaMetrics, Telegraf, vmalert, the NAS alert router, Grafana, ntfy, Syncthing, Vaultwarden,
+- VictoriaMetrics, Telegraf, vmalert, Alertmanager, alertmanager-ntfy, Grafana, ntfy, Syncthing, Vaultwarden,
   alert delivery, and Cockpit ZFS/documentation assets;
 - no unexpected failed units and a healthy final ZFS pool;
 - native-ZFS encryption-root creation from a KeePassXC-generated key;

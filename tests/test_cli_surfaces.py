@@ -55,14 +55,6 @@ class CliSurfaceTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("Traceback", result.stderr)
 
-    def test_alert_router_invalid_listen_configuration_fails_before_serving(self) -> None:
-        for listen in ("invalid", "127.0.0.1:not-a-port", "127.0.0.1:0", "127.0.0.1:65536", ":9093"):
-            with self.subTest(listen=listen):
-                result = self.run_python("nas_alert_router", env={"NAS_ALERT_ROUTER_LISTEN": listen})
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Invalid NAS_ALERT_ROUTER_LISTEN", result.stderr)
-                self.assertNotIn("Traceback", result.stderr)
-
     def test_python_cli_parsers_reject_hostile_unknown_arguments_without_execution(self) -> None:
         commands = (
             "nas_cockpit_api",
