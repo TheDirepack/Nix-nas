@@ -9,9 +9,7 @@ description = "NixOS NAS appliance control-plane commands"
 requires-python = ">=3.12"
 
 [project.scripts]
-nas-ai-config = "nas_ai_config:main"
 nas-cockpit-api = "nas_cockpit_api:main"
-nas-code-agent = "nas_coding_agent:main"
 nas-doctor = "nas_doctor:main"
 nas-identity-sync = "nas_identity_sync:main"
 nas-managed-services-control = "nas_v2_control:main"
@@ -30,7 +28,6 @@ py-modules = [
   "nas_ai_config",
   "nas_common",
   "nas_cockpit_api",
-  "nas_coding_agent",
   "nas_doctor",
   "nas_identity_model",
   "nas_identity_sync",
