@@ -31,7 +31,6 @@ let
     dependencies = with pkgs.python3Packages; [
       defusedxml
       jsonschema
-      pyjwt
       pyyaml
       ruamel-yaml
     ];
