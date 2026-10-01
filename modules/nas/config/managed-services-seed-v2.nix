@@ -7,12 +7,8 @@ let
   markerPath = "/var/lib/nas-control/.managed-services-native-seed-v2";
   schemaPath = "/etc/nas-control/managed-services-v3.schema.json";
   platformPath = "/etc/nas-control/platform-capabilities.json";
-  v2Source = ../../../services;
-  v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
-    defusedxml
-    jsonschema
-    ruamel-yaml
-  ]);
+  v2Source = nasInternal.v2Source;
+  v2Python = nasInternal.v2PythonXml;
   yamlFormat = pkgs.formats.yaml { };
 
   helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };

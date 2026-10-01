@@ -17,12 +17,8 @@ let
   resticPathsPath = "/run/nas-control/restic-v2-paths";
   quadletRuntimePath = "/run/containers/systemd";
   authentikOutpostPort = nasInternal.authentikOutpostPort;
-  v2Source = ../../../services;
-  v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
-    defusedxml
-    jsonschema
-    ruamel-yaml
-  ]);
+  v2Source = nasInternal.v2Source;
+  v2Python = nasInternal.v2PythonXml;
   podmanEnabled = lib.attrByPath [ "virtualisation" "podman" "enable" ] false config;
   firewalldEnabled = cfg.networking.enable && cfg.networking.firewall.enable;
   firewalldPackage = config.services.firewalld.package;

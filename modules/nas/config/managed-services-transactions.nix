@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nasInternal, ... }:
 
 let
   cfg = config.nas;
@@ -18,12 +18,8 @@ let
   firewalldProjectionPath = "/run/nas-control/firewalld";
   firewalldManifestPath = "${firewalldProjectionPath}/manifest.json";
   quadletRuntimePath = "/run/containers/systemd";
-  v2Source = ../../../services;
-  v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
-    defusedxml
-    jsonschema
-    ruamel-yaml
-  ]);
+  v2Source = nasInternal.v2Source;
+  v2Python = nasInternal.v2PythonXml;
   networkingEnabled = cfg.networking.enable;
   firewalldEnabled = cfg.networking.enable && cfg.networking.firewall.enable;
   firewalldPackage = config.services.firewalld.package;

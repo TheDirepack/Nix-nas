@@ -2,11 +2,8 @@
 
 let
   cfg = config.nas;
-  v2Source = ../../../services;
-  v2Python = pkgs.python3.withPackages (pythonPackages: with pythonPackages; [
-    jsonschema
-    ruamel-yaml
-  ]);
+  v2Source = nasInternal.v2Source;
+  v2Python = nasInternal.v2PythonCore;
   effectivePath = "/run/nas-control/effective.json";
   blueprintDir = "${nasInternal.authentikDataDir}/blueprints";
   nativeBlueprintDir = "${nasInternal.nasAuthentikBlueprints}/share/authentik/blueprints";
