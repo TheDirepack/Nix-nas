@@ -98,7 +98,7 @@ class ContractTests(unittest.TestCase):
             "systemd.services.nas-managed-services-reconcile = {", 1
         )[0]
         reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
-            "systemd.paths.nas-managed-services-reconcile = {", 1
+            "systemd.paths.nas-managed-services-reconcile", 1
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
