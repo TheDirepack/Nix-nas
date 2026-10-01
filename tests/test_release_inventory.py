@@ -20,7 +20,10 @@ class ReleaseInventoryTests(unittest.TestCase):
             "/nix/store/b": {"narHash": "sha256-b", "narSize": 2, "references": ["/nix/store/a"]},
             "/nix/store/a": {"narHash": "sha256-a", "narSize": 1, "references": []},
         }
-        self.assertEqual([entry["path"] for entry in inventory._closure_entries(mapping)], ["/nix/store/a", "/nix/store/b"])
+        self.assertEqual(
+            [entry["path"] for entry in inventory._closure_entries(mapping)],
+            ["/nix/store/a", "/nix/store/b"],
+        )
         listed = [{"path": "/nix/store/a", "narHash": "sha256-a"}]
         self.assertEqual(inventory._closure_entries(listed)[0]["narHash"], "sha256-a")
 
@@ -51,7 +54,7 @@ class ReleaseInventoryTests(unittest.TestCase):
             )
             fake_nix.chmod(0o755)
             (root / "demo-image.nix").write_text(
-                '{ repository = "example/demo";\n  tag = "3";\n  digests = { x86_64_linux = "sha256:demo"; };\n}\n',
+                '{\n  repository = "example/demo";\n  tag = "3";\n  digests = {\n    x86_64_linux = "sha256:demo";\n  };\n}\n',
                 encoding="utf-8",
             )
             result = inventory.build_inventory(
