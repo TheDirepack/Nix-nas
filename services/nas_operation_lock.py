@@ -1,16 +1,8 @@
-"""Small flock-based conflict coordinator for privileged NAS operations.
+"""Single-flock coordination for privileged NAS mutations.
 
-The conflict policy is the only project-specific part: callers name one or more
-classes and this module acquires the corresponding lock files in sorted order.
-There is no reservation database, coordinator database, PID ancestry walk, or
-/proc fd inspection.  Asynchronous work is launched by systemd and acquires the
-same locks when its worker starts.
-
-Nested commands inherit a random coordination token.  While the outer process
-holds a class lock it writes that token into the locked file; a child validates
-that the requested lock is still held with the same token before proceeding.
-The kernel flock remains the actual lifetime/cleanup mechanism, including on
-crash or SIGKILL.
+All privileged mutations serialize on one kernel flock. Operation classes are
+kept only as diagnostic metadata and for nested-work validation; they no longer
+create separate lock files or permit partially overlapping mutations.
 """
 
 from __future__ import annotations
@@ -33,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Sequence
 
 OPERATION_ROOT = pathlib.Path(os.environ.get("NAS_OPERATION_ROOT", "/run/nas-operations"))
+LOCK_PATH_NAME = "operation.lock"
 KNOWN_CLASSES = frozenset(
     {
         "appliance",
@@ -46,16 +39,15 @@ KNOWN_CLASSES = frozenset(
         "update",
     }
 )
-RESERVATION_TOKEN_RE = re.compile(r"[0-9a-f]{32}")
+TOKEN_RE = re.compile(r"[0-9a-f]{32}")
 COORDINATION_TOKEN_ENV = "NAS_OPERATION_COORDINATION_TOKEN"
-DEFAULT_RESERVATION_TTL_SECONDS = 300
 _CURRENT_COORDINATION_TOKEN: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "nas_operation_coordination_token", default=None
 )
 
 
 class OperationBusyError(RuntimeError):
-    """Another operation currently owns at least one requested conflict class."""
+    """Another privileged mutation owns the appliance lock."""
 
 
 @dataclass(frozen=True)
@@ -81,31 +73,12 @@ class ActiveOperation:
 
 @dataclass(frozen=True)
 class OperationReservation:
-    """Compatibility result for old asynchronous callers.
-
-    Reservations are intentionally admission hints now: the systemd worker is
-    the authority and acquires real flocks before mutation.  Keeping this small
-    value avoids a flag-day change in callers while deleting reservation state.
-    """
-
     action: str
     classes: tuple[str, ...]
     token: str
-    created_at: int
-    expires_at: int
-    created_monotonic_ns: int
-    expires_monotonic_ns: int
 
     def as_json(self) -> dict[str, Any]:
-        return {
-            "action": self.action,
-            "classes": list(self.classes),
-            "token": self.token,
-            "createdAt": self.created_at,
-            "expiresAt": self.expires_at,
-            "createdMonotonicNs": self.created_monotonic_ns,
-            "expiresMonotonicNs": self.expires_monotonic_ns,
-        }
+        return {"action": self.action, "classes": list(self.classes), "token": self.token}
 
 
 def _validate_class(name: str) -> str:
@@ -118,8 +91,7 @@ def _normalize_classes(classes: Sequence[str]) -> tuple[str, ...]:
     normalized = tuple(sorted({_validate_class(str(name)) for name in classes}))
     if not normalized:
         raise ValueError("At least one operation class is required")
-    # appliance is the wildcard class used for whole-appliance mutations.
-    return tuple(sorted(KNOWN_CLASSES)) if "appliance" in normalized else normalized
+    return normalized
 
 
 def ensure_root() -> None:
@@ -151,9 +123,9 @@ def ensure_root() -> None:
         raise PermissionError(f"NAS operation root is not accessible to this operator: {OPERATION_ROOT}")
 
 
-def _open_lock(name: str) -> Any:
+def _open_lock() -> Any:
     ensure_root()
-    path = OPERATION_ROOT / f"{_validate_class(name)}.lock"
+    path = OPERATION_ROOT / LOCK_PATH_NAME
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o660)
     try:
         metadata = os.fstat(descriptor)
@@ -169,24 +141,19 @@ def _open_lock(name: str) -> Any:
         raise
 
 
-def _lock_handle(handle: Any, *, blocking: bool) -> None:
+def _try_lock(handle: Any, *, blocking: bool) -> None:
     flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
     fcntl.flock(handle, flags)
 
 
-def _release(handles: Sequence[Any], *, clear: bool = False) -> None:
-    for handle in reversed(handles):
-        try:
-            if clear:
-                try:
-                    handle.seek(0)
-                    handle.truncate()
-                    handle.flush()
-                except OSError:
-                    pass
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        finally:
-            handle.close()
+def _read_metadata(handle: Any) -> dict[str, Any] | None:
+    try:
+        handle.seek(0)
+        raw = handle.read(4096)
+        value = json.loads(raw) if raw.strip() else None
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _metadata(token: str, action: str, classes: tuple[str, ...]) -> str:
@@ -200,33 +167,6 @@ def _metadata(token: str, action: str, classes: tuple[str, ...]) -> str:
     )
 
 
-def _read_metadata(handle: Any) -> dict[str, Any] | None:
-    try:
-        handle.seek(0)
-        raw = handle.read(4096)
-        value = json.loads(raw) if raw.strip() else None
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def _acquire_handles(classes: tuple[str, ...], *, blocking: bool, action: str) -> list[Any]:
-    handles: list[Any] = []
-    try:
-        for name in classes:
-            handle = _open_lock(name)
-            try:
-                _lock_handle(handle, blocking=blocking)
-            except BlockingIOError as exc:
-                handle.close()
-                raise OperationBusyError(f"Another privileged operation conflicts with {action}: {name}") from exc
-            handles.append(handle)
-        return handles
-    except Exception:
-        _release(handles)
-        raise
-
-
 def _boot_id() -> str:
     try:
         return pathlib.Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip() or "unavailable"
@@ -234,26 +174,37 @@ def _boot_id() -> str:
         return "unavailable"
 
 
+def _classes_cover(held: Sequence[str], requested: Sequence[str]) -> bool:
+    held_set = set(held)
+    return "appliance" in held_set or set(requested).issubset(held_set)
+
+
 def validate_coordination_token(token: str, classes: Sequence[str]) -> None:
-    """Verify that every requested kernel flock is live with ``token`` metadata."""
-    if RESERVATION_TOKEN_RE.fullmatch(token) is None:
+    """Verify that the single appliance flock is live and owned by ``token``."""
+    if TOKEN_RE.fullmatch(token) is None:
         raise OperationBusyError("The parent operation coordination token is malformed")
-    normalized = _normalize_classes(classes)
-    for name in normalized:
-        handle = _open_lock(name)
+    requested = _normalize_classes(classes)
+    handle = _open_lock()
+    try:
+        value = _read_metadata(handle)
         try:
-            value = _read_metadata(handle)
-            try:
-                _lock_handle(handle, blocking=False)
-            except BlockingIOError:
-                pass
-            else:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-                raise OperationBusyError(f"The parent operation no longer owns the required class: {name}")
-            if value is None or value.get("token") != token:
-                raise OperationBusyError(f"The requested class is owned by a different operation: {name}")
-        finally:
-            handle.close()
+            _try_lock(handle, blocking=False)
+        except BlockingIOError:
+            pass
+        else:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            raise OperationBusyError("The parent operation no longer owns the appliance mutation lock")
+        held = value.get("classes") if isinstance(value, dict) else None
+        if value is None or value.get("token") != token:
+            raise OperationBusyError("The appliance mutation lock is owned by a different operation")
+        if (
+            not isinstance(held, list)
+            or not all(isinstance(item, str) for item in held)
+            or not _classes_cover(held, requested)
+        ):
+            raise OperationBusyError("The parent operation does not cover the requested mutation class")
+    finally:
+        handle.close()
 
 
 def current_coordination_token() -> str:
@@ -267,36 +218,32 @@ def reserve_operation(
     action: str,
     classes: Sequence[str],
     *,
-    ttl_seconds: int = DEFAULT_RESERVATION_TTL_SECONDS,
+    ttl_seconds: int = 300,
 ) -> OperationReservation:
-    """Perform a non-binding admission check for an asynchronous systemd job.
+    """Check that the global mutation lock is currently available.
 
-    The previous implementation persisted a reservation database and later
-    transferred it to a worker.  systemd already owns the job lifecycle, so the
-    real serialization now happens when that worker acquires its class flocks.
+    systemd owns asynchronous job lifetime; the worker acquires the real flock
+    when it starts. The returned token is only a request identifier for the
+    current first-start handoff and carries no reservation state.
     """
+    del ttl_seconds
     normalized = _normalize_classes(classes)
-    if ttl_seconds < 30 or ttl_seconds > 3600:
-        raise ValueError("Operation reservation TTL must be between 30 and 3600 seconds")
-    handles = _acquire_handles(normalized, blocking=False, action=action)
-    _release(handles)
-    now = int(time.time())
-    monotonic = time.monotonic_ns()
-    return OperationReservation(
-        action=action,
-        classes=normalized,
-        token=secrets.token_hex(16),
-        created_at=now,
-        expires_at=now + ttl_seconds,
-        created_monotonic_ns=monotonic,
-        expires_monotonic_ns=monotonic + ttl_seconds * 1_000_000_000,
-    )
+    handle = _open_lock()
+    try:
+        try:
+            _try_lock(handle, blocking=False)
+        except BlockingIOError as exc:
+            raise OperationBusyError(f"Another privileged operation conflicts with {action}") from exc
+        else:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        handle.close()
+    return OperationReservation(action=action, classes=normalized, token=secrets.token_hex(16))
 
 
 def cancel_reservation(token: str) -> None:
-    """Compatibility no-op: asynchronous reservation state no longer exists."""
-    if RESERVATION_TOKEN_RE.fullmatch(token) is None:
-        raise ValueError("Invalid operation reservation token")
+    if TOKEN_RE.fullmatch(token) is None:
+        raise ValueError("Invalid operation request token")
 
 
 @contextlib.contextmanager
@@ -308,11 +255,9 @@ def acquire_operation(
     publish: bool = True,
     reservation_token: str | None = None,
 ) -> Iterator[ActiveOperation]:
-    """Hold requested conflict classes for the complete mutation."""
-    del publish
+    """Hold the one appliance mutation lock for the complete operation."""
+    del publish, reservation_token
     normalized = _normalize_classes(classes)
-    if reservation_token is not None and RESERVATION_TOKEN_RE.fullmatch(reservation_token) is None:
-        raise OperationBusyError("The asynchronous operation admission token is malformed")
 
     inherited = os.environ.get(COORDINATION_TOKEN_ENV)
     if inherited:
@@ -321,71 +266,82 @@ def acquire_operation(
         yield ActiveOperation(action, normalized, os.getpid(), now, _boot_id(), str(now), inherited)
         return
 
-    handles = _acquire_handles(normalized, blocking=blocking, action=action)
-    token = secrets.token_hex(16)
-    started = int(time.time())
-    active = ActiveOperation(action, normalized, os.getpid(), started, _boot_id(), str(started), token)
-    payload = _metadata(token, action, normalized)
-    coordination_context = _CURRENT_COORDINATION_TOKEN.set(token)
-    previous_env = os.environ.get(COORDINATION_TOKEN_ENV)
+    handle = _open_lock()
     try:
-        for handle in handles:
-            handle.seek(0)
-            handle.truncate()
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+        try:
+            _try_lock(handle, blocking=blocking)
+        except BlockingIOError as exc:
+            raise OperationBusyError(f"Another privileged operation conflicts with {action}") from exc
+        token = secrets.token_hex(16)
+        started = int(time.time())
+        active = ActiveOperation(action, normalized, os.getpid(), started, _boot_id(), str(started), token)
+        handle.seek(0)
+        handle.truncate()
+        handle.write(_metadata(token, action, normalized))
+        handle.flush()
+        os.fsync(handle.fileno())
+        coordination_context = _CURRENT_COORDINATION_TOKEN.set(token)
+        previous_env = os.environ.get(COORDINATION_TOKEN_ENV)
         os.environ[COORDINATION_TOKEN_ENV] = token
-        yield active
+        try:
+            yield active
+        finally:
+            if previous_env is None:
+                os.environ.pop(COORDINATION_TOKEN_ENV, None)
+            else:
+                os.environ[COORDINATION_TOKEN_ENV] = previous_env
+            _CURRENT_COORDINATION_TOKEN.reset(coordination_context)
+            try:
+                handle.seek(0)
+                handle.truncate()
+                handle.flush()
+            except OSError:
+                pass
+            fcntl.flock(handle, fcntl.LOCK_UN)
     finally:
-        if previous_env is None:
-            os.environ.pop(COORDINATION_TOKEN_ENV, None)
-        else:
-            os.environ[COORDINATION_TOKEN_ENV] = previous_env
-        _CURRENT_COORDINATION_TOKEN.reset(coordination_context)
-        _release(handles, clear=True)
+        handle.close()
 
 
 def operation_state() -> dict[str, Any]:
-    """Return an advisory snapshot derived directly from kernel class locks."""
-    ensure_root()
-    busy: list[str] = []
-    by_token: dict[str, dict[str, Any]] = {}
-    for name in sorted(KNOWN_CLASSES):
-        handle = _open_lock(name)
+    """Return an advisory snapshot from the single kernel flock."""
+    handle = _open_lock()
+    try:
+        value = _read_metadata(handle)
         try:
-            value = _read_metadata(handle)
-            try:
-                _lock_handle(handle, blocking=False)
-            except BlockingIOError:
-                busy.append(name)
-                if value is not None and isinstance(value.get("token"), str):
-                    token = value["token"]
-                    item = by_token.setdefault(
-                        token,
-                        {
-                            "action": value.get("action", "operation"),
-                            "classes": [],
-                            "pid": value.get("pid"),
-                        },
-                    )
-                    item["classes"].append(name)
-            else:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-        finally:
-            handle.close()
+            _try_lock(handle, blocking=False)
+        except BlockingIOError:
+            raw_classes = value.get("classes") if isinstance(value, dict) else None
+            classes = raw_classes if isinstance(raw_classes, list) else []
+            busy = sorted(item for item in classes if isinstance(item, str))
+            active = (
+                [
+                    {
+                        "action": value.get("action", "operation"),
+                        "classes": busy,
+                        "pid": value.get("pid"),
+                    }
+                ]
+                if isinstance(value, dict)
+                else []
+            )
+        else:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            busy = []
+            active = []
+    finally:
+        handle.close()
     return {
         "busyClasses": busy,
-        "active": list(by_token.values()),
+        "active": active,
         "reservations": [],
-        "snapshotSemantics": "advisory-kernel-flock",
+        "snapshotSemantics": "advisory-single-kernel-flock",
     }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="nas-operation-run",
-        description="Run a command while holding NAS appliance mutation locks.",
+        description="Run a command while holding the NAS appliance mutation lock.",
     )
     parser.add_argument("--action", help="Human-readable operation name for diagnostics")
     parser.add_argument(
@@ -394,7 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         required=True,
         choices=sorted(KNOWN_CLASSES),
-        help="Conflict class to hold; repeat as needed. appliance is globally exclusive.",
+        help="Diagnostic mutation class; repeat as needed.",
     )
     parser.add_argument(
         "--validate-current",

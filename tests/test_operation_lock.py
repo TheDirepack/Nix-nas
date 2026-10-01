@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import io
+import contextlib
 import os
 import pathlib
+import select
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -32,60 +36,62 @@ class OperationLockTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    def test_acquire_holds_kernel_lock_and_publishes_minimal_metadata(self) -> None:
+    def test_acquire_uses_one_kernel_lock_and_publishes_metadata(self) -> None:
         with locks.acquire_operation("backup", ("storage",)) as operation:
             self.assertEqual(operation.classes, ("storage",))
             self.assertRegex(operation.coordination_token, r"^[0-9a-f]{32}$")
-            metadata = json.loads((self.root / "storage.lock").read_text(encoding="utf-8"))
+            metadata = json.loads((self.root / locks.LOCK_PATH_NAME).read_text(encoding="utf-8"))
             self.assertEqual(metadata["token"], operation.coordination_token)
             self.assertEqual(metadata["action"], "backup")
+            self.assertEqual(metadata["classes"], ["storage"])
             state = locks.operation_state()
             self.assertEqual(state["busyClasses"], ["storage"])
             self.assertEqual(state["reservations"], [])
-            self.assertEqual(state["snapshotSemantics"], "advisory-kernel-flock")
-        self.assertEqual((self.root / "storage.lock").read_text(encoding="utf-8"), "")
+            self.assertEqual(state["snapshotSemantics"], "advisory-single-kernel-flock")
+        self.assertEqual((self.root / locks.LOCK_PATH_NAME).read_text(encoding="utf-8"), "")
         self.assertEqual(locks.operation_state()["busyClasses"], [])
 
-    def test_nested_child_validation_uses_live_token_not_proc_ancestry(self) -> None:
+    def test_disjoint_mutation_classes_still_serialize(self) -> None:
+        with locks.acquire_operation("backup", ("storage",)):
+            token = os.environ.pop(locks.COORDINATION_TOKEN_ENV)
+            try:
+                with self.assertRaises(locks.OperationBusyError):
+                    with locks.acquire_operation("identity", ("identity",)):
+                        pass
+            finally:
+                os.environ[locks.COORDINATION_TOKEN_ENV] = token
+
+    def test_nested_child_validation_uses_live_token_and_class_coverage(self) -> None:
         with locks.acquire_operation("outer", ("identity", "runtime")) as outer:
             token = outer.coordination_token
             locks.validate_coordination_token(token, ("identity",))
             with locks.acquire_operation("nested", ("runtime",)) as nested:
                 self.assertEqual(nested.coordination_token, token)
-            with self.assertRaisesRegex(locks.OperationBusyError, "no longer owns"):
+            with self.assertRaisesRegex(locks.OperationBusyError, "does not cover"):
                 locks.validate_coordination_token(token, ("storage",))
         with self.assertRaises(locks.OperationBusyError):
             locks.validate_coordination_token(token, ("identity",))
 
-    def test_appliance_class_expands_to_every_conflict_class(self) -> None:
+    def test_appliance_class_covers_nested_classes_without_expanding_lock_files(self) -> None:
         with locks.acquire_operation("first-start", ("appliance",)) as operation:
-            self.assertEqual(operation.classes, tuple(sorted(locks.KNOWN_CLASSES)))
-            self.assertEqual(locks.operation_state()["busyClasses"], list(sorted(locks.KNOWN_CLASSES)))
+            self.assertEqual(operation.classes, ("appliance",))
+            self.assertEqual(locks.operation_state()["busyClasses"], ["appliance"])
+            locks.validate_coordination_token(operation.coordination_token, ("storage", "identity"))
+        self.assertEqual(sorted(self.root.glob("*.lock")), [self.root / locks.LOCK_PATH_NAME])
 
-    def test_reservation_is_only_admission_hint_and_creates_no_database(self) -> None:
+    def test_reservation_is_only_an_admission_check(self) -> None:
         reservation = locks.reserve_operation("first-start", ("storage",), ttl_seconds=60)
         self.assertEqual(reservation.classes, ("storage",))
         self.assertRegex(reservation.token, r"^[0-9a-f]{32}$")
-        self.assertFalse(list(self.root.glob("reservation-*.json")))
+        self.assertEqual(sorted(self.root.glob("*.lock")), [self.root / locks.LOCK_PATH_NAME])
         locks.cancel_reservation(reservation.token)
 
-    def test_reservation_refuses_currently_busy_class(self) -> None:
-        # Remove the inherited coordination token to model an independent
-        # asynchronous launcher checking admission while a worker owns storage.
-        with locks.acquire_operation("backup", ("storage",)):
-            token = os.environ.pop(locks.COORDINATION_TOKEN_ENV)
-            try:
-                with self.assertRaisesRegex(locks.OperationBusyError, "storage"):
-                    locks.reserve_operation("other", ("storage",), ttl_seconds=60)
-            finally:
-                os.environ[locks.COORDINATION_TOKEN_ENV] = token
-
-    def test_exception_releases_all_class_locks(self) -> None:
+    def test_exception_releases_global_lock(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "boom"):
             with locks.acquire_operation("update", ("update", "runtime")):
                 raise RuntimeError("boom")
         self.assertEqual(locks.operation_state()["busyClasses"], [])
-        with locks.acquire_operation("after", ("update", "runtime")):
+        with locks.acquire_operation("after", ("storage",)):
             pass
 
     def test_unknown_class_and_bad_token_fail_closed(self) -> None:
@@ -105,6 +111,67 @@ class OperationLockTests(unittest.TestCase):
                 result = locks.main(["--action", "nested", "--class", "state", "--", "/bin/false"])
                 self.assertEqual(result, 7)
                 run.assert_called_once()
+
+    def test_cli_contender_fails_without_executing_command(self) -> None:
+        with locks.acquire_operation("backup", ("storage",)):
+            token = os.environ.pop(locks.COORDINATION_TOKEN_ENV)
+            try:
+                with mock.patch("nas_operation_lock.subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(locks.main(["--action", "update", "--class", "update", "--", "/bin/true"]), 75)
+                    run.assert_not_called()
+            finally:
+                os.environ[locks.COORDINATION_TOKEN_ENV] = token
+
+    def test_cli_rejects_stale_parent_token_for_validation_and_execution(self) -> None:
+        with locks.acquire_operation("parent", ("state",)) as parent:
+            token = parent.coordination_token
+        with mock.patch.dict(os.environ, {locks.COORDINATION_TOKEN_ENV: token}):
+            with mock.patch("nas_operation_lock.subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(locks.main(["--class", "state", "--validate-current"]), 76)
+                self.assertEqual(locks.main(["--action", "nested", "--class", "state", "--", "/bin/true"]), 76)
+                run.assert_not_called()
+
+    def test_different_live_owner_token_is_rejected(self) -> None:
+        with locks.acquire_operation("parent", ("state",)):
+            with self.assertRaisesRegex(locks.OperationBusyError, "different operation"):
+                locks.validate_coordination_token("0" * 32, ("state",))
+
+    def test_process_crash_releases_lock_and_invalidates_nested_token(self) -> None:
+        self.root.mkdir(mode=0o770)
+        environment = {**os.environ, "NAS_OPERATION_ROOT": str(self.root), "PYTHONPATH": str(SERVICES)}
+        script = (
+            "import sys; import nas_operation_lock as locks\n"
+            "with locks.acquire_operation('backup', ('storage',)) as operation:\n"
+            " print(operation.coordination_token, flush=True)\n"
+            " sys.stdin.read()\n"
+        )
+        with subprocess.Popen(
+            [sys.executable, "-c", script],
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as holder:
+            try:
+                assert holder.stdout is not None
+                self.assertTrue(select.select([holder.stdout], [], [], 10)[0], "lock holder did not become ready")
+                token = holder.stdout.readline().strip()
+                self.assertRegex(token, r"^[0-9a-f]{32}$")
+                with self.assertRaises(locks.OperationBusyError):
+                    with locks.acquire_operation("identity", ("identity",)):
+                        self.fail("disjoint mutation bypassed the process-owned global lock")
+                holder.kill()
+                holder.communicate(timeout=10)
+                self.assertEqual(locks.operation_state()["busyClasses"], [])
+                with self.assertRaises(locks.OperationBusyError):
+                    locks.validate_coordination_token(token, ("storage",))
+                with locks.acquire_operation("after-crash", ("identity",)):
+                    self.assertEqual(locks.operation_state()["busyClasses"], ["identity"])
+            finally:
+                if holder.poll() is None:
+                    holder.kill()
+                    holder.communicate(timeout=10)
 
 
 if __name__ == "__main__":
