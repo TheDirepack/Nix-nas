@@ -5,6 +5,8 @@ import io
 import contextlib
 import os
 import pathlib
+import select
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -133,6 +135,43 @@ class OperationLockTests(unittest.TestCase):
         with locks.acquire_operation("parent", ("state",)):
             with self.assertRaisesRegex(locks.OperationBusyError, "different operation"):
                 locks.validate_coordination_token("0" * 32, ("state",))
+
+    def test_process_crash_releases_lock_and_invalidates_nested_token(self) -> None:
+        self.root.mkdir(mode=0o770)
+        environment = {**os.environ, "NAS_OPERATION_ROOT": str(self.root), "PYTHONPATH": str(SERVICES)}
+        script = (
+            "import sys; import nas_operation_lock as locks\n"
+            "with locks.acquire_operation('backup', ('storage',)) as operation:\n"
+            " print(operation.coordination_token, flush=True)\n"
+            " sys.stdin.read()\n"
+        )
+        with subprocess.Popen(
+            [sys.executable, "-c", script],
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as holder:
+            try:
+                assert holder.stdout is not None
+                self.assertTrue(select.select([holder.stdout], [], [], 10)[0], "lock holder did not become ready")
+                token = holder.stdout.readline().strip()
+                self.assertRegex(token, r"^[0-9a-f]{32}$")
+                with self.assertRaises(locks.OperationBusyError):
+                    with locks.acquire_operation("identity", ("identity",)):
+                        self.fail("disjoint mutation bypassed the process-owned global lock")
+                holder.kill()
+                holder.communicate(timeout=10)
+                self.assertEqual(locks.operation_state()["busyClasses"], [])
+                with self.assertRaises(locks.OperationBusyError):
+                    locks.validate_coordination_token(token, ("storage",))
+                with locks.acquire_operation("after-crash", ("identity",)):
+                    self.assertEqual(locks.operation_state()["busyClasses"], ["identity"])
+            finally:
+                if holder.poll() is None:
+                    holder.kill()
+                    holder.communicate(timeout=10)
 
 
 if __name__ == "__main__":

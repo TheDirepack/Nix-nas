@@ -29,7 +29,7 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_identity_sync.py` | Authentik and Syncthing I/O/reconciliation entry point | `test_identity_sync.py` |
 | `nas_identity_model.py` | Pure identity, account-plan, and Syncthing desired-state model | `test_identity_sync.py` |
 | `nas_cockpit_api.py` | Fixed privileged action allow-list for the Authentik-authorized Cockpit session | `test_cockpit_api.py` |
-| `nas_operation_lock.py` | Shared cross-process conflict classes and reconnect-safe active-operation metadata | `test_operation_lock.py`, `test_cockpit_api.py` |
+| `nas_operation_lock.py` | One cross-process mutation flock; class labels constrain nested work and active metadata is advisory | `test_operation_lock.py`, `test_cockpit_api.py` |
 | `nas_operation_journal.py` | Durable resumable-operation phases and manual-recovery stop semantics | `test_setup.py`, `test_identity_sync.py` |
 | `nas_state.py` | Signed profile-aware state export, drift, validation, rollback, and restore | `test_state.py`, `test_v2_state_authority.py` |
 | `nas_doctor.py` | Unified appliance diagnostics and V2 desired/effective drift detection (absorbs legacy state-authority migration checks) | `test_doctor.py` |
