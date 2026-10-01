@@ -52,6 +52,7 @@ let
     ++ lib.optional cfg.virtualization.enable "libvirtd.service"
     ++ lib.optionals cfg.observability.enable [ "victoriametrics.service" "telegraf.service" ]
     ++ lib.optionals (cfg.observability.enable && cfg.alerting.enable) [ "vmalert-nas.service" "alertmanager.service" ]
+    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable && cfg.observability.ntfy.enable) "alertmanager-ntfy.service"
     ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) "grafana.service"
     ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
   );
@@ -265,11 +266,6 @@ in
             timeout = "10s";
             content_encoding = "gzip";
           };
-          # VictoriaMetrics' Influx ingestion maps non-numeric fields to zero.
-          # Normalize SMART's boolean health field before output so healthy=1
-          # and failed=0 remain distinguishable to vmalert.
-          # Telegraf processors are TOML array-of-table plugins, even when only
-          # one processor instance is configured.
           processors.converter = [
             {
               namepass = [ "smart_device" ];
@@ -337,11 +333,7 @@ in
         after = [ "victoriametrics.service" ];
         requires = [ "victoriametrics.service" ];
         path = [ pkgs.sudo ];
-        # SMART is the only privileged Telegraf input. sudo can execute only the
-        # immutable read-only wrapper above; the wrapper validates Telegraf's
-        # documented scan/read shapes before invoking smartctl.
         serviceConfig = {
-          # Ping collection is disabled, so Telegraf does not need CAP_NET_RAW.
           AmbientCapabilities = lib.mkForce [ ];
           RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
           PrivateTmp = true;
@@ -374,8 +366,6 @@ in
         listenAddress = "127.0.0.1";
         port = obs.alertRouterPort;
         webExternalUrl = "https://${lanHost}/alerts/";
-        checkConfig = false;
-        environmentFile = lib.mkIf obs.ntfy.enable "${observabilitySecretDir}/alertmanager-environment";
         extraFlags = [
           "--cluster.listen-address="
           "--web.route-prefix=/"
@@ -399,32 +389,39 @@ in
             name = "ntfy";
             webhook_configs = [
               {
-                url = "http://127.0.0.1:${toString obs.ntfy.port}/\${NAS_NTFY_TOPIC}?template=alertmanager";
+                url = "http://127.0.0.1:${toString obs.alertNtfyBridgePort}/hook";
                 send_resolved = true;
-                http_config.basic_auth = {
-                  username = "admin";
-                  password_file = "\${CREDENTIALS_DIRECTORY}/ntfy-admin-password";
-                };
               }
             ];
           };
         };
       };
 
+      services.prometheus.alertmanager-ntfy = lib.mkIf (cfg.alerting.enable && obs.ntfy.enable) {
+        enable = true;
+        settings = {
+          http.addr = "127.0.0.1:${toString obs.alertNtfyBridgePort}";
+          ntfy = {
+            baseurl = "http://127.0.0.1:${toString obs.ntfy.port}";
+            notification.topic = "";
+          };
+        };
+        extraConfigFiles = [ "${observabilitySecretDir}/alertmanager-ntfy.yml" ];
+      };
+
       systemd.services.alertmanager = lib.mkIf cfg.alerting.enable {
         wantedBy = lib.mkForce [ ];
         partOf = [ "nas-protected-services.target" ];
-        after = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "ntfy-sh.service";
-        wants = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "ntfy-sh.service";
-        unitConfig = lib.optionalAttrs obs.ntfy.enable {
-          ConditionPathExists = [
-            "${observabilitySecretDir}/alertmanager-environment"
-            "${observabilitySecretDir}/ntfy-admin-password"
-          ];
-        };
-        serviceConfig = lib.optionalAttrs obs.ntfy.enable {
-          LoadCredential = "ntfy-admin-password:${observabilitySecretDir}/ntfy-admin-password";
-        };
+        after = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "alertmanager-ntfy.service";
+        wants = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "alertmanager-ntfy.service";
+      };
+
+      systemd.services.alertmanager-ntfy = lib.mkIf (cfg.alerting.enable && obs.ntfy.enable) {
+        wantedBy = lib.mkForce [ ];
+        partOf = [ "nas-protected-services.target" ];
+        after = [ "ntfy-sh.service" ];
+        requires = [ "ntfy-sh.service" ];
+        unitConfig.ConditionPathExists = [ "${observabilitySecretDir}/alertmanager-ntfy.yml" ];
       };
 
       services.grafana = lib.mkIf grafana.enable {
