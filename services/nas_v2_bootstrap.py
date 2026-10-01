@@ -21,7 +21,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
-from nas_io import fsync_directory as _fsync_directory
+from nas_common import fsync_directory as _fsync_directory
 from nas_v2_spec import ManagedServicesV2Error, compile_document, load_platform_capabilities, load_schema
 
 

@@ -34,7 +34,6 @@ py-modules = [
   "nas_doctor",
   "nas_identity_model",
   "nas_identity_sync",
-  "nas_io",
   "nas_logging",
   "nas_operation_journal",
   "nas_operation_lock",

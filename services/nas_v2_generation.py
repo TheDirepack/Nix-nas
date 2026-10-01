@@ -17,7 +17,7 @@ import shutil
 from collections.abc import Mapping
 from typing import Any
 
-from nas_io import fsync_directory as _fsync_directory
+from nas_common import fsync_directory as _fsync_directory
 
 
 class GenerationError(RuntimeError):
