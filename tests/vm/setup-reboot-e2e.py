@@ -36,7 +36,8 @@ REQUIRED_UNITS = (
     "vaultwarden.service",
     "victoriametrics.service",
     "telegraf.service",
-    "nas-alert-router.service",
+    "alertmanager.service",
+    "alertmanager-ntfy.service",
     "vmalert-nas.service",
     "grafana.service",
     "ntfy-sh.service",
@@ -47,7 +48,7 @@ REQUIRED_SERVICES = {
     "vaultwarden",
     "victoriametrics",
     "telegraf",
-    "alert-router",
+    "alertmanager",
     "vmalert",
     "grafana",
     "notifications",
@@ -257,6 +258,7 @@ def verify_services(stage: str) -> None:
     wait_http(
         ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8428/victoriametrics/ping"), "VictoriaMetrics"
     )
+    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9093/-/ready"), "Alertmanager")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/api/health"), "Grafana")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:2586/v1/health"), "ntfy")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9092/console/"), "Cockpit")
