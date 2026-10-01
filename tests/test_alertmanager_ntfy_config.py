@@ -27,14 +27,15 @@ class AlertmanagerNtfyConfigTests(unittest.TestCase):
             topic.chmod(0o400)
             password.chmod(0o400)
 
-            old = (renderer.TOPIC_PATH, renderer.PASSWORD_PATH, renderer.OUTPUT_PATH)
+            old = tuple(getattr(renderer, name) for name in ("TOPIC_PATH", "PASSWORD_PATH", "OUTPUT_PATH"))
             try:
-                renderer.TOPIC_PATH = topic
-                renderer.PASSWORD_PATH = password
-                renderer.OUTPUT_PATH = output
+                setattr(renderer, "TOPIC_PATH", topic)
+                setattr(renderer, "PASSWORD_PATH", password)
+                setattr(renderer, "OUTPUT_PATH", output)
                 self.assertEqual(renderer.main(), 0)
             finally:
-                renderer.TOPIC_PATH, renderer.PASSWORD_PATH, renderer.OUTPUT_PATH = old
+                for name, value in zip(("TOPIC_PATH", "PASSWORD_PATH", "OUTPUT_PATH"), old, strict=True):
+                    setattr(renderer, name, value)
 
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(payload["ntfy"]["notification"]["topic"], "nas_private_topic")
