@@ -15,7 +15,7 @@ set -Eeuo pipefail
 # so an unchanged bundle reuses its previous archive without a rebuild or
 # re-upload. `core` contains boot, recovery, unlock, primary access, and
 # deterministic-test package roots. The application bundles contain the
-# identity, observability, storage-add-on, and AI package roots. `vm-drivers`
+# identity, observability, and storage-add-on package roots. `vm-drivers`
 # carries the exact unencrypted and encrypted NixOS test-driver roots. Their
 # generated driver configurations reference each VM's system.build.vm start
 # script, so only this config-sensitive bundle changes when the appliance
@@ -39,7 +39,7 @@ NIX="${NAS_BUNDLE_NIX:-nix}"
 NIX_STORE_CMD="${NAS_BUNDLE_NIX_STORE:-nix-store}"
 
 # Keep in sync with the reusable roots in `packages.x86_64-linux` in flake.nix.
-BUNDLES=(core identity observability storage ai vm-drivers)
+BUNDLES=(core identity observability storage vm-drivers)
 
 PROG="${0##*/}"
 
@@ -396,7 +396,7 @@ main() {
       else
         for name in "$@"; do
           case "$name" in
-            core|identity|observability|storage|ai|vm-drivers) ;;
+            core|identity|observability|storage|vm-drivers) ;;
             *) die "unknown bundle: $name" ;;
           esac
         done

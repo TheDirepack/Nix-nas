@@ -50,7 +50,6 @@ function overview() {
           capabilities: {
             files: {allowed: true, source: xss},
             webdav: {allowed: false, source: "default"},
-            ai: {allowed: false, source: "default"},
             vault: {allowed: true, source: "group"},
           },
         },
@@ -59,7 +58,7 @@ function overview() {
     featureControl: {
       features: [
         {
-          id: "aiWorkspace",
+          id: "grafana",
           label: xss,
           description: xss,
           available: true,
@@ -170,40 +169,6 @@ function hostileOverview(value) {
   data.featureControl.memory.components[0].notes = value;
   data.capabilities.users[0].displayName = value;
   data.capabilities.users[0].capabilities.files.source = value;
-  data.aiConfig = {
-    ok: true,
-    localModels: [
-      {
-        id: "local-model",
-        path: value,
-        context: 32768,
-        ttl: 300,
-        tools: true,
-        extraArgs: [value],
-        managed: true,
-      },
-    ],
-    providers: [
-      {
-        id: "provider",
-        url: value,
-        models: [value],
-        credentialConfigured: false,
-        timeouts: {connect: 30, keepalive: 30, responseHeader: 60, tlsHandshake: 10, idleConn: 90},
-        filters: {stripParams: value, setParams: {[value]: value}},
-      },
-    ],
-    availableTargets: [value],
-    codingRoles: {"coding/default": {targets: [value], strategy: "warm", spillover: 1}},
-    advanced: {
-      healthCheckTimeout: 300,
-      globalTTL: 300,
-      unloadTimeout: 10,
-      logLevel: value,
-      captureBuffer: 0,
-      metricsMaxInMemory: 250,
-    },
-  };
   data.operationState.active = [{action: value, startedAt: 0}];
   data.failedUnits = [value, longToken];
   data.timers = [value];

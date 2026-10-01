@@ -88,7 +88,7 @@ def mock_data(value: str) -> dict[str, Any]:
         "managedServices": {
             "services": [
                 {
-                    "id": "ai-runtime",
+                    "id": "grafana",
                     "label": value,
                     "description": value,
                     "requestedMode": "on-demand",
@@ -98,7 +98,7 @@ def mock_data(value: str) -> dict[str, Any]:
                     "running": True,
                     "healthy": True,
                     "idleSeconds": 300,
-                    "units": [{"unit": "nas-llama-swap.service", "active": True, "memoryBytes": 1048576}],
+                    "units": [{"unit": "grafana.service", "active": True, "memoryBytes": 1048576}],
                 },
             ],
         },

@@ -36,13 +36,10 @@ test("structured API mutations send JSON only over stdin", async () => {
     calls.push(["spawn", command, options]);
     return process;
   };
-  assert.deepEqual(
-    await apiInput(["ai-provider-set"], {id: "openrouter", apiKey: "secret"}, spawn),
-    {ok: true},
-  );
+  assert.deepEqual(await apiInput(["source-control"], {action: "status"}, spawn), {ok: true});
   assert.deepEqual(calls, [
-    ["spawn", ["nas-cockpit-api", "ai-provider-set"], {superuser: "require", err: "message"}],
-    ["input", JSON.stringify({id: "openrouter", apiKey: "secret"})],
+    ["spawn", ["nas-cockpit-api", "source-control"], {superuser: "require", err: "message"}],
+    ["input", JSON.stringify({action: "status"})],
   ]);
   assert.equal(calls[0][1].includes("secret"), false);
 });
@@ -123,9 +120,9 @@ test("managed service mode validates identifiers and fixed modes before spawning
     calls.push({command, options});
     return Promise.resolve('{"ok":true}');
   };
-  await setManagedServiceMode("ai-runtime", "on-demand", spawn);
+  await setManagedServiceMode("grafana", "on-demand", spawn);
   assert.deepEqual(calls[0], {
-    command: ["nas-managed-services-control", "set", "ai-runtime", "on-demand"],
+    command: ["nas-managed-services-control", "set", "grafana", "on-demand"],
     options: {superuser: "require", err: "message"},
   });
   assert.throws(
@@ -133,7 +130,7 @@ test("managed service mode validates identifiers and fixed modes before spawning
     /Invalid Managed Services/,
   );
   assert.throws(
-    () => setManagedServiceMode("ai-runtime", "secret", spawn),
+    () => setManagedServiceMode("grafana", "secret", spawn),
     /Invalid Managed Services/,
   );
 });
@@ -149,11 +146,11 @@ test("hostile structured values never become Cockpit command arguments", async (
   const payload = {
     id: "'\";$(touch /tmp/nas-api-pwned);\\\n",
     url: "javascript:alert(1)",
-    models: ["<img src=x onerror=alert(1)>", "$(id)"],
-    filters: {setParams: {__proto__: "polluted"}},
+    path: ["<img src=x onerror=alert(1)>", "$(id)"],
+    query: {setParams: {__proto__: "polluted"}},
   };
-  await apiInput(["ai-provider-set"], payload, spawn);
-  assert.deepEqual(calls[0].command, ["nas-cockpit-api", "ai-provider-set"]);
+  await apiInput(["source-control"], payload, spawn);
+  assert.deepEqual(calls[0].command, ["nas-cockpit-api", "source-control"]);
   assert.equal(
     calls[0].command.some((value) => value.includes("pwned")),
     false,

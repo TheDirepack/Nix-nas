@@ -182,10 +182,6 @@ in
       grafana.enable = lib.mkForce true;
       ntfy.enable = lib.mkForce true;
     };
-    ai = {
-      enable = lib.mkForce false;
-      modelDownloader.enable = lib.mkForce false;
-    };
     syncthing.enable = lib.mkForce true;
     vaultwarden.enable = lib.mkForce true;
     power.ups.enable = lib.mkForce false;

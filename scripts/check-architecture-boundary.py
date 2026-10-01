@@ -13,17 +13,12 @@ APPLICATION_NAMES = (
     "copyparty",
     "syncthing",
     "vaultwarden",
-    "open-webui",
-    "llama-swap",
-    "deepseek-harness",
     "grafana",
     "victoriametrics",
     "telegraf",
     "vmalert",
     "ntfy",
-    "hfdownloader",
     "nut-webgui",
-    "coding-agent",
 )
 
 GENERIC_PATHS = (

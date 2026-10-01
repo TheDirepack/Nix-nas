@@ -14,10 +14,10 @@ The step-by-step walkthrough, including this checklist with every item explained
 
 ## Important option behavior
 
-The base NAS module keeps optional applications disabled. Import the focused profiles under `modules/profiles/` for `core-storage`, `identity-sharing`, `observability`, `virtualization`, or `local-ai`; the shipped `local.nix` demonstrates an explicit profile selection. The appliance release currently supports only `x86_64-linux`.
+The base NAS module keeps optional applications disabled. Import the focused profiles under `modules/profiles/` for `core-storage`, `identity-sharing`, `observability`, or `virtualization`; the shipped `local.nix` demonstrates an explicit profile selection. The appliance release currently supports only `x86_64-linux`.
 
-- Empty AI and virtualization storage roots use their ZFS defaults.
-- `hardware.cpuVendor = "auto"` selects the portable profile. GPU vendors and the llama.cpp backend must match installed hardware and architecture.
+- An empty virtualization storage root uses its ZFS default.
+- `hardware.cpuVendor = "auto"` selects the portable profile. Declared GPU vendors must match installed hardware and architecture.
 - The model downloader stays disabled until immutable image digests are populated or a native package replaces it.
 - Native ZFS encryption stores its key in KeePassXC and stages it under `/run` only while unlocked.
 - Syncthing is LAN-oriented by default. User devices are managed through Authentik; the global Syncthing interface remains administrative.
@@ -28,4 +28,4 @@ The base NAS module keeps optional applications disabled. Import the focused pro
 - Same-pool Restic requires `backup.allowSamePoolRepository = true` and is local rollback only. Production readiness requires an external Restic repository or enabled ZFS replication.
 - `backup.restoreVerification` controls the scheduled isolated restore test and must point to disk-backed scratch storage outside `/run`.
 
-See the focused networking, storage, backup, CopyParty, and virtualization/AI/power pages for operational details.
+See the focused networking, storage, backup, CopyParty, and virtualization/power pages for operational details.

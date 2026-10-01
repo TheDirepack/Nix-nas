@@ -31,7 +31,7 @@ The design goal is:
 
 > If a new application uses runtime and platform primitives V2 already supports, adding it must require only a V2 definition plus the application's own native configuration/artifact. It must not require a new application-specific Python branch, NixOS lifecycle module, Caddy branch, Cockpit form, authorization implementation, backup implementation, or service controller.
 
-A future application such as Starlight must be able to use the same primitives as llama-swap, Open WebUI, Grafana, Vaultwarden, CopyParty, Syncthing, or any user-added service.
+A future application must be able to use the same primitives as Grafana, VictoriaMetrics, Vaultwarden, CopyParty, Syncthing, or any user-added service.
 
 ## 2. Primary design rules
 
@@ -50,7 +50,7 @@ Application names must not appear in generic lifecycle, routing, dependency, dev
 Bad:
 
 ```python
-if service_id == "llama-swap":
+if service_id == "grafana":
     ...
 ```
 
@@ -264,10 +264,10 @@ A service may also declare additional **service-scoped capabilities** where the 
 ```yaml
 authorization:
   capabilities:
-    - id: models
-      title: Manage models
-    - id: session
-      title: Start coding sessions
+    - id: retention
+      title: Manage retention
+    - id: ingest
+      title: Submit data
     - id: admin
       title: Application administration
 ```
@@ -275,9 +275,8 @@ authorization:
 These resolve to stable Authentik-managed capability/group objects such as:
 
 ```text
-application.ai-runtime.access
-application.ai-runtime.models
-application.ai-coding.session
+application.metrics-runtime.access
+application.metrics-runtime.retention
 application.some-service.admin
 ```
 
@@ -426,7 +425,7 @@ Do not add generic `preStart`/`postStart` hook mini-languages. Model meaningful 
 
 ### 7.3 Session
 
-A session is an explicitly created finite runtime instance, useful for disposable per-use workloads such as coding-agent containers.
+A session is an explicitly created finite runtime instance, useful for disposable per-use workloads such as one-shot conversion or import containers.
 
 The V2 definition describes how to provision/session-template the runtime, resources, mounts, network, and dependencies.
 
@@ -676,7 +675,7 @@ Runtime lowering examples:
 
 VM passthrough must require an explicit PCI device and passthrough mode. `auto` must never detach an arbitrary host GPU into a VM.
 
-llama-swap should be able to request an optional GPU and fall back to CPU. Future Starlight should use exactly the same mechanism.
+Any GPU-accelerated application should be able to request an optional GPU and fall back to CPU. Every future application must use exactly the same mechanism.
 
 ## 12. Resource limits and sandboxing
 
@@ -967,7 +966,6 @@ There is no V2 scheduling daemon.
 Examples of workloads to model this way:
 
 - Authentik migrations where V2-managed;
-- AI storage/config initialization;
 - Syncthing reconciliation;
 - Restic backup;
 - restore verification;
@@ -1016,7 +1014,7 @@ Identity/group assignments continue to originate in Authentik and the existing i
 
 V2 is not a universal application configuration language.
 
-It should not learn the internal config schema of llama-swap, Grafana, Syncthing, Vaultwarden, Open WebUI, etc.
+It should not learn the internal config schema of Grafana, Syncthing, Vaultwarden, VictoriaMetrics, etc.
 
 Application-specific configuration remains:
 
@@ -1099,7 +1097,7 @@ The frontend may have generic widgets such as:
 - dependency graph display;
 - timer editor.
 
-It must not have a bespoke `if app == llama-swap` form.
+It must not have a bespoke `if app == grafana` form.
 
 ### 25.3 Validation UX
 
@@ -1169,12 +1167,6 @@ They may appear as referenceable dependency nodes/capabilities, but V2 does not 
 - Syncthing reconciliation job;
 - Vaultwarden;
 - Vaultwarden CA preparation job;
-- AI storage preparation job;
-- AI config initialization job;
-- llama-swap;
-- Open WebUI;
-- Hugging Face/model downloader;
-- Pi/coding-agent session runtime;
 - VictoriaMetrics;
 - Telegraf;
 - vmalert;
@@ -1187,21 +1179,17 @@ They may appear as referenceable dependency nodes/capabilities, but V2 does not 
 - restore verification;
 - Syncoid replication;
 - optional update jobs;
-- future Starlight server.
+- future user-added applications.
 
 ### 27.3 Important dependency examples
 
-- `ai-config` depends on completed `ai-storage`;
-- `ai-runtime` depends on completed `ai-config`;
-- Open WebUI depends on ready llama-swap;
-- Pi session template depends on ready llama-swap;
-- Grafana depends on ready VictoriaMetrics;
+- Grafana depends on started VictoriaMetrics;
 - Telegraf depends on VictoriaMetrics;
 - Vaultwarden depends on the completed CA preparation job and identity platform capability;
 - Syncthing depends on mounted storage/network;
 - reconciliation jobs depend on the relevant daemon being ready.
 
-## 28. Minimal example: llama-swap + Open WebUI
+## 28. Minimal example: metrics runtime + dashboards
 
 Illustrative only; exact fields follow the canonical JSON Schema.
 
@@ -1209,29 +1197,17 @@ Illustrative only; exact fields follow the canonical JSON Schema.
 schemaVersion: 3
 
 services:
-  ai-storage:
-    name: AI storage preparation
+  metrics-storage:
+    name: Metrics storage preparation
     enabled: true
     workload:
       kind: job
     runtime:
       type: systemd
-      unit: nas-ai-storage.service
+      unit: nas-metrics-storage.service
 
-  ai-config:
-    name: AI configuration preparation
-    enabled: true
-    workload:
-      kind: job
-    runtime:
-      type: systemd
-      unit: nas-ai-config-init.service
-    dependencies:
-      - service: ai-storage
-        condition: completed
-
-  ai-runtime:
-    name: llama-swap
+  metrics-runtime:
+    name: Metrics database
     enabled: true
     workload:
       kind: daemon
@@ -1239,9 +1215,9 @@ services:
       idleSeconds: 600
     runtime:
       type: systemd
-      unit: nas-llama-swap.service
+      unit: nas-metrics.service
     dependencies:
-      - service: ai-config
+      - service: metrics-storage
         condition: completed
     resources:
       accelerators:
@@ -1257,8 +1233,8 @@ services:
           port: 8080
     authorization:
       capabilities:
-        - id: models
-          title: Manage models
+        - id: retention
+          title: Manage retention
     routes:
       ui:
         target:
@@ -1268,13 +1244,13 @@ services:
         exposure:
           type: path
           paths:
-            - /ai/runtime/
+            - /metrics/admin/
         auth:
           mode: identity
           capability: access
         portal:
           visible: true
-          category: AI
+          category: Monitoring
       api:
         target:
           type: http
@@ -1283,12 +1259,12 @@ services:
         exposure:
           type: path
           paths:
-            - /ai/v1/
+            - /metrics/api/
         auth:
           mode: upstream
 
-  ai-workspace:
-    name: Open WebUI
+  dashboards:
+    name: Dashboards
     enabled: true
     workload:
       kind: daemon
@@ -1296,9 +1272,9 @@ services:
       idleSeconds: 600
     runtime:
       type: systemd
-      unit: open-webui.service
+      unit: dashboards.service
     dependencies:
-      - service: ai-runtime
+      - service: metrics-runtime
         condition: ready
     routes:
       main:
@@ -1309,166 +1285,13 @@ services:
         exposure:
           type: path
           paths:
-            - /ai/
+            - /metrics/
         auth:
           mode: identity
           capability: access
         portal:
           visible: true
-          category: AI
+          category: Monitoring
 ```
 
-Nothing in the generic compiler needs to know what llama-swap or Open WebUI is.
-
-## 29. What V2 explicitly must not become
-
-V2 must not become:
-
-- a second authentication system;
-- a second user/group database;
-- a per-request authorization service;
-- a resident application supervisor;
-- a replacement for systemd;
-- a replacement for Podman/Compose/libvirt;
-- a replacement for firewalld;
-- a replacement for CopyParty ACLs;
-- a replacement for Restic/ZFS tooling;
-- a generic app-config scripting language;
-- a central API-key validator;
-- a permanent scheduler daemon;
-- a permanent idle-reaper daemon;
-- an application-name switchboard.
-
-If implementation starts accumulating those roles, simplify by compiling the behavior into the native owner instead.
-
-## 30. Implementation simplification targets
-
-The implementation should converge toward a small set of generic components:
-
-1. **Schema + normalizer** — parse/validate/default/semantic-check desired state.
-2. **Compiler/planner** — produce one effective model and native projection plans.
-3. **Runtime adapters** — thin translators for systemd/exec/Python/Quadlet/Compose/libvirt/OCI.
-4. **Caddy projection** — native routes, capability enforcement, portal metadata, optional wake call.
-5. **Authentik projection** — ensure service capability objects exist; no membership changes.
-6. **Network projection** — firewalld/Podman network configuration.
-7. **Storage/backup projection** — CopyParty-visible resources and Restic/ZFS inventory.
-8. **Systemd job/timer projection** — jobs, schedules, dependency wrappers, on-demand idle cleanup.
-9. **Cockpit schema UI** — primary editor.
-
-Everything else should be deleted or folded into these if it does not represent a genuinely separate native subsystem.
-
-## 31. Migration/deletion targets
-
-After parity is demonstrated, retire:
-
-- legacy feature lifecycle state/controller logic;
-- request-time `nas-feature-control` authorization decisions;
-- V2 identity/group validation code;
-- V2 API-key/secret authorization code;
-- object-permission catalogs for routes/listeners/storage/network internals;
-- central lifecycle/reaper code that native systemd units/timers replace;
-- application-specific Caddy routes;
-- application-specific firewall port lists;
-- Pi-specific wake/heartbeat/dependency logic;
-- duplicate Nix application settings after seed migration;
-- duplicate Cockpit feature forms;
-- static app-name backup branches;
-- compatibility aliases such as old camelCase feature IDs;
-- obsolete `startPolicy`/legacy lifecycle fields;
-- old JSON desired-state authority after YAML migration.
-
-## 32. Acceptance tests
-
-The system is not considered complete until the following are proven.
-
-### 32.1 Genericity
-
-- No application-specific IDs in generic V2 engine/projection code.
-- Add a representative new service definition without modifying Python/Nix/Caddy/Cockpit code.
-- Future Starlight can request GPU, storage, dependencies, auth capability, route, resources, and runtime using existing primitives.
-
-### 32.2 GUI/schema
-
-- GUI can create/edit every supported service shape.
-- YAML -> normalized model -> GUI edit -> YAML preserves equivalent semantics.
-- Duplicate YAML keys are rejected.
-- Schema and semantic errors map to usable GUI fields.
-
-### 32.3 Authorization boundary
-
-- V2 creates required Authentik service capability objects but never assignments.
-- Caddy strips forged identity headers.
-- Caddy denies a user missing the required capability.
-- Caddy allows a user with the capability.
-- Unauthorized users cannot trigger on-demand wake.
-- Wake helper contains no identity/group validation logic.
-- Portal hides services the user cannot access and shows allowed services.
-
-### 32.4 Lifecycle/dependencies
-
-- Cross-runtime dependency ordering works.
-- `completed` jobs gate dependents correctly.
-- `ready` dependencies fail closed on readiness timeout.
-- Persistent daemons are native-runtime managed.
-- On-demand wake occurs only after Caddy authorization.
-- Idle stop does not require a resident V2 daemon.
-- Shared dependencies are not stopped while still needed.
-
-### 32.5 Runtimes
-
-- Existing systemd.
-- Generated exec.
-- Per-service Python venv isolation.
-- Quadlet.
-- Compose.
-- libvirt.
-- OCI session.
-
-### 32.6 GPU/device
-
-- optional GPU fallback;
-- required GPU failure;
-- NVIDIA CDI;
-- AMD/Intel DRM devices;
-- Compose target selection;
-- VM explicit PCI passthrough;
-- no arbitrary host GPU passthrough from `auto`.
-
-### 32.7 Storage/network/backup
-
-- mount path traversal/symlink escape protection;
-- file-browser visibility projection;
-- listener port/range reconciliation;
-- isolated network policy;
-- backup resource selection;
-- cache/ephemeral exclusion;
-- ZFS snapshot consistency;
-- native DB dump/restore jobs.
-
-### 32.8 Security
-
-- secret values never appear in desired/effective state/logs;
-- generated config permissions are correct;
-- V2 cannot import arbitrary Python into the control plane;
-- Python venv dependencies are isolated per service;
-- no implicit privileged container mode;
-- generated Caddy configuration validates before reload;
-- failed apply does not leave partially updated security policy.
-
-## 33. Completion definition
-
-Managed Services V2 is complete when all of the following are true:
-
-1. Cockpit is the normal way to add/edit services.
-2. `services.yaml` is the sole mutable application desired-state authority.
-3. JSON Schema is the single structural/UI contract.
-4. Existing application workloads are represented through generic V2 primitives.
-5. Authentik alone owns identity/capability assignments.
-6. Caddy alone performs HTTP request-time access enforcement and portal filtering.
-7. Native runtimes own process lifetime after provisioning.
-8. Native systemd timers own scheduling and idle maintenance rather than a V2 daemon.
-9. New applications using existing primitives require only V2 data/native app artifacts.
-10. Legacy feature-controller/application-specific integration code is removed.
-11. The implementation is materially smaller and easier to reason about than the system it replaces.
-
-The final measure of success is not how much V2 code exists. It is how much custom NAS-specific code is no longer necessary because one declarative spec can configure mature native systems correctly.
+Nothing in the generic compiler needs to know what the metrics database or the dashboard application is.

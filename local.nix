@@ -5,9 +5,6 @@
   imports = [
     ./modules/profiles/core-storage.nix
     ./modules/profiles/identity-sharing.nix
-    # AI is stripped from the build for now; re-enable the profile below
-    # when local AI ships again. Observability stays core.
-    # ./modules/profiles/local-ai.nix
     ./modules/profiles/observability.nix
   ];
 
@@ -39,22 +36,6 @@
 
     desktop.enable = false;
 
-    ai = {
-      storageRoot = "";
-
-      llamaSwap = {
-        port = 9292;
-        globalTtl = 600;
-      };
-
-      modelDownloader = {
-        enable = false;
-        port = 9381;
-      };
-
-      openWebuiPort = 9380;
-    };
-
     hardware = {
       cpuVendor = "auto";
       gpuVendors = [ ];
@@ -63,11 +44,6 @@
       nvidia = {
         openKernelModule = false;
         containerToolkit = false;
-      };
-
-      llamaCpp = {
-        enable = true;
-        backend = "cpu";
       };
     };
 

@@ -13,7 +13,6 @@
 # Users and access
 
 - [Applications](users/applications.md)
-- [Coding agent](users/coding-agent.md)
 - [User settings](users/settings.md)
 - [Account and permission model](permissions.md)
 - [Accounts and access](admin/accounts.md)
@@ -29,8 +28,7 @@
 - [Networking and remote access](admin/networking.md)
 - [Observability and alerts](admin/observability.md)
 - [Maintenance, service policy, and updates](admin/maintenance.md)
-- [Virtualization, AI, UPS, Vaultwarden, and TFTP](admin/virtualization-ai-power.md)
-- [Pi coding agent](admin/coding-agent.md)
+- [Virtualization, UPS, Vaultwarden, and TFTP](admin/virtualization-power.md)
 
 # Validation and recovery
 

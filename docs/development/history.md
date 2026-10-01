@@ -6,7 +6,13 @@ This is intentionally a summary, not an audit transcript. Detailed per-release p
 
 The project converged on Authentik for identity, CopyParty for share authority, KeePassXC for machine secrets, Caddy for forward-auth routing and the landing page, Cockpit for host management, Syncthing for synchronization, and VictoriaMetrics/Grafana for observability. Custom portal, user-settings, generated CopyParty ACL, LLDAP, Authelia, Apprise, and desktop D-Bus secret paths were removed.
 
-Managed Services V2 is the single application-definition layer: `services.yaml` (mutable, seed-once) + `managed-services-v3.schema.json` (structural/UI contract) compiled finitely into native systemd, Podman/Quadlet/Compose, libvirt, Caddy, Authentik capability objects, and firewalld. `features.json` and the `nas-feature-control` gate/controller are gone. Caddy is the sole HTTPS front door (bootstrap static guidance pre-secrets, Authentik-gated routes after activation). The Pi coding-agent runs as a transient `nas-code-agent` sandbox with llama-swap as the sole model/provider authority.
+Managed Services V2 is the single application-definition layer: `services.yaml` (mutable, seed-once) + `managed-services-v3.schema.json` (structural/UI contract) compiled finitely into native systemd, Podman/Quadlet/Compose, libvirt, Caddy, Authentik capability objects, and firewalld. `features.json` and the `nas-feature-control` gate/controller are gone. Caddy is the sole HTTPS front door (bootstrap static guidance pre-secrets, Authentik-gated routes after activation).
+
+## Local AI removed
+
+The local-AI control plane (llama-swap, Open WebUI, the Hugging Face downloader, and the Pi coding agent) was deleted rather than disabled. `modules/ai`, the `local-ai` profile, `nas.ai.*`, `nas.hardware.llamaCpp.*`, `services/nas_ai_config.py`, `services/nas_coding_agent.py`, and the AI Cockpit page are gone, along with the `/ai*` routes, AI secret staging, and AI seed entries. Managed Services V2 remains generic and application-agnostic; no AI-specific replacement belongs in it.
+
+`docs/development/managed-services-v2-spec.md` was reduced to a pointer at `spec/managed-services/README.md`, which is the single V2 authority. Two drifting specification copies had diverged.
 
 ## Baseline 0.1.0 — 2026-08-25
 

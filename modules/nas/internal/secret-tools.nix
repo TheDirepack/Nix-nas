@@ -168,88 +168,6 @@ let
         get_secret "$1"
       }
 
-      validate_ai_provider_id() {
-        [[ "''${1:-}" =~ ^[a-z][a-z0-9-]{0,47}$ ]] || {
-          echo "AI provider ID must use lowercase letters, digits, and hyphens." >&2
-          exit 2
-        }
-      }
-
-      ai_provider_env_name() {
-        validate_ai_provider_id "$1"
-        local value
-        value="''${1^^}"
-        value="''${value//-/_}"
-        printf 'LLAMA_SWAP_PEER_%s_API_KEY' "$value"
-      }
-
-      ai_provider_pairs() {
-        local config=/var/lib/nas-llama-swap/config.yaml
-        [[ -f "$config" ]] || return 0
-        python3 - "$config" <<'PY_AI_PROVIDERS'
-import re
-import sys
-import yaml
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as handle:
-    config = yaml.safe_load(handle) or {}
-peers = config.get("peers") or {}
-if not isinstance(peers, dict):
-    raise SystemExit("llama-swap peers configuration is not an object")
-provider_re = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
-env_re = re.compile(r"^\$\{env\.([A-Z][A-Z0-9_]*)\}$")
-for provider, peer in sorted(peers.items()):
-    if not isinstance(provider, str) or not provider_re.fullmatch(provider) or not isinstance(peer, dict):
-        continue
-    value = peer.get("apiKey")
-    if not isinstance(value, str):
-        continue
-    match = env_re.fullmatch(value)
-    if match:
-        expected = "LLAMA_SWAP_PEER_" + provider.upper().replace("-", "_") + "_API_KEY"
-        if match.group(1) != expected:
-            raise SystemExit(f"peer {provider} references an unexpected API-key environment variable")
-        print(provider + "\t" + match.group(1))
-PY_AI_PROVIDERS
-      }
-
-      stage_ai_provider_runtime_key() {
-        local provider="$1" value="$2" env_name existing temp
-        env_name="$(ai_provider_env_name "$provider")"
-        require_secret_atom "$value" "AI provider API key" 8 4096
-        [[ -f "$secret_root/ready" ]] || return 0
-        existing="$secret_root/ai/llama-swap.env"
-        [[ -f "$existing" ]] || return 0
-        temp="$(mktemp "$secret_root/.llama-swap.env.XXXXXX")"
-        trap 'rm -f "$temp"' RETURN
-        grep -v -E "^''${env_name}=" "$existing" > "$temp" || true
-        printf '%s=%s\n' "$env_name" "$value" >> "$temp"
-        install_secret "$temp" "$existing" nas-ai nas-ai
-        rm -f "$temp"
-        trap - RETURN
-        if [[ -z "''${NAS_SKIP_LLAMA_SWAP_RESTART:-}" ]] && systemctl is-active --quiet nas-llama-swap.service; then
-          sudo systemctl restart nas-llama-swap.service
-        fi
-      }
-
-      remove_ai_provider_runtime_key() {
-        local provider="$1" env_name existing temp
-        env_name="$(ai_provider_env_name "$provider")"
-        [[ -f "$secret_root/ready" ]] || return 0
-        existing="$secret_root/ai/llama-swap.env"
-        [[ -f "$existing" ]] || return 0
-        temp="$(mktemp "$secret_root/.llama-swap.env.XXXXXX")"
-        trap 'rm -f "$temp"' RETURN
-        grep -v -E "^''${env_name}=" "$existing" > "$temp" || true
-        install_secret "$temp" "$existing" nas-ai nas-ai
-        rm -f "$temp"
-        trap - RETURN
-        if [[ -z "''${NAS_SKIP_LLAMA_SWAP_RESTART:-}" ]] && systemctl is-active --quiet nas-llama-swap.service; then
-          sudo systemctl restart nas-llama-swap.service
-        fi
-      }
-
       store_random_if_missing() {
         local key="$1" label="$2" bytes="$3" value
         if has_secret "$key"; then
@@ -308,12 +226,6 @@ PY_AI_PROVIDERS
         ${lib.optionalString cfg.zfsEncryption.enable ''
         store_random_if_missing zfs-dataset-key "ZFS native encryption key" 32
         ''}
-        ${lib.optionalString cfg.ai.enable ''
-        store_random_if_missing llama-swap-api-key "llama-swap API key" 32
-        ${lib.optionalString cfg.ai.codingAgent.enable ''store_random_if_missing coding-agent-api-key "Pi coding-agent llama-swap client key" 32''}
-        store_random_if_missing open-webui-secret "Open WebUI signing secret" 32
-        store_random_if_missing open-webui-admin-password "Open WebUI bootstrap administrator password" 24
-        ''}
         ${lib.optionalString cfg.vaultwarden.enable ''
         store_random_if_missing vaultwarden-oidc-client-secret "Vaultwarden Authentik OIDC client secret" 32
         store_random_if_missing vaultwarden-admin "Vaultwarden admin token" 32
@@ -359,9 +271,6 @@ PY_AI_PROVIDERS
         local bootstrap_token_reused=false
         local authentik_secret authentik_bootstrap_token authentik_bootstrap_password authentik_outpost_token
         ${lib.optionalString cfg.vaultwarden.enable ''local vaultwarden_client_secret vaultwarden_admin_token vaultwarden_admin_hash''}
-        ${lib.optionalString cfg.ai.enable ''local llama_swap_api_key open_webui_secret open_webui_admin_password huggingface_token''}
-        ${lib.optionalString (cfg.ai.enable && cfg.ai.codingAgent.enable) ''local coding_agent_api_key''}
-        ${lib.optionalString cfg.ai.enable ''local provider_id provider_env provider_key''}
         ${lib.optionalString cfg.observability.ntfy.enable ''local ntfy_password ntfy_hash ntfy_topic''}
         local state_bundle_signing_key
         sudo install -d -m 0711 -o root -g root /run/nas-secret-runtime/staging
@@ -407,7 +316,7 @@ PY_AI_PROVIDERS
         trap 'exit 130' INT
         trap 'exit 143' TERM
 
-        install -d -m 0700 "$local_stage"/{authentik,vaultwarden,zfs,ai,observability,power,state}
+        install -d -m 0700 "$local_stage"/{authentik,vaultwarden,zfs,observability,power,state}
 
         authentik_secret="$(get_secret authentik-secret-key)"
         authentik_bootstrap_token="$(get_secret_optional authentik-bootstrap-token)"
@@ -475,35 +384,6 @@ NTFY_ENV
         ${lib.optionalString cfg.zfsEncryption.enable ''
         printf '%s' "$(get_secret zfs-dataset-key)" > "$local_stage/zfs/dataset-key"
         ''}
-        ${lib.optionalString cfg.ai.enable ''
-        llama_swap_api_key="$(get_secret llama-swap-api-key)"
-        ${lib.optionalString cfg.ai.codingAgent.enable ''coding_agent_api_key="$(get_secret coding-agent-api-key)"''}
-        open_webui_secret="$(get_secret open-webui-secret)"
-        open_webui_admin_password="$(get_secret open-webui-admin-password)"
-        huggingface_token="$(get_secret_optional huggingface-token)"
-        require_secret_atom "$llama_swap_api_key" "llama-swap API key" 8 4096
-        ${lib.optionalString cfg.ai.codingAgent.enable ''require_secret_atom "$coding_agent_api_key" "Pi coding-agent API key" 8 4096''}
-        require_secret_atom "$open_webui_secret" "Open WebUI signing secret" 8 4096
-        require_secret_atom "$open_webui_admin_password" "Open WebUI bootstrap password" 8 4096
-        require_huggingface_token "$huggingface_token"
-        printf 'LLAMA_SWAP_API_KEY=%s\n' "$llama_swap_api_key" > "$local_stage/ai/llama-swap.env"
-        ${lib.optionalString cfg.ai.codingAgent.enable ''
-        printf 'LLAMA_SWAP_CODING_API_KEY=%s\n' "$coding_agent_api_key" >> "$local_stage/ai/llama-swap.env"
-        printf '%s' "$coding_agent_api_key" > "$local_stage/ai/coding-agent-api-key"
-        ''}
-        while IFS=$'\t' read -r provider_id provider_env; do
-          [[ -n "$provider_id" && -n "$provider_env" ]] || continue
-          provider_key="$(get_secret_optional "ai-provider-$provider_id")"
-          [[ -n "$provider_key" ]] || {
-            echo "llama-swap provider $provider_id requires a KeePass API key that is not configured." >&2
-            exit 1
-          }
-          require_secret_atom "$provider_key" "llama-swap provider $provider_id API key" 8 4096
-          printf '%s=%s\n' "$provider_env" "$provider_key" >> "$local_stage/ai/llama-swap.env"
-        done < <(ai_provider_pairs)
-        printf 'WEBUI_SECRET_KEY=%s\nWEBUI_ADMIN_PASSWORD=%s\n' "$open_webui_secret" "$open_webui_admin_password" > "$local_stage/ai/open-webui.env"
-        printf 'HF_TOKEN=%s\n' "$huggingface_token" > "$local_stage/ai/hfdownloader.env"
-        ''}
         ${lib.optionalString cfg.vaultwarden.enable ''
         vaultwarden_client_secret="$(get_secret vaultwarden-oidc-client-secret)"
         vaultwarden_admin_token="$(get_secret vaultwarden-admin)"
@@ -520,7 +400,6 @@ NTFY_ENV
         sudo install -d -m 0700 -o root -g root "$root_stage/state"
         ${lib.optionalString cfg.vaultwarden.enable ''sudo install -d -m 0700 -o root -g root "$root_stage/vaultwarden"''}
         ${lib.optionalString cfg.zfsEncryption.enable ''sudo install -d -m 0700 -o root -g root "$root_stage/zfs"''}
-        ${lib.optionalString cfg.ai.enable ''sudo install -d -m 0711 -o root -g root "$root_stage/ai"''}
         ${lib.optionalString (cfg.observability.enable || cfg.observability.ntfy.enable) ''sudo install -d -m 0750 -o root -g nas-observability "$root_stage/observability"''}
         ${lib.optionalString (cfg.power.ups.enable && cfg.power.ups.web.enable) ''sudo install -d -m 0700 -o root -g root "$root_stage/power"''}
 
@@ -538,12 +417,6 @@ NTFY_ENV
         fi
         ${lib.optionalString cfg.vaultwarden.enable ''install_secret "$local_stage/vaultwarden/environment" "$root_stage/vaultwarden/environment" root root''}
         ${lib.optionalString cfg.zfsEncryption.enable ''install_secret "$local_stage/zfs/dataset-key" "$root_stage/zfs/dataset-key" root root''}
-        ${lib.optionalString cfg.ai.enable ''
-        install_secret "$local_stage/ai/llama-swap.env" "$root_stage/ai/llama-swap.env" nas-ai nas-ai
-        ${lib.optionalString cfg.ai.codingAgent.enable ''install_secret "$local_stage/ai/coding-agent-api-key" "$root_stage/ai/coding-agent-api-key" nas-code-agent nas-code-agent''}
-        install_secret "$local_stage/ai/open-webui.env" "$root_stage/ai/open-webui.env" root root
-        install_secret "$local_stage/ai/hfdownloader.env" "$root_stage/ai/hfdownloader.env" hfdownloader hfdownloader
-        ''}
         ${lib.optionalString (cfg.observability.enable && cfg.observability.grafana.enable) ''install_secret "$local_stage/observability/grafana-secret-key" "$root_stage/observability/grafana-secret-key" grafana grafana''}
         ${lib.optionalString cfg.observability.ntfy.enable ''
         install_secret "$local_stage/observability/ntfy-environment" "$root_stage/observability/ntfy-environment" root root
@@ -747,91 +620,6 @@ NTFY_ENV
         echo "Authentik bootstrap credentials removed. Run nas-secrets activate to remove runtime artifacts."
       }
 
-      command_set_hf_token() {
-        acquire_lock
-        prompt_unlock
-        ensure_group
-        local token
-        read -r -s -p "Hugging Face read token: " token
-        echo
-        [[ "$token" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || { echo "Token format is invalid." >&2; exit 1; }
-        store_value huggingface-token "$token"
-        unset token
-        echo "Token stored. Run nas-secrets activate to export it."
-      }
-
-      command_clear_hf_token() {
-        acquire_lock
-        prompt_unlock
-        remove_value huggingface-token
-        echo "Hugging Face token removed. Run nas-secrets activate."
-      }
-
-      command_set_ai_provider_key_stdin() {
-        local provider="''${2:-}" token
-        validate_ai_provider_id "$provider"
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        ensure_group
-        IFS= read -r token || { echo "Unable to read the AI provider API key from standard input." >&2; exit 1; }
-        if IFS= read -r _; then
-          echo "Unexpected extra input while setting the AI provider API key." >&2
-          exit 1
-        fi
-        require_secret_atom "$token" "AI provider API key" 8 4096
-        store_value "ai-provider-$provider" "$token"
-        stage_ai_provider_runtime_key "$provider" "$token"
-        unset token
-        echo "AI provider API key stored and staged."
-      }
-
-      command_clear_ai_provider_key_stdin() {
-        local provider="''${2:-}"
-        validate_ai_provider_id "$provider"
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        if IFS= read -r _; then
-          echo "Unexpected extra input while clearing the AI provider API key." >&2
-          exit 1
-        fi
-        remove_value "ai-provider-$provider"
-        remove_ai_provider_runtime_key "$provider"
-        echo "AI provider API key removed."
-      }
-
-      command_show_ai_provider_key() {
-        local provider="''${2:-}"
-        validate_ai_provider_id "$provider"
-        acquire_lock
-        prompt_unlock
-        if has_secret "ai-provider-$provider"; then
-          get_secret "ai-provider-$provider"
-        fi
-      }
-
-      command_show_ai_provider_key_stdin() {
-        local provider="''${2:-}"
-        validate_ai_provider_id "$provider"
-        acquire_lock
-        password_from_stdin=true
-        prompt_unlock
-        if IFS= read -r _; then
-          echo "Unexpected extra input while showing the AI provider API key." >&2
-          exit 1
-        fi
-        if has_secret "ai-provider-$provider"; then
-          get_secret "ai-provider-$provider"
-        fi
-      }
-
-      command_show_ai_api_key() {
-        prompt_unlock
-        get_secret llama-swap-api-key
-        echo
-      }
-
       command_show_ntfy_password() {
         prompt_unlock
         get_secret ntfy-admin-password
@@ -861,7 +649,7 @@ NTFY_ENV
 
       enter_operation_coordinator() {
         case "''${1:-}" in
-          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|activate-setup-stdin|stop|set-authentik-token|set-authentik-token-stdin|set-authentik-runtime-stdin|retire-authentik-bootstrap-stdin|set-hf-token|clear-hf-token|set-ai-provider-key-stdin|clear-ai-provider-key-stdin|show-ai-provider-key|show-ai-provider-key-stdin)
+          init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|activate-setup-stdin|stop|set-authentik-token|set-authentik-token-stdin|set-authentik-runtime-stdin|retire-authentik-bootstrap-stdin)
             local runner="''${NAS_OPERATION_RUNNER:-/run/current-system/sw/bin/nas-operation-run}"
             [[ -x "$runner" ]] || {
               echo "NAS operation coordinator is unavailable: $runner" >&2
@@ -897,19 +685,12 @@ NTFY_ENV
         set-authentik-runtime-stdin) command_set_authentik_runtime_stdin ;;
         retire-authentik-bootstrap-stdin) command_retire_authentik_bootstrap_stdin ;;
         check-authentik-token) command_check_authentik_token ;;
-        set-hf-token) command_set_hf_token ;;
-        clear-hf-token) command_clear_hf_token ;;
-        set-ai-provider-key-stdin) command_set_ai_provider_key_stdin "$@" ;;
-        clear-ai-provider-key-stdin) command_clear_ai_provider_key_stdin "$@" ;;
-        show-ai-provider-key) command_show_ai_provider_key "$@" ;;
-        show-ai-provider-key-stdin) command_show_ai_provider_key_stdin "$@" ;;
-        show-ai-api-key) command_show_ai_api_key ;;
         show-ntfy-password) command_show_ntfy_password ;;
         show-zfs-key) command_show_zfs_key ;;
         show-zfs-key-stdin) command_show_zfs_key_stdin ;;
         show-authentik-bootstrap) command_show_authentik_bootstrap ;;
         *)
-          echo "Usage: nas-secrets {init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|set-authentik-runtime-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|set-hf-token|clear-hf-token|set-ai-provider-key-stdin PROVIDER|clear-ai-provider-key-stdin PROVIDER|show-ai-provider-key PROVIDER|show-ai-provider-key-stdin PROVIDER|show-ai-api-key|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
+          echo "Usage: nas-secrets {init|adopt-authentik-bootstrap-stdin|activate|activate-stdin|status|stop|set-authentik-token|set-authentik-token-stdin|set-authentik-runtime-stdin|retire-authentik-bootstrap-stdin|check-authentik-token|show-ntfy-password|show-zfs-key|show-zfs-key-stdin|show-authentik-bootstrap}" >&2
           exit 2
           ;;
       esac

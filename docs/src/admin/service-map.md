@@ -26,8 +26,6 @@ Use this page when you are unsure where a setting belongs. Keeping one authority
 | Firewall policy | firewalld/nftables + V2 projection | Cockpit Networking / `firewall-cmd` for host policy; V2 for application listeners/egress | `/var/lib/nas-firewall` + `services.yaml` |
 | Containers | Podman | Cockpit Podman + V2 runtime policy | Podman storage + `services.yaml` |
 | Virtual machines | libvirt | Cockpit Machines + V2 runtime policy | ZFS VM storage path + `services.yaml` |
-| AI model routing | llama-swap | AI runtime UI | AI config/model tree |
-| Model downloads | Hugging Face downloader | admin downloader UI/API | AI model tree |
 | UPS | NUT | Cockpit + NUT Web UI | NUT config and boot credential |
 | Managed application/job schedules | Managed Services V2 -> native systemd timers | `services.yaml` / Cockpit systemd timer view | V2 desired state plus generated systemd timers |
 | Optional non-V2 host schedules | Cockpit Scheduler where configured | Cockpit Scheduler | scheduler state |

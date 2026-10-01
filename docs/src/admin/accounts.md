@@ -59,7 +59,6 @@ Disabling an account:
 - `nas_allow_webdav`
 - `nas_allow_syncthing`
 - `nas_allow_vault`
-- `nas_allow_ai`
 
 Matching `nas_deny_*` groups take precedence. See [Account and permission model](../permissions.md) for the enforcement model.
 
