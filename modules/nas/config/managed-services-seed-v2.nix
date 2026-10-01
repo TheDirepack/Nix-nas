@@ -225,7 +225,7 @@ let
   // lib.optionalAttrs (cfg.observability.enable && cfg.alerting.enable) {
     alertmanager = (daemon "alertmanager.service" "Alertmanager notification router") // {
       authorization.capabilities = adminCapability "View Alertmanager";
-      routes.web = (pathRoute [ "/alerts/" ] (httpTarget cfg.observability.alertRouterPort) (identity "admin")) // {
+      routes.web = (pathRoute [ "/alerts/" ] (httpTarget cfg.observability.alertmanagerPort) (identity "admin")) // {
         portal = portal "Alerts" "Monitoring" "bell" 70;
       };
     };
