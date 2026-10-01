@@ -2,6 +2,8 @@
 
 `nas_setup.py` currently mixes four separate jobs: first-start request handling, privileged orchestration, identity/bootstrap retirement, and steady-state recovery/status. The cleanup should reduce it to a thin command surface over smaller modules rather than growing more setup-specific helpers in the same file.
 
+The secret-runtime extraction is complete: `secret-tools.nix` sources the immutable `nas-secret-runtime.sh` library for validation and private-file installation. The validators retain their existing call sites and diagnostics; private installation rejects missing, non-regular, and symlink sources. There is no duplicate implementation in the Nix string. The setup-module and npm cleanup below remain separate follow-up changes, not part of this extraction.
+
 ## Target split
 
 - `nas_setup.py`: argument parsing and command dispatch only.

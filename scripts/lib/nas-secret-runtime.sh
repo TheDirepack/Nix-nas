@@ -1,40 +1,38 @@
 # shellcheck shell=bash
-# Shared secret validation and installation helpers.
-# Source this file from privileged secret workflows; it is intentionally not an executable.
 
-nas_secret_require_atom() {
+require_secret_atom() {
   local value="$1" label="$2" minimum="${3:-8}" maximum="${4:-4096}"
   if (( ${#value} < minimum || ${#value} > maximum )) || [[ ! "$value" =~ ^[A-Za-z0-9._~+/=:@-]+$ ]]; then
-    echo "$label has an unsafe or unexpected format." >&2
+    echo "$label has an unsafe or unexpected format in KeePassXC." >&2
     return 1
   fi
 }
 
-nas_secret_require_hex() {
+require_secret_hex() {
   local value="$1" expected="$2" label="$3"
   if (( ${#value} != expected )) || [[ ! "$value" =~ ^[0-9A-Fa-f]+$ ]]; then
-    echo "$label has an unsafe or unexpected format." >&2
+    echo "$label has an unsafe or unexpected format in KeePassXC." >&2
     return 1
   fi
 }
 
-nas_secret_require_ntfy_topic() {
+require_ntfy_topic() {
   local value="$1"
   if (( ${#value} < 8 || ${#value} > 128 )) || [[ ! "$value" =~ ^[A-Za-z0-9_-]+$ ]]; then
-    echo "ntfy alert topic has an unsafe or unexpected format." >&2
+    echo "ntfy alert topic has an unsafe or unexpected format in KeePassXC." >&2
     return 1
   fi
 }
 
-nas_secret_require_huggingface_token() {
+require_huggingface_token() {
   local value="$1"
   [[ -z "$value" || "$value" =~ ^hf_[A-Za-z0-9]{20,}$ ]] || {
-    echo "Hugging Face token has an unsafe or unexpected format." >&2
+    echo "Hugging Face token has an unsafe or unexpected format in KeePassXC." >&2
     return 1
   }
 }
 
-nas_secret_install_private() {
+install_secret() {
   local source="$1" target="$2" owner="$3" group="$4"
   [[ -f "$source" && ! -L "$source" ]] || {
     echo "Refusing to install a non-regular or symlink secret source: $source" >&2
