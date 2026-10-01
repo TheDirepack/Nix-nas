@@ -12,7 +12,6 @@ An ordinary account receives **no NAS application capability merely by belonging
 | `nas_allow_webdav` | WebDAV route |
 | `nas_allow_syncthing` | Own Syncthing-device settings and managed personal sync |
 | `nas_allow_vault` | Vaultwarden SSO enrollment/sign-in path |
-| `nas_allow_ai` | User AI workspace |
 
 The matching `nas_deny_*` group overrides an allow grant. `nas_disabled` disables the account across shared policy.
 

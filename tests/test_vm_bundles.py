@@ -16,7 +16,6 @@ EXPECTED_BUNDLES = [
     "identity",
     "observability",
     "storage",
-    "ai",
     "vm-drivers",
 ]
 
@@ -183,7 +182,6 @@ class VmBundleScriptTests(unittest.TestCase):
                 ".#packages.x86_64-linux.identity "
                 ".#packages.x86_64-linux.observability "
                 ".#packages.x86_64-linux.storage "
-                ".#packages.x86_64-linux.ai "
                 ".#packages.x86_64-linux.vm-drivers "
                 ".#checks.x86_64-linux.nas-vm.driver "
                 ".#checks.x86_64-linux.nas-vm-encrypted.driver",
@@ -352,7 +350,6 @@ class VmBundleScriptTests(unittest.TestCase):
                 "NAR:/nix/store/aaaaaaaaaa-identity",
                 "NAR:/nix/store/aaaaaaaaaa-observability",
                 "NAR:/nix/store/aaaaaaaaaa-storage",
-                "NAR:/nix/store/aaaaaaaaaa-ai",
                 "NAR:/nix/store/aaaaaaaaaa-vm-drivers",
             ],
         )

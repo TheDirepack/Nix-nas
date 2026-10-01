@@ -14,8 +14,6 @@ All browser routes use `https://<nas-hostname>.local`. Authentik authenticates e
 | `/dav/` | `nas_allow_webdav` | CopyParty WebDAV endpoint. |
 | `/syncthing/` | `nas_admin` | Global upstream Syncthing UI. |
 | `/vault/` | `nas_allow_vault` | Vaultwarden web vault and clients. |
-| `/ai/` | `nas_allow_ai` | Open WebUI. |
-| `/ai/models/` | `nas_admin` | Model downloader interface when enabled. |
 | `/metrics/` | `nas_admin` | Grafana dashboards. |
 | `/victoriametrics/` | `nas_admin` | VictoriaMetrics VMUI and PromQL-compatible APIs. |
 | `/alerts/` | `nas_admin` | Upstream Alertmanager UI for alerts and silences. |

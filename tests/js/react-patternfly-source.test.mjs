@@ -12,7 +12,6 @@ const PAGES = [
   "src/pages/services-page.jsx",
   "src/pages/applications-page.jsx",
   "src/pages/operations-page.jsx",
-  "src/pages/ai-page.jsx",
   "src/pages/source-page.jsx",
   "src/pages/setup-page.jsx",
 ];
@@ -101,8 +100,6 @@ test("managed services editor is generated from the canonical schema with YAML a
     "copyparty",
     "syncthing",
     "grafana",
-    "ai-runtime",
-    "ai-workspace",
     "ntfy",
   ]) {
     assert.equal(

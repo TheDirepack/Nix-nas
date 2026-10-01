@@ -30,18 +30,6 @@
           description = "Enable NVIDIA Container Toolkit when GPU-enabled OCI workloads are required.";
         };
       };
-      llamaCpp = {
-        enable = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = "Install llama.cpp tools without automatically starting a model server.";
-        };
-        backend = lib.mkOption {
-          type = lib.types.enum [ "cpu" "vulkan" "cuda" "rocm" ];
-          default = "cpu";
-          description = "llama.cpp acceleration backend. Vulkan is the portable GPU option; CUDA and ROCm are x86_64-only in this profile.";
-        };
-      };
     };
   };
 }

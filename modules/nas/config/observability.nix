@@ -48,7 +48,6 @@ let
     ]
     ++ lib.optional cfg.syncthing.enable "syncthing.service"
     ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
-    ++ lib.optional cfg.ai.enable "open-webui.service"
     ++ lib.optional cfg.virtualization.enable "libvirtd.service"
     ++ lib.optionals cfg.observability.enable [ "victoriametrics.service" "telegraf.service" ]
     ++ lib.optionals (cfg.observability.enable && cfg.alerting.enable) [ "vmalert-nas.service" "alertmanager.service" ]

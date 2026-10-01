@@ -39,8 +39,8 @@
     }
   ],
   "services": {
-    "ai-runtime": "always",
-    "ai-workspace": "on-demand",
+    "copyparty": "always",
+    "syncthing": "on-demand",
     "grafana": "on-demand"
   },
   "deactivateMissingManagedAccounts": false,

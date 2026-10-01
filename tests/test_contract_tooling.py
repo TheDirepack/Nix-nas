@@ -578,7 +578,6 @@ class ContractTests(unittest.TestCase):
             "nas-profile-identity-sharing",
             "nas-profile-observability",
             "nas-profile-virtualization",
-            "nas-profile-local-ai",
             "nas-profile-all",
         ]:
             self.assertIn(name, flake)
@@ -601,7 +600,7 @@ class ContractTests(unittest.TestCase):
         negative_eval = text("tests/nixos/negative-eval.nix")
         self.assertIn('builtins.getEnv "NAS_NEGATIVE_ROOT"', negative_eval)
         self.assertIn('builtins.getEnv "NAS_NEGATIVE_FIXTURE"', negative_eval)
-        self.assertIn('name == "open-webui"', host_platform)
+        self.assertIn("hasNvidiaGpu && lib.any (prefix: lib.hasPrefix prefix name)", host_platform)
         self.assertNotIn("allowUnfree = true", host_platform)
         self.assertIn("!cfg.testing.readOnlyPackageSet", host_platform)
         self.assertIn("nas.testing.readOnlyPackageSet = true", text("tests/nixos/integration.nix"))

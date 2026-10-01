@@ -9,7 +9,7 @@ NixOS NAS is a NixOS-based NAS appliance that keeps storage, identity, secrets, 
 - File sharing with volumes, ACLs, quotas, share links, and WebDAV through CopyParty.
 - Web administration through Cockpit, including guided first-start setup and locked-boot unlock.
 - Machine secrets in a KeePassXC database, staged under `/run` only while the system is unlocked.
-- Optional Syncthing, Vaultwarden, virtualization, local AI, and a VictoriaMetrics/Telegraf observability stack.
+- Optional Syncthing, Vaultwarden, virtualization, and a VictoriaMetrics/Telegraf observability stack.
 - Recovery-first design: a cold-boot Cockpit/PAM recovery plane, `nas-state` export/restore for appliance state, and Restic for backups.
 
 ## Release status

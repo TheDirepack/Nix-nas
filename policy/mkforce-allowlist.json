@@ -20,18 +20,6 @@
       "reason": "NixOS 26.05 sets nixpkgs.config read-only for allowUnfree; host-platform must force the GPU allowlist predicate."
     },
     {
-      "path": "modules/nas/config/host-platform.nix",
-      "setting": "nixpkgs.config.cudaSupport",
-      "count": 1,
-      "reason": "NixOS 26.05 sets nixpkgs.config read-only; host-platform must force cudaSupport based on nas.hardware.llamaCpp.backend."
-    },
-    {
-      "path": "modules/nas/config/host-platform.nix",
-      "setting": "nixpkgs.config.rocmSupport",
-      "count": 1,
-      "reason": "NixOS 26.05 sets nixpkgs.config read-only; host-platform must force rocmSupport based on nas.hardware.llamaCpp.backend."
-    },
-    {
       "path": "modules/nas/config/caddy-bootstrap.nix",
       "setting": "systemd.services.caddy.serviceConfig.ExecStart",
       "count": 1,

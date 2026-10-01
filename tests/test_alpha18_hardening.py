@@ -33,8 +33,9 @@ class Alpha18HardeningContracts(unittest.TestCase):
         flake = text("flake.nix")
         self.assertFalse((ROOT / "nas-module.nix").exists())
         self.assertFalse((ROOT / "ai-module.nix").exists())
+        self.assertFalse((ROOT / "modules" / "ai").exists())
         self.assertIn("core = import ./modules/nas;", flake)
-        self.assertIn("ai = import ./modules/ai;", flake)
+        self.assertNotIn("./modules/ai", flake)
         default_block = flake.split("default = { ... }:", 1)[1].split("profiles =", 1)[0]
         self.assertIn("copyparty.nixosModules.default", default_block)
         self.assertIn("copyparty.overlays.default", default_block)
@@ -157,9 +158,10 @@ class Alpha18HardeningContracts(unittest.TestCase):
 
     def test_profiles_keep_optional_services_out_of_base_defaults(self) -> None:
         flake = text("flake.nix")
-        for profile in ("core-storage", "identity-sharing", "observability", "virtualization", "local-ai"):
+        for profile in ("core-storage", "identity-sharing", "observability", "virtualization"):
             self.assertIn(profile, flake)
             self.assertTrue((ROOT / "modules/profiles" / f"{profile}.nix").is_file())
+        self.assertFalse((ROOT / "modules/profiles/local-ai.nix").exists())
 
     def test_mkforce_and_version_contracts_remain_machine_checked(self) -> None:
         for script in ("check-mkforce.py", "check-version.py"):

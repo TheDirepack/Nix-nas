@@ -71,8 +71,6 @@ test("generic schema model contains no built-in application identifiers", () => 
     "copyparty",
     "syncthing",
     "grafana",
-    "ai-runtime",
-    "ai-workspace",
     "ntfy",
   ]) {
     assert.equal(source.includes(application), false, `${application} must not be special-cased`);

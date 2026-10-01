@@ -47,7 +47,6 @@ let
 
   vaultwardenSecretDir = "${secretRoot}/vaultwarden";
   zfsSecretDir = "${secretRoot}/zfs";
-  aiSecretDir = "${secretRoot}/ai";
   observabilitySecretDir = "${secretRoot}/observability";
   powerSecretDir = "${secretRoot}/power";
   zfsKeyPath = "${zfsSecretDir}/dataset-key";
@@ -59,7 +58,6 @@ let
   vaultwardenOidcAuthority = "https://${lanHost}${cfg.identity.authentikPath}application/o/vaultwarden/";
   vaultwardenOidcCallback = "https://${lanHost}/vault/identity/connect/oidc-signin";
   shareRoot = "${cfg.zfsRoot}/shares";
-  aiStorageRoot = if cfg.ai.storageRoot != "" then cfg.ai.storageRoot else "${cfg.zfsRoot}/ai";
   copypartyMountRoot = "${copypartyDataDir}/shares";
   tftpMountRoot = "${copypartyMountRoot}/tftp";
   vmStoragePath = if cfg.virtualization.storagePath != "" then cfg.virtualization.storagePath else "${cfg.zfsRoot}/virtual-machines";
@@ -120,20 +118,12 @@ let
   ++ lib.optional (authentikOutpostPort != authentikPort) authentikOutpostPort
   ++ lib.optional cfg.syncthing.enable syncthingGuiPort
   ++ lib.optional cfg.vaultwarden.enable vaultwardenPort
-  ++ managementPorts
-  ++ lib.optionals cfg.ai.enable [ cfg.ai.llamaSwap.port cfg.ai.openWebuiPort ]
-  ++ lib.optional (cfg.ai.enable && cfg.ai.modelDownloader.enable) cfg.ai.modelDownloader.port;
+  ++ managementPorts;
 
   gpuVendors = cfg.hardware.gpuVendors;
   hasIntelGpu = lib.elem "intel" gpuVendors;
   hasAmdGpu = lib.elem "amd" gpuVendors;
   hasNvidiaGpu = lib.elem "nvidia" gpuVendors;
-  llamaBackend = cfg.hardware.llamaCpp.backend;
-  llamaCppPackage =
-    if llamaBackend == "cuda" then pkgs.llama-cpp.override { cudaSupport = true; }
-    else if llamaBackend == "rocm" then pkgs.llama-cpp.override { rocmSupport = true; }
-    else if llamaBackend == "vulkan" then pkgs.llama-cpp.override { vulkanSupport = true; }
-    else pkgs.llama-cpp;
 
 in
 {
@@ -146,15 +136,14 @@ in
     bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir
     bootstrapUsername bootstrapPassword
     authentikDataDir postgresqlDataDir vaultwardenDataDir vaultwardenStateDirectory
-    vaultwardenSecretDir zfsSecretDir aiSecretDir observabilitySecretDir powerSecretDir
+    vaultwardenSecretDir zfsSecretDir observabilitySecretDir powerSecretDir
     zfsKeyPath zfsKeyFingerprintProperty vaultwardenBackupDir caddyInternalCaPath
     caddyCaExportDir caddyCaExportPath vaultwardenOidcClientId vaultwardenOidcAuthority
-    vaultwardenOidcCallback shareRoot aiStorageRoot copypartyMountRoot tftpMountRoot
+    vaultwardenOidcCallback shareRoot copypartyMountRoot tftpMountRoot
     vmStoragePath upsUsesLocalDriver upsMonitorSystem syncthingDataDir syncthingConfigDir
     hostSystem isX86_64 supportedHostSystems failureAlert
     bootLoaderConfigured rootFilesystemConfigured caddyBackendUnits protectedServiceUnits
     observabilityUidCollisions observabilityGidCollisions managementPorts
-    loopbackServicePorts gpuVendors hasIntelGpu hasAmdGpu hasNvidiaGpu llamaBackend
-    llamaCppPackage
+    loopbackServicePorts gpuVendors hasIntelGpu hasAmdGpu hasNvidiaGpu
   ;
 }

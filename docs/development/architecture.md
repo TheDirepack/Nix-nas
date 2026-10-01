@@ -21,7 +21,7 @@ NixOS NAS is designed as a single-host appliance with explicit authorities rathe
 users ---> Authentik ---> Caddy authorization ---> application UIs
                     \                         \
                      \                         +--> CopyParty / Syncthing /
-                      +--> capability policy        Vaultwarden / AI
+                      +--> capability policy        Vaultwarden / Grafana
 
 KeePassXC ---> nas-secrets ---> /run/nas-secrets ---> protected services
 

@@ -14,7 +14,6 @@ Authentik is the authority for human identities, passwords, MFA, groups, profile
 - `nas_allow_webdav`
 - `nas_allow_syncthing`
 - `nas_allow_vault`
-- `nas_allow_ai`
 
 Matching deny groups take precedence. Application bindings in Authentik should mirror the same capability groups so the dashboard matches the policy enforced by Caddy and the application backend.
 

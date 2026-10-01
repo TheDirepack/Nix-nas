@@ -76,13 +76,6 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(result, status)
         command.assert_called_once_with([api._setup_entry(), "status"], optional=True)
 
-    def test_ai_configuration_fails_closed(self) -> None:
-        with mock.patch.object(api.ai_config, "load_config", side_effect=api.ai_config.AiConfigError("bad")):
-            result = api.ai_configuration()
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["providers"], [])
-        self.assertEqual(result["codingRoles"], {})
-
     def test_operation_state_adds_action_conflicts_and_handles_io_error(self) -> None:
         with (
             mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": ["runtime"], "active": []}),
@@ -415,189 +408,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             with self.assertRaisesRegex(api.ApiError, "busy"):
                 api.set_managed_service("demo", "off")
 
-    def test_private_file_snapshot_and_restore_round_trip(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            path = root / "secret"
-            self.assertFalse(api._snapshot_private_file(path, "secret").exists)
-            path.write_bytes(b"before")
-            os.chmod(path, 0o640)
-            snap = api._private_file_snapshot(path, "secret")
-            self.assertTrue(snap.exists)
-            self.assertEqual(snap.content, b"before")
-            path.write_bytes(b"after")
-            with mock.patch.object(api.os, "geteuid", return_value=1000):
-                api._restore_private_file(path, snap, "secret")
-            self.assertEqual(path.read_bytes(), b"before")
-            api._restore_private_file(path, api.PrivateFileSnapshot(False), "secret")
-            self.assertFalse(path.exists())
-
-    def test_private_file_snapshot_rejects_unsafe_and_large_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            directory = root / "directory"
-            directory.mkdir()
-            with self.assertRaisesRegex(api.ApiError, "unsafe"):
-                api._snapshot_private_file(directory, "config")
-            path = root / "large"
-            path.write_bytes(b"xx")
-            with mock.patch.object(api, "MAX_PRIVATE_SNAPSHOT_BYTES", 1):
-                with self.assertRaisesRegex(api.ApiError, "unexpectedly large"):
-                    api._snapshot_private_file(path, "config")
-
-    def test_provider_reference_and_existing_key_validation(self) -> None:
-        expected = "${env." + api.ai_config.provider_env_name("cloud") + "}"
-        self.assertTrue(api._provider_reference_configured({"peers": {"cloud": {"apiKey": expected}}}, "cloud"))
-        self.assertFalse(api._provider_reference_configured({}, "cloud"))
-        self.assertFalse(api._provider_reference_configured({"peers": {"cloud": "bad"}}, "cloud"))
-        active = self.active()
-        with mock.patch.object(api, "run", return_value=CommandResult(0, "old-key\n", "")):
-            self.assertEqual(api._fetch_existing_provider_key(active, "cloud", "db"), "old-key")
-        with mock.patch.object(api, "run", return_value=CommandResult(1, "", "denied")):
-            with self.assertRaisesRegex(api.ApiError, "snapshot the existing"):
-                api._fetch_existing_provider_key(active, "cloud", "db")
-        for value in ("", "bad\nkey", "x" * 4097):
-            with mock.patch.object(api, "run", return_value=CommandResult(0, value, "")):
-                with self.assertRaisesRegex(api.ApiError, "missing or malformed"):
-                    api._fetch_existing_provider_key(active, "cloud", "db")
-
-    def test_write_provider_key_sets_or_clears_through_secret_stdin(self) -> None:
-        active = self.active()
-        with mock.patch.object(api, "run", return_value=CommandResult(0, "", "")) as run:
-            api._write_provider_key(active, "cloud", "db", "new-key")
-            api._write_provider_key(active, "cloud", "db", None)
-        first, second = run.call_args_list
-        self.assertEqual(first.args[0], ["nas-secrets", "set-ai-provider-key-stdin", "cloud"])
-        self.assertEqual(first.kwargs["input_text"], "db\nnew-key\n")
-        self.assertEqual(second.args[0], ["nas-secrets", "clear-ai-provider-key-stdin", "cloud"])
-        self.assertEqual(second.kwargs["input_text"], "db\n")
-        self.assertEqual(first.kwargs["env"]["NAS_SKIP_LLAMA_SWAP_RESTART"], "1")
-
-    def test_restart_llama_swap_inactive_restart_failure_and_health_failure(self) -> None:
-        active = self.active()
-        with mock.patch.object(api, "run", return_value=CommandResult(1, "", "")) as run:
-            api._restart_llama_swap(active)
-        self.assertEqual(run.call_count, 1)
-        with mock.patch.object(api, "run", return_value=CommandResult(1, "", "failed")):
-            with self.assertRaises(api.ApiError):
-                api._restart_llama_swap(active, was_active=True)
-        with mock.patch.object(api, "run", side_effect=[CommandResult(0, "", ""), CommandResult(1, "", "")]):
-            with self.assertRaisesRegex(api.ApiError, "failed to start"):
-                api._restart_llama_swap(active, was_active=True)
-
-    def test_set_ai_provider_happy_paths_and_validation(self) -> None:
-        active = self.active()
-        base = {"id": "cloud", "url": "https://cloud.example/v1", "models": ["coder"]}
-        with self.assertRaisesRegex(api.ApiError, "KeePassXC database password"):
-            api.set_ai_provider({**base, "apiKey": "secret"})
-        with self.assertRaisesRegex(api.ApiError, "single-line"):
-            api.set_ai_provider({**base, "apiKey": "a\nb", "keepassPassword": "db"})
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-            mock.patch.object(api, "_snapshot_private_file", return_value=api.PrivateFileSnapshot(False)),
-            mock.patch.object(api.ai_config, "load_config", return_value={"peers": {}}),
-            mock.patch.object(api, "_llama_swap_active", return_value=False),
-            mock.patch.object(api, "_write_provider_key") as write_key,
-            mock.patch.object(api.ai_config, "set_provider", return_value={"ok": True}) as setter,
-            mock.patch.object(api, "_restart_llama_swap"),
-        ):
-            self.assertTrue(api.set_ai_provider({**base, "apiKey": "secret", "keepassPassword": "db"})["ok"])
-        write_key.assert_called_once_with(active, "cloud", "db", "secret")
-        self.assertTrue(setter.call_args.kwargs["credential"])
-
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-            mock.patch.object(api, "_snapshot_private_file", return_value=api.PrivateFileSnapshot(False)),
-            mock.patch.object(api.ai_config, "load_config", return_value={"peers": {}}),
-            mock.patch.object(api, "_llama_swap_active", return_value=False),
-            mock.patch.object(api.ai_config, "set_provider", return_value={"ok": True}) as setter,
-            mock.patch.object(api, "_restart_llama_swap"),
-        ):
-            self.assertTrue(api.set_ai_provider(base)["ok"])
-        self.assertFalse(setter.call_args.kwargs["credential"])
-
-    def test_set_ai_provider_rolls_back_failed_config(self) -> None:
-        active = self.active()
-        base = {
-            "id": "cloud",
-            "url": "https://cloud.example/v1",
-            "models": ["coder"],
-            "apiKey": "new",
-            "keepassPassword": "db",
-        }
-        snap = api.PrivateFileSnapshot(True, b"old", 0o600, 1, 1)
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-            mock.patch.object(api, "_snapshot_private_file", return_value=snap),
-            mock.patch.object(api.ai_config, "load_config", return_value={"peers": {}}),
-            mock.patch.object(api, "_llama_swap_active", return_value=True),
-            mock.patch.object(api, "_write_provider_key"),
-            mock.patch.object(api.ai_config, "set_provider", side_effect=ValueError("bad config")),
-            mock.patch.object(api, "_rollback_provider_mutation") as rollback,
-        ):
-            with self.assertRaisesRegex(ValueError, "bad config"):
-                api.set_ai_provider(base)
-        self.assertTrue(rollback.called)
-        self.assertTrue(rollback.call_args.kwargs["config_attempted"])
-
-    def test_delete_ai_provider_requires_password_for_stored_key_and_happy_path(self) -> None:
-        active = self.active()
-        expected = "${env." + api.ai_config.provider_env_name("cloud") + "}"
-        config = {"peers": {"cloud": {"apiKey": expected}}}
-        snap = api.PrivateFileSnapshot(False)
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-            mock.patch.object(api, "_snapshot_private_file", return_value=snap),
-            mock.patch.object(api.ai_config, "load_config", return_value=config),
-        ):
-            with self.assertRaisesRegex(api.ApiError, "password is required"):
-                api.delete_ai_provider({"id": "cloud"})
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)),
-            mock.patch.object(api, "_snapshot_private_file", return_value=snap),
-            mock.patch.object(api.ai_config, "load_config", return_value={"peers": {}}),
-            mock.patch.object(api, "_llama_swap_active", return_value=False),
-            mock.patch.object(api.ai_config, "delete_provider", return_value={"ok": True}),
-            mock.patch.object(api, "_restart_llama_swap"),
-        ):
-            self.assertTrue(api.delete_ai_provider({"id": "cloud"})["ok"])
-
-    def test_local_model_role_and_advanced_validation_and_success(self) -> None:
-        base = {"id": "local", "path": "/models/x.gguf"}
-        for request, message in [
-            ({**base, "context": True}, "context must be an integer"),
-            ({**base, "context": 1, "ttl": True}, "TTL must be an integer"),
-            ({**base, "context": 1, "tools": "yes"}, "tools capability"),
-            ({**base, "context": 1, "extraArgs": [1]}, "Invalid extraArgs"),
-        ]:
-            with self.subTest(request=request), self.assertRaisesRegex(api.ApiError, message):
-                api.set_ai_local_model(request)
-        with (
-            mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()),
-            mock.patch.object(api.ai_config, "set_local_model", return_value={"ok": True}),
-        ):
-            self.assertTrue(api.set_ai_local_model({**base, "context": 1024})["ok"])
-        with (
-            mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()),
-            mock.patch.object(api.ai_config, "delete_local_model", side_effect=api.ai_config.AiConfigError("missing")),
-        ):
-            with self.assertRaisesRegex(api.ApiError, "missing"):
-                api.delete_ai_local_model({"id": "local"})
-        with (
-            mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()),
-            mock.patch.object(api.ai_config, "set_role", return_value={"ok": True}),
-        ):
-            self.assertTrue(
-                api.set_ai_role({"role": "coding/default", "targets": ["cloud/coder"], "strategy": "pin"})["ok"]
-            )
-        with self.assertRaisesRegex(api.ApiError, "unsupported fields"):
-            api.set_ai_advanced({})
-        with (
-            mock.patch.object(api, "operation_guard", return_value=contextlib.nullcontext()),
-            mock.patch.object(api.ai_config, "replace_advanced", return_value={"ok": True}),
-        ):
-            self.assertTrue(api.set_ai_advanced({"globalTTL": 300})["ok"])
-
     def test_overview_aggregates_v2_services_and_probe_failures(self) -> None:
         managed = {"services": [{"id": "demo", "units": [{"unit": "demo.service"}, {"bad": True}]}]}
         healthy = CommandResult(0, "healthy", "")
@@ -607,7 +417,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             mock.patch.object(api, "identity_status", return_value={"users": []}),
             mock.patch.object(api, "capability_status", return_value={"capabilities": []}),
             mock.patch.object(api, "update_status", return_value={"ok": True}),
-            mock.patch.object(api, "ai_configuration", return_value={"ok": True}),
             mock.patch.object(
                 api, "service_states", return_value={"demo.service": {"activeState": "active"}}
             ) as states,
@@ -630,7 +439,6 @@ class CockpitApiDriftTests(unittest.TestCase):
             mock.patch.object(api, "identity_status", return_value={}),
             mock.patch.object(api, "capability_status", return_value={}),
             mock.patch.object(api, "update_status", return_value={}),
-            mock.patch.object(api, "ai_configuration", return_value={}),
             mock.patch.object(api, "service_states", return_value={}),
             mock.patch.object(api, "run", return_value=CommandResult(1, "", "offline")),
             mock.patch.object(api, "operation_state", return_value={}),

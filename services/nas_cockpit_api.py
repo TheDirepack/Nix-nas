@@ -18,18 +18,15 @@ import re
 import secrets
 import socket
 import socketserver
-import stat
 import struct
 import threading
 import time
 
 import sys
 import syslog
-import tempfile
 from dataclasses import dataclass
 from typing import Any, cast
 
-import nas_ai_config as ai_config
 from nas_common import CommandResult, parse_systemd_show, run_command
 from nas_operation_lock import (
     OperationBusyError,
@@ -46,9 +43,9 @@ CONFIG_DIR = pathlib.Path(os.environ.get("NAS_CONFIG_DIR", "/etc/nixos/nixos-nas
 PORTAL_MODEL = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
 FIRST_RUN_CONFIG = os.environ.get("NAS_FIRST_RUN_CONFIG", "/etc/nixos/nixos-nas/first-run.json")
 MAX_PASSWORD_LENGTH = 4096
-MAX_ARGUMENT_LENGTH = 128
+MAX_STRING_LIST_ITEMS = 256
+MAX_STRING_LIST_ITEM_LENGTH = 256
 MAX_JSON_INPUT_BYTES = 128 * 1024
-MAX_PRIVATE_SNAPSHOT_BYTES = 4 * 1024 * 1024
 SERVICE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 FIRST_START_CONFLICTS = (
     "appliance",
@@ -72,15 +69,6 @@ class ActionSpec:
     timeout_seconds: int = 300
     conflicts: tuple[str, ...] = ("runtime",)
     worker_owns_operation: bool = False
-
-
-@dataclass(frozen=True)
-class PrivateFileSnapshot:
-    exists: bool
-    content: bytes = b""
-    mode: int = 0o600
-    uid: int = 0
-    gid: int = 0
 
 
 HOST_ACTIONS: dict[str, ActionSpec] = {
@@ -188,11 +176,9 @@ def _json_string_list(request: dict[str, Any], name: str, *, required: bool = Fa
     value = request.get(name, [])
     if (
         not isinstance(value, list)
-        or len(value) > ai_config.MAX_MODELS
+        or len(value) > MAX_STRING_LIST_ITEMS
         or not all(
-            isinstance(item, str)
-            and 0 < len(item) <= max(ai_config.MAX_MODEL_ID, MAX_ARGUMENT_LENGTH)
-            and "\x00" not in item
+            isinstance(item, str) and 0 < len(item) <= MAX_STRING_LIST_ITEM_LENGTH and "\x00" not in item
             for item in value
         )
     ):
@@ -338,20 +324,6 @@ def update_status() -> dict[str, Any]:
             base["ok"] = False
     # Candidate provenance is the exact revision; expose recovery evidence alongside health.
     return base
-
-
-def ai_configuration() -> dict[str, Any]:
-    try:
-        return ai_config.public_view(ai_config.load_config())
-    except (OSError, ai_config.AiConfigError) as exc:
-        return {
-            "ok": False,
-            "error": str(exc),
-            "providers": [],
-            "localModels": [],
-            "codingRoles": {},
-            "availableTargets": [],
-        }
 
 
 def operation_state() -> dict[str, Any]:
@@ -680,414 +652,6 @@ def set_managed_service(service_id: str, mode: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {"ok": True}
 
 
-def _snapshot_private_file(path: pathlib.Path, label: str) -> PrivateFileSnapshot:
-    try:
-        before = path.lstat()
-    except FileNotFoundError:
-        return PrivateFileSnapshot(False)
-    except OSError as exc:
-        raise ApiError(f"Unable to snapshot {label}") from exc
-    if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
-        raise ApiError(f"Refusing unsafe {label} path")
-    flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ApiError(f"Unable to snapshot {label}") from exc
-    try:
-        current = os.fstat(descriptor)
-        if current.st_dev != before.st_dev or current.st_ino != before.st_ino or not stat.S_ISREG(current.st_mode):
-            raise ApiError(f"{label} changed while it was being snapshotted")
-        if current.st_size > MAX_PRIVATE_SNAPSHOT_BYTES:
-            raise ApiError(f"{label} is unexpectedly large")
-        with os.fdopen(descriptor, "rb") as handle:
-            descriptor = -1
-            content = handle.read(MAX_PRIVATE_SNAPSHOT_BYTES + 1)
-        if len(content) > MAX_PRIVATE_SNAPSHOT_BYTES:
-            raise ApiError(f"{label} is unexpectedly large")
-        return PrivateFileSnapshot(True, content, stat.S_IMODE(current.st_mode), current.st_uid, current.st_gid)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
-def _private_file_snapshot(path: pathlib.Path, label: str) -> PrivateFileSnapshot:
-    """Compatibility-free internal alias retained only for local call-site clarity."""
-    return _snapshot_private_file(path, label)
-
-
-def _fsync_parent(path: pathlib.Path) -> None:
-    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _restore_private_file(path: pathlib.Path, snapshot: PrivateFileSnapshot, label: str) -> None:
-    parent = path.parent
-    try:
-        parent_info = parent.lstat()
-    except OSError as exc:
-        raise ApiError(f"Unable to restore {label}: parent directory unavailable") from exc
-    if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
-        raise ApiError(f"Unable to restore {label}: unsafe parent directory")
-    if not snapshot.exists:
-        try:
-            path.unlink(missing_ok=True)
-            _fsync_parent(path)
-        except OSError as exc:
-            raise ApiError(f"Unable to restore absent {label}") from exc
-        return
-    fd, raw = tempfile.mkstemp(prefix=f".{path.name}.rollback.", dir=parent)
-    temporary = pathlib.Path(raw)
-    replaced = False
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(snapshot.content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, snapshot.mode)
-        if os.geteuid() == 0:
-            os.chown(temporary, snapshot.uid, snapshot.gid)
-        os.replace(temporary, path)
-        replaced = True
-        _fsync_parent(path)
-    except OSError as exc:
-        raise ApiError(f"Unable to restore {label}") from exc
-    finally:
-        if not replaced:
-            temporary.unlink(missing_ok=True)
-
-
-def _secret_env_path() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("NAS_SECRET_ROOT", "/run/nas-secrets")) / "ai" / "llama-swap.env"
-
-
-def _provider_reference_configured(config: dict[str, Any], provider_id: str) -> bool:
-    peers = config.get("peers")
-    if not isinstance(peers, dict):
-        return False
-    peer = peers.get(provider_id)
-    if not isinstance(peer, dict):
-        return False
-    expected = "${env." + ai_config.provider_env_name(provider_id) + "}"
-    return peer.get("apiKey") == expected
-
-
-def _fetch_existing_provider_key(active: Any, provider_id: str, keepass_password: str) -> str:
-    env = dict(os.environ)
-    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-    command = ["nas-secrets", "show-ai-provider-key-stdin", provider_id]
-    result = run(command, check=False, timeout_seconds=30, input_text=f"{keepass_password}\n", env=env)
-    if result.returncode != 0:
-        diagnostic(
-            f"nas-cockpit-api unable to snapshot existing provider credential id={provider_id!r} rc={result.returncode}"
-        )
-        raise ApiError("Unable to snapshot the existing provider credential before mutation")
-    value = result.stdout.strip()
-    if not value or len(value) > 4096 or "\n" in value or "\r" in value or "\x00" in value:
-        raise ApiError("Existing provider credential is missing or malformed; refusing mutation")
-    return value
-
-
-def _write_provider_key(active: Any, provider_id: str, keepass_password: str, value: str | None) -> None:
-    env = dict(os.environ)
-    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-    env["NAS_SKIP_LLAMA_SWAP_RESTART"] = "1"
-    if value is None:
-        command = ["nas-secrets", "clear-ai-provider-key-stdin", provider_id]
-        input_text = f"{keepass_password}\n"
-    else:
-        command = ["nas-secrets", "set-ai-provider-key-stdin", provider_id]
-        input_text = f"{keepass_password}\n{value}\n"
-    result = run(command, check=False, timeout_seconds=120, input_text=input_text, env=env)
-    if result.returncode != 0:
-        raise operation_error(command, result)
-
-
-def _llama_swap_active(active: Any) -> bool:
-    env = dict(os.environ)
-    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-    result = run(
-        ["systemctl", "is-active", "--quiet", "nas-llama-swap.service"],
-        check=False,
-        timeout_seconds=10,
-        env=env,
-    )
-    return result.returncode == 0
-
-
-def _restart_llama_swap(active: Any, *, was_active: bool | None = None) -> None:
-    env = dict(os.environ)
-    env["NAS_OPERATION_COORDINATION_TOKEN"] = active.coordination_token
-    should_restart = _llama_swap_active(active) if was_active is None else was_active
-    if not should_restart:
-        return
-    command = ["systemctl", "restart", "nas-llama-swap.service"]
-    result = run(command, check=False, timeout_seconds=60, env=env)
-    if result.returncode != 0:
-        raise operation_error(command, result)
-    active_result = run(
-        ["systemctl", "is-active", "--quiet", "nas-llama-swap.service"],
-        check=False,
-        timeout_seconds=10,
-        env=env,
-    )
-    if active_result.returncode != 0:
-        raise ApiError("llama-swap failed to start after provider update")
-
-
-def _rollback_provider_mutation(
-    *,
-    active: Any,
-    provider_id: str,
-    keepass_password: str,
-    old_config: PrivateFileSnapshot,
-    old_env: PrivateFileSnapshot | None,
-    had_credential: bool,
-    old_keepass_key: str | None,
-    credential_attempted: bool,
-    config_attempted: bool,
-    service_was_active: bool,
-) -> None:
-    failures: list[str] = []
-    if credential_attempted:
-        try:
-            _write_provider_key(active, provider_id, keepass_password, old_keepass_key if had_credential else None)
-        except Exception:
-            failures.append("KeePass credential")
-    if old_env is not None:
-        try:
-            _restore_private_file(_secret_env_path(), old_env, "llama-swap runtime secret environment")
-        except Exception:
-            failures.append("runtime secret environment")
-    if config_attempted:
-        try:
-            _restore_private_file(pathlib.Path(ai_config.CONFIG_PATH), old_config, "llama-swap configuration")
-        except Exception:
-            failures.append("llama-swap configuration")
-    if service_was_active:
-        try:
-            _restart_llama_swap(active, was_active=True)
-        except Exception:
-            failures.append("llama-swap service")
-    if failures:
-        diagnostic("nas-cockpit-api provider rollback incomplete components=" + ",".join(failures))
-        raise ApiError("Provider mutation failed and rollback was incomplete; manual recovery is required")
-
-
-def set_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
-    provider_id = _json_string(request, "id", required=True, max_length=48)
-    url = _json_string(request, "url", required=True, max_length=2048)
-    models = _json_string_list(request, "models", required=True)
-    api_key = _json_string(request, "apiKey", max_length=4096)
-    keepass_password = _json_string(request, "keepassPassword", max_length=MAX_PASSWORD_LENGTH)
-    timeouts = request.get("timeouts", {})
-    filters = request.get("filters", {})
-    try:
-        ai_config.validate_provider_id(provider_id)
-        ai_config.validate_proxy_url(url)
-        ai_config.validate_models(models)
-        ai_config.validate_timeouts(timeouts)
-        ai_config.validate_filters(filters)
-    except ai_config.AiConfigError as exc:
-        raise ApiError(str(exc)) from exc
-    if api_key and not keepass_password:
-        raise ApiError("KeePassXC database password is required when setting a provider API key")
-    if any("\n" in value or "\r" in value for value in (keepass_password, api_key)):
-        raise ApiError("Provider credentials must be single-line values")
-
-    old_keepass_key: str | None = None
-    try:
-        with acquire_operation("ai-provider-set", ("secrets", "runtime")) as active:
-            old_config = _snapshot_private_file(pathlib.Path(ai_config.CONFIG_PATH), "llama-swap configuration")
-            before = ai_config.load_config()
-            had_credential = _provider_reference_configured(before, provider_id)
-            old_env: PrivateFileSnapshot | None = None
-            service_was_active = _llama_swap_active(active)
-            credential_attempted = False
-            if api_key:
-                old_env = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
-                if had_credential:
-                    old_keepass_key = _fetch_existing_provider_key(active, provider_id, keepass_password)
-                credential_attempted = True
-                try:
-                    _write_provider_key(active, provider_id, keepass_password, api_key)
-                except Exception as original:
-                    try:
-                        _rollback_provider_mutation(
-                            active=active,
-                            provider_id=provider_id,
-                            keepass_password=keepass_password,
-                            old_config=old_config,
-                            old_env=old_env,
-                            had_credential=had_credential,
-                            old_keepass_key=old_keepass_key,
-                            credential_attempted=True,
-                            config_attempted=False,
-                            service_was_active=False,
-                        )
-                    except ApiError as rollback_error:
-                        raise rollback_error from original
-                    raise
-            try:
-                value = ai_config.set_provider(
-                    provider_id,
-                    url,
-                    models,
-                    credential=bool(api_key),
-                    timeouts=timeouts,
-                    filters=filters,
-                )
-                _restart_llama_swap(active, was_active=service_was_active)
-                return value
-            except Exception as original:
-                try:
-                    _rollback_provider_mutation(
-                        active=active,
-                        provider_id=provider_id,
-                        keepass_password=keepass_password,
-                        old_config=old_config,
-                        old_env=old_env,
-                        had_credential=had_credential,
-                        old_keepass_key=old_keepass_key,
-                        credential_attempted=credential_attempted,
-                        config_attempted=True,
-                        service_was_active=service_was_active,
-                    )
-                except ApiError as rollback_error:
-                    raise rollback_error from original
-                raise
-    except (OperationBusyError, ai_config.AiConfigError, OSError, ApiError) as exc:
-        if isinstance(exc, ApiError):
-            raise
-        raise ApiError(str(exc)) from exc
-    finally:
-        api_key = ""
-        keepass_password = ""
-        if old_keepass_key:
-            old_keepass_key = ""
-
-
-def delete_ai_provider(request: dict[str, Any]) -> dict[str, Any]:
-    provider_id = _json_string(request, "id", required=True, max_length=48)
-    keepass_password = _json_string(request, "keepassPassword", max_length=MAX_PASSWORD_LENGTH)
-    old_keepass_key: str | None = None
-    try:
-        provider_id = ai_config.validate_provider_id(provider_id)
-        with acquire_operation("ai-provider-delete", ("secrets", "runtime")) as active:
-            old_config = _snapshot_private_file(pathlib.Path(ai_config.CONFIG_PATH), "llama-swap configuration")
-            before = ai_config.load_config()
-            had_credential = _provider_reference_configured(before, provider_id)
-            if had_credential and not keepass_password:
-                raise ApiError("KeePassXC database password is required to remove the stored provider credential")
-            if "\n" in keepass_password or "\r" in keepass_password:
-                raise ApiError("KeePassXC database password must be a single line")
-            old_env: PrivateFileSnapshot | None = None
-            if had_credential:
-                old_env = _snapshot_private_file(_secret_env_path(), "llama-swap runtime secret environment")
-                old_keepass_key = _fetch_existing_provider_key(active, provider_id, keepass_password)
-            service_was_active = _llama_swap_active(active)
-            try:
-                value = ai_config.delete_provider(provider_id)
-                if had_credential:
-                    _write_provider_key(active, provider_id, keepass_password, None)
-                _restart_llama_swap(active, was_active=service_was_active)
-                return value
-            except Exception as original:
-                try:
-                    _rollback_provider_mutation(
-                        active=active,
-                        provider_id=provider_id,
-                        keepass_password=keepass_password,
-                        old_config=old_config,
-                        old_env=old_env,
-                        had_credential=had_credential,
-                        old_keepass_key=old_keepass_key,
-                        credential_attempted=had_credential,
-                        config_attempted=True,
-                        service_was_active=service_was_active,
-                    )
-                except ApiError as rollback_error:
-                    raise rollback_error from original
-                raise
-    except (OperationBusyError, ai_config.AiConfigError, OSError, ApiError) as exc:
-        if isinstance(exc, ApiError):
-            raise
-        raise ApiError(str(exc)) from exc
-    finally:
-        keepass_password = ""
-        if old_keepass_key:
-            old_keepass_key = ""
-
-
-def set_ai_local_model(request: dict[str, Any]) -> dict[str, Any]:
-    model_id = _json_string(request, "id", required=True, max_length=128)
-    model_path = _json_string(request, "path", required=True, max_length=4096)
-    context = request.get("context")
-    ttl = request.get("ttl", -1)
-    tools = request.get("tools", False)
-    extra_args = request.get("extraArgs", [])
-    if isinstance(context, bool) or not isinstance(context, int):
-        raise ApiError("Local model context must be an integer")
-    if isinstance(ttl, bool) or not isinstance(ttl, int):
-        raise ApiError("Local model TTL must be an integer")
-    if not isinstance(tools, bool):
-        raise ApiError("Local model tools capability must be boolean")
-    if (
-        not isinstance(extra_args, list)
-        or len(extra_args) > ai_config.MAX_LOCAL_ARGS
-        or any(not isinstance(item, str) for item in extra_args)
-    ):
-        raise ApiError("Invalid extraArgs")
-    try:
-        with operation_guard("ai-local-model-set", ("runtime",)):
-            return ai_config.set_local_model(
-                model_id,
-                model_path,
-                context=context,
-                ttl=ttl,
-                tools=tools,
-                extra_args=extra_args,
-            )
-    except ai_config.AiConfigError as exc:
-        raise ApiError(str(exc)) from exc
-
-
-def delete_ai_local_model(request: dict[str, Any]) -> dict[str, Any]:
-    model_id = _json_string(request, "id", required=True, max_length=128)
-    try:
-        with operation_guard("ai-local-model-delete", ("runtime",)):
-            return ai_config.delete_local_model(model_id)
-    except ai_config.AiConfigError as exc:
-        raise ApiError(str(exc)) from exc
-
-
-def set_ai_role(request: dict[str, Any]) -> dict[str, Any]:
-    role = _json_string(request, "role", required=True, max_length=64)
-    targets = _json_string_list(request, "targets", required=True)
-    strategy = _json_string(request, "strategy", required=True, max_length=16)
-    spillover = request.get("spillover", 1)
-    try:
-        with operation_guard("ai-role-set", ("runtime",)):
-            return ai_config.set_role(role, targets, strategy=strategy, spillover=spillover)
-    except ai_config.AiConfigError as exc:
-        raise ApiError(str(exc)) from exc
-
-
-def set_ai_advanced(request: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"healthCheckTimeout", "globalTTL", "unloadTimeout", "logLevel", "captureBuffer", "metricsMaxInMemory"}
-    values = {key: request[key] for key in allowed if key in request}
-    if not values or set(request) - allowed:
-        raise ApiError("Advanced AI settings contain unsupported fields")
-    try:
-        with operation_guard("ai-advanced-set", ("runtime",)):
-            return ai_config.replace_advanced(values)
-    except ai_config.AiConfigError as exc:
-        raise ApiError(str(exc)) from exc
-
-
 def overview() -> dict[str, Any]:
     managed = managed_services_status()
     units = [
@@ -1116,7 +680,6 @@ def overview() -> dict[str, Any]:
         "identity": identity_status,
         "capabilities": capability_status,
         "update": update_status,
-        "aiConfig": ai_configuration,
         "services": lambda: service_states(units),
         "zpool": lambda: command_probe(["zpool", "status", "-x", ZFS_POOL]),
         "zfs": lambda: command_probe(["zfs", "list", "-H", "-o", "name,used,avail,refer,mountpoint", ZFS_DATASET]),
@@ -1149,7 +712,6 @@ def overview() -> dict[str, Any]:
         "capabilities": results["capabilities"],
         "managedServices": managed,
         "update": results["update"],
-        "aiConfig": results["aiConfig"],
         "operations": operation_state(),
         "services": results["services"],
         "zfs": {
@@ -1239,12 +801,6 @@ def build_parser() -> argparse.ArgumentParser:
     managed = sub.add_parser("managed-service")
     managed.add_argument("service")
     managed.add_argument("mode", choices=["off", "on-demand", "always"])
-    sub.add_parser("ai-provider-set")
-    sub.add_parser("ai-provider-delete")
-    sub.add_parser("ai-local-model-set")
-    sub.add_parser("ai-local-model-delete")
-    sub.add_parser("ai-role-set")
-    sub.add_parser("ai-advanced-set")
     sub.add_parser("source-control")
     sub.add_parser("update-control")
     serve = sub.add_parser(
@@ -1756,7 +1312,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, first_start_job_status(self._authorized_job()))
                 return
             self._send_json(404, {"error": "Not found"})
-        except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:
+        except (ApiError, OSError, ValueError) as exc:
             self._api_error(exc)
 
     def do_POST(self) -> None:  # noqa: N802 - http.server naming
@@ -1779,7 +1335,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 if job_id is None:
                     try:
                         status = first_start_status()
-                    except (ApiError, OSError, ValueError, ai_config.AiConfigError):
+                    except (ApiError, OSError, ValueError):
                         status = {}
                     if status.get("status") in {"complete", "complete-unverified"}:
                         revoke_all_setup_capabilities()
@@ -1813,7 +1369,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, result)
                 return
             self._send_json(404, {"error": "Not found"})
-        except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:
+        except (ApiError, OSError, ValueError) as exc:
             self._api_error(exc)
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
@@ -1884,18 +1440,6 @@ def main() -> int:
             result = run_action(args.name)
         elif args.command == "managed-service":
             result = set_managed_service(args.service, args.mode)
-        elif args.command == "ai-provider-set":
-            result = set_ai_provider(_json_input())
-        elif args.command == "ai-provider-delete":
-            result = delete_ai_provider(_json_input())
-        elif args.command == "ai-local-model-set":
-            result = set_ai_local_model(_json_input())
-        elif args.command == "ai-local-model-delete":
-            result = delete_ai_local_model(_json_input())
-        elif args.command == "ai-role-set":
-            result = set_ai_role(_json_input())
-        elif args.command == "ai-advanced-set":
-            result = set_ai_advanced(_json_input())
         elif args.command == "source-control":
             result = source_control(_json_input())
         elif args.command == "update-control":
@@ -1906,7 +1450,7 @@ def main() -> int:
             raise ApiError(f"Unsupported command: {args.command}")
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    except (ApiError, OSError, ValueError, ai_config.AiConfigError) as exc:
+    except (ApiError, OSError, ValueError) as exc:
         print(f"nas-cockpit-api: {exc}", file=sys.stderr)
         return 1
 

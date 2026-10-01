@@ -9,7 +9,6 @@ let
     copypartyUserConfigDir
     nasAuthentikBlueprints
     lanHost
-    llamaCppPackage
     nasAlert
     nasCockpitApi
     nasDoctor
@@ -136,7 +135,6 @@ in
       jq
       skopeo
     ]
-    ++ lib.optional cfg.hardware.llamaCpp.enable llamaCppPackage
     ++ lib.optional cfg.alerting.enable nasAlert
     ++ lib.optional cfg.backup.enable restic;
 
