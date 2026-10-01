@@ -406,22 +406,6 @@ in
             notification.topic = "";
           };
         };
-        extraConfigFiles = [ "${observabilitySecretDir}/alertmanager-ntfy.yml" ];
-      };
-
-      systemd.services.alertmanager = lib.mkIf cfg.alerting.enable {
-        wantedBy = lib.mkForce [ ];
-        partOf = [ "nas-protected-services.target" ];
-        after = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "alertmanager-ntfy.service";
-        wants = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "alertmanager-ntfy.service";
-      };
-
-      systemd.services.alertmanager-ntfy = lib.mkIf (cfg.alerting.enable && obs.ntfy.enable) {
-        wantedBy = lib.mkForce [ ];
-        partOf = [ "nas-protected-services.target" ];
-        after = [ "ntfy-sh.service" ];
-        requires = [ "ntfy-sh.service" ];
-        unitConfig.ConditionPathExists = [ "${observabilitySecretDir}/alertmanager-ntfy.yml" ];
       };
 
       services.grafana = lib.mkIf grafana.enable {
