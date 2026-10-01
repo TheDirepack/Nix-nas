@@ -40,7 +40,7 @@
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Install single-node VictoriaMetrics, Telegraf, optional Grafana, vmalert, the NAS alert router, and native ntfy notification components.";
+        description = "Install single-node VictoriaMetrics, Telegraf, optional Grafana, vmalert, Alertmanager, and native ntfy notification components.";
       };
       retentionTime = lib.mkOption {
         type = lib.types.str;
@@ -67,10 +67,15 @@
         default = 8880;
         description = "Loopback vmalert health and status port.";
       };
-      alertRouterPort = lib.mkOption {
+      alertmanagerPort = lib.mkOption {
         type = lib.types.port;
         default = 9093;
-        description = "Loopback NAS alert-router web/API port.";
+        description = "Loopback Alertmanager web/API port.";
+      };
+      alertNtfyBridgePort = lib.mkOption {
+        type = lib.types.port;
+        default = 9094;
+        description = "Loopback alertmanager-ntfy webhook bridge port.";
       };
       grafana = {
         enable = lib.mkOption {
@@ -88,7 +93,7 @@
         enable = lib.mkOption {
           type = lib.types.bool;
           default = false;
-          description = "Enable the native ntfy push-notification server and direct NAS alert delivery.";
+          description = "Enable the native ntfy push-notification server and Alertmanager notification delivery.";
         };
         port = lib.mkOption {
           type = lib.types.port;

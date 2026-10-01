@@ -18,7 +18,7 @@ All browser routes use `https://<nas-hostname>.local`. Authentik authenticates e
 | `/ai/models/` | `nas_admin` | Model downloader interface when enabled. |
 | `/metrics/` | `nas_admin` | Grafana dashboards. |
 | `/victoriametrics/` | `nas_admin` | VictoriaMetrics VMUI and PromQL-compatible APIs. |
-| `/alerts/` | `nas_admin` | Read-only NAS alert-router status and delivery state. |
+| `/alerts/` | `nas_admin` | Upstream Alertmanager UI for alerts and silences. |
 | `/notifications/` | Native ntfy credentials | ntfy UI and client API. |
 | `/console/` | `nas_admin` | Cockpit through Caddy after Authentik authentication and authorization. |
 | `/console/cockpit/@localhost/nas/docs/index.html` (Cockpit navigation item) | `nas_admin` | Searchable manual generated for the deployed release, served through the authenticated Cockpit package route. |

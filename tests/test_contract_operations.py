@@ -98,7 +98,7 @@ class ContractTests(unittest.TestCase):
             "systemd.services.nas-managed-services-reconcile = {", 1
         )[0]
         reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
-            "systemd.paths.nas-managed-services-reconcile = {", 1
+            "systemd.paths.nas-managed-services-reconcile", 1
         )[0]
         protected = text("modules/nas/config/systemd-services.nix")
 
@@ -191,14 +191,15 @@ class ContractTests(unittest.TestCase):
         self.assertIn("nas-untrusted-test", guest)
         self.assertIn("untrusted namespace reached protected TCP port", guest)
 
-    def test_victoriametrics_replaces_prometheus_and_routes_are_v2_owned(self) -> None:
+    def test_victoriametrics_replaces_prometheus_server_and_routes_are_v2_owned(self) -> None:
         observability = text("modules/nas/config/observability.nix")
         seed = text("modules/nas/config/managed-services-seed-v2.nix")
         proxy = text("modules/nas/config/reverse-proxy.nix")
         self.assertIn("services.victoriametrics", observability)
         self.assertIn("services.vmalert.instances.nas", observability)
         self.assertIn("services.telegraf", observability)
-        self.assertNotIn("services.prometheus", observability)
+        self.assertIn("services.prometheus.alertmanager", observability)
+        self.assertNotIn("services.prometheus.enable", observability)
         self.assertIn("victoriametrics =", seed)
         self.assertIn('pathRoute [ "/victoriametrics/" ]', seed)
         self.assertNotIn("handle /victoriametrics/*", proxy)

@@ -35,16 +35,6 @@
         "tests/test_contract_operations.py"
       ]
     },
-    "nas-alert-router": {
-      "fuzzStrategy": "protocol-system-test",
-      "source": "services/nas_alert_router.py",
-      "systemTest": "tests/vm/guest-test.sh",
-      "tests": [
-        "tests/test_alert_router.py",
-        "tests/test_adversarial_security.py",
-        "tests/test_fuzz_boundaries.py"
-      ]
-    },
     "nas-cockpit-api": {
       "fuzzStrategy": "unknown-argv",
       "sources": [
@@ -457,11 +447,6 @@
     "services/nas_ai_config.py": [
       "tests/test_ai_config.py",
       "tests/test_cockpit_api.py"
-    ],
-    "services/nas_alert_router.py": [
-      "tests/test_adversarial_security.py",
-      "tests/test_alert_router.py",
-      "tests/test_fuzz_boundaries.py"
     ],
     "services/nas_cockpit_api.py": [
       "tests/test_adversarial_security.py",

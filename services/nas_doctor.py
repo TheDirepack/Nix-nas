@@ -30,9 +30,8 @@ MANAGED_SERVICES_PLATFORM = pathlib.Path(
 )
 MANAGED_SERVICES_PLATFORM_FALLBACK = pathlib.Path("/etc/nas-control/platform-capabilities.json")
 MANAGED_SERVICES_EFFECTIVE = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
-ALERT_ROUTER_STATE = pathlib.Path(os.environ.get("NAS_ALERT_ROUTER_STATE", "/var/lib/nas-alert-router/state.json"))
 OPERATION_GROUP = os.environ.get("NAS_OPERATION_GROUP", "nas-operations")
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$")
 LEVELS = {"ok": 0, "info": 0, "warning": 1, "critical": 2, "indeterminate": 1}
 
 
@@ -326,26 +325,6 @@ def _operation_hygiene_checks(*, deep: bool) -> list[Check]:
     return checks
 
 
-def _alert_router_state_checks() -> list[Check]:
-    parent = ALERT_ROUTER_STATE.parent
-    try:
-        corrupt = sorted(parent.glob(f"{ALERT_ROUTER_STATE.name}.corrupt-*"))
-    except OSError as exc:
-        return [Check("alerts.router-state", "warning", "Alert-router recovery state cannot be inspected", str(exc))]
-    if corrupt:
-        newest = corrupt[-1]
-        return [
-            Check(
-                "alerts.router-state",
-                "warning",
-                "Alert-router state corruption was quarantined",
-                f"{len(corrupt)} quarantined file(s); newest={newest}",
-                "Inspect notification delivery history and remove quarantined state only after determining the corruption cause",
-            )
-        ]
-    return [Check("alerts.router-state", "ok", "No quarantined alert-router state is present")]
-
-
 def _authority_checks(deep: bool) -> tuple[list[Check], str | None]:
     checks: list[Check] = []
     try:
@@ -413,7 +392,6 @@ def build_report(*, deep: bool = False) -> dict[str, Any]:
         *_setup_checks(),
         _managed_services_check(),
         *_operation_hygiene_checks(deep=deep),
-        *_alert_router_state_checks(),
     ]
     authority, digest = _authority_checks(deep)
     checks.extend(authority)
