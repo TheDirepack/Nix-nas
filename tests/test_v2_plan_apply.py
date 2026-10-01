@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import builtins
 import pathlib
+import runpy
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -18,6 +21,18 @@ import nas_v2_spec as v2  # noqa: E402
 
 
 class ManagedServicesV2PlanApplyTests(unittest.TestCase):
+    def test_apply_import_fails_closed_without_the_authority_lock(self):
+        original_import = builtins.__import__
+
+        def without_editor(name, *args, **kwargs):
+            if name == "nas_v2_editor":
+                raise ImportError("authority lock unavailable")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch.object(builtins, "__import__", side_effect=without_editor):
+            with self.assertRaisesRegex(ImportError, "authority lock unavailable"):
+                runpy.run_path(str(SERVICES / "nas_v2_apply.py"), run_name="apply_without_lock")
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.schema = v2.load_schema(SCHEMA)

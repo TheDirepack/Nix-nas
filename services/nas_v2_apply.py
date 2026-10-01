@@ -21,6 +21,7 @@ from typing import Any
 from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, resolve_effective
 from nas_v2_backup import compile_backup_projection
 from nas_v2_caddy import generate_caddyfile, portal_bytes, validate_caddyfile
+from nas_v2_editor import authority_lock
 from nas_v2_history import record_desired_locked
 from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
 from nas_v2_network import materialize_projection as materialize_firewalld_projection
@@ -49,15 +50,6 @@ from nas_v2_systemd_native import validate_projection as validate_systemd_projec
 # managed-services.nix and system.nix). Creating them under the
 # compatibility symlink still lands on ZFS.
 _SERVICE_APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
-
-try:
-    from nas_v2_editor import authority_lock
-except ImportError:  # pragma: no cover - fallback for minimal test harnesses
-    from contextlib import contextmanager as _cm
-
-    @_cm
-    def authority_lock(path: pathlib.Path):  # type: ignore[no-redef]  # pyright: ignore[reportAssignmentType]
-        yield
 
 
 @dataclass(frozen=True)
