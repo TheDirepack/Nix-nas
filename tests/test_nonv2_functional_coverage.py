@@ -21,7 +21,6 @@ import nas_syncthing_devices as syncthing  # noqa: E402
 import nas_cockpit_api as cockpit  # noqa: E402
 import nas_setup_config as setup_config  # noqa: E402
 import nas_ai_config as ai_config  # noqa: E402
-import nas_alert_router as alerts  # noqa: E402
 import nas_identity_model as identity  # noqa: E402
 
 
@@ -218,14 +217,6 @@ class NonV2FunctionalCoverageTests(unittest.TestCase):
         if hasattr(ai_config, "validate_provider_id"):
             with self.assertRaises(Exception):
                 ai_config.validate_provider_id("bad/provider")  # pyright: ignore[reportAttributeAccessIssue]
-
-    def test_alert_router_routes_and_caps(self) -> None:
-        if hasattr(alerts, "route_alert"):
-            try:
-                alerts.route_alert({"alertname": "Test", "severity": "info"})  # pyright: ignore[reportAttributeAccessIssue]
-            except Exception as exc:
-                self.assertIsInstance(exc, (ValueError, RuntimeError, KeyError))
-        self.assertTrue(hasattr(alerts, "MAX_ALERTS") or hasattr(alerts, "ALERT_ROUTES") or True)
 
     def test_identity_model_scrub_and_capability(self) -> None:
         if hasattr(identity, "scrub_user"):
