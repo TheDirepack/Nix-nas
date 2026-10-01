@@ -202,11 +202,6 @@ def quadlet_network_reference(
     return f"{prefix}-{service_id}.network"
 
 
-def _write_line(lines: list[str], key: str, value: Any) -> None:
-    if value is not None and value != "":
-        lines.append(f"{key}={value}")
-
-
 def _digest(service_id: str) -> str:
     return hashlib.sha256(service_id.encode()).hexdigest()[:12]
 
