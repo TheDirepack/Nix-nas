@@ -12,7 +12,7 @@ import tempfile
 TOPIC_PATH = pathlib.Path("/run/nas-secrets/observability/ntfy-topic")
 PASSWORD_PATH = pathlib.Path("/run/nas-secrets/observability/ntfy-admin-password")
 OUTPUT_PATH = pathlib.Path("/run/nas-alertmanager-ntfy/config.yml")
-TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 PASSWORD_RE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{20,4096}$")
 
 
