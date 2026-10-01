@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the alertmanager-ntfy credential file from activated ntfy secrets."""
+"""Render alertmanager-ntfy credentials from activated ntfy secret files."""
 
 from __future__ import annotations
 
@@ -18,10 +18,25 @@ PASSWORD_RE = re.compile(r"^[A-Za-z0-9._~+/=:@-]{20,4096}$")
 
 
 def read_private(path: pathlib.Path, pattern: re.Pattern[str], label: str) -> str:
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise RuntimeError(f"{label} must be a regular non-symlink file")
-    value = path.read_text(encoding="utf-8")
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"unable to open {label} without following symlinks") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"{label} must be a regular file")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            raise RuntimeError(f"{label} must not be accessible by group or other users")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            value = handle.read(4097)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if not pattern.fullmatch(value):
         raise RuntimeError(f"{label} has an invalid format")
     return value
@@ -40,6 +55,7 @@ def main() -> int:
     OUTPUT_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(OUTPUT_PATH.parent, 0o700)
     fd, temporary = tempfile.mkstemp(prefix=".config.", dir=OUTPUT_PATH.parent)
+    replaced = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, sort_keys=True)
@@ -48,11 +64,18 @@ def main() -> int:
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o400)
         os.replace(temporary, OUTPUT_PATH)
-    finally:
+        replaced = True
+        directory_fd = os.open(OUTPUT_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if not replaced:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
     return 0
 
 
