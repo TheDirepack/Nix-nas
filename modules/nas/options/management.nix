@@ -67,7 +67,7 @@
         default = 8880;
         description = "Loopback vmalert health and status port.";
       };
-      alertRouterPort = lib.mkOption {
+      alertmanagerPort = lib.mkOption {
         type = lib.types.port;
         default = 9093;
         description = "Loopback Alertmanager web/API port.";
