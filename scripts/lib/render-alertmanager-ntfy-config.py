@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Render alertmanager-ntfy credentials from activated ntfy secret files."""
 
 from __future__ import annotations
