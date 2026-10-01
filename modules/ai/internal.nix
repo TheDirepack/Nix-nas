@@ -44,6 +44,23 @@ let
       pkgs.llama-cpp.override { vulkanSupport = true; }
     else
       pkgs.llama-cpp;
+
+  aiPython = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.pyyaml ]);
+  nasAiConfig = pkgs.writeShellApplication {
+    name = "nas-ai-config";
+    runtimeInputs = [ aiPython ];
+    text = ''
+      exec ${aiPython}/bin/python ${../../services/nas_ai_config.py} "$@"
+    '';
+  };
+  nasCodingAgent = pkgs.writeShellApplication {
+    name = "nas-code-agent";
+    runtimeInputs = [ pkgs.python3 ];
+    text = ''
+      exec ${pkgs.python3}/bin/python ${../../services/nas_coding_agent.py} "$@"
+    '';
+  };
+
   protectedUnits = [
     "nas-ai-storage.service"
     "nas-ai-config-init.service"
@@ -85,6 +102,9 @@ in
     defaultConfig
     llamaBackend
     llamaCppPackage
+    aiPython
+    nasAiConfig
+    nasCodingAgent
     protectedUnits
     uidCollisions
     gidCollisions
