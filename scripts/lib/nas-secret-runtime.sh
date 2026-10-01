@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared secret validation and installation helpers.
 # Source this file from privileged secret workflows; it is intentionally not an executable.
 
