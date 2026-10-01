@@ -1,5 +1,21 @@
 # Dependency policy
 
+## Release inventory
+
+Release automation publishes `dependencies-nas-ci-ready.json` and
+`dependencies-nas-qemu.json` beside the source archive. Each records the stamped
+release commit, exact system store path, recursive Nix closure, and repository
+OCI pins. OCI entries describe source declarations, not proof that an image was
+installed. Empty digest slots remain visible. This inventory is informational;
+it is not a vulnerability scan or an install-ready qualification claim.
+
+For an already built system, run:
+
+```bash
+python3 scripts/release-inventory.py --system /nix/store/EXACT-SYSTEM \
+  --revision "$(git rev-parse HEAD)" --output /tmp/dependencies.json
+```
+
 ## CopyParty
 
 The CopyParty flake is consumed as one reviewed upstream input and follows this repository's nixpkgs input. Nested lock nodes are not edited independently. A CopyParty update must include flake evaluation, closure builds, and the QEMU matrix.

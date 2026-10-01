@@ -15,6 +15,18 @@ SPEC.loader.exec_module(inventory)
 
 
 class ReleaseInventoryTests(unittest.TestCase):
+    def test_release_publishes_inventory_after_stamping_and_packaging(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        marker = "      - name: Inventory release closures and repository OCI pins"
+        self.assertIn(marker, workflow)
+        step = workflow.split(marker, 1)[1].split("      - name:", 1)[0]
+        self.assertIn("for profile in nas-ci-ready nas-qemu;", step)
+        self.assertIn("scripts/release-inventory.py", step)
+        self.assertIn('--revision "$(git rev-parse HEAD)"', step)
+        self.assertIn("$RELEASE_OUT/dependencies-$profile.json", step)
+        self.assertLess(workflow.index("Package and verify source release"), workflow.index(marker))
+        self.assertLess(workflow.index(marker), workflow.index("Retain immutable release publication inputs"))
+
     def test_closure_entries_accept_mapping_and_list_shapes(self) -> None:
         mapping = {
             "/nix/store/b": {"narHash": "sha256-b", "narSize": 2, "references": ["/nix/store/a"]},
