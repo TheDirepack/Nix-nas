@@ -120,7 +120,7 @@ class ContractTests(unittest.TestCase):
 
     def test_user_settings_are_authentik_owned(self) -> None:
         proxy = text("modules/nas/config/reverse-proxy.nix")
-        blueprint = text("authentik/blueprints/nas-user-settings.yaml")
+        blueprint = text("authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml")
         account_tools = text("modules/nas/internal/account-tools.nix")
         self.assertIn("if/user/", proxy)
         self.assertIn("if/flow/nas-user-settings/", proxy)
@@ -136,9 +136,16 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("nasUserSettings", account_tools)
         self.assertFalse((ROOT / "services" / "nas_user_settings.py").exists())
 
-    def test_staged_syncthing_blueprint_is_self_contained_and_inert(self) -> None:
+    def test_syncthing_blueprint_is_self_contained_and_installed_once(self) -> None:
         blueprint = text("authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml")
-        self.assertIn('blueprints.goauthentik.io/instantiate: "false"', blueprint)
+        self.assertIn('blueprints.goauthentik.io/instantiate: "true"', blueprint)
+        self.assertNotIn("authentik_rbac.role", blueprint)
+        self.assertFalse((ROOT / "authentik/blueprints/nas-user-settings.yaml").exists())
+        package = text("modules/nas/internal/account-tools.nix")
+        self.assertEqual(
+            package.count("${../../../authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml}"), 1
+        )
+        self.assertIn("${../../../authentik/blueprints/nas-automation.yaml}", package)
         self.assertIn("attributes.nasSyncthingDevices", blueprint)
         self.assertIn("nas-user-settings-validate-syncthing-devices", blueprint)
         self.assertIn("name: nas-user-settings-profile", blueprint)
@@ -147,7 +154,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(blueprint.count("!Find ["), 6)
 
     def test_authentik_blueprint_expressions_are_valid_python(self) -> None:
-        blueprint = text("authentik/blueprints/nas-user-settings.yaml")
+        blueprint = text("authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml")
 
         def block_after(marker: str) -> str:
             lines = blueprint.splitlines()

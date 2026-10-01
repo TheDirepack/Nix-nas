@@ -150,7 +150,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("retire_bootstrap_runtime", setup)
         self.assertNotIn('run_root(["find", str(bootstrap_root), "-mindepth", "1", "-delete"])', setup)
         self.assertIn('"/^AUTHENTIK_BOOTSTRAP_/d"', setup)
-        blueprint = text("authentik/blueprints/nas-user-settings.yaml")
+        blueprint = text("authentik/blueprints/nas-automation.yaml")
         self.assertIn("authentik_core.view_token", blueprint)
         self.assertIn("authentik_outposts.view_outpost", blueprint)
 
