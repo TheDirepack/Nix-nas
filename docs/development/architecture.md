@@ -25,7 +25,7 @@ users ---> Authentik ---> Caddy authorization ---> application UIs
 
 KeePassXC ---> nas-secrets ---> /run/nas-secrets ---> protected services
 
-Telegraf ---> VictoriaMetrics ---> vmalert ---> NAS alert router ---> ntfy
+Telegraf ---> VictoriaMetrics ---> vmalert ---> Alertmanager ---> alertmanager-ntfy ---> ntfy
 ```
 
 The arrows describe authority or controlled data flow, not unrestricted write access.
@@ -43,7 +43,7 @@ The arrows describe authority or controlled data flow, not unrestricted write ac
 | ZFS pool/dataset state | ZFS, with Sanoid/Syncoid for snapshot/replication policy |
 | Appliance-state bundles | `nas-state` registry and signed manifests |
 | Metrics | Telegraf + VictoriaMetrics |
-| Alert rule evaluation/routing | vmalert + NAS alert router |
+| Alert rule evaluation/routing | vmalert + Alertmanager |
 
 A new feature should extend an existing authority whenever possible. It should not create a second user database, share database, secret store, feature-state file, or authorization policy simply because that representation is convenient locally.
 
@@ -76,9 +76,9 @@ Most long-running helpers should be unprivileged and hardened with systemd. Root
 
 ## Observability
 
-Telegraf is the single host collector and writes directly to single-node VictoriaMetrics. Grafana is optional. vmalert evaluates rules against VictoriaMetrics and sends notifications to the small NAS alert router, which performs bounded deduplication/inhibition and optional ntfy delivery.
+Telegraf is the single host collector and writes directly to single-node VictoriaMetrics. Grafana is optional. vmalert evaluates rules against VictoriaMetrics. Alertmanager owns grouping, deduplication, inhibition, and retries; alertmanager-ntfy bridges notifications to ntfy using systemd credentials rendered from activated secrets.
 
-The design intentionally avoids a Prometheus server, Alertmanager, mandatory Loki, or a service mesh on this resource-conscious single-host appliance.
+The design does not require a Prometheus server, Loki, or a service mesh.
 
 ## Where to make changes
 

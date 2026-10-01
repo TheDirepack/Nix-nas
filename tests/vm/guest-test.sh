@@ -1267,6 +1267,35 @@ ntfy_recovered_code="$(curl --silent --output /tmp/nas-alert-ntfy-recovered.json
   -H 'Content-Type: application/json' --data-binary "$alert_payload" \
   http://127.0.0.1:9093/api/v2/alerts)"
 [[ "$ntfy_recovered_code" == 200 ]] || fail "Alertmanager did not accept an alert after ntfy restart (HTTP $ntfy_recovered_code)"
+python3 - "$TEST_TIMEOUT" <<'VERIFY_NTFY'
+import base64
+import json
+import pathlib
+import sys
+import time
+import urllib.error
+import urllib.request
+
+config = json.loads(pathlib.Path('/run/nas-alertmanager-ntfy/config.yml').read_text())['ntfy']
+auth = config['auth']['basic']
+authorization = base64.b64encode(f"{auth['username']}:{auth['password']}".encode()).decode()
+request = urllib.request.Request(
+    'http://127.0.0.1:2586/' + config['notification']['topic'] + '/json?poll=1&since=all',
+    headers={'Authorization': 'Basic ' + authorization},
+)
+deadline = time.monotonic() + int(sys.argv[1])
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            messages = [json.loads(line) for line in response if line.strip()]
+        if any('QemuNtfyDependency' in message.get('message', '') for message in messages):
+            break
+    except (urllib.error.URLError, TimeoutError):
+        pass
+    time.sleep(2)
+else:
+    raise SystemExit('FAIL: Alertmanager retry did not deliver the retained alert to ntfy')
+VERIFY_NTFY
 pass "Alertmanager remains available during ntfy outage and the ntfy bridge recovers cleanly"
 malformed_alert_code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
   --header 'Content-Type: application/json' --data-binary '{' \

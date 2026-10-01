@@ -155,15 +155,6 @@ class DoctorCoverageTests(unittest.TestCase):
             checks = doctor._operation_hygiene_checks(deep=True)
         self.assertEqual(checks[-1].status, "ok")
 
-    def test_alert_router_quarantine_is_reported(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            state = pathlib.Path(raw) / "state.json"
-            (pathlib.Path(raw) / "state.json.corrupt-1").write_text("bad", encoding="utf-8")
-            with mock.patch.object(doctor, "ALERT_ROUTER_STATE", state):
-                checks = doctor._alert_router_state_checks()
-            self.assertEqual(checks[0].status, "warning")
-            self.assertIn("quarantined", checks[0].summary)
-
 
 if __name__ == "__main__":
     unittest.main()
