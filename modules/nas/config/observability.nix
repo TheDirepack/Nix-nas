@@ -4,7 +4,6 @@ let
   inherit (nasInternal)
     cfg
     lanHost
-    nasAlertRouter
     observabilitySecretDir
     powerSecretDir
   ;
@@ -52,7 +51,7 @@ let
     ++ lib.optional cfg.ai.enable "open-webui.service"
     ++ lib.optional cfg.virtualization.enable "libvirtd.service"
     ++ lib.optionals cfg.observability.enable [ "victoriametrics.service" "telegraf.service" ]
-    ++ lib.optional (cfg.observability.enable && cfg.alerting.enable) "vmalert-nas.service"
+    ++ lib.optionals (cfg.observability.enable && cfg.alerting.enable) [ "vmalert-nas.service" "alertmanager.service" ]
     ++ lib.optional (cfg.observability.enable && cfg.observability.grafana.enable) "grafana.service"
     ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
   );
@@ -370,61 +369,61 @@ in
         };
       };
 
-      systemd.services.nas-alert-router = lib.mkIf cfg.alerting.enable {
-        description = "NAS vmalert notification router";
+      services.prometheus.alertmanager = lib.mkIf cfg.alerting.enable {
+        enable = true;
+        listenAddress = "127.0.0.1";
+        port = obs.alertRouterPort;
+        webExternalUrl = "https://${lanHost}/alerts/";
+        checkConfig = false;
+        environmentFile = lib.mkIf obs.ntfy.enable "${observabilitySecretDir}/alertmanager-environment";
+        extraFlags = [
+          "--cluster.listen-address="
+          "--web.route-prefix=/"
+        ];
+        configuration = {
+          route = {
+            receiver = if obs.ntfy.enable then "ntfy" else "discard";
+            group_by = [ "..." ];
+            group_wait = "0s";
+            group_interval = "1m";
+            repeat_interval = "4h";
+          };
+          inhibit_rules = [
+            {
+              source_matchers = [ ''severity="critical"'' ];
+              target_matchers = [ ''severity="warning"'' ];
+              equal = [ "alertname" "instance" ];
+            }
+          ];
+          receivers = [ { name = "discard"; } ] ++ lib.optional obs.ntfy.enable {
+            name = "ntfy";
+            webhook_configs = [
+              {
+                url = "http://127.0.0.1:${toString obs.ntfy.port}/\${NAS_NTFY_TOPIC}?template=alertmanager";
+                send_resolved = true;
+                http_config.basic_auth = {
+                  username = "admin";
+                  password_file = "\${CREDENTIALS_DIRECTORY}/ntfy-admin-password";
+                };
+              }
+            ];
+          };
+        };
+      };
+
+      systemd.services.alertmanager = lib.mkIf cfg.alerting.enable {
+        wantedBy = lib.mkForce [ ];
+        partOf = [ "nas-protected-services.target" ];
         after = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "ntfy-sh.service";
         wants = [ "network-online.target" ] ++ lib.optional obs.ntfy.enable "ntfy-sh.service";
-        wantedBy = [ ];
-        environment = {
-          NAS_ALERT_ROUTER_LISTEN = "127.0.0.1:${toString obs.alertRouterPort}";
-          NAS_ALERT_ROUTER_STATE = "/var/lib/nas-alert-router/state.json";
-          NAS_ALERT_ROUTER_REPEAT_SECONDS = "14400";
-          NAS_ALERT_ROUTER_NTFY_ENABLED = if obs.ntfy.enable then "1" else "0";
-          NAS_NTFY_URL = "http://127.0.0.1:${toString obs.ntfy.port}";
-          NAS_NTFY_TOPIC_FILE = "${observabilitySecretDir}/ntfy-topic";
-          NAS_NTFY_PASSWORD_FILE = "${observabilitySecretDir}/ntfy-admin-password";
-          NAS_NTFY_USERNAME = "admin";
-        };
         unitConfig = lib.optionalAttrs obs.ntfy.enable {
           ConditionPathExists = [
-            "${observabilitySecretDir}/ntfy-topic"
+            "${observabilitySecretDir}/alertmanager-environment"
             "${observabilitySecretDir}/ntfy-admin-password"
           ];
         };
-        serviceConfig = {
-          Type = "simple";
-          ExecStart = nasAlertRouter;
-          User = "nas-observability";
-          Group = "nas-observability";
-          StateDirectory = "nas-alert-router";
-          StateDirectoryMode = "0700";
-          Restart = "on-failure";
-          RestartSec = "5s";
-          TimeoutStartSec = "30s";
-          TimeoutStopSec = "30s";
-          NoNewPrivileges = true;
-          PrivateTmp = true;
-          PrivateDevices = true;
-          ProtectSystem = "strict";
-          ProtectHome = true;
-          ProtectKernelTunables = true;
-          ProtectKernelModules = true;
-          ProtectControlGroups = true;
-          RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
-          RestrictNamespaces = true;
-          RestrictRealtime = true;
-          RestrictSUIDSGID = true;
-          LockPersonality = true;
-          MemoryDenyWriteExecute = true;
-          CapabilityBoundingSet = [ ];
-          SystemCallArchitectures = "native";
-          SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
-          UMask = "0077";
-        } // lib.optionalAttrs obs.ntfy.enable {
-          BindReadOnlyPaths = [
-            "${observabilitySecretDir}/ntfy-topic"
-            "${observabilitySecretDir}/ntfy-admin-password"
-          ];
+        serviceConfig = lib.optionalAttrs obs.ntfy.enable {
+          LoadCredential = "ntfy-admin-password:${observabilitySecretDir}/ntfy-admin-password";
         };
       };
 
