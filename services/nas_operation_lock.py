@@ -157,11 +157,14 @@ def _read_metadata(handle: Any) -> dict[str, Any] | None:
 
 
 def _metadata(token: str, action: str, classes: tuple[str, ...]) -> str:
-    return json.dumps(
-        {"token": token, "action": action, "classes": list(classes), "pid": os.getpid()},
-        sort_keys=True,
-        separators=(",", ":"),
-    ) + "\n"
+    return (
+        json.dumps(
+            {"token": token, "action": action, "classes": list(classes), "pid": os.getpid()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
 
 
 def _boot_id() -> str:
@@ -194,7 +197,11 @@ def validate_coordination_token(token: str, classes: Sequence[str]) -> None:
         held = value.get("classes") if isinstance(value, dict) else None
         if value is None or value.get("token") != token:
             raise OperationBusyError("The appliance mutation lock is owned by a different operation")
-        if not isinstance(held, list) or not all(isinstance(item, str) for item in held) or not _classes_cover(held, requested):
+        if (
+            not isinstance(held, list)
+            or not all(isinstance(item, str) for item in held)
+            or not _classes_cover(held, requested)
+        ):
             raise OperationBusyError("The parent operation does not cover the requested mutation class")
     finally:
         handle.close()
@@ -303,15 +310,20 @@ def operation_state() -> dict[str, Any]:
         try:
             _try_lock(handle, blocking=False)
         except BlockingIOError:
-            classes = value.get("classes") if isinstance(value, dict) else []
+            raw_classes = value.get("classes") if isinstance(value, dict) else None
+            classes = raw_classes if isinstance(raw_classes, list) else []
             busy = sorted(item for item in classes if isinstance(item, str))
-            active = [
-                {
-                    "action": value.get("action", "operation"),
-                    "classes": busy,
-                    "pid": value.get("pid"),
-                }
-            ] if isinstance(value, dict) else []
+            active = (
+                [
+                    {
+                        "action": value.get("action", "operation"),
+                        "classes": busy,
+                        "pid": value.get("pid"),
+                    }
+                ]
+                if isinstance(value, dict)
+                else []
+            )
         else:
             fcntl.flock(handle, fcntl.LOCK_UN)
             busy = []
