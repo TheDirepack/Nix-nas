@@ -105,7 +105,7 @@ def _doc_with_all_primitives() -> dict:
                 "name": "Session",
                 "enabled": True,
                 "workload": {"kind": "session"},
-                "runtime": {"type": "systemd", "unit": "demo-session.service"},
+                "runtime": {"type": "oci", "image": "example.invalid/session:1"},
             },
         },
     }

@@ -239,7 +239,10 @@ def remote_admin_policy_name() -> str:
     return f"nv2m{_digest('remote-admin')}"
 
 
+# Policy priority order (lower runs first): remote-admin -300 CONTINUE, LAN -100,
+# host/route/listener -50, world egress 50. Priority 0 is reserved by firewalld.
 _REMOTE_ADMIN_PRIORITY = "-300"
+_WORLD_POLICY_PRIORITY = "50"
 
 
 def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 integration
@@ -284,6 +287,12 @@ def _policy_xml(
     forward_ports: list[tuple[str, str, str]] | None = None,
     extra: list[str] | None = None,
 ) -> bytes:
+    try:
+        priority_int = int(priority)
+    except (TypeError, ValueError) as exc:
+        raise FirewalldProjectionError(f"invalid firewalld policy priority {priority!r}") from exc
+    if priority_int == 0 or not -32767 <= priority_int <= 32767:
+        raise FirewalldProjectionError(f"reserved or out-of-range firewalld policy priority {priority!r}")
     lines = [
         f'<policy target="{target}" priority="{priority}">',
         f"  <ingress-zone name={quoteattr(ingress)}/>",
@@ -358,7 +367,7 @@ def _world_policy_xml(service_id: str, policy: dict[str, Any]) -> bytes:
         extra.extend(_egress_rule_xml(rule))
     return _policy_xml(
         target,
-        "0",
+        _WORLD_POLICY_PRIORITY,
         zone_name(service_id),
         "ANY",
         f"V2 egress {escape(service_id)}",
@@ -461,7 +470,7 @@ def _allow_policy_xml(
 
 def _remote_admin_policy_xml(lan_zone: str) -> bytes:
     return _policy_xml(
-        "ACCEPT",
+        "CONTINUE",
         _REMOTE_ADMIN_PRIORITY,
         lan_zone,
         "HOST",

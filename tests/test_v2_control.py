@@ -109,9 +109,9 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
                 mock.patch.object(control, "replace_document", return_value={"ok": True}) as replace,
                 mock.patch.object(control, "_reconcile") as reconcile,
             ):
-                result = control.replace_from_source(str(source_path))
+                result = control.replace_from_source(str(source_path), "a" * 64)
         self.assertTrue(result["ok"])
-        replace.assert_called_once()
+        self.assertEqual(replace.call_args.kwargs["expected_revision"], "a" * 64)
         reconcile.assert_called_once_with()
 
     def test_replace_json_document_uses_same_reconcile_transaction(self) -> None:
@@ -128,13 +128,14 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
                 mock.patch.object(control, "replace_document_value", return_value={"ok": True}) as replace,
                 mock.patch.object(control, "_reconcile") as reconcile,
             ):
-                result = control.replace_json_from_source(str(source_path))
+                result = control.replace_json_from_source(str(source_path), "b" * 64)
         self.assertTrue(result["ok"])
         replace.assert_called_once_with(
             source_value,
             desired_path=desired_path,
             schema_path=control.SCHEMA_PATH,
             platform_path=None,
+            expected_revision="b" * 64,
         )
         reconcile.assert_called_once_with()
 
@@ -143,7 +144,15 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
             source_path = pathlib.Path(tmp) / "replacement.json"
             source_path.write_text("[]", encoding="utf-8")
             with self.assertRaisesRegex(control.ControlError, "must contain an object"):
-                control.replace_json_from_source(str(source_path))
+                control.replace_json_from_source(str(source_path), "c" * 64)
+
+    def test_replace_commands_require_a_canonical_revision(self) -> None:
+        parser = control.build_parser()
+        for command in ("replace-document", "replace-json-document"):
+            args = parser.parse_args([command, "-", "a" * 64])
+            self.assertEqual(args.revision, "a" * 64)
+            with self.assertRaises(SystemExit):
+                parser.parse_args([command, "-", "stale"])
 
 
 if __name__ == "__main__":

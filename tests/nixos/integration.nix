@@ -13,6 +13,7 @@ in
 
 pkgs.testers.runNixOSTest {
   name = "nixos-nas-full-stack";
+  globalTimeout = 2 * 60 * 60;
 
   nodes.machine = { ... }: {
     imports = [

@@ -12,12 +12,41 @@ WRAPPER = ROOT / "scripts" / "vm-pytest.sh"
 QEMU = ROOT / "scripts" / "qemu-test.sh"
 GUEST_SUITE = ROOT / "tests" / "vm" / "full-suite.sh"
 GUEST_TEST = ROOT / "tests" / "vm" / "guest-test.sh"
+ENCRYPTED_GUEST_TEST = ROOT / "tests" / "vm" / "encrypted-guest-test.sh"
+SECRET_ADVERSARIAL = ROOT / "tests" / "vm" / "secret-adversarial.sh"
+INSTALLED_ADVERSARIAL = ROOT / "tests" / "vm" / "adversarial-installed.py"
 FIRST_RUN_BROWSER = ROOT / "tests" / "browser" / "first-run-wizard.py"
 FINAL_BROWSER = ROOT / "scripts" / "qemu-final-browser.sh"
+QEMU_PROCESS = ROOT / "scripts" / "lib" / "nas-qemu-process.sh"
 VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_reconfigure_prints_failed_doctor_report_and_preserves_status(self) -> None:
+        source = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        self.assertIn("check_doctor() {", source)
+        function = source.split("check_doctor() {", 1)[1].split("\n}", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            report = pathlib.Path(directory) / "doctor.json"
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'nas-doctor() { echo \'{"status":"critical"}\'; return 2; }\n'
+                    + "check_doctor() {"
+                    + function
+                    + '\n}\ncheck_doctor "$1"',
+                    "test",
+                    str(report),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('"status":"critical"', result.stderr)
+            self.assertEqual(report.read_text(), '{"status":"critical"}\n')
+
     def _stage(self, source: pathlib.Path, cache: pathlib.Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", str(QEMU), "stage-source"],
@@ -49,6 +78,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
     def test_wrapper_uses_the_existing_official_iso_lifecycle(self) -> None:
         wrapper = WRAPPER.read_text(encoding="utf-8")
         qemu = QEMU.read_text(encoding="utf-8")
+        qemu_process = QEMU_PROCESS.read_text(encoding="utf-8")
         final_browser = FINAL_BROWSER.read_text(encoding="utf-8")
         installer = (ROOT / "tests" / "vm" / "install-system.sh").read_text(encoding="utf-8")
         install_expect = (ROOT / "tests" / "vm" / "install.expect").read_text(encoding="utf-8")
@@ -70,6 +100,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("restore_persistent_baseline", qemu)
         self.assertIn("CACHE_MARKER_CONTENT=", qemu)
         self.assertIn("nas_qemu_pid_from_pidfile", qemu)
+        self.assertIn('executable="${executable% (deleted)}"', qemu_process)
         self.assertIn("QEMU source path is missing", qemu)
         self.assertIn("realpath", qemu)
         self.assertIn('qemu-img snapshot -c "$BASELINE_SNAPSHOT"', qemu)
@@ -97,6 +128,8 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn('tar --exclude=./.nas-source-selection.json -C "$source_stage" -cf - .', qemu)
         self.assertIn("git -C /var/lib/nas-test/repo config gc.auto 0", qemu)
         self.assertIn("nix develop path:/var/lib/nas-test/repo#test", qemu)
+        self.assertIn('if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then', qemu)
+        self.assertIn("GITHUB_ACTIONS=$github_actions", qemu)
         self.assertIn(
             "systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service",
             qemu,
@@ -174,8 +207,65 @@ class VmSuiteWrapperTests(unittest.TestCase):
             guest,
         )
         self.assertNotIn("chown operator:users /var/lib/nas-test/setup", guest)
-        self.assertIn('runuser -u "$administrator" -- env HOME="$home"', guest)
+        self.assertIn('runuser -u "$administrator" -- env -C / HOME="$home"', guest)
         self.assertIn("--setup-reboot-e2e", (ROOT / "tests/nixos/vm-common.nix").read_text(encoding="utf-8"))
+
+    def test_guest_administrator_commands_enter_a_mount_independent_directory(self) -> None:
+        guest = GUEST_TEST.read_text(encoding="utf-8")
+        encrypted_guest = ENCRYPTED_GUEST_TEST.read_text(encoding="utf-8")
+        self.assertEqual(guest.count('env -C / HOME="$home"'), 2)
+        self.assertEqual(guest.count("env -C / HOME=/tank/homes/nasadmin"), 1)
+        self.assertEqual(encrypted_guest.count("env -C / HOME=/tank/homes/nasadmin"), 2)
+        self.assertEqual(encrypted_guest.count("env -C / HOME=/home/admin"), 2)
+
+    def test_installer_qualifies_pinned_old_packages_before_current_generation(self) -> None:
+        qemu = QEMU.read_text(encoding="utf-8")
+        reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("NAS_TEST_PACKAGE_UPGRADE=$package_upgrade", qemu)
+        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", reconfigure)
+        self.assertIn("--override-input nixpkgs", reconfigure)
+        self.assertIn("syncthing-$older_version", reconfigure)
+        self.assertIn("syncthing-$current_version", reconfigure)
+        self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
+        self.assertIn("final-vm-evidence/installed-console.log", workflow)
+
+    def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
+        adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
+        self.assertIn("activate_secrets_with_retry()", adversarial)
+        self.assertIn('if [[ "$rc" -ne 75 ]]; then', adversarial)
+        self.assertIn("sleep 1", adversarial)
+        self.assertIn("/tmp/nas-secret-adversarial.out /tmp/nas-secret-adversarial.err", adversarial)
+        self.assertIn(
+            "/tmp/nas-secret-adversarial-recovery.out /tmp/nas-secret-adversarial-recovery.err",
+            adversarial,
+        )
+
+    def test_secret_adversarial_uses_the_promoted_local_administrator(self) -> None:
+        adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
+        self.assertIn("/var/lib/nas-setup/local-administrator.json", adversarial)
+        self.assertIn('cd "$administrator_home"', adversarial)
+        self.assertIn('runuser -u "$administrator" -- env HOME="$administrator_home"', adversarial)
+        self.assertNotIn("runuser -u admin", adversarial)
+        self.assertNotIn("  authentik-bootstrap-token \\", adversarial)
+        self.assertNotIn("  authentik-bootstrap-password \\", adversarial)
+        self.assertNotIn("  llama-swap-api-key \\", adversarial)
+        self.assertNotIn("  open-webui-secret \\", adversarial)
+
+    def test_installed_smoke_allows_only_the_disabled_optional_launcher_to_be_absent(self) -> None:
+        installed = INSTALLED_ADVERSARIAL.read_text(encoding="utf-8")
+        vm_common = VM_COMMON.read_text(encoding="utf-8")
+        self.assertIn('OPTIONAL_INSTALLED_COMMANDS = frozenset({"nas-code"})', installed)
+        self.assertIn("if name in OPTIONAL_INSTALLED_COMMANDS:", installed)
+        self.assertIn('raise RuntimeError(f"installed custom command is missing: {name}")', installed)
+        self.assertIn('"smoke": os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1"', installed)
+        self.assertIn("pkgs.python3", vm_common)
+
+    def test_vm_executes_the_canonical_guest_fixture_without_rewriting(self) -> None:
+        vm_common = VM_COMMON.read_text(encoding="utf-8")
+        self.assertIn("guestTestSource = builtins.readFile ../vm/guest-test.sh;", vm_common)
+        self.assertNotIn("guestTestRaw", vm_common)
+        self.assertNotIn("builtins.replaceStrings", vm_common)
 
     def test_persistent_controls_are_additive_to_existing_ci_modes(self) -> None:
         qemu = QEMU.read_text(encoding="utf-8")

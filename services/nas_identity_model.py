@@ -259,6 +259,7 @@ def desired_syncthing(
     model: IdentityModel, share_root: pathlib.Path
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     devices: dict[str, dict[str, Any]] = {}
+    device_owners: dict[str, str] = {}
     folders: dict[str, dict[str, Any]] = {}
     for user in model.users:
         if not user.personal_sync:
@@ -274,7 +275,13 @@ def desired_syncthing(
             existing = devices.get(device["deviceID"])
             if existing is not None and existing != device:
                 raise SyncError(f"Syncthing device {device['deviceID']} has conflicting Authentik definitions")
+            if existing is not None:
+                raise SyncError(
+                    f"Syncthing device {device['deviceID']} is claimed by multiple users: "
+                    f"{device_owners[device['deviceID']]}, {user.uid}"
+                )
             devices[device["deviceID"]] = device
+            device_owners[device["deviceID"]] = user.uid
         folder_id = f"nas-{user.uid}-backup"
         folders[folder_id] = {
             "id": folder_id,
@@ -287,7 +294,6 @@ def desired_syncthing(
             "rescanIntervalS": 3600,
             "pullerMaxPendingKiB": 16384,
             "scanProgressIntervalS": -1,
-            "weakHashThresholdPct": 101,
             "versioning": {"type": "staggered", "params": {"cleanInterval": "3600", "maxAge": "31536000"}},
         }
     return folders, devices

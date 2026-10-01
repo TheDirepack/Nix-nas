@@ -229,6 +229,7 @@ let
         echo "$dataset is not encrypted; there is no ZFS key to unload." >&2
         exit 1
       fi
+      sudo systemctl stop nas-managed-services-dirty.path nas-managed-services-reconcile.path
       sudo systemctl stop nas-protected-services.target
       zfs_retry() {
         local label=$1
@@ -383,9 +384,42 @@ let
       set -euo pipefail
       [[ $# -eq 1 ]] || { echo "Usage: nas-zfs-export-recovery-key /absolute/output-file" >&2; exit 2; }
       output="$1"
+      dataset=${lib.escapeShellArg cfg.zfsDataset}
+      zfs=${pkgs.zfs}/bin/zfs
+      fingerprint_property=${lib.escapeShellArg zfsKeyFingerprintProperty}
+      expected_keylocation=${lib.escapeShellArg "file://${zfsKeyPath}"}
       [[ "$output" == /* ]] || { echo "The output path must be absolute." >&2; exit 2; }
       [[ " $(id -nG) " == *" nas-administrators "* ]] || {
         echo "Run this as the wizard-created Linux administrator; the KeePassXC database password will be requested interactively." >&2
+        exit 1
+      }
+      sudo "$zfs" list -H -o name "$dataset" >/dev/null 2>&1 || {
+        echo "The configured ZFS dataset '$dataset' does not exist." >&2
+        exit 1
+      }
+      encryption="$(sudo "$zfs" get -H -o value encryption "$dataset")"
+      [[ "$encryption" != off ]] || {
+        echo "The configured ZFS dataset '$dataset' is not encrypted." >&2
+        exit 1
+      }
+      encryptionroot="$(sudo "$zfs" get -H -o value encryptionroot "$dataset")"
+      keyformat="$(sudo "$zfs" get -H -o value keyformat "$dataset")"
+      keylocation="$(sudo "$zfs" get -H -o value keylocation "$dataset")"
+      [[ "$encryptionroot" == "$dataset" ]] || {
+        echo "The configured ZFS dataset is not its own encryption root." >&2
+        exit 1
+      }
+      [[ "$keyformat" == hex ]] || {
+        echo "The configured ZFS dataset does not use a hexadecimal key." >&2
+        exit 1
+      }
+      [[ "$keylocation" == "$expected_keylocation" ]] || {
+        echo "The configured ZFS dataset does not use the managed key location." >&2
+        exit 1
+      }
+      stored_fingerprint="$(sudo "$zfs" get -H -o value "$fingerprint_property" "$dataset")"
+      [[ "$stored_fingerprint" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "The configured ZFS dataset has no valid managed-key fingerprint." >&2
         exit 1
       }
       if [[ -t 0 ]]; then
@@ -397,6 +431,11 @@ let
         exit 1
       }
       [[ "$key" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "The stored ZFS key has an unexpected format." >&2; exit 1; }
+      key_fingerprint="$(printf '%s' "$key" | sha256sum | cut -d ' ' -f1)"
+      [[ "$stored_fingerprint" == "$key_fingerprint" ]] || {
+        echo "The stored ZFS key does not match the configured encryption root." >&2
+        exit 1
+      }
       tmp="$(mktemp)"
       trap 'rm -f -- "$tmp"; unset key' EXIT
       chmod 0600 "$tmp"

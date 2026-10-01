@@ -92,7 +92,7 @@ let
         nativeBuildInputs = [ pkgs.nodejs ];
       } ''
         cd ${../../../cockpit}
-        node build.js --check
+        NAS_FRONTEND_INTEGRITY_HELPER=${../../../scripts/frontend-build-integrity.cjs} node build.js --check
         cockpit_dist=${../../../cockpit/dist}
         for asset in manifest.json index.html index.js index.css build-meta.json; do
           test -s "$cockpit_dist/$asset" || {
@@ -110,9 +110,13 @@ let
     };
 
   firstRunWizardStatic =
-    pkgs.runCommand "first-run-wizard-static" { } ''
+    pkgs.runCommand "first-run-wizard-static" {
+      nativeBuildInputs = [ pkgs.nodejs ];
+    } ''
+      wizard_src=${../../../setup/first-run-wizard}
+      NAS_FRONTEND_INTEGRITY_HELPER=${../../../scripts/frontend-build-integrity.cjs} node "$wizard_src/build.js" --check
       wizard_dist=${../../../setup/first-run-wizard/dist}
-      for asset in index.html first-run-wizard.js first-run-wizard.css; do
+      for asset in index.html first-run-wizard.js first-run-wizard.css build-meta.json; do
         test -s "$wizard_dist/$asset" || {
           printf 'First-run wizard bundle is missing %s. Run npm ci and node build.js in setup/first-run-wizard/.\n' "$asset" >&2
           exit 1

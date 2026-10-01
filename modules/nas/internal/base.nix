@@ -16,6 +16,7 @@ let
   authentikRuntimeApiTokenFile = "/run/nas-authentik/api-token";
   authentikApiTokenFile = "${authentikSecretDir}/api-token";
   authentikBootstrapTokenFile = "${authentikSecretDir}/bootstrap-token";
+  authentikOutpostTokenFile = "${authentikSecretDir}/outpost-token";
   # This deliberately lives on the boot filesystem. Authentik, PostgreSQL,
   # and KeePass must be available before the ZFS data pool can be unlocked.
   bootstrapRuntimeRoot = "/var/lib/nas-control-plane";
@@ -138,7 +139,7 @@ in
   inherit
     cfg systemStateVersion lanHost identityAdminGroup secretRoot authentikSecretDir authentikEnvironmentFile
     authentikRuntimeEnvironmentFile authentikRuntimeApiTokenFile
-    authentikApiTokenFile authentikBootstrapTokenFile copypartyUserConfigDir copypartyDataDir
+    authentikApiTokenFile authentikBootstrapTokenFile authentikOutpostTokenFile copypartyUserConfigDir copypartyDataDir
     authentikPort cockpitPort syncthingGuiPort syncthingSyncPort syncthingDiscoveryPort vaultwardenPort nutUpsdPort
     authentikOutpostPort authentikOutpostPath
     bootstrapRuntimeRoot bootstrapAuthentikDataDir bootstrapPostgresqlDataDir bootstrapSecretsDir

@@ -43,12 +43,14 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         rendered = caddy.generate_caddyfile(self.compile(service))
         self.assertIn("request_header -X-Authentik-Username", rendered)
         self.assertIn("forward_auth 127.0.0.1:9010", rendered)
-        self.assertIn('uri "/identity/outpost.goauthentik.io/auth/caddy"', rendered)
-        self.assertIn("X-Original-URL {http.request.scheme}://{http.request.host}{http.request.orig_uri}", rendered)
+        self.assertIn('uri "/outpost.goauthentik.io/auth/caddy"', rendered)
+        self.assertIn("X-Original-URL {http.request.scheme}://{http.request.hostport}{http.request.orig_uri}", rendered)
+        self.assertIn("header_up X-Forwarded-Host {http.request.hostport}", rendered)
         self.assertNotIn("X-Original-URL {http.request.scheme}://{http.request.host}{http.request.uri}", rendered)
         self.assertIn("header_up X-Forwarded-Uri {uri}", rendered)
         self.assertIn("not header_regexp X-Authentik-Groups", rendered)
-        self.assertIn(r"application\\.demo\\.admin", rendered)
+        self.assertIn("application[.]demo[.]admin", rendered)
+        self.assertNotIn(r"application\\.demo", rendered)
         self.assertIn("respond @v2_demo_web_missing_capability 403", rendered)
         self.assertLess(rendered.index("forward_auth 127.0.0.1:9010"), rendered.index("reverse_proxy 127.0.0.1:8080"))
         self.assertLess(rendered.index("missing_capability"), rendered.index("reverse_proxy 127.0.0.1:8080"))
@@ -377,6 +379,11 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn('uri strip_prefix "/demo"', rendered)
         self.assertIn("reverse_proxy unix//run/demo/http.sock", rendered)
         self.assertIn('header_down X-Frame-Options "SAMEORIGIN"', rendered)
+
+    def test_syncthing_route_uses_the_loopback_upstream_host(self):
+        seed = (ROOT / "modules/nas/config/managed-services-seed-v2.nix").read_text(encoding="utf-8")
+        syncthing = seed.split('routes.web = (pathRoute [ "/syncthing" ]', 1)[1].split("};", 1)[0]
+        self.assertIn('requestHeaders.Host = "127.0.0.1:${toString syncthingGuiPort}";', syncthing)
 
     def test_static_request_headers_cannot_forge_trusted_identity(self):
         service = self.base_service()

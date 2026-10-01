@@ -30,6 +30,15 @@ def embedded_outpost(*, providers: list[int] | None = None) -> dict[str, object]
 
 
 class SetupLauncherTransactionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.property_mapping_patch = mock.patch.object(
+            sync,
+            "default_proxy_property_mappings",
+            return_value=["openid", "email", "profile", "entitlements", "ak-proxy"],
+        )
+        self.property_mapping_patch.start()
+        self.addCleanup(self.property_mapping_patch.stop)
+
     def test_validates_embedded_outpost_before_first_mutation(self) -> None:
         with (
             mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
@@ -104,6 +113,7 @@ class SetupLauncherTransactionTests(unittest.TestCase):
             "authentication_flow": "old-auth",
             "authorization_flow": "old-authorization",
             "invalidation_flow": "old-invalidation",
+            "property_mappings": ["old-mapping"],
         }
         application = {
             "name": "NAS Setup",
@@ -181,6 +191,7 @@ class SetupLauncherTransactionTests(unittest.TestCase):
             "authentication_flow": "old-auth",
             "authorization_flow": "old-authorization",
             "invalidation_flow": "old-invalidation",
+            "property_mappings": ["old-mapping"],
         }
         application = {
             "name": "NAS Portal",

@@ -17,7 +17,7 @@ Use this page when you are unsure **where** a setting belongs. Keeping one autho
 | Boot/appliance backup | Restic + Managed Services V2 resource/job policy | Cockpit action + native systemd timer | Restic repository + `services.yaml` |
 | Metrics collection | Telegraf | Declarative Nix configuration | systemd runtime state |
 | Metrics history/query | VictoriaMetrics | `/victoriametrics/` | `/var/lib/victoriametrics` |
-| Dashboards | Grafana | `/metrics/` | `/var/lib/grafana` |
+| Dashboards | Grafana | `/metrics/` | `/var/lib/grafana/grafana.db` |
 | Alert evaluation | vmalert | declarative rules | VictoriaMetrics alert state |
 | Alert delivery/deduplication | NAS alert router | `/alerts/` | `/var/lib/nas-alert-router/state.json` |
 | Notifications | ntfy | `/notifications/` | `/var/lib/ntfy-sh` |

@@ -163,6 +163,33 @@ class WizardFlowContractTests(unittest.TestCase):
         self.assertIn('{"complete", "complete-unverified", "failed"}', source)
         self.assertIn("browser_diagnostics(driver)", source)
         self.assertIn("--result-file", source)
+        self.assertIn("wizard-job-document", source)
+        self.assertNotIn("first-start/job/${", source)
+
+    def test_wait_for_job_reads_the_rendered_document_without_fetching(self) -> None:
+        wizard = load_wizard()
+        completed = json.dumps({"jobId": "a" * 24, "status": "complete", "result": {"ok": True}})
+        element = mock.MagicMock()
+        element.get_attribute.return_value = completed
+        driver = mock.MagicMock()
+        driver.find_element.return_value = element
+        driver.find_elements.return_value = []
+        with mock.patch.object(wizard.time, "sleep") as sleep:
+            job = wizard.wait_for_job(driver, 30)
+        self.assertEqual(job["status"], "complete")
+        driver.execute_async_script.assert_not_called()
+        driver.execute_script.assert_not_called()
+        sleep.assert_not_called()
+
+    def test_wait_for_job_surfaces_danger_alerts(self) -> None:
+        wizard = load_wizard()
+        alert = mock.MagicMock()
+        alert.is_displayed.return_value = True
+        alert.text = "submission exploded"
+        driver = mock.MagicMock()
+        driver.find_elements.return_value = [alert]
+        with self.assertRaisesRegex(RuntimeError, "submission exploded"):
+            wizard.wait_for_job(driver, 30)
 
     def test_diagnostic_capture_omits_input_values(self) -> None:
         wizard = load_wizard()

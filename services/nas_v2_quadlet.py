@@ -86,6 +86,18 @@ def _publish_lines(effective: dict[str, Any], service_id: str, service: dict[str
         return []
     lines: list[str] = []
     published: set[tuple[str, int]] = set()
+    route_bind_hosts: dict[tuple[str, int], str] = {}
+    routes = service.get("routes", {})
+    if isinstance(routes, dict):
+        for route in routes.values():
+            target = route.get("target") if isinstance(route, dict) else None
+            if not isinstance(target, dict) or target.get("type") not in {"http", "https"}:
+                continue
+            port = target.get("port")
+            host = target.get("host", "127.0.0.1")
+            bind_host = _LOOPBACK_HOSTS.get(host) if isinstance(host, str) else None
+            if isinstance(port, int) and not isinstance(port, bool) and bind_host is not None:
+                route_bind_hosts[("tcp", port)] = bind_host
     listeners = service.get("listeners", {})
     if isinstance(listeners, dict):
         for listener_id in sorted(listeners):
@@ -106,7 +118,10 @@ def _publish_lines(effective: dict[str, Any], service_id: str, service: dict[str
                     target_port = exposure["port"]
                 if not isinstance(target_port, int) or isinstance(target_port, bool) or not 1 <= target_port <= 65535:
                     raise QuadletProjectionError(f"listener {listener_id!r} targetPort is invalid")
-                value = f"{exposure['port']}:{target_port}/{protocol}"
+                host_port = exposure["port"]
+                bind_host = route_bind_hosts.get((protocol, host_port))
+                bind_prefix = f"{bind_host}:" if bind_host is not None else ""
+                value = f"{bind_prefix}{host_port}:{target_port}/{protocol}"
             else:
                 if target_port is not None:
                     raise QuadletProjectionError(
@@ -114,7 +129,6 @@ def _publish_lines(effective: dict[str, Any], service_id: str, service: dict[str
                     )
                 value = f"{exposure['start']}-{exposure['end']}:{exposure['start']}-{exposure['end']}/{protocol}"
             lines.append(f"PublishPort={_quote(value, field=f'listener {listener_id!r} publication')}")
-    routes = service.get("routes", {})
     if isinstance(routes, dict):
         for route_id in sorted(routes):
             route = routes[route_id]

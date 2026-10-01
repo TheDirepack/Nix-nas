@@ -104,6 +104,13 @@
       "timeoutKeys": []
     },
     {
+      "id": "oci-lifecycle",
+      "label": "Unknown OCI service lifecycle",
+      "ordinaryWaits": 10,
+      "fixedSeconds": 180,
+      "timeoutKeys": []
+    },
+    {
       "id": "observability",
       "label": "Observability and notifications",
       "ordinaryWaits": 8,

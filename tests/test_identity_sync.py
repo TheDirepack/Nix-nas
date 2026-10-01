@@ -17,6 +17,14 @@ import nas_identity_sync as sync  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "authentik-identity.json"
 
+PROXY_MAPPINGS = [
+    {"scope_name": "openid", "pk": "mapping-openid"},
+    {"scope_name": "email", "pk": "mapping-email"},
+    {"scope_name": "profile", "pk": "mapping-profile"},
+    {"scope_name": "entitlements", "pk": "mapping-entitlements"},
+    {"scope_name": "ak_proxy", "pk": "mapping-proxy"},
+]
+
 
 class IdentityModelTests(unittest.TestCase):
     def model(self) -> identity_model.IdentityModel:
@@ -78,7 +86,7 @@ class IdentityModelTests(unittest.TestCase):
             with self.subTest(public_host=public_host):
                 with (
                     mock.patch.object(sync, "PUBLIC_HOST", public_host),
-                    mock.patch.object(sync, "authentik_list", side_effect=[flows, [], [], [outpost]]),
+                    mock.patch.object(sync, "authentik_list", side_effect=[flows, PROXY_MAPPINGS, [], [], [outpost]]),
                     mock.patch.object(
                         sync,
                         "authentik_request",
@@ -95,6 +103,10 @@ class IdentityModelTests(unittest.TestCase):
                 self.assertEqual(provider_request.kwargs["method"], "POST")
                 self.assertEqual(provider_request.kwargs["body"]["external_host"], f"https://{public_host}")
                 self.assertEqual(provider_request.kwargs["body"]["mode"], "forward_single")
+                self.assertEqual(
+                    provider_request.kwargs["body"]["property_mappings"],
+                    ["mapping-openid", "mapping-email", "mapping-profile", "mapping-entitlements", "mapping-proxy"],
+                )
                 self.assertEqual(application_request.args, ("bootstrap-token", "core/applications/"))
                 self.assertEqual(application_request.kwargs["body"]["meta_launch_url"], f"https://{public_host}")
                 self.assertEqual(outpost_request.args, ("bootstrap-token", "outposts/instances/embedded/"))
@@ -122,13 +134,25 @@ class IdentityModelTests(unittest.TestCase):
         outpost = {"pk": "embedded", "managed": "goauthentik.io/outposts/embedded", "providers": [], "config": {}}
         with (
             mock.patch.object(sync, "PUBLIC_HOST", "nas.local"),
-            mock.patch.object(sync, "authentik_list", side_effect=[[], flows, [], [], [outpost]]),
+            mock.patch.object(sync, "authentik_list", side_effect=[[], flows, PROXY_MAPPINGS, [], [], [outpost]]),
             mock.patch.object(sync, "authentik_request", side_effect=[{"pk": "portal-provider"}, None, None]),
             mock.patch.object(sync.time, "sleep") as sleep,
         ):
             self.assertEqual(
                 sync.ensure_portal_proxy("bootstrap-token"),
                 {"provider": "NAS Portal", "application": "nas-portal"},
+            )
+        sleep.assert_called_once_with(1)
+
+    def test_proxy_provider_waits_for_all_identity_header_scope_mappings(self) -> None:
+        with (
+            mock.patch.object(sync, "authentik_list", side_effect=[PROXY_MAPPINGS[:1], PROXY_MAPPINGS]),
+            mock.patch.object(sync.time, "monotonic", side_effect=[0, 0]),
+            mock.patch.object(sync.time, "sleep") as sleep,
+        ):
+            self.assertEqual(
+                sync.default_proxy_property_mappings("bootstrap-token"),
+                ["mapping-openid", "mapping-email", "mapping-profile", "mapping-entitlements", "mapping-proxy"],
             )
         sleep.assert_called_once_with(1)
 
@@ -145,6 +169,7 @@ class IdentityModelTests(unittest.TestCase):
                 "authentik_list",
                 side_effect=[
                     flows,
+                    PROXY_MAPPINGS,
                     [],  # providers/proxy/
                     [],  # core/applications/
                     [{"managed": "goauthentik.io/outposts/embedded", "pk": 7, "providers": []}],
@@ -185,6 +210,7 @@ class IdentityModelTests(unittest.TestCase):
                 "authentik_list",
                 side_effect=[
                     flows,
+                    PROXY_MAPPINGS,
                     [],  # providers/proxy/
                     [{"slug": "nas-setup", "provider": None}],  # core/applications/
                     [{"managed": "goauthentik.io/outposts/embedded", "pk": 7, "providers": []}],
@@ -226,6 +252,29 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(folders["nas-alice-backup"]["type"], "receiveonly")
         self.assertEqual(folders["nas-alice-backup"]["pullerMaxPendingKiB"], 16384)
 
+    def test_syncthing_v2_readback_converges_without_retired_weak_hash_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, mock.patch.object(sync, "SHARE_ROOT", pathlib.Path(raw)):
+            folders, devices = sync.desired_syncthing(self.model())
+        self.assertTrue(all("weakHashThresholdPct" not in folder for folder in folders.values()))
+        observed_folders = json.loads(json.dumps(list(folders.values())))
+        for folder in observed_folders:
+            folder.pop("weakHashThresholdPct", None)
+
+        with (
+            mock.patch.object(
+                sync,
+                "syncthing_request",
+                side_effect=[observed_folders, list(devices.values())],
+            ),
+            mock.patch.object(sync, "SYNCTHING_VERIFY_ATTEMPTS", 1),
+        ):
+            sync.verify_syncthing_configuration(
+                folders,
+                devices,
+                removed_folders=set(),
+                removed_devices=set(),
+            )
+
     def test_syncthing_access_is_not_inferred_from_old_groups(self) -> None:
         user = identity_model.User(
             "alice",
@@ -256,6 +305,55 @@ class IdentityModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             with self.assertRaisesRegex(identity_model.SyncError, "conflicting Authentik definitions"):
                 identity_model.desired_syncthing(model, pathlib.Path(raw))
+
+    def test_syncthing_device_cannot_be_claimed_by_multiple_users(self) -> None:
+        device_id = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+        attrs = {"nasSyncthingDevices": [json.dumps({"id": device_id, "name": "Shared"})]}
+        groups = frozenset({"application.syncthing.access"})
+        model = identity_model.IdentityModel(
+            (
+                identity_model.User("alice", "alice@example.test", "Alice", groups, attrs),
+                identity_model.User("bob", "bob@example.test", "Bob", groups, attrs),
+            ),
+            (),
+            ("admin",),
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(identity_model.SyncError, "claimed by multiple users: alice, bob"):
+                identity_model.desired_syncthing(model, pathlib.Path(raw))
+
+    def test_syncthing_personal_folders_and_devices_are_disjoint(self) -> None:
+        alice_device = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+        bob_device = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+        groups = frozenset({"application.syncthing.access"})
+        model = identity_model.IdentityModel(
+            (
+                identity_model.User(
+                    "alice",
+                    "alice@example.test",
+                    "Alice",
+                    groups,
+                    {"nasSyncthingDevices": [json.dumps({"id": alice_device, "name": "Alice laptop"})]},
+                ),
+                identity_model.User(
+                    "bob",
+                    "bob@example.test",
+                    "Bob",
+                    groups,
+                    {"nasSyncthingDevices": [json.dumps({"id": bob_device, "name": "Bob laptop"})]},
+                ),
+            ),
+            (),
+            ("admin",),
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            folders, devices = identity_model.desired_syncthing(model, root)
+        self.assertEqual(set(devices), {alice_device, bob_device})
+        self.assertEqual(folders["nas-alice-backup"]["path"], str(root / "users/alice/syncthing"))
+        self.assertEqual(folders["nas-bob-backup"]["path"], str(root / "users/bob/syncthing"))
+        self.assertEqual(folders["nas-alice-backup"]["devices"], [{"deviceID": alice_device}])
+        self.assertEqual(folders["nas-bob-backup"]["devices"], [{"deviceID": bob_device}])
 
     def test_build_model_requires_explicit_enabled_nas_admin(self) -> None:
         with self.assertRaisesRegex(identity_model.SyncError, "No enabled members of nas_admin"):

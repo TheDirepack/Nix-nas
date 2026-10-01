@@ -259,6 +259,7 @@ save() {
     export_status=("${PIPESTATUS[@]}")
     set -e
     kill -- "-$heartbeat_pid" 2>/dev/null || kill -KILL "$heartbeat_pid" 2>/dev/null || true
+    kill -KILL -- "-$heartbeat_pid" 2>/dev/null || true
     wait "$heartbeat_pid" 2>/dev/null || true
     if (( export_status[0] != 0 || export_status[1] != 0 )); then
       die "failed to export $export_name bundle (nix-store=${export_status[0]}, gzip=${export_status[1]})"

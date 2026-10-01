@@ -44,7 +44,10 @@ in
           roll_keep 10
           roll_keep_for 720h
         }
-        format json
+        format filter {
+          request>headers>X-Nas-Setup-Capability delete
+          wrap json
+        }
       }
 
       # Authentik bootstrap/global routes remain static until Caddy itself moves
@@ -83,17 +86,27 @@ in
 
       # V2 application routes handle prefix stripping, headers, and lifecycle
       # without app-specific Caddy branches.
+      # Keep the already-issued setup capability usable across the final Caddy
+      # transition. The setup service is absent after the subsequent reboot.
+      handle /setup/api/first-start/job {
+        reverse_proxy unix//run/nas-setup-api/setup.sock
+      }
+      handle /setup/api/reboot {
+        reverse_proxy unix//run/nas-setup-api/setup.sock
+      }
       handle /settings/syncthing {
         route {
           ${caddyForwardAuth}
           @missingSyncthingSettingsAccess {
-            not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)application\.syncthing\.admin([[:space:]]*[|,]|$)
+            not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)(application\.syncthing\.access|nas_admin)([[:space:]]*[|,]|$)
           }
           respond @missingSyncthingSettingsAccess 403
           redir * ${cfg.identity.authentikPath}if/flow/nas-user-settings/
         }
       }
-      redir /settings* ${cfg.identity.authentikPath}if/user/
+      handle /settings* {
+        redir * ${cfg.identity.authentikPath}if/user/
+      }
 
       # Authentik owns the appliance home page and application launcher.
       handle {

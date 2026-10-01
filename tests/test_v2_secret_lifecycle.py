@@ -1,12 +1,43 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class V2SecretLifecycleTests(unittest.TestCase):
+    def test_stop_revokes_readiness_before_systemd_can_reactivate_dependencies(self) -> None:
+        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+        stop = source.split("command_stop() {", 1)[1].split("command_check_authentik_token() {", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / "secrets"
+            root.mkdir()
+            (root / "ready").touch()
+            (root / "credential").touch()
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'set -euo pipefail\nsecret_root="$1"\n'
+                    "acquire_lock() { :; }\n"
+                    "sudo() {\n"
+                    '  if [[ "$1" == systemctl ]]; then\n'
+                    '    [[ ! -e "$secret_root/ready" ]] || return 91\n'
+                    '    [[ -e "$secret_root/credential" ]] || return 92\n'
+                    '  else "$@"; fi\n'
+                    "}\ncommand_stop() {" + stop + '\ncommand_stop\n[[ ! -e "$secret_root" ]]',
+                    "stop-test",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_secret_activation_remains_keepass_backed_and_transactional(self) -> None:
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
         activate = source.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
@@ -27,7 +58,10 @@ class V2SecretLifecycleTests(unittest.TestCase):
         core, _, convergence = activate.partition("for gated_unit in")
         self.assertIn("for gated_unit in", activate)
         self.assertNotIn("copyparty.service", core)
-        self.assertIn("copyparty.service", convergence)
+        self.assertIn("v2_systemd_state=/run/nas-control/systemd-reconciled.json", core)
+        self.assertIn(".startUnits", core)
+        self.assertIn("for gated_unit in \"''${v2_start_units[@]}\"", convergence)
+        self.assertNotIn("for gated_unit in copyparty.service", convergence)
 
     def test_discarded_generation_helpers_do_not_return(self) -> None:
         source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
@@ -36,6 +70,14 @@ class V2SecretLifecycleTests(unittest.TestCase):
         self.assertNotIn("nas-secret-stage-authentik", source)
         self.assertNotIn("nas-keepass-validate", source)
         self.assertNotIn("nas-secret-fault-test", source)
+
+    def test_authentik_token_check_accepts_retired_bootstrap_authority(self) -> None:
+        source = (ROOT / "modules/nas/internal/secret-tools.nix").read_text(encoding="utf-8")
+        check = source.split("command_check_authentik_token() {", 1)[1].split("command_set_authentik_token() {", 1)[0]
+
+        self.assertIn("if ! has_secret authentik-bootstrap-token; then", check)
+        self.assertIn("Authentik bootstrap token is retired", check)
+        self.assertIn('if [[ "$bootstrap" == "$api" ]]', check)
 
 
 if __name__ == "__main__":

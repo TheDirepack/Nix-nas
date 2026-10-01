@@ -57,10 +57,12 @@ not in the repository. These wrappers are additive developer tools and do not
 change CI check ownership; the CI VM jobs invoke the same lifecycle and now
 declare their host-side dependencies explicitly.
 
-The installed VM forwards SSH, Caddy HTTP/HTTPS, and Cockpit to the host. The
-default bind address is loopback, so after `vm-start.sh` you can inspect the
-appliance at `http://127.0.0.1:8088`, `https://127.0.0.1:8443`, and
-`https://127.0.0.1:9094` without a bridge or host NIC. Use
+The installed VM forwards SSH (default host port 2222) and Caddy HTTPS
+(default host port 8443) to the host, matching `qemu_network_args` in
+`scripts/qemu-test.sh`. The default bind address is loopback, so after
+`vm-start.sh` you can reach SSH at `127.0.0.1:2222` and the appliance at
+`https://127.0.0.1:8443` without a bridge or host NIC. Cockpit is accessed
+through the authenticated `/console` route. Use
 `NAS_QEMU_HOST_BIND_ADDRESS=0.0.0.0` only when another machine must reach the
 test VM; user-mode networking remains in use and the forwarded services are
 then exposed on every host interface.
@@ -96,6 +98,14 @@ than booting a test-driver machine directly. It:
 9. shuts down, boots the installed system, waits for SSH, and runs `nas-vm-guest-test` inside that VM;
 10. runs an in-place `nixos-rebuild test` from the staged source and checks `nas-doctor` again;
 11. powers the VM off after a successful run.
+
+CI then runs a second, fresh installation. After the installed VM completes its
+setup and reboot checks, it switches to the pinned June 2026 NixOS 26.05 package
+set, checks Syncthing 2.0.15 and the distinct system generation, and switches
+back to the reviewed lock. The check compares the desired services document,
+KeePassXC database, and installer sentinel before and after the upgrade. CI
+repeats the final browser and security checks on the updated installation.
+Use `NAS_QEMU_PACKAGE_UPGRADE=1 ./scripts/qemu-test.sh installer` for this path.
 
 Run it with:
 
@@ -140,8 +150,10 @@ which is consumed by the native NixOS test, the installed-QEMU wrapper, and the
 guest phase profiler. Add a phase or bounded wait there instead of changing one
 wrapper timeout independently.
 
-- locked boot: Cockpit remains reachable while Authentik, Caddy, CopyParty, and
-  other protected services remain stopped;
+- locked boot: the bootstrap Caddy configuration serves only static setup
+  guidance while Authentik, Cockpit, CopyParty, and other protected services
+  remain stopped; no browser management endpoint is exposed while locked, and
+  recovery remains console, SSH, or hardware KVM with a local PAM administrator;
 - a disposable `tank/nas` ZFS dataset mounted at `/tank`, including mount-source
   and filesystem-type checks;
 - disabled encryption and UPS command guards, including encryption/UPS guard behavior;
@@ -157,6 +169,7 @@ wrapper timeout independently.
   Cockpit, Open WebUI, Syncthing, Vaultwarden administration, metrics, and alerts;
 - CopyParty Unix-socket reachability, anonymous TFTP reads, default read-only TFTP write rejection, and Authentik health;
 - all custom `nas-*` command surfaces, including in-VM repository preflight, Python tests, Node tests, JSON/TOML checks, and flake evaluation;
+- an unknown post-install OCI service lifecycle using VM-only offline images: revision-safe creation, native Quadlet and identity-route projection, live image update, failed-update rollback, and complete removal cleanup;
 - adversarial command-shaped identifiers, SQL-like account names, traversal-shaped setup paths, and malformed alert HTTP bodies fail closed without side effects or tracebacks;
 - a repeated declarative installation preserves unrelated persistent state and the booted system survives an in-place rebuild/test;
 - llama-swap and Open WebUI in Always, Off, and On-demand/wake modes;
@@ -204,10 +217,8 @@ and Nix store paths. QEMU user networking provides this by default.
 | `NAS_QEMU_OS_DISK_GIB` | `64` | Disposable OS disk size. |
 | `NAS_QEMU_DATA_DISK_GIB` | `8` | Disposable ZFS disk size. |
 | `NAS_QEMU_SSH_PORT` | `2222` | Loopback SSH forwarding port. |
-| `NAS_QEMU_HTTP_PORT` | `8088` | Host port forwarded to guest HTTP port 80. |
 | `NAS_QEMU_HTTPS_PORT` | `8443` | Host port forwarded to guest HTTPS port 443. |
-| `NAS_QEMU_COCKPIT_PORT` | `9094` | Host port forwarded to guest Cockpit port 9092. |
-| `NAS_QEMU_HOST_BIND_ADDRESS` | `127.0.0.1` | Host IPv4 address used for SSH, HTTP, HTTPS, and Cockpit forwarding. |
+| `NAS_QEMU_HOST_BIND_ADDRESS` | `127.0.0.1` | Host IPv4 address used for SSH and HTTPS forwarding. |
 | `NAS_QEMU_KEEP_VM` | `0` | Legacy disposable-mode reuse switch; the persistent wrappers manage reuse and baseline restore explicitly. |
 | `NAS_QEMU_PERSISTENT_REBUILD_TIMEOUT` | manifest `reconfigureBuild` | Guest `nixos-rebuild switch` deadline for the persistent wrapper. |
 | `NAS_QEMU_SOURCE_SUITE_TIMEOUT` | manifest-derived | Host-side deadline for the full source/appliance suite in the persistent VM. |

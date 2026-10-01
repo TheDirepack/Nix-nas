@@ -104,7 +104,10 @@ let
         local-discovery = portListener "udp" syncthingDiscoveryPort;
       };
       routes.web = (pathRoute [ "/syncthing" ] (httpTarget syncthingGuiPort) (identity "admin")) // {
-        proxy.stripPrefix = "/syncthing";
+        proxy = {
+          stripPrefix = "/syncthing";
+          requestHeaders.Host = "127.0.0.1:${toString syncthingGuiPort}";
+        };
         portal = portal "Syncthing" "Files" "sync" 20;
       };
     };
@@ -126,7 +129,7 @@ let
       routes = {
         admin = (pathRoute [ "/vault/admin" ] (httpTarget vaultwardenPort) (identity "admin")) // { portal.visible = false; };
         oidc = (pathRoute [ "/vault/identity/connect/oidc" "/vault/identity/connect/oidc-signin" ] (httpTarget vaultwardenPort) (identity "access")) // { portal.visible = false; };
-        web = (pathRoute [ "/vault" ] (httpTarget vaultwardenPort) { mode = "upstream"; }) // {
+        web = (pathRoute [ "/vault" ] (httpTarget vaultwardenPort) (identity "access")) // {
           portal = portal "Vaultwarden" "Home" "lock" 30;
         };
       };

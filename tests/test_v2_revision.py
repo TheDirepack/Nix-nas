@@ -71,9 +71,10 @@ class RevisionTests(unittest.TestCase):
             try:
                 control.DESIRED_PATH = desired
                 control.SCHEMA_PATH = SCHEMA
+                revision = editor.read_document(desired_path=desired, schema_path=SCHEMA)["revision"]
                 with mock.patch.object(control, "_reconcile", side_effect=control.ControlError("reconcile failed")):
                     with self.assertRaisesRegex(control.ControlError, "reconcile failed"):
-                        control.replace_from_source(str(source))
+                        control.replace_from_source(str(source), revision)
                 # Rollback belongs to the guarded Git reconcile transaction.
                 # The control CLI must not race it by restoring prior text.
                 self.assertEqual(desired.read_text(encoding="utf-8"), minimal_yaml("b"))

@@ -541,7 +541,8 @@ run_installer() {
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
   local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
-  local ssh_key ssh_key_dir full_suite_skip_fuzz
+  local ssh_key ssh_key_dir full_suite_skip_fuzz github_actions=false
+  local package_upgrade="${NAS_QEMU_PACKAGE_UPGRADE:-0}" reconfigure_timeout rebuild_timeout
   local -a accel network_args ssh_args
   os_disk="$STATE_DIR/nixos-nas-os.qcow2"
   data_disk="$STATE_DIR/nixos-nas-zfs.qcow2"
@@ -561,6 +562,14 @@ run_installer() {
     }
   }
   trap cleanup_vm EXIT INT TERM
+
+  [[ "$package_upgrade" == 0 || "$package_upgrade" == 1 ]] || die "NAS_QEMU_PACKAGE_UPGRADE must be 0 or 1"
+  reconfigure_timeout="${NAS_QEMU_RECONFIGURE_TIMEOUT:-$(nas_vm_timeout_value reconfigure)}"
+  rebuild_timeout="$(nas_vm_timeout_value reconfigureBuild)"
+  if [[ "$package_upgrade" == 1 ]]; then
+    reconfigure_timeout="${NAS_QEMU_RECONFIGURE_TIMEOUT:-$((reconfigure_timeout + 5400))}"
+    rebuild_timeout=3600
+  fi
 
   source_stage="$(stage_source_tree)"
   source_id="$(source_fingerprint "$source_stage")"
@@ -666,6 +675,9 @@ run_installer() {
     # its lifecycle and must not let this process's EXIT trap stop it.
     nas_qemu_disarm_cleanup
     full_suite_skip_fuzz="${NAS_QEMU_SKIP_FUZZ:-0}"
+    if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+      github_actions=true
+    fi
     sync_source_to_guest "$source_stage" "$ssh_key"
     if [[ "${NAS_QEMU_PERSISTENT_ACTION:-start}" == test || "$marker_id" != "$source_id" ]]; then
       rebuild_guest_source "$ssh_key"
@@ -687,7 +699,7 @@ run_installer() {
            sudo -n systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service &&
            (sudo -n systemctl start nas-authentik-proxy-outpost.service || true) &&
            sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do sleep 1; done' &&
-           sudo -n env NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
+           sudo -n env GITHUB_ACTIONS=$github_actions NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
              nix develop path:/var/lib/nas-test/repo#test -c \
              bash /var/lib/nas-test/repo/tests/vm/full-suite.sh"
     fi
@@ -706,11 +718,11 @@ run_installer() {
 
   log "Exercising post-install activation, failed-candidate, and rollback paths"
   timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
-    "${NAS_QEMU_RECONFIGURE_TIMEOUT:-$(nas_vm_timeout_value reconfigure)}" \
+    "$reconfigure_timeout" \
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
-      "sudo -n env NAS_TEST_REBUILD_TIMEOUT=$(nas_vm_timeout_value reconfigureBuild) nas-vm-reconfigure-test"
+      "sudo -n env NAS_TEST_REBUILD_TIMEOUT=$rebuild_timeout NAS_TEST_PACKAGE_UPGRADE=$package_upgrade nas-vm-reconfigure-test"
 
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
@@ -766,7 +778,12 @@ run_installer_with_timeout() {
   local mode=$1 timeout_seconds
   case "$mode" in
     persistent-test) timeout_seconds="${NAS_QEMU_FULL_SUITE_TIMEOUT:-$(nas_vm_full_suite_timeout_seconds)}" ;;
-    *) timeout_seconds="${NAS_QEMU_INSTALLER_TIMEOUT:-$(nas_vm_installer_timeout_seconds)}" ;;
+    *)
+      timeout_seconds="${NAS_QEMU_INSTALLER_TIMEOUT:-$(nas_vm_installer_timeout_seconds)}"
+      if [[ "${NAS_QEMU_PACKAGE_UPGRADE:-0}" == 1 && -z "${NAS_QEMU_INSTALLER_TIMEOUT:-}" ]]; then
+        timeout_seconds="$((timeout_seconds + 5400))"
+      fi
+      ;;
   esac
   if [[ "${NAS_QEMU_OUTER_TIMEOUT_ACTIVE:-0}" == 1 ]]; then
     run_installer

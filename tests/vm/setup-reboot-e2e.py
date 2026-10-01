@@ -23,13 +23,14 @@ from typing import Any
 REPO = pathlib.Path("/var/lib/nas-test/repo")
 STATE = pathlib.Path("/var/lib/nas-test/setup-reboot-e2e-state.json")
 RESULT = pathlib.Path("/var/lib/nas-test/setup-reboot-e2e-result.json")
-UNIT = pathlib.Path("/etc/systemd/system/nas-vm-setup-reboot-e2e.service")
 SENTINEL = pathlib.Path("/tank/shares/e2e-reboot-sentinel.txt")
 PUBLIC_ORIGIN = "https://nas-test.local:8443"
 REQUIRED_UNITS = (
     "nas-protected-services.target",
     "caddy.service",
     "authentik.service",
+    "nas-authentik-proxy-outpost.service",
+    "nas-cockpit-sso.service",
     "copyparty.service",
     "syncthing.service",
     "vaultwarden.service",
@@ -102,7 +103,24 @@ def wait_active(unit: str, timeout_seconds: int = 180) -> None:
             return
         time.sleep(2)
     status = run("systemctl", "status", "--no-pager", unit, timeout=30)
-    raise CheckError(f"timed out waiting for {unit} to become active: {status.stdout[-1200:]}")
+    failed = run("systemctl", "--failed", "--no-pager", timeout=30)
+    journal = run(
+        "journalctl",
+        "-b",
+        "-u",
+        "nas-managed-services-reconcile.service",
+        "-u",
+        "nas-v2-apply-failed.service",
+        "-n",
+        "70",
+        "--no-pager",
+        timeout=30,
+    )
+    raise CheckError(
+        f"timed out waiting for {unit} to become active: {status.stdout[-1200:]}\n"
+        f"failed units: {failed.stdout[-1000:]}\n"
+        f"reconcile journal: {journal.stdout[-5500:]}"
+    )
 
 
 def wait_http(command: tuple[str, ...], label: str, timeout_seconds: int = 180) -> None:
@@ -149,14 +167,55 @@ def syncthing_api_key() -> str:
     raise CheckError("Syncthing API key is unavailable")
 
 
+def activate_after_reboot() -> None:
+    status = json.loads(require(("nas-setup", "status")))
+    if (
+        status.get("runtimeSecretsActive")
+        or run("systemctl", "is-active", "--quiet", "nas-protected-services.target").returncode == 0
+    ):
+        raise CheckError("protected services or runtime secrets remained active across the locked reboot")
+    require(("zpool", "import", "-N", "tank"))
+    result = run(
+        "runuser",
+        "-u",
+        "nasadmin",
+        "--",
+        "env",
+        "-C",
+        "/",
+        "HOME=/tank/homes/nasadmin",
+        "nas-secrets",
+        "activate-stdin",
+        input_text="nixos-nas-vm-test-password\n",
+        timeout=600,
+    )
+    if result.returncode:
+        failed = run("systemctl", "--failed", "--no-pager", timeout=30)
+        journal = run(
+            "journalctl",
+            "-b",
+            "-n",
+            "90",
+            "--no-pager",
+            timeout=30,
+        )
+        raise CheckError(
+            f"post-reboot secret activation failed ({result.returncode}): {result.stderr[-600:]}\n"
+            f"failed units: {failed.stdout[-1200:]}\n"
+            f"activation journal: {journal.stdout[-7000:]}"
+        )
+    wait_active("nas-authentik-proxy-outpost.service", timeout_seconds=120)
+
+
 def verify_services(stage: str) -> None:
     status = require(("nas-setup", "status"))
     try:
         setup = json.loads(status)
     except json.JSONDecodeError as error:
         raise CheckError("nas-setup status did not return JSON") from error
-    if not all(setup.get(key) is True for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")):
-        raise CheckError(f"setup is not complete after {stage}: {setup}")
+    health = {key: setup.get(key) for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")}
+    if not all(value is True for value in health.values()):
+        raise CheckError(f"setup is not complete after {stage}: {health}")
     if not SENTINEL.is_file() or SENTINEL.read_text(encoding="utf-8") != "setup-reboot-e2e\n":
         raise CheckError(f"ZFS-backed setup sentinel did not survive {stage}")
     require(("zpool", "status", "-x", "tank"))
@@ -194,12 +253,17 @@ def verify_services(stage: str) -> None:
         ),
         "Syncthing",
     )
-    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8222/alive"), "Vaultwarden")
+    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8222/vault/alive"), "Vaultwarden")
     wait_http(
         ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8428/victoriametrics/ping"), "VictoriaMetrics"
     )
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/api/health"), "Grafana")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:2586/v1/health"), "ntfy")
+    wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9092/console/"), "Cockpit")
+    wait_http(
+        ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9010/outpost.goauthentik.io/ping"),
+        "Authentik proxy outpost",
+    )
 
 
 def browser_sign_in(stage: str) -> None:
@@ -214,10 +278,12 @@ def browser_sign_in(stage: str) -> None:
     with tempfile.TemporaryDirectory(prefix="nas-e2e-authz-", dir="/run") as directory:
         secrets = pathlib.Path(directory)
         values = {
-            "admin": "admin-vm-password",
+            "administrator": "nasadmin-vm-password",
             "operator": "operator-vm-password",
             "alice": "alice-updated-password",
             "baseline": "baseline-vm-password",
+            "post-a": "post-a-vm-password",
+            "post-b": "post-b-vm-password",
         }
         for name, value in values.items():
             path = secrets / name
@@ -250,21 +316,26 @@ def browser_sign_in(stage: str) -> None:
                 str(REPO / "tests/browser/authz.py"),
                 "--origin",
                 PUBLIC_ORIGIN,
-                "--cockpit-password-file",
-                str(secrets / "admin"),
+                "--administrator-password-file",
+                str(secrets / "administrator"),
                 "--operator-password-file",
                 str(secrets / "operator"),
                 "--alice-password-file",
                 str(secrets / "alice"),
                 "--baseline-password-file",
                 str(secrets / "baseline"),
+                "--post-a-password-file",
+                str(secrets / "post-a"),
+                "--post-b-password-file",
+                str(secrets / "post-b"),
             ]
             result = subprocess.run(
                 command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, env=environment
             )
             if result.returncode:
+                detail = result.stderr or result.stdout
                 raise CheckError(
-                    f"authenticated browser checks failed after {stage}: {(result.stderr or result.stdout)[-2400:]}"
+                    f"authenticated browser checks failed after {stage}: {detail[:1100]}\n{detail[-1900:]}"
                 )
         finally:
             proxy.terminate()
@@ -277,21 +348,7 @@ def browser_sign_in(stage: str) -> None:
 
 def schedule_reboot(next_phase: str) -> None:
     write_json(STATE, {"schemaVersion": 1, "phase": next_phase})
-    require(("systemctl", "daemon-reload"))
-    require(("systemctl", "enable", UNIT.name))
     require(("systemd-run", f"--unit=nas-vm-setup-reboot-e2e-{next_phase}", "--on-active=3s", "systemctl", "reboot"))
-
-
-def install_resume_unit() -> None:
-    command = "/run/current-system/sw/bin/nas-vm-guest-test --setup-reboot-e2e --resume"
-    UNIT.write_text(
-        "[Unit]\nDescription=NAS VM setup reboot E2E continuation\n"
-        "Wants=network-online.target\nAfter=network-online.target\nConditionPathExists=" + str(STATE) + "\n\n"
-        "[Service]\nType=oneshot\nExecStart=" + command + "\n\n"
-        "[Install]\nWantedBy=multi-user.target\n",
-        encoding="utf-8",
-    )
-    UNIT.chmod(0o644)
 
 
 def start() -> None:
@@ -299,7 +356,6 @@ def start() -> None:
         raise CheckError("setup reboot E2E evidence already exists; use a fresh disposable VM")
     SENTINEL.parent.mkdir(mode=0o2770, parents=True, exist_ok=True)
     SENTINEL.write_text("setup-reboot-e2e\n", encoding="utf-8")
-    install_resume_unit()
     verify_services("initial setup")
     schedule_reboot("after-first-reboot")
 
@@ -313,17 +369,17 @@ def resume() -> None:
     try:
         phase = read_state().get("phase")
         if phase == "after-first-reboot":
+            activate_after_reboot()
             verify_services("the first reboot")
             browser_sign_in("the first reboot")
             schedule_reboot("after-second-reboot")
             return
         if phase == "after-second-reboot":
+            activate_after_reboot()
             verify_services("the second reboot")
             browser_sign_in("the second reboot")
-            require(("systemctl", "disable", UNIT.name))
-            UNIT.unlink(missing_ok=True)
-            require(("systemctl", "daemon-reload"))
             finish(True, phase="complete", verifiedReboots=2)
+            STATE.unlink()
             return
         raise CheckError(f"unexpected setup reboot lifecycle phase: {phase!r}")
     except Exception as error:

@@ -13,7 +13,7 @@ class FirstRunWizardPackagingTests(unittest.TestCase):
         wizard_dist = ROOT / "setup/first-run-wizard/dist"
 
         self.assertTrue(wizard_dist.is_dir(), "the built wizard bundle must be committed")
-        for asset in ("index.html", "first-run-wizard.js", "first-run-wizard.css"):
+        for asset in ("index.html", "first-run-wizard.js", "first-run-wizard.css", "build-meta.json"):
             self.assertTrue(
                 (wizard_dist / asset).is_file(),
                 f"setup/first-run-wizard/dist/{asset} must be tracked",

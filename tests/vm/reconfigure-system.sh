@@ -4,6 +4,8 @@ set -Eeuo pipefail
 SOURCE="${NAS_TEST_SOURCE:-/var/lib/nas-test/repo}"
 SENTINEL="${NAS_TEST_INSTALL_SENTINEL:-/var/lib/nas-install-test/reinstall-sentinel}"
 TIMEOUT="${NAS_TEST_REBUILD_TIMEOUT:-1800}"
+PACKAGE_UPGRADE="${NAS_TEST_PACKAGE_UPGRADE:-0}"
+OLDER_NIXPKGS_REV=36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -11,9 +13,46 @@ rebuild() {
   timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
     "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false
 }
+check_doctor() {
+  local report="$1" status=0
+  nas-doctor --json >"$report" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    cat "$report" >&2
+    return "$status"
+  fi
+}
 
 [[ -f "$SOURCE/flake.nix" ]] || fail "reviewed source flake is missing: $SOURCE"
 [[ "$(cat "$SENTINEL" 2>/dev/null || true)" == preserve-me ]] || fail "installer persistence sentinel is missing"
+[[ "$PACKAGE_UPGRADE" == 0 || "$PACKAGE_UPGRADE" == 1 ]] || fail "invalid package upgrade test mode"
+
+if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
+  log "Switch to pinned older NixOS packages and promote back to the reviewed lock"
+  older_version="$(nix eval --raw --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV" \
+    "path:$SOURCE#nixosConfigurations.nas-qemu.pkgs.syncthing.version")"
+  current_version="$(nix eval --raw "path:$SOURCE#nixosConfigurations.nas-qemu.pkgs.syncthing.version")"
+  [[ "$older_version" != "$current_version" ]] || fail "older and reviewed Syncthing packages are identical"
+  [[ "$older_version" == 2.0.15 ]] || fail "pinned older Syncthing package changed: $older_version"
+  baseline_document="$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)"
+  baseline_database="$(sha256sum /var/lib/nas-control-plane/nas-secrets/NAS.kdbx | cut -d ' ' -f1)"
+  current_system="$(readlink -f /run/current-system)"
+  rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"
+  older_system="$(readlink -f /run/current-system)"
+  [[ "$older_system" != "$current_system" ]] || fail "older package set did not activate a distinct generation"
+  systemctl show --property=ExecStart --value syncthing.service | grep -q "syncthing-$older_version" ||
+    fail "older generation does not contain the pinned Syncthing package"
+  [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "older package activation destroyed the persistence sentinel"
+  rebuild switch --flake "path:$SOURCE#nas-qemu"
+  [[ "$(readlink -f /run/current-system)" == "$current_system" ]] || fail "reviewed generation was not restored"
+  systemctl show --property=ExecStart --value syncthing.service | grep -q "syncthing-$current_version" ||
+    fail "reviewed generation does not contain the newer Syncthing package"
+  [[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$baseline_document" ]] ||
+    fail "package upgrade changed the desired-state authority"
+  [[ "$(sha256sum /var/lib/nas-control-plane/nas-secrets/NAS.kdbx | cut -d ' ' -f1)" == "$baseline_database" ]] ||
+    fail "package upgrade changed the KeePassXC authority"
+  [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "package upgrade destroyed the persistence sentinel"
+  check_doctor /tmp/nas-post-package-upgrade-doctor.json
+fi
 
 log "Reviewed configuration dry-activate, test, and switch"
 rebuild dry-activate --flake "path:$SOURCE#nas-qemu"
@@ -22,7 +61,7 @@ rebuild switch --flake "path:$SOURCE#nas-qemu"
 reviewed_system="$(readlink -f /run/current-system)"
 [[ -n "$reviewed_system" ]] || fail "could not identify reviewed system generation"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "reviewed switch destroyed unrelated persistent state"
-nas-doctor --json >/tmp/nas-post-reconfigure-doctor.json
+check_doctor /tmp/nas-post-reconfigure-doctor.json
 
 work="$(mktemp -d /var/tmp/nas-reconfigure-test.XXXXXX)"
 trap 'rm -rf "$work"' EXIT
@@ -67,7 +106,7 @@ candidate_system="$(readlink -f /run/current-system)"
 grep -qx 'candidate-generation' /etc/nas-generation-test || fail "candidate generation marker is missing"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "candidate switch damaged persistent state"
 
-rebuild switch --rollback
+rebuild --rollback switch
 [[ "$(readlink -f /run/current-system)" != "$candidate_system" ]] || fail "nixos-rebuild --rollback left candidate active"
 [[ ! -e /etc/nas-generation-test ]] || fail "rollback left candidate generation marker active"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "rollback damaged persistent state"
@@ -76,5 +115,5 @@ log "Return to the reviewed configuration after rollback drill"
 rebuild switch --flake "path:$SOURCE#nas-qemu"
 [[ ! -e /etc/nas-generation-test ]] || fail "reviewed generation retained candidate-only marker"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "final reviewed switch damaged persistent state"
-nas-doctor --json >/tmp/nas-post-rollback-doctor.json
+check_doctor /tmp/nas-post-rollback-doctor.json
 printf '{"ok":true,"invalidCandidateRejected":true,"rollbackVerified":true}\n'

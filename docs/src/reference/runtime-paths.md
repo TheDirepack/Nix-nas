@@ -12,7 +12,7 @@
 | `/var/lib/syncthing` | Syncthing identity and configuration | Restic |
 | `/var/lib/nas-control` | Feature-mode state | Restic |
 | `/var/lib/victoriametrics` | Metrics history | Disposable or protect via dataset/backup policy |
-| `/var/lib/grafana` | Dashboard/UI state | Restic when enabled |
+| `/var/lib/grafana/grafana.db` | Mutable Grafana dashboard/UI state | Restic when enabled |
 | `/var/lib/ntfy-sh` | Notification state | Restic when enabled |
 | `<zfsRoot>/virtual-machines` | VM images | ZFS snapshots/Syncoid |
 | `<zfsRoot>/ai` | AI models and configuration | ZFS snapshots/Syncoid according to policy |

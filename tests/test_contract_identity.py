@@ -44,7 +44,21 @@ class ContractTests(unittest.TestCase):
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
         self.assertIn("authentik-bootstrap-token", secrets)
         self.assertIn("authentik-api-token", secrets)
+        self.assertIn("authentik-outpost-token", secrets)
+        self.assertIn("set-authentik-runtime-stdin", secrets)
         self.assertIn("authentik_token(bootstrap=True)", identity)
+
+    def test_secret_reactivation_restores_proxy_outpost_after_authentik(self) -> None:
+        secrets = text("modules/nas/internal/secret-tools.nix")
+        activation = secrets.split("command_activate() (", 1)[1].split("command_status() {", 1)[0]
+        self.assertLess(
+            activation.index("http://127.0.0.1:${toString authentikPort}${cfg.identity.authentikPath}-/health/ready/"),
+            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
+        )
+        self.assertLess(
+            activation.index("sudo systemctl start nas-authentik-proxy-outpost.service"),
+            activation.index("nas_secret_tx_commit"),
+        )
 
     def test_copyparty_is_the_only_share_authority(self) -> None:
         identity = text("services/nas_identity_sync.py") + text("services/nas_identity_model.py")
@@ -68,12 +82,53 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("ExecStartPre", copyparty)
         self.assertIn('BindReadOnlyPaths = lib.mkAfter [ "/etc/passwd" ];', copyparty)
 
+    def test_syncthing_waits_for_its_zfs_share_namespace(self) -> None:
+        services = text("modules/nas/config/systemd-services.nix")
+        syncthing = services.split("syncthing = lib.mkIf cfg.syncthing.enable {", 1)[1].split("syncthing-init =", 1)[0]
+        self.assertIn('requires = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service" ];', syncthing)
+        self.assertIn('after = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service"', syncthing)
+        self.assertIn('ReadWritePaths = [ syncthingDataDir "${shareRoot}/users" ];', syncthing)
+
+    def test_vaultwarden_uses_the_zfs_state_path_without_systemd_state_directory(self) -> None:
+        services = text("modules/nas/config/application-services.nix")
+        vaultwarden = services.split("systemd.services.vaultwarden", 1)[1].split("config.systemd.services", 1)[0]
+        self.assertIn('serviceConfig.StateDirectory = lib.mkForce "";', vaultwarden)
+        self.assertIn("serviceConfig.ReadWritePaths = [ vaultwardenDataDir ];", vaultwarden)
+        self.assertIn("vaultwardenDataDir", vaultwarden)
+
+    def test_caddy_ca_export_does_not_wait_on_caddy_during_reconciliation(self) -> None:
+        services = text("modules/nas/config/systemd-services.nix")
+        ca_export = services.split("nas-caddy-ca-export = lib.mkIf cfg.vaultwarden.enable {", 1)[1].split(
+            "vaultwarden = lib.mkIf cfg.vaultwarden.enable {", 1
+        )[0]
+        vaultwarden = services.split("vaultwarden = lib.mkIf cfg.vaultwarden.enable {", 1)[1].split(
+            "backup-vaultwarden =", 1
+        )[0]
+        self.assertNotIn('requires = [ "caddy.service" ];', ca_export)
+        self.assertNotIn('after = [ "caddy.service" ];', ca_export)
+        self.assertIn("[[ -r ${caddyInternalCaPath} ]]", ca_export)
+        self.assertIn('before = [ "vaultwarden.service" ];', ca_export)
+        self.assertIn('requires = [ "nas-caddy-ca-export.service" "nas-zfs-mount-guard.service" ];', vaultwarden)
+
+    def test_vaultwarden_web_route_requires_its_access_capability(self) -> None:
+        seed = text("modules/nas/config/managed-services-seed-v2.nix")
+        self.assertIn(
+            '(pathRoute [ "/vault" ] (httpTarget vaultwardenPort) (identity "access"))',
+            seed,
+        )
+        self.assertNotIn('(pathRoute [ "/vault" ] (httpTarget vaultwardenPort) { mode = "upstream"; })', seed)
+
     def test_user_settings_are_authentik_owned(self) -> None:
         proxy = text("modules/nas/config/reverse-proxy.nix")
         blueprint = text("authentik/blueprints/nas-user-settings.yaml")
         account_tools = text("modules/nas/internal/account-tools.nix")
         self.assertIn("if/user/", proxy)
         self.assertIn("if/flow/nas-user-settings/", proxy)
+        settings_route = proxy.split("handle /settings/syncthing", 1)[1].split("handle /settings*", 1)[0]
+        self.assertIn(r"application\.syncthing\.access", settings_route)
+        self.assertIn("nas_admin", settings_route)
+        self.assertNotIn(r"application\.syncthing\.admin", settings_route)
+        self.assertIn("handle /settings* {", proxy)
         self.assertIn("attributes.nasSyncthingDevices", blueprint)
         self.assertIn("user_creation_mode: never_create", blueprint)
         self.assertIn("nas-user-settings-validate-syncthing-devices", blueprint)

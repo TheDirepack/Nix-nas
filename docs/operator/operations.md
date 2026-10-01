@@ -67,11 +67,13 @@ nas-managed-services-control reconcile
 systemctl status nas-managed-services-reconcile.service
 ```
 
-For larger edits, retrieve the current YAML/schema with `document`, edit the YAML, then atomically validate/replace it:
+For larger edits, retrieve the current YAML/schema and revision with `document`, then edit the YAML. `replace-document` requires the returned lowercase 64-character SHA-256 revision:
 
 ```bash
-nas-managed-services-control replace-document /path/to/services.yaml
+nas-managed-services-control replace-document /path/to/services.yaml <revision-from-document>
 ```
+
+If the authority changed after it was retrieved, fetch the latest document, reconcile the edits, and retry with its revision.
 
 See [Configuration and management map](../src/admin/service-map.md) before changing mutable application settings from the command line.
 

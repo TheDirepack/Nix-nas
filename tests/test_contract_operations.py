@@ -18,9 +18,10 @@ class ContractTests(unittest.TestCase):
         )[0]
         self.assertNotIn('before = [ "caddy.service" ];', reconcile)
 
-    def test_caddy_bootstrap_does_not_block_on_managed_services_reconciliation(self) -> None:
+    def test_caddy_bootstrap_waits_for_managed_services_reconciliation(self) -> None:
         bootstrap = text("modules/nas/config/caddy-bootstrap.nix")
-        self.assertIn("systemctl start --no-block nas-managed-services-reconcile.service || true", bootstrap)
+        self.assertIn("systemctl start nas-managed-services-reconcile.service", bootstrap)
+        self.assertNotIn("systemctl start --no-block nas-managed-services-reconcile.service", bootstrap)
 
     def test_zfs_replication_and_boot_recovery_roles_are_separate(self) -> None:
         options = text("modules/nas/options/storage.nix") + text("modules/nas/options/operations.nix")
@@ -56,7 +57,9 @@ class ContractTests(unittest.TestCase):
         for code in (71, 72, 73):
             self.assertIn(f"exit {code}", secrets)
         self.assertNotIn("seq 1 90", secrets)
-        self.assertIn("/bin/timeout 90s", authentik)
+        self.assertIn("/bin/timeout 180s", authentik)
+        self.assertIn("--retry 180", authentik)
+        self.assertIn('TimeoutStartSec = "4min";', authentik)
         self.assertIn('blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";', authentik)
         blueprints = text("modules/nas/internal/account-tools.nix")
         self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)
@@ -64,9 +67,17 @@ class ContractTests(unittest.TestCase):
     def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
         zfs_tools = text("modules/nas/internal/zfs-tools.nix")
         encrypted_guest = text("tests/vm/encrypted-guest-test.sh")
+        exporter = zfs_tools.split("nasZfsExportRecoveryKey =", 1)[1].split("in\n{", 1)[0]
         self.assertIn("pkgs.findutils", zfs_tools)
         self.assertIn("if [[ -t 0 ]]; then", zfs_tools)
         self.assertIn("show-zfs-key-stdin", zfs_tools)
+        self.assertIn('encryption "$dataset"', exporter)
+        self.assertIn('encryptionroot "$dataset"', exporter)
+        self.assertIn('keyformat "$dataset"', exporter)
+        self.assertIn('keylocation "$dataset"', exporter)
+        self.assertIn("zfsKeyFingerprintProperty", exporter)
+        self.assertIn('stored_fingerprint" == "$key_fingerprint', exporter)
+        self.assertLess(exporter.index("stored_fingerprint"), exporter.index('tmp="$(mktemp)"'))
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_zfs_mount_check_accepts_the_expected_mount_inside_a_stacked_namespace(self) -> None:
@@ -222,6 +233,7 @@ class ContractTests(unittest.TestCase):
         system = text("modules/nas/config/system.nix")
         identities = text("modules/nas/config/identities.nix")
         secrets = text("modules/nas/internal/secret-tools.nix")
+        services = text("modules/nas/config/systemd-services.nix")
         update = text("scripts/update-nas.sh")
         package = text("pyproject.toml")
         self.assertIn('"d /run/nas-operations 2770 root nas-operations -"', system)
@@ -232,6 +244,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn("enter_operation_coordinator", secrets)
         self.assertIn("operation_class=update", update)
         self.assertNotIn("exec 8>/run/nas-operations/appliance.lock", update)
+        syncthing_sync = services.split("nas-syncthing-sync =", 1)[1].split("nas-caddy-ca-export =", 1)[0]
+        self.assertIn("nas-operation-run", syncthing_sync)
+        self.assertIn("--action syncthing-sync --class identity --class runtime --", syncthing_sync)
+        self.assertIn("RestartForceExitStatus = [ 75 ];", syncthing_sync)
+        self.assertIn('RestartSec = "5s";', syncthing_sync)
+        guest = text("tests/vm/guest-test.sh")
+        self.assertIn(
+            "systemctl show nas-syncthing-sync.service --property=ExecMainStatus --value",
+            guest,
+        )
+        self.assertNotIn(
+            "systemctl show nas-syncthing-sync.service --property=NRestarts --value",
+            guest,
+        )
 
     def test_state_wrapper_is_profile_aware_private_and_excludes_regenerable_metrics(self) -> None:
         account = text("modules/nas/internal/account-tools.nix")
@@ -262,7 +288,44 @@ class ContractTests(unittest.TestCase):
             self.assertIn("/setup/api", guest)
             self.assertIn("planDigest", guest)
             self.assertIn("stale", guest.lower())
+            self.assertIn("systemd-run --collect --pipe --wait", guest)
         self.assertIn("prepare-first-start", text("tests/vm/guest-test.sh"))
+
+    def test_encrypted_vm_waits_for_reconciliation_before_each_lock_drill(self) -> None:
+        guest = text("tests/vm/encrypted-guest-test.sh")
+        self.assertIn("wait_reconciliation_idle()", guest)
+        self.assertIn("systemctl start nas-managed-services-reconcile.service", guest)
+        self.assertIn("wait_oneshot_completed nas-managed-services-reconcile.service", guest)
+        self.assertIn("[[ ! -e /run/nas-control/reconcile.pending ]]", guest)
+        self.assertEqual(guest.count("wait_reconciliation_idle"), 3)
+
+    def test_managed_services_reconciliation_stops_with_protected_storage(self) -> None:
+        managed = text("modules/nas/config/managed-services.nix")
+        transactions = text("modules/nas/config/managed-services-transactions.nix")
+        zfs_tools = text("modules/nas/internal/zfs-tools.nix")
+        encrypted_guest = text("tests/vm/encrypted-guest-test.sh")
+
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile", 1
+        )[0]
+        base_reconcile_path = managed.split("systemd.paths.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.services.nas-managed-services-authentik-reconcile", 1
+        )[0]
+        dirty_path = transactions.split("systemd.paths.nas-managed-services-dirty = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile.pathConfig", 1
+        )[0]
+        for unit in (reconcile, base_reconcile_path, dirty_path):
+            self.assertIn('wantedBy = [ "nas-protected-services.target" ];', unit)
+            self.assertIn('partOf = [ "nas-protected-services.target" ];', unit)
+            self.assertNotIn('wantedBy = [ "multi-user.target" ];', unit)
+        self.assertIn(
+            "systemctl stop nas-managed-services-dirty.path nas-managed-services-reconcile.path",
+            zfs_tools,
+        )
+        self.assertIn("wait_inactive nas-managed-services-dirty.path", encrypted_guest)
+        self.assertIn("wait_inactive nas-managed-services-reconcile.path", encrypted_guest)
+        self.assertNotIn("stale handler", encrypted_guest)
+        self.assertNotIn("systemctl reset-failed nas-v2-apply-failed.service", encrypted_guest)
 
     def test_update_snapshots_have_bounded_retention(self) -> None:
         update = text("scripts/update-nas.sh")

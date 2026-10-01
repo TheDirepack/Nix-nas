@@ -7,6 +7,20 @@
   color: var(--pf-t--global--text--color--subtle);
 }
 
+.nas-actions {
+  display: flex;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+.nas-actions--wrap {
+  flex-wrap: wrap;
+}
+
+.nas-actions--wrap > button {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .nas-pre {
   max-height: 20rem;
   overflow: auto;

@@ -48,7 +48,7 @@ export function ServicesPage({data, mutate, busy}) {
   const saveFormDocument = async () => {
     setSaving(true);
     try {
-      await mutate(() => replaceManagedServicesJsonDocument(formValue));
+      await mutate(() => replaceManagedServicesJsonDocument(formValue, document.revision));
       setEditorError("");
       await loadDocument();
     } catch (reason) {
@@ -61,7 +61,7 @@ export function ServicesPage({data, mutate, busy}) {
   const saveYamlDocument = async () => {
     setSaving(true);
     try {
-      await mutate(() => replaceManagedServicesDocument(yaml));
+      await mutate(() => replaceManagedServicesDocument(yaml, document.revision));
       setEditorError("");
       await loadDocument();
     } catch (reason) {

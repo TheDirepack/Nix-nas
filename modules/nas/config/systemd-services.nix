@@ -353,8 +353,8 @@ in
         STNODEFAULTFOLDER = "1";
         GOMEMLIMIT = "192MiB";
       };
-      requires = [ "nas-zfs-mount-guard.service" ];
-      after = [ "nas-zfs-mount-guard.service" "network-online.target" ];
+      requires = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service" ];
+      after = [ "nas-zfs-mount-guard.service" "nas-copyparty-share-root.service" "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig = {
         RequiresMountsFor = [ cfg.zfsRoot syncthingDataDir ];
@@ -391,7 +391,9 @@ in
             --retry 30 --retry-delay 2 --retry-connrefused --retry-all-errors \
             http://127.0.0.1:${toString syncthingGuiPort}/rest/noauth/health
         '';
-        ExecStart = "${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
+        ExecStart = "${nasPythonApplication}/bin/nas-operation-run --action syncthing-sync --class identity --class runtime -- ${nasIdentitySync}/bin/nas-identity-sync sync-syncthing";
+        RestartForceExitStatus = [ 75 ];
+        RestartSec = "5s";
       };
     };
 
@@ -400,8 +402,8 @@ in
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" "caddy.service" ];
-      requires = [ "caddy.service" ];
-      after = [ "caddy.service" ];
+      # Caddy's startup selector awaits V2 reconciliation, which may start
+      # Vaultwarden; only the persisted CA file can gate this export.
       before = [ "vaultwarden.service" ];
       unitConfig.ConditionPathExists = "${secretRoot}/ready";
       serviceConfig = {
@@ -458,7 +460,10 @@ in
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = [ "${secretRoot}/ready" "${observabilitySecretDir}/grafana-secret-key" ];
-      serviceConfig.BindReadOnlyPaths = [ observabilitySecretDir ];
+      serviceConfig = {
+        BindReadOnlyPaths = [ observabilitySecretDir ];
+        SupplementaryGroups = [ "nas-observability" ];
+      };
     };
 
     victoriametrics = lib.mkIf cfg.observability.enable {
