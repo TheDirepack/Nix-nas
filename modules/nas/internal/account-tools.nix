@@ -5,7 +5,6 @@ let
     authentikBootstrapTokenFile
     authentikPort
     cfg
-    copypartyDataDir
     copypartyUserConfigDir
     lib
     nasSecrets
@@ -16,8 +15,6 @@ let
     pkgs
     shareRoot
     syncthingConfigDir
-    vaultwardenBackupDir
-    vaultwardenDataDir
   ;
 
   nasPythonApplication = pkgs.python3Packages.buildPythonApplication {
@@ -112,18 +109,10 @@ let
     kind = "path";
     restoreStrategy = "path-policy";
   };
-  mkDatabaseAuthority = { name, source, sensitive ? true, optional ? false }: {
-    inherit name source sensitive optional;
-    kind = "database";
-    restoreStrategy = "database-native";
-    owner = null;
-    group = null;
-    rootMode = null;
-  };
 
-  # Ownership is an installation contract, not archive metadata. This lets
-  # disaster recovery recreate an authority that does not yet exist without
-  # guessing root:root ownership from the empty target host.
+  # State bundles are deliberately small: they move runtime-editable control
+  # configuration, not application databases or user data. Restic/native dump
+  # jobs and ZFS snapshots own those larger recovery domains.
   stateRegistry = [
     (mkPathAuthority {
       name = "managed-services";
@@ -133,51 +122,13 @@ let
       rootMode = "0640";
     })
     (mkPathAuthority {
-      name = "first-run";
-      source = "/var/lib/nas-setup";
-      optional = true;
-      group = "wheel";
-      rootMode = "0750";
-    })
-    (mkPathAuthority {
-      name = "copyparty";
-      source = copypartyDataDir;
+      name = "copyparty-config";
+      source = copypartyUserConfigDir;
       sensitive = true;
       owner = "copyparty";
       group = "copyparty";
-      rootMode = "0750";
+      rootMode = "0770";
     })
-    (mkPathAuthority {
-      name = "identity-sync";
-      source = "/var/lib/nas-identity-sync";
-      sensitive = true;
-      rootMode = "0700";
-    })
-    (mkPathAuthority {
-      name = "caddy";
-      source = "/var/lib/caddy";
-      sensitive = true;
-      owner = "caddy";
-      group = "caddy";
-      rootMode = "0700";
-    })
-    (mkPathAuthority {
-      name = "authentik-media";
-      source = "/var/lib/authentik/data";
-      sensitive = true;
-      owner = "authentik";
-      group = "authentik";
-      rootMode = "0750";
-    })
-    (mkPathAuthority {
-      name = "keepass";
-      source = cfg.secrets.keepassDatabase;
-      sensitive = true;
-      owner = "root";
-      group = "users";
-      rootMode = "0600";
-    })
-    (mkDatabaseAuthority { name = "authentik-database"; source = "postgresql://authentik"; })
   ]
   ++ lib.optionals cfg.networking.enable [
     (mkPathAuthority {
@@ -187,85 +138,18 @@ let
       rootMode = "0700";
     })
   ]
-  ++ lib.optionals (cfg.networking.enable && cfg.networking.firewall.enable) [
-    (mkPathAuthority { name = "firewall"; source = "/var/lib/nas-firewall"; rootMode = "0700"; })
-  ]
-  ++ lib.optionals cfg.syncthing.enable [
-    (mkPathAuthority {
-      name = "syncthing";
-      source = syncthingConfigDir;
-      sensitive = true;
-      owner = "syncthing";
-      group = "copyparty";
-      rootMode = "0700";
-    })
-  ]
   ++ lib.optionals (cfg.scheduler.backend == "cockpit-scheduler") [
-    (mkPathAuthority { name = "scheduler"; source = "/var/lib/cockpit-scheduler"; optional = true; })
-  ]
-  ++ lib.optionals cfg.vaultwarden.enable [
     (mkPathAuthority {
-      name = "vaultwarden";
-      source = vaultwardenDataDir;
-      sensitive = true;
-      owner = "vaultwarden";
-      group = "vaultwarden";
-      rootMode = "0700";
-    })
-    (mkPathAuthority {
-      name = "vaultwarden-backups";
-      source = vaultwardenBackupDir;
-      sensitive = true;
+      name = "scheduler";
+      source = "/var/lib/cockpit-scheduler";
       optional = true;
-      owner = "vaultwarden";
-      group = "vaultwarden";
-      rootMode = "0700";
-    })
-  ]
-  ++ lib.optionals (cfg.observability.enable && cfg.observability.grafana.enable) [
-    (mkPathAuthority {
-      name = "grafana";
-      source = "/var/lib/grafana/grafana.db";
-      sensitive = true;
-      optional = true;
-      owner = "grafana";
-      group = "grafana";
-      rootMode = "0600";
-    })
-  ]
-  ++ lib.optionals cfg.observability.ntfy.enable [
-    (mkPathAuthority {
-      name = "ntfy";
-      source = "/var/lib/private/ntfy-sh";
-      sensitive = true;
-      owner = "ntfy-sh";
-      group = "ntfy-sh";
-      rootMode = "0700";
-    })
-  ]
-  ++ lib.optionals cfg.virtualization.enable [
-    (mkPathAuthority {
-      name = "libvirt";
-      source = "/var/lib/libvirt";
-      sensitive = true;
-      rootMode = "0750";
     })
   ];
 
-  stateQuiesceUnits = [
-    "authentik.service"
-    "authentik-worker.service"
-    "nas-authentik-proxy-outpost.service"
-    "postgresql.service"
-    "nas-v2-timer-identity-sync-0.timer"
-    "copyparty.service"
-    "caddy.service"
-  ]
-  ++ lib.optional cfg.syncthing.enable "syncthing.service"
-  ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
-  ++ lib.optionals (cfg.observability.enable && cfg.observability.grafana.enable) [ "grafana.service" ]
-  ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
-  ++ lib.optional cfg.virtualization.enable "libvirtd.service";
+  # Exporting these file authorities does not require stopping application
+  # databases or user workloads. Restore still restarts the native owners that
+  # consume the restored control configuration.
+  stateQuiesceUnits = [ ];
 
   stateRestoreUnits = [
     "nas-protected-services.target"
@@ -284,16 +168,8 @@ let
       pkgs.python3
       pkgs.systemd
       pkgs.util-linux
-      pkgs.postgresql
     ] ++ lib.optional cfg.networking.enable pkgs.networkmanager;
     text = ''
-      export NAS_SETUP_STATE_ROOT=/var/lib/nas-setup
-      export NAS_FIREWALL_STATE_ROOT=/var/lib/nas-firewall
-      export NAS_NETWORKMANAGER_STATE_ROOT=/etc/NetworkManager/system-connections
-      export NAS_COPYPARTY_STATE_ROOT=/var/lib/copyparty/user.d
-      export NAS_SYNCTHING_STATE_PATH=${lib.escapeShellArg (syncthingConfigDir + "/config.xml")}
-      export NAS_AUTHENTIK_STATE_ROOT=/var/lib/authentik/data
-      export NAS_KEEPASS_DATABASE=${lib.escapeShellArg cfg.secrets.keepassDatabase}
       export NAS_STATE_REGISTRY_FILE=${stateRegistryFile}
       export NAS_STATE_REGISTRY_REQUIRED=1
       export NAS_STATE_RUNTIME_ROOT=/run/nas-state
