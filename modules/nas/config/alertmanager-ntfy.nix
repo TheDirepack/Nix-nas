@@ -9,9 +9,9 @@ let
 in
 {
   config = lib.mkIf (obs.enable && cfg.alerting.enable) {
-    # The old custom router implementation is deleted. Suppress its stale
-    # split systemd declaration until systemd-services.nix is simplified.
-    systemd.services.nas-alert-router.enable = lib.mkForce false;
+    # The custom router implementation is deleted. This lower-priority override
+    # suppresses the old split declaration until that block is removed outright.
+    systemd.services.nas-alert-router.enable = lib.mkOverride 80 false;
 
     systemd.services.alertmanager = {
       onFailure = failureAlert;
@@ -22,12 +22,12 @@ in
     };
 
     systemd.services.vmalert-nas = {
-      after = lib.mkForce [ "victoriametrics.service" "alertmanager.service" ];
-      requires = lib.mkForce [ "victoriametrics.service" "alertmanager.service" ];
+      after = lib.mkOverride 80 [ "victoriametrics.service" "alertmanager.service" ];
+      requires = lib.mkOverride 80 [ "victoriametrics.service" "alertmanager.service" ];
     };
 
     services.prometheus.alertmanager-ntfy.extraConfigFiles =
-      lib.mkIf obs.ntfy.enable (lib.mkForce [ credentialPath ]);
+      lib.mkIf obs.ntfy.enable (lib.mkOverride 80 [ credentialPath ]);
 
     systemd.services.nas-alertmanager-ntfy-config = lib.mkIf obs.ntfy.enable {
       description = "Render alertmanager-ntfy runtime credentials";
@@ -72,7 +72,7 @@ in
       after = lib.mkAfter [ "nas-alertmanager-ntfy-config.service" "ntfy-sh.service" ];
       requires = lib.mkAfter [ "nas-alertmanager-ntfy-config.service" ];
       wants = lib.mkAfter [ "ntfy-sh.service" ];
-      unitConfig.ConditionPathExists = lib.mkForce [ credentialPath ];
+      unitConfig.ConditionPathExists = lib.mkOverride 80 [ credentialPath ];
     };
   };
 }
