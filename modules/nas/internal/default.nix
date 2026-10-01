@@ -16,8 +16,10 @@ let
   caddy_helpers = import ./caddy-helpers.nix (common // base);
   core = mergeChecked "base and Caddy helpers" base caddy_helpers;
 
-  secret_tools = import ./secret-tools.nix (common // core);
-  with_secrets = mergeChecked "core and secret tools" core secret_tools;
+  v2_tools = import ./v2-tools.nix (common // core);
+  with_v2 = mergeChecked "core and V2 tools" core v2_tools;
+  secret_tools = import ./secret-tools.nix (common // with_v2);
+  with_secrets = mergeChecked "V2 and secret tools" with_v2 secret_tools;
   zfs_tools = import ./zfs-tools.nix (common // with_secrets);
   with_zfs = mergeChecked "secret and ZFS tools" with_secrets zfs_tools;
   power_tools = import ./power-tools.nix (common // with_zfs);
