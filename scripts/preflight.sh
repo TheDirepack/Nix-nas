@@ -69,35 +69,7 @@ step "static security boundaries" ./scripts/security-static-scan.py
 step "Python syntax" ./scripts/validate-python-syntax.py
 
 fresh_manifest="$(mktemp "${TMPDIR:-/tmp}/nas-preflight-manifest.XXXXXX")"
-step "fresh manifest generation" python3 - "$repo_root" "$fresh_manifest" <<'PY'
-from __future__ import annotations
-
-import hashlib
-import pathlib
-import stat
-import sys
-
-root = pathlib.Path(sys.argv[1]).resolve()
-output = pathlib.Path(sys.argv[2])
-ignored_parts = {".git", ".cache", ".hypothesis", ".pytest_cache", "__pycache__", "node_modules", ".direnv", ".venv"}
-ignored_names = {".coverage", "coverage.json", "MANIFEST.sha256"}
-ignored_suffixes = {".pyc", ".zip", ".qcow2", ".iso", ".log"}
-
-rows = []
-for path in sorted(root.rglob("*")):
-    relative = path.relative_to(root)
-    if any(part in ignored_parts or part.endswith(".egg-info") for part in relative.parts):
-        continue
-    if relative.name in ignored_names or relative.suffix in ignored_suffixes:
-        continue
-    mode = path.lstat().st_mode
-    if stat.S_ISDIR(mode):
-        continue
-    if not stat.S_ISREG(mode):
-        raise SystemExit(f"fresh manifest encountered non-regular object: {relative}")
-    rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  ./{relative.as_posix()}")
-output.write_text("\n".join(rows) + "\n", encoding="utf-8")
-PY
+step "fresh manifest generation" python3 "$repo_root/scripts/lib/manifest.py" --root "$repo_root" --out "$fresh_manifest"
 step "fresh manifest verification" sha256sum --check --status "$fresh_manifest"
 
 # Generated fuzz/property work is deliberately opt-in during preflight. The
