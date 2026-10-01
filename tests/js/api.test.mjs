@@ -36,10 +36,7 @@ test("structured API mutations send JSON only over stdin", async () => {
     calls.push(["spawn", command, options]);
     return process;
   };
-  assert.deepEqual(
-    await apiInput(["source-control"], {action: "status"}, spawn),
-    {ok: true},
-  );
+  assert.deepEqual(await apiInput(["source-control"], {action: "status"}, spawn), {ok: true});
   assert.deepEqual(calls, [
     ["spawn", ["nas-cockpit-api", "source-control"], {superuser: "require", err: "message"}],
     ["input", JSON.stringify({action: "status"})],

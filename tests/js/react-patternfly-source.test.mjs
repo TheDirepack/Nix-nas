@@ -96,12 +96,7 @@ test("managed services editor is generated from the canonical schema with YAML a
   }
   assert.equal(schemaEditor.includes("<select"), false, "schema editor uses a raw select");
   assert.equal(schemaEditor.includes("<input"), false, "schema editor uses a raw input");
-  for (const application of [
-    "copyparty",
-    "syncthing",
-    "grafana",
-    "ntfy",
-  ]) {
+  for (const application of ["copyparty", "syncthing", "grafana", "ntfy"]) {
     assert.equal(
       schemaEditor.includes(application),
       false,
