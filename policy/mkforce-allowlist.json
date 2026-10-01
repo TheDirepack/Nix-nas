@@ -14,12 +14,6 @@
       "reason": "The upstream Telegraf unit grants CAP_NET_RAW for the ping input; this configuration has no ping input and explicitly removes the unused ambient capability."
     },
     {
-      "path": "modules/nas/config/observability.nix",
-      "setting": "wantedBy",
-      "count": 2,
-      "reason": "Alertmanager and alertmanager-ntfy must remain behind nas-protected-services.target rather than inheriting the upstream multi-user startup target while the appliance is locked."
-    },
-    {
       "path": "modules/nas/config/host-platform.nix",
       "setting": "nixpkgs.config.allowUnfreePredicate",
       "count": 1,
