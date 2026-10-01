@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import io
+import contextlib
 import os
 import pathlib
 import sys
@@ -107,6 +109,30 @@ class OperationLockTests(unittest.TestCase):
                 result = locks.main(["--action", "nested", "--class", "state", "--", "/bin/false"])
                 self.assertEqual(result, 7)
                 run.assert_called_once()
+
+    def test_cli_contender_fails_without_executing_command(self) -> None:
+        with locks.acquire_operation("backup", ("storage",)):
+            token = os.environ.pop(locks.COORDINATION_TOKEN_ENV)
+            try:
+                with mock.patch("nas_operation_lock.subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(locks.main(["--action", "update", "--class", "update", "--", "/bin/true"]), 75)
+                    run.assert_not_called()
+            finally:
+                os.environ[locks.COORDINATION_TOKEN_ENV] = token
+
+    def test_cli_rejects_stale_parent_token_for_validation_and_execution(self) -> None:
+        with locks.acquire_operation("parent", ("state",)) as parent:
+            token = parent.coordination_token
+        with mock.patch.dict(os.environ, {locks.COORDINATION_TOKEN_ENV: token}):
+            with mock.patch("nas_operation_lock.subprocess.run") as run, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(locks.main(["--class", "state", "--validate-current"]), 76)
+                self.assertEqual(locks.main(["--action", "nested", "--class", "state", "--", "/bin/true"]), 76)
+                run.assert_not_called()
+
+    def test_different_live_owner_token_is_rejected(self) -> None:
+        with locks.acquire_operation("parent", ("state",)):
+            with self.assertRaisesRegex(locks.OperationBusyError, "different operation"):
+                locks.validate_coordination_token("0" * 32, ("state",))
 
 
 if __name__ == "__main__":
