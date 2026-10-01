@@ -134,7 +134,9 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn("services.prometheus.alertmanager", observability)
         self.assertIn("services.prometheus.alertmanager-ntfy", observability)
         self.assertIn('daemon "alertmanager.service"', seed)
-        self.assertIn("nas-alert-router.enable = lib.mkForce false", integration)
+        self.assertIn('credentialPath = "/run/nas-alertmanager-ntfy/config.yml";', integration)
+        self.assertIn("nas-alertmanager-ntfy-config", integration)
+        self.assertNotIn("nas-alert-router", integration)
         self.assertFalse((ROOT / "services/nas_alert_router.py").exists())
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
