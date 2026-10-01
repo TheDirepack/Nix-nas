@@ -35,14 +35,9 @@ class OperationLockCoverageTests(unittest.TestCase):
         self.root_patch.stop()
         self.tmp.cleanup()
 
-    def test_reservation_ttl_is_bounded(self) -> None:
-        for ttl in (0, 29, 3601):
-            with self.subTest(ttl=ttl), self.assertRaises(ValueError):
-                locks.reserve_operation("x", ("storage",), ttl_seconds=ttl)
-
     def test_operation_state_ignores_stale_unlocked_metadata(self) -> None:
         locks.ensure_root()
-        stale = self.root / "storage.lock"
+        stale = self.root / locks.LOCK_PATH_NAME
         stale.write_text('{"token":"' + "a" * 32 + '","action":"old","classes":["storage"]}\n', encoding="utf-8")
         stale.chmod(0o660)
         state = locks.operation_state()

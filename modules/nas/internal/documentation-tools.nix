@@ -80,7 +80,7 @@ let
     emit_source "Disko OS-disk example" ${../../../installation/disko-os-disk-example.nix} disko-os-disk-example.md nix
     emit_source "Disko fresh-pool example" ${../../../installation/disko-fresh-pool-example.nix} disko-fresh-pool-example.md nix
     emit_source "Pool-layout worksheet" ${../../../installation/pool-layout.md} pool-layout.md markdown
-    emit_source "Authentik NAS user-settings blueprint" ${../../../authentik/blueprints/nas-user-settings.yaml} authentik-nas-user-settings-blueprint.md yaml
+    emit_source "Authentik NAS Syncthing user-settings blueprint" ${../../../authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml} authentik-nas-user-settings-blueprint.md yaml
 
     mkdir -p "$out/share/cockpit/nas/docs"
     mdbook build "$work" --dest-dir "$out/share/cockpit/nas/docs"

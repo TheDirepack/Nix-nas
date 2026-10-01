@@ -262,7 +262,7 @@ class IdentitySyncCoverageTests(unittest.TestCase):
                 sync.provision_runtime_token("bootstrap")
 
     def test_automation_role_has_no_global_token_key_permission(self) -> None:
-        blueprint = (ROOT / "authentik/blueprints/nas-user-settings.yaml").read_text(encoding="utf-8")
+        blueprint = (ROOT / "authentik/blueprints/nas-automation.yaml").read_text(encoding="utf-8")
         self.assertNotIn("authentik_core.view_token_key", blueprint)
 
     def test_provision_runtime_token_rejects_missing_role_or_bad_user_key(self) -> None:
