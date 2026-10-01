@@ -1,7 +1,7 @@
 { config, lib, pkgs, aiInternal, nasInternal, ... }:
 
 let
-  inherit (aiInternal) aiSecretDir cfg;
+  inherit (aiInternal) aiSecretDir cfg nasCodingAgent;
   inherit (nasInternal) nasPythonApplication;
   code = cfg.codingAgent;
   piPackageAvailable = builtins.hasAttr "pi-coding-agent" pkgs;
@@ -56,7 +56,7 @@ let
   '';
   launcher = pkgs.writeShellApplication {
     name = "nas-code";
-    runtimeInputs = [ nasPythonApplication pkgs.systemd ];
+    runtimeInputs = [ nasCodingAgent nasPythonApplication pkgs.systemd ];
     text = ''
       export NAS_CODING_WORKSPACE_ROOTS_JSON=${lib.escapeShellArg (builtins.toJSON code.workspaceRoots)}
       export NAS_PI_SESSION_EXEC=${lib.escapeShellArg sessionExec}
@@ -64,7 +64,7 @@ let
       export NAS_PI_STATE_DIR=${lib.escapeShellArg stateDir}
       export NAS_MANAGED_SERVICES_CONTROL=${lib.escapeShellArg "${nasPythonApplication}/bin/nas-managed-services-control"}
       export NAS_CODING_HEARTBEAT_SECONDS=${toString code.heartbeatSeconds}
-      exec ${nasPythonApplication}/bin/nas-code-agent "$@"
+      exec ${nasCodingAgent}/bin/nas-code-agent "$@"
     '';
   };
 in
@@ -77,9 +77,6 @@ in
       };
     }
     (lib.mkIf (cfg.enable && code.enable && piPackageAvailable) {
-      # The caller must supply the already-authenticated identity. Authorization
-      # itself is the canonical application.ai-coding.access Authentik assignment;
-      # no Linux-group or UID fallback is retained.
       security.sudo.extraConfig = ''
         Defaults env_keep += "NAS_AUTHENTICATED_IDENTITY_JSON"
       '';
@@ -104,9 +101,6 @@ in
         partOf = [ "nas-protected-services.target" ];
         requires = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
         after = [ "nas-ai-coding-prepare.service" "nas-pi-netns.service" "nas-llama-swap-pi-proxy.service" ];
-        # Managed Services V2 adds StopWhenUnneeded=yes in its owned drop-in for
-        # the on-demand ai-coding service and refreshes its native lease while a
-        # transient session is active.
         unitConfig.StopWhenUnneeded = false;
       };
 
@@ -203,7 +197,6 @@ in
               echo "Fix with: chown :nas-code-agent ${root} && chmod 2770 ${root} or add ACL via setfacl -m g:nas-code-agent:rwx ${root}" >&2
               exit 1
             fi
-            # Group/ACL-based filesystem access is distinct from application authorization.
           '') code.workspaceRoots}
         '';
       };
