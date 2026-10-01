@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 
 FLOORS = {
-    "services/nas_ai_config.py": 70.0,
     "services/nas_cockpit_api.py": 49.0,
-    "services/nas_coding_agent.py": 60.0,
     "services/nas_common.py": 75.0,
     "services/nas_doctor.py": 60.0,
     "services/nas_identity_model.py": 79.0,

@@ -46,10 +46,10 @@ class CockpitApiTests(unittest.TestCase):
             mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext(active)) as lock,
             mock.patch.object(api, "run", return_value=self.completed(stdout='{"ok":true}\n')) as run,
         ):
-            self.assertEqual(api.set_managed_service("ai-workspace", "on-demand"), {"ok": True})
+            self.assertEqual(api.set_managed_service("grafana", "on-demand"), {"ok": True})
         lock.assert_called_once_with("managed-service-policy", ("runtime",))
         command = run.call_args.args[0]
-        self.assertEqual(command, ["nas-managed-services-control", "set", "ai-workspace", "on-demand"])
+        self.assertEqual(command, ["nas-managed-services-control", "set", "grafana", "on-demand"])
         self.assertNotIn("nas-feature-control", command)
         self.assertEqual(run.call_args.kwargs["env"]["NAS_OPERATION_COORDINATION_TOKEN"], "coord-token")
 
@@ -213,46 +213,6 @@ class CockpitApiTests(unittest.TestCase):
         with self.assertRaises(api.ApiError):
             api._json_string_list({"values": ["ok", 7]}, "values")
 
-    def test_ai_local_model_update_is_runtime_coordinated(self) -> None:
-        request = {
-            "id": "local-qwen",
-            "path": "/tank/ai/models/qwen.gguf",
-            "context": 32768,
-            "ttl": 300,
-            "tools": True,
-            "extraArgs": ["--flash-attn=on"],
-        }
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext()) as lock,
-            mock.patch.object(api.ai_config, "set_local_model", return_value={"ok": True}) as setter,
-        ):
-            self.assertTrue(api.set_ai_local_model(request)["ok"])
-        lock.assert_called_once_with("ai-local-model-set", ("runtime",))
-        setter.assert_called_once_with(
-            "local-qwen",
-            "/tank/ai/models/qwen.gguf",
-            context=32768,
-            ttl=300,
-            tools=True,
-            extra_args=["--flash-attn=on"],
-        )
-
-    def test_ai_role_and_advanced_updates_are_runtime_coordinated(self) -> None:
-        with (
-            mock.patch.object(api, "acquire_operation", return_value=contextlib.nullcontext()) as lock,
-            mock.patch.object(api.ai_config, "set_role", return_value={"ok": True}) as role,
-            mock.patch.object(api.ai_config, "replace_advanced", return_value={"ok": True}) as advanced,
-        ):
-            self.assertTrue(
-                api.set_ai_role(
-                    {"role": "coding/default", "targets": ["cloud/coder"], "strategy": "pin", "spillover": 1}
-                )["ok"]
-            )
-            self.assertTrue(api.set_ai_advanced({"globalTTL": 300})["ok"])
-        self.assertEqual(lock.call_count, 2)
-        role.assert_called_once_with("coding/default", ["cloud/coder"], strategy="pin", spillover=1)
-        advanced.assert_called_once_with({"globalTTL": 300})
-
     def test_source_control_rejects_unknown_operation_before_filesystem_or_subprocess(self) -> None:
         with mock.patch.object(api, "run") as run:
             with self.assertRaisesRegex(api.ApiError, "Unsupported"):
@@ -265,8 +225,8 @@ class CockpitApiTests(unittest.TestCase):
         self.assertNotIn("feature", help_text.lower())
         with self.assertRaises(SystemExit):
             parser.parse_args(["feature", "ai", "always"])
-        parsed = parser.parse_args(["managed-service", "ai-workspace", "always"])
-        self.assertEqual(parsed.service, "ai-workspace")
+        parsed = parser.parse_args(["managed-service", "grafana", "always"])
+        self.assertEqual(parsed.service, "grafana")
 
 
 class SetupApiTransportTests(unittest.TestCase):

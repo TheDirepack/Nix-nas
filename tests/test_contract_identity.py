@@ -186,12 +186,10 @@ class ContractTests(unittest.TestCase):
         common = text("services/nas_common.py")
         caddy = text("services/nas_v2_caddy.py")
         system = text("modules/nas/config/system.nix")
-        coding = text("services/nas_coding_agent.py")
         self.assertIn("application_capability_group", common)
         self.assertIn("application_capability_allowed", common)
         self.assertIn("application.", caddy)
         self.assertIn("application.copyparty.files", system)
-        self.assertIn('CODING_CAPABILITY_GROUP = "application.ai-coding.access"', coding)
         self.assertFalse((ROOT / "modules/nas/config/managed-services-identity-migration.nix").exists())
         self.assertFalse((ROOT / "services" / "nas_v2_identity_migrate.py").exists())
 

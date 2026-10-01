@@ -281,7 +281,6 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     services = data.get("services")
     if not isinstance(services, dict):
         raise ValueError("effective state missing services object")
-    # Validate each authorization entry has capabilities shape.
     for svc_id, entry in authz.items():
         if not isinstance(entry, dict):
             raise ValueError(f"authorization entry {svc_id!r} must be object")
@@ -340,3 +339,12 @@ def read_json_object(
         if missing is None:
             raise
         return dict(missing)
+
+
+def fsync_directory(path: pathlib.Path) -> None:
+    """Persist a directory entry mutation without imposing caller policy."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

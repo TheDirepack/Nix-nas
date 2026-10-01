@@ -131,69 +131,6 @@ let
       };
     };
   }
-  // lib.optionalAttrs cfg.ai.enable {
-    ai-storage = (job "nas-ai-storage.service" "Prepare local AI storage") // {
-      dependencies = [ (depends "zfs-mount-guard" "completed") ];
-    };
-    ai-config = (job "nas-ai-config-init.service" "Prepare llama-swap configuration") // {
-      dependencies = [ (depends "ai-storage" "completed") ];
-    };
-    ai-runtime = (daemon "nas-llama-swap.service" "AI model router") // {
-      dependencies = [ (depends "ai-config" "completed") ];
-      authorization.capabilities = adminCapability "Administer the AI runtime";
-      resources.accelerators = [ { kind = "gpu"; vendor = "any"; quantity = 1; required = false; mode = "shared"; } ];
-      readiness.probes = [ { type = "tcp"; port = cfg.ai.llamaSwap.port; } ];
-      routes = {
-        api = (pathRoute [ "/ai/v1" ] (httpTarget cfg.ai.llamaSwap.port) { mode = "upstream"; }) // {
-          proxy.stripPrefix = "/ai";
-          portal.visible = false;
-        };
-        admin = (pathRoute [ "/ai/runtime" ] (httpTarget cfg.ai.llamaSwap.port) (identity "admin")) // {
-          proxy = {
-            stripPrefix = "/ai/runtime";
-            requestHeaders."X-Forwarded-Prefix" = "/ai/runtime";
-          };
-          portal = portal "AI Runtime" "AI" "cpu" 45;
-        };
-      };
-    };
-    ai-workspace = (onDemand "open-webui.service" "Open WebUI AI workspace" 600) // {
-      dependencies = [ (depends "ai-runtime" "ready") ];
-      authorization.capabilities = [
-        (capability "access" "Use Open WebUI")
-        (capability "admin" "Administer Open WebUI")
-      ];
-      readiness.probes = [ { type = "http"; url = "http://127.0.0.1:${toString cfg.ai.openWebuiPort}/health"; } ];
-      routes.main = (pathRoute [ "/ai/" ] (httpTarget cfg.ai.openWebuiPort) (identity "access")) // {
-        proxy = {
-          stripPrefix = "/ai";
-          requestHeaders."X-Forwarded-Prefix" = "/ai";
-          requestHeaders."X-Forwarded-Proto" = "https";
-        };
-        portal = portal "Open WebUI" "AI" "bot" 40;
-      };
-    };
-  }
-  // lib.optionalAttrs (cfg.ai.enable && cfg.ai.codingAgent.enable) {
-    ai-coding = (onDemand "nas-ai-coding-sessions.target" "Pi coding-agent sessions" cfg.ai.codingAgent.idleSeconds) // {
-      dependencies = [ (depends "ai-runtime" "ready") ];
-      authorization.capabilities = [ (capability "access" "Run coding-agent sessions") ];
-    };
-  }
-  // lib.optionalAttrs (cfg.ai.enable && cfg.ai.modelDownloader.enable) {
-    ai-downloader = (onDemand "podman-hfdownloader.service" "Hugging Face model downloader" 600) // {
-      dependencies = [ (depends "ai-storage" "completed") ];
-      authorization.capabilities = adminCapability "Download and manage AI models";
-      readiness.probes = [ { type = "tcp"; port = cfg.ai.modelDownloader.port; } ];
-      routes.web = (pathRoute [ "/ai/models" ] (httpTarget cfg.ai.modelDownloader.port) (identity "admin")) // {
-        proxy = {
-          stripPrefix = "/ai/models";
-          requestHeaders."X-Forwarded-Prefix" = "/ai/models";
-        };
-        portal = portal "AI Models" "AI" "download" 50;
-      };
-    };
-  }
   // lib.optionalAttrs cfg.virtualization.enable {
     vm-storage = (job "nas-vm-storage.service" "Prepare VM storage") // {
       dependencies = [ (depends "zfs-mount-guard" "completed") ];
@@ -222,6 +159,7 @@ let
     alertmanager = (daemon "alertmanager.service" "Alertmanager notification router") // {
       authorization.capabilities = adminCapability "View Alertmanager";
       routes.web = (pathRoute [ "/alerts/" ] (httpTarget cfg.observability.alertmanagerPort) (identity "admin")) // {
+        proxy.stripPrefix = "/alerts";
         portal = portal "Alerts" "Monitoring" "bell" 70;
       };
     };

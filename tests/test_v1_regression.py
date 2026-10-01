@@ -44,7 +44,6 @@ class V1RegressionTests(unittest.TestCase):
         allowed_negative_tests = {
             "tests/test_alpha18_hardening.py",
             "tests/test_cockpit_api.py",
-            "tests/test_coding_agent.py",
             "tests/test_contract_identity.py",
             "tests/test_identity_sync.py",
             "tests/test_setup.py",

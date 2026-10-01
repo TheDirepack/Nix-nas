@@ -1079,16 +1079,13 @@ def read_secret(path: str) -> str:
     return value
 
 
-def capability_routes(ai_enabled: bool) -> dict[str, str]:
-    routes = {
+def capability_routes() -> dict[str, str]:
+    return {
         "files": "/shares/",
         "webdav": "/dav/",
         "vault": "/vault/",
         "syncthing": "/settings/syncthing",
     }
-    if ai_enabled:
-        routes["ai"] = "/ai/"
-    return routes
 
 
 def main() -> int:
@@ -1104,7 +1101,6 @@ def main() -> int:
     parser.add_argument("--bootstrap-only", action="store_true")
     parser.add_argument("--identity-xss-only", action="store_true")
     parser.add_argument("--syncthing-admin-only", action="store_true")
-    parser.add_argument("--ai-enabled", action="store_true")
     args = parser.parse_args()
     if args.bootstrap_only:
         if args.bootstrap_password_file is None:
@@ -1185,7 +1181,7 @@ def main() -> int:
             "application.vaultwarden.access",
         ],
     )
-    routes = capability_routes(args.ai_enabled)
+    routes = capability_routes()
     common_allowed = [
         RouteExpectation(routes["files"], True),
         RouteExpectation(routes["vault"], True),
@@ -1200,8 +1196,6 @@ def main() -> int:
         RouteExpectation("/shares/admin/", True),
         RouteExpectation("/vault/admin/", True),
     ]
-    if args.ai_enabled:
-        operator_expectations.append(RouteExpectation(routes["ai"], True))
     run_account(
         args.origin,
         "operator",
@@ -1219,8 +1213,6 @@ def main() -> int:
         RouteExpectation("/shares/admin/", False),
         RouteExpectation("/vault/admin/", False),
     ]
-    if args.ai_enabled:
-        alice_expectations.append(RouteExpectation(routes["ai"], False))
     run_account(
         args.origin,
         "alice",

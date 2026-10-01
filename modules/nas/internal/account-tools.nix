@@ -4,12 +4,10 @@ let
     authentikApiTokenFile
     authentikBootstrapTokenFile
     authentikPort
-    aiStorageRoot
     cfg
     copypartyDataDir
     copypartyUserConfigDir
     lib
-    llamaCppPackage
     nasSecrets
     nasUpdate
     nasPreflight
@@ -35,7 +33,6 @@ let
       ruamel-yaml
     ];
     pythonImportsCheck = [
-      "nas_ai_config"
       "nas_cockpit_api"
       "nas_doctor"
       "nas_identity_sync"
@@ -246,44 +243,6 @@ let
       rootMode = "0700";
     })
   ]
-  ++ lib.optionals cfg.ai.enable [
-    (mkPathAuthority {
-      name = "llama-swap";
-      source = "/var/lib/nas-llama-swap";
-      owner = "nas-ai";
-      group = "nas-ai";
-      rootMode = "0750";
-    })
-    (mkPathAuthority {
-      name = "open-webui";
-      source = "/var/lib/open-webui";
-      sensitive = true;
-      owner = "open-webui";
-      group = "open-webui";
-      rootMode = "0700";
-    })
-  ]
-  ++ lib.optionals (cfg.ai.enable && cfg.ai.codingAgent.enable) [
-    (mkPathAuthority {
-      name = "coding-agent";
-      source = "/var/lib/nas-code-agent";
-      sensitive = false;
-      optional = true;
-      owner = "nas-code-agent";
-      group = "nas-code-agent";
-      rootMode = "0750";
-    })
-  ]
-  ++ lib.optionals (cfg.ai.enable && cfg.ai.modelDownloader.enable) [
-    (mkPathAuthority {
-      name = "model-downloader";
-      source = "${aiStorageRoot}/downloader-config";
-      sensitive = true;
-      owner = "hfdownloader";
-      group = "nas-ai-models";
-      rootMode = "0750";
-    })
-  ]
   ++ lib.optionals cfg.virtualization.enable [
     (mkPathAuthority {
       name = "libvirt";
@@ -306,9 +265,6 @@ let
   ++ lib.optional cfg.vaultwarden.enable "vaultwarden.service"
   ++ lib.optionals (cfg.observability.enable && cfg.observability.grafana.enable) [ "grafana.service" ]
   ++ lib.optional cfg.observability.ntfy.enable "ntfy-sh.service"
-  ++ lib.optionals cfg.ai.enable [ "nas-llama-swap.service" "open-webui.service" ]
-  ++ lib.optional (cfg.ai.enable && cfg.ai.codingAgent.enable) "nas-ai-coding-sessions.target"
-  ++ lib.optional (cfg.ai.enable && cfg.ai.modelDownloader.enable) "podman-hfdownloader.service"
   ++ lib.optional cfg.virtualization.enable "libvirtd.service";
 
   stateRestoreUnits = [

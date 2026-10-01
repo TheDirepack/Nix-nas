@@ -28,9 +28,7 @@ except ImportError:
     HAS_HYPOTHESIS = False
 else:
     HAS_HYPOTHESIS = True
-    import nas_ai_config as ai_config
     import nas_cockpit_api as cockpit_api
-    import nas_coding_agent as coding_agent
     import nas_common as common
     import nas_doctor as doctor
     import nas_identity_model as identity_model
@@ -57,9 +55,7 @@ else:
 
 SERVICE_INPUT_MODULES = frozenset(
     {
-        "nas_ai_config",
         "nas_cockpit_api",
-        "nas_coding_agent",
         "nas_common",
         "nas_doctor",
         "nas_guarded_apply",
@@ -153,15 +149,6 @@ if HAS_HYPOTHESIS:
         @given(HOSTILE_TEXT)
         def test_text_protocol_and_shell_boundaries(self, value: str) -> None:
             self.assertEqual(nas_v2_cli._parser().prog, "nas-v2")
-            expected_boundary_error(ai_config.validate_provider_id, value)
-            expected_boundary_error(ai_config.validate_proxy_url, value)
-            expected_boundary_error(ai_config.validate_model_id, value)
-            expected_boundary_error(ai_config.validate_local_model_id, value)
-            expected_boundary_error(ai_config.validate_local_extra_args, [value])
-            expected_boundary_error(ai_config.validate_models, [value])
-            expected_boundary_error(ai_config.validate_filters, {"stripParams": value})
-            expected_boundary_error(ai_config.validate_role, value)
-            expected_boundary_error(coding_agent.validate_workspace, value, (pathlib.Path("/tmp"),))
             with contextlib.redirect_stderr(io.StringIO()):
                 common.split_groups(value)
             common.parse_systemd_show(value)

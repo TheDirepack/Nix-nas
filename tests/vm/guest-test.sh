@@ -198,7 +198,7 @@ assert_blocked() {
 assert_spoof_blocked() {
   local path=$1 code
   code="$(http_code --resolve "$PUBLIC_HOST:443:127.0.0.1" \
-    -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files,application.ai-workspace.access' \
+    -H 'Remote-User: akadmin' -H 'Remote-Groups: nas_admin,application.copyparty.files' \
     -H 'X-authentik-username: akadmin' -H 'X-authentik-groups: nas_admin' \
     "https://$PUBLIC_HOST$path")"
   case "$code" in
@@ -407,21 +407,6 @@ pass "nas-update status reports the protected checkout"
 
 nas-operation-run --action vm-operation-run-smoke --class runtime -- true
 pass "shared operation runner executes an installed child under coordinator ownership"
-
-# AI configuration/control executables are source-contract qualified here even when the optional
-# coding-agent feature is not enabled in this VM profile.
-if command -v nas-ai-config >/dev/null 2>&1; then
-  nas-ai-config --help >/dev/null
-  pass "nas-ai-config CLI is installed and starts"
-fi
-if command -v nas-code-agent >/dev/null 2>&1; then
-  nas-code-agent --help >/dev/null
-  pass "nas-code-agent CLI is installed and starts"
-fi
-if command -v nas-code >/dev/null 2>&1; then
-  command -v nas-code >/dev/null
-  pass "nas-code optional launcher is installed when codingAgent is enabled"
-fi
 
 log "Run the complete first-time setup GUI"
 for _ in $(seq 1 60); do
@@ -1288,7 +1273,7 @@ while time.monotonic() < deadline:
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             messages = [json.loads(line) for line in response if line.strip()]
-        if any('QemuNtfyDependency' in message.get('message', '') for message in messages):
+        if any('alertname = QemuNtfyDependency' in message.get('tags', []) for message in messages):
             break
     except (urllib.error.URLError, TimeoutError):
         pass

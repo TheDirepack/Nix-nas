@@ -4,6 +4,5 @@
     ./identity-sharing.nix
     ./observability.nix
     ./virtualization.nix
-    ./local-ai.nix
   ];
 }

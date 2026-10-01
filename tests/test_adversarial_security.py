@@ -31,14 +31,14 @@ class AdversarialInputTests(unittest.TestCase):
                     self.assertEqual(common.split_groups(payload), set())
 
     def test_hostile_group_text_never_grants_v2_application_privilege(self) -> None:
-        allow = common.application_capability_group("ai-workspace", "access")
+        allow = common.application_capability_group("grafana", "admin")
         for payload in payloads.ALL_TEXT_PAYLOADS:
             with self.subTest(payload=repr(payload)):
                 with contextlib.redirect_stderr(io.StringIO()):
                     groups = common.split_groups(payload)
                 self.assertNotIn(common.ADMIN_GROUP, groups)
                 self.assertNotIn(allow, groups)
-                self.assertFalse(common.application_capability_allowed(groups, "ai-workspace", "access"))
+                self.assertFalse(common.application_capability_allowed(groups, "grafana", "admin"))
 
     def test_identifiers_reject_injection_payloads(self) -> None:
         for payload in payloads.ALL_TEXT_PAYLOADS:

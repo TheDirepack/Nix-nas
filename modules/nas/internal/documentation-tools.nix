@@ -86,22 +86,51 @@ let
     mdbook build "$work" --dest-dir "$out/share/cockpit/nas/docs"
   '';
 
+  mkFrontendBundle = name: source:
+    let
+      frontendSource = pkgs.lib.cleanSourceWith {
+        src = source;
+        filter = path: type: !(builtins.elem (baseNameOf path) [ "node_modules" "dist" ]);
+      };
+      stagedSource = pkgs.runCommandNoCC "${name}-source" { } ''
+        mkdir -p "$out"
+        cp -R ${frontendSource}/. "$out/"
+        chmod -R u+w "$out"
+        cp ${../../../scripts/frontend-build-integrity.cjs} "$out/frontend-build-integrity.cjs"
+      '';
+    in pkgs.buildNpmPackage {
+      pname = name;
+      version = pkgs.lib.removeSuffix "\n" (builtins.readFile ../../../VERSION);
+      src = stagedSource;
+      npmDeps = pkgs.importNpmLock { npmRoot = frontendSource; };
+      npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+      NODE_ENV = "production";
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+      npmFlags = [ "--include=dev" ];
+      dontNpmBuild = true;
+      buildPhase = ''
+        runHook preBuild
+        export NAS_FRONTEND_INTEGRITY_HELPER="$PWD/frontend-build-integrity.cjs"
+        npm run build
+        node build.js --check
+        runHook postBuild
+      '';
+      installPhase = ''
+        runHook preInstall
+        mkdir -p "$out"
+        cp -R dist/. "$out/"
+        runHook postInstall
+      '';
+    };
+
+  cockpitBundle = mkFrontendBundle "cockpit-nas-bundle" ../../../cockpit;
+  wizardBundle = mkFrontendBundle "first-run-wizard-bundle" ../../../setup/first-run-wizard;
+
   cockpitNasPlugin =
     let
-      plugin = pkgs.runCommand "cockpit-nas-management" {
-        nativeBuildInputs = [ pkgs.nodejs ];
-      } ''
-        cd ${../../../cockpit}
-        NAS_FRONTEND_INTEGRITY_HELPER=${../../../scripts/frontend-build-integrity.cjs} node build.js --check
-        cockpit_dist=${../../../cockpit/dist}
-        for asset in manifest.json index.html index.js index.css build-meta.json; do
-          test -s "$cockpit_dist/$asset" || {
-            printf 'Cockpit React/PatternFly bundle is missing %s. Restore the reviewed lockfile, run npm ci, then npm run build in cockpit/.\n' "$asset" >&2
-            exit 1
-          }
-        done
+      plugin = pkgs.runCommand "cockpit-nas-management" { } ''
         install -d "$out/share/cockpit/nas"
-        cp -R "$cockpit_dist/." "$out/share/cockpit/nas/"
+        cp -R ${cockpitBundle}/. "$out/share/cockpit/nas/"
         cp -R ${nasDocumentation}/share/cockpit/nas/docs "$out/share/cockpit/nas/docs"
       '';
     in
@@ -109,23 +138,10 @@ let
       passthru.cockpitPath = [ plugin ];
     };
 
-  firstRunWizardStatic =
-    pkgs.runCommand "first-run-wizard-static" {
-      nativeBuildInputs = [ pkgs.nodejs ];
-    } ''
-      wizard_src=${../../../setup/first-run-wizard}
-      NAS_FRONTEND_INTEGRITY_HELPER=${../../../scripts/frontend-build-integrity.cjs} node "$wizard_src/build.js" --check
-      wizard_dist=${../../../setup/first-run-wizard/dist}
-      for asset in index.html first-run-wizard.js first-run-wizard.css build-meta.json; do
-        test -s "$wizard_dist/$asset" || {
-          printf 'First-run wizard bundle is missing %s. Run npm ci and node build.js in setup/first-run-wizard/.\n' "$asset" >&2
-          exit 1
-        }
-      done
-      install -d "$out/share/nas-portal-wizard"
-      cp -R "$wizard_dist/." "$out/share/nas-portal-wizard/"
-      chmod -R u+w "$out/share/nas-portal-wizard"
-    '';
+  firstRunWizardStatic = pkgs.runCommand "first-run-wizard-static" { } ''
+    install -d "$out/share/nas-portal-wizard"
+    cp -R ${wizardBundle}/. "$out/share/nas-portal-wizard/"
+  '';
 in
 {
   inherit nasDocumentation cockpitNasPlugin firstRunWizardStatic;

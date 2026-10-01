@@ -100,31 +100,31 @@ class V2SeedGenerationTests(unittest.TestCase):
                         },
                     },
                 },
-                "ai-runtime": {
-                    "name": "AI Runtime",
+                "metrics": {
+                    "name": "Metrics",
                     "workload": {"kind": "daemon"},
-                    "runtime": {"type": "systemd", "unit": "ai-runtime.service"},
+                    "runtime": {"type": "systemd", "unit": "metrics.service"},
                     "routes": {
                         "admin": {
                             "target": {"type": "http", "port": 8002},
-                            "exposure": {"type": "path", "paths": ["/ai/runtime"]},
+                            "exposure": {"type": "path", "paths": ["/metrics/admin"]},
                             "auth": {"mode": "public"},
                         },
                         "api": {
                             "target": {"type": "http", "port": 8002},
-                            "exposure": {"type": "path", "paths": ["/ai/v1"]},
+                            "exposure": {"type": "path", "paths": ["/metrics/api"]},
                             "auth": {"mode": "public"},
                         },
                     },
                 },
-                "ai-workspace": {
-                    "name": "Open WebUI",
+                "dashboards": {
+                    "name": "Dashboards",
                     "workload": {"kind": "daemon"},
-                    "runtime": {"type": "systemd", "unit": "open-webui.service"},
+                    "runtime": {"type": "systemd", "unit": "dashboards.service"},
                     "routes": {
                         "main": {
                             "target": {"type": "http", "port": 8003},
-                            "exposure": {"type": "path", "paths": ["/ai/"]},
+                            "exposure": {"type": "path", "paths": ["/metrics/"]},
                             "auth": {"mode": "public"},
                         }
                     },
@@ -146,12 +146,21 @@ class V2SeedGenerationTests(unittest.TestCase):
         }
         effective = spec.compile_document(doc, self.schema)
         rendered = caddy.generate_caddyfile(effective)
-        for p in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime", "/console"):
-            self.assertIn(p.rstrip("/") if p != "/ai/" else "/ai", rendered)
+        for p in (
+            "/shares",
+            "/shares/admin",
+            "/vault",
+            "/vault/admin",
+            "/metrics",
+            "/metrics/api",
+            "/metrics/admin",
+            "/console",
+        ):
+            self.assertIn(p, rendered)
         self.assertLess(rendered.index("/shares/admin"), rendered.index('"/shares"'))
         self.assertLess(rendered.index("/vault/admin"), rendered.index('"/vault"'))
-        self.assertLess(rendered.index("/ai/runtime"), rendered.index('path "/ai/"'))
-        self.assertLess(rendered.index("/ai/v1"), rendered.index('path "/ai/"'))
+        self.assertLess(rendered.index("/metrics/admin"), rendered.index('path "/metrics/"'))
+        self.assertLess(rendered.index("/metrics/api"), rendered.index('path "/metrics/"'))
 
     def test_longest_prefix_overlap_is_rejected_by_spec(self):
         doc = {

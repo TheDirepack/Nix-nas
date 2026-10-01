@@ -33,8 +33,9 @@ class Alpha18HardeningContracts(unittest.TestCase):
         flake = text("flake.nix")
         self.assertFalse((ROOT / "nas-module.nix").exists())
         self.assertFalse((ROOT / "ai-module.nix").exists())
+        self.assertFalse((ROOT / "modules" / "ai").exists())
         self.assertIn("core = import ./modules/nas;", flake)
-        self.assertIn("ai = import ./modules/ai;", flake)
+        self.assertNotIn("./modules/ai", flake)
         default_block = flake.split("default = { ... }:", 1)[1].split("profiles =", 1)[0]
         self.assertIn("copyparty.nixosModules.default", default_block)
         self.assertIn("copyparty.overlays.default", default_block)
@@ -145,6 +146,14 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertNotIn("nas-alert-router", active_source)
         self.assertFalse((ROOT / "services/nas_alert_router.py").exists())
 
+    def test_alertmanager_public_prefix_is_stripped_for_root_backend(self) -> None:
+        seed = text("modules/nas/config/managed-services-seed-v2.nix")
+        route = seed.split('routes.web = (pathRoute [ "/alerts/" ]', 1)[1].split("};", 1)[0]
+        self.assertIn('proxy.stripPrefix = "/alerts";', route)
+        observability = text("modules/nas/config/observability.nix")
+        self.assertIn('webExternalUrl = "https://${lanHost}/alerts/";', observability)
+        self.assertIn('"--web.route-prefix=/"', observability)
+
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
         state = text("services/nas_state.py")
         schema = text("schemas/state-bundle.schema.json")
@@ -157,9 +166,10 @@ class Alpha18HardeningContracts(unittest.TestCase):
 
     def test_profiles_keep_optional_services_out_of_base_defaults(self) -> None:
         flake = text("flake.nix")
-        for profile in ("core-storage", "identity-sharing", "observability", "virtualization", "local-ai"):
+        for profile in ("core-storage", "identity-sharing", "observability", "virtualization"):
             self.assertIn(profile, flake)
             self.assertTrue((ROOT / "modules/profiles" / f"{profile}.nix").is_file())
+        self.assertFalse((ROOT / "modules/profiles/local-ai.nix").exists())
 
     def test_mkforce_and_version_contracts_remain_machine_checked(self) -> None:
         for script in ("check-mkforce.py", "check-version.py"):

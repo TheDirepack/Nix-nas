@@ -1,14 +1,24 @@
 # Dependency policy
 
+## Release inventory
+
+Release automation publishes `dependencies-nas-ci-ready.json` and
+`dependencies-nas-qemu.json` beside the source archive. Each records the stamped
+release commit, exact system store path, recursive Nix closure, and repository
+OCI pins. OCI entries describe source declarations, not proof that an image was
+installed. Empty digest slots remain visible. This inventory is informational;
+it is not a vulnerability scan or an install-ready qualification claim.
+
+For an already built system, run:
+
+```bash
+python3 scripts/release-inventory.py --system /nix/store/EXACT-SYSTEM \
+  --revision "$(git rev-parse HEAD)" --output /tmp/dependencies.json
+```
+
 ## CopyParty
 
 The CopyParty flake is consumed as one reviewed upstream input and follows this repository's nixpkgs input. Nested lock nodes are not edited independently. A CopyParty update must include flake evaluation, closure builds, and the QEMU matrix.
-
-## HuggingFaceModelDownloader
-
-The model-downloader service remains an optional digest-pinned OCI workload until a native Nix package can be created with verified source and Go dependency hashes. Unverified hashes and failing placeholder derivations are forbidden. The service stays disabled in the VM matrix until an immutable platform artifact is available.
-
-This is an explicit supply-chain boundary rather than an open implementation note: dependency changes require verifiable immutable inputs and a successful Nix build.
 
 ## Python runtime validation
 
@@ -28,11 +38,11 @@ Playwright is the browser-behavior layer for checks that require a browser engin
 
 ## Cockpit frontend
 
-The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`; an installable release must also contain the generated `cockpit/package-lock.json`, the compiled `cockpit/dist/` payload, and matching source-hash metadata. Nix installs only that verified payload and refuses a source-only placeholder. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.
+The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`. Nix builds Cockpit and the first-run wizard from their reviewed npm lockfiles with `importNpmLock` and `buildNpmPackage`, then verifies their output with the existing build-integrity checks. Local `node_modules` and generated `dist` trees are excluded from derivation inputs. Release archives retain the compiled payload and source-hash metadata for browser qualification and source consumers; they are not the inputs to the installed frontend build. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.
 
-## Open WebUI
+## Unfree packages
 
-Open WebUI is the only non-GPU package admitted by the Nix unfree-package predicate. Keep the exception exact to the `open-webui` package name; broader unfree enablement would bypass the appliance dependency review boundary.
+The unfree-package predicate in `modules/nas/config/host-platform.nix` admits only NVIDIA/CUDA/CUDNN/Libcu/NCCL package names, and only when `nas.hardware.gpuVendors` declares `nvidia`. Keep that exception exact to those package-name prefixes; broader unfree enablement would bypass the appliance dependency review boundary.
 
 ## Upgrade qualification pin
 
