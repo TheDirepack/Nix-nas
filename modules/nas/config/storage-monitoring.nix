@@ -14,7 +14,7 @@ let
   helpers = import ./managed-services-helpers.nix { inherit lib config nasInternal; };
   authentikArtifact = helpers.authentikArtifact;
   copypartyArtifact = helpers.copypartyArtifact;
-  v2Source = ../../../services;
+  v2Source = nasInternal.v2Source;
   v2BackupInventory = "/run/nas-control/backup-resources.json";
   v2BackupRuntimePaths = "/run/nas-control/restic-v2-runtime-paths";
   v2BackupRuntimeState = "/run/nas-control/backup-runtime-state.json";
