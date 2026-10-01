@@ -144,7 +144,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("name: nas-user-settings-profile", blueprint)
         self.assertIn("name: nas-user-settings-write", blueprint)
         self.assertIn("slug: nas-user-settings", blueprint)
-        self.assertEqual(blueprint.count("!Find ["), 4)
+        self.assertEqual(blueprint.count("!Find ["), 6)
 
     def test_authentik_blueprint_expressions_are_valid_python(self) -> None:
         blueprint = text("authentik/blueprints/nas-user-settings.yaml")
