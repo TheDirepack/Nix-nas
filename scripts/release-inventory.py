@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate a machine-readable Nix closure and OCI pin inventory for releases."""
 
 from __future__ import annotations
@@ -16,24 +15,25 @@ _DIGEST_RE = re.compile(r'^\s*([A-Za-z0-9_]+)\s*=\s*"([^"]*)"\s*;\s*$', re.MULTI
 
 
 def _closure_entries(payload: Any) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
+    raw_entries: list[tuple[str, dict[str, Any]]] = []
     if isinstance(payload, dict):
-        iterable = payload.items()
+        for path, metadata in payload.items():
+            if not isinstance(path, str) or not isinstance(metadata, dict):
+                raise ValueError("nix path-info JSON contains an invalid entry")
+            raw_entries.append((path, metadata))
     elif isinstance(payload, list):
-        iterable = []
         for item in payload:
             if not isinstance(item, dict):
                 raise ValueError("nix path-info JSON list entries must be objects")
             path = item.get("path")
             if not isinstance(path, str):
                 raise ValueError("nix path-info JSON entry is missing path")
-            iterable.append((path, item))
+            raw_entries.append((path, item))
     else:
         raise ValueError("nix path-info JSON must be an object or list")
 
-    for path, metadata in iterable:
-        if not isinstance(path, str) or not isinstance(metadata, dict):
-            raise ValueError("nix path-info JSON contains an invalid entry")
+    entries: list[dict[str, Any]] = []
+    for path, metadata in raw_entries:
         entry: dict[str, Any] = {"path": path}
         for key in ("narHash", "narSize", "closureSize"):
             value = metadata.get(key)
