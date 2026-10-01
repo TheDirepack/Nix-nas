@@ -14,7 +14,6 @@ These modules back installed appliance commands and finite reconciliation helper
 | `nas_operation_journal.py` | Resumable workflow journal/manual-recovery boundary |
 | `nas_state.py` | Signed state export, validation, diff, and restore |
 | `nas_doctor.py` | Unified appliance diagnostics, including V2 desired/effective drift |
-| `nas_alert_router.py` | Bounded vmalert routing/deduplication and ntfy delivery |
 | `nas_syncthing_devices.py` | Narrow user-device declaration validation |
 | `nas_v2_spec.py` | YAML 1.2 parsing, schema validation, normalization, semantic validation, and effective-state compilation |
 | `nas_v2_plan.py` | Deterministic reconciliation plan generation |
