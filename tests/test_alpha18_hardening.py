@@ -152,7 +152,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         for command in ("export", "validate", "diff", "restore"):
             self.assertIn(f'add_parser("{command}"', state)
         self.assertIn('"const": 2', schema)
-        self.assertIn("registryDigest", state if False else schema)
+        self.assertIn("registryDigest", schema)
         self.assertIn("rollbackBundle", state)
 
     def test_profiles_keep_optional_services_out_of_base_defaults(self) -> None:
