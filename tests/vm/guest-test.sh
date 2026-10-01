@@ -1273,7 +1273,7 @@ while time.monotonic() < deadline:
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             messages = [json.loads(line) for line in response if line.strip()]
-        if any('QemuNtfyDependency' in message.get('message', '') for message in messages):
+        if any('alertname = QemuNtfyDependency' in message.get('tags', []) for message in messages):
             break
     except (urllib.error.URLError, TimeoutError):
         pass

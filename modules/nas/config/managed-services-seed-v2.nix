@@ -163,6 +163,7 @@ let
     alertmanager = (daemon "alertmanager.service" "Alertmanager notification router") // {
       authorization.capabilities = adminCapability "View Alertmanager";
       routes.web = (pathRoute [ "/alerts/" ] (httpTarget cfg.observability.alertmanagerPort) (identity "admin")) // {
+        proxy.stripPrefix = "/alerts";
         portal = portal "Alerts" "Monitoring" "bell" 70;
       };
     };
