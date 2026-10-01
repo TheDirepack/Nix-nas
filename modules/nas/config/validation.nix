@@ -10,7 +10,6 @@ let
     hasNvidiaGpu
     hostSystem
     isX86_64
-    llamaBackend
     loopbackServicePorts
     observabilityGidCollisions
     observabilityUidCollisions
@@ -132,19 +131,7 @@ in
       }
       {
         assertion = !hasNvidiaGpu || isX86_64;
-        message = "The standard NVIDIA driver integration in this profile is supported only on x86_64. Use CPU/Vulkan with a supported ARM graphics stack or add board-specific NVIDIA modules.";
-      }
-      {
-        assertion = llamaBackend != "cuda" || (isX86_64 && hasNvidiaGpu);
-        message = "nas.hardware.llamaCpp.backend = cuda requires x86_64 and nvidia in nas.hardware.gpuVendors.";
-      }
-      {
-        assertion = llamaBackend != "rocm" || (isX86_64 && hasAmdGpu);
-        message = "nas.hardware.llamaCpp.backend = rocm requires x86_64 and amd in nas.hardware.gpuVendors.";
-      }
-      {
-        assertion = llamaBackend != "vulkan" || gpuVendors != [ ];
-        message = "nas.hardware.llamaCpp.backend = vulkan requires at least one declared GPU vendor.";
+        message = "The standard NVIDIA driver integration in this profile is supported only on x86_64. Use a supported ARM graphics stack or add board-specific NVIDIA modules.";
       }
       {
         assertion = lib.versionAtLeast pkgs.caddy.version "2.11.3";

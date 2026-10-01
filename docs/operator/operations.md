@@ -62,7 +62,7 @@ Authentik owns human identities, groups, and capability assignments. Managed Ser
 nas-managed-services-control status
 nas-managed-services-control document
 nas-managed-services-control set grafana always
-nas-managed-services-control set ai-runtime on-demand
+nas-managed-services-control set syncthing on-demand
 nas-managed-services-control reconcile
 systemctl status nas-managed-services-reconcile.service
 ```

@@ -10,7 +10,7 @@
       "groups_obj": [
         {"pk": "g-admin", "name": "nas_admin"},
         {"pk": "g-users", "name": "nas_users"},
-        {"pk": "g-ai", "name": "application.ai-workspace.access"}
+        {"pk": "g-grafana", "name": "application.grafana.admin"}
       ],
       "attributes": {
         "nasSyncthingDevice": "{\"id\": \"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH\", \"name\": \"NAS Administrator Device\", \"addresses\": [\"dynamic\"]}"
@@ -57,7 +57,7 @@
     {"pk": "g-users", "name": "nas_users", "users_obj": [{"username": "admin"}, {"username": "alice"}], "attributes": {}},
     {"pk": "g-guests", "name": "nas_guests", "users_obj": [{"username": "guest"}], "attributes": {}},
     {"pk": "g-media", "name": "share-media", "users_obj": [{"username": "alice"}], "attributes": {}},
-    {"pk": "g-ai", "name": "application.ai-workspace.access", "users_obj": [{"username": "admin"}], "attributes": {}},
+    {"pk": "g-grafana", "name": "application.grafana.admin", "users_obj": [{"username": "admin"}], "attributes": {}},
     {"pk": "g-vault", "name": "application.vaultwarden.access", "users_obj": [{"username": "alice"}], "attributes": {}},
     {"pk": "g-syncthing", "name": "application.syncthing.access", "users_obj": [{"username": "alice"}], "attributes": {}}
   ]

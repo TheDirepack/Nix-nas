@@ -29,55 +29,51 @@ class V2ReferenceTests(unittest.TestCase):
         )
 
     def test_readme_example_compiles(self):
-        # The README example at spec/managed-services/README.md:1257 should compile
-        # It defines ai-runtime (/ai/runtime/, /ai/v1/) and ai-workspace (/ai/) which are parent/child
-        # With longest-path-first ordering, this should succeed and render with /ai/runtime before /ai/
+        # The minimal example in spec/managed-services/README.md must compile.
+        # It defines a persistent runtime with parent/child paths (/metrics/admin/,
+        # /metrics/api/) plus an on-demand workspace on /metrics/.
+        # With longest-path-first ordering, this should succeed and render the
+        # longer paths before the /metrics/ parent.
         example = {
             "schemaVersion": 3,
             "services": {
-                "ai-storage": {
-                    "name": "AI storage",
+                "metrics-storage": {
+                    "name": "Metrics storage",
                     "workload": {"kind": "job"},
-                    "runtime": {"type": "systemd", "unit": "nas-ai-storage.service"},
+                    "runtime": {"type": "systemd", "unit": "nas-metrics-storage.service"},
                 },
-                "ai-config": {
-                    "name": "AI config",
-                    "workload": {"kind": "job"},
-                    "runtime": {"type": "systemd", "unit": "nas-ai-config-init.service"},
-                    "dependencies": [{"service": "ai-storage", "condition": "completed"}],
-                },
-                "ai-runtime": {
-                    "name": "llama-swap",
+                "metrics-runtime": {
+                    "name": "Metrics database",
                     "workload": {"kind": "daemon", "activation": "persistent"},
-                    "runtime": {"type": "systemd", "unit": "nas-llama-swap.service"},
-                    "dependencies": [{"service": "ai-config", "condition": "completed"}],
-                    "authorization": {"capabilities": [{"id": "models", "title": "Manage models"}]},
+                    "runtime": {"type": "systemd", "unit": "nas-metrics.service"},
+                    "dependencies": [{"service": "metrics-storage", "condition": "completed"}],
+                    "authorization": {"capabilities": [{"id": "retention", "title": "Manage retention"}]},
                     "readiness": {"probes": [{"type": "tcp", "port": 8080}]},
                     "routes": {
                         "ui": {
                             "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
-                            "exposure": {"type": "path", "paths": ["/ai/runtime/"]},
+                            "exposure": {"type": "path", "paths": ["/metrics/admin/"]},
                             "auth": {"mode": "identity", "capability": "access"},
-                            "portal": {"visible": True, "category": "AI"},
+                            "portal": {"visible": True, "category": "Monitoring"},
                         },
                         "api": {
                             "target": {"type": "http", "host": "127.0.0.1", "port": 8080},
-                            "exposure": {"type": "path", "paths": ["/ai/v1/"]},
+                            "exposure": {"type": "path", "paths": ["/metrics/api/"]},
                             "auth": {"mode": "upstream"},
                         },
                     },
                 },
-                "ai-workspace": {
-                    "name": "Open WebUI",
+                "dashboards": {
+                    "name": "Dashboards",
                     "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 600},
-                    "runtime": {"type": "systemd", "unit": "open-webui.service"},
-                    "dependencies": [{"service": "ai-runtime", "condition": "ready"}],
+                    "runtime": {"type": "systemd", "unit": "dashboards.service"},
+                    "dependencies": [{"service": "metrics-runtime", "condition": "ready"}],
                     "routes": {
                         "main": {
                             "target": {"type": "http", "host": "127.0.0.1", "port": 3000},
-                            "exposure": {"type": "path", "paths": ["/ai/"]},
+                            "exposure": {"type": "path", "paths": ["/metrics/"]},
                             "auth": {"mode": "identity", "capability": "access"},
-                            "portal": {"visible": True, "category": "AI"},
+                            "portal": {"visible": True, "category": "Monitoring"},
                         },
                     },
                 },
@@ -86,10 +82,10 @@ class V2ReferenceTests(unittest.TestCase):
         schema = spec.load_schema(SCHEMA)
         effective = spec.compile_document(example, schema)
         rendered = caddy.generate_caddyfile(effective)
-        # Longest-path-first: /ai/runtime and /ai/v1 must appear before /ai/
+        # Longest-path-first: /metrics/admin and /metrics/api must appear before /metrics/
         # Use specific path patterns to avoid substring matches
-        self.assertLess(rendered.index('"/ai/runtime/"'), rendered.index('"/ai/" "/ai/*"'))
-        self.assertLess(rendered.index('"/ai/v1/"'), rendered.index('"/ai/" "/ai/*"'))
+        self.assertLess(rendered.index('"/metrics/admin/"'), rendered.index('"/metrics/" "/metrics/*"'))
+        self.assertLess(rendered.index('"/metrics/api/"'), rendered.index('"/metrics/" "/metrics/*"'))
 
     def test_nix_authority_path_consistency(self):
         nix_files = {
@@ -114,7 +110,7 @@ class V2ReferenceTests(unittest.TestCase):
         # The seed generated by managed-services-seed-v2.nix should compile
         # We can't run Nix here, but we can test that a document with the seed's
         # overlapping routes compiles when using longest-path-first
-        # The seed has /shares, /shares/admin, /vault, /vault/admin, /ai/, /ai/v1, /ai/runtime
+        # The seed has /shares, /shares/admin, /vault, /vault/admin
         doc = {
             "schemaVersion": 3,
             "services": {

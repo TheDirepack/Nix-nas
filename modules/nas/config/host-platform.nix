@@ -7,7 +7,6 @@ let
     hasIntelGpu
     hasNvidiaGpu
     isX86_64
-    llamaBackend
     upsMonitorSystem
     upsUsesLocalDriver
   ;
@@ -17,15 +16,13 @@ in
     (lib.mkIf (!cfg.testing.readOnlyPackageSet) {
       nixpkgs.config.allowUnfreePredicate = lib.mkForce (package:
         let name = lib.getName package;
-        in name == "open-webui" || (hasNvidiaGpu && lib.any (prefix: lib.hasPrefix prefix name) [
+        in hasNvidiaGpu && lib.any (prefix: lib.hasPrefix prefix name) [
             "nvidia"
             "cuda"
             "cudnn"
             "libcu"
             "nccl"
-          ]));
-      nixpkgs.config.cudaSupport = lib.mkForce (llamaBackend == "cuda");
-      nixpkgs.config.rocmSupport = lib.mkForce (llamaBackend == "rocm");
+          ]);
     })
     {
     networking.hostName = lib.mkDefault "nas";

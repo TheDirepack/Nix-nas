@@ -133,14 +133,14 @@ class SetupConfigTests(unittest.TestCase):
                     "groups": ["nas_users"],
                 }
             ],
-            "services": {"ai-workspace": "on-demand"},
+            "services": {"syncthing": "on-demand"},
             "runPreflight": True,
         }
 
     def test_config_is_v2_native_and_rejects_features(self) -> None:
         value = setup_config.normalize_config(self.base())
         self.assertEqual(value["schemaVersion"], 2)
-        self.assertEqual(value["services"], {"ai-workspace": "on-demand"})
+        self.assertEqual(value["services"], {"syncthing": "on-demand"})
         self.assertNotIn("features", value)
         bad = self.base()
         bad["features"] = {"ai": "always"}
@@ -175,7 +175,7 @@ class SetupConfigTests(unittest.TestCase):
 
     def test_service_modes_are_closed(self) -> None:
         bad = self.base()
-        bad["services"] = {"ai-workspace": "sometimes"}
+        bad["services"] = {"syncthing": "sometimes"}
         with self.assertRaisesRegex(setup_config.SetupError, "always, off, on-demand"):
             setup_config.normalize_config(bad)
 
@@ -203,7 +203,7 @@ class ManagedServicesSetupTests(unittest.TestCase):
             "schemaVersion": 3,
             "services": [
                 {
-                    "id": "ai-workspace",
+                    "id": "syncthing",
                     "available": True,
                     "allowedModes": ["off", "on-demand", "always"],
                     "requestedMode": "on-demand",
@@ -219,7 +219,7 @@ class ManagedServicesSetupTests(unittest.TestCase):
 
     def test_validate_service_request_uses_v2_status(self) -> None:
         with mock.patch.object(setup, "_managed_services_status", return_value=self.service_status()) as status:
-            setup.validate_service_request({"ai-workspace": "on-demand"})
+            setup.validate_service_request({"syncthing": "on-demand"})
         status.assert_called_once_with()
 
     def test_validate_service_request_rejects_unknown_or_disallowed_mode(self) -> None:
@@ -234,8 +234,8 @@ class ManagedServicesSetupTests(unittest.TestCase):
             mock.patch.object(setup, "coordinated_child", side_effect=lambda value: ["env", "TOKEN=x", *value]),
             mock.patch.object(setup, "run_root", return_value=setup.Completed((), "", "")) as run_root,
         ):
-            result = setup.apply_services({"ai-workspace": "always"})
-        self.assertEqual(result, {"ai-workspace": "always"})
+            result = setup.apply_services({"syncthing": "always"})
+        self.assertEqual(result, {"syncthing": "always"})
         command = run_root.call_args.args[0]
         self.assertIn("nas-managed-services-control", command)
         self.assertNotIn("nas-feature-control", command)
@@ -243,8 +243,8 @@ class ManagedServicesSetupTests(unittest.TestCase):
 
     def test_service_policy_ready_reads_requested_modes(self) -> None:
         with mock.patch.object(setup, "_managed_services_status", return_value=self.service_status()):
-            self.assertTrue(setup.service_policy_ready({"ai-workspace": "on-demand"}))
-            self.assertFalse(setup.service_policy_ready({"ai-workspace": "always"}))
+            self.assertTrue(setup.service_policy_ready({"syncthing": "on-demand"}))
+            self.assertFalse(setup.service_policy_ready({"syncthing": "always"}))
 
     def test_canonical_plan_contains_services_not_features(self) -> None:
         config = setup_config.normalize_config(
@@ -252,12 +252,12 @@ class ManagedServicesSetupTests(unittest.TestCase):
                 "schemaVersion": 2,
                 "storage": {"createPool": False},
                 "accounts": [],
-                "services": {"ai-workspace": "on-demand"},
+                "services": {"syncthing": "on-demand"},
                 "runPreflight": False,
             }
         )
         plan = setup.canonical_setup_plan(config)
-        self.assertEqual(plan["services"], {"ai-workspace": "on-demand"})
+        self.assertEqual(plan["services"], {"syncthing": "on-demand"})
         self.assertNotIn("features", plan)
         self.assertRegex(setup.setup_plan_digest(config), r"^[0-9a-f]{64}$")
 
@@ -621,7 +621,7 @@ class FirstStartStatusTests(unittest.TestCase):
                     "schemaVersion": 2,
                     "storage": {"createPool": False},
                     "accounts": [],
-                    "services": {"ai-workspace": "on-demand"},
+                    "services": {"syncthing": "on-demand"},
                     "runPreflight": True,
                 }
             ),

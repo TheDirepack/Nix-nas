@@ -27,8 +27,7 @@ cleanup_work() {
 nas_vm_cleanup_add cleanup_work
 nas_vm_cleanup_add nas_vm_js_deps_cleanup
 trap nas_vm_cleanup_trap EXIT
-mkdir -p "$work/"{home,tmp,secrets/ai,llama-swap}
-printf 'models: {}\npeers: {}\nselectors: {}\n' >"$work/llama-swap/config.yaml"
+mkdir -p "$work/"{home,tmp,secrets}
 touch "$work/secrets/ready"
 
 # Keep source tests hermetic even though this process runs as root in a real
@@ -42,7 +41,6 @@ export NAS_STATE_RUNTIME_ROOT="$work/state"
 export NAS_STATE_ROLLBACK_ROOT="$work/rollback"
 export NAS_STATE_RESTORE_JOURNAL="$work/rollback/restore-operation.json"
 export NAS_SECRET_ROOT="$work/secrets"
-export NAS_LLAMA_SWAP_CONFIG="$work/llama-swap/config.yaml"
 export NAS_V2_DESIRED="$work/control/services"
 export NAS_V2_EFFECTIVE="$work/control/effective.json"
 export NAS_V2_SCHEMA="$repo/schemas/managed-services-v3.schema.json"
@@ -72,7 +70,6 @@ run_appliance() {
     -u NAS_STATE_ROLLBACK_ROOT \
     -u NAS_STATE_RESTORE_JOURNAL \
     -u NAS_SECRET_ROOT \
-    -u NAS_LLAMA_SWAP_CONFIG \
     -u NAS_V2_DESIRED \
     -u NAS_V2_EFFECTIVE \
     -u NAS_V2_SCHEMA \

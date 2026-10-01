@@ -22,7 +22,6 @@
       mkPkgs = systemName: import nixpkgs {
         system = systemName;
         overlays = [ copyparty.overlays.default ];
-        config.allowUnfreePredicate = package: nixpkgs.lib.getName package == "open-webui";
       };
       commonModules = [
         self.nixosModules.default
@@ -40,11 +39,9 @@
     {
       nixosModules = rec {
         core = import ./modules/nas;
-        ai = import ./modules/ai;
         default = { ... }: {
           imports = [
             copyparty.nixosModules.default
-            ai
             core
           ];
           nixpkgs.overlays = [ copyparty.overlays.default ];
@@ -54,7 +51,6 @@
           identity-sharing = import ./modules/profiles/identity-sharing.nix;
           observability = import ./modules/profiles/observability.nix;
           virtualization = import ./modules/profiles/virtualization.nix;
-          local-ai = import ./modules/profiles/local-ai.nix;
           all = import ./modules/profiles/all.nix;
         };
       };
@@ -82,7 +78,6 @@
       nixosConfigurations.nas-profile-identity-sharing = mkConsumer [ self.nixosModules.profiles."identity-sharing" ];
       nixosConfigurations.nas-profile-observability = mkConsumer [ self.nixosModules.profiles.observability ];
       nixosConfigurations.nas-profile-virtualization = mkConsumer [ self.nixosModules.profiles.virtualization ];
-      nixosConfigurations.nas-profile-local-ai = mkConsumer [ self.nixosModules.profiles."local-ai" ];
       nixosConfigurations.nas-profile-all = mkConsumer [ self.nixosModules.profiles.all ];
 
       checks.x86_64-linux =
@@ -153,7 +148,6 @@
             identity = [ authentik postgresql vaultwardenBundle syncthing ];
             observability = [ grafana ntfy-sh ];
             storage = [ restic cockpit-files cockpit-podman cockpitZfsBundle ];
-            ai = [ open-webui llama-swap llama-cpp ];
           };
         in {
           core = pkgs.buildEnv {
@@ -171,10 +165,6 @@
           storage = pkgs.buildEnv {
             name = "nas-vm-bundle-storage";
             paths = bundlePaths.storage;
-          };
-          ai = pkgs.buildEnv {
-            name = "nas-vm-bundle-ai";
-            paths = bundlePaths.ai;
           };
           vm-drivers = pkgs.buildEnv {
             name = "nas-vm-bundle-vm-drivers";

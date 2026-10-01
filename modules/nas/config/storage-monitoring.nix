@@ -2,7 +2,6 @@
 
 let
   inherit (nasInternal)
-    aiStorageRoot
     authentikDataDir
     cfg
     copypartyDataDir
@@ -199,11 +198,6 @@ in
         ]
         ++ lib.optionals cfg.observability.ntfy.enable [
           "/var/lib/ntfy-sh"
-        ]
-        ++ lib.optionals cfg.ai.enable [
-          "/var/lib/nas-llama-swap"
-          "/var/lib/open-webui"
-          "${aiStorageRoot}/downloader-config"
         ];
         dynamicFilesFrom = ''
           #!${pkgs.runtimeShell}

@@ -216,6 +216,16 @@ jobs:
           mapfile -d '' assets < <(find "$RELEASE_OUT" -type f -print0 | sort -z)
           ((${#assets[@]} >= 3))
           printf 'Prepared %d release assets.\n' "${#assets[@]}"
+      - name: Inventory release closures and repository OCI pins
+        run: |
+          set -euo pipefail
+          for profile in nas-ci-ready nas-qemu; do
+            system_path="$(nix path-info ".#nixosConfigurations.$profile.config.system.build.toplevel")"
+            python3 scripts/release-inventory.py \
+              --system "$system_path" \
+              --revision "$(git rev-parse HEAD)" \
+              --output "$RELEASE_OUT/dependencies-$profile.json"
+          done
       - name: Prepare release notes and immutable candidate bundle
         env:
           REPOSITORY: ${{ github.repository }}

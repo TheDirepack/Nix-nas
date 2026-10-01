@@ -156,7 +156,7 @@ def main() -> int:
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     # Host is never NixOS (no /run/nas-state tmpfs, no nas-* system users, no
-    # /var/lib/nas-llama-swap). Make the fast suite hermetic so `pytest` on
+    # /run/nas-secret-runtime). Make the fast suite hermetic so `pytest` on
     # ubuntu-24.04 matches the VM gate (see tests/README.md "Where tests run").
     # Tests that truly need a NixOS closure should be marked `requires_vm`.
     env.setdefault("NAS_STATE_ALLOW_UNPRIVILEGED", "1")
@@ -170,19 +170,9 @@ def main() -> int:
             os.rmdir("/run/nas-state")
         except OSError:
             env["NAS_STATE_RUNTIME_ROOT"] = str(_hermetic_tmp / "nas-state")
-    # Secret roots for cockpit_api / ai_config
+    # Secret root for cockpit_api
     if "NAS_SECRET_ROOT" not in env:
         env["NAS_SECRET_ROOT"] = str(_hermetic_tmp / "nas-secrets")
-    if "NAS_LLAMA_SWAP_CONFIG" not in env:
-        # Create a minimal valid llama-swap config so load_config() does not fail
-        # with FileNotFoundError on host. Tests that need specific config will
-        # override this via mock or temp path.
-        _llama_dir = _hermetic_tmp / "nas-llama-swap"
-        _llama_dir.mkdir(parents=True, exist_ok=True)
-        _llama_cfg = _llama_dir / "config.yaml"
-        if not _llama_cfg.exists():
-            _llama_cfg.write_text("models: {}\npeers: {}\nselectors: {}\n", encoding="utf-8")
-        env["NAS_LLAMA_SWAP_CONFIG"] = str(_llama_cfg)
     # State rollback / journal paths (for nas_state, operation_journal)
     if "NAS_STATE_ROLLBACK_ROOT" not in env:
         try:
@@ -209,7 +199,6 @@ def main() -> int:
     # Ensure secret and state root subdirs exist so lstat() checks pass.
     try:
         pathlib.Path(env["NAS_SECRET_ROOT"]).mkdir(parents=True, exist_ok=True)
-        (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ai").mkdir(parents=True, exist_ok=True)
         # Ready marker for tests that check /run/nas-secrets/ready
         (pathlib.Path(env["NAS_SECRET_ROOT"]) / "ready").touch(exist_ok=True)
         for key in [

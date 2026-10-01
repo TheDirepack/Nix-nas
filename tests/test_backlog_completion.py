@@ -30,7 +30,7 @@ class BacklogCompletionTests(unittest.TestCase):
 
     def test_browser_matrix_covers_all_capabilities_and_baseline_user(self) -> None:
         browser = (ROOT / "tests/browser/authz.py").read_text()
-        for capability in ("files", "webdav", "ai", "vault", "syncthing"):
+        for capability in ("files", "webdav", "vault", "syncthing"):
             self.assertIn(f'"{capability}"', browser)
         self.assertIn('"baseline"', browser)
         self.assertIn('RouteExpectation("/syncthing/", False)', browser)
