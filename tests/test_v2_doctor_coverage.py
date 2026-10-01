@@ -45,6 +45,15 @@ class DoctorCoverageTests(unittest.TestCase):
                 path.write_text("2.2.0-alpha.7", encoding="utf-8")
                 self.assertEqual(doctor._version_check().status, "ok")
 
+    def test_version_check_accepts_stable_source_and_release_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = pathlib.Path(raw) / "VERSION"
+            with mock.patch.object(doctor, "VERSION_FILE", path):
+                for version in ((ROOT / "VERSION").read_text().strip(), "0.1.1"):
+                    with self.subTest(version=version):
+                        path.write_text(version, encoding="utf-8")
+                        self.assertEqual(doctor._version_check().status, "ok")
+
     def test_setup_checks_cover_journal_and_state_consistency(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

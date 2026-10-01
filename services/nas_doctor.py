@@ -31,7 +31,7 @@ MANAGED_SERVICES_PLATFORM = pathlib.Path(
 MANAGED_SERVICES_PLATFORM_FALLBACK = pathlib.Path("/etc/nas-control/platform-capabilities.json")
 MANAGED_SERVICES_EFFECTIVE = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
 OPERATION_GROUP = os.environ.get("NAS_OPERATION_GROUP", "nas-operations")
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$")
 LEVELS = {"ok": 0, "info": 0, "warning": 1, "critical": 2, "indeterminate": 1}
 
 
