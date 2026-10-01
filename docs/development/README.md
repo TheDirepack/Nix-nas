@@ -10,6 +10,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [Code map](code-map.md) — where a change belongs.
 - [Testing and validation](testing.md) — local, NixOS, VM, browser, and hardware validation.
 - [Known risks](known-risks.md) — unresolved multi-step failure boundaries and recovery expectations.
+- [State bundle scope](state-bundle-scope.md) — boundary between small control-configuration bundles and Restic/ZFS/native application recovery.
 - [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
 - [Automated merge releases](automated-releases.md) — release-only version stamping, Diceware bootstrap credentials, build/publish flow, and retry behavior.
