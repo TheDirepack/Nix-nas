@@ -1,6 +1,6 @@
 # Configuration and management map
 
-Use this page when you are unsure **where** a setting belongs. Keeping one authority for each concern prevents drift and makes recovery predictable.
+Use this page when you are unsure where a setting belongs. Keeping one authority for each concern prevents drift and makes recovery predictable.
 
 | Concern | Authority | Normal interface | Important state |
 |---|---|---|---|
@@ -19,8 +19,8 @@ Use this page when you are unsure **where** a setting belongs. Keeping one autho
 | Metrics history/query | VictoriaMetrics | `/victoriametrics/` | `/var/lib/victoriametrics` |
 | Dashboards | Grafana | `/metrics/` | `/var/lib/grafana/grafana.db` |
 | Alert evaluation | vmalert | declarative rules | VictoriaMetrics alert state |
-| Alert delivery/deduplication | NAS alert router | `/alerts/` | `/var/lib/nas-alert-router/state.json` |
-| Notifications | ntfy | `/notifications/` | `/var/lib/ntfy-sh` |
+| Alert routing, deduplication and inhibition | Alertmanager | `/alerts/` | Alertmanager runtime state |
+| Push notification delivery | alertmanager-ntfy + ntfy | `/notifications/` | `/var/lib/ntfy-sh` plus runtime bridge credentials |
 | Host network profiles | NetworkManager | Cockpit Networking | NetworkManager profiles |
 | Per-application isolated network/VLAN/egress policy | Managed Services V2 | `services.yaml` / schema-driven editor | `network` or `networkProfiles` in `services.yaml` |
 | Firewall policy | firewalld/nftables + V2 projection | Cockpit Networking / `firewall-cmd` for host policy; V2 for application listeners/egress | `/var/lib/nas-firewall` + `services.yaml` |
@@ -38,8 +38,8 @@ Use this page when you are unsure **where** a setting belongs. Keeping one autho
 ## Configuration layers
 
 - **NixOS** decides what is installed and establishes safe declarative defaults.
-- **Managed Services V2** owns mutable application desired state in `services.yaml` and finitely projects it into native runtime mechanisms.
+- **Managed Services V2** owns mutable application desired state in `services.yaml` and projects it into native runtime mechanisms.
 - **Authentik** owns human identities, groups, capability assignments, passwords, MFA, and application bindings.
 - **Upstream application UIs** own mutable application-specific settings that do not belong in cross-cutting V2 policy.
 - **NAS Overview** provides status, navigation, reviewed host actions, and locked-state recovery.
-- **Generated documentation** is reference material; edit the owning source/configuration instead.
+- **Generated documentation** is reference material. Edit the owning source or configuration instead.
