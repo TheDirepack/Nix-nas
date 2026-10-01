@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import pathlib
+import socket
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -15,6 +18,40 @@ import nas_v2_readiness as readiness  # noqa: E402
 
 
 class V2ReadinessTests(unittest.TestCase):
+    def test_http_readiness_uses_status_without_waiting_for_body(self):
+        release = threading.Event()
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(5)
+
+            def serve():
+                connection, _address = listener.accept()
+                with connection:
+                    connection.recv(4096)
+                    connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+                    release.wait(5)
+
+            worker = threading.Thread(target=serve)
+            worker.start()
+            try:
+                port = listener.getsockname()[1]
+                self.assertTrue(readiness._probe_http({"url": f"http://127.0.0.1:{port}/health"}))
+            finally:
+                release.set()
+                worker.join(6)
+            self.assertFalse(worker.is_alive())
+
+    def test_http_probe_closes_connection_for_accepted_and_rejected_status(self):
+        for status, expected in ((200, True), (503, False)):
+            with self.subTest(status=status), mock.patch.object(readiness.http.client, "HTTPConnection") as factory:
+                connection = factory.return_value
+                connection.getresponse.return_value.status = status
+                self.assertEqual(readiness._probe_http({"url": "http://127.0.0.1/health?q=1"}), expected)
+                connection.request.assert_called_once_with("GET", "/health?q=1")
+                connection.getresponse.return_value.read.assert_not_called()
+                connection.close.assert_called_once_with()
+
     def test_existing_path_is_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "ready"
