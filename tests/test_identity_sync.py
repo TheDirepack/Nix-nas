@@ -236,7 +236,7 @@ class IdentityModelTests(unittest.TestCase):
         report = identity_model.capability_status(self.model())
         users = {row["id"]: row for row in report["users"]}
         self.assertEqual(report["capabilityModel"], "managed-services-v2")
-        self.assertIn("application.ai-workspace.access", users["admin"]["capabilities"])
+        self.assertIn("application.grafana.admin", users["admin"]["capabilities"])
         self.assertIn("application.vaultwarden.access", users["alice"]["capabilities"])
         self.assertIn("application.syncthing.access", users["alice"]["capabilities"])
         self.assertEqual(users["guest"]["capabilities"], {})

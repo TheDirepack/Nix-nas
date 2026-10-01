@@ -1033,18 +1033,23 @@ class BrowserAuthzInputTests(unittest.TestCase):
             mock.patch.object(
                 self.authz,
                 "fetch_status",
-                return_value={"status": 503, "url": "https://nas-test.local/ai/"},
+                return_value={"status": 503, "url": "https://nas-test.local/metrics/"},
             ),
             mock.patch.object(self.authz.time, "sleep"),
         ):
             with self.assertRaisesRegex(RuntimeError, '"status": 503'):
-                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/ai/", True)])
+                self.authz.verify_routes(object(), [self.authz.RouteExpectation("/metrics/", True)])
 
-    def test_capability_routes_omit_ai_when_the_profile_disables_it(self) -> None:
-        self.assertNotIn("ai", self.authz.capability_routes(ai_enabled=False))
-
-    def test_capability_routes_include_ai_when_the_profile_enables_it(self) -> None:
-        self.assertEqual(self.authz.capability_routes(ai_enabled=True)["ai"], "/ai/")
+    def test_capability_routes_cover_every_user_capability(self) -> None:
+        self.assertEqual(
+            self.authz.capability_routes(),
+            {
+                "files": "/shares/",
+                "webdav": "/dav/",
+                "vault": "/vault/",
+                "syncthing": "/settings/syncthing",
+            },
+        )
 
     def test_administrator_assigns_application_capabilities_through_authentik_session(self) -> None:
         driver = mock.MagicMock()

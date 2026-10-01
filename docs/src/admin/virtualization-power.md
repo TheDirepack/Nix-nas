@@ -1,12 +1,8 @@
-# Virtualization, AI, UPS, and optional services
+# Virtualization, UPS, Vaultwarden, and TFTP
 
 ## Virtualization
 
 When enabled, Cockpit Machines manages libvirt/QEMU/KVM. VM disks default to the configured ZFS storage path. Configure bridges, software TPM, virtiofs, and the non-root QEMU policy through `nas.virtualization.*`.
-
-## Local AI
-
-llama-swap is the runtime/model-router authority. Open WebUI provides the user workspace. The downloader manages approved Hugging Face model retrieval. Configure acceleration backend, model storage, service IDs, ports, and idle unloading through `nas.hardware.llamaCpp.*` and `nas.ai.*`.
 
 ## UPS
 

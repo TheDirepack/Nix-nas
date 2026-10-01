@@ -67,14 +67,7 @@ test("generic schema model contains no built-in application identifiers", () => 
     new URL("../../cockpit/src/schema-model.js", import.meta.url),
     "utf8",
   );
-  for (const application of [
-    "copyparty",
-    "syncthing",
-    "grafana",
-    "ai-runtime",
-    "ai-workspace",
-    "ntfy",
-  ]) {
+  for (const application of ["copyparty", "syncthing", "grafana", "ntfy"]) {
     assert.equal(source.includes(application), false, `${application} must not be special-cased`);
   }
 });

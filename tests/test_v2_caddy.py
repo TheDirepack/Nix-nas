@@ -434,9 +434,9 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                     "b": svc("b", "/shares/admin"),
                     "c": svc("c", "/vault"),
                     "d": svc("d", "/vault/admin"),
-                    "e": svc("e", "/ai/"),
-                    "f": svc("f", "/ai/v1"),
-                    "g": svc("g", "/ai/runtime"),
+                    "e": svc("e", "/metrics/"),
+                    "f": svc("f", "/metrics/api"),
+                    "g": svc("g", "/metrics/admin"),
                 },
             },
             self.schema,
@@ -444,13 +444,13 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         rendered = caddy.generate_caddyfile(doc)
         self.assertLess(rendered.index("/shares/admin"), rendered.index('"/shares"'))
         self.assertLess(rendered.index("/vault/admin"), rendered.index('"/vault"'))
-        pos_runtime = rendered.index("/ai/runtime")
-        pos_v1 = rendered.index("/ai/v1")
-        pos_ai = rendered.index('path "/ai/"')
-        if pos_ai == -1:
-            pos_ai = rendered.index('"/ai/*"')
-        self.assertLess(pos_runtime, pos_ai)
-        self.assertLess(pos_v1, pos_ai)
+        pos_admin = rendered.index("/metrics/admin")
+        pos_api = rendered.index("/metrics/api")
+        pos_root = rendered.index('path "/metrics/"')
+        if pos_root == -1:
+            pos_root = rendered.index('"/metrics/*"')
+        self.assertLess(pos_admin, pos_root)
+        self.assertLess(pos_api, pos_root)
 
     def test_real_seed_overlapping_routes_compile_and_render(self):
         copyparty_files = {
@@ -489,31 +489,31 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 },
             },
         }
-        ai_runtime = {
-            "name": "AI Runtime",
+        metrics = {
+            "name": "Metrics",
             "workload": {"kind": "daemon"},
-            "runtime": {"type": "systemd", "unit": "ai-runtime.service"},
+            "runtime": {"type": "systemd", "unit": "metrics.service"},
             "routes": {
                 "admin": {
                     "target": {"type": "http", "port": 8002},
-                    "exposure": {"type": "path", "paths": ["/ai/runtime"]},
+                    "exposure": {"type": "path", "paths": ["/metrics/admin"]},
                     "auth": {"mode": "public"},
                 },
                 "api": {
                     "target": {"type": "http", "port": 8002},
-                    "exposure": {"type": "path", "paths": ["/ai/v1"]},
+                    "exposure": {"type": "path", "paths": ["/metrics/api"]},
                     "auth": {"mode": "public"},
                 },
             },
         }
-        ai_workspace = {
-            "name": "Open WebUI",
+        dashboards = {
+            "name": "Dashboards",
             "workload": {"kind": "daemon"},
-            "runtime": {"type": "systemd", "unit": "open-webui.service"},
+            "runtime": {"type": "systemd", "unit": "dashboards.service"},
             "routes": {
                 "main": {
                     "target": {"type": "http", "port": 8003},
-                    "exposure": {"type": "path", "paths": ["/ai/"]},
+                    "exposure": {"type": "path", "paths": ["/metrics/"]},
                     "auth": {"mode": "public"},
                 }
             },
@@ -524,15 +524,15 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 "services": {
                     "copyparty": copyparty_files,
                     "vaultwarden": vault,
-                    "ai-runtime": ai_runtime,
-                    "ai-workspace": ai_workspace,
+                    "metrics": metrics,
+                    "dashboards": dashboards,
                 },
             },
             self.schema,
         )
         rendered = caddy.generate_caddyfile(effective)
-        for p in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime"):
-            self.assertIn(p.rstrip("/") if p != "/ai/" else "/ai", rendered)
+        for p in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/metrics", "/metrics/api", "/metrics/admin"):
+            self.assertIn(p, rendered)
 
     def test_exact_duplicate_path_still_fails_closed(self):
         one = self.base_service()

@@ -204,7 +204,7 @@ run_http_adversarial_contracts() {
     "https://nas-test.local:$HTTPS_PORT/%2e%2e/%2e%2e/etc/shadow" \
     --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" --path-as-is
 
-  for path in /shares/ /shares/admin/ /console/ /ai/ /syncthing/ /vault/admin /metrics/ /alerts/; do
+  for path in /shares/ /shares/admin/ /console/ /syncthing/ /vault/admin /metrics/ /alerts/; do
     probe_blocked "$path"
   done
 

@@ -25,9 +25,8 @@ mkfs.ext4 -F -L NIXOS_QEMU_ROOT "${DISK}1"
 install -d -m 0755 "$TARGET"
 mount -t ext4 "$ROOT_PARTITION" "$TARGET"
 
-# The Open WebUI frontend can briefly exceed the installer VM's physical
-# memory while Nix builds the complete appliance closure. Keep the full AI
-# profile enabled and provide guest-local swap instead of reducing coverage.
+# Building the complete appliance closure can briefly exceed the installer
+# VM's physical memory. Provide guest-local swap instead of reducing coverage.
 swap_file="$TARGET/swapfile"
 if [[ ! -e "$swap_file" ]]; then
   fallocate -l "${NAS_INSTALL_SWAP_GIB:-8}G" "$swap_file"

@@ -30,7 +30,6 @@ let
       ruamel-yaml
     ];
     pythonImportsCheck = [
-      "nas_ai_config"
       "nas_cockpit_api"
       "nas_doctor"
       "nas_identity_sync"

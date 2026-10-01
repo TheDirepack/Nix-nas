@@ -64,7 +64,7 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
     call(path, iface, method, args) {
       calls.push({path, iface, method, args});
       if (method === "ListUnitsByNames") {
-        return Promise.resolve([[unitRow("nas-ai.service"), [undefined], null]]);
+        return Promise.resolve([[unitRow("grafana.service"), [undefined], null]]);
       }
       if (method === "ListUnitsByPatterns") {
         return Promise.resolve([[unitRow("broken.service", "failed", "failed", "failed")]]);
@@ -80,10 +80,10 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
   };
   globalThis.systemdTestClient = client;
   try {
-    const state = await readSystemdState(["nas-ai.service", 42, ""]);
+    const state = await readSystemdState(["grafana.service", 42, ""]);
     const byName = (method) => calls.find((call) => call.method === method);
     assert.ok(byName("ListUnitsByNames"), "named unit query missing");
-    assert.deepEqual(byName("ListUnitsByNames").args, [["nas-ai.service"]]);
+    assert.deepEqual(byName("ListUnitsByNames").args, [["grafana.service"]]);
     assert.ok(byName("ListUnitsByPatterns"), "failed unit query missing");
     assert.deepEqual(byName("ListUnitsByPatterns").args, [["failed"], []]);
     assert.ok(
@@ -93,7 +93,7 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
     assert.deepEqual(state.failedUnits, [
       "broken.service failed failed failed broken.service description",
     ]);
-    const unit = state.units["nas-ai.service"];
+    const unit = state.units["grafana.service"];
     assert.equal(unit.active, true);
     assert.equal(unit.memoryBytes, 2048);
   } finally {

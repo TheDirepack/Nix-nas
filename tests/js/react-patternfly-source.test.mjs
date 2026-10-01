@@ -12,7 +12,6 @@ const PAGES = [
   "src/pages/services-page.jsx",
   "src/pages/applications-page.jsx",
   "src/pages/operations-page.jsx",
-  "src/pages/ai-page.jsx",
   "src/pages/source-page.jsx",
   "src/pages/setup-page.jsx",
 ];
@@ -97,14 +96,7 @@ test("managed services editor is generated from the canonical schema with YAML a
   }
   assert.equal(schemaEditor.includes("<select"), false, "schema editor uses a raw select");
   assert.equal(schemaEditor.includes("<input"), false, "schema editor uses a raw input");
-  for (const application of [
-    "copyparty",
-    "syncthing",
-    "grafana",
-    "ai-runtime",
-    "ai-workspace",
-    "ntfy",
-  ]) {
+  for (const application of ["copyparty", "syncthing", "grafana", "ntfy"]) {
     assert.equal(
       schemaEditor.includes(application),
       false,

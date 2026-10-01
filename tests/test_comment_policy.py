@@ -18,7 +18,6 @@ CODE_ROOTS = [
 ROOT_FILES = [
     ROOT / "flake.nix",
     ROOT / "hardware-configuration.nix",
-    ROOT / "hfdownloader-image.nix",
     ROOT / "local.nix",
     ROOT / "ruff.toml",
 ]

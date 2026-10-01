@@ -18,7 +18,6 @@ pkgs.testers.runNixOSTest {
   nodes.machine = { ... }: {
     imports = [
       copyparty.nixosModules.default
-      self.nixosModules.ai
       self.nixosModules.core
       ../../local.nix
       ./vm-common.nix

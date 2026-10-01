@@ -30,8 +30,8 @@ class CommonPolicyTests(unittest.TestCase):
             "application.copyparty.files",
         )
         self.assertEqual(
-            common.application_capability_group("ai-coding"),
-            "application.ai-coding.access",
+            common.application_capability_group("metrics-runtime"),
+            "application.metrics-runtime.access",
         )
         for service_id in ("", "UPPER", "../demo", "demo_service"):
             with self.subTest(service_id=service_id), self.assertRaises(ValueError):

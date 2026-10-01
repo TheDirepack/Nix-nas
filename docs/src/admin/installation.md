@@ -51,7 +51,7 @@ On the target machine, run `nixos-generate-config`, review its output, and repla
 
 3. **Set `nas.trustedInterfaces`** to the names of your LAN interfaces (for example `[ "enp1s0" ]`). These are the only interfaces allowed to reach SSH, HTTPS, mDNS, Syncthing, and optional TFTP; empty is fail-closed.
 
-4. **Pick feature profiles.** The optional applications stay disabled unless you import their profiles from `modules/profiles/`: `core-storage`, `identity-sharing`, `observability`, `virtualization`, `local-ai`. The shipped `local.nix` shows an explicit selection.
+4. **Pick feature profiles.** The optional applications stay disabled unless you import their profiles from `modules/profiles/`: `core-storage`, `identity-sharing`, `observability`, and `virtualization`. The shipped `local.nix` shows an explicit selection.
 
 5. **Review the storage names**: `nas.zfsPool`, `nas.zfsDataset`, `nas.zfsRoot` (shipped defaults: `tank`, `tank/nas`, `/tank`) and the boot-import policy (`nas.zfsImportAtBoot`).
 
@@ -187,7 +187,7 @@ Everything below happens after setup completes and the system reboots.
 
 ## Where to go next
 
-- [Administrator configuration](configuration.md) — option behavior notes for AI, encryption, Syncthing, backups, and more.
+- [Administrator configuration](configuration.md) — option behavior notes for encryption, Syncthing, backups, and more.
 - [First start](first-run.md) — the complete setup-state reference, commands, and safeguards.
 - [Storage installation and recovery](storage-recovery.md) — Disko examples and the rules to follow before formatting anything.
 - [Locked-state unlock](../locked-unlock.md) — the everyday unlock transaction.

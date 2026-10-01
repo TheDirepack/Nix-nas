@@ -273,13 +273,11 @@ class ContractTests(unittest.TestCase):
 
     def test_managed_service_memory_policy_is_declared_without_feature_catalog(self) -> None:
         observability = text("modules/nas/config/observability.nix")
-        ai_options = text("modules/ai/options.nix")
         systemd = text("modules/nas/config/systemd-services.nix")
         identity_model = text("services/nas_identity_model.py")
         self.assertIn('victoriaAllowed = "96MiB";', observability)
         self.assertIn('victoriaHigh = "128M";', observability)
         self.assertIn("MemoryHigh = memoryPolicy.victoriaHigh", observability)
-        self.assertIn("default = 300;", ai_options)
         self.assertIn('GOMEMLIMIT = "192MiB"', systemd)
         self.assertIn('"numConnections": 1', identity_model)
         self.assertFalse((ROOT / "modules/nas/internal/feature-catalog.nix").exists())

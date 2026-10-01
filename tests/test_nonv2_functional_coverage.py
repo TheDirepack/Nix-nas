@@ -20,7 +20,6 @@ import nas_state as state  # noqa: E402
 import nas_syncthing_devices as syncthing  # noqa: E402
 import nas_cockpit_api as cockpit  # noqa: E402
 import nas_setup_config as setup_config  # noqa: E402
-import nas_ai_config as ai_config  # noqa: E402
 import nas_identity_model as identity  # noqa: E402
 
 
@@ -210,14 +209,6 @@ class NonV2FunctionalCoverageTests(unittest.TestCase):
             )
         self.assertTrue(hasattr(state, "hash_path"))
 
-    def test_ai_config_provider_id_strict(self) -> None:
-        if hasattr(ai_config, "PROVIDER_ID_RE"):
-            self.assertIsNotNone(ai_config.PROVIDER_ID_RE.fullmatch("openai"))
-            self.assertIsNone(ai_config.PROVIDER_ID_RE.fullmatch("Bad/Provider"))
-        if hasattr(ai_config, "validate_provider_id"):
-            with self.assertRaises(Exception):
-                ai_config.validate_provider_id("bad/provider")  # pyright: ignore[reportAttributeAccessIssue]
-
     def test_identity_model_scrub_and_capability(self) -> None:
         if hasattr(identity, "scrub_user"):
             self.assertIsNone(identity.scrub_user({"name": "test", "password": "secret"}).get("password"))  # pyright: ignore[reportAttributeAccessIssue]
@@ -225,7 +216,7 @@ class NonV2FunctionalCoverageTests(unittest.TestCase):
             self.assertEqual("application.demo.access", identity.capability_name("demo", "access"))  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_secrets_not_in_nix_store(self) -> None:
-        for mod in (ai_config, cockpit, state):
+        for mod in (cockpit, state):
             mod_file = getattr(mod, "__file__", None)
             assert isinstance(mod_file, str)  # pyright: ignore[reportOptionalSubscript]
             src = pathlib.Path(mod_file).read_text(encoding="utf-8")  # pyright: ignore[reportArgumentType]

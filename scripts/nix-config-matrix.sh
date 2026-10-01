@@ -13,7 +13,6 @@ readonly -a CONFIGURATIONS=(
   nas-profile-identity-sharing
   nas-profile-observability
   nas-profile-virtualization
-  nas-profile-local-ai
   nas-profile-all
 )
 readonly -a PLACEHOLDER_ERRORS=(

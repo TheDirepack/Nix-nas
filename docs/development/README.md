@@ -69,5 +69,4 @@ Useful supporting records:
 - [Privileged-service audit](root-service-audit.md)
 - [QEMU and installer validation](vm-testing.md)
 - [Artifact naming](artifact-naming.md)
-- [Coding agent operator guide](../../docs/src/admin/coding-agent.md) (operator-facing)
 - [Managed Services V2 spec](managed-services-v2-spec.md) is the single V2 authority; historical V2 drafts and superseded bootstrap plans have been removed.

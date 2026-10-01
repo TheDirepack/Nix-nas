@@ -27,7 +27,6 @@ import {OverviewPage} from "./pages/overview-page.jsx";
 import {ServicesPage} from "./pages/services-page.jsx";
 import {ApplicationsPage} from "./pages/applications-page.jsx";
 import {OperationsPage} from "./pages/operations-page.jsx";
-import {AiPage} from "./pages/ai-page.jsx";
 import {SourcePage} from "./pages/source-page.jsx";
 import {SetupPage} from "./pages/setup-page.jsx";
 
@@ -36,7 +35,6 @@ const PAGES = [
   ["services", "Managed services", ServicesPage],
   ["applications", "Applications", ApplicationsPage],
   ["operations", "Operations", OperationsPage],
-  ["ai", "AI configuration", AiPage],
   ["source", "Source & updates", SourcePage],
   ["setup", "First start", SetupPage],
 ];

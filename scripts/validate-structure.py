@@ -34,7 +34,6 @@ REQUIRED_FILES = {
     "modules/profiles/identity-sharing.nix",
     "modules/profiles/observability.nix",
     "modules/profiles/virtualization.nix",
-    "modules/profiles/local-ai.nix",
     "modules/profiles/all.nix",
     "docs/book.toml",
     "docs/src/SUMMARY.md",

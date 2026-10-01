@@ -14,7 +14,6 @@ INVENTORIES = (
     ROOT / "tests/custom-script-contracts-v2.json",
 )
 MARKER = pathlib.Path("/tmp/nas-installed-fuzz-pwned")
-OPTIONAL_INSTALLED_COMMANDS = frozenset({"nas-code"})
 PAYLOADS = (
     "../etc/shadow",
     ";touch /tmp/nas-installed-fuzz-pwned",
@@ -73,8 +72,6 @@ def main() -> int:
     for name in sorted(strategies):
         if pathlib.Path(f"/run/current-system/sw/bin/{name}").exists() or shutil_which(name):
             commands.add(name)
-        elif name in OPTIONAL_INSTALLED_COMMANDS:
-            continue
         else:
             raise RuntimeError(f"installed custom command is missing: {name}")
 

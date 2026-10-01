@@ -328,8 +328,9 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
 
     def test_real_seed_overlapping_routes_compile(self):
         # Real seed uses parent/child routes: /shares with /shares/admin,
-        # /vault with /vault/admin, and /ai/ with /ai/v1 and /ai/runtime.
-        # These must compile when longest-path-first ordering is guaranteed.
+        # /vault with /vault/admin, and /metrics/ with /metrics/api and
+        # /metrics/admin. These must compile when longest-path-first ordering
+        # is guaranteed.
         copyparty = minimal_service()
         copyparty["authorization"] = {
             "capabilities": [{"id": "files", "title": "Files"}, {"id": "admin", "title": "Admin"}]
@@ -362,24 +363,24 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
                 "auth": {"mode": "identity", "capability": "admin"},
             },
         }
-        ai_runtime = minimal_service()
-        ai_runtime["routes"] = {
+        metrics = minimal_service()
+        metrics["routes"] = {
             "admin": {
                 "target": {"type": "http", "port": 8002},
-                "exposure": {"type": "path", "paths": ["/ai/runtime"]},
+                "exposure": {"type": "path", "paths": ["/metrics/admin"]},
                 "auth": {"mode": "identity", "capability": "access"},
             },
             "api": {
                 "target": {"type": "http", "port": 8002},
-                "exposure": {"type": "path", "paths": ["/ai/v1"]},
+                "exposure": {"type": "path", "paths": ["/metrics/api"]},
                 "auth": {"mode": "upstream"},
             },
         }
-        ai_workspace = minimal_service()
-        ai_workspace["routes"] = {
+        dashboards = minimal_service()
+        dashboards["routes"] = {
             "main": {
                 "target": {"type": "http", "port": 8003},
-                "exposure": {"type": "path", "paths": ["/ai/"]},
+                "exposure": {"type": "path", "paths": ["/metrics/"]},
                 "auth": {"mode": "identity", "capability": "access"},
             },
         }
@@ -388,8 +389,8 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
             "services": {
                 "copyparty": copyparty,
                 "vaultwarden": vault,
-                "ai-runtime": ai_runtime,
-                "ai-workspace": ai_workspace,
+                "metrics": metrics,
+                "dashboards": dashboards,
             },
         }
         effective = self.compile(doc)
@@ -398,7 +399,15 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         for route in effective["derived"]["routes"]:
             for p in route["exposure"].get("paths", []):
                 paths.add(p)
-        for expected in ("/shares", "/shares/admin", "/vault", "/vault/admin", "/ai/", "/ai/v1", "/ai/runtime"):
+        for expected in (
+            "/shares",
+            "/shares/admin",
+            "/vault",
+            "/vault/admin",
+            "/metrics/",
+            "/metrics/api",
+            "/metrics/admin",
+        ):
             self.assertIn(expected, paths)
 
     def test_systemd_runtime_unit_must_be_a_safe_unit_name(self):

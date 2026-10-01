@@ -59,7 +59,6 @@ class SecretVaultRenderingTests(unittest.TestCase):
         for value in (
             "a" * 20,
             "0123456789abcdef" * 4,
-            "hf_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
             "sk-live_ABC.def-123+/=:@~",
         ):
             with self.subTest(value=value):
@@ -110,13 +109,6 @@ class SecretVaultRenderingTests(unittest.TestCase):
             with self.subTest(value=repr(value)):
                 self.assertNotEqual(self.run_helper("require_ntfy_topic", value).returncode, 0)
 
-    def test_huggingface_token_is_empty_or_exact_read_token_shape(self) -> None:
-        self.assertEqual(self.run_helper("require_huggingface_token", "").returncode, 0)
-        self.assertEqual(self.run_helper("require_huggingface_token", "hf_" + "A" * 24).returncode, 0)
-        for value in ("hf_short", "token", "hf_ABC\nEVIL=1", "hf_" + "A" * 20 + "-"):
-            with self.subTest(value=repr(value)):
-                self.assertNotEqual(self.run_helper("require_huggingface_token", value).returncode, 0)
-
     def test_every_runtime_environment_secret_is_guarded_before_rendering(self) -> None:
         source = SECRET_TOOLS.read_text(encoding="utf-8")
         required_pairs = (
@@ -124,10 +116,6 @@ class SecretVaultRenderingTests(unittest.TestCase):
                 'require_secret_atom "$authentik_bootstrap_password"',
                 "AUTHENTIK_BOOTSTRAP_PASSWORD=$authentik_bootstrap_password",
             ),
-            ('require_secret_atom "$llama_swap_api_key"', "LLAMA_SWAP_API_KEY=%s"),
-            ('require_secret_atom "$open_webui_secret"', "WEBUI_SECRET_KEY=%s"),
-            ('require_secret_atom "$open_webui_admin_password"', "WEBUI_ADMIN_PASSWORD=%s"),
-            ('require_huggingface_token "$huggingface_token"', "HF_TOKEN=%s"),
             ('require_secret_atom "$vaultwarden_client_secret"', "SSO_CLIENT_SECRET='%s'"),
             ('require_secret_atom "$ntfy_password"', "NTFY_AUTH_USERS=admin:$ntfy_hash:admin"),
             ('require_ntfy_topic "$ntfy_topic"', "printf '%s' \"$ntfy_topic\""),
