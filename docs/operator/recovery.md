@@ -204,6 +204,15 @@ Check that only reserved `nas-` folders/devices were reconciled. The global `/sy
 
 ## Restic boot/system recovery
 
+`nas-state` contains only runtime-editable control configuration: Managed Services
+desired state, CopyParty administrator configuration, enabled NetworkManager
+profiles, and optional Cockpit Scheduler state. It does not contain KeePass,
+Authentik databases/media, Syncthing identity, application databases, or VM data.
+Recover those separately from Restic/native dumps, ZFS snapshots/replication,
+or the application's own backup. Exporting the control bundle does not stop
+application workloads. Perform network-profile restores from an out-of-band
+console because they can interrupt remote access.
+
 Before a full restore, validate and compare a current state bundle when one is available:
 
 ```bash

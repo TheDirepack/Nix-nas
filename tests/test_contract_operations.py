@@ -268,7 +268,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("NAS_STATE_QUIESCE_UNITS_JSON", account)
         self.assertIn('"d /run/nas-state 0700 root root -"', system)
         self.assertNotIn('name = "victoriametrics"; source = "/var/lib/victoriametrics"', account)
-        self.assertIn('lib.optional cfg.virtualization.enable "libvirtd.service"', account)
+        self.assertIn("stateQuiesceUnits = [ ];", account)
+        self.assertNotIn('"libvirtd.service"', account)
 
     def test_managed_service_memory_policy_is_declared_without_feature_catalog(self) -> None:
         observability = text("modules/nas/config/observability.nix")
