@@ -9,21 +9,12 @@ let
 in
 {
   config = lib.mkIf (obs.enable && cfg.alerting.enable) {
-    # The custom router implementation is deleted. This lower-priority override
-    # suppresses the old split declaration until that block is removed outright.
-    systemd.services.nas-alert-router.enable = lib.mkOverride 80 false;
-
     systemd.services.alertmanager = {
       onFailure = failureAlert;
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       wants = lib.optional obs.ntfy.enable "alertmanager-ntfy.service";
       after = lib.optional obs.ntfy.enable "alertmanager-ntfy.service";
-    };
-
-    systemd.services.vmalert-nas = {
-      after = lib.mkOverride 80 [ "victoriametrics.service" "alertmanager.service" ];
-      requires = lib.mkOverride 80 [ "victoriametrics.service" "alertmanager.service" ];
     };
 
     services.prometheus.alertmanager-ntfy.extraConfigFiles =
