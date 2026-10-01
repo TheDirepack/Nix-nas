@@ -18,6 +18,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
+from nas_common import fsync_directory as _fsync_directory
 from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, resolve_effective
 from nas_v2_backup import compile_backup_projection
 from nas_v2_caddy import generate_caddyfile, portal_bytes, validate_caddyfile
@@ -173,14 +174,6 @@ def _prepare_temp(path: pathlib.Path, data: bytes, mode: int) -> pathlib.Path:
         raise
 
 
-def _fsync_directory(directory: pathlib.Path) -> None:
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 _V2_OWNED_DIRS = {
     "units",
     "descriptors",
@@ -285,6 +278,7 @@ def _replace_bundle(
                 old = previous[path]
                 if old is None:
                     path.unlink(missing_ok=True)
+                    _fsync_directory(path.parent)
                     continue
                 rollback = _prepare_temp(path, old[0], old[1])
                 os.replace(rollback, path)
