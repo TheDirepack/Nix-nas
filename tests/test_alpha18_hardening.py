@@ -129,6 +129,12 @@ class Alpha18HardeningContracts(unittest.TestCase):
         observability = text("modules/nas/config/observability.nix")
         integration = text("modules/nas/config/alertmanager-ntfy.nix")
         seed = text("modules/nas/config/managed-services-seed-v2.nix")
+        active_source = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for root in (ROOT / "modules", ROOT / "services")
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix in {".nix", ".py"}
+        )
         self.assertIn("services.victoriametrics", observability)
         self.assertIn("services.telegraf", observability)
         self.assertIn("services.prometheus.alertmanager", observability)
@@ -136,7 +142,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         self.assertIn('daemon "alertmanager.service"', seed)
         self.assertIn('credentialPath = "/run/nas-alertmanager-ntfy/config.yml";', integration)
         self.assertIn("nas-alertmanager-ntfy-config", integration)
-        self.assertNotIn("nas-alert-router", integration)
+        self.assertNotIn("nas-alert-router", active_source)
         self.assertFalse((ROOT / "services/nas_alert_router.py").exists())
 
     def test_mutable_state_has_versioned_export_diff_validate_and_restore(self) -> None:
@@ -146,7 +152,7 @@ class Alpha18HardeningContracts(unittest.TestCase):
         for command in ("export", "validate", "diff", "restore"):
             self.assertIn(f'add_parser("{command}"', state)
         self.assertIn('"const": 2', schema)
-        self.assertIn("registryDigest", schema)
+        self.assertIn("registryDigest", state if False else schema)
         self.assertIn("rollbackBundle", state)
 
     def test_profiles_keep_optional_services_out_of_base_defaults(self) -> None:
