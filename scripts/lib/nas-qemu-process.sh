@@ -9,10 +9,13 @@ nas_qemu_pid_from_pidfile() {
   kill -0 "$pid" 2>/dev/null || return 1
   executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
   executable="${executable% (deleted)}"
-  [[ "${executable##*/}" == qemu-system-x86_64 ]] || {
-    printf 'error: refusing to signal pid %s from %s because it is not qemu-system-x86_64\n' "$pid" "$pidfile" >&2
-    return 2
-  }
+  case "${executable##*/}" in
+    qemu-system-x86_64|.qemu-system-x86_64-wrapped) ;;
+    *)
+      printf 'error: refusing to signal pid %s from %s because it is not qemu-system-x86_64\n' "$pid" "$pidfile" >&2
+      return 2
+      ;;
+  esac
   QEMU_PID="$pid"
 }
 
