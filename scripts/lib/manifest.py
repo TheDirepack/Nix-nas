@@ -39,7 +39,18 @@ def generate_manifest(root: pathlib.Path, output: pathlib.Path) -> pathlib.Path:
     if not root.is_dir():
         raise SystemExit(f"manifest root is not a directory: {root}")
     rows: list[str] = []
-    for path in sorted(root.rglob("*")):
+    paths: list[pathlib.Path] = []
+
+    def scan_error(exc: OSError) -> None:
+        raise SystemExit(f"unable to enumerate manifest root: {exc}") from exc
+
+    for directory, directories, files in os.walk(root, onerror=scan_error, followlinks=False):
+        parent = pathlib.Path(directory)
+        directories[:] = [
+            name for name in directories if name != ".git" and not _is_ignored((parent / name).relative_to(root))
+        ]
+        paths.extend(parent / name for name in directories + files)
+    for path in sorted(paths):
         relative = path.relative_to(root)
         if ".git" in relative.parts:
             continue
