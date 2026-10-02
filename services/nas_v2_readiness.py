@@ -94,7 +94,6 @@ def _probe_http(probe: dict[str, Any]) -> bool:
         connection.request("GET", target)
         response = connection.getresponse()
         status = response.status
-        response.read(4096)
     except (OSError, TimeoutError, http.client.HTTPException):
         return False
     finally:
