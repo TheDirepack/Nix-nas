@@ -16,6 +16,43 @@ import nas_v2_backup as runtime  # noqa: E402
 
 
 class V2BackupRuntimeTests(unittest.TestCase):
+    def test_cleanup_rejects_staging_root_and_nested_paths_without_deleting_data(self):
+        for target in ("root", "nested"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                staging = root / "backup-staging"
+                other = staging / "other-artifact"
+                other.mkdir(parents=True)
+                sentinel = other / "dump"
+                sentinel.write_bytes(b"must survive")
+                artifact = staging if target == "root" else sentinel
+                state_path, paths_path = root / "state.json", root / "paths.txt"
+                entry = {"artifactPath": str(artifact)}
+                state_path.write_text(json.dumps({"schemaVersion": 1, "snapshots": [], "nativeDumps": [entry]}))
+                paths_path.write_text(str(artifact))
+                with mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging):
+                    with self.assertRaisesRegex(runtime.BackupRuntimeError, "staging root"):
+                        runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/false")
+                self.assertEqual(sentinel.read_bytes(), b"must survive")
+                self.assertEqual(json.loads(state_path.read_text())["nativeDumps"], [entry])
+                self.assertTrue(paths_path.exists())
+
+    def test_cleanup_rejects_symlinked_staging_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            outside = root / "outside"
+            outside.mkdir()
+            artifact = outside / "database-artifact"
+            artifact.mkdir()
+            sentinel = artifact / "dump"
+            sentinel.write_bytes(b"must survive")
+            staging = root / "backup-staging"
+            staging.symlink_to(outside, target_is_directory=True)
+            with mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging):
+                with self.assertRaisesRegex(runtime.BackupRuntimeError, "staging root.*symlink"):
+                    runtime._remove_staged_artifact(str(staging / artifact.name))
+            self.assertEqual(sentinel.read_bytes(), b"must survive")
+
     def inventory(
         self,
         artifact_path: pathlib.Path,
