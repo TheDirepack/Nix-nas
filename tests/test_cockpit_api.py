@@ -535,7 +535,7 @@ class SetupApiCapabilityTests(unittest.TestCase):
             lookup.start()
             self.assertTrue(lookup_writing.wait(1))
             revoke = threading.Thread(
-                target=lambda: (api.revoke_setup_capability(token), revoke_done.set()), daemon=True
+                target=lambda: (api.revoke_job_capabilities("a" * 24), revoke_done.set()), daemon=True
             )
             revoke.start()
             time.sleep(0.1)
@@ -561,10 +561,9 @@ class SetupApiCapabilityTests(unittest.TestCase):
             first = api.issue_setup_capability("a" * 24, now=1000.0)
             second = api.issue_setup_capability("a" * 24, now=1000.0)
             other = api.issue_setup_capability("b" * 24, now=1000.0)
-            api.revoke_setup_capability(first)
-            self.assertIsNone(api.lookup_setup_capability(first, now=1000.0))
             self.assertEqual(api.lookup_setup_capability(second, now=1000.0), "a" * 24)
             api.revoke_job_capabilities("a" * 24)
+            self.assertIsNone(api.lookup_setup_capability(first, now=1000.0))
             self.assertIsNone(api.lookup_setup_capability(second, now=1000.0))
             self.assertEqual(api.lookup_setup_capability(other, now=1000.0), "b" * 24)
             api.revoke_all_setup_capabilities()

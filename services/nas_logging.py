@@ -1,18 +1,10 @@
-"""Bounded structured logging for NAS control-plane services.
-
-The helper emits one JSON object per line so journald can retain stable fields
-without forcing diagnostics to parse free-form messages. Values are bounded and
-secret-like fields are redacted before serialization.
-"""
+"""Bound and redact structured values retained by control-plane journals."""
 
 from __future__ import annotations
 
-import json
 import math
 import re
-import sys
-from datetime import datetime, timezone
-from typing import Any, Mapping, TextIO
+from typing import Any, Mapping
 
 MAX_TEXT_LENGTH = 4096
 MAX_COLLECTION_ITEMS = 64
@@ -105,46 +97,3 @@ def sanitize(value: Any, *, key: str = "", depth: int = 0) -> Any:
             list_output.append("[truncated]")
         return list_output
     return _bounded_text(value)
-
-
-def log_event(
-    event: str,
-    *,
-    operation_id: str = "",
-    workflow: str = "",
-    phase: str = "",
-    actor: str = "system",
-    authority: str = "",
-    result: str = "",
-    error_class: str = "",
-    duration_ms: int | float | None = None,
-    retry_count: int = 0,
-    affected_unit: str = "",
-    recovery_required: bool = False,
-    stream: TextIO | None = None,
-    **fields: Any,
-) -> dict[str, Any]:
-    """Emit and return a stable structured operation record."""
-
-    record: dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "event": _bounded_text(event),
-        "operationId": _bounded_text(operation_id),
-        "workflow": _bounded_text(workflow),
-        "phase": _bounded_text(phase),
-        "actor": _bounded_text(actor),
-        "authority": _bounded_text(authority),
-        "result": _bounded_text(result),
-        "errorClass": _bounded_text(error_class),
-        "retryCount": max(0, int(retry_count)),
-        "affectedUnit": _bounded_text(affected_unit),
-        "recoveryRequired": bool(recovery_required),
-    }
-    if duration_ms is not None:
-        number = float(duration_ms)
-        record["durationMs"] = max(0, round(number, 3)) if math.isfinite(number) else 0
-    for key, value in fields.items():
-        record[_bounded_text(key)] = sanitize(value, key=key)
-    target = sys.stderr if stream is None else stream
-    print(json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False), file=target, flush=True)
-    return record

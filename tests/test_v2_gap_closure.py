@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import pathlib
 import sys
@@ -25,6 +24,7 @@ import nas_v2_network as net  # noqa: E402
 import nas_v2_podman_network as podnet  # noqa: E402
 import nas_v2_session as sess  # noqa: E402
 import nas_v2_spec as spec  # noqa: E402
+import nas_v2_editor as editor  # noqa: E402
 import nas_v2_systemd_native as sysd  # noqa: E402
 import nas_v2_systemd_attachments as sysattach  # noqa: E402
 import nas_v2_systemd_reconcile as recon  # noqa: E402
@@ -73,32 +73,15 @@ class SpecGapTests(unittest.TestCase):
             with self.assertRaises(spec.ManagedServicesV2Error):
                 spec._yaml_files_in_dir(d / "nonexistent")
 
-    def test_is_directory_authority_and_hash(self):
+    def test_parse_yaml_directory_and_file_agree(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp) / "dir"
             d.mkdir()
-            self.assertTrue(spec.is_directory_authority(d))
-            self.assertFalse(spec.is_directory_authority(d / "missing"))
-            with self.assertRaises(spec.ManagedServicesV2Error):
-                spec.hash_authority(d)
             (d / "00.yaml").write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
-            h = spec.hash_authority(d)
-            self.assertEqual(len(h), 64)
-            hf = spec.hash_authority(d / "00.yaml")
-            self.assertEqual(hf, hashlib.sha256((d / "00.yaml").read_bytes()).hexdigest())
             parsed = spec.parse_yaml(d)
             self.assertIn("schemaVersion", parsed)
             parsed2 = spec.parse_yaml(d / "00.yaml")
             self.assertEqual(parsed, parsed2)
-
-    def test_hash_authority_io_error(self):
-        with mock.patch("pathlib.Path.read_bytes", side_effect=OSError("boom")):
-            with tempfile.TemporaryDirectory() as tmp:
-                d = pathlib.Path(tmp) / "dir"
-                d.mkdir()
-                (d / "a.yaml").write_text("x: 1", encoding="utf-8")
-                with self.assertRaises(spec.ManagedServicesV2Error):
-                    spec.hash_authority(d)
 
     def test_load_schema_invalid_and_validate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,13 +221,13 @@ class SpecGapTests(unittest.TestCase):
             with self.assertRaises(spec.ManagedServicesV2Error):
                 spec.load_platform_capabilities(p3)
 
-    def test_as_dict_and_load_and_compile(self):
+    def test_as_dict_and_compile_parsed_document(self):
         e = spec.ManagedServicesV2Error("msg", path="$.x", code="test")
         self.assertEqual(e.as_dict(), {"code": "test", "path": "$.x", "message": "msg"})
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp) / "svc.yaml"
             d.write_text("schemaVersion: 3\nservices: {}\n", encoding="utf-8")
-            eff = spec.load_and_compile(d, SCHEMA, platform_path=None)
+            eff = spec.compile_document(spec.parse_yaml(d), self.schema)
             self.assertEqual(eff["schemaVersion"], 3)
 
 
@@ -363,9 +346,6 @@ class CaddyGapTests(unittest.TestCase):
         self.assertEqual(caddy._route_url({"type": "path", "paths": ["/a"]}, {"url": "/custom"}), "/custom")
         with self.assertRaises(caddy.PortalProjectionError):
             caddy.compile_portal_projection({"schemaVersion": 2, "services": {}})
-        with self.assertRaises(caddy.PortalProjectionError):
-            caddy._access("s", {})
-        self.assertEqual(caddy._access("s", {"auth": {"mode": "public"}})["mode"], "public")
 
     def test_validate_caddyfile_requires_binary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -772,7 +752,7 @@ class BootstrapGapTests(unittest.TestCase):
 
 
 class ApplyGapTests(unittest.TestCase):
-    def test_save_and_apply_rejects_directory_authority(self):
+    def test_editor_rejects_directory_authority(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             desired = root / "desired"
@@ -784,8 +764,13 @@ class ApplyGapTests(unittest.TestCase):
                 effective=root / "effective.json",
                 plan=root / "plan.json",
             )
-            with self.assertRaisesRegex(spec.ManagedServicesV2Error, "one YAML file"):
-                apply_mod.save_and_apply("schemaVersion: 3\nservices: {}\n", paths)
+            with self.assertRaises(editor.ManagedServicesEditorError):
+                editor.replace_document(
+                    "schemaVersion: 3\nservices: {}\n",
+                    desired_path=paths.desired,
+                    schema_path=paths.schema,
+                    platform_path=None,
+                )
 
     def test_bind_platform_vlan_parent(self):
         eff = {

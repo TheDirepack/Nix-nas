@@ -49,8 +49,8 @@ class NonV2FunctionalCoverageTests(unittest.TestCase):
             common.application_capability_group("demo", "Bad-Cap")
 
     def test_account_admin_bypass_and_disabled(self) -> None:
-        self.assertTrue(common.account_is_admin({common.ADMIN_GROUP}))
-        self.assertFalse(common.account_is_admin({common.DISABLED_GROUP, common.ADMIN_GROUP}))
+        self.assertTrue(common.application_capability_allowed({common.ADMIN_GROUP}, "demo"))
+        self.assertFalse(common.application_capability_allowed({common.DISABLED_GROUP, common.ADMIN_GROUP}, "demo"))
         self.assertFalse(common.application_capability_allowed({common.DISABLED_GROUP}, "demo"))
         self.assertTrue(common.application_capability_allowed({common.ADMIN_GROUP}, "demo"))
         self.assertFalse(common.application_capability_allowed({"application.demo.access"}, "demo", "admin"))

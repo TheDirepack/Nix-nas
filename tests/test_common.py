@@ -61,21 +61,9 @@ class CommonPolicyTests(unittest.TestCase):
             )
         )
 
-    def test_personal_share_requires_copyparty_files_and_non_guest(self) -> None:
-        files = common.application_capability_group("copyparty", "files")
-        self.assertTrue(common.account_has_personal_share({common.USER_GROUP, files}))
-        self.assertTrue(common.account_has_personal_share({common.ADMIN_GROUP}))
-        self.assertFalse(common.account_has_personal_share({common.USER_GROUP}))
-        self.assertFalse(common.account_has_personal_share({common.GUEST_GROUP, files}))
-        self.assertFalse(common.account_has_personal_share({common.USER_GROUP, files, common.DISABLED_GROUP}))
-
     def test_account_role_helpers_fail_closed_for_disabled_accounts(self) -> None:
         self.assertTrue(common.account_enabled({common.USER_GROUP}))
         self.assertFalse(common.account_enabled({common.USER_GROUP, common.DISABLED_GROUP}))
-        self.assertTrue(common.account_is_admin({common.ADMIN_GROUP}))
-        self.assertFalse(common.account_is_admin({common.ADMIN_GROUP, common.DISABLED_GROUP}))
-        self.assertTrue(common.account_has_portal_access({common.GUEST_GROUP}))
-        self.assertFalse(common.account_has_portal_access({common.GUEST_GROUP, common.DISABLED_GROUP}))
 
     def test_split_groups_accepts_supported_delimiters_and_deduplicates(self) -> None:
         self.assertEqual(
@@ -100,25 +88,6 @@ class CommonPolicyTests(unittest.TestCase):
         self.assertEqual(parsed["demo.service"]["ActiveState"], "active")
         self.assertEqual(parsed["second.service"]["Result"], "success")
         self.assertEqual(common.parse_systemd_show(""), {})
-
-    def test_read_json_object_requires_mapping_or_explicit_fallback(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            good = root / "good.json"
-            good.write_text(json.dumps({"ok": True}), encoding="utf-8")
-            self.assertEqual(common.read_json_object(good), {"ok": True})
-
-            bad = root / "bad.json"
-            bad.write_text("[]", encoding="utf-8")
-            with self.assertRaises(ValueError):
-                common.read_json_object(bad)
-
-            warnings: list[str] = []
-            self.assertEqual(
-                common.read_json_object(root / "missing.json", missing={"ok": False}, warn=warnings.append),
-                {"ok": False},
-            )
-            self.assertEqual(len(warnings), 1)
 
     def test_run_command_bounds_output_and_redacts_failed_secret_stdin(self) -> None:
         noisy = common.run_command(

@@ -46,7 +46,6 @@ test("Caddy portal escapes identity fields at output contexts", () => {
 });
 
 import {
-  inactiveServiceCount,
   managedApplicationLinks,
   managedServiceMap,
   managedServiceOperationsBusy,
@@ -54,7 +53,6 @@ import {
   managedServiceRuntimeText,
   managedServiceUnitState,
   mib,
-  operationBusy,
   revisionModel,
   safeInternalPath,
   setupModel,
@@ -102,7 +100,6 @@ test("V2 view-model helpers stay total over malformed JSON-shaped backend data",
   const functions = [
     (value) => managedServiceMap(value),
     (value) => managedServiceRows(value),
-    (value) => inactiveServiceCount(value),
     (value) => revisionModel(value),
     (value) => staticLinks(value),
     (value) => managedApplicationLinks(value),
@@ -110,7 +107,6 @@ test("V2 view-model helpers stay total over malformed JSON-shaped backend data",
     (value) => setupModel(value),
     (value) => managedServiceUnitState(value),
     (value) => managedServiceRuntimeText(value),
-    (value) => operationBusy(value, "health"),
     (value) => managedServiceOperationsBusy(value),
     (value) => visibleOperations(value),
     (value) => mib(value),

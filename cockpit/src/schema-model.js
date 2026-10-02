@@ -174,17 +174,6 @@ export function defaultValue(root, schema) {
   return "";
 }
 
-export function propertySchema(root, schema, name) {
-  const resolved = selectedSchema(root, schema, undefined);
-  if (resolved.properties && Object.hasOwn(resolved.properties, name)) {
-    return resolved.properties[name];
-  }
-  if (resolved.additionalProperties && typeof resolved.additionalProperties === "object") {
-    return resolved.additionalProperties;
-  }
-  return {};
-}
-
 export function propertyNamePattern(root, schema) {
   const resolved = resolveSchema(root, schema);
   const pattern = resolved.propertyNames?.pattern;

@@ -141,7 +141,7 @@ class DoctorTests(unittest.TestCase):
         ):
             checks = nas_doctor._operation_hygiene_checks(deep=False)
         by_id = {item.id: item for item in checks}
-        self.assertEqual("warning", by_id["operations.legacy-environment"].status)
+        self.assertNotIn("operations.legacy-environment", by_id)
         self.assertEqual("warning", by_id["operations.inherited-token"].status)
 
 

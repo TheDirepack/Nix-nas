@@ -347,13 +347,6 @@ def copy_authority(source: pathlib.Path, target: pathlib.Path) -> None:
         raise StateError(f"Unsupported authority source: {source}")
 
 
-def bounded(value: str) -> str:
-    encoded = value.encode("utf-8", errors="replace")
-    if len(encoded) <= COMMAND_OUTPUT_LIMIT:
-        return value
-    return encoded[:COMMAND_OUTPUT_LIMIT].decode("utf-8", errors="replace") + "\n[output truncated]"
-
-
 def _drain_bounded(stream: Any, *, limit: int, result: list[str]) -> None:
     kept = bytearray()
     total = 0

@@ -6,16 +6,10 @@ import stat
 import sys
 from typing import Any, Mapping
 
-from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, USER_GROUP
+from nas_common import ADMIN_GROUP, DISABLED_GROUP, GUEST_GROUP, RESERVED_GROUPS, USER_GROUP
 from nas_syncthing_devices import DeviceError, normalize_devices, validate_username
 
 SCHEMA_VERSION = 2
-RESERVED_GROUPS = {
-    ADMIN_GROUP,
-    USER_GROUP,
-    GUEST_GROUP,
-    DISABLED_GROUP,
-}
 SERVICE_MODES = {"off", "on-demand", "always"}
 ZFS_TOPOLOGIES = {"single", "stripe", "mirror", "raidz1", "raidz2", "raidz3"}
 
@@ -157,17 +151,10 @@ def normalize_config(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise SetupError("storage must be an object")
     reject_unknown_fields(
         storage_raw,
-        {"createPool", "device", "devices", "topology", "wipeDevice", "wipeDevices", "ashift"},
+        {"createPool", "devices", "topology", "wipeDevices", "ashift"},
         "storage",
     )
-    legacy_device = storage_raw.get("device")
-    devices_value = storage_raw.get("devices")
-    if legacy_device is not None and devices_value is not None:
-        raise SetupError("Use only one of storage.device or storage.devices")
-    if legacy_device is not None:
-        devices_value = [legacy_device]
-    if devices_value is None:
-        devices_value = []
+    devices_value = storage_raw.get("devices", [])
     if not isinstance(devices_value, list) or not all(isinstance(item, str) for item in devices_value):
         raise SetupError("storage.devices must be a list of absolute /dev paths")
     devices = [_string(item, f"storage.devices[{index}]") for index, item in enumerate(devices_value)]
@@ -183,10 +170,6 @@ def normalize_config(raw: Mapping[str, Any]) -> dict[str, Any]:
     if topology not in ZFS_TOPOLOGIES:
         raise SetupError(f"storage.topology must be one of: {', '.join(sorted(ZFS_TOPOLOGIES))}")
     wipe_value = storage_raw.get("wipeDevices")
-    if "wipeDevice" in storage_raw:
-        if wipe_value is not None:
-            raise SetupError("Use only one of storage.wipeDevice or storage.wipeDevices")
-        wipe_value = storage_raw.get("wipeDevice")
     ashift = storage_raw.get("ashift", 12)
     if isinstance(ashift, bool) or not isinstance(ashift, int) or not 9 <= ashift <= 16:
         raise SetupError("storage.ashift must be an integer from 9 through 16")

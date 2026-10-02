@@ -81,13 +81,6 @@ export function replaceManagedServicesJsonDocument(
   return process.then(parseJsonOutput);
 }
 
-export function managedServicesStatus(spawn = globalThis.cockpit?.spawn) {
-  return requireSpawn(spawn)(["nas-managed-services-control", "status"], {
-    superuser: "require",
-    err: "message",
-  }).then(parseJsonOutput);
-}
-
 export function setManagedServiceMode(serviceId, mode, spawn = globalThis.cockpit?.spawn) {
   if (typeof serviceId !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(serviceId)) {
     throw new Error("Invalid Managed Services V2 service identifier.");
@@ -164,18 +157,4 @@ export function activateSecrets(password, spawn = globalThis.cockpit?.spawn) {
   });
   process.input(`${secret}\n`);
   return process;
-}
-
-export function sourceControl(operation, spawn = globalThis.cockpit?.spawn) {
-  if (!new Set(["status", "diff", "log"]).has(operation)) {
-    throw new Error("Unsupported source-control operation");
-  }
-  return apiInput(["source-control"], {operation}, spawn);
-}
-
-export function updateControl(operation, spawn = globalThis.cockpit?.spawn) {
-  if (!new Set(["preview", "sync", "apply"]).has(operation)) {
-    throw new Error("Unsupported update operation");
-  }
-  return apiInput(["update-control"], {operation}, spawn);
 }
