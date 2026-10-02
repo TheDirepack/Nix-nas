@@ -1,0 +1,53 @@
+# Experimental only: do not install this blueprint in the appliance default.
+# Replace nas.example.invalid with the disposable VM's public host before applying.
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+version: 1
+metadata:
+  name: NAS domain forward-auth experiment
+entries:
+  - model: authentik_providers_proxy.proxyprovider
+    id: nas-domain-forward-auth
+    identifiers:
+      name: NAS Domain Forward Auth
+    attrs:
+      name: NAS Domain Forward Auth
+      mode: forward_domain
+      external_host: https://nas.example.invalid/identity/
+      cookie_domain: nas.example.invalid
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+
+  # Launcher applications deliberately have no application provider. Caddy
+  # remains the route-level authorization authority after domain authentication.
+  - model: authentik_core.application
+    id: nas-domain-portal-launcher
+    identifiers:
+      slug: nas-portal-domain-experiment
+    attrs:
+      name: NAS Portal (domain experiment)
+      provider: null
+      meta_launch_url: https://nas.example.invalid/
+      open_in_new_tab: false
+
+  - model: authentik_core.application
+    id: nas-domain-cockpit-launcher
+    identifiers:
+      slug: nas-cockpit-domain-experiment
+    attrs:
+      name: NAS Cockpit (domain experiment)
+      provider: null
+      meta_launch_url: https://nas.example.invalid/console/
+      open_in_new_tab: false
+
+  - model: authentik_core.application
+    id: nas-domain-setup-launcher
+    identifiers:
+      slug: nas-setup-domain-experiment
+    attrs:
+      name: NAS Setup (domain experiment)
+      provider: null
+      meta_launch_url: https://nas.example.invalid/setup/
+      meta_description: First-start setup for the NAS appliance
+      meta_publisher: NAS
+      open_in_new_tab: false
