@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
 from typing import Any
 
 
@@ -899,7 +900,7 @@ def _verify_sqlite(path: pathlib.Path, *, restore_root: pathlib.Path) -> None:
     _assert_within_restore_root(path, restore_root)
     try:
         uri = f"{path.resolve().as_uri()}?mode=ro"
-        with sqlite3.connect(uri, uri=True) as database:
+        with closing(sqlite3.connect(uri, uri=True)) as database:
             rows = database.execute("PRAGMA integrity_check").fetchall()
     except (OSError, sqlite3.Error) as exc:
         raise BackupVerificationError(f"SQLite integrity verification failed for {path}: {exc}") from exc
@@ -913,10 +914,14 @@ def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str, r
     try:
         result = subprocess.run(
             [pg_restore_bin, "--list", str(path)],
+            stdin=subprocess.DEVNULL,
             check=False,
             capture_output=True,
             text=True,
+            timeout=60,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise BackupVerificationError(f"PostgreSQL custom dump verification timed out after 60s for {path}") from exc
     except OSError as exc:
         raise BackupVerificationError(f"unable to execute pg_restore for {path}: {exc}") from exc
     if result.returncode != 0 or not result.stdout.strip():
