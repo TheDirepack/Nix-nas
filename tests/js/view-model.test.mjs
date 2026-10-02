@@ -1,14 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  inactiveServiceCount,
   managedApplicationLinks,
   managedServiceMap,
   managedServiceOperationsBusy,
   managedServiceRuntimeText,
   managedServiceUnitState,
   mib,
-  operationBusy,
   revisionModel,
   safeInternalPath,
   setupModel,
@@ -56,13 +54,6 @@ test("managed service and application link models follow V2 state", () => {
 });
 
 test("service runtime and memory formatting are deterministic", () => {
-  assert.equal(
-    inactiveServiceCount({
-      "a.service": {activeState: "inactive"},
-      "b.service": {activeState: "active"},
-    }),
-    1,
-  );
   assert.equal(managedServiceUnitState({managed: false, units: []}), "Platform service");
   assert.equal(
     managedServiceUnitState({units: [{active: true}, {active: false}], effectiveMode: "always"}),
@@ -121,7 +112,6 @@ test("operation conflicts disable V2 lifecycle controls while privileged work is
       managedServicesConflicts: ["runtime", "appliance", "first-start"],
     },
   };
-  assert.equal(operationBusy(data, "zfs-scrub"), true);
   assert.equal(managedServiceOperationsBusy(data), false);
   data.operations.busyClasses.push("runtime");
   assert.equal(managedServiceOperationsBusy(data), true);

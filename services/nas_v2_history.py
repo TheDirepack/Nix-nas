@@ -215,24 +215,6 @@ def _is_bootstrap_revision_locked(
     return result.returncode == 0 and result.stdout == _BOOTSTRAP_BASELINE.decode("utf-8")
 
 
-def authority_matches_commit(
-    *,
-    commit: str,
-    authority: pathlib.Path = DEFAULT_AUTHORITY,
-    repository: pathlib.Path = DEFAULT_REPOSITORY,
-    git_bin: str = "git",
-) -> bool:
-    """Return whether the current authority still equals ``commit``."""
-    with authority_lock(authority):
-        ensure_repository(authority=authority, repository=repository, git_bin=git_bin)
-        return _authority_matches_commit_locked(
-            authority=authority,
-            repository=repository,
-            git_bin=git_bin,
-            commit=commit,
-        )
-
-
 def record_desired_locked(
     *,
     authority: pathlib.Path = DEFAULT_AUTHORITY,
@@ -556,7 +538,6 @@ __all__ = [
     "DesiredStateHistoryError",
     "PREVIOUS_APPLIED_REF",
     "acknowledge_pending",
-    "authority_matches_commit",
     "clear_previous_applied",
     "ensure_bootstrap_applied",
     "ensure_repository",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import os
 import pathlib
@@ -64,9 +63,7 @@ if HAS_HYPOTHESIS:
                 },
                 "safe": "visible",
             }
-            stream = io.StringIO()
-            nas_logging.log_event("fuzz", stream=stream, payload=payload)
-            raw = stream.getvalue()
+            raw = json.dumps(nas_logging.sanitize({"payload": payload}))
             self.assertEqual(len(raw.splitlines()), 1)
             decoded = json.loads(raw)
             encoded = json.dumps(decoded)

@@ -24,9 +24,10 @@ import sys
 import tempfile
 from typing import Any
 
+from nas_common import ADMIN_GROUP
+
 CAPABILITY_RE = re.compile(r"^application\.[a-z][a-z0-9-]{0,63}\.[a-z][a-z0-9.-]{0,127}$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
-ADMIN_GROUP = "nas_admin"
 
 
 class AuthentikBlueprintError(RuntimeError):

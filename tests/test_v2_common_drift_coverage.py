@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import pathlib
 import sys
-import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -64,31 +62,6 @@ class CommonDriftCoverageTests(unittest.TestCase):
         )
         self.assertEqual(set(parsed), {"good.service"})
         self.assertEqual(parsed["good.service"]["SubState"], "running")
-
-    def test_read_json_object_warns_and_returns_fallback_for_invalid_json_and_io_errors(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
-            warnings: list[str] = []
-            invalid = root / "invalid.json"
-            invalid.write_text("{", encoding="utf-8")
-            self.assertEqual(
-                common.read_json_object(invalid, missing={"safe": False}, warn=warnings.append),
-                {"safe": False},
-            )
-            directory = root / "directory"
-            directory.mkdir()
-            self.assertEqual(
-                common.read_json_object(directory, missing={"safe": False}, warn=warnings.append),
-                {"safe": False},
-            )
-            self.assertEqual(len(warnings), 2)
-
-    def test_read_json_object_raises_invalid_json_without_fallback(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            path = pathlib.Path(raw) / "invalid.json"
-            path.write_text(json.dumps([]), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                common.read_json_object(path)
 
     def test_application_capability_group_accepts_longest_valid_identifiers(self) -> None:
         service_id = "a" + "1" * 63

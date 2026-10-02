@@ -15,6 +15,7 @@ let
     pkgs
     shareRoot
     syncthingConfigDir
+    syncthingGuiPort
   ;
 
   nasPythonApplication = pkgs.python3Packages.buildPythonApplication {
@@ -26,7 +27,6 @@ let
     dependencies = with pkgs.python3Packages; [
       defusedxml
       jsonschema
-      pyyaml
       ruamel-yaml
     ];
     pythonImportsCheck = [
@@ -56,6 +56,7 @@ let
       export NAS_SHARE_ROOT=${lib.escapeShellArg shareRoot}
       export NAS_SYNCTHING_ENABLE=${if cfg.syncthing.enable then "1" else "0"}
       export NAS_SYNCTHING_CONFIG_DIR=${lib.escapeShellArg syncthingConfigDir}
+      export NAS_SYNCTHING_URL=http://127.0.0.1:${toString syncthingGuiPort}
       exec ${nasIdentitySyncScript} "$@"
     '';
   };

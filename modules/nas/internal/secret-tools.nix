@@ -8,7 +8,6 @@ let
     pkgs
     secretRoot
   ;
-  pythonYaml = pkgs.python3.withPackages (pythonPackages: [ pythonPackages.pyyaml ]);
   nasSecrets = pkgs.writeShellApplication {
     name = "nas-secrets";
     excludeShellChecks = [ "SC2329" ];
@@ -22,7 +21,7 @@ let
       pkgs.gnused
       pkgs.keepassxc
       pkgs.openssl
-      pythonYaml
+      pkgs.python3
       pkgs.systemd
       pkgs.util-linux
     ];

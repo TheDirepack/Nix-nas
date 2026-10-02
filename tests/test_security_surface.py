@@ -193,7 +193,7 @@ class SecuritySurfaceTests(unittest.TestCase):
         for raw in CONTROL_PAYLOADS:
             with self.subTest(raw=raw):
                 self.assertEqual(common.split_groups(raw), set())
-                self.assertFalse(common.account_is_admin(common.split_groups(raw)))
+                self.assertFalse(common.application_capability_allowed(common.split_groups(raw), "demo"))
 
     def test_injection_payloads_are_rejected_as_v2_service_ids(self):
         for raw in SHELL_PAYLOADS + SQL_PAYLOADS + XSS_PAYLOADS + PATH_PAYLOADS:

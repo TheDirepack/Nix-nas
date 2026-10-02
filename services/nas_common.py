@@ -16,12 +16,13 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 ADMIN_GROUP = os.environ.get("NAS_IDENTITY_ADMIN_GROUP", "nas_admin")
 USER_GROUP = os.environ.get("NAS_IDENTITY_USER_GROUP", "nas_users")
 GUEST_GROUP = os.environ.get("NAS_IDENTITY_GUEST_GROUP", "nas_guests")
 DISABLED_GROUP = os.environ.get("NAS_IDENTITY_DISABLED_GROUP", "nas_disabled")
+RESERVED_GROUPS = frozenset({ADMIN_GROUP, USER_GROUP, GUEST_GROUP, DISABLED_GROUP})
 
 MAX_GROUP_HEADER_BYTES = max(256, int(os.environ.get("NAS_MAX_GROUP_HEADER_BYTES", "8192")))
 MAX_GROUPS = max(8, int(os.environ.get("NAS_MAX_GROUPS", "256")))
@@ -221,15 +222,6 @@ def account_enabled(groups: set[str]) -> bool:
     return DISABLED_GROUP not in groups
 
 
-def account_is_admin(groups: set[str]) -> bool:
-    return account_enabled(groups) and ADMIN_GROUP in groups
-
-
-def account_has_portal_access(groups: set[str]) -> bool:
-    """Authenticated enabled accounts may reach the neutral landing/settings page."""
-    return account_enabled(groups)
-
-
 def application_capability_group(service_id: str, capability: str = "access") -> str:
     if not _APPLICATION_ID_RE.fullmatch(service_id):
         raise ValueError(f"Invalid V2 service id {service_id!r}")
@@ -250,10 +242,6 @@ def application_capability_allowed(
     if administrator_bypass and ADMIN_GROUP in groups:
         return True
     return application_capability_group(service_id, capability) in groups
-
-
-_COPYPARTY_SERVICE = os.environ.get("NAS_V2_COPYPARTY_SERVICE", "copyparty")
-_COPYPARTY_CAPABILITY = os.environ.get("NAS_V2_COPYPARTY_CAPABILITY", "files")
 
 
 def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]:
@@ -290,7 +278,7 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     return data
 
 
-def _resolve_v2_service_capability(
+def resolve_v2_service_capability(
     service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
 ) -> tuple[str, str] | None:  # pragma: no cover - V2 integration branch, exercised in VM
     service = os.environ.get(service_env, fallback_service)
@@ -309,36 +297,6 @@ def _resolve_v2_service_capability(
     except (OSError, ValueError, json.JSONDecodeError):
         pass
     return service, capability
-
-
-def account_has_personal_share(groups: set[str]) -> bool:
-    resolved = _resolve_v2_service_capability(
-        "NAS_V2_COPYPARTY_SERVICE", "NAS_V2_COPYPARTY_CAPABILITY", _COPYPARTY_SERVICE, _COPYPARTY_CAPABILITY
-    )
-    if resolved is None:
-        return False
-    service, capability = resolved
-    return GUEST_GROUP not in groups and application_capability_allowed(groups, service, capability)
-
-
-def read_json_object(
-    path: pathlib.Path,
-    *,
-    missing: Mapping[str, Any] | None = None,
-    warn: Callable[[str], None] | None = None,
-) -> dict[str, Any]:
-    """Read a JSON object, optionally returning a fail-closed fallback."""
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("top-level value is not an object")
-        return value
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        if warn is not None:
-            warn(f"Unable to read {path}: {exc}")
-        if missing is None:
-            raise
-        return dict(missing)
 
 
 def fsync_directory(path: pathlib.Path) -> None:

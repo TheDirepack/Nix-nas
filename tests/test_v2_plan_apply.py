@@ -18,6 +18,7 @@ if str(SERVICES) not in sys.path:
 import nas_v2_apply as v2apply  # noqa: E402
 import nas_v2_plan as v2plan  # noqa: E402
 import nas_v2_spec as v2  # noqa: E402
+import nas_v2_editor as editor  # noqa: E402
 
 
 class ManagedServicesV2PlanApplyTests(unittest.TestCase):
@@ -128,7 +129,7 @@ class ManagedServicesV2PlanApplyTests(unittest.TestCase):
             ],
         )
 
-    def test_save_and_apply_preserves_yaml_comments_and_materializes_derived_state(self):
+    def test_editor_then_apply_preserves_yaml_comments_and_materializes_derived_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             schema = root / "schema.json"
@@ -160,7 +161,9 @@ services:
       type: systemd
       unit: demo.service
 """
-            v2apply.save_and_apply(text, paths)
+            editor.replace_document(text, desired_path=desired, schema_path=schema, platform_path=platform)
+            with mock.patch.object(v2apply, "_ensure_service_dirs"):
+                v2apply.apply(paths)
             self.assertEqual(desired.read_text(encoding="utf-8"), text)
             compiled = json.loads(effective.read_text(encoding="utf-8"))
             self.assertEqual(
@@ -184,8 +187,13 @@ services:
                 plan=root / "plan.json",
             )
             before = desired.read_bytes()
-            with self.assertRaises(v2.ManagedServicesV2Error):
-                v2apply.save_and_apply("schemaVersion: 3\nservices:\n  Bad_ID: {}\n", paths)
+            with self.assertRaises(editor.ManagedServicesEditorError):
+                editor.replace_document(
+                    "schemaVersion: 3\nservices:\n  Bad_ID: {}\n",
+                    desired_path=desired,
+                    schema_path=schema,
+                    platform_path=None,
+                )
             self.assertEqual(desired.read_bytes(), before)
             self.assertFalse(paths.effective.exists())
             self.assertFalse(paths.plan.exists())
@@ -212,7 +220,7 @@ services:
             self.assertEqual(on_disk.get("changedFiles"), result["changedFiles"])
             self.assertTrue(any(str(plan_path) in f for f in result["changedFiles"]))
 
-    def test_save_and_apply_preserves_existing_mode(self):
+    def test_editor_then_apply_preserves_existing_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             schema = root / "schema.json"
@@ -228,7 +236,9 @@ services:
                 plan=root / "plan.json",
             )
             text = "schemaVersion: 3\nservices:\n  demo:\n    name: Demo\n    workload:\n      kind: daemon\n    runtime:\n      type: systemd\n      unit: demo.service\n"
-            v2apply.save_and_apply(text, paths)
+            editor.replace_document(text, desired_path=desired, schema_path=schema, platform_path=None)
+            with mock.patch.object(v2apply, "_ensure_service_dirs"):
+                v2apply.apply(paths)
             self.assertEqual(oct(desired.stat().st_mode & 0o777), oct(0o600))
 
     def test_compile_paths_and_apply_hold_authority_lock(self):

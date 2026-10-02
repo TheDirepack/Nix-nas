@@ -95,11 +95,6 @@
           default = "";
           description = "Absolute path to rclone.conf with credentials. Empty uses default location.";
         };
-        rcloneExtraArgs = lib.mkOption {
-          type = lib.types.listOf lib.types.str;
-          default = [ ];
-          description = "Extra flags forwarded to rclone (e.g. --s3-no-check-bucket).";
-        };
       };
     };
 

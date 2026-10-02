@@ -10,7 +10,6 @@ authorization decisions.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import pathlib
@@ -191,49 +190,6 @@ def _merge_documents(documents: list[dict[str, Any]]) -> dict[str, Any]:
             else:
                 merged[key] = copy.deepcopy(value)
     return merged
-
-
-def is_directory_authority(path: pathlib.Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def hash_authority(path: pathlib.Path) -> str:
-    p = pathlib.Path(path)
-    if p.is_dir():
-        files = _yaml_files_in_dir(p)
-        if not files:
-            raise ManagedServicesV2Error(
-                f"Managed Services V2 desired state directory {p} contains no YAML files",
-                code="yaml-empty",
-            )
-        h = hashlib.sha256()
-        for f in files:
-            try:
-                data = f.read_bytes()
-            except OSError as exc:
-                raise ManagedServicesV2Error(
-                    f"Unable to read Managed Services V2 desired state {f}: {exc}",
-                    code="io-read",
-                ) from exc
-            # Include filename and length delimiters to avoid concatenation ambiguity.
-            h.update(f.name.encode("utf-8"))
-            h.update(b"\x00")
-            h.update(str(len(data)).encode("utf-8"))
-            h.update(b"\x00")
-            h.update(data)
-            h.update(b"\x00")
-        return h.hexdigest()
-    try:
-        data = p.read_bytes()
-    except OSError as exc:
-        raise ManagedServicesV2Error(
-            f"Unable to read Managed Services V2 desired state {p}: {exc}",
-            code="io-read",
-        ) from exc
-    return hashlib.sha256(data).hexdigest()
 
 
 def parse_yaml(path: pathlib.Path = DEFAULT_SPEC_PATH) -> dict[str, Any]:
@@ -1084,12 +1040,3 @@ def compile_document(
     validate_schema(normalized, schema)
     semantic_validate(normalized, platform_capabilities=platform_capabilities)
     return build_effective(normalized)
-
-
-def load_and_compile(
-    spec_path: pathlib.Path = DEFAULT_SPEC_PATH,
-    schema_path: pathlib.Path = DEFAULT_SCHEMA_PATH,
-    platform_path: pathlib.Path | None = DEFAULT_PLATFORM_PATH,
-) -> dict[str, Any]:
-    capabilities = None if platform_path is None else load_platform_capabilities(platform_path)
-    return compile_document(parse_yaml(spec_path), load_schema(schema_path), platform_capabilities=capabilities)
