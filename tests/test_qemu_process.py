@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -27,17 +29,17 @@ class QemuProcessTests(unittest.TestCase):
         )
 
     def test_native_and_nix_wrapped_executable_names_are_recognized(self):
-        sleep = shutil.which("sleep")
-        self.assertIsNotNone(sleep)
-        assert sleep is not None
         for name in ("qemu-system-x86_64", ".qemu-system-x86_64-wrapped"):
             for deleted in (False, True):
                 with self.subTest(name=name, deleted=deleted), tempfile.TemporaryDirectory() as raw:
                     root = pathlib.Path(raw)
                     executable = root / name
-                    shutil.copyfile(sleep, executable)
+                    shutil.copyfile("/proc/self/exe", executable)
                     executable.chmod(0o700)
-                    child = subprocess.Popen([str(executable), "60"])
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(60)"],
+                        executable=str(executable),
+                    )
                     try:
                         pidfile = root / "qemu.pid"
                         pidfile.write_text(str(child.pid))
@@ -51,7 +53,11 @@ class QemuProcessTests(unittest.TestCase):
                         child.wait(timeout=10)
 
     def test_unrelated_executable_is_rejected_despite_spoofed_argv_zero(self):
-        child = subprocess.Popen(["bash", "-c", "exec -a qemu-system-x86_64 sleep 60"])
+        child = subprocess.Popen(
+            ["qemu-system-x86_64", "-c", "import time; time.sleep(60)"],
+            executable="/proc/self/exe",
+            env={**os.environ, "PYTHONHOME": sys.base_prefix},
+        )
         try:
             with tempfile.TemporaryDirectory() as raw:
                 pidfile = pathlib.Path(raw) / "qemu.pid"
@@ -67,14 +73,15 @@ class QemuProcessTests(unittest.TestCase):
             child.wait(timeout=10)
 
     def test_wrapper_name_matching_is_exact(self):
-        sleep = shutil.which("sleep")
-        assert sleep is not None
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             executable = root / ".qemu-system-x86_64-wrapped-unrelated"
-            shutil.copyfile(sleep, executable)
+            shutil.copyfile("/proc/self/exe", executable)
             executable.chmod(0o700)
-            child = subprocess.Popen([str(executable), "60"])
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                executable=str(executable),
+            )
             try:
                 pidfile = root / "qemu.pid"
                 pidfile.write_text(str(child.pid))
