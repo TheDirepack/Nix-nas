@@ -369,19 +369,21 @@ def finish(ok: bool, **extra: Any) -> None:
     write_json(RESULT, payload)
 
 
+def verify_reboot(stage: str) -> None:
+    activate_after_reboot()
+    verify_services(stage)
+    browser_sign_in(stage)
+
+
 def resume() -> None:
     try:
         phase = read_state().get("phase")
         if phase == "after-first-reboot":
-            activate_after_reboot()
-            verify_services("the first reboot")
-            browser_sign_in("the first reboot")
+            verify_reboot("the first reboot")
             schedule_reboot("after-second-reboot")
             return
         if phase == "after-second-reboot":
-            activate_after_reboot()
-            verify_services("the second reboot")
-            browser_sign_in("the second reboot")
+            verify_reboot("the second reboot")
             finish(True, phase="complete", verifiedReboots=2)
             STATE.unlink()
             return
@@ -396,10 +398,13 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--start", action="store_true")
     group.add_argument("--resume", action="store_true")
+    group.add_argument("--verify", action="store_true")
     arguments = parser.parse_args()
     try:
         if arguments.start:
             start()
+        elif arguments.verify:
+            verify_reboot("the final reboot")
         else:
             resume()
     except Exception as error:

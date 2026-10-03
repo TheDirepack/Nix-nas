@@ -758,6 +758,7 @@ run_installer() {
   ssh "${ssh_args[@]}" -p "$SSH_PORT" admin@127.0.0.1 \
     'set -euo pipefail; \
      test "$(cat /var/lib/nas-install-test/reinstall-sentinel)" = preserve-me; \
+     sudo -n nas-vm-guest-test --setup-reboot-e2e --verify; \
      sudo -n nas-doctor --json >/tmp/nas-post-switch-reboot-doctor.json'
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true
