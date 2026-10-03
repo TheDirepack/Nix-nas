@@ -18,6 +18,16 @@ def text(relative: str) -> str:
 
 
 class Alpha20CockpitContracts(unittest.TestCase):
+    def test_public_proxy_enforces_https_without_upstream_technology_headers(self) -> None:
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        self.assertIn("-X-Powered-By", proxy)
+        self.assertIn('Strict-Transport-Security "max-age=31536000"', proxy)
+        self.assertIn("header ?Content-Security-Policy ${builtins.toJSON authentikCsp}", proxy)
+        self.assertIn("script-src 'self' 'unsafe-inline'", proxy)
+        browser = text("cockpit/e2e/final-vm.spec.mjs")
+        self.assertIn('response.headers()["strict-transport-security"]', browser)
+        self.assertIn('response.headers()["x-powered-by"]', browser)
+
     def test_authentik_accessibility_backport_patches_source_for_all_consumers(self) -> None:
         patch = text("authentik/patches/authentik-accessibility.patch")
         self.assertIn("web/src/flow/components/ak-brand-footer.ts", patch)

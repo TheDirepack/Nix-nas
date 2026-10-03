@@ -171,7 +171,10 @@ async function exerciseLayoutMatrix(page, frame) {
 test("anonymous clients see only the Authentik login boundary", async ({page}) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto("/console/");
+  const response = await page.goto("/console/");
+  expect(response).not.toBeNull();
+  expect(response.headers()["strict-transport-security"]).toBe("max-age=31536000");
+  expect(response.headers()["x-powered-by"]).toBeUndefined();
   await expectLogin(page);
   expect(errors).toEqual([]);
 });

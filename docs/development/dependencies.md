@@ -65,6 +65,13 @@ worker, migration, and blueprint commands consume this one package. Dependency
 updates must either retain an applicable source patch or remove it after the
 unchanged installed-login accessibility test passes without it.
 
+Authentik's [documented CSP](https://docs.goauthentik.io/security/security-hardening/#content-security-policy-csp)
+requires inline scripts and styles. The proxy adds that baseline only when
+upstream has not supplied a policy, preserving the stricter policy on uploaded
+files. Do not replace it with a blanket strict script policy or add
+`unsafe-eval` to satisfy an unverified interface failure. The required
+`unsafe-inline` remains a scanner-visible constraint, not a qualified strict CSP.
+
 ## Upgrade qualification pin
 
 The official-ISO upgrade rehearsal pins nixpkgs revision
