@@ -19,6 +19,14 @@ operational boundaries remain here.
 
 ## Required external evidence
 
+Authentik's own interface requires inline scripts/styles under its documented
+CSP baseline. The proxy preserves upstream policies and supplies that baseline
+only where absent; it is not a strict nonce-based policy. ZAP qualification
+remains unresolved until the inline-script and cross-origin-policy findings are
+addressed without breaking upstream authentication/application interfaces.
+Informational scanner observations are not evidence of an exploitable defect,
+but the current all-warnings-fatal baseline also treats them as blocking.
+
 A source-only release is not hardware evidence. Nix evaluation, closure builds,
 the native NixOS tests, evaluated service-user ownership tests, the official-ISO
 install/reboot harness, firewall behavior, and applicable live drills must pass

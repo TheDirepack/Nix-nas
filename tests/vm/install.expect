@@ -1,6 +1,14 @@
 #!/usr/bin/env expect
 set timeout 7200
 log_user 1
+set package_upgrade 0
+if {[info exists env(NAS_QEMU_PACKAGE_UPGRADE)]} {
+  set package_upgrade $env(NAS_QEMU_PACKAGE_UPGRADE)
+}
+if {$package_upgrade ni {0 1}} {
+  puts stderr "Invalid package upgrade mode"
+  exit 2
+}
 
 if {$argc < 1} {
   puts stderr "usage: install.expect qemu-system-x86_64 [arguments...]"
@@ -35,7 +43,7 @@ while {!$shell_ready} {
   }
 }
 
-send -- "mkdir -p /mnt-source /mnt-ssh-key && mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 nas-source /mnt-source && mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 nas-ssh-key /mnt-ssh-key && NAS_INSTALL_SSH_PUBLIC_KEY=/mnt-ssh-key/admin.pub bash /mnt-source/tests/vm/install-system.sh; rc=\$?; echo __NAS_INSTALL_RC__\$rc\r"
+send -- "mkdir -p /mnt-source /mnt-ssh-key && mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 nas-source /mnt-source && mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 nas-ssh-key /mnt-ssh-key && NAS_INSTALL_PACKAGE_UPGRADE=$package_upgrade NAS_INSTALL_SSH_PUBLIC_KEY=/mnt-ssh-key/admin.pub bash /mnt-source/tests/vm/install-system.sh; rc=\$?; echo __NAS_INSTALL_RC__\$rc\r"
 expect {
   -re {NIXOS_NAS_INSTALL_COMPLETE} { }
   -re {__NAS_INSTALL_RC__([1-9][0-9]*)} {

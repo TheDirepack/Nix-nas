@@ -43,8 +43,17 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     machine.wait_for_unit("multi-user.target")
+    machine.succeed("busctl --system call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
+    machine.succeed("test ! -e /run/nas-control/rollback-guard/current-guard-unit")
+    machine.succeed("systemctl start nas-v2-apply-failed.service")
+    machine.succeed("test $(systemctl show -p ConditionResult --value nas-v2-apply-failed.service) = no")
+    machine.succeed("! systemctl is-failed --quiet nas-v2-apply-failed.service")
+    machine.succeed("systemctl restart firewalld.service nas-firewall-baseline.service")
+    machine.succeed("systemctl is-active --quiet nas-firewall-baseline.service")
+    machine.succeed("firewall-cmd --state")
     machine.succeed("timeout --verbose --signal=TERM --kill-after=${toString outerKillAfter}s ${toString guestWatchdog}s nas-vm-guest-test /dev/vdb")
+    machine.succeed("test $(zfs get -H -o value encryption tank/nas) = off")
     machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.secretAdversarial}s nas-vm-secret-adversarial")
     machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.installedSmoke}s python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
     machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")

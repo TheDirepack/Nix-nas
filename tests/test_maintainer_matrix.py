@@ -117,6 +117,9 @@ pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8'
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         invocation = (reports / "invocation.txt").read_text(encoding="utf-8")
         self.assertIn("--network\nhost", invocation)
+        self.assertIn(f"--user\n{os.getuid()}:{os.getgid()}\n", invocation)
+        self.assertIn("JAVA_TOOL_OPTIONS=-Duser.home=/tmp", invocation)
+        self.assertIn("HOME=/tmp", invocation)
         self.assertIn("--add-host\nnas-test.local:127.0.0.1", invocation)
         self.assertIn("zap-baseline.py", invocation)
         self.assertIn("https://nas-test.local:8443/", invocation)
@@ -184,6 +187,43 @@ pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8'
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("NAS_ZAP_CONFIRM_ACTIVE=1", result.stderr)
+
+    def test_zap_automation_writes_reports_as_the_invoking_user(self) -> None:
+        fake_bin = pathlib.Path(self._temporary.name) / "automation-bin"
+        fake_bin.mkdir()
+        runtime = fake_bin / "docker"
+        runtime.write_text(
+            "#!/usr/bin/env python3\n"
+            "import pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "out = pathlib.Path(args[args.index('-v') + 1].split(':', 1)[0])\n"
+            "(out / 'invocation.txt').write_text('\\n'.join(args))\n"
+            "for suffix in ('html', 'json'):\n"
+            "    (out / ('zap-automation-unauthenticated.' + suffix)).write_text('ok')\n",
+            encoding="utf-8",
+        )
+        runtime.chmod(0o755)
+        out = pathlib.Path(self._temporary.name) / "automation-reports"
+        result = subprocess.run(
+            ["bash", "scripts/zap-automation-scan.sh", "unauthenticated", "https://127.0.0.1/"],
+            cwd=self.clean_root,
+            env={
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "NAS_CONTAINER_RUNTIME": "docker",
+                "NAS_ZAP_IMAGE": "example.invalid/zap@sha256:" + "a" * 64,
+                "NAS_ZAP_OUT_DIR": str(out),
+                "NAS_ZAP_CONFIRM_ACTIVE": "1",
+            },
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        invocation = (out / "invocation.txt").read_text()
+        self.assertIn(f"--user\n{os.getuid()}:{os.getgid()}\n", invocation)
+        self.assertIn("JAVA_TOOL_OPTIONS=-Duser.home=/tmp", invocation)
+        self.assertIn("HOME=/tmp", invocation)
 
 
 if __name__ == "__main__":

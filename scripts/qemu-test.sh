@@ -453,7 +453,8 @@ sync_source_to_guest() {
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
-      'sudo -n rm -rf /var/lib/nas-test/repo &&
+      'sudo -n systemctl start nas-vm-test-repository.service &&
+       sudo -n rm -rf /var/lib/nas-test/repo &&
        sudo -n install -d -m 0755 /var/lib/nas-test/repo &&
        sudo -n tar -C /var/lib/nas-test/repo -xf - &&
        sudo -n git -C /var/lib/nas-test/repo init -q &&
@@ -694,11 +695,11 @@ run_installer() {
           -p "$SSH_PORT" admin@127.0.0.1 \
           "cd /var/lib/nas-test/repo &&
            sudo -n systemctl reset-failed &&
-           sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1; sleep 1; done' &&
+           sudo -n timeout $(nas_vm_ordinary_wait_seconds)s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1; sleep 1; done' &&
            sudo -n nas-secrets stop &&
            sudo -n systemctl start caddy.service authentik-worker.service authentik.service nas-cockpit-sso.service &&
            (sudo -n systemctl start nas-authentik-proxy-outpost.service || true) &&
-           sudo -n timeout 120s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do sleep 1; done' &&
+           sudo -n timeout $(nas_vm_ordinary_wait_seconds)s sh -c 'until systemctl is-active --quiet nas-authentik-proxy-outpost.service; do systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1; sleep 1; done' &&
            sudo -n env GITHUB_ACTIONS=$github_actions NAS_FULL_SUITE_REPO=/var/lib/nas-test/repo NAS_FULL_SUITE_SKIP_FUZZ=$full_suite_skip_fuzz \
              nix develop path:/var/lib/nas-test/repo#test -c \
              bash /var/lib/nas-test/repo/tests/vm/full-suite.sh"
@@ -757,6 +758,7 @@ run_installer() {
   ssh "${ssh_args[@]}" -p "$SSH_PORT" admin@127.0.0.1 \
     'set -euo pipefail; \
      test "$(cat /var/lib/nas-install-test/reinstall-sentinel)" = preserve-me; \
+     sudo -n nas-vm-guest-test --setup-reboot-e2e --verify; \
      sudo -n nas-doctor --json >/tmp/nas-post-switch-reboot-doctor.json'
   ssh "${ssh_args[@]}" \
     -p "$SSH_PORT" admin@127.0.0.1 'sudo -n poweroff' >/dev/null 2>&1 || true

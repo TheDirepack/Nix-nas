@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +24,79 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_installed_fuzz_evidence_matches_both_canonical_inventories(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        verifier = source.split("    python3 - ", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        strategies = {}
+        for name in ("custom-script-contracts.json", "custom-script-contracts-v2.json"):
+            inventory = json.loads((ROOT / "tests" / name).read_text(encoding="utf-8"))
+            strategies.update(
+                {name: row["fuzzStrategy"] for name, row in inventory["executables"].items() if row.get("fuzzStrategy")}
+            )
+        complete = {"ok": True, "smoke": False, "commands": len(strategies), "strategies": strategies}
+        with tempfile.TemporaryDirectory() as directory:
+            report = pathlib.Path(directory) / "fuzz.json"
+            for payload, accepted in (
+                (complete, True),
+                ({**complete, "commands": len(strategies) - 1}, False),
+                ({**complete, "strategies": {}}, False),
+                ({**complete, "smoke": True}, False),
+                ({**complete, "ok": False}, False),
+            ):
+                with self.subTest(payload=payload):
+                    report.write_text(json.dumps(payload), encoding="utf-8")
+                    result = subprocess.run(
+                        ["python3", "-c", verifier, str(ROOT), str(report)],
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_final_workloads_preserve_storage_and_use_the_real_authentik_gate(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        self.assertIn('-b "$INSTALLED_DATA_DISK" "$DATA_DISK"', source)
+        self.assertIn("nas-vm-guest-test --setup-reboot-e2e --verify", source)
+        self.assertNotIn("useradd", source)
+        self.assertNotIn("chpasswd", source)
+        self.assertNotIn("COCKPIT_PORT", source)
+        self.assertIn('NAS_VM_BASE_URL="https://nas-test.local:$HTTPS_PORT"', source)
+
+    def test_final_browser_config_does_not_depend_on_npm_exec_working_directory(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        self.assertIn('--config "$ROOT/cockpit/e2e/playwright.config.mjs"', source)
+
+    def test_final_browser_and_scanner_resolve_the_public_test_hostname(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("127.0.0.1 nas-test.local", workflow)
+        scanner = (ROOT / "scripts/zap-automation-scan.sh").read_text(encoding="utf-8")
+        self.assertIn('runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")', scanner)
+
+    def test_installed_guest_emits_boot_diagnostics_to_the_harness_serial_log(self) -> None:
+        fixture = (ROOT / "tests/nixos/qemu-installed.nix").read_text(encoding="utf-8")
+        self.assertIn('boot.kernelParams = [ "console=ttyS0,115200n8" ];', fixture)
+
+    def test_live_setup_fixtures_use_canonical_storage_fields(self) -> None:
+        for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                fixture = re.search(r"<<EOFSETUP\n(.*?)\nEOFSETUP", source, re.S)
+                if fixture is None:
+                    self.fail(f"setup JSON fixture missing from {path}")
+                storage = json.loads(fixture.group(1))["storage"]
+                self.assertEqual(storage.get("devices"), ["$ZFS_DEVICE"])
+                self.assertIs(storage.get("wipeDevices"), True)
+                self.assertNotIn("device", storage)
+                self.assertNotIn("wipeDevice", storage)
+
+    def test_source_refresh_waits_for_boot_repository_materialization(self) -> None:
+        source = QEMU.read_text(encoding="utf-8")
+        refresh = source.split("sync_source_to_guest() {", 1)[1].split("\n}", 1)[0]
+        wait = "sudo -n systemctl start nas-vm-test-repository.service"
+        self.assertIn(wait, refresh)
+        self.assertLess(refresh.index(wait), refresh.index("sudo -n rm -rf /var/lib/nas-test/repo"))
+
     def test_reconfigure_prints_failed_doctor_report_and_preserves_status(self) -> None:
         source = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         self.assertIn("check_doctor() {", source)
@@ -119,7 +194,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", qemu)
         self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", qemu)
         self.assertIn('HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"', final_browser)
-        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
+        self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
         self.assertNotIn("-netdev tap", qemu)
         self.assertNotIn("bridge=", qemu)
         self.assertIn("sync_source_to_guest", qemu)
@@ -182,6 +257,11 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("zfsEncryption.enable = lib.mkForce false;", fixture)
         self.assertIn("zfsEncryption.acknowledgeUnencrypted = lib.mkForce false;", fixture)
 
+    def test_native_unencrypted_leg_checks_the_wizard_selected_dataset(self) -> None:
+        fixture = (ROOT / "tests/nixos/integration.nix").read_text(encoding="utf-8")
+        self.assertIn("zfs get -H -o value encryption tank/nas) = off", fixture)
+        self.assertNotIn("nas.zfsEncryption.enable = pkgs.lib.mkForce false;", fixture)
+
     def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertIn('administrator="akadmin"', guest)
@@ -223,12 +303,23 @@ class VmSuiteWrapperTests(unittest.TestCase):
         reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("NAS_TEST_PACKAGE_UPGRADE=$package_upgrade", qemu)
-        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", reconfigure)
+        baseline = (ROOT / "tests/vm/package-upgrade-baseline.sh").read_text(encoding="utf-8")
+        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", baseline)
         self.assertIn("--override-input nixpkgs", reconfigure)
         self.assertIn("syncthing-$older_version", reconfigure)
         self.assertIn("syncthing-$current_version", reconfigure)
         self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
         self.assertIn("final-vm-evidence/installed-console.log", workflow)
+
+    def test_upgrade_initializes_older_packages_before_mutable_application_state(self) -> None:
+        installer = (ROOT / "tests/vm/install-system.sh").read_text(encoding="utf-8")
+        expect = (ROOT / "tests/vm/install.expect").read_text(encoding="utf-8")
+        reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        self.assertIn("NAS_INSTALL_PACKAGE_UPGRADE=$package_upgrade", expect)
+        self.assertIn('--override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"', installer)
+        self.assertIn("install_args+=(--override-input nixpkgs", installer)
+        self.assertNotIn('rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input', reconfigure)
+        self.assertIn('fail "installed baseline does not contain the pinned older Syncthing package"', reconfigure)
 
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")

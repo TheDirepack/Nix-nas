@@ -102,8 +102,11 @@ process_timeout="${NAS_ZAP_PROCESS_TIMEOUT_SECONDS:-$((minutes * 60 + 120))}"
 (( process_timeout <= 18000 )) || die "NAS_ZAP_PROCESS_TIMEOUT_SECONDS must not exceed 18000"
 [[ "$REPORT_PREFIX" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "NAS_ZAP_REPORT_PREFIX contains unsafe characters"
 command -v timeout >/dev/null 2>&1 || die "timeout is required"
+command -v id >/dev/null 2>&1 || die "id is required"
 
-runtime_args=(run --rm --network host -v "$OUT_DIR:/zap/wrk:rw")
+# Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
+runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
+  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw")
 if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
   [[ "$NAS_ZAP_EXTRA_HOST" != *$'\n'* && "$NAS_ZAP_EXTRA_HOST" != *$'\r'* ]] || die "NAS_ZAP_EXTRA_HOST must be one line"
   runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")
