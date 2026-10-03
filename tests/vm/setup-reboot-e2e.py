@@ -217,6 +217,8 @@ def verify_services(stage: str) -> None:
     health = {key: setup.get(key) for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")}
     if not all(value is True for value in health.values()):
         raise CheckError(f"setup is not complete after {stage}: {health}")
+    if run("systemctl", "is-failed", "--quiet", "nas-v2-apply-failed.service").returncode == 0:
+        raise CheckError(f"Managed Services V2 rollback is failed after {stage}")
     if not SENTINEL.is_file() or SENTINEL.read_text(encoding="utf-8") != "setup-reboot-e2e\n":
         raise CheckError(f"ZFS-backed setup sentinel did not survive {stage}")
     require(("zpool", "status", "-x", "tank"))

@@ -23,6 +23,16 @@ class SetupRebootE2eContracts(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_reboot_health_does_not_ignore_failed_rollback(self) -> None:
+        runner = self.runner()
+        status = '{"runtimeSecretsActive":true,"poolPresent":true,"datasetPresent":true}'
+        with (
+            mock.patch.object(runner, "require", return_value=status),
+            mock.patch.object(runner, "run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+            self.assertRaisesRegex(runner.CheckError, "rollback.*failed"),
+        ):
+            runner.verify_services("test reboot")
+
     def test_reboot_reactivation_checks_locked_state_and_sends_password_only_on_stdin(self) -> None:
         runner = self.runner()
         calls = []

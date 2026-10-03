@@ -44,6 +44,10 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
+    machine.succeed("test ! -e /run/nas-control/rollback-guard/current-guard-unit")
+    machine.succeed("systemctl start nas-v2-apply-failed.service")
+    machine.succeed("test $(systemctl show -p ConditionResult --value nas-v2-apply-failed.service) = no")
+    machine.succeed("! systemctl is-failed --quiet nas-v2-apply-failed.service")
     machine.succeed("timeout --verbose --signal=TERM --kill-after=${toString outerKillAfter}s ${toString guestWatchdog}s nas-vm-guest-test /dev/vdb")
     machine.succeed("test $(zfs get -H -o value encryption tank/nas) = off")
     machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.secretAdversarial}s nas-vm-secret-adversarial")
