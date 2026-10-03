@@ -870,6 +870,7 @@ jobs:
     if: >-
       !cancelled() && needs.installer.result == 'success' &&
       (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'full') ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     needs: [installer, prepare]
     runs-on: ubuntu-24.04

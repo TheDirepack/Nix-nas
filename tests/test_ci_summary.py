@@ -77,18 +77,21 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
-    def test_full_dispatch_adds_integration_installer_and_manual_fuzz(self) -> None:
+    def test_full_dispatch_requires_every_qualification_tier(self) -> None:
         expected = ci_summary.expected_jobs(
             "workflow_dispatch",
-            "refs/heads/main",
+            "refs/heads/topic",
             "",
             "full",
         )
         self.assertEqual(
             expected,
-            set(ci_summary.BASE_JOBS) | {"integration", "installer", "source-fuzz"},
+            set(ci_summary.BASE_JOBS) | {"integration", "installer", "source-fuzz", "installed-security"},
         )
-        self.assertNotIn("installed-security", expected)
+        needs = self.results(expected)
+        needs["installed-security"]["result"] = "skipped"
+        _, bad = ci_summary.summarize(needs, "workflow_dispatch", "refs/heads/topic", "", "full")
+        self.assertIn("installed-security=skipped (required)", bad)
         installer_dispatch = ci_summary.expected_jobs(
             "workflow_dispatch",
             "refs/heads/main",

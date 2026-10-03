@@ -18,8 +18,8 @@ The local matrix `fast` command runs source and security checks only. The
 generated smart-fuzz tier is explicit (`test-matrix.py fuzz`) and should be run
 locally during pre-merge qualification. CI qualifies the full-stack QEMU
 matrix and the official-ISO installer tier on every pull-request commit;
-schedule and main pushes additionally run the installed adversarial
-qualification. `all` additionally runs
+schedule, main pushes, and explicit `full` dispatches additionally run the installed adversarial
+qualification. A `full` dispatch requires every qualification tier, including installed-command and active ZAP checks. `all` additionally runs
 the smart-fuzz, Nix configuration/negative-fixture matrix, built-browser,
 native NixOS VM, and official-ISO installer tiers. Each stage has an outer
 deadline; missing heavyweight tools or reviewed frontend artifacts are reported

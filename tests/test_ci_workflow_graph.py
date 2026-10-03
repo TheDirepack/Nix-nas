@@ -348,6 +348,11 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("continue-on-error", text)
         self.assertIn("ci-check-report.py", text)
 
+    def test_full_dispatch_includes_installed_security(self) -> None:
+        condition = self.jobs["installed-security"]["if"]
+        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
+        self.assertIn("github.event.inputs.test-tier == 'full'", condition)
+
     def test_maintenance_prunes_only_repo_owned_state_without_blocking_ci(self) -> None:
         maintenance = self.jobs["maintenance"]
         self.assertEqual(self.needs(maintenance), {"summary"})
