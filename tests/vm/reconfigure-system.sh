@@ -26,7 +26,7 @@ check_doctor() {
 [[ "$PACKAGE_UPGRADE" == 0 || "$PACKAGE_UPGRADE" == 1 ]] || fail "invalid package upgrade test mode"
 
 if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
-  # shellcheck source=tests/vm/package-upgrade-baseline.sh
+  # shellcheck source=/dev/null
   source "$SOURCE/tests/vm/package-upgrade-baseline.sh"
   log "Promote the initialized older NixOS baseline to the reviewed lock"
   older_version="$(nix eval --raw --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV" \

@@ -12,6 +12,17 @@ from maintainer_test_base import MaintainerScriptMixin
 
 
 class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
+    def test_reconfigure_shellcheck_does_not_require_guest_repository_at_build_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                ["shellcheck", str(self.clean_root / "tests/vm/reconfigure-system.sh")],
+                cwd=directory,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_installer_package_baseline_is_explicit_and_preserves_reviewed_flake(self) -> None:
         source = (self.clean_root / "tests/vm/install-system.sh").read_text(encoding="utf-8")
         selection = source.split('install_args=(--flake "path:$SOURCE#$FLAKE")', 1)[1].split("\nnixos-install", 1)[0]
