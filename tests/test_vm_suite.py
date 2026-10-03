@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +24,26 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_live_setup_fixtures_use_canonical_storage_fields(self) -> None:
+        for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                fixture = re.search(r"<<EOFSETUP\n(.*?)\nEOFSETUP", source, re.S)
+                if fixture is None:
+                    self.fail(f"setup JSON fixture missing from {path}")
+                storage = json.loads(fixture.group(1))["storage"]
+                self.assertEqual(storage.get("devices"), ["$ZFS_DEVICE"])
+                self.assertIs(storage.get("wipeDevices"), True)
+                self.assertNotIn("device", storage)
+                self.assertNotIn("wipeDevice", storage)
+
+    def test_source_refresh_waits_for_boot_repository_materialization(self) -> None:
+        source = QEMU.read_text(encoding="utf-8")
+        refresh = source.split("sync_source_to_guest() {", 1)[1].split("\n}", 1)[0]
+        wait = "sudo -n systemctl start nas-vm-test-repository.service"
+        self.assertIn(wait, refresh)
+        self.assertLess(refresh.index(wait), refresh.index("sudo -n rm -rf /var/lib/nas-test/repo"))
+
     def test_reconfigure_prints_failed_doctor_report_and_preserves_status(self) -> None:
         source = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         self.assertIn("check_doctor() {", source)

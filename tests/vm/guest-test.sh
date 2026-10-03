@@ -432,8 +432,8 @@ cat >/var/lib/nas-test/setup/first-run.json <<EOFSETUP
   "schemaVersion": 2,
   "storage": {
     "createPool": true,
-    "device": "$ZFS_DEVICE",
-    "wipeDevice": true
+    "devices": ["$ZFS_DEVICE"],
+    "wipeDevices": true
   },
   "accounts": [
     {

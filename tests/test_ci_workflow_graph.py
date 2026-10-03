@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import unittest
 from typing import Any
 
@@ -198,6 +199,20 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("current-coverage.outcome == 'success'"), 4)
         self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
+    def test_coverage_baseline_uses_the_same_test_population_as_current(self) -> None:
+        unit_script = self.qualification_script.split("  unit)\n", 1)[1].split("    # Invoked indirectly", 1)[0]
+        baseline = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "baseline-build")
+
+        def exclusions(text):
+            return set(re.findall(r"--exclude\s+(test_\w+\.py)", text))
+
+        self.assertEqual(exclusions(str(baseline["run"])), exclusions(unit_script))
+        for step in self.jobs["coverage-diff"]["steps"]:
+            if step.get("id") == "main-coverage":
+                key = step["with"]["key"]
+                self.assertIn("scripts/ci-qualification.sh", key)
+                self.assertIn(".github/workflows/ci.yml", key)
+
     def test_qualification_gate_joins_all_parallel_checks_once(self) -> None:
         gate = self.jobs["qualification"]
         expected = {"prerequisites", *self.PARALLEL, "coverage-diff"}
@@ -301,6 +316,11 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("github.event_name != 'workflow_dispatch'", installer_if)
         prepare = self.serialized(self.jobs["prepare"])
         self.assertIn("github.event_name == 'pull_request'", prepare)
+
+    def test_installed_zap_has_an_immutable_default_without_repository_variables(self) -> None:
+        step = next(step for step in self.jobs["installed-security"]["steps"] if step.get("id") == "zap")
+        image = step["env"]["NAS_ZAP_IMAGE"]
+        self.assertRegex(image, r"vars\.NAS_ZAP_IMAGE\s*\|\|\s*'ghcr\.io/zaproxy/zaproxy@sha256:[a-f0-9]{64}'")
 
     def test_long_fuzz_searches_run_only_when_manually_triggered(self) -> None:
         fuzz = self.jobs["source-fuzz"]

@@ -470,7 +470,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: main-coverage.json
-          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}
       - name: Set up Nix for uncached baseline
         id: baseline-nix
         if: >-
@@ -497,6 +497,7 @@ jobs:
             --exclude test_maintainer_release.py \
             --exclude test_contract_tooling.py \
             --exclude test_fuzz_boundaries.py \
+            --exclude test_fuzz_custom_inputs.py \
             --exclude test_property_invariants.py \
             --exclude test_secret_security_fuzz.py
       - name: Compare current coverage with main
@@ -923,7 +924,7 @@ jobs:
         continue-on-error: true
         env:
           NAS_FINAL_VM_WORKLOAD: zap-fuzz
-          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
+          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE || 'ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef' }}
           NAS_ZAP_CONFIRM_ACTIVE: "1"
           NAS_ZAP_OUT_DIR: zap-report
           NAS_ZAP_AUTOMATION_MINUTES: "90"

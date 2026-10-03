@@ -453,7 +453,8 @@ sync_source_to_guest() {
     ssh "${ssh_args[@]}" \
       -o ServerAliveInterval=15 -o ServerAliveCountMax=20 \
       -p "$SSH_PORT" admin@127.0.0.1 \
-      'sudo -n rm -rf /var/lib/nas-test/repo &&
+      'sudo -n systemctl start nas-vm-test-repository.service &&
+       sudo -n rm -rf /var/lib/nas-test/repo &&
        sudo -n install -d -m 0755 /var/lib/nas-test/repo &&
        sudo -n tar -C /var/lib/nas-test/repo -xf - &&
        sudo -n git -C /var/lib/nas-test/repo init -q &&
