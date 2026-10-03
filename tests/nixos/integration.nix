@@ -24,7 +24,6 @@ pkgs.testers.runNixOSTest {
     ];
 
     nas.trustedInterfaces = pkgs.lib.mkForce [ "eth1" ];
-    nas.zfsEncryption.enable = pkgs.lib.mkForce false;
     nas.testing.readOnlyPackageSet = true;
     users.users.admin.openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci"
