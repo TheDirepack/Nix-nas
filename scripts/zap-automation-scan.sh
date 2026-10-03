@@ -48,7 +48,7 @@ case "$MODE" in
   *) usage >&2; die "unknown scan mode: $MODE" ;;
 esac
 [[ "${NAS_ZAP_CONFIRM_ACTIVE:-0}" == 1 ]] || die "active scanning requires NAS_ZAP_CONFIRM_ACTIVE=1"
-for cmd in python3 timeout; do need "$cmd"; done
+for cmd in python3 timeout id; do need "$cmd"; done
 [[ -n "$TARGET" ]] || die "target URL is required"
 [[ "$TARGET" =~ ^https?:// ]] || die "target must use http:// or https://"
 [[ "$IMAGE" =~ @sha256:[0-9a-fA-F]{64}$ ]] || die "NAS_ZAP_IMAGE must be pinned to an immutable sha256 digest"
@@ -208,7 +208,9 @@ with open(output, "w", encoding="utf-8") as handle:
 PY_PLAN
 chmod 0644 "$plan"
 
-runtime_args=(run --rm --network host -v "$OUT_DIR:/zap/wrk:rw")
+# Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
+runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
+  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw")
 if [[ "$MODE" == authenticated ]]; then
   runtime_args+=(-e NAS_ZAP_AUTH_USER -e NAS_ZAP_AUTH_PASSWORD)
 fi

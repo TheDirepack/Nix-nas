@@ -24,6 +24,7 @@ pkgs.testers.runNixOSTest {
     ];
 
     nas.trustedInterfaces = pkgs.lib.mkForce [ "eth1" ];
+    nas.zfsEncryption.enable = pkgs.lib.mkForce false;
     nas.testing.readOnlyPackageSet = true;
     users.users.admin.openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci"
@@ -45,6 +46,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("multi-user.target")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
     machine.succeed("timeout --verbose --signal=TERM --kill-after=${toString outerKillAfter}s ${toString guestWatchdog}s nas-vm-guest-test /dev/vdb")
+    machine.succeed("test $(zfs get -H -o value encryption tank/nas) = off")
     machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.secretAdversarial}s nas-vm-secret-adversarial")
     machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.installedSmoke}s python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")
     machine.succeed("jq -e '.ok == true and .smoke == true and .commands > 0' /tmp/nas-installed-command-smoke.json >/dev/null")

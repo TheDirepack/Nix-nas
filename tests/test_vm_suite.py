@@ -204,6 +204,10 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("zfsEncryption.enable = lib.mkForce false;", fixture)
         self.assertIn("zfsEncryption.acknowledgeUnencrypted = lib.mkForce false;", fixture)
 
+    def test_native_unencrypted_leg_disables_the_reference_encryption_default(self) -> None:
+        fixture = (ROOT / "tests/nixos/integration.nix").read_text(encoding="utf-8")
+        self.assertIn("nas.zfsEncryption.enable = pkgs.lib.mkForce false;", fixture)
+
     def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertIn('administrator="akadmin"', guest)
