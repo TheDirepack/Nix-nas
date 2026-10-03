@@ -25,7 +25,7 @@ const INTERACTIVE = 'button, a[href], select, input, textarea, [role="dialog"], 
 function isNasComponentFrame(frame) {
   try {
     const url = new URL(frame.url());
-    return /\/cockpit\/@[^/]+\/nixos-nas(?:\/|$)/.test(url.pathname);
+    return /\/cockpit\/@[^/]+\/nas(?:\/|$)/.test(url.pathname);
   } catch {
     return false;
   }
@@ -35,23 +35,23 @@ async function getNasComponentFrame(page) {
   await expect
     .poll(() => page.frames().filter(isNasComponentFrame).length, {
       timeout: 30_000,
-      message: "Cockpit never loaded the installed nixos-nas package frame",
+      message: "Cockpit never loaded the installed nas package frame",
     })
     .toBe(1);
   const frame = page.frames().find(isNasComponentFrame);
-  if (!frame) throw new Error("nixos-nas Cockpit frame disappeared after discovery");
+  if (!frame) throw new Error("nas Cockpit frame disappeared after discovery");
   return frame;
 }
 
 async function expectLogin(page) {
   await expect(page).toHaveURL(/\/identity\//);
-  await expect(page.locator('input[name="uid_field"]')).toBeVisible();
+  await expect(page.getByRole("textbox", {name: "Email or Username", exact: true})).toBeVisible();
   await expect(page.locator('button[type="submit"]').filter({visible: true}).first()).toBeVisible();
   expect(page.frames().some(isNasComponentFrame)).toBe(false);
 }
 
 async function submitUsername(page, value) {
-  const user = page.locator('input[name="uid_field"]');
+  const user = page.getByRole("textbox", {name: "Email or Username", exact: true});
   await expect(user).toBeVisible();
   await user.fill(value);
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
@@ -61,7 +61,7 @@ async function login(page) {
   await page.goto("/console/");
   await expectLogin(page);
   await submitUsername(page, username);
-  const pass = page.locator('input[type="password"]');
+  const pass = page.getByRole("textbox", {name: "Password", exact: true});
   await expect(pass).toBeVisible();
   await pass.fill(password);
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
@@ -70,9 +70,7 @@ async function login(page) {
 
 async function openNasOverview(page) {
   await login(page);
-  const link = page.getByText("NAS Overview", {exact: true}).filter({visible: true}).first();
-  await expect(link).toBeVisible({timeout: 30_000});
-  await link.click();
+  await page.goto("/console/nas");
   const frame = await getNasComponentFrame(page);
   await expect(frame.getByRole("heading", {name: "NixOS NAS"})).toBeVisible({timeout: 30_000});
   return frame;
@@ -85,7 +83,7 @@ async function openOperationsSection(frame) {
 
 async function expectNoSeriousAxeViolations(page) {
   // axe-core traverses same-origin frames from the Cockpit shell.  The caller
-  // first proves that the real nixos-nas frame exists so this cannot silently
+  // first proves that the real nas frame exists so this cannot silently
   // degrade into a shell-only accessibility check.
   await getNasComponentFrame(page);
   const result = await new AxeBuilder({page})
@@ -205,9 +203,9 @@ test("direct anonymous attempts to reach the NAS component remain login-protecte
   page,
 }) => {
   for (const path of [
-    "/console/cockpit/@localhost/nixos-nas/index.html",
-    "/console/cockpit/@localhost/nixos-nas/",
-    "/console/#/nixos-nas",
+    "/console/cockpit/@localhost/nas/index.html",
+    "/console/cockpit/@localhost/nas/",
+    "/console/nas",
   ]) {
     await page.goto(path);
     await expectLogin(page);
@@ -218,9 +216,9 @@ test("invalid credentials cannot expose the NAS component", async ({page}) => {
   await page.goto("/console/");
   await expectLogin(page);
   await submitUsername(page, username);
-  await page.locator('input[type="password"]').fill("definitely-not-a-password");
+  await page.getByRole("textbox", {name: "Password", exact: true}).fill("definitely-not-a-password");
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
-  await expect(page.locator('input[type="password"]')).toBeVisible();
+  await expect(page.getByRole("textbox", {name: "Password", exact: true})).toBeVisible();
   await expect(page).toHaveURL(/\/identity\//);
   expect(page.frames().some(isNasComponentFrame)).toBe(false);
 });
@@ -245,7 +243,7 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     await page.goto("/console/");
     await expectLogin(page);
     await submitUsername(page, payload);
-    const pass = page.locator('input[type="password"]');
+    const pass = page.getByRole("textbox", {name: "Password", exact: true});
     await expect(pass).toBeVisible();
     await pass.fill(payload);
     await page.locator('button[type="submit"]').filter({visible: true}).first().click();

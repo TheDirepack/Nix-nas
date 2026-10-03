@@ -285,8 +285,11 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("function firstMaintenanceAction", security)
         self.assertIn("anonymous clients see only the Authentik login boundary", vm)
         self.assertNotIn("#login-user-input", vm)
-        self.assertIn('input[name="uid_field"]', vm)
+        self.assertIn('page.getByRole("textbox", {name: "Email or Username", exact: true})', vm)
+        self.assertIn('page.getByRole("textbox", {name: "Password", exact: true})', vm)
         self.assertIn('await page.goto("/console/")', vm)
+        self.assertIn('await page.goto("/console/nas")', vm)
+        self.assertNotIn("nixos-nas", vm)
         self.assertIn("unexpected interactive element overlaps", vm)
 
 
