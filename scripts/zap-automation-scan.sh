@@ -211,6 +211,10 @@ chmod 0644 "$plan"
 # Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
 runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
   -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw")
+if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
+  [[ "$NAS_ZAP_EXTRA_HOST" != *$'\n'* && "$NAS_ZAP_EXTRA_HOST" != *$'\r'* ]] || die "NAS_ZAP_EXTRA_HOST must be one line"
+  runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")
+fi
 if [[ "$MODE" == authenticated ]]; then
   runtime_args+=(-e NAS_ZAP_AUTH_USER -e NAS_ZAP_AUTH_PASSWORD)
 fi

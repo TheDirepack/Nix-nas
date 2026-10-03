@@ -283,7 +283,10 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("hostile status corpus never creates executable elements", security)
         self.assertIn('frame.locator(".nas-actions button").first()', vm)
         self.assertIn("function firstMaintenanceAction", security)
-        self.assertIn("anonymous clients see only the Cockpit login boundary", vm)
+        self.assertIn("anonymous clients see only the Authentik login boundary", vm)
+        self.assertNotIn("#login-user-input", vm)
+        self.assertIn('input[name="uid_field"]', vm)
+        self.assertIn('await page.goto("/console/")', vm)
         self.assertIn("unexpected interactive element overlaps", vm)
 
 

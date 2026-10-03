@@ -24,6 +24,25 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_final_workloads_preserve_storage_and_use_the_real_authentik_gate(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        self.assertIn('-b "$INSTALLED_DATA_DISK" "$DATA_DISK"', source)
+        self.assertIn("nas-vm-guest-test --setup-reboot-e2e --verify", source)
+        self.assertNotIn("useradd", source)
+        self.assertNotIn("chpasswd", source)
+        self.assertNotIn("COCKPIT_PORT", source)
+        self.assertIn('NAS_VM_BASE_URL="https://nas-test.local:$HTTPS_PORT"', source)
+
+    def test_final_browser_config_does_not_depend_on_npm_exec_working_directory(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        self.assertIn('--config "$ROOT/cockpit/e2e/playwright.config.mjs"', source)
+
+    def test_final_browser_and_scanner_resolve_the_public_test_hostname(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("127.0.0.1 nas-test.local", workflow)
+        scanner = (ROOT / "scripts/zap-automation-scan.sh").read_text(encoding="utf-8")
+        self.assertIn('runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")', scanner)
+
     def test_installed_guest_emits_boot_diagnostics_to_the_harness_serial_log(self) -> None:
         fixture = (ROOT / "tests/nixos/qemu-installed.nix").read_text(encoding="utf-8")
         self.assertIn('boot.kernelParams = [ "console=ttyS0,115200n8" ];', fixture)
@@ -145,7 +164,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", qemu)
         self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", qemu)
         self.assertIn('HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"', final_browser)
-        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
+        self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
         self.assertNotIn("-netdev tap", qemu)
         self.assertNotIn("bridge=", qemu)
         self.assertIn("sync_source_to_guest", qemu)

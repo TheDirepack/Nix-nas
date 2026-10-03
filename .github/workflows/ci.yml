@@ -804,7 +804,10 @@ jobs:
       - name: Install from official NixOS media and reboot-test
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
-        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
+        # All browser engines must resolve Authentik's canonical callback host.
+        run: |
+          echo '127.0.0.1 nas-test.local' | sudo tee -a /etc/hosts
+          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Qualify older-to-newer NixOS package upgrade on a fresh installation
         env:
           NAS_QEMU_PACKAGE_UPGRADE: "1"

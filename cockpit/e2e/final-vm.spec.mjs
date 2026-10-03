@@ -44,21 +44,28 @@ async function getNasComponentFrame(page) {
 }
 
 async function expectLogin(page) {
-  await expect(page.locator("#login-user-input")).toBeVisible();
-  await expect(page.locator("#login-password-input")).toBeVisible();
-  await expect(page.locator("#login-button")).toBeVisible();
+  await expect(page).toHaveURL(/\/identity\//);
+  await expect(page.locator('input[name="uid_field"]')).toBeVisible();
+  await expect(page.locator('button[type="submit"]').filter({visible: true}).first()).toBeVisible();
   expect(page.frames().some(isNasComponentFrame)).toBe(false);
 }
 
-async function login(page) {
-  await page.goto("/");
-  const user = page.locator("#login-user-input");
-  const pass = page.locator("#login-password-input");
+async function submitUsername(page, value) {
+  const user = page.locator('input[name="uid_field"]');
   await expect(user).toBeVisible();
-  await user.fill(username);
+  await user.fill(value);
+  await page.locator('button[type="submit"]').filter({visible: true}).first().click();
+}
+
+async function login(page) {
+  await page.goto("/console/");
+  await expectLogin(page);
+  await submitUsername(page, username);
+  const pass = page.locator('input[type="password"]');
+  await expect(pass).toBeVisible();
   await pass.fill(password);
-  await page.locator("#login-button").click();
-  await expect(page.locator("#login-user-input")).toHaveCount(0, {timeout: 30_000});
+  await page.locator('button[type="submit"]').filter({visible: true}).first().click();
+  await expect(page).toHaveURL(/\/console\//);
 }
 
 async function openNasOverview(page) {
@@ -163,10 +170,10 @@ async function exerciseLayoutMatrix(page, frame) {
   }
 }
 
-test("anonymous clients see only the Cockpit login boundary", async ({page}) => {
+test("anonymous clients see only the Authentik login boundary", async ({page}) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto("/");
+  await page.goto("/console/");
   await expectLogin(page);
   expect(errors).toEqual([]);
 });
@@ -174,7 +181,7 @@ test("anonymous clients see only the Cockpit login boundary", async ({page}) => 
 test("anonymous login boundary remains accessible and responsive at common sizes and 200 percent text", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/console/");
   await expectLogin(page);
   const result = await new AxeBuilder({page})
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
@@ -198,9 +205,9 @@ test("direct anonymous attempts to reach the NAS component remain login-protecte
   page,
 }) => {
   for (const path of [
-    "/cockpit/@localhost/nixos-nas/index.html",
-    "/cockpit/@localhost/nixos-nas/",
-    "/#/nixos-nas",
+    "/console/cockpit/@localhost/nixos-nas/index.html",
+    "/console/cockpit/@localhost/nixos-nas/",
+    "/console/#/nixos-nas",
   ]) {
     await page.goto(path);
     await expectLogin(page);
@@ -208,11 +215,13 @@ test("direct anonymous attempts to reach the NAS component remain login-protecte
 });
 
 test("invalid credentials cannot expose the NAS component", async ({page}) => {
-  await page.goto("/");
-  await page.locator("#login-user-input").fill(`invalid-${Date.now()}`);
-  await page.locator("#login-password-input").fill("definitely-not-a-password");
-  await page.locator("#login-button").click();
-  await expect(page.locator("#login-user-input")).toBeVisible();
+  await page.goto("/console/");
+  await expectLogin(page);
+  await submitUsername(page, username);
+  await page.locator('input[type="password"]').fill("definitely-not-a-password");
+  await page.locator('button[type="submit"]').filter({visible: true}).first().click();
+  await expect(page.locator('input[type="password"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/identity\//);
   expect(page.frames().some(isNasComponentFrame)).toBe(false);
 });
 
@@ -222,7 +231,6 @@ test("hostile anonymous login values stay inert", async ({page}) => {
   await page.addInitScript(() => {
     globalThis.__nas_login_xss = 0;
   });
-  await page.goto("/");
   const payloads = [
     "<script>globalThis.__nas_login_xss=1</script>",
     '<img src=x onerror="globalThis.__nas_login_xss=2">',
@@ -234,10 +242,14 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     "\r\nX-Injected: yes",
   ];
   for (const payload of payloads) {
-    await page.locator("#login-user-input").fill(payload);
-    await page.locator("#login-password-input").fill(payload);
-    await page.locator("#login-button").click();
-    await expect(page.locator("#login-user-input")).toBeVisible();
+    await page.goto("/console/");
+    await expectLogin(page);
+    await submitUsername(page, payload);
+    const pass = page.locator('input[type="password"]');
+    await expect(pass).toBeVisible();
+    await pass.fill(payload);
+    await page.locator('button[type="submit"]').filter({visible: true}).first().click();
+    await expect(page).toHaveURL(/\/identity\//);
     expect(await page.evaluate(() => globalThis.__nas_login_xss)).toBe(0);
     expect(page.frames().some(isNasComponentFrame)).toBe(false);
   }
