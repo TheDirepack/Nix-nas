@@ -52,3 +52,6 @@ The official-ISO upgrade rehearsal pins nixpkgs revision
 `36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac` (NixOS 26.05, June 30,
 2026). It provides Syncthing 2.0.15, older than the reviewed lock's package.
 Keep the revision immutable so CI exercises the same old-to-new transition.
+The shared test declaration lives in `tests/vm/package-upgrade-baseline.sh`.
+Install and initialize that baseline before promoting to the reviewed lock;
+downgrading an already-migrated native database is not an upgrade rehearsal.

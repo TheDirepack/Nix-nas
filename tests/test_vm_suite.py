@@ -250,12 +250,23 @@ class VmSuiteWrapperTests(unittest.TestCase):
         reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("NAS_TEST_PACKAGE_UPGRADE=$package_upgrade", qemu)
-        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", reconfigure)
+        baseline = (ROOT / "tests/vm/package-upgrade-baseline.sh").read_text(encoding="utf-8")
+        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", baseline)
         self.assertIn("--override-input nixpkgs", reconfigure)
         self.assertIn("syncthing-$older_version", reconfigure)
         self.assertIn("syncthing-$current_version", reconfigure)
         self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
         self.assertIn("final-vm-evidence/installed-console.log", workflow)
+
+    def test_upgrade_initializes_older_packages_before_mutable_application_state(self) -> None:
+        installer = (ROOT / "tests/vm/install-system.sh").read_text(encoding="utf-8")
+        expect = (ROOT / "tests/vm/install.expect").read_text(encoding="utf-8")
+        reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        self.assertIn("NAS_INSTALL_PACKAGE_UPGRADE=$package_upgrade", expect)
+        self.assertIn('--override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"', installer)
+        self.assertIn("install_args+=(--override-input nixpkgs", installer)
+        self.assertNotIn('rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input', reconfigure)
+        self.assertIn('fail "installed baseline does not contain the pinned older Syncthing package"', reconfigure)
 
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")
