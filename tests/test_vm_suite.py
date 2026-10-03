@@ -24,6 +24,10 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_installed_guest_emits_boot_diagnostics_to_the_harness_serial_log(self) -> None:
+        fixture = (ROOT / "tests/nixos/qemu-installed.nix").read_text(encoding="utf-8")
+        self.assertIn('boot.kernelParams = [ "console=ttyS0,115200n8" ];', fixture)
+
     def test_live_setup_fixtures_use_canonical_storage_fields(self) -> None:
         for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
             with self.subTest(path=path.name):

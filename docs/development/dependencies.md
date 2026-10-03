@@ -46,6 +46,14 @@ The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as 
 
 The unfree-package predicate in `modules/nas/config/host-platform.nix` admits only NVIDIA/CUDA/CUDNN/Libcu/NCCL package names, and only when `nas.hardware.gpuVendors` declares `nvidia`. Keep that exception exact to those package-name prefixes; broader unfree enablement would bypass the appliance dependency review boundary.
 
+## Firewalld readiness
+
+The upstream unit may use implicit `Type=simple`, which does not guarantee that
+`firewall-cmd` can connect when dependent units start. The NAS unit uses native
+`Type=dbus` readiness with `BusName=org.fedoraproject.FirewallD1`. Firewalld
+acquires that name after initializing firewall state; the baseline and guards
+must remain ordered after this readiness boundary.
+
 ## Upgrade qualification pin
 
 The official-ISO upgrade rehearsal pins nixpkgs revision
