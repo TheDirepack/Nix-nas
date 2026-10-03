@@ -19,6 +19,10 @@ def text(relative: str) -> str:
 
 class Alpha20CockpitContracts(unittest.TestCase):
     def test_authentik_accessibility_backport_patches_source_for_all_consumers(self) -> None:
+        patch = text("authentik/patches/authentik-accessibility.patch")
+        self.assertIn("web/src/flow/components/ak-brand-footer.ts", patch)
+        self.assertIn("+        background-color: #151515;", patch)
+        self.assertNotIn("web/src/styles/authentik/components/Login/login.css", patch)
         packages = text("modules/nas/internal/account-tools.nix")
         self.assertIn("authentikPackage = pkgs.authentik.override", packages)
         self.assertIn("pkgs.applyPatches", packages)

@@ -64,23 +64,15 @@ diff --git a/web/src/flow/FlowExecutor.css b/web/src/flow/FlowExecutor.css
  
          grid-area: main;
      }
-diff --git a/web/src/styles/authentik/components/Login/login.css b/web/src/styles/authentik/components/Login/login.css
---- a/web/src/styles/authentik/components/Login/login.css
-+++ b/web/src/styles/authentik/components/Login/login.css
-@@ -283,6 +283,7 @@
- 
- .pf-c-login__footer {
-     --pf-global--Color--100: var(--pf-global--Color--light-100) !important;
-+    background-color: #151515;
-     grid-area: footer;
-     flex: 0 0 auto;
-     display: flex;
-@@ -304,7 +305,7 @@
-     );
- 
-     @media (max-width: 35rem) {
--        color: var(--pf-global--Color--200);
-+        color: var(--pf-global--Color--light-100);
+diff --git a/web/src/flow/components/ak-brand-footer.ts b/web/src/flow/components/ak-brand-footer.ts
+--- a/web/src/flow/components/ak-brand-footer.ts
++++ b/web/src/flow/components/ak-brand-footer.ts
+@@ -18,6 +18,8 @@ const styles = css`
+         color: unset;
      }
- 
-     @media (min-width: 35rem) and (min-height: 17.5rem) {
+     ul.pf-c-list.pf-m-inline {
++        background-color: #151515;
++        color: #ffffff;
+         justify-content: center;
+         padding: 0;
+         column-gap: var(--pf-global--spacer--xl);
