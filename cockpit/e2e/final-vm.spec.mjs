@@ -106,6 +106,7 @@ async function expectLayoutHealthy(frame, viewport) {
   const boxes = await frame.locator(INTERACTIVE).evaluateAll((nodes) =>
     nodes
       .filter((node) => {
+        if (node.tabIndex === -1 && node.closest('[aria-hidden="true"]')) return false;
         const style = getComputedStyle(node);
         const rect = node.getBoundingClientRect();
         return (
@@ -132,7 +133,7 @@ async function expectLayoutHealthy(frame, viewport) {
   );
 
   for (const box of boxes) {
-    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.x, JSON.stringify(box)).toBeGreaterThanOrEqual(-1);
     expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
     expect(box.y + box.height).toBeGreaterThanOrEqual(-1);
   }

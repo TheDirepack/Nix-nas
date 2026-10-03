@@ -308,6 +308,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertNotIn("#login-user-input", vm)
         self.assertIn('page.getByRole("textbox", {name: "Email or Username", exact: true})', vm)
         self.assertIn('page.getByRole("textbox", {name: "Password", exact: true})', vm)
+        self.assertIn("node.tabIndex === -1 && node.closest('[aria-hidden=\"true\"]')", vm)
         self.assertIn('await page.goto("/console/")', vm)
         self.assertIn('await page.goto("/console/nas")', vm)
         self.assertNotIn("nixos-nas", vm)
