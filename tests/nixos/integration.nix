@@ -43,6 +43,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     machine.wait_for_unit("multi-user.target")
+    machine.succeed("busctl --system call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
     machine.succeed("test ! -e /run/nas-control/rollback-guard/current-guard-unit")
     machine.succeed("systemctl start nas-v2-apply-failed.service")

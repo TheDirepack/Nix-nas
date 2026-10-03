@@ -218,15 +218,28 @@ case "$WORKLOAD" in
     log "Running installed-command adversarial fuzzing in the disposable VM"
     ssh "${ssh_args[@]}" admin@127.0.0.1 \
       'sudo -n python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py' >"$fuzz_out"
-    python3 - "$ROOT/tests/custom-script-contracts.json" "$fuzz_out" <<'PY'
+    python3 - "$ROOT" "$fuzz_out" <<'PY'
+import importlib.util
 import json
 import pathlib
 import sys
 
-contracts = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+root = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("installed_adversarial", root / "tests/vm/adversarial-installed.py")
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load the canonical installed-command inventory")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+runner.INVENTORIES = tuple(root / "tests" / path.name for path in runner.INVENTORIES)
+strategies = runner.inventory_strategies()
 result = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
-expected = sum(item.get("fuzzStrategy") is not None for item in contracts["executables"])
-if result.get("ok") is not True or result.get("commands") != expected or expected == 0:
+if (
+    not strategies
+    or result.get("ok") is not True
+    or result.get("smoke") is not False
+    or result.get("commands") != len(strategies)
+    or result.get("strategies") != strategies
+):
     raise SystemExit("installed-command fuzz evidence is empty or incomplete")
 PY
     run_http_adversarial_contracts "$http_out"

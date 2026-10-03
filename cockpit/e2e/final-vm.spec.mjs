@@ -58,19 +58,18 @@ async function submitUsername(page, value) {
 }
 
 async function login(page) {
-  await page.goto("/console/");
+  await page.goto("/console/nas");
   await expectLogin(page);
   await submitUsername(page, username);
   const pass = page.getByRole("textbox", {name: "Password", exact: true});
   await expect(pass).toBeVisible();
   await pass.fill(password);
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
-  await expect(page).toHaveURL(/\/console\//);
+  await expect(page).toHaveURL(/\/console\/nas(?:[?#]|$)/);
 }
 
 async function openNasOverview(page) {
   await login(page);
-  await page.goto("/console/nas");
   const frame = await getNasComponentFrame(page);
   await expect(frame.getByRole("heading", {name: "NixOS NAS"})).toBeVisible({timeout: 30_000});
   return frame;
@@ -240,6 +239,7 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     "\r\nX-Injected: yes",
   ];
   for (const payload of payloads) {
+    await page.context().clearCookies();
     await page.goto("/console/");
     await expectLogin(page);
     await submitUsername(page, payload);

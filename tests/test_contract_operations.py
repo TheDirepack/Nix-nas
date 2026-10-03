@@ -62,7 +62,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('TimeoutStartSec = "4min";', authentik)
         self.assertIn('blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";', authentik)
         blueprints = text("modules/nas/internal/account-tools.nix")
-        self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)
+        self.assertIn("${authentikPackage.src}/blueprints/.", blueprints)
 
     def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
         zfs_tools = text("modules/nas/internal/zfs-tools.nix")

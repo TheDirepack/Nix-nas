@@ -2,6 +2,7 @@
 
 let
   inherit (nasInternal)
+    authentikPackage
     authentikDataDir
     bootstrapAuthentikDataDir
     bootstrapPostgresqlDataDir
@@ -152,6 +153,8 @@ let
 in
 {
   config = {
+    # Cockpit preloads SMART health, which requires the native UDisks2 bus.
+    services.udisks2.enable = true;
     services.cockpit = {
       enable = true;
       port = cockpitPort;
@@ -320,7 +323,7 @@ in
         RemainAfterExit = true;
         Restart = "on-failure";
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
-        ExecStart = "${pkgs.authentik}/bin/ak migrate";
+        ExecStart = "${authentikPackage}/bin/ak migrate";
       };
     };
     systemd.services.authentik-worker = {
@@ -333,7 +336,7 @@ in
         RuntimeDirectory = "authentik-worker";
         RuntimeDirectoryMode = "0750";
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
-        ExecStart = "${pkgs.authentik}/bin/ak worker";
+        ExecStart = "${authentikPackage}/bin/ak worker";
       };
     };
     systemd.services.authentik = {
@@ -346,7 +349,7 @@ in
         RuntimeDirectory = "authentik-server";
         RuntimeDirectoryMode = "0750";
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${authentikDataDir}/data";
-        ExecStart = "${pkgs.authentik}/bin/ak server";
+        ExecStart = "${authentikPackage}/bin/ak server";
         TimeoutStartSec = "4min";
         ExecStartPost = pkgs.writeShellScript "authentik-ready" ''
           exec ${pkgs.coreutils}/bin/timeout 180s ${pkgs.curl}/bin/curl \

@@ -18,6 +18,23 @@ def text(relative: str) -> str:
 
 
 class Alpha20CockpitContracts(unittest.TestCase):
+    def test_authentik_accessibility_backport_patches_source_for_all_consumers(self) -> None:
+        packages = text("modules/nas/internal/account-tools.nix")
+        self.assertIn("authentikPackage = pkgs.authentik.override", packages)
+        self.assertIn("pkgs.applyPatches", packages)
+        self.assertIn("authentik-accessibility.patch", packages)
+        application = text("modules/nas/config/application-services.nix")
+        self.assertNotIn("${pkgs.authentik}/bin/ak", application)
+        self.assertIn("${authentikPackage}/bin/ak server", application)
+        blueprint = text("modules/nas/config/managed-services-authentik-blueprint.nix")
+        self.assertIn("${authentikPackage}/bin/ak apply_blueprint", blueprint)
+
+    def test_stock_cockpit_smart_health_has_its_native_udisks_bus(self) -> None:
+        application = text("modules/nas/config/application-services.nix")
+        self.assertIn("services.udisks2.enable = true;", application)
+        native = text("tests/nixos/integration.nix")
+        self.assertIn("/org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects", native)
+
     def test_first_start_is_enabled(self) -> None:
         options = text("modules/nas/options/core.nix")
         services = text("modules/nas/config/systemd-services.nix")
@@ -290,6 +307,9 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn('await page.goto("/console/")', vm)
         self.assertIn('await page.goto("/console/nas")', vm)
         self.assertNotIn("nixos-nas", vm)
+        login = vm.split("async function login(page) {", 1)[1].split("\n}", 1)[0]
+        self.assertIn('await page.goto("/console/nas")', login)
+        self.assertNotIn('await page.goto("/console/")', login)
         self.assertIn("unexpected interactive element overlaps", vm)
 
 

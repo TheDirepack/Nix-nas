@@ -24,6 +24,36 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_installed_fuzz_evidence_matches_both_canonical_inventories(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        verifier = source.split("    python3 - ", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        strategies = {}
+        for name in ("custom-script-contracts.json", "custom-script-contracts-v2.json"):
+            inventory = json.loads((ROOT / "tests" / name).read_text(encoding="utf-8"))
+            strategies.update(
+                {name: row["fuzzStrategy"] for name, row in inventory["executables"].items() if row.get("fuzzStrategy")}
+            )
+        complete = {"ok": True, "smoke": False, "commands": len(strategies), "strategies": strategies}
+        with tempfile.TemporaryDirectory() as directory:
+            report = pathlib.Path(directory) / "fuzz.json"
+            for payload, accepted in (
+                (complete, True),
+                ({**complete, "commands": len(strategies) - 1}, False),
+                ({**complete, "strategies": {}}, False),
+                ({**complete, "smoke": True}, False),
+                ({**complete, "ok": False}, False),
+            ):
+                with self.subTest(payload=payload):
+                    report.write_text(json.dumps(payload), encoding="utf-8")
+                    result = subprocess.run(
+                        ["python3", "-c", verifier, str(ROOT), str(report)],
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
     def test_final_workloads_preserve_storage_and_use_the_real_authentik_gate(self) -> None:
         source = FINAL_BROWSER.read_text(encoding="utf-8")
         self.assertIn('-b "$INSTALLED_DATA_DISK" "$DATA_DISK"', source)

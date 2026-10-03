@@ -54,6 +54,17 @@ The upstream unit may use implicit `Type=simple`, which does not guarantee that
 acquires that name after initializing firewall state; the baseline and guards
 must remain ordered after this readiness boundary.
 
+## Authentik login accessibility
+
+`authentikPackage` in `modules/nas/internal/account-tools.nix` applies
+`authentik/patches/authentik-accessibility.patch` to the upstream source before
+Nix builds its frontend and server. It removes invalid required-state ARIA from
+labels, keeps password-manager helper controls out of accessibility/tab order,
+and gives light footer/locale text a solid dark background. All native server,
+worker, migration, and blueprint commands consume this one package. Dependency
+updates must either retain an applicable source patch or remove it after the
+unchanged installed-login accessibility test passes without it.
+
 ## Upgrade qualification pin
 
 The official-ISO upgrade rehearsal pins nixpkgs revision

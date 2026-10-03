@@ -1,6 +1,7 @@
 { config, lib, pkgs, nasInternal, ... }:
 
 let
+  authentikPackage = nasInternal.authentikPackage;
   cfg = config.nas;
   v2Source = nasInternal.v2Source;
   v2Python = nasInternal.v2PythonCore;
@@ -41,7 +42,7 @@ let
       -- ${pkgs.coreutils}/bin/env \
         HOME=${lib.escapeShellArg nasInternal.authentikDataDir} \
         AUTHENTIK_BLUEPRINTS_DIR=${lib.escapeShellArg blueprintDir} \
-        ${pkgs.authentik}/bin/ak apply_blueprint ${lib.escapeShellArg blueprintName}
+        ${authentikPackage}/bin/ak apply_blueprint ${lib.escapeShellArg blueprintName}
 
     ${v2Python}/bin/python ${v2Source}/nas_v2_authentik_blueprint.py commit \
       --manifest ${lib.escapeShellArg objectManifest} \
