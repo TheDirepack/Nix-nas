@@ -65,6 +65,12 @@ worker, migration, and blueprint commands consume this one package. Dependency
 updates must either retain an applicable source patch or remove it after the
 unchanged installed-login accessibility test passes without it.
 
+The same source package applies `authentik-known-device-cookie.patch` so the
+remembered-device cookie is HttpOnly and uses the request's secure transport
+flag. Keep this patch until upstream provides equivalent protection. Do not
+make the CSRF cookie HttpOnly: the native interface reads it to construct its
+CSRF request header. Preserve upstream session SameSite behavior as well.
+
 Authentik's [documented CSP](https://docs.goauthentik.io/security/security-hardening/#content-security-policy-csp)
 requires inline scripts and styles. The proxy adds that baseline only when
 upstream has not supplied a policy, preserving the stricter policy on uploaded

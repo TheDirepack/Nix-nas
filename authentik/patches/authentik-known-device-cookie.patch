@@ -1,0 +1,12 @@
+diff --git a/authentik/stages/user_login/stage.py b/authentik/stages/user_login/stage.py
+--- a/authentik/stages/user_login/stage.py
++++ b/authentik/stages/user_login/stage.py
+@@ -119,6 +119,8 @@ class UserLoginStageView(ChallengeStageView):
+             expires=expiry,
+             path=settings.SESSION_COOKIE_PATH,
+             domain=settings.SESSION_COOKIE_DOMAIN,
++            secure=self.request.is_secure(),
++            httponly=True,
+             samesite=settings.SESSION_COOKIE_SAMESITE,
+         )
+         return response

@@ -270,6 +270,19 @@ test("final VM exposes the installed Cockpit NAS component after real authentica
   expect(errors).toEqual([]);
 });
 
+test("final VM protects remembered-device cookies without breaking native CSRF", async ({page}) => {
+  await openNasOverview(page);
+  const cookies = await page.context().cookies();
+  const device = cookies.find((cookie) => cookie.name === "authentik_device");
+  expect(device).toBeDefined();
+  expect(device.secure).toBe(true);
+  expect(device.httpOnly).toBe(true);
+  const csrf = cookies.find((cookie) => cookie.name === "authentik_csrf");
+  expect(csrf).toBeDefined();
+  expect(csrf.secure).toBe(true);
+  expect(csrf.httpOnly).toBe(false);
+});
+
 test("final VM component has no serious or critical accessibility violations", async ({page}) => {
   await openNasOverview(page);
   await expectNoSeriousAxeViolations(page);

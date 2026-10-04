@@ -25,7 +25,10 @@ let
         pkgs.applyPatches {
           name = "authentik-accessible-source";
           src = source;
-          patches = [ ../../../authentik/patches/authentik-accessibility.patch ];
+          patches = [
+            ../../../authentik/patches/authentik-accessibility.patch
+            ../../../authentik/patches/authentik-known-device-cookie.patch
+          ];
         }
       else source;
   };
