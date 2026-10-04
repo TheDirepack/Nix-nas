@@ -24,6 +24,54 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_isolated_authentik_outage_cancels_pending_sync_retries_and_restores_timers(self) -> None:
+        source = GUEST_TEST.read_text(encoding="utf-8")
+        block = source.split('log "Authentication dependency outage stays fail-closed"', 1)[1].split(
+            'pass "protected proxy routes fail closed and recover after Authentik outage"', 1
+        )[0]
+        for enabled in (True, False):
+            with self.subTest(timers_active=enabled):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+PUBLIC_HOST=nas-test.local
+AUTHENTIK_PUBLIC_HOST=nas-test.local:8443
+AUTHENTIK_OUTPOST_PORT=9010
+timers_stopped=0
+retry_cancelled=0
+systemctl() {
+  printf '%s\\n' "$*"
+  case "$*" in
+    'is-active --quiet '*.timer) [[ "$1" && "$TIMERS_ACTIVE" == 1 ]]; return ;;
+    'stop nas-v2-timer-identity-sync-0.timer nas-v2-timer-syncthing-sync-0.timer') timers_stopped=1 ;;
+    'stop nas-syncthing-sync.service') retry_cancelled=1 ;;
+    'stop --job-mode=ignore-dependencies authentik.service')
+      [[ "$timers_stopped" == 1 && "$retry_cancelled" == 1 ]] || {
+        echo 'scheduled retry raced the isolated outage' >&2; return 1;
+      } ;;
+  esac
+}
+wait_inactive() { :; }
+wait_active() { :; }
+wait_http() { :; }
+curl() { echo 503; }
+fail() { echo "$*" >&2; exit 1; }
+"""
+                        + block,
+                    ],
+                    env={**os.environ, "TIMERS_ACTIVE": "1" if enabled else "0"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                restore = "start nas-v2-timer-identity-sync-0.timer nas-v2-timer-syncthing-sync-0.timer"
+                self.assertEqual(restore in result.stdout, enabled)
+                self.assertIn("start nas-identity-sync.service", result.stdout)
+
     def test_installed_fuzz_evidence_matches_both_canonical_inventories(self) -> None:
         source = FINAL_BROWSER.read_text(encoding="utf-8")
         verifier = source.split("    python3 - ", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]

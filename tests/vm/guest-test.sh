@@ -871,6 +871,19 @@ grep -q 'request_header -Remote-User' /run/nas-control/caddy-managed.conf
 grep -q 'request_header -X-Authentik-Username' /run/nas-control/caddy-managed.conf
 pass "Authentik API and fail-closed proxy checks passed"
 log "Authentication dependency outage stays fail-closed"
+outage_sync_timers=(nas-v2-timer-identity-sync-0.timer nas-v2-timer-syncthing-sync-0.timer)
+outage_resume_timers=()
+for timer in "${outage_sync_timers[@]}"; do
+  if systemctl is-active --quiet "$timer"; then
+    outage_resume_timers+=("$timer")
+  fi
+done
+# Cancel queued lock-contention retries as well as timers so this tests only
+# the proxy boundary, not an overlapping identity reconciliation transaction.
+systemctl stop "${outage_sync_timers[@]}"
+systemctl stop nas-syncthing-sync.service
+systemctl start nas-identity-sync.service
+wait_inactive nas-identity-sync.service
 outage_preserved_units=(
   nas-protected-services.target
   caddy.service
@@ -906,6 +919,9 @@ wait_http "http://127.0.0.1:$AUTHENTIK_OUTPOST_PORT/outpost.goauthentik.io/ping"
 for unit in "${outage_preserved_units[@]}"; do
   systemctl is-active --quiet "$unit" || fail "$unit did not survive the isolated Authentik outage"
 done
+if ((${#outage_resume_timers[@]})); then
+  systemctl start "${outage_resume_timers[@]}"
+fi
 pass "protected proxy routes fail closed and recover after Authentik outage"
 proxy_headers="$(curl --silent --show-error --insecure --dump-header - --output /dev/null \
   --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/")"
