@@ -7,6 +7,7 @@ OUT_DIR="${NAS_ZAP_OUT_DIR:-$PWD/zap-report}"
 IMAGE="${NAS_ZAP_IMAGE:-}"
 REPORT_PREFIX="${NAS_ZAP_REPORT_PREFIX:-scan}"
 RUNTIME="${NAS_CONTAINER_RUNTIME:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -84,6 +85,7 @@ command -v "$RUNTIME" >/dev/null 2>&1 || die "$RUNTIME is not installed"
 
 install -d -m 0755 "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd -P)"
+install -m 0644 "$SCRIPT_DIR/lib/zap-packaged.conf" "$OUT_DIR/zap-packaged.conf"
 case "$MODE" in
   baseline)
     scanner=zap-baseline.py
@@ -117,6 +119,7 @@ set +e
 timeout --signal=TERM --kill-after=30s "${process_timeout}s" \
   "$RUNTIME" "${runtime_args[@]}" "$IMAGE" "$scanner" \
     -t "$TARGET" \
+    -c zap-packaged.conf \
     -m "$minutes" \
     -r "zap-$REPORT_PREFIX-$MODE.html" \
     -J "zap-$REPORT_PREFIX-$MODE.json" \

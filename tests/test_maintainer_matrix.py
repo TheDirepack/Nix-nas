@@ -91,6 +91,7 @@ for flag in ('-r','-J','-w'):
     name=args[args.index(flag)+1]
     (out/name).write_text('ok\\n', encoding='utf-8')
 pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8')
+sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
 """,
             encoding="utf-8",
         )
@@ -125,6 +126,20 @@ pathlib.Path(out/'invocation.txt').write_text('\\n'.join(args), encoding='utf-8'
         self.assertIn("https://nas-test.local:8443/", invocation)
         self.assertNotIn("\n-I\n", f"\n{invocation}\n")
         self.assertTrue((reports / "zap-scan-baseline.json").is_file())
+        self.assertIn("-c\nzap-packaged.conf", invocation)
+        rules = (reports / "zap-packaged.conf").read_text(encoding="utf-8")
+        configured = [line.split("\t")[:2] for line in rules.splitlines() if line and not line.startswith("#")]
+        self.assertEqual(configured, [["10015", "INFO"], ["10049", "INFO"], ["10109", "INFO"]])
+        warning = subprocess.run(
+            ["bash", "scripts/zap-scan.sh", "baseline", "https://nas-test.local:8443/"],
+            cwd=self.clean_root,
+            env={**env, "FAKE_ZAP_RC": "2"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(warning.returncode, 2)
+        self.assertIn("warnings are fatal", warning.stderr)
 
         public = subprocess.run(
             ["bash", "scripts/zap-scan.sh", "baseline", "https://example.com/"],
