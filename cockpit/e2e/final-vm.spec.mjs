@@ -219,7 +219,9 @@ test("invalid credentials cannot expose the NAS component", async ({page}) => {
   await page.goto("/console/");
   await expectLogin(page);
   await submitUsername(page, username);
-  await page.getByRole("textbox", {name: "Password", exact: true}).fill("definitely-not-a-password");
+  await page
+    .getByRole("textbox", {name: "Password", exact: true})
+    .fill("definitely-not-a-password");
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
   await expect(page.getByRole("textbox", {name: "Password", exact: true})).toBeVisible();
   await expect(page).toHaveURL(/\/identity\//);
