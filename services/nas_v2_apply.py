@@ -18,9 +18,11 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
+from nas_common import fsync_directory as _fsync_directory
 from nas_v2_accelerator import enabled_capabilities, load_platform_inventory, resolve_effective
 from nas_v2_backup import compile_backup_projection
 from nas_v2_caddy import generate_caddyfile, portal_bytes, validate_caddyfile
+from nas_v2_editor import authority_lock
 from nas_v2_history import record_desired_locked
 from nas_v2_network import PodmanNetworkProjectionError, requires_firewalld
 from nas_v2_network import materialize_projection as materialize_firewalld_projection
@@ -49,15 +51,6 @@ from nas_v2_systemd_native import validate_projection as validate_systemd_projec
 # managed-services.nix and system.nix). Creating them under the
 # compatibility symlink still lands on ZFS.
 _SERVICE_APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
-
-try:
-    from nas_v2_editor import authority_lock
-except ImportError:  # pragma: no cover - fallback for minimal test harnesses
-    from contextlib import contextmanager as _cm
-
-    @_cm
-    def authority_lock(path: pathlib.Path):  # type: ignore[no-redef]  # pyright: ignore[reportAssignmentType]
-        yield
 
 
 @dataclass(frozen=True)
@@ -173,14 +166,6 @@ def _prepare_temp(path: pathlib.Path, data: bytes, mode: int) -> pathlib.Path:
         raise
 
 
-def _fsync_directory(directory: pathlib.Path) -> None:
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 _V2_OWNED_DIRS = {
     "units",
     "descriptors",
@@ -285,6 +270,7 @@ def _replace_bundle(
                 old = previous[path]
                 if old is None:
                     path.unlink(missing_ok=True)
+                    _fsync_directory(path.parent)
                     continue
                 rollback = _prepare_temp(path, old[0], old[1])
                 os.replace(rollback, path)
@@ -556,71 +542,6 @@ def apply(
         return plan
 
 
-def save_and_apply(yaml_text: str, paths: ApplyPaths = ApplyPaths()) -> dict[str, Any]:
-    """Validate and atomically replace the single-file authority and derived state."""
-    schema = load_schema(paths.schema)
-    document = parse_yaml_text(yaml_text, source="<draft>")
-    effective = _compile_document_with_platform(document, schema, paths.platform)
-    provenance = {"desiredSha256": hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()}
-    effective["provenance"] = provenance
-    plan = build_plan(effective)
-    plan["provenance"] = copy.deepcopy(provenance)
-
-    with authority_lock(paths.desired):
-        if paths.desired.is_dir():
-            raise ManagedServicesV2Error("Managed Services V2 authority must be one YAML file")
-        try:
-            old_stat = paths.desired.stat()
-            old_mode = old_stat.st_mode & 0o777
-            old_uid = old_stat.st_uid
-            old_gid = old_stat.st_gid
-            old_desired: tuple[bytes, int, int, int] | None = (
-                paths.desired.read_bytes(),
-                old_mode,
-                old_uid,
-                old_gid,
-            )
-        except FileNotFoundError:
-            old_mode = 0o640
-            old_uid = 0
-            old_gid = 0
-            old_desired = None
-
-        desired_temp = _prepare_temp(paths.desired, yaml_text.encode("utf-8"), old_mode)
-        if os.geteuid() == 0 and old_desired is not None:
-            try:
-                os.chown(desired_temp, old_uid, old_gid)
-            except OSError:
-                pass
-        try:
-            os.replace(desired_temp, paths.desired)
-            _fsync_directory(paths.desired.parent)
-            try:
-                _replace_bundle(
-                    [
-                        (paths.effective, _json_bytes(effective), 0o640),
-                        (paths.plan, _json_bytes(plan), 0o640),
-                    ]
-                )
-            except Exception:
-                if old_desired is None:
-                    paths.desired.unlink(missing_ok=True)
-                else:
-                    rollback = _prepare_temp(paths.desired, old_desired[0], old_desired[1])
-                    if os.geteuid() == 0:
-                        try:
-                            os.chown(rollback, old_desired[2], old_desired[3])
-                        except OSError:
-                            pass
-                    os.replace(rollback, paths.desired)
-                _fsync_directory(paths.desired.parent)
-                raise
-        finally:
-            desired_temp.unlink(missing_ok=True)
-
-    return plan
-
-
 __all__ = [
     "ApplyPaths",
     "BackupProjection",
@@ -631,5 +552,4 @@ __all__ = [
     "SystemdProjection",
     "apply",
     "compile_paths",
-    "save_and_apply",
 ]

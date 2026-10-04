@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import pathlib
 import sqlite3
+import subprocess
 import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -17,6 +20,53 @@ import nas_v2_backup as verifier  # noqa: E402
 
 
 class V2BackupVerifyTests(unittest.TestCase):
+    def test_sqlite_verification_closes_connections_on_success_and_failure(self):
+        connect = sqlite3.connect
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                database = root / "state.db"
+                if corrupt:
+                    database.write_bytes(b"SQLite format 3\x00not-a-database")
+                else:
+                    with closing(connect(database)) as handle:
+                        handle.execute("CREATE TABLE item (id INTEGER)")
+                        handle.commit()
+                connections = []
+
+                def tracked_connect(*args, **kwargs):
+                    connection = connect(*args, **kwargs)
+                    connections.append(connection)
+                    return connection
+
+                try:
+                    with mock.patch.object(verifier.sqlite3, "connect", side_effect=tracked_connect):
+                        if corrupt:
+                            with self.assertRaises(verifier.BackupVerificationError):
+                                verifier._verify_sqlite(database, restore_root=root)
+                        else:
+                            verifier._verify_sqlite(database, restore_root=root)
+                    self.assertEqual(len(connections), 1)
+                    with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed database"):
+                        connections[0].execute("SELECT 1")
+                finally:
+                    for connection in connections:
+                        connection.close()
+
+    def test_postgresql_verification_is_bounded_and_noninteractive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            dump = root / "database.dump"
+            dump.write_bytes(b"PGDMPfixture")
+            completed = subprocess.CompletedProcess([], 0, stdout="dump entry", stderr="")
+            with mock.patch.object(verifier.subprocess, "run", return_value=completed) as run:
+                verifier._verify_postgresql_custom_dump(dump, pg_restore_bin="pg_restore", restore_root=root)
+            self.assertEqual(run.call_args.kwargs.get("timeout"), 60)
+            self.assertEqual(run.call_args.kwargs.get("stdin"), subprocess.DEVNULL)
+            with mock.patch.object(verifier.subprocess, "run", side_effect=subprocess.TimeoutExpired("pg_restore", 60)):
+                with self.assertRaisesRegex(verifier.BackupVerificationError, "timed out"):
+                    verifier._verify_postgresql_custom_dump(dump, pg_restore_bin="pg_restore", restore_root=root)
+
     def write_inventory(self, root: pathlib.Path, resources: list[dict]) -> pathlib.Path:
         path = root / "inventory.json"
         path.write_text(json.dumps({"schemaVersion": 1, "resources": resources}), encoding="utf-8")
@@ -39,9 +89,10 @@ class V2BackupVerifyTests(unittest.TestCase):
             artifact.mkdir(parents=True)
 
             database = artifact / "state.db"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 connection.execute("CREATE TABLE item (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
                 connection.execute("INSERT INTO item(value) VALUES ('ok')")
+                connection.commit()
 
             (artifact / "opaque-native-artifact").write_text("application-owned\n", encoding="utf-8")
             (artifact / "database.pgdump").write_bytes(b"PGDMPfixture")

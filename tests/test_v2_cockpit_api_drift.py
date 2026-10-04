@@ -59,13 +59,9 @@ class CockpitApiDriftTests(unittest.TestCase):
         self.assertEqual(links["docs"], "/console/cockpit/@localhost/nas/docs/index.html")
         self.assertNotIn("files", links)
         with mock.patch.object(api, "_json_command", return_value={"ok": True}) as command:
-            self.assertEqual(api.identity_status(), {"ok": True})
-            self.assertEqual(api.capability_status(), {"ok": True})
             self.assertEqual(api.update_status(), {"ok": True})
             self.assertEqual(api.first_start_status(), {"ok": True})
         calls = [call.args[0] for call in command.call_args_list]
-        self.assertIn(["nas-identity-sync", "status"], calls)
-        self.assertIn(["nas-identity-sync", "capabilities"], calls)
         self.assertIn(["nas-update", "--status", "--json"], calls)
         self.assertTrue(any(call[:2] == ["nas-setup", "prepare-first-start"] for call in calls))
 
@@ -102,7 +98,7 @@ class CockpitApiDriftTests(unittest.TestCase):
             result = api.operation_state()
         self.assertEqual(result["conflictsByAction"]["identity-sync"], ["runtime"])
         self.assertEqual(result["managedServicesConflicts"], ["runtime"])
-        self.assertNotIn("identity-sync", result["workerOwnedActions"])
+        self.assertNotIn("workerOwnedActions", result)
         with mock.patch.object(api, "shared_operation_state", side_effect=OSError("denied")):
             result = api.operation_state()
         self.assertEqual(result["busyClasses"], [])
@@ -414,8 +410,6 @@ class CockpitApiDriftTests(unittest.TestCase):
         with (
             mock.patch.object(api, "managed_services_status", return_value=managed),
             mock.patch.object(api, "setup_status", return_value={"status": "ready"}),
-            mock.patch.object(api, "identity_status", return_value={"users": []}),
-            mock.patch.object(api, "capability_status", return_value={"capabilities": []}),
             mock.patch.object(api, "update_status", return_value={"ok": True}),
             mock.patch.object(
                 api, "service_states", return_value={"demo.service": {"activeState": "active"}}
@@ -436,8 +430,6 @@ class CockpitApiDriftTests(unittest.TestCase):
         with (
             mock.patch.object(api, "managed_services_status", return_value={"services": []}),
             mock.patch.object(api, "setup_status", side_effect=RuntimeError("probe failed")),
-            mock.patch.object(api, "identity_status", return_value={}),
-            mock.patch.object(api, "capability_status", return_value={}),
             mock.patch.object(api, "update_status", return_value={}),
             mock.patch.object(api, "service_states", return_value={}),
             mock.patch.object(api, "run", return_value=CommandResult(1, "", "offline")),

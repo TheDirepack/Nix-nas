@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/nas-qemu-process.sh
+source "$ROOT/scripts/lib/nas-qemu-process.sh"
 DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu"
 CACHE_DIR="${NAS_QEMU_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
 STATE_DIR="${NAS_QEMU_STATE_DIR:-$CACHE_DIR/state}"
@@ -57,21 +59,6 @@ validate_state_path() {
   [[ ! -L "$CACHE_DIR" && ! -L "$STATE_DIR" ]] || die "QEMU cache and state paths must not be symlinks"
 }
 
-qemu_pid_from_pidfile() {
-  local pidfile=$1 pid executable
-  QEMU_PID=""
-  [[ -s "$pidfile" ]] || return 1
-  pid="$(<"$pidfile")"
-  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  executable="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-  [[ "${executable##*/}" == qemu-system-x86_64 ]] || {
-    printf 'error: refusing to signal pid %s from %s because it is not qemu-system-x86_64\n' "$pid" "$pidfile" >&2
-    return 2
-  }
-  QEMU_PID="$pid"
-}
-
 validate_state_path
 [[ "$WORKLOAD" =~ ^(deterministic-browser|installed-command-fuzz|zap-fuzz)$ ]] || die "invalid NAS_FINAL_VM_WORKLOAD"
 if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
@@ -80,17 +67,8 @@ if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
 [[ -s "$SSH_KEY" ]] || die "installer SSH key is missing; run qemu-test.sh installer first"
 
 cleanup() {
-  if [[ -s "$PIDFILE" ]] && qemu_pid_from_pidfile "$PIDFILE"; then
-    pid="$QEMU_PID"
-    kill "$pid" 2>/dev/null || true
-    for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-    kill -KILL "$pid" 2>/dev/null || true
-  elif [[ -s "$PIDFILE" ]]; then
-    qemu_pid_from_pidfile "$PIDFILE" || {
-      local pid_status=$?
-      (( pid_status == 2 )) && die "refusing to clean up a pidfile owned by a non-QEMU process: $PIDFILE"
-    }
-  fi
+  nas_qemu_stop_pidfile "$PIDFILE" 20 ||
+    die "refusing to clean up a pidfile owned by a non-QEMU process: $PIDFILE"
   rm -f "$PIDFILE" "$OVERLAY" "$DATA_DISK"
 }
 trap cleanup EXIT INT TERM

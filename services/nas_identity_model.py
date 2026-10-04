@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import pathlib
 from collections.abc import Sequence
@@ -11,8 +10,10 @@ from nas_common import (
     ADMIN_GROUP,
     DISABLED_GROUP,
     GUEST_GROUP,
+    RESERVED_GROUPS,
     USER_GROUP,
     application_capability_allowed,
+    resolve_v2_service_capability,
 )
 from nas_syncthing_devices import DeviceError, normalize_devices, validate_username
 
@@ -20,31 +21,6 @@ _SYNCTHING_SERVICE = os.environ.get("NAS_V2_SYNCTHING_SERVICE", "syncthing")
 _SYNCTHING_CAPABILITY = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", "access")
 
 
-def _resolve_syncthing_capability() -> tuple[str, str] | None:  # pragma: no cover - V2 integration
-    service = os.environ.get("NAS_V2_SYNCTHING_SERVICE", _SYNCTHING_SERVICE)
-    capability = os.environ.get("NAS_V2_SYNCTHING_CAPABILITY", _SYNCTHING_CAPABILITY)
-    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
-    try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        derived = data.get("derived", {}).get("authorization", {})
-        if not isinstance(derived, dict):
-            raise ValueError("derived.authorization is not a dict")
-        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
-        if isinstance(caps, dict) and capability in caps:
-            return service, capability
-        if isinstance(derived, dict) and derived:
-            return None
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-    return service, capability
-
-
-RESERVED_GROUPS = (
-    ADMIN_GROUP,
-    USER_GROUP,
-    GUEST_GROUP,
-    DISABLED_GROUP,
-)
 APPLICATION_GROUP_PREFIX = "application."
 
 
@@ -66,7 +42,9 @@ class User:
 
     @property
     def personal_sync(self) -> bool:
-        resolved = _resolve_syncthing_capability()
+        resolved = resolve_v2_service_capability(
+            "NAS_V2_SYNCTHING_SERVICE", "NAS_V2_SYNCTHING_CAPABILITY", _SYNCTHING_SERVICE, _SYNCTHING_CAPABILITY
+        )
         if resolved is None:
             return False
         service, capability = resolved
@@ -340,7 +318,7 @@ def normalized_account_plan(raw: Any, index: int) -> dict[str, Any]:
     if not isinstance(groups_raw, list) or not all(isinstance(item, str) for item in groups_raw):
         raise SyncError(f"accounts[{index}].groups must be a list of base identity roles")
     groups = {item.strip() for item in groups_raw if item.strip()}
-    unknown = sorted(groups - set(RESERVED_GROUPS))
+    unknown = sorted(groups - RESERVED_GROUPS)
     if unknown:
         raise SyncError(
             f"accounts[{index}] contains non-role group(s): {', '.join(unknown)}; "

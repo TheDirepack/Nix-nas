@@ -205,7 +205,7 @@ class ContractTests(unittest.TestCase):
         model = text("services/nas_identity_model.py")
         devices = text("services/nas_syncthing_devices.py")
         self.assertIn("nasSyncthingDevices", model)
-        self.assertIn("_resolve_syncthing_capability", model)
+        self.assertIn("resolve_v2_service_capability", model)
         self.assertIn("application_capability_allowed", model)
         self.assertIn("NAS_V2_SYNCTHING", model)
         self.assertIn("expand_attribute_values", devices)

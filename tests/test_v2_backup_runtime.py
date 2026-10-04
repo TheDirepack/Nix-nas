@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
 import sys
 import tempfile
 import unittest
@@ -52,6 +53,40 @@ class V2BackupRuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "staging root.*symlink"):
                     runtime._remove_staged_artifact(str(staging / artifact.name))
             self.assertEqual(sentinel.read_bytes(), b"must survive")
+
+    def test_preparation_job_cannot_publish_an_artifact_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            outside = root / "outside"
+            outside.mkdir()
+            sentinel = outside / "private.dump"
+            sentinel.write_bytes(b"must not be backed up")
+            inventory_path, paths_path, state_path = root / "inventory.json", root / "paths.txt", root / "state.json"
+            inventory_path.write_text(json.dumps(self.inventory(artifact)))
+
+            def replace_artifact(_argv):
+                shutil.rmtree(artifact)
+                artifact.symlink_to(outside, target_is_directory=True)
+                return ""
+
+            with (
+                mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
+                mock.patch.object(runtime, "_run", side_effect=replace_artifact),
+            ):
+                with self.assertRaisesRegex(runtime.BackupRuntimeError, "symlink"):
+                    runtime.prepare(
+                        inventory_path=inventory_path,
+                        paths_path=paths_path,
+                        state_path=state_path,
+                        zfs_bin="/bin/false",
+                        systemctl_bin="/bin/false",
+                    )
+            self.assertEqual(sentinel.read_bytes(), b"must not be backed up")
+            self.assertFalse(artifact.is_symlink())
+            self.assertFalse(paths_path.exists())
+            self.assertFalse(state_path.exists())
 
     def inventory(
         self,

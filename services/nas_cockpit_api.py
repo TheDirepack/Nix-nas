@@ -24,7 +24,6 @@ import time
 
 import sys
 import syslog
-from dataclasses import dataclass
 from typing import Any, cast
 
 from nas_common import CommandResult, parse_systemd_show, run_command
@@ -63,20 +62,7 @@ class ApiError(RuntimeError):
     """Expected appliance operation failure."""
 
 
-@dataclass(frozen=True)
-class ActionSpec:
-    commands: tuple[tuple[str, ...], ...]
-    timeout_seconds: int = 300
-    conflicts: tuple[str, ...] = ("runtime",)
-    worker_owns_operation: bool = False
-
-
-HOST_ACTIONS: dict[str, ActionSpec] = {
-    "protected-restart": ActionSpec(
-        (("systemctl", "start", "nas-protected-restart.service"),),
-        conflicts=("identity", "runtime"),
-    ),
-}
+PROTECTED_RESTART_CONFLICTS = ("identity", "runtime")
 
 
 def diagnostic(message: str) -> None:
@@ -286,14 +272,6 @@ def setup_status() -> dict[str, Any]:
     return _json_command([_setup_entry(), "status"], optional=True)
 
 
-def identity_status() -> dict[str, Any]:
-    return _json_command(["nas-identity-sync", "status"], optional=True)
-
-
-def capability_status() -> dict[str, Any]:
-    return _json_command(["nas-identity-sync", "capabilities"], optional=True)
-
-
 UPDATE_MANUAL_RECOVERY_PATH = pathlib.Path(
     os.environ.get("NAS_UPDATE_MANUAL_RECOVERY", "/var/lib/nas-update/manual-recovery-required.json")
 )
@@ -336,15 +314,10 @@ def operation_state() -> dict[str, Any]:
     value.update(
         {
             "conflictsByAction": {
-                **{name: list(spec.conflicts) for name, spec in HOST_ACTIONS.items()},
+                "protected-restart": list(PROTECTED_RESTART_CONFLICTS),
                 **{str(row["id"]): ["runtime"] for row in job_rows},
             },
-            "workerOwnedActions": [name for name, spec in HOST_ACTIONS.items() if spec.worker_owns_operation],
-            "managedJobs": [
-                {"id": row["id"], "label": row["label"], "description": row.get("description", "")} for row in job_rows
-            ],
             "managedServicesConflicts": sorted(busy & {"runtime", "appliance", "first-start"}),
-            "firstStartConflicts": list(FIRST_START_CONFLICTS),
         }
     )
     return value
@@ -591,9 +564,11 @@ def operation_guard(action: str, conflicts: tuple[str, ...]):
 
 
 def run_action(name: str) -> dict[str, Any]:
-    spec = HOST_ACTIONS.get(name)
-    managed_job = False
-    if spec is None:
+    if name == "protected-restart":
+        command = ("systemctl", "start", "nas-protected-restart.service")
+        timeout_seconds = 300
+        guard = operation_guard(name, PROTECTED_RESTART_CONFLICTS)
+    else:
         if not SERVICE_ID_RE.fullmatch(name):
             raise ApiError("Unknown action: invalid V2 job identifier")
         row = next((candidate for candidate in managed_job_rows() if candidate.get("id") == name), None)
@@ -609,25 +584,25 @@ def run_action(name: str) -> dict[str, Any]:
         )
         if owner is None:
             raise ApiError(f"V2 job {name} has no compiled owner unit")
-        spec = ActionSpec((("systemctl", "start", owner),), timeout_seconds=21600)
-        managed_job = True
-
-    outputs: list[dict[str, Any]] = []
-    guard = contextlib.nullcontext() if managed_job else operation_guard(name, spec.conflicts)
+        command = ("systemctl", "start", owner)
+        timeout_seconds = 21600
+        guard = contextlib.nullcontext()
     with guard:
-        for command in spec.commands:
-            result = run(command, check=False, timeout_seconds=spec.timeout_seconds)
-            outputs.append(
-                {
-                    "command": list(command),
-                    "returncode": result.returncode,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                }
-            )
-            if result.returncode != 0:
-                raise operation_error(command, result)
-    return {"ok": True, "action": name, "commands": outputs}
+        result = run(command, check=False, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            raise operation_error(command, result)
+    return {
+        "ok": True,
+        "action": name,
+        "commands": [
+            {
+                "command": list(command),
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        ],
+    }
 
 
 def set_managed_service(service_id: str, mode: str) -> dict[str, Any]:
@@ -677,14 +652,11 @@ def overview() -> dict[str, Any]:
 
     probes: dict[str, Any] = {
         "setup": setup_status,
-        "identity": identity_status,
-        "capabilities": capability_status,
         "update": update_status,
         "services": lambda: service_states(units),
         "zpool": lambda: command_probe(["zpool", "status", "-x", ZFS_POOL]),
         "zfs": lambda: command_probe(["zfs", "list", "-H", "-o", "name,used,avail,refer,mountpoint", ZFS_DATASET]),
         "failed": lambda: command_probe(["systemctl", "--failed", "--no-legend", "--plain"]),
-        "timers": lambda: command_probe(["systemctl", "list-timers", "--all", "--no-legend", "--plain"]),
     }
     results: dict[str, Any] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(probes), thread_name_prefix="nas-overview") as executor:
@@ -702,14 +674,11 @@ def overview() -> dict[str, Any]:
     zpool = results["zpool"]
     zfs = results["zfs"]
     failed = results["failed"]
-    timers = results["timers"]
     return {
         "host": socket.gethostname(),
         "protectedReady": pathlib.Path("/run/nas-secrets/ready").exists(),
         "authentikTokenWarning": read_optional_text(pathlib.Path("/run/nas-secrets/authentik-token-warning")),
         "setup": results["setup"],
-        "identity": results["identity"],
-        "capabilities": results["capabilities"],
         "managedServices": managed,
         "update": results["update"],
         "operations": operation_state(),
@@ -720,7 +689,6 @@ def overview() -> dict[str, Any]:
             "dataset": (zfs.stdout or zfs.stderr).strip() if isinstance(zfs, CommandResult) else "unavailable",
         },
         "failedUnits": failed.stdout.strip().splitlines() if isinstance(failed, CommandResult) else [],
-        "timers": timers.stdout.splitlines()[:80] if isinstance(timers, CommandResult) else [],
         "links": static_links(),
         "managedServiceLinks": portal_entries(),
     }
@@ -978,10 +946,10 @@ def _lookup_setup_capability_record(
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        if not isinstance(record, dict) or record.get("schemaVersion") not in {1, 2}:
+        if not isinstance(record, dict) or record.get("schemaVersion") != 2:
             _unlink_capability(path)
             return None
-        scope = record.get("scope", "job-poll-reboot")
+        scope = record.get("scope")
         issued_at = record.get("issuedAt")
         used_at = record.get("lastUsedAt")
         if (
@@ -1042,12 +1010,6 @@ def lookup_completed_setup_capability(token: str, *, now: float | None = None) -
     return _lookup_setup_capability_record(token, scopes=frozenset({"completed-reboot"}), now=now) is not None
 
 
-def revoke_setup_capability(token: str) -> None:
-    if isinstance(token, str) and SETUP_CAPABILITY_RE.fullmatch(token) is not None:
-        with _setup_capability_guard():
-            _unlink_capability(_capability_record_path(token))
-
-
 def _revoke_matching_capabilities_unlocked(job_id: str | None) -> int:
     revoked = 0
     try:
@@ -1074,30 +1036,6 @@ def revoke_job_capabilities(job_id: str) -> int:
 def revoke_all_setup_capabilities() -> int:
     with _setup_capability_guard():
         return _revoke_matching_capabilities_unlocked(None)
-
-
-def refresh_setup_capability(job_id: str, status: dict[str, Any], *, now: float | None = None) -> str:
-    """Atomically revoke prior job tokens and issue their replacement."""
-    moment = now if now is not None else _setup_now()
-    record = {
-        "schemaVersion": 2,
-        "scope": "job-poll-reboot",
-        "jobId": job_id,
-        "issuedAt": moment,
-        "lastUsedAt": moment,
-    }
-    if status.get("status") not in {
-        "pending",
-        "submitted",
-        "running",
-        "complete",
-        "complete-unverified",
-        "failed",
-    }:
-        raise ApiError("First-start job state cannot be authorized")
-    with _setup_capability_guard():
-        _revoke_matching_capabilities_unlocked(job_id)
-        return _issue_setup_capability_record(record)
 
 
 def record_active_setup_job(job_id: str) -> None:

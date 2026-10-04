@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
 from typing import Any
 
 
@@ -79,6 +80,8 @@ def _runtime_safe_absolute_path(value: Any, *, label: str) -> str:
 
 def _validate_staged_artifact_path(resource_id: str, artifact_path: str, artifact_resource: str) -> pathlib.Path:
     candidate = pathlib.Path(artifact_path)
+    if BACKUP_STAGING_ROOT.is_symlink():
+        raise BackupRuntimeError(f"staging root {BACKUP_STAGING_ROOT} must not be a symlink")
     if candidate.is_symlink():
         raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
     try:
@@ -89,13 +92,11 @@ def _validate_staged_artifact_path(resource_id: str, artifact_path: str, artifac
         raise BackupRuntimeError(
             f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
         ) from exc
-    # Must be derived from resource identity: staging_root/<resource-id> or staging_root/<artifactResource>
     allowed_names = {resource_id, artifact_resource}
     if candidate.name not in allowed_names:
         raise BackupRuntimeError(
             f"native-dump artifact path {artifact_path!r} must be {BACKUP_STAGING_ROOT}/<resource-id> derived from {resource_id!r}"
         )
-    # Also ensure parent is exactly staging root (no deeper nesting)
     try:
         candidate.parent.resolve(strict=False).relative_to(staging_resolved)
         if candidate.parent.resolve(strict=False) != staging_resolved:
@@ -408,52 +409,19 @@ def _native_dump_path(
         or ".." in pathlib.PurePosixPath(artifact_path).parts
     ):
         raise BackupRuntimeError(f"backup resource {resource_id!r} has an invalid compiled native-dump job mapping")
-    # Enforce dedicated staging root derived from resource identity and reject symlink escapes
     artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
-    # Ensure staging root itself is not a symlink escape
-    staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
-    try:
-        staging_resolved.relative_to(BACKUP_STAGING_ROOT.resolve(strict=False))
-    except ValueError:
-        raise BackupRuntimeError(f"staging root {BACKUP_STAGING_ROOT} escapes itself")
-    if BACKUP_STAGING_ROOT.is_symlink():
-        raise BackupRuntimeError(f"staging root {BACKUP_STAGING_ROOT} must not be a symlink")
-    # Ensure parent staging directory exists with safe mode
     try:
         BACKUP_STAGING_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(BACKUP_STAGING_ROOT, 0o700)
     except OSError as exc:
         raise BackupRuntimeError(f"unable to prepare staging root {BACKUP_STAGING_ROOT!r}: {exc}") from exc
-    # Resolve symlink check: artifact must not be symlink and must resolve inside staging root
-    if artifact.is_symlink():
-        raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
-    try:
-        resolved = artifact.resolve(strict=False)
-        staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
-        resolved.relative_to(staging_resolved)
-        if resolved != artifact.resolve():
-            # If resolve differs due to symlink components, already rejected above but double-check
-            if artifact.is_symlink():
-                raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
-    except ValueError as exc:
-        raise BackupRuntimeError(
-            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
-        ) from exc
+    artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     try:
         artifact.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(artifact, 0o700)
     except OSError as exc:
         raise BackupRuntimeError(f"unable to prepare native-dump artifact directory {artifact_path!r}: {exc}") from exc
-    # Re-validate after mkdir that we didn't create via symlink and that resulting dir is still inside staging
-    if artifact.is_symlink():
-        raise BackupRuntimeError(f"native-dump artifact path {artifact_path!r} must not be a symlink")
-    try:
-        resolved_after = artifact.resolve()
-        resolved_after.relative_to(staging_resolved)
-    except ValueError as exc:
-        raise BackupRuntimeError(
-            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT} after creation"
-        ) from exc
+    artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     if not artifact.is_dir():
         raise BackupRuntimeError(f"native-dump artifact resource {artifact_resource!r} must resolve to a directory")
     try:
@@ -490,6 +458,7 @@ def _native_dump_path(
     if on_pending is not None:
         on_pending(pending)
     _run([systemctl_bin, "restart", preparation_unit])
+    artifact = _validate_staged_artifact_path(resource_id, artifact_path, artifact_resource)
     try:
         produced = any(artifact.iterdir())
     except OSError as exc:
@@ -861,7 +830,7 @@ def _verify_sqlite(path: pathlib.Path, *, restore_root: pathlib.Path) -> None:
     _assert_within_restore_root(path, restore_root)
     try:
         uri = f"{path.resolve().as_uri()}?mode=ro"
-        with sqlite3.connect(uri, uri=True) as database:
+        with closing(sqlite3.connect(uri, uri=True)) as database:
             rows = database.execute("PRAGMA integrity_check").fetchall()
     except (OSError, sqlite3.Error) as exc:
         raise BackupVerificationError(f"SQLite integrity verification failed for {path}: {exc}") from exc
@@ -875,10 +844,14 @@ def _verify_postgresql_custom_dump(path: pathlib.Path, *, pg_restore_bin: str, r
     try:
         result = subprocess.run(
             [pg_restore_bin, "--list", str(path)],
+            stdin=subprocess.DEVNULL,
             check=False,
             capture_output=True,
             text=True,
+            timeout=60,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise BackupVerificationError(f"PostgreSQL custom dump verification timed out after 60s for {path}") from exc
     except OSError as exc:
         raise BackupVerificationError(f"unable to execute pg_restore for {path}: {exc}") from exc
     if result.returncode != 0 or not result.stdout.strip():

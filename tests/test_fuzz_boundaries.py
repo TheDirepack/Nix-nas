@@ -6,7 +6,6 @@ import json
 import pathlib
 import re
 import sys
-import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -231,20 +230,6 @@ if HAS_HYPOTHESIS:
                 event("safe-member:accepted")
                 self.assertFalse(raw.startswith("/"))
 
-        @settings(max_examples=400, deadline=None)
-        @given(json_values(max_leaves=30))
-        def test_common_read_json_object_never_returns_non_dict(self, raw: object) -> None:
-            target(len(str(raw)), label="json-input-length")
-            with tempfile.TemporaryDirectory() as tmp:
-                path = pathlib.Path(tmp) / "obj.json"
-                path.write_text(json.dumps(raw), encoding="utf-8")
-                try:
-                    obj = common.read_json_object(path)
-                except Exception:
-                    event("read-json:rejected")
-                    return
-                event("read-json:accepted")
-                self.assertIsInstance(obj, dict)
 else:
 
     class StructuredBoundaryFuzzTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]

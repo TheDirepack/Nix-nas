@@ -118,7 +118,7 @@ class SetupConfigCoverageTests(unittest.TestCase):
 
     def test_storage_device_alias_fields_and_types_are_closed(self) -> None:
         cases = [
-            ({"device": "/dev/a", "devices": ["/dev/b"]}, "Use only one"),
+            ({"device": "/dev/a", "devices": ["/dev/b"]}, "unknown field"),
             ({"devices": "/dev/a"}, "must be a list"),
             ({"devices": ["relative"]}, "absolute /dev path"),
             ({"devices": ["/dev/../tmp/x"]}, "parent-directory traversal"),
@@ -133,7 +133,7 @@ class SetupConfigCoverageTests(unittest.TestCase):
     def test_storage_topology_wipe_and_ashift_validation(self) -> None:
         cases = [
             ({"topology": "weird"}, "topology must be one of"),
-            ({"wipeDevice": True, "wipeDevices": True}, "Use only one"),
+            ({"wipeDevice": True, "wipeDevices": True}, "unknown field"),
             ({"ashift": True}, "integer from 9 through 16"),
             ({"ashift": 8}, "integer from 9 through 16"),
             ({"ashift": 17}, "integer from 9 through 16"),
@@ -171,12 +171,11 @@ class SetupConfigCoverageTests(unittest.TestCase):
             with self.subTest(storage=storage), self.assertRaisesRegex(config.SetupError, "require storage.createPool"):
                 config.normalize_config(raw)
 
-    def test_legacy_single_device_alias_normalizes(self) -> None:
+    def test_legacy_single_device_alias_is_rejected(self) -> None:
         raw = self.base()
         raw["storage"] = {"createPool": True, "device": "/dev/a", "wipeDevice": True}
-        value = config.normalize_config(raw)
-        self.assertEqual(value["storage"]["devices"], ["/dev/a"])
-        self.assertTrue(value["storage"]["wipeDevices"])
+        with self.assertRaisesRegex(config.SetupError, "unknown field"):
+            config.normalize_config(raw)
 
     def test_services_container_ids_and_modes_are_validated(self) -> None:
         bad = self.base()

@@ -41,15 +41,6 @@ export function managedServiceRows(data = {}) {
   );
 }
 
-export function inactiveServiceCount(services = {}) {
-  const rows = Array.isArray(services) ? services : Object.values(services || {});
-  return rows.filter((item) => {
-    if (!item || typeof item !== "object") return false;
-    if (typeof item.activeState === "string") return item.activeState !== "active";
-    return item.active !== true;
-  }).length;
-}
-
 export function revisionModel(update = {}) {
   update = update && typeof update === "object" && !Array.isArray(update) ? update : {};
   if (update.ok === false) return {kind: "error", error: update.error || "Unknown error"};
@@ -188,15 +179,6 @@ export function managedServiceRuntimeText(service = {}) {
     details.push(`Idle policy ${Math.ceil(service.idleSeconds / 60)} min`);
   }
   return details.join(" · ");
-}
-
-export function operationBusy(data = {}, actionId = "") {
-  const busy = new Set(
-    Array.isArray(data?.operations?.busyClasses) ? data.operations.busyClasses : [],
-  );
-  const conflicts = data?.operations?.conflictsByAction?.[actionId];
-  if (!Array.isArray(conflicts)) return busy.size > 0;
-  return conflicts.some((item) => busy.has(item));
 }
 
 export function managedServiceOperationsBusy(data = {}) {

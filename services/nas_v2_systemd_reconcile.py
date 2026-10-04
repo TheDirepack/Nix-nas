@@ -21,6 +21,8 @@ import sys
 import tempfile
 from typing import Any
 
+from nas_common import fsync_directory as _fsync_directory
+
 
 class SystemdReconcileError(RuntimeError):
     """Raised when staged V2 systemd state cannot be reconciled safely."""
@@ -96,14 +98,6 @@ def _hash_file(path: pathlib.Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _fsync_directory(directory: pathlib.Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _atomic_json(path: pathlib.Path, value: dict[str, Any]) -> None:

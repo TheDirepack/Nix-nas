@@ -311,7 +311,6 @@ class V2PodmanNetworkTests(unittest.TestCase):
         effective, service = self.service(policy=policy)
         self.assertTrue(network.requires_firewalld(effective))
         self.assertTrue(network._external_egress(policy))
-        self.assertTrue(network._deny_egress_needs_firewalld(policy))
         with self.assertRaisesRegex(network.PodmanNetworkProjectionError, "firewalld policy projection"):
             network.quadlet_network_reference(effective, "demo", service, firewalld_enabled=False)
         self.assertEqual(

@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from nas_common import fsync_directory
 from nas_logging import sanitize
 
 
@@ -28,11 +29,7 @@ def atomic_write_json(path: pathlib.Path, value: Mapping[str, Any], mode: int = 
         os.chmod(name, mode)
         os.replace(name, path)
         replaced = True
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(path.parent)
     finally:
         if not replaced:
             try:

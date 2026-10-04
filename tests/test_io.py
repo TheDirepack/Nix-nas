@@ -19,9 +19,39 @@ class IoPrimitiveTests(unittest.TestCase):
     def test_callers_keep_patchable_local_aliases(self) -> None:
         import nas_v2_bootstrap as bootstrap
         import nas_v2_generation as generation
+        import nas_v2_apply as apply
+        import nas_v2_systemd_reconcile as reconcile
+        import nas_operation_journal as journal
 
         self.assertIs(bootstrap._fsync_directory, nas_common.fsync_directory)
         self.assertIs(generation._fsync_directory, nas_common.fsync_directory)
+        self.assertIs(apply._fsync_directory, nas_common.fsync_directory)
+        self.assertIs(reconcile._fsync_directory, nas_common.fsync_directory)
+        self.assertIs(journal.fsync_directory, nas_common.fsync_directory)
+
+    def test_bundle_rollback_syncs_removal_of_newly_created_files(self) -> None:
+        import nas_v2_apply as apply
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            first, second = root / "first", root / "second"
+            replace = apply.os.replace
+
+            def fail_second(source, target):
+                if target == second:
+                    raise OSError("replace failed")
+                replace(source, target)
+
+            with (
+                mock.patch.object(apply.os, "replace", side_effect=fail_second),
+                mock.patch.object(apply, "_fsync_directory") as synced,
+            ):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    apply._replace_bundle([(first, b"one", 0o640), (second, b"two", 0o640)])
+                synced.assert_called_once_with(root)
+            self.assertFalse(first.exists())
+            self.assertFalse(second.exists())
+            self.assertEqual(list(root.iterdir()), [])
 
     def test_no_duplicate_io_module_is_packaged(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

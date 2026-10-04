@@ -106,10 +106,6 @@ def _external_egress(policy: dict[str, Any]) -> bool:
     )
 
 
-def _deny_egress_needs_firewalld(policy: dict[str, Any]) -> bool:
-    return policy.get("outboundDefault", "allow") == "deny" and _external_egress(policy)
-
-
 def _needs_isolated_firewalld(service: dict[str, Any], policy: dict[str, Any]) -> bool:
     return (
         policy.get("outboundDefault", "allow") != "deny"

@@ -244,14 +244,6 @@ in
         # The existing Restic service stays the backup implementation. V2 owns its
         # schedule, so the NixOS Restic module must not create a parallel timer.
         timerConfig = null;
-        pruneOpts = [
-          "--keep-daily 14"
-          "--keep-weekly 8"
-          "--keep-monthly 12"
-          "--keep-yearly 3"
-        ];
-        runCheck = true;
-        checkOpts = [ "--read-data-subset=1%" ];
       } // resticRepository);
     };
 

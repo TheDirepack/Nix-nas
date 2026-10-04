@@ -5,7 +5,6 @@ import {
   api,
   apiInput,
   managedServicesDocument,
-  managedServicesStatus,
   parseJsonOutput,
   replaceManagedServicesDocument,
   replaceManagedServicesJsonDocument,
@@ -44,19 +43,14 @@ test("structured API mutations send JSON only over stdin", async () => {
   assert.equal(calls[0][1].includes("secret"), false);
 });
 
-test("managed services status and document use the canonical V2 control CLI", async () => {
+test("managed services document uses the canonical V2 control CLI", async () => {
   const calls = [];
   const spawn = (command, options) => {
     calls.push({command, options});
     return Promise.resolve('{"ok":true,"services":[]}');
   };
-  await managedServicesStatus(spawn);
   await managedServicesDocument(spawn);
   assert.deepEqual(calls, [
-    {
-      command: ["nas-managed-services-control", "status"],
-      options: {superuser: "require", err: "message"},
-    },
     {
       command: ["nas-managed-services-control", "document"],
       options: {superuser: "require", err: "message"},

@@ -10,9 +10,23 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 from nas_v2_caddy import PortalProjectionError, compile_portal_projection  # noqa: E402
+from nas_v2_spec import compile_document, load_schema  # noqa: E402
 
 
 class PortalProjectionTests(unittest.TestCase):
+    def compile(self, document):
+        for service in document["services"].values():
+            service.update(
+                workload={"kind": "daemon", "activation": "persistent"},
+                runtime={"type": "systemd", "unit": "demo.service"},
+                authorization={
+                    "capabilities": [{"id": "access", "title": "Access"}, {"id": "admin", "title": "Admin"}]
+                },
+            )
+            for route in service["routes"].values():
+                route["target"] = {"type": "http", "port": 8080}
+        return compile_document(document, load_schema(ROOT / "schemas/managed-services-v3.schema.json"))
+
     def test_projects_only_enabled_visible_routes_with_canonical_capability(self) -> None:
         effective = {
             "schemaVersion": 3,
@@ -46,7 +60,7 @@ class PortalProjectionTests(unittest.TestCase):
                 },
             },
         }
-        projection = compile_portal_projection(effective)
+        projection = compile_portal_projection(self.compile(effective))
         self.assertEqual(projection["schemaVersion"], 2)
         self.assertEqual(projection["source"], "managed-services-v2")
         self.assertEqual(len(projection["entries"]), 1)
@@ -77,7 +91,7 @@ class PortalProjectionTests(unittest.TestCase):
                 }
             },
         }
-        entries = compile_portal_projection(effective)["entries"]
+        entries = compile_portal_projection(self.compile(effective))["entries"]
         self.assertEqual([entry["access"]["allow"] for entry in entries], ["any", "any"])
 
     def test_visible_route_without_safe_url_fails_closed(self) -> None:

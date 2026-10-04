@@ -248,15 +248,6 @@ def _managed_services_check() -> Check:
 
 def _operation_hygiene_checks(*, deep: bool) -> list[Check]:
     checks: list[Check] = []
-    if os.environ.get("NAS_OPERATION_COORDINATED"):
-        checks.append(
-            Check(
-                "operations.legacy-environment",
-                "warning",
-                "Legacy NAS_OPERATION_COORDINATED is set but no longer authorizes nested mutations",
-                remediation="Remove the stale environment variable from the shell or service environment",
-            )
-        )
     if os.environ.get(COORDINATION_TOKEN_ENV):
         checks.append(
             Check(
