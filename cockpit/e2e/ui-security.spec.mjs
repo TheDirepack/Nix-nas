@@ -290,7 +290,9 @@ for (const [name, payload] of hostileDisplayCorpus) {
     await page.locator(".pf-v6-c-nav").getByText("Managed services", {exact: true}).click();
     await expect(page.getByLabel(`${payload} runtime policy`)).toBeVisible();
     await page.locator(".pf-v6-c-nav").getByText("Source & updates", {exact: true}).click();
-    await expect(page.locator(".pf-v6-c-description-list__description").filter({hasText: payload}).first()).toBeVisible();
+    await expect(
+      page.locator(".pf-v6-c-description-list__description").filter({hasText: payload}).first(),
+    ).toBeVisible();
     expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
     const unsafeNodes = await page
       .locator("script, iframe, svg, img, object, embed")
@@ -372,9 +374,7 @@ test("handles narrow, wide, and enlarged-text layouts without document overflow"
   }
 });
 
-test("overview controls stay horizontally contained and keyboard reachable", async ({
-  page,
-}) => {
+test("overview controls stay horizontally contained and keyboard reachable", async ({page}) => {
   await page.setViewportSize({width: 360, height: 740});
   await openApp(page);
   const controls = page.locator(
@@ -399,7 +399,8 @@ test("overview controls stay horizontally contained and keyboard reachable", asy
   for (let step = 0; step < count * 2; step += 1) {
     await page.keyboard.press("Tab");
     for (const index of visible) {
-      if (await controls.nth(index).evaluate((node) => node === document.activeElement)) reached.add(index);
+      if (await controls.nth(index).evaluate((node) => node === document.activeElement))
+        reached.add(index);
     }
   }
   expect([...reached].sort((a, b) => a - b)).toEqual(visible);

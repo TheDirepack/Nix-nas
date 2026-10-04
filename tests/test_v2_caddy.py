@@ -33,7 +33,8 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         pairs = [("a", "b-c"), ("a-b", "c"), ("a" * 64, "b" * 64)]
         self.assertEqual(len({activation.socket_unit(*pair) for pair in pairs}), len(pairs))
         self.assertEqual(len({activation.socket_path(*pair) for pair in pairs}), len(pairs))
-        with tempfile.TemporaryDirectory() as raw:
+        # CI's TMPDIR can exceed sockaddr_un even when the production path fits.
+        with tempfile.TemporaryDirectory(dir="/tmp") as raw:
             for pair in pairs:
                 name = activation.socket_path(*pair).name
                 self.assertLessEqual(len(str(activation.socket_path(*pair)).encode()), 107)
