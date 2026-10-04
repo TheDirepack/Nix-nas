@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,31 @@ spec.loader.exec_module(gate)
 
 
 class CoverageGateTests(unittest.TestCase):
+    def test_ci_calls_enforce_the_canonical_total_branch_floor(self):
+        for source in (ROOT / "scripts/ci-qualification.sh", ROOT / ".github/workflows/ci.yml"):
+            calls = re.findall(r"python3 scripts/check-coverage\.py \\\n\s+([^\n]+)", source.read_text())
+            self.assertEqual(len(calls), 1, str(source))
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                report = {
+                    "files": {
+                        name: {"summary": {"percent_covered": 100, "num_branches": 100, "covered_branches": 100}}
+                        for name in gate.FLOORS
+                    },
+                    "totals": {"num_branches": 100, "covered_branches": 68},
+                }
+                for name in ("coverage.json", "main-coverage.json"):
+                    (root / name).write_text(json.dumps(report))
+                result = subprocess.run(
+                    [sys.executable, str(CHECKER), *shlex.split(calls[0])],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("total: 68.0% is below 70.0%", result.stdout)
+
     def run_gate(self, summary, *, baseline_summary=None):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

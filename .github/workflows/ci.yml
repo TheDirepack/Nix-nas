@@ -508,7 +508,7 @@ jobs:
           test -s coverage.json
           test -s main-coverage.json
           python3 scripts/check-coverage.py \
-            coverage.json --baseline main-coverage.json --total-floor 66
+            coverage.json --baseline main-coverage.json
       - name: Report coverage baseline failures
         if: always()
         env:
