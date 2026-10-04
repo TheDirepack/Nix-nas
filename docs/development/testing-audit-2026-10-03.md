@@ -2,6 +2,9 @@
 
 ## Result
 
+Historical snapshot. Source corrections and current qualification limits are in
+[Audit remediation: 2026-10-04](audit-remediation-2026-10-04.md).
+
 Twelve testing weaknesses remain open. Five need high-priority correction;
 seven are medium priority. These are priorities for test reliability, not new
 security vulnerability ratings. This audit changes no implementation or tests.

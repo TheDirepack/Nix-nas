@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import importlib.resources
 import os
 import pathlib
 import re
@@ -23,28 +24,11 @@ HOSTNAME_RE = re.compile(
 HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 MATCHER_RE = re.compile(r"[^A-Za-z0-9_]")
 
-IDENTITY_HEADERS = (
-    "Remote-User",
-    "Remote-Groups",
-    "Remote-Name",
-    "Remote-Email",
-    "Remote-UID",
-    "Remote-Role",
-    "X-Authentik-Username",
-    "X-Authentik-Groups",
-    "X-Authentik-Name",
-    "X-Authentik-Email",
-    "X-Authentik-Uid",
-    "X-Authentik-Jwt",
-    "X-Authentik-Entitlements",
-    "X-Authentik-Meta-Outpost",
-    "X-Authentik-Meta-App",
-    "X-Authentik-Meta-Provider",
-    "X-Authentik-Meta-User",
-    "X-Authentik-Meta-Is-Superuser",
-    "X-Authentik-Role",
+IDENTITY_HEADERS = tuple(
+    json.loads(importlib.resources.files("nas_policy").joinpath("identity-headers.json").read_text())
 )
 TRUSTED_IDENTITY_HEADERS = frozenset(IDENTITY_HEADERS)
+_IDENTITY_HEADER_NAMES = frozenset(header.lower() for header in IDENTITY_HEADERS)
 AUTHENTIK_COPY_HEADERS = (
     "X-Authentik-Username",
     "X-Authentik-Groups",
@@ -161,7 +145,7 @@ def _render_proxy(
     proxy = route["proxy"]
     request_headers = proxy["requestHeaders"]
     for name in request_headers:
-        if _header_name(name) in TRUSTED_IDENTITY_HEADERS:
+        if _header_name(name).lower() in _IDENTITY_HEADER_NAMES:
             raise CaddyProjectionError(f"Static request header may not overwrite trusted identity header {name}")
     for name in proxy["removeRequestHeaders"]:
         lines.append(f"{indent}request_header -{_header_name(name)}")

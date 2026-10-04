@@ -19,8 +19,6 @@ import nas_operation_lock as oplock  # noqa: E402
 import nas_state as state  # noqa: E402
 import nas_syncthing_devices as syncthing  # noqa: E402
 import nas_cockpit_api as cockpit  # noqa: E402
-import nas_setup_config as setup_config  # noqa: E402
-import nas_identity_model as identity  # noqa: E402
 
 
 class NonV2FunctionalCoverageTests(unittest.TestCase):
@@ -189,60 +187,8 @@ class NonV2FunctionalCoverageTests(unittest.TestCase):
             syncthing.normalize_device({"deviceID": "not-a-device"})
 
     def test_cockpit_api_allow_list_and_validation(self) -> None:
-        self.assertTrue(hasattr(cockpit, "run_action") or hasattr(cockpit, "operation_guard"))
-        if hasattr(cockpit, "run_action"):
-            from nas_cockpit_api import ApiError
-
-            with self.assertRaises(ApiError):
-                cockpit.run_action("not-a-real-method")
-
-    def test_cockpit_api_secret_not_logged(self) -> None:
-        self.assertTrue(hasattr(common, "split_groups"))
-
-    def test_setup_config_validates_hostname_and_storage(self) -> None:
-        if hasattr(setup_config, "validate_hostname"):
-            with self.assertRaises(Exception):
-                setup_config.validate_hostname("bad..hostname")  # pyright: ignore[reportAttributeAccessIssue]
-            self.assertTrue(
-                setup_config.validate_hostname("nas.local") is None  # pyright: ignore[reportAttributeAccessIssue]
-                or setup_config.validate_hostname("nas.local") == "nas.local"  # pyright: ignore[reportAttributeAccessIssue]
-            )
-        self.assertTrue(hasattr(state, "hash_path"))
-
-    def test_identity_model_scrub_and_capability(self) -> None:
-        if hasattr(identity, "scrub_user"):
-            self.assertIsNone(identity.scrub_user({"name": "test", "password": "secret"}).get("password"))  # pyright: ignore[reportAttributeAccessIssue]
-        if hasattr(identity, "capability_name"):
-            self.assertEqual("application.demo.access", identity.capability_name("demo", "access"))  # pyright: ignore[reportAttributeAccessIssue]
-
-    def test_secrets_not_in_nix_store(self) -> None:
-        for mod in (cockpit, state):
-            mod_file = getattr(mod, "__file__", None)
-            assert isinstance(mod_file, str)  # pyright: ignore[reportOptionalSubscript]
-            src = pathlib.Path(mod_file).read_text(encoding="utf-8")  # pyright: ignore[reportArgumentType]
-            self.assertNotIn("/nix/store/secret", src.lower())
-
-    def test_doctor_detects_drift(self) -> None:
-        try:
-            import nas_doctor as doctor  # pyright: ignore[reportAttributeAccessIssue]
-        except ImportError:
-            self.skipTest("nas_doctor not importable")  # pyright: ignore[reportAttributeAccessIssue]
-        if hasattr(doctor, "check_drift"):
-            res = doctor.check_drift()  # pyright: ignore[reportAttributeAccessIssue]
-            self.assertIsInstance(res, (dict, list, bool))
-
-    def test_logging_redacts_secrets(self) -> None:
-        try:
-            import nas_logging as logging  # pyright: ignore[reportAttributeAccessIssue]
-
-            if hasattr(logging, "redact"):
-                self.assertIn("***", logging.redact("password=secret123"))  # pyright: ignore[reportAttributeAccessIssue]
-        except ImportError:
-            pass
-
-    def test_storage_mount_guard_exists(self) -> None:
-        self.assertTrue(callable(state.ensure_safe_tree))
-        self.assertTrue(callable(state.hash_path))
+        with self.assertRaises(cockpit.ApiError):
+            cockpit.run_action("not-a-real-method")
 
 
 if __name__ == "__main__":

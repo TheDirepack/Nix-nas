@@ -1,17 +1,9 @@
 args:
 let
   inherit (args) authentikPort authentikOutpostPort authentikOutpostPath cfg lanHost vaultwardenPort;
+  identityHeaders = builtins.fromJSON (builtins.readFile ../../../services/nas_policy/identity-headers.json);
   caddyForwardAuth = ''
-    request_header -Remote-User
-    request_header -Remote-Groups
-    request_header -Remote-Name
-    request_header -Remote-Email
-    request_header -Remote-Role
-    request_header -X-Authentik-Username
-    request_header -X-Authentik-Groups
-    request_header -X-Authentik-Name
-    request_header -X-Authentik-Email
-    request_header -X-Authentik-Uid
+    ${args.lib.concatMapStringsSep "\n" (header: "request_header -${header}") identityHeaders}
     forward_auth 127.0.0.1:${toString authentikOutpostPort} {
       uri ${authentikOutpostPath}
       # The outpost's Caddy handler needs this exact trio to detect the

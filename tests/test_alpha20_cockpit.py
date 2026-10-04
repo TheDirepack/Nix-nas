@@ -311,7 +311,8 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "iframe-srcdoc",
         ):
             self.assertIn(probe, deterministic)
-        self.assertIn("hostile status corpus never creates executable elements", security)
+        self.assertIn("overview, managed-service label, and source branch stay inert", security)
+        self.assertNotIn('document.createElement("span")', security)
         self.assertIn('frame.locator(".nas-actions button").first()', vm)
         self.assertIn("function firstMaintenanceAction", security)
         self.assertIn("anonymous clients see only the Authentik login boundary", vm)

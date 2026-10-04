@@ -16,6 +16,45 @@ import nas_v2_spec as v2  # noqa: E402
 
 
 class ManagedServicesV2CaddyTests(unittest.TestCase):
+    def test_nix_and_python_share_the_identity_header_registry(self):
+        import json
+
+        registry = ROOT / "services/nas_policy/identity-headers.json"
+        self.assertTrue(registry.is_file())
+        self.assertEqual(tuple(json.loads(registry.read_text())), caddy.IDENTITY_HEADERS)
+        helper = (ROOT / "modules/nas/internal/caddy-helpers.nix").read_text()
+        self.assertIn("builtins.readFile ../../../services/nas_policy/identity-headers.json", helper)
+        self.assertIn("request_header -${header}", helper)
+
+    def test_activation_identifiers_are_collision_free_and_bindable(self):
+        import socket
+        import tempfile
+
+        pairs = [("a", "b-c"), ("a-b", "c"), ("a" * 64, "b" * 64)]
+        self.assertEqual(len({activation.socket_unit(*pair) for pair in pairs}), len(pairs))
+        self.assertEqual(len({activation.socket_path(*pair) for pair in pairs}), len(pairs))
+        with tempfile.TemporaryDirectory() as raw:
+            for pair in pairs:
+                name = activation.socket_path(*pair).name
+                self.assertLessEqual(len(str(activation.socket_path(*pair)).encode()), 107)
+                with socket.socket(socket.AF_UNIX) as sock:
+                    sock.bind(str(pathlib.Path(raw) / name))
+
+    def test_static_identity_header_rejection_is_case_insensitive(self):
+        for header in caddy.IDENTITY_HEADERS:
+            for name in (header.lower(), header.upper(), header.swapcase()):
+                service = self.base_service()
+                service["routes"] = {
+                    "web": {
+                        "target": {"type": "http", "port": 8080},
+                        "exposure": {"type": "path", "paths": ["/demo/"]},
+                        "auth": {"mode": "public"},
+                        "proxy": {"requestHeaders": {name: "forged"}},
+                    }
+                }
+                with self.subTest(name=name), self.assertRaises(caddy.CaddyProjectionError):
+                    caddy.generate_caddyfile(self.compile(service))
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.schema = v2.load_schema(SCHEMA)
@@ -287,8 +326,13 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         for header in expected_headers:
             with self.subTest(header=header):
                 self.assertIn(f"request_header -{header}", rendered)
-        self.assertEqual(set(caddy.IDENTITY_HEADERS), set(expected_headers))
-        self.assertEqual(caddy.TRUSTED_IDENTITY_HEADERS, frozenset(expected_headers))
+        self.assertEqual(
+            set(caddy.IDENTITY_HEADERS), set(expected_headers) | {"X-Authentik-Meta-Jwks", "X-Authentik-Meta-Version"}
+        )
+        self.assertEqual(
+            caddy.TRUSTED_IDENTITY_HEADERS,
+            frozenset(expected_headers) | {"X-Authentik-Meta-Jwks", "X-Authentik-Meta-Version"},
+        )
         self.assertLess(rendered.index("request_header -Remote-User"), rendered.index("forward_auth"))
 
     def test_activation_socket_path_is_derived_from_validated_ids(self):

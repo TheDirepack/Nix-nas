@@ -2,6 +2,9 @@
 
 ## Result and scope
 
+Historical snapshot. Source corrections and current qualification limits are in
+[Audit remediation: 2026-10-04](audit-remediation-2026-10-04.md).
+
 Eight findings remain open: one high, six medium, and one low. Seven have isolated
 reproductions; the eighth is a documentation contradiction. No runtime code,
 configuration, production state, or VM state changed during this audit.

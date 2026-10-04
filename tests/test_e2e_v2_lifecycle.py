@@ -1,11 +1,4 @@
-"""End-to-end V2 lifecycle: YAML -> effective -> all native projections.
-
-This is the single deterministic E2E that proves the entire V2 pipeline works
-for every runtime, network, and storage primitive without mocking the
-projections. It is intentionally not a coverage-gap filler; it asserts that a
-real-world document compiles and that each adapter produces non-empty,
-fail-closed output.
-"""
+"""Multi-runtime compiler/plan smoke checks; not native lifecycle qualification."""
 
 from __future__ import annotations
 
@@ -146,7 +139,7 @@ class E2EV2LifecycleTests(unittest.TestCase):
         self.assertIn("/compose/", caddyfile)
         self.assertIn("forward_auth", caddyfile)
 
-    def test_systemd_projection_covers_all_runtimes(self) -> None:
+    def test_plan_declares_each_runtime_and_job_timer(self) -> None:
         doc = _doc_with_all_primitives()
         effective = spec.compile_document(doc, self.schema)
         plan = v2plan.build_plan(effective)

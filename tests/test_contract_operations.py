@@ -77,7 +77,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('keylocation "$dataset"', exporter)
         self.assertIn("zfsKeyFingerprintProperty", exporter)
         self.assertIn('stored_fingerprint" == "$key_fingerprint', exporter)
-        self.assertLess(exporter.index("stored_fingerprint"), exporter.index('tmp="$(mktemp)"'))
+        self.assertLess(exporter.index("stored_fingerprint"), exporter.index("/dev/stdin"))
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_zfs_mount_check_accepts_the_expected_mount_inside_a_stacked_namespace(self) -> None:

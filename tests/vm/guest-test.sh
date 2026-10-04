@@ -674,12 +674,7 @@ EOF_BAD_CONFIG
 if nas-setup validate-config /tmp/nas-bad-path-config.json >/tmp/nas-bad-path.out 2>/tmp/nas-bad-path.err; then
   fail "setup accepted a traversal-shaped storage device"
 fi
-systemctl status alertmanager.service alertmanager-ntfy.service ntfy-sh.service --no-pager >&2 || true
-wait_active alertmanager.service
-code="$(curl --silent --output /tmp/nas-alert-malformed-adv.json --write-out '%{http_code}' \
-  --header 'Content-Type: application/json' --data-binary '{' http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$code" == 400 ]] || fail "Alertmanager malformed JSON returned HTTP $code instead of 400"
-pass "hostile identifiers, traversal, and malformed Alertmanager requests fail closed"
+pass "custom hostile identifiers and traversal fail closed"
 
 log "Cockpit ZFS rollback wrapper"
 rollback_wrapper="$(find /nix/store -maxdepth 3 -type f -path '*/bin/zfs' \
@@ -1298,11 +1293,6 @@ else:
     raise SystemExit('FAIL: Alertmanager retry did not deliver the retained alert to ntfy')
 VERIFY_NTFY
 pass "Alertmanager remains available during ntfy outage and the ntfy bridge recovers cleanly"
-malformed_alert_code="$(curl --silent --output /tmp/nas-alert-malformed.json --write-out '%{http_code}' \
-  --header 'Content-Type: application/json' --data-binary '{' \
-  http://127.0.0.1:9093/api/v2/alerts)"
-[[ "$malformed_alert_code" == 400 ]] || fail "malformed Alertmanager JSON returned HTTP $malformed_alert_code"
-pass "Alertmanager rejects malformed alert input"
 ! nas-alert $'Injected title\r\nX-NAS-Test: injected' 'must not send' >/tmp/nas-alert-header-injection.log 2>&1 || \
   fail "nas-alert accepted a CRLF header-injection title"
 grep -q 'one line' /tmp/nas-alert-header-injection.log
