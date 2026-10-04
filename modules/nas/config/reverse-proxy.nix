@@ -10,6 +10,8 @@ let
     lanHost
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
+  # Authentik generates inline scripts; preserve its stricter uploaded-file CSP.
+  authentikCsp = "default-src 'self'; img-src https: data:; object-src 'none'; frame-ancestors 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'";
 in
 {
   config.services.caddy = {
@@ -21,6 +23,8 @@ in
       encode zstd gzip
       header {
         -Server
+        -X-Powered-By
+        Strict-Transport-Security "max-age=31536000"
         X-Content-Type-Options "nosniff"
         Referrer-Policy "no-referrer"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
@@ -65,6 +69,7 @@ in
       redir ${authentikPathNoSlash} ${cfg.identity.authentikPath}
       @authentikUi path ${cfg.identity.authentikPath}*
       handle @authentikUi {
+        header ?Content-Security-Policy ${builtins.toJSON authentikCsp}
         reverse_proxy 127.0.0.1:${toString authentikPort} {
           header_up Host {http.request.host}
           header_up X-Forwarded-Proto https
@@ -73,6 +78,7 @@ in
       }
       @authentikFlows path /flows/*
       handle @authentikFlows {
+        header ?Content-Security-Policy ${builtins.toJSON authentikCsp}
         uri replace /flows ${cfg.identity.authentikPath}flows
         reverse_proxy 127.0.0.1:${toString authentikPort} {
           header_up Host {http.request.host}

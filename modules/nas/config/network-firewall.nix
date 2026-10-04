@@ -109,6 +109,9 @@ in
     systemd.services.firewalld = lib.mkIf cfg.networking.firewall.enable {
       restartTriggers = [ firewalldSeedConfig zoneXml ];
       serviceConfig = {
+        # Firewalld claims this bus name after initializing its firewall state.
+        Type = "dbus";
+        BusName = "org.fedoraproject.FirewallD1";
         StateDirectory = "nas-firewall";
         StateDirectoryMode = "0700";
       };

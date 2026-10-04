@@ -7,11 +7,13 @@ SOURCE="${NAS_INSTALL_SOURCE:-/mnt-source}"
 TARGET="${NAS_INSTALL_TARGET:-/mnt}"
 SSH_PUBLIC_KEY="${NAS_INSTALL_SSH_PUBLIC_KEY:-}"
 FLAKE="${NAS_INSTALL_FLAKE:-nas-qemu}"
+PACKAGE_UPGRADE="${NAS_INSTALL_PACKAGE_UPGRADE:-0}"
 
 [[ -b "$DISK" ]] || { echo "Installer disk is missing: $DISK" >&2; exit 2; }
 [[ -f "$SOURCE/flake.nix" ]] || { echo "NAS source flake is missing: $SOURCE" >&2; exit 2; }
 [[ -f "$SSH_PUBLIC_KEY" ]] || { echo "Ephemeral SSH public key is missing: $SSH_PUBLIC_KEY" >&2; exit 2; }
 [[ ! -L "$SSH_PUBLIC_KEY" ]] || { echo "Ephemeral SSH public key must not be a symlink" >&2; exit 2; }
+[[ "$PACKAGE_UPGRADE" == 0 || "$PACKAGE_UPGRADE" == 1 ]] || { echo "Invalid package upgrade mode" >&2; exit 2; }
 
 swapoff -a || true
 umount -R "$TARGET" 2>/dev/null || true
@@ -36,9 +38,16 @@ fi
 swapon "$swap_file" 2>/dev/null || true
 
 export NIX_CONFIG="experimental-features = nix-command flakes"
+install_args=(--flake "path:$SOURCE#$FLAKE")
+if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
+  # Initialize native databases with older packages; never downgrade migrated state.
+  # shellcheck source=tests/vm/package-upgrade-baseline.sh
+  source "$SOURCE/tests/vm/package-upgrade-baseline.sh"
+  install_args+=(--override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV")
+fi
 nixos-install \
   --root "$TARGET" \
-  --flake "path:$SOURCE#$FLAKE" \
+  "${install_args[@]}" \
   --no-root-passwd \
   --option accept-flake-config true \
   --option max-jobs 1 \
@@ -52,7 +61,7 @@ install -d -m 0755 "$TARGET/var/lib/nas-install-test"
 printf '%s\n' preserve-me > "$TARGET/var/lib/nas-install-test/reinstall-sentinel"
 nixos-install \
   --root "$TARGET" \
-  --flake "path:$SOURCE#$FLAKE" \
+  "${install_args[@]}" \
   --no-root-passwd \
   --option accept-flake-config true \
   --option max-jobs 1 \

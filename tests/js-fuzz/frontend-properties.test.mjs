@@ -3,14 +3,12 @@ import assert from "node:assert/strict";
 import fc from "fast-check";
 
 import {
-  inactiveServiceCount,
   managedApplicationLinks,
   managedServiceMap,
   managedServiceOperationsBusy,
   managedServiceRuntimeText,
   managedServiceUnitState,
   mib,
-  operationBusy,
   revisionModel,
   safeInternalPath,
   setupModel,
@@ -103,18 +101,6 @@ test("staticLinks never exposes unknown backend link names or unsafe paths", () 
   );
 });
 
-test("inactiveServiceCount is total and bounded by the supplied rows", () => {
-  fc.assert(
-    fc.property(fc.array(shallowJson, {maxLength: 300}), (rows) => {
-      const count = inactiveServiceCount(rows);
-      assert.ok(Number.isInteger(count));
-      assert.ok(count >= 0);
-      assert.ok(count <= rows.length);
-    }),
-    {numRuns: 1000},
-  );
-});
-
 test("revisionModel is total for arbitrary shallow backend objects", () => {
   fc.assert(
     fc.property(fc.dictionary(fc.string({maxLength: 48}), shallowJson, {maxKeys: 40}), (update) => {
@@ -143,18 +129,15 @@ test("all backend view-model helpers remain total for hostile JSON", () => {
   fc.assert(
     fc.property(
       shallowJson,
-      fc.string({maxLength: 64}),
-      (value, actionId) => {
+      (value) => {
         assert.doesNotThrow(() => managedServiceMap(value));
         assert.doesNotThrow(() => setupModel(value));
         assert.doesNotThrow(() => managedServiceUnitState(value));
         assert.doesNotThrow(() => managedServiceRuntimeText(value));
-        assert.doesNotThrow(() => operationBusy(value, actionId));
         assert.doesNotThrow(() => managedServiceOperationsBusy(value));
         assert.doesNotThrow(() => visibleOperations(value));
         assert.doesNotThrow(() => staticLinks(value));
         assert.doesNotThrow(() => managedApplicationLinks(value));
-        assert.doesNotThrow(() => inactiveServiceCount(value));
         assert.doesNotThrow(() => revisionModel(value));
       },
     ),

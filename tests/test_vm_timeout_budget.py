@@ -20,6 +20,14 @@ class VmTimeoutBudgetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
+    def test_persistent_outpost_waits_use_the_shared_readiness_budget(self) -> None:
+        wrapper = QEMU.read_text(encoding="utf-8")
+        startup = wrapper.split('log "Running the complete source and appliance suite inside the persistent VM"', 1)[1]
+        startup = startup.split('log "Persistent VM is ready', 1)[0]
+        self.assertNotIn("timeout 120s", startup)
+        self.assertEqual(startup.count("$(nas_vm_ordinary_wait_seconds)s sh -c"), 2)
+        self.assertEqual(startup.count("systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1"), 2)
+
     def test_manifest_derives_guest_watchdog_and_is_used_by_wrappers(self) -> None:
         expected = (
             sum(
