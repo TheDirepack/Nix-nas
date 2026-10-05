@@ -232,12 +232,18 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 runner.INVENTORIES = tuple(root / "tests" / path.name for path in runner.INVENTORIES)
 strategies = runner.inventory_strategies()
+delegated = sorted(name for name, strategy in strategies.items() if strategy in runner.DELEGATED_STRATEGIES)
+executed = sorted(set(strategies) - set(delegated))
 result = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
 if (
     not strategies
     or result.get("ok") is not True
     or result.get("smoke") is not False
-    or result.get("commands") != len(strategies)
+    or result.get("discovered") != len(strategies)
+    or result.get("commands") != len(executed)
+    or result.get("executed") != executed
+    or result.get("delegated") != delegated
+    or result.get("skipped") != []
     or result.get("strategies") != strategies
 ):
     raise SystemExit("installed-command fuzz evidence is empty or incomplete")

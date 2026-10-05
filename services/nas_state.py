@@ -582,17 +582,11 @@ def manifest_contract() -> tuple[set[str], set[str], set[str]]:
     return top, entry, statuses
 
 
-def allow_unsigned_bundles() -> bool:
-    return os.environ.get("NAS_STATE_ALLOW_UNSIGNED", "0") == "1"
-
-
 def signing_key() -> bytes:
     key_path = pathlib.Path(os.environ.get("NAS_STATE_SIGNING_KEY", str(SIGNING_KEY_PATH)))
     try:
         raw = key_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        if allow_unsigned_bundles():
-            return b""
         raise StateError(f"State bundle signing key is unavailable: {key_path}") from exc
     if not re.fullmatch(r"[0-9A-Fa-f]{64,256}", raw):
         raise StateError(f"State bundle signing key at {key_path} has an invalid format: must be 64-256 hex digits")
@@ -608,8 +602,6 @@ def canonical_manifest_payload(manifest: Mapping[str, Any]) -> bytes:
 
 def sign_manifest(manifest: Mapping[str, Any]) -> str:
     key = signing_key()
-    if not key and allow_unsigned_bundles():
-        return "0" * 64
     return hmac.new(key, canonical_manifest_payload(manifest), hashlib.sha256).hexdigest()
 
 
@@ -673,8 +665,16 @@ def _safe_tar_info(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
-def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integration
-    # V2 effective is the authority when available; otherwise fall back to env or static.
+def export_quiesce_units() -> tuple[str, ...]:
+    raw = os.environ.get("NAS_STATE_QUIESCE_UNITS_JSON")
+    if raw is not None:
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise StateError("NAS_STATE_QUIESCE_UNITS_JSON is invalid") from exc
+        if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+            raise StateError("NAS_STATE_QUIESCE_UNITS_JSON must be an array of unit names")
+        return tuple(dict.fromkeys(value))
     effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     try:
         raw = pathlib.Path(effective_path).read_text(encoding="utf-8")
@@ -708,15 +708,6 @@ def export_quiesce_units() -> tuple[str, ...]:  # pragma: no cover - VM integrat
             return tuple(dict.fromkeys(units))
     except (OSError, ValueError, json.JSONDecodeError):
         pass
-    raw = os.environ.get("NAS_STATE_QUIESCE_UNITS_JSON")
-    if raw:
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise StateError("NAS_STATE_QUIESCE_UNITS_JSON is invalid") from exc
-        if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-            raise StateError("NAS_STATE_QUIESCE_UNITS_JSON must be an array of unit names")
-        return tuple(dict.fromkeys(value))
     return (
         "authentik.service",
         "authentik-worker.service",
@@ -771,8 +762,9 @@ def export_bundle(output: pathlib.Path, *, include_sensitive: bool, quiesce: boo
         quiesced_units = export_quiesce_units()
         unit_snapshot = capture_unit_state(quiesced_units)
         stop_active_units(unit_snapshot)
-        prepare_database_export(registry, unit_snapshot)
     try:
+        if quiesced_units:
+            prepare_database_export(registry, unit_snapshot)
         with state_temporary_directory("nas-state-export.") as temporary:
             staging = pathlib.Path(temporary)
             payload_root = staging / PAYLOAD_ROOT

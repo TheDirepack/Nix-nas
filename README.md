@@ -7,10 +7,10 @@ NixOS NAS is a NixOS-based NAS appliance that keeps storage, identity, secrets, 
 - ZFS pool management with snapshots and replication (Sanoid/Syncoid), plus Restic backups.
 - Single sign-on with MFA through Authentik.
 - File sharing with volumes, ACLs, quotas, share links, and WebDAV through CopyParty.
-- Web administration through Cockpit, including guided first-start setup and locked-boot unlock.
+- Web administration through Cockpit and guided browser first-start setup.
 - Machine secrets in a KeePassXC database, staged under `/run` only while the system is unlocked.
 - Optional Syncthing, Vaultwarden, virtualization, and a VictoriaMetrics/Telegraf observability stack.
-- Recovery-first design: a cold-boot Cockpit/PAM recovery plane, `nas-state` export/restore for appliance state, and Restic for backups.
+- Out-of-band cold-boot recovery through console, provisioned SSH recovery access, or hardware KVM; `nas-state` export/restore and Restic backups.
 
 ## Release status
 
@@ -26,8 +26,8 @@ You should be comfortable with Linux administration; NixOS basics help but are e
 
 1. Prepare the host configuration (`hardware-configuration.nix`, `local.nix`).
 2. Build and install NixOS from the flake target `.#nas`.
-3. Prepare the first-run plan (accounts, storage plan, feature modes).
-4. Complete guided setup (browser wizard or CLI).
+3. Prepare the first-run plan (accounts, storage plan, service modes).
+4. Complete the browser setup wizard. Fresh setup does not yet have a command-only execution path.
 5. Verify the result and record your offline recovery material.
 
 The full walkthrough is [Install and set up](docs/src/admin/installation.md).
@@ -50,7 +50,7 @@ The complete authority map is in [`docs/src/admin/service-map.md`](docs/src/admi
 
 ## Recovery model
 
-Protected services stay stopped until secrets and storage checks succeed. Cockpit and the local PAM administrator remain available as the cold-boot recovery plane. Mutable appliance state can be exported, validated, compared, and restored with `nas-state`, while ZFS snapshots/replication and Restic cover different recovery layers.
+Protected services stay stopped until secrets and storage checks succeed. No browser management endpoint, including Cockpit, is exposed while locked. Keep local console, a provisioned SSH recovery key, or hardware KVM access for the local PAM administrator; Authentik membership does not grant host access. Mutable appliance state can be exported, validated, compared, and restored with `nas-state`, while ZFS snapshots/replication and Restic cover different recovery layers.
 
 Keep an offline copy of the recovery material listed in [`docs/operator/recovery.md`](docs/operator/recovery.md).
 

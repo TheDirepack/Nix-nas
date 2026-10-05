@@ -81,12 +81,28 @@ fail() { echo "$*" >&2; exit 1; }
             strategies.update(
                 {name: row["fuzzStrategy"] for name, row in inventory["executables"].items() if row.get("fuzzStrategy")}
             )
-        complete = {"ok": True, "smoke": False, "commands": len(strategies), "strategies": strategies}
+        delegated = sorted(
+            name
+            for name, strategy in strategies.items()
+            if strategy in {"protocol-system-test", "system-lifecycle", "disposable-zfs-lifecycle"}
+        )
+        executed = sorted(set(strategies) - set(delegated))
+        complete = {
+            "ok": True,
+            "smoke": False,
+            "commands": len(executed),
+            "strategies": strategies,
+            "discovered": len(strategies),
+            "executed": executed,
+            "delegated": delegated,
+            "skipped": [],
+        }
         with tempfile.TemporaryDirectory() as directory:
             report = pathlib.Path(directory) / "fuzz.json"
             for payload, accepted in (
                 (complete, True),
-                ({**complete, "commands": len(strategies) - 1}, False),
+                ({**complete, "commands": len(executed) - 1}, False),
+                ({**complete, "executed": []}, False),
                 ({**complete, "strategies": {}}, False),
                 ({**complete, "smoke": True}, False),
                 ({**complete, "ok": False}, False),
