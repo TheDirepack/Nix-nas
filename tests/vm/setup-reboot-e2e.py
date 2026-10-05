@@ -293,10 +293,11 @@ def browser_sign_in(stage: str) -> None:
             path = secrets / name
             path.write_text(value + "\n", encoding="utf-8")
             path.chmod(0o600)
+        # Inherit the journal stream: an unread stderr pipe can stall the proxy.
         proxy = subprocess.Popen(
             [str(activate), "--listen", "127.0.0.1:8443", str(proxyd), "127.0.0.1:443"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=sys.stderr,
             text=True,
         )
         try:
@@ -338,6 +339,8 @@ def browser_sign_in(stage: str) -> None:
             )
             if result.returncode:
                 detail = result.stderr or result.stdout
+                print(detail, file=sys.stderr, flush=True)
+                print(f"browser callback proxy exit status: {proxy.poll()}", file=sys.stderr, flush=True)
                 raise CheckError(
                     f"authenticated browser checks failed after {stage}: {detail[:1100]}\n{detail[-1900:]}"
                 )
