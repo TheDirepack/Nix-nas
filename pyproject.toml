@@ -24,6 +24,7 @@ version = {file = ["VERSION"]}
 
 [tool.setuptools]
 package-dir = {"" = "services"}
+packages = ["nas_policy"]
 py-modules = [
   "nas_common",
   "nas_cockpit_api",
@@ -70,6 +71,9 @@ py-modules = [
   "nas_v2_systemd_native",
   "nas_v2_systemd_reconcile"
 ]
+
+[tool.setuptools.package-data]
+nas_policy = ["*.json"]
 
 [tool.ruff]
 target-version = "py312"

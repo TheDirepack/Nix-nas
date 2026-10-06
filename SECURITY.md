@@ -23,11 +23,11 @@ The bootstrap token exists only to initialize Authentik. Normal automation shoul
 
 ## Default-deny capability authorization
 
-`nas_users` is an identity baseline, not an access grant. Ordinary access requires an explicit Authentik `nas_allow_*` group. Caddy uses the same shared policy implementation for files, WebDAV, Syncthing self-service, Vaultwarden SSO, and AI; matching `nas_deny_*` groups and `nas_disabled` fail closed. Authentik application bindings should mirror these groups for correct dashboard visibility.
+`nas_users` is an identity baseline, not an access grant. Identity-protected V2 routes require the configured `application.<service>.<capability>` group or `nas_admin`, after successful Authentik forward authentication. V2 ensures capability objects exist but does not assign users. Retired `nas_allow_*` and `nas_deny_*` groups are not the V2 route authorization contract. Disabled-account policy belongs to Authentik and the identity synchronizer.
 
 ## CopyParty authorization
 
-Caddy passes authenticated `Remote-User` and `Remote-Groups` headers only after Authentik forward authentication. The `/shares` route additionally requires `nas_allow_files`, and `/dav` requires `nas_allow_webdav`. CopyParty ACLs remain the final authority for files and shares.
+Caddy passes authenticated `Remote-User` and `Remote-Groups` headers only after Authentik forward authentication and the route's configured V2 capability check. CopyParty ACLs remain the final authority for files and shares.
 
 CopyParty flags are not filtered through a custom semantic allowlist because only the trusted administrators can change authoritative configuration. Ordinary users may use native share links only where CopyParty's volume ACLs and share flags allow them.
 

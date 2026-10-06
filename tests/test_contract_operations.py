@@ -62,7 +62,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('TimeoutStartSec = "4min";', authentik)
         self.assertIn('blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";', authentik)
         blueprints = text("modules/nas/internal/account-tools.nix")
-        self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)
+        self.assertIn("${authentikPackage.src}/blueprints/.", blueprints)
 
     def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
         zfs_tools = text("modules/nas/internal/zfs-tools.nix")
@@ -77,7 +77,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('keylocation "$dataset"', exporter)
         self.assertIn("zfsKeyFingerprintProperty", exporter)
         self.assertIn('stored_fingerprint" == "$key_fingerprint', exporter)
-        self.assertLess(exporter.index("stored_fingerprint"), exporter.index('tmp="$(mktemp)"'))
+        self.assertLess(exporter.index("stored_fingerprint"), exporter.index("/dev/stdin"))
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_zfs_mount_check_accepts_the_expected_mount_inside_a_stacked_namespace(self) -> None:

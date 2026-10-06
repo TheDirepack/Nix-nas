@@ -217,6 +217,8 @@ def verify_services(stage: str) -> None:
     health = {key: setup.get(key) for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")}
     if not all(value is True for value in health.values()):
         raise CheckError(f"setup is not complete after {stage}: {health}")
+    if run("systemctl", "is-failed", "--quiet", "nas-v2-apply-failed.service").returncode == 0:
+        raise CheckError(f"Managed Services V2 rollback is failed after {stage}")
     if not SENTINEL.is_file() or SENTINEL.read_text(encoding="utf-8") != "setup-reboot-e2e\n":
         raise CheckError(f"ZFS-backed setup sentinel did not survive {stage}")
     require(("zpool", "status", "-x", "tank"))
@@ -291,10 +293,11 @@ def browser_sign_in(stage: str) -> None:
             path = secrets / name
             path.write_text(value + "\n", encoding="utf-8")
             path.chmod(0o600)
+        # Inherit the journal stream: an unread stderr pipe can stall the proxy.
         proxy = subprocess.Popen(
             [str(activate), "--listen", "127.0.0.1:8443", str(proxyd), "127.0.0.1:443"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=sys.stderr,
             text=True,
         )
         try:
@@ -336,6 +339,8 @@ def browser_sign_in(stage: str) -> None:
             )
             if result.returncode:
                 detail = result.stderr or result.stdout
+                print(detail, file=sys.stderr, flush=True)
+                print(f"browser callback proxy exit status: {proxy.poll()}", file=sys.stderr, flush=True)
                 raise CheckError(
                     f"authenticated browser checks failed after {stage}: {detail[:1100]}\n{detail[-1900:]}"
                 )
@@ -367,19 +372,21 @@ def finish(ok: bool, **extra: Any) -> None:
     write_json(RESULT, payload)
 
 
+def verify_reboot(stage: str) -> None:
+    activate_after_reboot()
+    verify_services(stage)
+    browser_sign_in(stage)
+
+
 def resume() -> None:
     try:
         phase = read_state().get("phase")
         if phase == "after-first-reboot":
-            activate_after_reboot()
-            verify_services("the first reboot")
-            browser_sign_in("the first reboot")
+            verify_reboot("the first reboot")
             schedule_reboot("after-second-reboot")
             return
         if phase == "after-second-reboot":
-            activate_after_reboot()
-            verify_services("the second reboot")
-            browser_sign_in("the second reboot")
+            verify_reboot("the second reboot")
             finish(True, phase="complete", verifiedReboots=2)
             STATE.unlink()
             return
@@ -394,10 +401,13 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--start", action="store_true")
     group.add_argument("--resume", action="store_true")
+    group.add_argument("--verify", action="store_true")
     arguments = parser.parse_args()
     try:
         if arguments.start:
             start()
+        elif arguments.verify:
+            verify_reboot("the final reboot")
         else:
             resume()
     except Exception as error:

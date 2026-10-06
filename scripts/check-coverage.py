@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
-FLOORS = {
+COMBINED_FLOORS = {
     "services/nas_cockpit_api.py": 49.0,
     "services/nas_common.py": 75.0,
     "services/nas_doctor.py": 60.0,
@@ -42,7 +43,63 @@ FLOORS = {
     "services/nas_v2_systemd_native.py": 80.0,
     "services/nas_v2_systemd_reconcile.py": 68.0,
 }
-TOTAL_FLOOR = 66.0
+FLOORS = {
+    "services/nas_cockpit_api.py": 79.0,
+    "services/nas_common.py": 95.0,
+    "services/nas_doctor.py": 81.0,
+    "services/nas_guarded_apply.py": 55.0,
+    "services/nas_identity_model.py": 93.0,
+    "services/nas_identity_sync.py": 78.0,
+    "services/nas_logging.py": 89.0,
+    "services/nas_operation_journal.py": 81.0,
+    "services/nas_operation_lock.py": 73.0,
+    "services/nas_setup.py": 62.0,
+    "services/nas_setup_config.py": 95.0,
+    "services/nas_state.py": 65.0,
+    "services/nas_syncthing_devices.py": 84.0,
+    "services/nas_v2_accelerator.py": 69.0,
+    "services/nas_v2_activation.py": 36.0,
+    "services/nas_v2_apply.py": 73.0,
+    "services/nas_v2_authentik_blueprint.py": 61.0,
+    "services/nas_v2_backup.py": 68.0,
+    "services/nas_v2_bootstrap.py": 38.0,
+    "services/nas_v2_caddy.py": 81.0,
+    "services/nas_v2_cli.py": 74.0,
+    "services/nas_v2_compose.py": 69.0,
+    "services/nas_v2_compose_import.py": 62.0,
+    "services/nas_v2_control.py": 31.0,
+    "services/nas_v2_editor.py": 70.0,
+    "services/nas_v2_entry.py": 55.0,
+    "services/nas_v2_exec_runner.py": 61.0,
+    "services/nas_v2_firewalld_reconcile.py": 68.0,
+    "services/nas_v2_generation.py": 72.0,
+    "services/nas_v2_history.py": 60.0,
+    "services/nas_v2_libvirt.py": 44.0,
+    "services/nas_v2_network.py": 76.0,
+    "services/nas_v2_nmstate.py": 62.0,
+    "services/nas_v2_plan.py": 87.0,
+    "services/nas_v2_platform_probe.py": 60.0,
+    "services/nas_v2_podman_network.py": 56.0,
+    "services/nas_v2_quadlet.py": 67.0,
+    "services/nas_v2_readiness.py": 60.0,
+    "services/nas_v2_session.py": 47.0,
+    "services/nas_v2_source_watch.py": 65.0,
+    "services/nas_v2_spec.py": 86.0,
+    "services/nas_v2_systemd_attachments.py": 66.0,
+    "services/nas_v2_systemd_native.py": 69.0,
+    "services/nas_v2_systemd_reconcile.py": 71.0,
+}
+TOTAL_FLOOR = 70.0
+
+
+def branch_percentage(summary: object) -> float:
+    if not isinstance(summary, dict):
+        raise ValueError("summary must be an object")
+    count = summary.get("num_branches")
+    covered = summary.get("covered_branches")
+    if type(count) is not int or type(covered) is not int or not 0 <= covered <= count:
+        raise ValueError("invalid or missing branch counts")
+    return 100.0 * covered / count if count else 100.0
 
 
 def main() -> int:
@@ -61,6 +118,13 @@ def main() -> int:
         help="maximum allowed per-file branch-coverage drop against the baseline",
     )
     args = parser.parse_args()
+    if (
+        not math.isfinite(args.total_floor)
+        or not 0 <= args.total_floor <= 100
+        or not math.isfinite(args.max_dip)
+        or args.max_dip < 0
+    ):
+        parser.error("coverage thresholds must be finite and within their valid ranges")
     try:
         data = json.loads(Path(args.report).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -71,6 +135,9 @@ def main() -> int:
         return 2
     failures: list[str] = []
     files = data.get("files", {})
+    if not isinstance(files, dict):
+        print("Coverage files must be an object")
+        return 2
     baseline_files: dict[str, object] = {}
     if args.baseline:
         try:
@@ -88,20 +155,38 @@ def main() -> int:
             failures.append(f"missing coverage result for {path}")
             continue
         summary = row.get("summary", {})
-        actual = float(summary.get("percent_covered", 0.0))
+        try:
+            actual = branch_percentage(summary)
+            if path in COMBINED_FLOORS:
+                combined = float(summary.get("percent_covered", 0.0))
+                if not math.isfinite(combined) or not 0 <= combined <= 100:
+                    raise ValueError("invalid combined coverage")
+                if combined + 1e-9 < COMBINED_FLOORS[path]:
+                    failures.append(f"{path}: combined coverage {combined:.1f}% is below {COMBINED_FLOORS[path]:.1f}%")
+        except (ValueError, TypeError) as exc:
+            failures.append(f"{path}: {exc}")
+            continue
         if actual + 1e-9 < floor:
             failures.append(f"{path}: {actual:.1f}% is below {floor:.1f}%")
         if args.baseline:
             baseline_row = baseline_files.get(path)
             if isinstance(baseline_row, dict):
-                baseline_value = float(baseline_row.get("summary", {}).get("percent_covered", 0.0))
+                try:
+                    baseline_value = branch_percentage(baseline_row.get("summary"))
+                except ValueError as exc:
+                    failures.append(f"{path}: invalid baseline: {exc}")
+                    continue
                 reference = max(floor, baseline_value)
                 if actual + 1e-9 < reference - args.max_dip:
                     failures.append(
                         f"{path}: {actual:.1f}% is more than {args.max_dip:.0f}pp below "
                         f"the baseline {baseline_value:.1f}%"
                     )
-    total = float(data.get("totals", {}).get("percent_covered", 0.0))
+    try:
+        total = branch_percentage(data.get("totals"))
+    except ValueError as exc:
+        failures.append(f"total: {exc}")
+        total = 0.0
     if total + 1e-9 < args.total_floor:
         failures.append(f"total: {total:.1f}% is below {args.total_floor:.1f}%")
     if failures:

@@ -20,6 +20,7 @@
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICITestFixtureOnlyKeyMaterial000000000000000 nas-ci"
   ];
 
+  boot.kernelParams = [ "console=ttyS0,115200n8" ];
   boot.initrd.availableKernelModules = [
     "virtio_pci"
     "virtio_blk"

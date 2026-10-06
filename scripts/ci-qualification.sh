@@ -138,7 +138,7 @@ case "$section" in
         return 2
       fi
       nix develop .#test -c python3 scripts/check-coverage.py \
-        coverage.json --total-floor 66
+        coverage.json
     }
     ci_run unit coverage-floor "Coverage floor" check_coverage_floor || failed=1
 

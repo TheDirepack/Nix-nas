@@ -470,7 +470,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: main-coverage.json
-          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py') }}
+          key: ${{ env.CI_CACHE_SCHEMA }}-coverage-main-${{ runner.os }}-${{ steps.main-baseline.outputs.sha }}-${{ hashFiles('scripts/prepare-coverage-baseline.py', 'scripts/ci-qualification.sh', '.github/workflows/ci.yml') }}
       - name: Set up Nix for uncached baseline
         id: baseline-nix
         if: >-
@@ -497,6 +497,7 @@ jobs:
             --exclude test_maintainer_release.py \
             --exclude test_contract_tooling.py \
             --exclude test_fuzz_boundaries.py \
+            --exclude test_fuzz_custom_inputs.py \
             --exclude test_property_invariants.py \
             --exclude test_secret_security_fuzz.py
       - name: Compare current coverage with main
@@ -507,7 +508,7 @@ jobs:
           test -s coverage.json
           test -s main-coverage.json
           python3 scripts/check-coverage.py \
-            coverage.json --baseline main-coverage.json --total-floor 66
+            coverage.json --baseline main-coverage.json
       - name: Report coverage baseline failures
         if: always()
         env:
@@ -803,7 +804,10 @@ jobs:
       - name: Install from official NixOS media and reboot-test
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
-        run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
+        # All browser engines must resolve Authentik's canonical callback host.
+        run: |
+          echo '127.0.0.1 nas-test.local' | sudo tee -a /etc/hosts
+          nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Qualify older-to-newer NixOS package upgrade on a fresh installation
         env:
           NAS_QEMU_PACKAGE_UPGRADE: "1"
@@ -869,6 +873,7 @@ jobs:
     if: >-
       !cancelled() && needs.installer.result == 'success' &&
       (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.test-tier == 'full') ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     needs: [installer, prepare]
     runs-on: ubuntu-24.04
@@ -923,7 +928,7 @@ jobs:
         continue-on-error: true
         env:
           NAS_FINAL_VM_WORKLOAD: zap-fuzz
-          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE }}
+          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE || 'ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef' }}
           NAS_ZAP_CONFIRM_ACTIVE: "1"
           NAS_ZAP_OUT_DIR: zap-report
           NAS_ZAP_AUTOMATION_MINUTES: "90"

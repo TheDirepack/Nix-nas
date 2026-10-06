@@ -55,6 +55,11 @@ def _quote(value: str) -> str:
     return '"' + safe.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _exec_quote(value: str) -> str:
+    # Exec directives expand dollars even inside quotes; Environment does not.
+    return _quote(value.replace("$", "$$"))
+
+
 def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
@@ -225,7 +230,7 @@ def _exec_unit(
         "",
         "[Service]",
         "Type=oneshot" if kind == "job" else "Type=simple",
-        f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config {_quote(str(descriptor_path))}",
+        f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_exec_runner.py'))} --config {_exec_quote(str(descriptor_path))}",
         *_identity_lines(runtime),
         *_environment_lines(runtime),
         *_resource_lines(service),
@@ -300,8 +305,8 @@ def _python_unit(
         "",
         "[Service]",
         "Type=oneshot" if kind == "job" else "Type=simple",
-        "ExecStart=" + " ".join(_quote(part) for part in command),
-        "WorkingDirectory=" + _quote(working),
+        "ExecStart=" + " ".join(_exec_quote(part) for part in command),
+        "WorkingDirectory=" + _single_line(working, field="workingDirectory"),
         *_identity_lines(runtime),
         *_environment_lines(runtime),
         "CacheDirectory=" + f"nas-v2-uv/{service_id}",
@@ -377,8 +382,8 @@ def _vm_unit(
                 "[Service]",
                 "Type=oneshot",
                 "RemainAfterExit=yes",
-                f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_libvirt.py'))} start --config {_quote(str(descriptor_path))}",
-                f"ExecStop={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_libvirt.py'))} stop --config {_quote(str(descriptor_path))}",
+                f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_libvirt.py'))} start --config {_exec_quote(str(descriptor_path))}",
+                f"ExecStop={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_libvirt.py'))} stop --config {_exec_quote(str(descriptor_path))}",
                 "TimeoutStartSec=0",
                 "TimeoutStopSec=240",
                 "NoNewPrivileges=yes",
@@ -411,7 +416,7 @@ def _readiness_unit(
                 "",
                 "[Service]",
                 "Type=oneshot",
-                f"ExecStart={_quote(python_bin)} {_quote(str(source_dir / 'nas_v2_readiness.py'))} --config {_quote(str(descriptor_path))} --systemctl {_quote(systemctl_bin)}",
+                f"ExecStart={_exec_quote(python_bin)} {_exec_quote(str(source_dir / 'nas_v2_readiness.py'))} --config {_exec_quote(str(descriptor_path))} --systemctl {_exec_quote(systemctl_bin)}",
                 "NoNewPrivileges=yes",
                 "PrivateTmp=yes",
                 "ProtectHome=yes",
@@ -497,7 +502,7 @@ def _activation_units(
                     "",
                     "[Service]",
                     "Type=notify",
-                    f"ExecStart={_quote(proxyd)} --exit-idle-time={idle}s {_quote(backend)}",
+                    f"ExecStart={_exec_quote(proxyd)} --exit-idle-time={idle}s {_exec_quote(backend)}",
                     "NoNewPrivileges=yes",
                     "PrivateTmp=yes",
                     "ProtectHome=yes",

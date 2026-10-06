@@ -17,9 +17,38 @@ if str(SERVICES) not in sys.path:
 import nas_v2_spec as v2  # noqa: E402
 import nas_v2_systemd_native as systemd  # noqa: E402
 import nas_v2_systemd_attachments as attachments  # noqa: E402
+import nas_v2_activation as activation  # noqa: E402
+import nas_v2_caddy as caddy  # noqa: E402
 
 
 class V2SystemdProjectionTests(unittest.TestCase):
+    def test_ambiguous_route_pairs_preserve_distinct_proxy_backend_and_capability(self):
+        services = {}
+        pairs = [("a", "b-c", 8001), ("a-b", "c", 8002)]
+        for service, route, port in pairs:
+            services[service] = {
+                "name": service,
+                "workload": {"kind": "daemon", "activation": "on-demand", "idleSeconds": 60},
+                "runtime": {"type": "systemd", "unit": service + ".service"},
+                "routes": {
+                    route: {
+                        "target": {"type": "http", "port": port},
+                        "exposure": {"type": "path", "paths": [f"/{service}/"]},
+                        "auth": {"mode": "identity", "capability": "access"},
+                    }
+                },
+            }
+        effective = self.compile(services)
+        output = pathlib.Path("/run/nas-control/systemd")
+        files, _ = self.generate(effective, output)
+        caddyfile = caddy.generate_caddyfile(effective)
+        for service, route, port in pairs:
+            proxy = files[output / "units" / activation.proxy_unit(service, route)].decode()
+            self.assertIn(f'"127.0.0.1:{port}"', proxy)
+            self.assertIn(str(activation.socket_path(service, route)), caddyfile)
+            escaped_service = service.replace("-", "\\\\-")
+            self.assertIn(f"application[.]{escaped_service}[.]access", caddyfile)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.schema = v2.load_schema(SCHEMA)
@@ -168,6 +197,26 @@ class V2SystemdProjectionTests(unittest.TestCase):
             manifest1["fingerprints"]["nas-v2-demo.service"],
             manifest2["fingerprints"]["nas-v2-demo.service"],
         )
+
+    def test_python_unit_preserves_literal_arguments_and_unquoted_working_directory(self):
+        effective = self.compile(
+            {
+                "demo": {
+                    "name": "Demo",
+                    "workload": {"kind": "daemon"},
+                    "runtime": {
+                        "type": "python",
+                        "entrypoint": {"module": "demo.server", "args": ["a$$b", "${HOME}/x", "100%", 'a"b', "a\\b"]},
+                        "environment": {"LITERAL": "${HOME}"},
+                    },
+                }
+            }
+        )
+        files, _ = self.generate(effective, pathlib.Path("/run/nas-control/systemd"))
+        unit = files[pathlib.Path("/run/nas-control/systemd/units/nas-v2-demo.service")].decode()
+        self.assertIn("\nWorkingDirectory=/var/lib/nas-control/apps/demo\n", unit)
+        self.assertIn('"a$$$$b" "$${HOME}/x" "100%%" "a\\"b" "a\\\\b"', unit)
+        self.assertIn('Environment="LITERAL=${HOME}"', unit)
 
     def test_on_demand_daemon_gets_native_socket_proxy_and_no_lease_timer(self):
         effective = self.compile(

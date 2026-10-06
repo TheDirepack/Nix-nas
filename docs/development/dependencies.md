@@ -36,6 +36,8 @@ Byte-level coverage-guided fuzzing may use Atheris/libFuzzer only for a target t
 
 Playwright is the browser-behavior layer for checks that require a browser engine: DOM execution/XSS regressions, layout, interaction, accessibility, and real login flows. Browser engines are allowed for generated tests when those semantics matter. Request/response-level behavior that only needs HTTP status, headers, paths, redirects, or authorization responses should use curl or a protocol-aware scanner instead, because launching and rendering a browser adds cost without increasing fidelity for those invariants. Installed web active scanning remains ZAP's responsibility.
 
+CI defaults to the immutable upstream ZAP image declared in `.github/workflows/ci.yml`. The optional `NAS_ZAP_IMAGE` repository variable may override it with another reviewed digest; an absent variable must not prevent qualification. Both scanner wrappers reject floating tags.
+
 ## Cockpit frontend
 
 The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`. Nix builds Cockpit and the first-run wizard from their reviewed npm lockfiles with `importNpmLock` and `buildNpmPackage`, then verifies their output with the existing build-integrity checks. Local `node_modules` and generated `dist` trees are excluded from derivation inputs. Release archives retain the compiled payload and source-hash metadata for browser qualification and source consumers; they are not the inputs to the installed frontend build. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.
@@ -44,9 +46,44 @@ The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as 
 
 The unfree-package predicate in `modules/nas/config/host-platform.nix` admits only NVIDIA/CUDA/CUDNN/Libcu/NCCL package names, and only when `nas.hardware.gpuVendors` declares `nvidia`. Keep that exception exact to those package-name prefixes; broader unfree enablement would bypass the appliance dependency review boundary.
 
+## Firewalld readiness
+
+The upstream unit may use implicit `Type=simple`, which does not guarantee that
+`firewall-cmd` can connect when dependent units start. The NAS unit uses native
+`Type=dbus` readiness with `BusName=org.fedoraproject.FirewallD1`. Firewalld
+acquires that name after initializing firewall state; the baseline and guards
+must remain ordered after this readiness boundary.
+
+## Authentik login accessibility
+
+`authentikPackage` in `modules/nas/internal/account-tools.nix` applies
+`authentik/patches/authentik-accessibility.patch` to the upstream source before
+Nix builds its frontend and server. It removes invalid required-state ARIA from
+labels, keeps password-manager helper controls out of accessibility/tab order,
+and gives light footer/locale text a solid dark background. All native server,
+worker, migration, and blueprint commands consume this one package. Dependency
+updates must either retain an applicable source patch or remove it after the
+unchanged installed-login accessibility test passes without it.
+
+The same source package applies `authentik-known-device-cookie.patch` so the
+remembered-device cookie is HttpOnly and uses the request's secure transport
+flag. Keep this patch until upstream provides equivalent protection. Do not
+make the CSRF cookie HttpOnly: the native interface reads it to construct its
+CSRF request header. Preserve upstream session SameSite behavior as well.
+
+Authentik's [documented CSP](https://docs.goauthentik.io/security/security-hardening/#content-security-policy-csp)
+requires inline scripts and styles. The proxy adds that baseline only when
+upstream has not supplied a policy, preserving the stricter policy on uploaded
+files. Do not replace it with a blanket strict script policy or add
+`unsafe-eval` to satisfy an unverified interface failure. The required
+`unsafe-inline` remains a scanner-visible constraint, not a qualified strict CSP.
+
 ## Upgrade qualification pin
 
 The official-ISO upgrade rehearsal pins nixpkgs revision
 `36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac` (NixOS 26.05, June 30,
 2026). It provides Syncthing 2.0.15, older than the reviewed lock's package.
 Keep the revision immutable so CI exercises the same old-to-new transition.
+The shared test declaration lives in `tests/vm/package-upgrade-baseline.sh`.
+Install and initialize that baseline before promoting to the reviewed lock;
+downgrading an already-migrated native database is not an upgrade rehearsal.

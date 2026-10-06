@@ -1,0 +1,23 @@
+[
+  "Remote-User",
+  "Remote-Groups",
+  "Remote-Name",
+  "Remote-Email",
+  "Remote-UID",
+  "Remote-Role",
+  "X-Authentik-Username",
+  "X-Authentik-Groups",
+  "X-Authentik-Name",
+  "X-Authentik-Email",
+  "X-Authentik-Uid",
+  "X-Authentik-Jwt",
+  "X-Authentik-Entitlements",
+  "X-Authentik-Meta-Outpost",
+  "X-Authentik-Meta-App",
+  "X-Authentik-Meta-Provider",
+  "X-Authentik-Meta-User",
+  "X-Authentik-Meta-Is-Superuser",
+  "X-Authentik-Role",
+  "X-Authentik-Meta-Jwks",
+  "X-Authentik-Meta-Version"
+]

@@ -64,7 +64,6 @@ def _registry(public: pathlib.Path, sensitive: pathlib.Path, missing: pathlib.Pa
 def _env(registry: str) -> dict[str, str]:
     return {
         "NAS_STATE_ALLOW_UNPRIVILEGED": "1",
-        "NAS_STATE_ALLOW_UNSIGNED": "1",
         "NAS_STATE_EXPORT_QUIESCE": "0",
         "NAS_STATE_REGISTRY_JSON": registry,
     }
@@ -75,6 +74,9 @@ class StateArchiveBoundTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = pathlib.Path(self._tmp.name)
+        key = root / "signing-key"
+        key.write_text("ab" * 32 + "\n")
+        key.chmod(0o600)
         patch = mock.patch.multiple(
             state,
             DEFAULT_ROLLBACK_ROOT=root / "rollbacks",
@@ -83,7 +85,13 @@ class StateArchiveBoundTests(unittest.TestCase):
         )
         patch.start()
         self.addCleanup(patch.stop)
-        env_patch = mock.patch.dict(os.environ, {"NAS_STATE_RUNTIME_ROOT": str(root / "runtime")})
+        env_patch = mock.patch.dict(
+            os.environ,
+            {
+                "NAS_STATE_RUNTIME_ROOT": str(root / "runtime"),
+                "NAS_STATE_SIGNING_KEY": str(key),
+            },
+        )
         env_patch.start()
         self.addCleanup(env_patch.stop)
 

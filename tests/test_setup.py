@@ -292,6 +292,51 @@ class ShareProvisioningTests(unittest.TestCase):
 
 
 class StorageProvisioningTests(unittest.TestCase):
+    def test_in_use_storage_is_rejected_before_any_destructive_command(self):
+        inventory = {
+            "blockdevices": [
+                {
+                    "path": "/dev/sda",
+                    "maj:min": "8:0",
+                    "type": "disk",
+                    "mountpoints": [None],
+                    "children": [{"path": "/dev/sda1", "maj:min": "8:1", "type": "part", "mountpoints": ["/"]}],
+                }
+            ]
+        }
+        for mounts, swaps in ((["/"], ""), (["/boot"], ""), ([None], "/dev/sda1 partition 10 0 -2\n")):
+            inventory["blockdevices"][0]["children"][0]["mountpoints"] = mounts
+
+            def command(argv, **kwargs):
+                if argv[0] == "lsblk":
+                    return setup.Completed(tuple(argv), json.dumps(inventory), "")
+                if argv[0] == "cat":
+                    return setup.Completed(tuple(argv), "Filename Type Size Used Priority\n" + swaps, "")
+                self.fail(f"unexpected destructive command: {argv}")
+
+            with (
+                self.subTest(mounts=mounts, swaps=swaps),
+                mock.patch.object(setup, "pool_exists", return_value=False),
+                mock.patch.object(setup.os, "stat", return_value=mock.Mock(st_mode=0o60600, st_rdev=os.makedev(8, 0))),
+                mock.patch.object(setup, "run_storage_host", side_effect=command),
+            ):
+                with self.assertRaisesRegex(setup.SetupError, "in use"):
+                    setup.setup_storage(
+                        {"createPool": True, "devices": ["/dev/sda"], "wipeDevices": True},
+                        keepass_password="unused",
+                        confirmed_devices=["/dev/sda"],
+                        allow_destructive=True,
+                    )
+
+    def test_uninspectable_storage_fails_closed(self):
+        with (
+            mock.patch.object(setup, "pool_exists", return_value=False),
+            mock.patch.object(setup.os, "stat", return_value=mock.Mock(st_mode=0o60600, st_rdev=os.makedev(8, 0))),
+            mock.patch.object(setup, "run_storage_host", return_value=setup.Completed((), "{}", "")),
+        ):
+            with self.assertRaisesRegex(setup.SetupError, "inventory"):
+                setup.validate_storage_request({"createPool": True, "devices": ["/dev/sda"]}, ["/dev/sda"], True)
+
     def test_pool_creation_uses_a_short_lived_device_helper_for_future_zfs_partitions(self) -> None:
         calls: list[list[str]] = []
 
@@ -304,6 +349,7 @@ class StorageProvisioningTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=False),
             mock.patch.object(setup, "dataset_exists", return_value=True),
             mock.patch.object(setup, "validate_storage_request"),
+            mock.patch.object(setup, "validate_unused_devices"),
             mock.patch.object(setup, "run_root", side_effect=capture),
             mock.patch.object(setup.secrets, "token_hex", return_value="0123456789abcdef"),
         ):
@@ -334,7 +380,6 @@ class StorageProvisioningTests(unittest.TestCase):
             [
                 "zpool",
                 "create",
-                "-f",
                 "-o",
                 "ashift=12",
                 "-O",
