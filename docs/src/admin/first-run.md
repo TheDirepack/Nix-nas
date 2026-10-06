@@ -141,6 +141,15 @@ automatically resumes; repair the reported authority and run
 `nas-setup reconcile-first-run --note 'what was repaired'` before retrying.
 Keep the recovery terminal available until the protected stack is ready.
 
+Identity database regeneration pauses the timers that trigger identity and
+Syncthing synchronization and drains their pending jobs before stopping
+Authentik/PostgreSQL. Previously active timers resume only after regeneration
+succeeds. If this stage fails, leave those timers stopped while repairing the
+identity stack; their names are logged in the first-start worker's journal.
+After recovery and successful setup, use `sudo systemctl start EXACT.timer`
+for each previously active timer still paused. Do not start synchronization
+against partially regenerated databases.
+
 The workflow prompts once for the KeePass database password. It then:
 
 1. verifies the configured KDBX database or creates it when missing;

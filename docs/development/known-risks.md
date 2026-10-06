@@ -17,6 +17,14 @@ operational boundaries remain here.
 | Network/firewall state restore | Restoring NetworkManager/firewalld state can still sever remote administration after the mutation begins; there is no independent acknowledgement/deadman rollback yet. | Perform network-affecting restore with NanoKVM/out-of-band access until a timed remote-confirmation rollback contract is implemented and VM-tested. |
 | Direct storage lifecycle mutations | Setup/state/update/identity/feature/secret paths now share the operation coordinator, but systemd-owned ZFS lifecycle helpers still require runtime proof before being wrapped because naïve nesting can deadlock protected-target startup. | Treat overlapping manual storage lifecycle operations as unsupported until the native/QEMU service-ordering tests prove a coordinator-safe integration. |
 
+## First-start recovery
+
+Failed first-start identity regeneration intentionally leaves its discovered
+identity/Syncthing timers stopped. Their prior active state is not persisted
+across a failed worker; manual recovery must restore the previously active
+timers after repairing the identity stack and completing setup. Timer names
+are recorded in the worker journal. See [First start](../src/admin/first-run.md).
+
 ## Required external evidence
 
 Authentik's own interface requires inline scripts/styles under its documented
