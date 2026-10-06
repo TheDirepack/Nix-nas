@@ -676,6 +676,27 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     """Replace all temporary identity state without touching KeePass or ZFS."""
     authentik_root = control_root / "authentik"
     postgresql_root = control_root / "postgresql"
+    sync_units = ["nas-identity-sync.service"]
+    if SYNCTHING_ENABLED:
+        sync_units.append("nas-syncthing-sync.service")
+    timers = sorted(
+        {
+            timer
+            for unit in sync_units
+            for timer in run_root(["systemctl", "show", "--property=TriggeredBy", "--value", unit]).stdout.split()
+            if timer.endswith(".timer")
+        }
+    )
+    active_timers = [
+        timer for timer in timers if run_root(["systemctl", "is-active", "--quiet", timer], check=False).returncode == 0
+    ]
+    # Timer dependencies start before their service conditions are evaluated;
+    # skipped sync jobs can therefore replace an in-flight identity stop job.
+    if timers:
+        progress(f"pausing identity synchronization timers: {', '.join(timers)}")
+        progress(f"previously active synchronization timers: {', '.join(active_timers) or 'none'}")
+        run_root(["systemctl", "stop", *timers])
+    run_root(["systemctl", "stop", *sync_units])
     run_root(
         [
             "systemctl",
@@ -705,6 +726,10 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     )
     run_root(["systemctl", "start", "nas-bootstrap-authentik-secrets.service"])
     run_root(["systemctl", "start", "nas-bootstrap-runtime-select.service"])
+    # A failed regeneration requires manual recovery; do not resume triggers
+    # against partially regenerated identity state.
+    if active_timers:
+        run_root(["systemctl", "start", *active_timers])
     return {"regenerated": True, "bootSide": True}
 
 
