@@ -94,6 +94,60 @@ class V2ReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(readiness.ReadinessError, "absolute"):
             readiness.probe_ready({"type": "path", "path": "../ready"}, systemctl="/bin/false")
 
+    def test_retry_sleep_is_bounded_by_remaining_timeout(self):
+        now = 0.0
+        sleeps = []
+
+        def sleep(seconds):
+            nonlocal now
+            sleeps.append(seconds)
+            now += seconds
+
+        with (
+            mock.patch.object(readiness.time, "monotonic", side_effect=lambda: now),
+            mock.patch.object(readiness.time, "sleep", side_effect=sleep),
+            mock.patch.object(readiness, "probe_ready", return_value=False) as probe,
+            self.assertRaises(readiness.ReadinessError),
+        ):
+            readiness.wait_ready(
+                {"timeoutSeconds": 1, "intervalMilliseconds": 60000, "probes": [{"type": "path", "path": "/ready"}]}
+            )
+        self.assertEqual(sleeps, [1.0])
+        self.assertEqual(probe.call_count, 1)
+
+    def test_probe_success_after_deadline_does_not_pass_gate(self):
+        now = 0.0
+
+        def slow_probe(*args, **kwargs):
+            nonlocal now
+            now = 2.0
+            return True
+
+        with (
+            mock.patch.object(readiness.time, "monotonic", side_effect=lambda: now),
+            mock.patch.object(readiness, "probe_ready", side_effect=slow_probe),
+            self.assertRaises(readiness.ReadinessError),
+        ):
+            readiness.wait_ready({"timeoutSeconds": 1, "probes": [{"type": "path", "path": "/ready"}]})
+
+    def test_no_further_probes_start_after_deadline(self):
+        now = 0.0
+
+        def slow_probe(*args, **kwargs):
+            nonlocal now
+            now = 2.0
+            return True
+
+        with (
+            mock.patch.object(readiness.time, "monotonic", side_effect=lambda: now),
+            mock.patch.object(readiness, "probe_ready", side_effect=slow_probe) as probe,
+            self.assertRaises(readiness.ReadinessError),
+        ):
+            readiness.wait_ready(
+                {"timeoutSeconds": 1, "probes": [{"type": "path", "path": "/one"}, {"type": "path", "path": "/two"}]}
+            )
+        self.assertEqual(probe.call_count, 1)
+
     def test_http_probe_rejects_out_of_range_port(self):
         for url in ("http://127.0.0.1:99999/", "http://127.0.0.1:0/"):
             with self.subTest(url=url), self.assertRaises(readiness.ReadinessError) as ctx:
