@@ -801,7 +801,9 @@ def verify_copy_party_user_isolation(
     for username, password in accounts:
         driver = browser()
         try:
-            login(driver, origin, username, password)
+            browser_step(
+                driver, f"Isolation sentinel login ({username})", lambda: login(driver, origin, username, password)
+            )
             verify_routes(driver, [RouteExpectation("/shares/", True)])
             path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
             written = fetch_request(driver, path, "PUT", contents[username])
@@ -816,16 +818,26 @@ def verify_copy_party_user_isolation(
                 continue
             driver = browser()
             try:
-                login(driver, origin, attacker, password)
+                browser_step(
+                    driver,
+                    f"Isolation peer login ({attacker} -> {victim})",
+                    lambda: login(driver, origin, attacker, password),
+                )
                 verify_routes(driver, [RouteExpectation("/shares/", True)])
-                verify_cross_user_file_access_blocked(driver, origin, victim)
+                browser_step(
+                    driver,
+                    f"Isolation peer denial ({attacker} -> {victim})",
+                    lambda: verify_cross_user_file_access_blocked(driver, origin, victim),
+                )
             finally:
                 close_browser(driver)
 
     admin_username, admin_password = administrator
     driver = browser()
     try:
-        login(driver, origin, admin_username, admin_password)
+        browser_step(
+            driver, "Isolation administrator login", lambda: login(driver, origin, admin_username, admin_password)
+        )
         verify_routes(driver, [RouteExpectation("/syncthing/", True), RouteExpectation("/shares/admin/", True)])
         for username, _password in accounts:
             path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
@@ -842,7 +854,9 @@ def verify_copy_party_user_isolation(
     for username, password in accounts:
         driver = browser()
         try:
-            login(driver, origin, username, password)
+            browser_step(
+                driver, f"Isolation readback login ({username})", lambda: login(driver, origin, username, password)
+            )
             path = f"/shares/users/{urllib.parse.quote(username, safe='')}/isolation-e2e.txt"
             downloaded = fetch_request(driver, path, "GET")
             if int(downloaded.get("status", 0)) != 200 or downloaded.get("body") != contents[username]:
