@@ -31,6 +31,20 @@ SKIPPED_RE = re.compile(r"skipped=(\d+)")
 EXPECTED_RE = re.compile(r"expected failures=(\d+)")
 UNEXPECTED_RE = re.compile(r"unexpected successes=(\d+)")
 RESULT_RE = re.compile(r"^(OK|FAILED)(?: \(([^)]+)\))?\s*$", re.MULTILINE)
+# The fast subset excludes heavyweight maintainer, fuzz and property suites.
+# This is the sole selection authority for preflight, CI and the non-root run.
+FAST_SUITE_EXCLUSIONS = frozenset(
+    {
+        "test_maintainer_core.py",
+        "test_maintainer_matrix.py",
+        "test_maintainer_release.py",
+        "test_contract_tooling.py",
+        "test_fuzz_boundaries.py",
+        "test_fuzz_custom_inputs.py",
+        "test_property_invariants.py",
+        "test_secret_security_fuzz.py",
+    }
+)
 SERIAL_TEST_FILES = frozenset(
     {
         "test_cli_surfaces.py",
@@ -128,11 +142,21 @@ def coverage_cleanup() -> None:
             path.unlink()
 
 
+def select_test_files(
+    directory: pathlib.Path, pattern: str, excluded: set[str],
+) -> list[pathlib.Path]:
+    return sorted(path for path in directory.glob(pattern) if path.name not in excluded)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=int, default=180, help="maximum seconds for one test file")
     parser.add_argument("--coverage", metavar="REPORT", help="write combined coverage.py JSON to REPORT")
     parser.add_argument("--pattern", default="test_*.py", help="test filename glob")
+    parser.add_argument(
+        "--group", choices=("all", "fast"), default="all",
+        help="all matched test files, or the canonical fast set excluding expensive suites",
+    )
     parser.add_argument(
         "--exclude",
         action="append",
@@ -149,7 +173,9 @@ def main() -> int:
         parser.error("--jobs must be from 1 through 32")
 
     excluded = set(args.exclude)
-    files = sorted(path for path in TESTS.glob(args.pattern) if path.name not in excluded)
+    if args.group == "fast":
+        excluded.update(FAST_SUITE_EXCLUSIONS)
+    files = select_test_files(TESTS, args.pattern, excluded)
     if not files:
         parser.error(f"no test files matched {args.pattern!r}")
 

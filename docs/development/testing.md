@@ -304,3 +304,8 @@ NAS_ZAP_IMAGE='registry.example/zaproxy@sha256:<digest>' \
 ## Evidence policy
 
 Do not claim Nix, QEMU, browser-engine, ZFS, systemd, installer, static-tool, or hardware validation unless that environment actually ran. Source-only artifacts may report locally executed tests and must list every heavyweight tier that remains unexecuted.
+
+The `run-unit-tests.py --group fast` selector is the single authoritative set of
+fast-suite exclusions. Preflight, CI unit qualification, and the non-root CI
+run all use that selector; targeted integration and tooling tests still run
+separately. `--pattern` and `--exclude` remain available for focused runs.
