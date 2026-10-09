@@ -1890,7 +1890,20 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
     job_id: str | None = None
     try:
         request_text = _read_secure_job_file(request_file, "First-start job request", max_bytes=64 * 1024)
-        request = parse_first_start_request(request_text)
+        try:
+            request = parse_first_start_request(request_text)
+        except SetupError:
+            # A valid reservation belongs to this job even if a later request
+            # field fails validation; cancellation still runs in finally.
+            try:
+                unverified = json.loads(request_text)
+            except json.JSONDecodeError:
+                unverified = None
+            if isinstance(unverified, dict):
+                candidate = unverified.get("reservationToken")
+                if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
+                    reservation_token = candidate
+            raise
         reservation_token = request["reservationToken"]
         job_id = request["jobId"]
         result_root = STATE_PATH.parent / "jobs"
