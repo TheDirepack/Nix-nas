@@ -1,325 +1,216 @@
 #!/usr/bin/env python3
-"""Activate the V2-owned firewalld namespace through firewall-cmd.
+"""Reconcile compiled native firewalld objects through firewall-cmd.
 
-The compiler may use XML as a validated intermediate representation, but V2 no
-longer installs or rolls back firewalld configuration files. firewalld owns its
-permanent/native state; the outer generic V2 guarded transaction owns failure
-recovery for the complete desired-state apply.
+The V2 projection is already a native-object manifest. Validate every object
+before the first mutation; the outer guarded V2 transaction owns rollback.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
+import ipaddress
 import json
 import pathlib
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as StdElementTree
 from typing import Any, Sequence
 
-from defusedxml import ElementTree
-
-_OWNED_FILE = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}\.xml$")
 _OWNED_NAME = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}$")
+_INTERFACE = re.compile(r"^nv2[0-9a-f]{11}$")
+_ZONE = re.compile(r"^(?:nv2z[0-9a-f]{12}|[A-Za-z0-9_-]{1,17}|HOST|ANY)$")
+_PORT = re.compile(r"^[0-9]{1,5}(?:-[0-9]{1,5})?$")
 
 
 class FirewalldReconcileError(RuntimeError):
-    """Raised when the projected firewall cannot be activated and verified."""
+    """The native firewall policy could not be validated, applied or verified."""
 
 
 def _run(command: Sequence[str], *, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
-            list(command),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+            list(command), stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=timeout, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise FirewalldReconcileError(f"unable to execute {command[0]}: {exc}") from exc
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:4000]
-        raise FirewalldReconcileError(f"command failed ({result.returncode}): {' '.join(command)}: {detail}")
+        raise FirewalldReconcileError(f"command failed ({result.returncode}): {command[0]}: {detail}")
     return result
 
 
-def _sha256(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _permanent(firewall_cmd: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return _run([firewall_cmd, "--permanent", *args])
 
 
-def _safe_target(raw: str) -> pathlib.PurePosixPath:
-    target = pathlib.PurePosixPath(raw)
-    if len(target.parts) != 2 or target.parts[0] not in {"zones", "policies"}:
-        raise FirewalldReconcileError(f"unsafe firewalld target {raw!r}")
-    if not _OWNED_FILE.fullmatch(target.name):
-        raise FirewalldReconcileError(f"firewalld target {raw!r} is outside the V2 ownership namespace")
-    expected_kind = "zones" if target.name.startswith("nv2z") else "policies"
-    if target.parts[0] != expected_kind:
-        raise FirewalldReconcileError(f"firewalld target {raw!r} has the wrong object kind")
-    return target
+def _port(value: Any, protocol: Any) -> str:
+    if not isinstance(value, str) or not _PORT.fullmatch(value) or protocol not in {"tcp", "udp"}:
+        raise FirewalldReconcileError("invalid native firewalld port or protocol")
+    bounds = [int(item) for item in value.split("-")]
+    if any(not 1 <= item <= 65535 for item in bounds) or len(bounds) == 2 and bounds[0] > bounds[1]:
+        raise FirewalldReconcileError("invalid native firewalld port range")
+    return f"{value}/{protocol}"
 
 
-def _read_projection(
-    manifest_path: pathlib.Path,
-    projection_root: pathlib.Path,
-) -> dict[pathlib.PurePosixPath, bytes]:
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise FirewalldReconcileError(f"unable to read firewalld manifest {manifest_path}: {exc}") from exc
-    if (
-        not isinstance(manifest, dict)
-        or manifest.get("schemaVersion") != 1
-        or not isinstance(manifest.get("files"), list)
+def _check_object(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise FirewalldReconcileError("invalid native firewall object")
+    kind, name = value.get("kind"), value.get("name")
+    if kind not in {"zone", "policy"} or not isinstance(name, str) or not _OWNED_NAME.fullmatch(name):
+        raise FirewalldReconcileError("outside the V2 ownership namespace")
+    if kind == "zone":
+        if not name.startswith("nv2z") or set(value) != {"kind", "name", "interface"}:
+            raise FirewalldReconcileError("invalid projected native zone")
+        if not isinstance(value["interface"], str) or not _INTERFACE.fullmatch(value["interface"]):
+            raise FirewalldReconcileError("unsafe projected interface")
+        return value
+    if name.startswith("nv2z") or set(value) != {
+        "kind", "name", "target", "priority", "ingress", "egress", "ports", "forwardPorts", "richRules",
+    }:
+        raise FirewalldReconcileError("invalid projected native policy")
+    if value["target"] not in {"ACCEPT", "DROP", "CONTINUE"} or type(value["priority"]) is not int or (
+        value["priority"] == 0 or not -32767 <= value["priority"] <= 32767
     ):
-        raise FirewalldReconcileError("firewalld projection manifest is invalid")
-
-    desired: dict[pathlib.PurePosixPath, bytes] = {}
-    for entry in manifest["files"]:
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("target"), str)
-            or not isinstance(entry.get("sha256"), str)
+        raise FirewalldReconcileError("invalid policy target or priority")
+    for field in ("ingress", "egress"):
+        if not isinstance(value[field], str) or not _ZONE.fullmatch(value[field]):
+            raise FirewalldReconcileError("unsafe projected policy zone")
+    if not isinstance(value["ports"], list) or not isinstance(value["forwardPorts"], list) or not isinstance(value["richRules"], list):
+        raise FirewalldReconcileError("invalid native policy collections")
+    for item in value["ports"]:
+        if not isinstance(item, list) or len(item) != 2:
+            raise FirewalldReconcileError("invalid native policy port")
+        _port(item[0], item[1])
+    for item in value["forwardPorts"]:
+        if not isinstance(item, list) or len(item) != 3:
+            raise FirewalldReconcileError("invalid native forward port")
+        _port(item[0], item[1])
+        _port(item[2], item[1])
+    for rule in value["richRules"]:
+        if not isinstance(rule, dict) or set(rule) not in (
+            {"family", "destination"}, {"family", "destination", "port", "protocol"}
         ):
-            raise FirewalldReconcileError("firewalld manifest file entry is invalid")
-        target = _safe_target(entry["target"])
-        source = projection_root / str(target)
+            raise FirewalldReconcileError("invalid native rich rule")
         try:
-            source.relative_to(projection_root)
-            payload = source.read_bytes()
-        except (ValueError, OSError) as exc:
-            raise FirewalldReconcileError(f"projected firewalld file is missing or unsafe: {source}") from exc
-        if hashlib.sha256(payload).hexdigest() != entry["sha256"]:
-            raise FirewalldReconcileError(f"projected firewalld file changed after validation: {source}")
-        if target in desired:
-            raise FirewalldReconcileError(f"duplicate firewalld projection target: {target}")
-        desired[target] = payload
-    return desired
-
-
-def _attr(element: StdElementTree.Element, name: str, *, label: str) -> str:
-    value = element.get(name)
-    if not value or any(ch in value for ch in "\r\n\x00"):
-        raise FirewalldReconcileError(f"projected {label} is missing safe attribute {name!r}")
+            network = ipaddress.ip_network(rule["destination"], strict=False)
+        except (TypeError, ValueError) as exc:
+            raise FirewalldReconcileError("invalid native rich-rule destination") from exc
+        if rule["family"] != ("ipv4" if network.version == 4 else "ipv6"):
+            raise FirewalldReconcileError("invalid native rich-rule family")
+        if "port" in rule:
+            _port(rule["port"], rule["protocol"])
     return value
 
 
-def _rich_rule(element: StdElementTree.Element) -> str:
-    family = _attr(element, "family", label="rich rule")
-    priority = element.get("priority")
-    parts = ["rule", f'family="{family}"']
-    if priority:
-        parts.append(f'priority="{priority}"')
-    destination = element.find("destination")
-    if destination is not None:
-        parts.extend(["destination", f'address="{_attr(destination, "address", label="destination")}"'])
-    port = element.find("port")
-    if port is not None:
-        parts.extend(
-            [
-                "port",
-                f'port="{_attr(port, "port", label="rich-rule port")}"',
-                f'protocol="{_attr(port, "protocol", label="rich-rule port")}"',
-            ]
-        )
-    if element.find("accept") is not None:
-        parts.append("accept")
-    elif element.find("drop") is not None:
-        parts.append("drop")
-    elif element.find("reject") is not None:
-        parts.append("reject")
-    else:
-        raise FirewalldReconcileError("projected rich rule has no supported action")
-    return " ".join(parts)
-
-
-def _permanent(firewall_cmd: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return _run([firewall_cmd, "--permanent", *args], check=check)
-
-
-def _apply_zone(firewall_cmd: str, name: str, payload: bytes) -> None:
+def _read_projection(manifest_path: pathlib.Path) -> dict[str, dict[str, Any]]:
     try:
-        root = ElementTree.fromstring(payload)
-    except ElementTree.ParseError as exc:
-        raise FirewalldReconcileError(f"invalid projected zone {name}: {exc}") from exc
-    if root.tag != "zone":
-        raise FirewalldReconcileError(f"projected zone {name} has root {root.tag!r}")
-    _permanent(firewall_cmd, f"--new-zone={name}")
-    target = root.get("target")
-    if target:
-        _permanent(firewall_cmd, f"--zone={name}", f"--set-target={target}")
-    for interface in root.findall("interface"):
-        _permanent(
-            firewall_cmd, f"--zone={name}", f"--add-interface={_attr(interface, 'name', label='zone interface')}"
-        )
-    for service in root.findall("service"):
-        _permanent(firewall_cmd, f"--zone={name}", f"--add-service={_attr(service, 'name', label='zone service')}")
-    for port in root.findall("port"):
-        value = f"{_attr(port, 'port', label='zone port')}/{_attr(port, 'protocol', label='zone port')}"
-        _permanent(firewall_cmd, f"--zone={name}", f"--add-port={value}")
-
-
-def _apply_policy(firewall_cmd: str, name: str, payload: bytes) -> None:
-    try:
-        root = ElementTree.fromstring(payload)
-    except ElementTree.ParseError as exc:
-        raise FirewalldReconcileError(f"invalid projected policy {name}: {exc}") from exc
-    if root.tag != "policy":
-        raise FirewalldReconcileError(f"projected policy {name} has root {root.tag!r}")
-    _permanent(firewall_cmd, f"--new-policy={name}")
-    target = root.get("target")
-    priority = root.get("priority")
-    if target:
-        _permanent(firewall_cmd, f"--policy={name}", f"--set-target={target}")
-    if priority:
-        _permanent(firewall_cmd, f"--policy={name}", f"--set-priority={priority}")
-    for zone in root.findall("ingress-zone"):
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-ingress-zone={_attr(zone, 'name', label='ingress zone')}")
-    for zone in root.findall("egress-zone"):
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-egress-zone={_attr(zone, 'name', label='egress zone')}")
-    for port in root.findall("port"):
-        value = f"{_attr(port, 'port', label='policy port')}/{_attr(port, 'protocol', label='policy port')}"
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-port={value}")
-    for forward in root.findall("forward-port"):
-        value = (
-            f"port={_attr(forward, 'port', label='forward port')}:"
-            f"proto={_attr(forward, 'protocol', label='forward port')}:"
-            f"toport={_attr(forward, 'to-port', label='forward port')}"
-        )
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-forward-port={value}")
-    for rule in root.findall("rule"):
-        _permanent(firewall_cmd, f"--policy={name}", f"--add-rich-rule={_rich_rule(rule)}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FirewalldReconcileError(f"unable to read native firewall manifest: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2 or not isinstance(manifest.get("objects"), list):
+        raise FirewalldReconcileError("native firewalld projection manifest is invalid")
+    desired: dict[str, dict[str, Any]] = {}
+    for entry in manifest["objects"]:
+        value = _check_object(entry)
+        if value["name"] in desired:
+            raise FirewalldReconcileError("duplicate native firewall object")
+        desired[value["name"]] = value
+    zones = {name for name, obj in desired.items() if obj["kind"] == "zone"}
+    for obj in desired.values():
+        if obj["kind"] == "policy":
+            for zone in (obj["ingress"], obj["egress"]):
+                if zone.startswith("nv2z") and zone not in zones:
+                    raise FirewalldReconcileError(f"projected policy references missing zone {zone}: INVALID_ZONE")
+    return desired
 
 
 def _current_owned(firewall_cmd: str) -> tuple[set[str], set[str]]:
     zones = set(_permanent(firewall_cmd, "--get-zones").stdout.split())
     policies = set(_permanent(firewall_cmd, "--get-policies").stdout.split())
     return (
-        {name for name in zones if _OWNED_NAME.fullmatch(name)},
-        {name for name in policies if _OWNED_NAME.fullmatch(name)},
+        {name for name in zones if _OWNED_NAME.fullmatch(name) and name.startswith("nv2z")},
+        {name for name in policies if _OWNED_NAME.fullmatch(name) and not name.startswith("nv2z")},
     )
 
 
-def _verify_runtime(*, desired: dict[pathlib.PurePosixPath, bytes], firewall_cmd: str) -> None:
+def _rich_rule(rule: dict[str, Any]) -> str:
+    parts = [
+        "rule", f'family="{rule["family"]}"', 'priority="-10"',
+        "destination", f'address="{rule["destination"]}"',
+    ]
+    if "port" in rule:
+        parts.extend(["port", f'port="{rule["port"]}"', f'protocol="{rule["protocol"]}"'])
+    parts.append("accept")
+    return " ".join(parts)
+
+
+def _apply_zone(firewall_cmd: str, zone: dict[str, Any]) -> None:
+    name = zone["name"]
+    _permanent(firewall_cmd, f"--new-zone={name}")
+    _permanent(firewall_cmd, f"--zone={name}", f"--add-interface={zone['interface']}")
+
+
+def _apply_policy(firewall_cmd: str, policy: dict[str, Any]) -> None:
+    name = policy["name"]
+    _permanent(firewall_cmd, f"--new-policy={name}")
+    _permanent(firewall_cmd, f"--policy={name}", f"--set-target={policy['target']}")
+    _permanent(firewall_cmd, f"--policy={name}", f"--set-priority={policy['priority']}")
+    for key, option in (("ingress", "--add-ingress-zone"), ("egress", "--add-egress-zone")):
+        _permanent(firewall_cmd, f"--policy={name}", f"{option}={policy[key]}")
+    for port, protocol in policy["ports"]:
+        _permanent(firewall_cmd, f"--policy={name}", f"--add-port={port}/{protocol}")
+    for port, protocol, destination in policy["forwardPorts"]:
+        _permanent(
+            firewall_cmd, f"--policy={name}",
+            f"--add-forward-port=port={port}:proto={protocol}:toport={destination}",
+        )
+    for rule in policy["richRules"]:
+        _permanent(firewall_cmd, f"--policy={name}", f"--add-rich-rule={_rich_rule(rule)}")
+
+
+def _verify_runtime(*, desired: dict[str, dict[str, Any]], firewall_cmd: str) -> None:
     _run([firewall_cmd, "--state"])
     zones = set(_run([firewall_cmd, "--get-zones"]).stdout.split())
     policies = set(_run([firewall_cmd, "--get-policies"]).stdout.split())
-    expected_zones = {target.stem for target in desired if target.parts[0] == "zones"}
-    expected_policies = {target.stem for target in desired if target.parts[0] == "policies"}
-    missing_zones = sorted(expected_zones - zones)
-    missing_policies = sorted(expected_policies - policies)
+    missing_zones = sorted(n for n, obj in desired.items() if obj["kind"] == "zone" and n not in zones)
+    missing_policies = sorted(n for n, obj in desired.items() if obj["kind"] == "policy" and n not in policies)
     if missing_zones or missing_policies:
-        detail: list[str] = []
-        if missing_zones:
-            detail.append(f"zones={','.join(missing_zones)}")
-        if missing_policies:
-            detail.append(f"policies={','.join(missing_policies)}")
-        raise FirewalldReconcileError("firewalld reload omitted projected objects: " + " ".join(detail))
+        raise FirewalldReconcileError(
+            "firewalld reload omitted projected objects: "
+            + f"zones={','.join(missing_zones)} policies={','.join(missing_policies)}"
+        )
 
 
-def _policy_zone_refs(payload: bytes, *, target: pathlib.PurePosixPath) -> list[str]:
-    try:
-        root = ElementTree.fromstring(payload)
-    except ElementTree.ParseError as exc:
-        raise FirewalldReconcileError(f"invalid projected policy {target.stem}: {exc}") from exc
-    refs: list[str] = []
-    for tag in ("ingress-zone", "egress-zone"):
-        for zone in root.findall(tag):
-            refs.append(_attr(zone, "name", label="ingress zone" if "ingress" in tag else "egress zone"))
-    return refs
-
-
-def _policy_priority(payload: bytes) -> int:
-    try:
-        root = ElementTree.fromstring(payload)
-    except ElementTree.ParseError:
-        return 0
-    try:
-        return int(root.get("priority") or "0")
-    except ValueError:
-        return 0
-
-
-def _validate_desired_dependencies(desired: dict[pathlib.PurePosixPath, bytes]) -> None:
-    available_zones = {target.stem for target in desired if target.parts[0] == "zones"}
-    for target, payload in sorted(desired.items(), key=lambda item: str(item[0])):
-        if target.parts[0] != "policies":
-            continue
-        for ref in _policy_zone_refs(payload, target=target):
-            if ref.startswith("nv2z") and ref not in available_zones:
-                raise FirewalldReconcileError(
-                    f"projected policy {target.stem} references missing zone {ref}: INVALID_ZONE"
-                )
-
-
-def _creation_order(desired: dict[pathlib.PurePosixPath, bytes]) -> list[tuple[pathlib.PurePosixPath, bytes]]:
-    zones = sorted((t, p) for t, p in desired.items() if t.parts[0] == "zones")
-    policies = sorted(
-        ((t, p) for t, p in desired.items() if t.parts[0] == "policies"),
-        key=lambda item: (_policy_priority(item[1]), str(item[0])),
-    )
-    return [*zones, *policies]
-
-
-def reconcile(
-    *,
-    manifest_path: pathlib.Path,
-    projection_root: pathlib.Path,
-    firewall_cmd: str = "firewall-cmd",
-) -> dict[str, Any]:
-    """Replace the complete V2 native namespace, reload firewalld, and verify it."""
-    desired = _read_projection(manifest_path, projection_root)
-    _validate_desired_dependencies(desired)
+def reconcile(*, manifest_path: pathlib.Path, firewall_cmd: str = "firewall-cmd") -> dict[str, Any]:
+    """Apply validated native objects, then check, reload and verify."""
+    desired = _read_projection(manifest_path)
     current_zones, current_policies = _current_owned(firewall_cmd)
-
-    # The nv2* namespace is exclusively V2-owned. Recreate it from the validated
-    # compiler IR so runtime/permanent drift cannot accumulate and no custom
-    # rollback bytes or file copying are required. Zones precede policies so
-    # dependent policies never observe INVALID_ZONE; any mid-apply failure aborts
-    # before check-config/reload and a retry re-applies the full desired set.
     for name in sorted(current_policies):
         _permanent(firewall_cmd, f"--delete-policy={name}")
     for name in sorted(current_zones):
         _permanent(firewall_cmd, f"--delete-zone={name}")
-
-    for target, payload in _creation_order(desired):
-        if target.parts[0] == "zones":
-            _apply_zone(firewall_cmd, target.stem, payload)
-        else:
-            _apply_policy(firewall_cmd, target.stem, payload)
-
+    for value in sorted((obj for obj in desired.values() if obj["kind"] == "zone"), key=lambda x: x["name"]):
+        _apply_zone(firewall_cmd, value)
+    for value in sorted(
+        (obj for obj in desired.values() if obj["kind"] == "policy"),
+        key=lambda x: (x["priority"], x["name"]),
+    ):
+        _apply_policy(firewall_cmd, value)
     _run([firewall_cmd, "--check-config"])
     _run([firewall_cmd, "--reload"])
     _verify_runtime(desired=desired, firewall_cmd=firewall_cmd)
-    return {
-        "ok": True,
-        "changed": bool(current_zones or current_policies or desired),
-        "objects": sorted(target.stem for target in desired),
-        "runtimeVerified": True,
-        "nativePermanentApi": True,
-    }
+    return {"ok": True, "changed": bool(current_zones or current_policies or desired),
+            "objects": sorted(desired), "runtimeVerified": True, "nativePermanentApi": True}
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Activate and verify the complete V2-owned firewalld namespace")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)
-    parser.add_argument("--projection-root", required=True)
     parser.add_argument("--firewall-cmd", default="firewall-cmd")
     args = parser.parse_args(argv)
     try:
-        result = reconcile(
-            manifest_path=pathlib.Path(args.manifest),
-            projection_root=pathlib.Path(args.projection_root),
-            firewall_cmd=args.firewall_cmd,
-        )
+        result = reconcile(manifest_path=pathlib.Path(args.manifest), firewall_cmd=args.firewall_cmd)
     except FirewalldReconcileError as exc:
         print(f"nas-v2-firewalld-reconcile: {exc}", file=sys.stderr)
         return 1
