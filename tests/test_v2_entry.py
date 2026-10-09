@@ -91,13 +91,15 @@ class V2EntryTests(unittest.TestCase):
                 mock.patch.object(nas_v2_entry, "apply") as apply_mock,
             ):
                 before = dict(__import__("os").environ)
-                status = nas_v2_entry.main(overrides={
-                    "NAS_V2_DESIRED": str(spec),
-                    "NAS_V2_SCHEMA": str(schema),
-                    "NAS_V2_EFFECTIVE": str(effective),
-                    "NAS_V2_PLATFORM": None,
-                    "NAS_V2_HISTORY_REPOSITORY": None,
-                })
+                status = nas_v2_entry.main(
+                    overrides={
+                        "NAS_V2_DESIRED": str(spec),
+                        "NAS_V2_SCHEMA": str(schema),
+                        "NAS_V2_EFFECTIVE": str(effective),
+                        "NAS_V2_PLATFORM": None,
+                        "NAS_V2_HISTORY_REPOSITORY": None,
+                    }
+                )
                 self.assertEqual(dict(__import__("os").environ), before)
             self.assertEqual(status, 0)
             paths = apply_mock.call_args.args[0]
