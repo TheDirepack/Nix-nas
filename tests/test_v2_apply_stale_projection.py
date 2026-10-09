@@ -21,10 +21,12 @@ class V2ApplyStaleProjectionTests(unittest.TestCase):
             root = pathlib.Path(raw)
             first = root / "generation" / "effective.json"
             second = root / "generation" / "plan.json"
-            apply_v2._write_unpublished_bundle([
-                (first, b"effective\n", 0o640),
-                (second, b"plan\n", 0o640),
-            ])
+            apply_v2._write_unpublished_bundle(
+                [
+                    (first, b"effective\n", 0o640),
+                    (second, b"plan\n", 0o640),
+                ]
+            )
             self.assertEqual(first.read_bytes(), b"effective\n")
             self.assertEqual(second.read_bytes(), b"plan\n")
             self.assertEqual(first.stat().st_mode & 0o777, 0o640)
@@ -47,9 +49,9 @@ class V2ApplyStaleProjectionTests(unittest.TestCase):
 
             with mock.patch.object(apply_v2.os, "replace", side_effect=fail_second):
                 with self.assertRaisesRegex(OSError, "simulated publish failure"):
-                    apply_v2._write_unpublished_bundle([
-                        (first, b"one", 0o640), (second, b"two", 0o640),
-                    ])
+                    apply_v2._write_unpublished_bundle(
+                        [(first, b"one", 0o640), (second, b"two", 0o640)]
+                    )
             self.assertEqual(first.read_bytes(), b"one")
             self.assertFalse(second.exists())
             self.assertEqual(sorted(path.name for path in root.iterdir()), ["one"])
