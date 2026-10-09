@@ -21,7 +21,7 @@ class V2NativeFirewalldTests(unittest.TestCase):
         self, root: pathlib.Path, *, objects: list[dict] | None = None
     ) -> pathlib.Path:
         projection = root / "firewalld"
-        projection.mkdir()
+        projection.mkdir(parents=True)
         if objects is None:
             objects = [
                 {"kind": "zone", "name": "nv2z0123456789ab", "interface": "nv20123456789a"},
