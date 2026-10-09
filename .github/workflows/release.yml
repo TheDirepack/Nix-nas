@@ -1,43 +1,35 @@
 name: Merge build and release
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   actions: read
   contents: read
   pull-requests: read
 
-# Only duplicate release attempts for the same qualified source are serialized
-# here. Cross-source ordering is enforced explicitly by the ordering job using
-# main's first-parent history, because GitHub concurrency ordering is based on
-# queue-entry time rather than source-commit order.
+# Only one manually requested publication can run at a time.
 concurrency:
-  group: release-${{ github.event.workflow_run.head_sha }}
+  group: manual-release-main
   cancel-in-progress: false
 
 jobs:
   eligibility:
     name: Verify qualified merge source
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       eligible: ${{ steps.source.outputs.eligible }}
       source_sha: ${{ steps.source.outputs.source_sha }}
+      ci_run_id: ${{ steps.source.outputs.ci_run_id }}
     steps:
-      - name: Require the exact merged pull request result on main
+      - name: Verify the selected main commit and its successful CI run
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           printf 'source_sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
@@ -51,47 +43,18 @@ jobs:
             printf 'eligible=true\n' >> "$GITHUB_OUTPUT"
             printf 'Qualified CI source %s is the merge result of %s main PR(s).\n' "$SOURCE_SHA" "$merged_prs"
           else
-            printf 'eligible=false\n' >> "$GITHUB_OUTPUT"
-            printf 'Source %s is not the exact merge result of a main PR; no release will be published.\n' "$SOURCE_SHA"
+            echo "Release source must be the exact result of a merged main PR." >&2
+            exit 1
           fi
-
-  ordering:
-    name: Preserve main release source order
-    needs: [eligibility]
-    if: needs.eligibility.outputs.eligible == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 350
-    permissions:
-      actions: read
-      contents: read
-      pull-requests: read
-    env:
-      SOURCE_SHA: ${{ needs.eligibility.outputs.source_sha }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.eligibility.outputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Wait for the nearest earlier qualified merge release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          python3 scripts/wait-release-predecessor.py \
-            --repository "$REPOSITORY" \
-            --source-sha "$SOURCE_SHA" \
-            --workflow ci.yml \
-            --poll-seconds 30 \
-            --timeout-seconds 19800
+          ci_run_id="$(gh api "/repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_SHA&event=push&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.head_sha == env.SOURCE_SHA and .head_branch == "main" and .conclusion == "success")] | sort_by(.created_at) | last | .id // empty')"
+          [[ -n "$ci_run_id" ]] || { echo "No successful main CI run exists for $SOURCE_SHA." >&2; exit 1; }
+          printf 'ci_run_id=%s\n' "$ci_run_id" >> "$GITHUB_OUTPUT" 
 
   build:
     name: Build release candidate from qualified source
-    needs: [eligibility, ordering]
-    if: >-
-      needs.eligibility.outputs.eligible == 'true' &&
-      needs.ordering.result == 'success'
+    needs: [eligibility]
+    if: needs.eligibility.outputs.eligible == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -134,7 +97,7 @@ jobs:
           name: vm-bundle-handoff
           path: ${{ runner.temp }}/vm-bundles
           github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ needs.eligibility.outputs.ci_run_id }}
       - name: Verify and import qualified CI build inputs
         run: |
           set -euo pipefail
@@ -244,7 +207,7 @@ jobs:
           repository = os.environ["REPOSITORY"]
           notes = f"""# NixOS NAS {version}
 
-          Automated release from qualified main merge [`{source_sha[:12]}`](https://github.com/{repository}/commit/{source_sha}).
+          Manually published release from qualified main merge [`{source_sha[:12]}`](https://github.com/{repository}/commit/{source_sha}).
 
           ## First-boot Authentik credentials
 
