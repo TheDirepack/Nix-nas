@@ -97,14 +97,14 @@ class V2ComposeFirewalldTests(unittest.TestCase):
         effective = {"services": {"demo": service}, "networkProfiles": {}}
 
         files, _manifest = firewalld.compile_projection(effective, lan_zone="nas-trusted")
-        listener = files[f"policies/{firewalld.listener_policy_name('demo')}.xml"].decode()
-        route = files[f"policies/{firewalld.route_policy_name('demo')}.xml"].decode()
+        listener = files[f"policies/{firewalld.listener_policy_name('demo')}"]
+        route = files[f"policies/{firewalld.route_policy_name('demo')}"]
 
-        self.assertIn('port="18080" protocol="tcp"', listener)
-        self.assertIn('port="19000-19002" protocol="udp"', listener)
-        self.assertNotIn('port="8080" protocol="tcp"', listener)
-        self.assertIn('<ingress-zone name="HOST"/>', route)
-        self.assertIn('port="8081" protocol="tcp"', route)
+        self.assertIn(["18080", "tcp"], listener["ports"])
+        self.assertIn(["19000-19002", "udp"], listener["ports"])
+        self.assertNotIn(["8080", "tcp"], listener["ports"])
+        self.assertEqual(route["ingress"], "HOST")
+        self.assertIn(["8081", "tcp"], route["ports"])
 
 
 class V2ComposeIngressProjectionTests(unittest.TestCase):
