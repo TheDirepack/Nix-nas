@@ -547,9 +547,7 @@ def apply(
         if paths.unpublished_generation:
             if stale:
                 raise SystemdProjectionError("unpublished generation unexpectedly contains stale files")
-            plan["changedFiles"] = sorted(str(path) for path, _data, _mode in files) + [
-                str(paths.plan)
-            ]
+            plan["changedFiles"] = sorted(str(path) for path, _data, _mode in files) + [str(paths.plan)]
             plan["changedFiles"].sort()
             files.append((paths.plan, _json_bytes(plan), 0o640))
             _write_unpublished_bundle(files)
