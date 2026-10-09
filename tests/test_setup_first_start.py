@@ -50,6 +50,30 @@ class FirstStartRequestContractTests(unittest.TestCase):
                 with self.assertRaises(SetupError):
                     parse_first_start_request(json.dumps(changed))
 
+    def test_invalid_request_releases_a_valid_preexisting_reservation(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        import nas_setup as setup
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            request_path = root / "request.json"
+            password_path = root / "password.json"
+            request_path.write_text(
+                json.dumps({**valid_request(), "planDigest": "wrong"}),
+                encoding="utf-8",
+            )
+            request_path.chmod(0o600)
+            password_path.write_text("{}", encoding="utf-8")
+            password_path.chmod(0o600)
+            with mock.patch.object(setup, "cancel_reservation") as cancel:
+                with self.assertRaisesRegex(SetupError, "plan digest"):
+                    setup.run_first_start_job(request_path, password_path)
+            cancel.assert_called_once_with("b" * 32)
+            self.assertFalse(request_path.exists())
+            self.assertFalse(password_path.exists())
+
     def test_bad_json_and_non_mapping_are_rejected(self) -> None:
         for text in ("not-json", "[]", "null"):
             with self.subTest(text=text), self.assertRaises(SetupError):
