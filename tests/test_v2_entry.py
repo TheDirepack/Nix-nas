@@ -27,6 +27,25 @@ class V2EntryTests(unittest.TestCase):
         paths = apply_mock.call_args.args[0]
         self.assertEqual(paths.desired, pathlib.Path("/var/lib/nas-control/services.yaml"))
 
+    def test_environment_authority_precedence_matches_cli(self) -> None:
+        for desired_value, legacy_value, expected in (
+            ("/authoritative/services.yaml", "/legacy/services.yaml", "/authoritative/services.yaml"),
+            ("", "/legacy/services.yaml", "/legacy/services.yaml"),
+            ("", "", "/var/lib/nas-control/services.yaml"),
+        ):
+            with self.subTest(desired=desired_value, legacy=legacy_value):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"NAS_V2_DESIRED": desired_value, "NAS_V2_SPEC": legacy_value},
+                        clear=True,
+                    ),
+                    mock.patch.object(sys, "argv", ["nas_v2_entry.py"]),
+                    mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+                ):
+                    self.assertEqual(nas_v2_entry.main(), 0)
+                self.assertEqual(apply_mock.call_args.args[0].desired, pathlib.Path(expected))
+
     def test_positional_authority_argument_remains_supported_for_nix_entrypoint(self) -> None:
         with (
             mock.patch.dict("os.environ", {"NAS_V2_DESIRED": "/configured/services.yaml"}, clear=True),
@@ -110,7 +129,7 @@ class V2EntryTests(unittest.TestCase):
                         "NAS_V2_HISTORY_REPOSITORY": None,
                     }
                 )
-                self.assertEqual(dict(__import__("os").environ), before)
+                self.assertEqual(dict(os.environ), before)
             self.assertEqual(status, 0)
             paths = apply_mock.call_args.args[0]
             self.assertEqual(paths.desired, spec)

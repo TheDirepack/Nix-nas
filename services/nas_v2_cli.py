@@ -24,13 +24,16 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     default_spec, default_schema, default_platform = _path_defaults()
     parser.add_argument("--spec", type=pathlib.Path, default=default_spec, help="desired services.yaml path")
     parser.add_argument("--schema", type=pathlib.Path, default=default_schema, help="V3 JSON Schema path")
-    parser.add_argument(
+    platform_options = parser.add_mutually_exclusive_group()
+    platform_options.add_argument(
         "--platform",
         type=pathlib.Path,
         default=default_platform,
         help="platform capability inventory (omit to compile without host capabilities)",
     )
-    parser.add_argument("--no-platform", action="store_true", help="do not use a platform capability inventory")
+    platform_options.add_argument(
+        "--no-platform", action="store_true", help="do not use a platform capability inventory"
+    )
     parser.add_argument("--output", type=pathlib.Path, help="write effective/plan JSON to this path instead of stdout")
 
 
@@ -51,16 +54,22 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _selected_platform(args: argparse.Namespace) -> pathlib.Path | None:
+    platform = None if args.no_platform else args.platform
+    if platform is not None and not platform.is_file():
+        raise RuntimeError(f"platform capability inventory does not exist: {platform}")
+    return platform
+
+
 def _compile(args: argparse.Namespace) -> dict:
     # Keep imports below command dispatch so ``nas-v2 --help`` remains usable
     # in a minimal developer environment without the compiler dependencies.
     from nas_v2_apply import _compile_document_with_platform
     from nas_v2_spec import load_schema, parse_yaml
 
-    platform = None if args.no_platform else args.platform
-    if platform is not None and not platform.is_file():
-        raise RuntimeError(f"platform capability inventory does not exist: {platform}")
-    return _compile_document_with_platform(parse_yaml(args.spec), load_schema(args.schema), platform)
+    return _compile_document_with_platform(
+        parse_yaml(args.spec), load_schema(args.schema), _selected_platform(args)
+    )
 
 
 def _write_json(value: object, output: pathlib.Path | None) -> None:
@@ -75,9 +84,7 @@ def _write_json(value: object, output: pathlib.Path | None) -> None:
 def _apply(args: argparse.Namespace) -> int:
     import nas_v2_entry
 
-    platform = None if args.no_platform else args.platform
-    if platform is not None and not platform.is_file():
-        raise RuntimeError(f"platform capability inventory does not exist: {platform}")
+    platform = _selected_platform(args)
 
     effective_output = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
     if args.output is not None:

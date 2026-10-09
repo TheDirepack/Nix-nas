@@ -41,6 +41,15 @@ class V2CliTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(cli._path_defaults()[0], pathlib.Path("/var/lib/nas-control/services.yaml"))
 
+    def test_conflicting_platform_flags_are_rejected(self) -> None:
+        for command in ("validate", "effective", "plan", "apply"):
+            with self.subTest(command=command):
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(SystemExit) as exit_status:
+                        cli.main([command, "--platform", "/tmp/platform.json", "--no-platform"])
+                self.assertEqual(exit_status.exception.code, 2)
+                self.assertIn("not allowed with argument", stderr.getvalue())
+
     def write_spec(self, root: pathlib.Path) -> pathlib.Path:
         path = root / "services.yaml"
         path.write_text(

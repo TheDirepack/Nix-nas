@@ -61,9 +61,7 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
             return overrides[name] or ""
         return os.environ.get(name, default)
 
-    desired = pathlib.Path(setting("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
-    if setting("NAS_V2_SPEC") and not setting("NAS_V2_DESIRED"):
-        desired = pathlib.Path(setting("NAS_V2_SPEC"))
+    desired = pathlib.Path(setting("NAS_V2_DESIRED") or setting("NAS_V2_SPEC") or "/var/lib/nas-control/services.yaml")
     if overrides is None and len(sys.argv) > 1:
         desired = pathlib.Path(sys.argv[1])
 
