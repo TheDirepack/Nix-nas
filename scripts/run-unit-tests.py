@@ -142,9 +142,7 @@ def coverage_cleanup() -> None:
             path.unlink()
 
 
-def select_test_files(
-    directory: pathlib.Path, pattern: str, excluded: set[str],
-) -> list[pathlib.Path]:
+def select_test_files(directory: pathlib.Path, pattern: str, excluded: set[str]) -> list[pathlib.Path]:
     return sorted(path for path in directory.glob(pattern) if path.name not in excluded)
 
 
@@ -154,7 +152,9 @@ def main() -> int:
     parser.add_argument("--coverage", metavar="REPORT", help="write combined coverage.py JSON to REPORT")
     parser.add_argument("--pattern", default="test_*.py", help="test filename glob")
     parser.add_argument(
-        "--group", choices=("all", "fast"), default="all",
+        "--group",
+        choices=("all", "fast"),
+        default="all",
         help="all matched test files, or the canonical fast set excluding expensive suites",
     )
     parser.add_argument(
