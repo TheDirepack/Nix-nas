@@ -214,6 +214,27 @@ services:
             self.assertEqual(output, "")
             entry.assert_called_once()
 
+    def test_entrypoint_exception_is_json_and_does_not_change_process_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            original_argv = sys.argv
+            with (
+                mock.patch.dict(os.environ, {"NAS_V2_DESIRED": str(root / "inherited.yaml")}),
+                mock.patch("nas_v2_entry.main", side_effect=RuntimeError("simulated entry failure")),
+            ):
+                environment = dict(os.environ)
+                status, output, error = self.invoke(
+                    ["apply", "--spec", str(spec), "--schema", str(SCHEMA), "--no-platform"]
+                )
+                self.assertEqual(dict(os.environ), environment)
+                self.assertIs(sys.argv, original_argv)
+            self.assertEqual(status, 2)
+            self.assertEqual(output, "")
+            message = json.loads(error)
+            self.assertEqual(message["error"]["type"], "RuntimeError")
+            self.assertIn("simulated entry failure", message["error"]["message"])
+
     def test_apply_rejects_missing_explicit_platform_without_calling_entry(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
