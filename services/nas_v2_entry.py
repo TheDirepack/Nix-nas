@@ -55,11 +55,16 @@ def _apply_once(
     return apply(paths, caddy=caddy, systemd=systemd, backup=backup, firewalld=firewalld, portal=portal)
 
 
-def main() -> int:
-    desired = pathlib.Path(os.environ.get("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
-    if os.environ.get("NAS_V2_SPEC") and not os.environ.get("NAS_V2_DESIRED"):
-        desired = pathlib.Path(os.environ["NAS_V2_SPEC"])
-    if len(sys.argv) > 1:
+def main(*, overrides: dict[str, str | None] | None = None) -> int:
+    def setting(name: str, default: str = "") -> str:
+        if overrides is not None and name in overrides:
+            return overrides[name] or ""
+        return os.environ.get(name, default)
+
+    desired = pathlib.Path(setting("NAS_V2_DESIRED", "/var/lib/nas-control/services.yaml"))
+    if setting("NAS_V2_SPEC") and not setting("NAS_V2_DESIRED"):
+        desired = pathlib.Path(setting("NAS_V2_SPEC"))
+    if overrides is None and len(sys.argv) > 1:
         desired = pathlib.Path(sys.argv[1])
 
     schema = pathlib.Path(setting("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))

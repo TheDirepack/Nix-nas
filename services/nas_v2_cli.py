@@ -82,9 +82,9 @@ def _apply(args: argparse.Namespace) -> int:
         "NAS_V2_SCHEMA": str(args.schema),
         "NAS_V2_PLATFORM": str(platform) if platform is not None else None,
         "NAS_V2_EFFECTIVE": (
-            str(args.output)
-            if args.output is not None
-            else os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+            str(args.output) if args.output is not None else os.environ.get(
+                "NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"
+            )
         ),
         "NAS_V2_GIT_BIN": args.git_bin,
         "NAS_V2_HISTORY_REPOSITORY": (
