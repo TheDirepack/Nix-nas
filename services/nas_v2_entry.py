@@ -102,7 +102,6 @@ def main() -> int:
         FirewalldProjection(
             output_dir=firewalld_output,
             lan_zone=os.environ.get("NAS_V2_LAN_ZONE", "nas-lan"),
-            firewall_offline_cmd=os.environ.get("NAS_V2_FIREWALL_OFFLINE_CMD", "firewall-offline-cmd"),
         )
         if os.environ.get("NAS_V2_FIREWALLD_ENABLED") == "1"
         else None

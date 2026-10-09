@@ -20,6 +20,7 @@ class V2TransactionWiringTests(unittest.TestCase):
         self.assertNotIn(" record", pre_start)
         self.assertIn("desiredRevision", post_start)
         firewall_reconcile = post_start.index("statelessFirewalldArgs")
+        self.assertNotIn("--projection-root", managed.split("statelessFirewalldArgs =", 1)[1].split("systemdReconcileArgs =", 1)[0])
         systemd_reconcile = post_start.index("systemdReconcileArgs")
         mark_applied = post_start.index("mark-applied")
         cancel = post_start.index("cancel")
