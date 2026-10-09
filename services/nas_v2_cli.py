@@ -77,19 +77,16 @@ def _apply(args: argparse.Namespace) -> int:
     if platform is not None and not platform.is_file():
         raise RuntimeError(f"platform capability inventory does not exist: {platform}")
 
+    effective_output = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    if args.output is not None:
+        effective_output = str(args.output)
     overrides = {
         "NAS_V2_DESIRED": str(args.spec),
         "NAS_V2_SCHEMA": str(args.schema),
         "NAS_V2_PLATFORM": str(platform) if platform is not None else None,
-        "NAS_V2_EFFECTIVE": (
-            str(args.output) if args.output is not None else os.environ.get(
-                "NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"
-            )
-        ),
+        "NAS_V2_EFFECTIVE": effective_output,
         "NAS_V2_GIT_BIN": args.git_bin,
-        "NAS_V2_HISTORY_REPOSITORY": (
-            str(args.history_repository) if args.history_repository is not None else None
-        ),
+        "NAS_V2_HISTORY_REPOSITORY": str(args.history_repository) if args.history_repository is not None else None,
     }
     status = nas_v2_entry.main(overrides=overrides)
     if status == 0:
