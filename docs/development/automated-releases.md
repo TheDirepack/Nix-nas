@@ -5,7 +5,7 @@ A release is published **only when an operator explicitly runs** the **Merge bui
 ## Qualification and publication
 
 1. The operator selects `main` and starts the workflow. The dispatch commit (`github.sha`) is the release source; releases from other refs are refused.
-2. The eligibility job verifies that this exact commit is the recorded merge result of a pull request merged into `main`, then finds a successful push-triggered **CI** run for that same SHA. It fails closed if either condition is missing. The CI run ID is retained for later artifact retrieval.
+2. The eligibility job verifies that this exact commit is the recorded merge result of a pull request merged into `main`, then finds a successful push-triggered **CI** run for that same SHA. It fails closed if either condition is missing. The CI run ID is retained for later artifact retrieval. CI handoff artifacts are retained for 14 days; rerun CI for the selected SHA before publication if that artifact has expired.
 3. The build job downloads and verifies that run's exact `vm-bundle-handoff` artifact and NixOS closures. It uses the Nixpkgs-provided Diceware tool to generate a five-word release-specific bootstrap credential and stamps a separate release-only commit without pushing that commit to `main`.
 4. Release-specific Cockpit and wizard bundles, Nix closures, tests, and source package are rebuilt or validated. A candidate Git bundle and publication metadata are uploaded as an immutable workflow artifact.
 5. A separate publication job, the only job with repository write access, verifies the candidate commit's parent and version, pushes an annotated tag, and creates or repairs the GitHub Release.
