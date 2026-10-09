@@ -11,7 +11,9 @@ import sys
 
 
 def _path_defaults() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path | None]:
-    spec = pathlib.Path(os.environ.get("NAS_V2_SPEC", "/var/lib/nas-control/services.yaml"))
+    spec = pathlib.Path(
+        os.environ.get("NAS_V2_DESIRED") or os.environ.get("NAS_V2_SPEC") or "/var/lib/nas-control/services.yaml"
+    )
     schema = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
     raw_platform = os.environ.get("NAS_V2_PLATFORM", "/etc/nas-control/platform-capabilities.json")
     platform = pathlib.Path(raw_platform) if raw_platform else None

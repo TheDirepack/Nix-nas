@@ -23,6 +23,24 @@ class V2CliTests(unittest.TestCase):
     def test_installed_program_name_is_stable(self) -> None:
         self.assertEqual(cli._parser().prog, "nas-v2")
 
+    def test_default_spec_matches_reconciler_authority_precedence(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NAS_V2_SPEC": "/legacy/services.yaml",
+                "NAS_V2_DESIRED": "/authoritative/services.yaml",
+            },
+        ):
+            self.assertEqual(cli._path_defaults()[0], pathlib.Path("/authoritative/services.yaml"))
+            self.assertEqual(
+                cli._parser().parse_args(["apply"]).spec,
+                pathlib.Path("/authoritative/services.yaml"),
+            )
+        with mock.patch.dict(os.environ, {"NAS_V2_SPEC": "/legacy/services.yaml"}, clear=True):
+            self.assertEqual(cli._path_defaults()[0], pathlib.Path("/legacy/services.yaml"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(cli._path_defaults()[0], pathlib.Path("/var/lib/nas-control/services.yaml"))
+
     def write_spec(self, root: pathlib.Path) -> pathlib.Path:
         path = root / "services.yaml"
         path.write_text(
