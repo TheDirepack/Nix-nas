@@ -76,7 +76,7 @@ def _check_object(value: Any) -> dict[str, Any]:
     for field in ("ingress", "egress"):
         if not isinstance(value[field], str) or not _ZONE.fullmatch(value[field]):
             raise FirewalldReconcileError("unsafe projected policy zone")
-    if not isinstance(value["ports"], list) or not isinstance(value["forwardPorts"], list) or not isinstance(value["richRules"], list):
+    if not all(isinstance(value[key], list) for key in ("ports", "forwardPorts", "richRules")):
         raise FirewalldReconcileError("invalid native policy collections")
     for item in value["ports"]:
         if not isinstance(item, list) or len(item) != 2:
@@ -108,7 +108,11 @@ def _read_projection(manifest_path: pathlib.Path) -> dict[str, dict[str, Any]]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise FirewalldReconcileError(f"unable to read native firewall manifest: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2 or not isinstance(manifest.get("objects"), list):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schemaVersion") != 2
+        or not isinstance(manifest.get("objects"), list)
+    ):
         raise FirewalldReconcileError("native firewalld projection manifest is invalid")
     desired: dict[str, dict[str, Any]] = {}
     for entry in manifest["objects"]:
