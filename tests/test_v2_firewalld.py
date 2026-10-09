@@ -53,8 +53,14 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertEqual((lan["target"], lan["egress"]), ("DROP", "nas-trusted"))
         world = files[f"policies/{firewalld.world_policy_name('worker')}"]
         self.assertEqual(world["target"], "DROP")
-        self.assertIn({"family": "ipv4", "destination": "203.0.113.0/24", "port": "443", "protocol": "tcp"}, world["richRules"])
-        self.assertIn({"family": "ipv4", "destination": "203.0.113.0/24", "port": "443", "protocol": "udp"}, world["richRules"])
+        self.assertIn(
+            {"family": "ipv4", "destination": "203.0.113.0/24", "port": "443", "protocol": "tcp"},
+            world["richRules"],
+        )
+        self.assertIn(
+            {"family": "ipv4", "destination": "203.0.113.0/24", "port": "443", "protocol": "udp"},
+            world["richRules"],
+        )
         self.assertIn({"family": "ipv6", "destination": "2001:db8::/32"}, world["richRules"])
         self.assertEqual(manifest["schemaVersion"], 2)
         self.assertEqual(len(manifest["objects"]), 5)
