@@ -75,6 +75,38 @@ class V2EntryTests(unittest.TestCase):
         self.assertFalse(hasattr(projection, "install_bin"))
         self.assertFalse(hasattr(projection, "rm_bin"))
 
+    def test_explicit_options_override_environment_without_mutating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = root / "services.yaml"
+            schema = root / "schema.json"
+            effective = root / "effective.json"
+            env = {
+                "NAS_V2_PLATFORM": str(root / "host-platform.json"),
+                "NAS_V2_DESIRED": "/unexpected/services.yaml",
+            }
+            with (
+                mock.patch.dict("os.environ", env, clear=True),
+                mock.patch.object(sys, "argv", ["nas_v2_entry.py", "/unexpected/argv.yaml"]),
+                mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+            ):
+                before = dict(__import__("os").environ)
+                status = nas_v2_entry.main(overrides={
+                    "NAS_V2_DESIRED": str(spec),
+                    "NAS_V2_SCHEMA": str(schema),
+                    "NAS_V2_EFFECTIVE": str(effective),
+                    "NAS_V2_PLATFORM": None,
+                    "NAS_V2_HISTORY_REPOSITORY": None,
+                })
+                self.assertEqual(dict(__import__("os").environ), before)
+            self.assertEqual(status, 0)
+            paths = apply_mock.call_args.args[0]
+            self.assertEqual(paths.desired, spec)
+            self.assertEqual(paths.schema, schema)
+            self.assertEqual(paths.effective, effective)
+            self.assertIsNone(paths.platform)
+            self.assertIsNone(paths.history_repository)
+
 
 if __name__ == "__main__":
     unittest.main()

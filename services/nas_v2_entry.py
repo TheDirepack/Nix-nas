@@ -62,49 +62,49 @@ def main() -> int:
     if len(sys.argv) > 1:
         desired = pathlib.Path(sys.argv[1])
 
-    schema = pathlib.Path(os.environ.get("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
-    platform = pathlib.Path(os.environ.get("NAS_V2_PLATFORM", "/etc/nas-control/platform-capabilities.json"))
-    effective = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
-    plan = pathlib.Path(os.environ.get("NAS_V2_PLAN", "/run/nas-control/plan.json"))
-    portal_output = pathlib.Path(os.environ.get("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
-    caddy_output = pathlib.Path(os.environ.get("NAS_V2_CADDY", "/run/nas-control/caddy-managed.conf"))
-    systemd_output = pathlib.Path(os.environ.get("NAS_V2_SYSTEMD", "/run/nas-control/systemd"))
-    backup_inventory = pathlib.Path(os.environ.get("NAS_V2_BACKUP_INVENTORY", "/run/nas-control/backup-resources.json"))
-    restic_paths = pathlib.Path(os.environ.get("NAS_V2_RESTIC_PATHS", "/run/nas-control/restic-v2-paths"))
-    firewalld_output = pathlib.Path(os.environ.get("NAS_V2_FIREWALLD", "/run/nas-control/firewalld"))
-    history_repository_raw = os.environ.get("NAS_V2_HISTORY_REPOSITORY")
+    schema = pathlib.Path(setting("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
+    platform = pathlib.Path(setting("NAS_V2_PLATFORM", "/etc/nas-control/platform-capabilities.json"))
+    effective = pathlib.Path(setting("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
+    plan = pathlib.Path(setting("NAS_V2_PLAN", "/run/nas-control/plan.json"))
+    portal_output = pathlib.Path(setting("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
+    caddy_output = pathlib.Path(setting("NAS_V2_CADDY", "/run/nas-control/caddy-managed.conf"))
+    systemd_output = pathlib.Path(setting("NAS_V2_SYSTEMD", "/run/nas-control/systemd"))
+    backup_inventory = pathlib.Path(setting("NAS_V2_BACKUP_INVENTORY", "/run/nas-control/backup-resources.json"))
+    restic_paths = pathlib.Path(setting("NAS_V2_RESTIC_PATHS", "/run/nas-control/restic-v2-paths"))
+    firewalld_output = pathlib.Path(setting("NAS_V2_FIREWALLD", "/run/nas-control/firewalld"))
+    history_repository_raw = setting("NAS_V2_HISTORY_REPOSITORY")
     history_repository = pathlib.Path(history_repository_raw) if history_repository_raw else None
-    git_bin = os.environ.get("NAS_V2_GIT_BIN", "git")
+    git_bin = setting("NAS_V2_GIT_BIN", "git")
 
     caddy = CaddyProjection(
         output=caddy_output,
-        caddy_bin=os.environ.get("NAS_V2_CADDY_BIN", "caddy"),
-        authentik_upstream=os.environ.get("NAS_V2_AUTHENTIK_UPSTREAM", "127.0.0.1:9010"),
-        authentik_path=os.environ.get("NAS_V2_AUTHENTIK_PATH", "/identity/"),
-        lan_host=os.environ.get("NAS_V2_LAN_HOST", "nas.local"),
+        caddy_bin=setting("NAS_V2_CADDY_BIN", "caddy"),
+        authentik_upstream=setting("NAS_V2_AUTHENTIK_UPSTREAM", "127.0.0.1:9010"),
+        authentik_path=setting("NAS_V2_AUTHENTIK_PATH", "/identity/"),
+        lan_host=setting("NAS_V2_LAN_HOST", "nas.local"),
     )
     systemd = SystemdProjection(
         output_dir=systemd_output,
-        systemd_analyze_bin=os.environ.get("NAS_V2_SYSTEMD_ANALYZE_BIN", "systemd-analyze"),
-        python_bin=os.environ.get("NAS_V2_PYTHON_BIN", sys.executable),
+        systemd_analyze_bin=setting("NAS_V2_SYSTEMD_ANALYZE_BIN", "systemd-analyze"),
+        python_bin=setting("NAS_V2_PYTHON_BIN", sys.executable),
         source_dir=pathlib.Path(__file__).parent,
-        systemctl_bin=os.environ.get("NAS_V2_SYSTEMCTL_BIN", "systemctl"),
-        uv_bin=os.environ.get("NAS_V2_UV_BIN", "uv"),
-        quadlet_generator_bin=os.environ.get("NAS_V2_QUADLET_GENERATOR_BIN") or None,
-        podman_bin=os.environ.get("NAS_V2_PODMAN_BIN", "podman"),
-        compose_provider_bin=os.environ.get("NAS_V2_COMPOSE_PROVIDER_BIN", "podman-compose"),
-        virsh_bin=os.environ.get("NAS_V2_VIRSH_BIN", "virsh"),
-        virt_xml_validate_bin=os.environ.get("NAS_V2_VIRT_XML_VALIDATE_BIN") or None,
-        vlan_parent=os.environ.get("NAS_V2_VLAN_PARENT"),
+        systemctl_bin=setting("NAS_V2_SYSTEMCTL_BIN", "systemctl"),
+        uv_bin=setting("NAS_V2_UV_BIN", "uv"),
+        quadlet_generator_bin=setting("NAS_V2_QUADLET_GENERATOR_BIN") or None,
+        podman_bin=setting("NAS_V2_PODMAN_BIN", "podman"),
+        compose_provider_bin=setting("NAS_V2_COMPOSE_PROVIDER_BIN", "podman-compose"),
+        virsh_bin=setting("NAS_V2_VIRSH_BIN", "virsh"),
+        virt_xml_validate_bin=setting("NAS_V2_VIRT_XML_VALIDATE_BIN") or None,
+        vlan_parent=setting("NAS_V2_VLAN_PARENT"),
     )
     backup = BackupProjection(inventory=backup_inventory, restic_paths=restic_paths)
     firewalld = (
         FirewalldProjection(
             output_dir=firewalld_output,
-            lan_zone=os.environ.get("NAS_V2_LAN_ZONE", "nas-lan"),
-            firewall_offline_cmd=os.environ.get("NAS_V2_FIREWALL_OFFLINE_CMD", "firewall-offline-cmd"),
+            lan_zone=setting("NAS_V2_LAN_ZONE", "nas-lan"),
+            firewall_offline_cmd=setting("NAS_V2_FIREWALL_OFFLINE_CMD", "firewall-offline-cmd"),
         )
-        if os.environ.get("NAS_V2_FIREWALLD_ENABLED") == "1"
+        if setting("NAS_V2_FIREWALLD_ENABLED") == "1"
         else None
     )
     portal = PortalProjection(output=portal_output)

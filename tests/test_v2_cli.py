@@ -96,6 +96,38 @@ services:
             self.assertTrue(json.loads(output)["ok"])
             self.assertEqual(entry.call_count, 1)
 
+    def test_apply_does_not_compile_twice_or_mutate_process_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            saved_argv = sys.argv
+            original_env = os.environ.copy()
+            with (
+                mock.patch.object(cli, "_compile", side_effect=AssertionError("apply must not precompile")),
+                mock.patch("nas_v2_entry.main", return_value=0) as entry,
+            ):
+                status, _out, err = self.invoke(
+                    ["apply", "--spec", str(spec), "--schema", str(SCHEMA), "--no-platform"]
+                )
+            self.assertEqual(status, 0, err)
+            entry.assert_called_once()
+            self.assertIs(sys.argv, saved_argv)
+            self.assertEqual(os.environ, original_env)
+
+    def test_apply_rejects_missing_explicit_platform_without_calling_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            with mock.patch("nas_v2_entry.main") as entry:
+                status, out, err = self.invoke([
+                    "apply", "--spec", str(spec), "--schema", str(SCHEMA),
+                    "--platform", str(root / "missing.json"),
+                ])
+            self.assertEqual(status, 2)
+            self.assertEqual(out, "")
+            self.assertIn("platform capability inventory does not exist", err)
+            entry.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

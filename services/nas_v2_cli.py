@@ -8,8 +8,6 @@ import json
 import os
 import pathlib
 import sys
-from contextlib import contextmanager
-from typing import Iterator
 
 
 def _path_defaults() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path | None]:
@@ -72,47 +70,28 @@ def _write_json(value: object, output: pathlib.Path | None) -> None:
     output.write_text(rendered, encoding="utf-8")
 
 
-@contextmanager
-def _temporary_environment(updates: dict[str, str], removed: set[str]) -> Iterator[None]:
-    original = os.environ.copy()
-    try:
-        for key in removed:
-            os.environ.pop(key, None)
-        os.environ.update(updates)
-        yield
-    finally:
-        os.environ.clear()
-        os.environ.update(original)
-
-
 def _apply(args: argparse.Namespace) -> int:
     import nas_v2_entry
 
-    updates = {
+    platform = None if args.no_platform else args.platform
+    if platform is not None and not platform.is_file():
+        raise RuntimeError(f"platform capability inventory does not exist: {platform}")
+
+    overrides = {
         "NAS_V2_DESIRED": str(args.spec),
         "NAS_V2_SCHEMA": str(args.schema),
-        "NAS_V2_EFFECTIVE": str(args.output)
-        if args.output is not None
-        else os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"),
+        "NAS_V2_PLATFORM": str(platform) if platform is not None else None,
+        "NAS_V2_EFFECTIVE": (
+            str(args.output)
+            if args.output is not None
+            else os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+        ),
         "NAS_V2_GIT_BIN": args.git_bin,
+        "NAS_V2_HISTORY_REPOSITORY": (
+            str(args.history_repository) if args.history_repository is not None else None
+        ),
     }
-    removed: set[str] = set()
-    if args.no_platform or args.platform is None:
-        removed.add("NAS_V2_PLATFORM")
-    else:
-        updates["NAS_V2_PLATFORM"] = str(args.platform)
-    if args.history_repository is not None:
-        updates["NAS_V2_HISTORY_REPOSITORY"] = str(args.history_repository)
-    else:
-        removed.add("NAS_V2_HISTORY_REPOSITORY")
-
-    old_argv = sys.argv
-    try:
-        with _temporary_environment(updates, removed):
-            sys.argv = ["nas-v2", str(args.spec)]
-            status = nas_v2_entry.main()
-    finally:
-        sys.argv = old_argv
+    status = nas_v2_entry.main(overrides=overrides)
     if status == 0:
         _write_json({"ok": True, "command": "apply", "spec": str(args.spec)}, None)
     return status
@@ -121,6 +100,8 @@ def _apply(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "apply":
+            return _apply(args)
         if args.command == "validate":
             effective = _compile(args)
             _write_json({"ok": True, "schemaVersion": effective["schemaVersion"]}, args.output)
@@ -134,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
 
             _write_json(build_plan(effective), args.output)
             return 0
-        return _apply(args)
+        raise ValueError(f"unsupported command: {args.command}")
     except Exception as exc:
         print(
             json.dumps(
