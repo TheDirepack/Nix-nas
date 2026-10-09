@@ -115,6 +115,49 @@ services:
             self.assertIs(sys.argv, saved_argv)
             self.assertEqual(os.environ, original_env)
 
+    def test_apply_end_to_end_uses_explicit_options_without_inherited_platform(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            output_path = root / "effective.json"
+            inherited = {
+                "NAS_V2_PLATFORM": str(root / "inherited-platform.json"),
+                "NAS_V2_HISTORY_REPOSITORY": str(root / "inherited-history"),
+                "NAS_V2_DESIRED": str(root / "inherited-services.yaml"),
+            }
+            with (
+                mock.patch.dict(os.environ, inherited),
+                mock.patch("nas_v2_entry._apply_once", return_value={}) as apply_once,
+            ):
+                original_env = dict(os.environ)
+                original_argv = sys.argv
+                status, stdout, stderr = self.invoke(
+                    [
+                        "apply",
+                        "--spec",
+                        str(spec),
+                        "--schema",
+                        str(SCHEMA),
+                        "--no-platform",
+                        "--output",
+                        str(output_path),
+                        "--git-bin",
+                        "git-from-cli",
+                    ]
+                )
+                self.assertEqual(dict(os.environ), original_env)
+                self.assertIs(sys.argv, original_argv)
+            self.assertEqual(status, 0, stderr)
+            self.assertEqual(json.loads(stdout)["ok"], True)
+            apply_once.assert_called_once()
+            paths = apply_once.call_args.kwargs["paths"]
+            self.assertEqual(paths.desired, spec)
+            self.assertEqual(paths.schema, SCHEMA)
+            self.assertEqual(paths.effective, output_path)
+            self.assertEqual(paths.git_bin, "git-from-cli")
+            self.assertIsNone(paths.platform)
+            self.assertIsNone(paths.history_repository)
+
     def test_apply_rejects_missing_explicit_platform_without_calling_entry(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
