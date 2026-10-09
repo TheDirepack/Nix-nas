@@ -51,7 +51,11 @@ class V2NativeFirewalldTests(unittest.TestCase):
         self.assertIn(("--policy=nv2h0123456789ab", "--set-priority=-50"), calls)
         self.assertIn(("--policy=nv2h0123456789ab", "--add-port=443/tcp"), calls)
         self.assertIn(
-            ("--policy=nv2h0123456789ab", "--add-rich-rule=rule family=\"ipv4\" priority=\"-10\" destination address=\"10.0.0.0/8\" port port=\"53\" protocol=\"udp\" accept"),
+            (
+                "--policy=nv2h0123456789ab",
+                '--add-rich-rule=rule family="ipv4" priority="-10" destination address="10.0.0.0/8" '
+                'port port="53" protocol="udp" accept',
+            ),
             calls,
         )
 
