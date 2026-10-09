@@ -38,7 +38,7 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 | `nas_v2_spec.py` | YAML 1.2 parsing (rejects empty/null), V3 schema validation, normalization, semantic validation, and effective-state compilation | `test_v2_spec.py` |
 | `nas_v2_bootstrap.py` | Seed-once: validates one complete V3 seed and atomically creates `services.yaml` once (with flock) | `test_v2_bootstrap.py`, `test_v2_seed_aggregation.py` |
 | `nas_v2_plan.py`, `nas_v2_apply.py` | Deterministic plan generation and finite transactional file apply (bundle + rollback) | `test_v2_plan_apply.py` |
-| `nas_v2_entry.py` | V2 command-surface entry/import boundary | `test_v2_boundary.py` |
+| `nas_v2_cli.py`, `nas_v2_entry.py` | V2 offline CLI and finite reconcile entrypoint; CLI passes explicit apply options, entrypoint retains Nix environment defaults | `test_v2_cli.py`, `test_v2_entry.py`, `test_v2_boundary.py` |
 | `nas_v2_control.py`, `nas_v2_editor.py` | Finite status/document/edit/reconcile API, revision-safe CAS (sha256), comment-preserving atomic edits | `test_v2_editor.py`, `test_v2_revision.py` |
 | `nas_v2_systemd_native.py`, `nas_v2_systemd_attachments.py`, `nas_v2_systemd_reconcile.py`, `nas_v2_activation.py`, `nas_v2_generation.py` | Native systemd unit generation, Compose import lowering, attachment wiring, reconciliation, activation ordering, and generation bookkeeping | `test_v2_systemd*.py`, `test_v2_generation.py`, `test_v2_restore_wiring.py` |
 | `nas_v2_quadlet.py` | Direct OCI/Quadlet projection | `test_v2_quadlet.py` |
