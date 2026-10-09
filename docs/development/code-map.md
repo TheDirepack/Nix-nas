@@ -25,6 +25,7 @@ Managed Services V2 has one mutable desired-state authority: `/var/lib/nas-contr
 |---|---|---|
 | `nas_setup.py` | First-run orchestration, guarded storage creation, runtime account commands | `test_setup.py` |
 | `nas_setup_config.py` | Setup schema, normalization, and secure secret-file input | `test_setup.py` |
+| `nas_setup_first_start.py` | Pure systemd first-start job request and secret-payload validation | `test_setup_first_start.py` |
 | `nas_identity_sync.py` | Authentik and Syncthing I/O/reconciliation entry point | `test_identity_sync.py` |
 | `nas_identity_model.py` | Pure identity, account-plan, and Syncthing desired-state model | `test_identity_sync.py` |
 | `nas_cockpit_api.py` | Fixed privileged action allow-list for the Authentik-authorized Cockpit session | `test_cockpit_api.py` |
