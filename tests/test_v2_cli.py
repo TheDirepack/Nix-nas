@@ -158,6 +158,44 @@ services:
             self.assertIsNone(paths.platform)
             self.assertIsNone(paths.history_repository)
 
+    def test_apply_forwards_explicit_history_and_platform_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            platform = root / "platform.json"
+            platform.write_text("{}\n", encoding="utf-8")
+            history = root / "revisions"
+            with mock.patch("nas_v2_entry.main", return_value=0) as entry:
+                status, _out, err = self.invoke(
+                    [
+                        "apply",
+                        "--spec",
+                        str(spec),
+                        "--schema",
+                        str(SCHEMA),
+                        "--platform",
+                        str(platform),
+                        "--history-repository",
+                        str(history),
+                    ]
+                )
+            self.assertEqual(status, 0, err)
+            options = entry.call_args.kwargs["overrides"]
+            self.assertEqual(options["NAS_V2_PLATFORM"], str(platform))
+            self.assertEqual(options["NAS_V2_HISTORY_REPOSITORY"], str(history))
+
+    def test_failed_entry_does_not_claim_apply_succeeded(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            with mock.patch("nas_v2_entry.main", return_value=1) as entry:
+                status, output, error = self.invoke(
+                    ["apply", "--spec", str(spec), "--schema", str(SCHEMA), "--no-platform"]
+                )
+            self.assertEqual(status, 1, error)
+            self.assertEqual(output, "")
+            entry.assert_called_once()
+
     def test_apply_rejects_missing_explicit_platform_without_calling_entry(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
