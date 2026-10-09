@@ -63,7 +63,8 @@ def main() -> int:
         desired = pathlib.Path(sys.argv[1])
 
     schema = pathlib.Path(setting("NAS_V2_SCHEMA", "/etc/nas-control/managed-services-v3.schema.json"))
-    platform = pathlib.Path(setting("NAS_V2_PLATFORM", "/etc/nas-control/platform-capabilities.json"))
+    platform_value = setting("NAS_V2_PLATFORM", "/etc/nas-control/platform-capabilities.json")
+    platform = pathlib.Path(platform_value) if platform_value else None
     effective = pathlib.Path(setting("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
     plan = pathlib.Path(setting("NAS_V2_PLAN", "/run/nas-control/plan.json"))
     portal_output = pathlib.Path(setting("NAS_V2_PORTAL", "/run/nas-control/portal.json"))
@@ -111,7 +112,7 @@ def main() -> int:
     paths = ApplyPaths(
         desired=desired,
         schema=schema,
-        platform=platform if platform.exists() else None,
+        platform=platform if platform is not None and platform.exists() else None,
         effective=effective,
         plan=plan,
         history_repository=history_repository,
