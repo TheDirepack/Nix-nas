@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 import tempfile
@@ -99,7 +100,7 @@ class V2EntryTests(unittest.TestCase):
                 mock.patch.object(sys, "argv", ["nas_v2_entry.py", "/unexpected/argv.yaml"]),
                 mock.patch.object(nas_v2_entry, "apply") as apply_mock,
             ):
-                before = dict(__import__("os").environ)
+                before = dict(os.environ)
                 status = nas_v2_entry.main(
                     overrides={
                         "NAS_V2_DESIRED": str(spec),
