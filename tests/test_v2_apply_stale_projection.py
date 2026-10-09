@@ -16,6 +16,44 @@ from nas_v2_systemd_native import SystemdProjectionError  # noqa: E402
 
 
 class V2ApplyStaleProjectionTests(unittest.TestCase):
+    def test_new_generation_writes_without_reading_prior_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            first = root / "generation" / "effective.json"
+            second = root / "generation" / "plan.json"
+            apply_v2._write_unpublished_bundle([
+                (first, b"effective\n", 0o640),
+                (second, b"plan\n", 0o640),
+            ])
+            self.assertEqual(first.read_bytes(), b"effective\n")
+            self.assertEqual(second.read_bytes(), b"plan\n")
+            self.assertEqual(first.stat().st_mode & 0o777, 0o640)
+
+            # Never silently replace a file, even within a generation path.
+            with self.assertRaisesRegex(SystemdProjectionError, "already exists"):
+                apply_v2._write_unpublished_bundle([(first, b"overwritten", 0o640)])
+            self.assertEqual(first.read_bytes(), b"effective\n")
+
+    def test_new_generation_failed_write_leaves_candidate_for_discard(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw) / "candidate"
+            first, second = root / "one", root / "two"
+            real_replace = apply_v2.os.replace
+
+            def fail_second(source, target):
+                if target == second:
+                    raise OSError("simulated publish failure")
+                return real_replace(source, target)
+
+            with mock.patch.object(apply_v2.os, "replace", side_effect=fail_second):
+                with self.assertRaisesRegex(OSError, "simulated publish failure"):
+                    apply_v2._write_unpublished_bundle([
+                        (first, b"one", 0o640), (second, b"two", 0o640),
+                    ])
+            self.assertEqual(first.read_bytes(), b"one")
+            self.assertFalse(second.exists())
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["one"])
+
     def test_stale_projection_file_is_removed_transactionally(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp) / "systemd"

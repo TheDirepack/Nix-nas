@@ -62,6 +62,7 @@ class ApplyPaths:
     plan: pathlib.Path = pathlib.Path("/run/nas-control/plan.json")
     history_repository: pathlib.Path | None = None
     git_bin: str = "git"
+    unpublished_generation: bool = False
 
 
 @dataclass(frozen=True)
@@ -284,6 +285,27 @@ def _replace_bundle(
     }
 
 
+def _write_unpublished_bundle(files: list[tuple[pathlib.Path, bytes, int]]) -> None:
+    """Write a new, unpublished tree; its caller discards it on any failure."""
+    destinations = [path for path, _data, _mode in files]
+    if len(destinations) != len(set(destinations)):
+        raise SystemdProjectionError("duplicate unpublished generation destination")
+    for path in destinations:
+        if path.exists() or path.is_symlink():
+            raise SystemdProjectionError(f"unpublished generation destination already exists: {path}")
+    prepared: list[tuple[pathlib.Path, pathlib.Path]] = []
+    try:
+        for path, data, mode in files:
+            prepared.append((path, _prepare_temp(path, data, mode)))
+        for path, temp in prepared:
+            os.replace(temp, path)
+        for directory in {path.parent for path in destinations}:
+            _fsync_directory(directory)
+    finally:
+        for _path, temp in prepared:
+            temp.unlink(missing_ok=True)
+
+
 def _compile_document_with_platform(
     document: dict[str, Any],
     schema: dict[str, Any],
@@ -480,6 +502,8 @@ def apply(
     portal: PortalProjection | None = None,
 ) -> dict[str, Any]:
     with authority_lock(paths.desired):
+        if paths.unpublished_generation and paths.history_repository is None:
+            raise SystemdProjectionError("unpublished generation requires guarded history authority")
         desired_revision: str | None = None
         if paths.history_repository is not None:
             history = record_desired_locked(
@@ -519,6 +543,17 @@ def apply(
             files.extend(_backup_files(effective, backup))
         if firewalld is not None:
             files.extend(_firewalld_files(effective, firewalld))
+
+        if paths.unpublished_generation:
+            if stale:
+                raise SystemdProjectionError("unpublished generation unexpectedly contains stale files")
+            plan["changedFiles"] = sorted(str(path) for path, _data, _mode in files) + [
+                str(paths.plan)
+            ]
+            plan["changedFiles"].sort()
+            files.append((paths.plan, _json_bytes(plan), 0o640))
+            _write_unpublished_bundle(files)
+            return plan
 
         def _would_change(path: pathlib.Path, data: bytes, mode: int) -> bool:
             try:
