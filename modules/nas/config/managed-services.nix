@@ -21,7 +21,6 @@ let
   v2Python = nasInternal.v2PythonXml;
   podmanEnabled = lib.attrByPath [ "virtualisation" "podman" "enable" ] false config;
   firewalldEnabled = cfg.networking.enable && cfg.networking.firewall.enable;
-  firewalldPackage = config.services.firewalld.package;
 
   platformCapabilities = {
     schemaVersion = 1;
