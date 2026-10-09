@@ -67,9 +67,7 @@ def _compile(args: argparse.Namespace) -> dict:
     from nas_v2_apply import _compile_document_with_platform
     from nas_v2_spec import load_schema, parse_yaml
 
-    return _compile_document_with_platform(
-        parse_yaml(args.spec), load_schema(args.schema), _selected_platform(args)
-    )
+    return _compile_document_with_platform(parse_yaml(args.spec), load_schema(args.schema), _selected_platform(args))
 
 
 def _write_json(value: object, output: pathlib.Path | None) -> None:
