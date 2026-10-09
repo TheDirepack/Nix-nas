@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -21,6 +22,33 @@ import nas_v2_cli as cli  # noqa: E402
 class V2CliTests(unittest.TestCase):
     def test_installed_program_name_is_stable(self) -> None:
         self.assertEqual(cli._parser().prog, "nas-v2")
+
+    def test_default_spec_matches_reconciler_authority_precedence(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NAS_V2_SPEC": "/legacy/services.yaml",
+                "NAS_V2_DESIRED": "/authoritative/services.yaml",
+            },
+        ):
+            self.assertEqual(cli._path_defaults()[0], pathlib.Path("/authoritative/services.yaml"))
+            self.assertEqual(
+                cli._parser().parse_args(["apply"]).spec,
+                pathlib.Path("/authoritative/services.yaml"),
+            )
+        with mock.patch.dict(os.environ, {"NAS_V2_SPEC": "/legacy/services.yaml"}, clear=True):
+            self.assertEqual(cli._path_defaults()[0], pathlib.Path("/legacy/services.yaml"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(cli._path_defaults()[0], pathlib.Path("/var/lib/nas-control/services.yaml"))
+
+    def test_conflicting_platform_flags_are_rejected(self) -> None:
+        for command in ("validate", "effective", "plan", "apply"):
+            with self.subTest(command=command):
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    with self.assertRaises(SystemExit) as exit_status:
+                        cli.main([command, "--platform", "/tmp/platform.json", "--no-platform"])
+                self.assertEqual(exit_status.exception.code, 2)
+                self.assertIn("not allowed with argument", stderr.getvalue())
 
     def write_spec(self, root: pathlib.Path) -> pathlib.Path:
         path = root / "services.yaml"
@@ -95,6 +123,147 @@ services:
             self.assertEqual(error, "")
             self.assertTrue(json.loads(output)["ok"])
             self.assertEqual(entry.call_count, 1)
+
+    def test_apply_does_not_compile_twice_or_mutate_process_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            saved_argv = sys.argv
+            original_env = os.environ.copy()
+            with (
+                mock.patch.object(cli, "_compile", side_effect=AssertionError("apply must not precompile")),
+                mock.patch("nas_v2_entry.main", return_value=0) as entry,
+            ):
+                status, _out, err = self.invoke(
+                    ["apply", "--spec", str(spec), "--schema", str(SCHEMA), "--no-platform"]
+                )
+            self.assertEqual(status, 0, err)
+            entry.assert_called_once()
+            self.assertIs(sys.argv, saved_argv)
+            self.assertEqual(os.environ, original_env)
+
+    def test_apply_end_to_end_uses_explicit_options_without_inherited_platform(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            output_path = root / "effective.json"
+            inherited = {
+                "NAS_V2_PLATFORM": str(root / "inherited-platform.json"),
+                "NAS_V2_HISTORY_REPOSITORY": str(root / "inherited-history"),
+                "NAS_V2_DESIRED": str(root / "inherited-services.yaml"),
+            }
+            with (
+                mock.patch.dict(os.environ, inherited),
+                mock.patch("nas_v2_entry._apply_once", return_value={}) as apply_once,
+            ):
+                original_env = dict(os.environ)
+                original_argv = sys.argv
+                status, stdout, stderr = self.invoke(
+                    [
+                        "apply",
+                        "--spec",
+                        str(spec),
+                        "--schema",
+                        str(SCHEMA),
+                        "--no-platform",
+                        "--output",
+                        str(output_path),
+                        "--git-bin",
+                        "git-from-cli",
+                    ]
+                )
+                self.assertEqual(dict(os.environ), original_env)
+                self.assertIs(sys.argv, original_argv)
+            self.assertEqual(status, 0, stderr)
+            self.assertEqual(json.loads(stdout)["ok"], True)
+            apply_once.assert_called_once()
+            paths = apply_once.call_args.kwargs["paths"]
+            self.assertEqual(paths.desired, spec)
+            self.assertEqual(paths.schema, SCHEMA)
+            self.assertEqual(paths.effective, output_path)
+            self.assertEqual(paths.git_bin, "git-from-cli")
+            self.assertIsNone(paths.platform)
+            self.assertIsNone(paths.history_repository)
+
+    def test_apply_forwards_explicit_history_and_platform_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            platform = root / "platform.json"
+            platform.write_text("{}\n", encoding="utf-8")
+            history = root / "revisions"
+            with mock.patch("nas_v2_entry.main", return_value=0) as entry:
+                status, _out, err = self.invoke(
+                    [
+                        "apply",
+                        "--spec",
+                        str(spec),
+                        "--schema",
+                        str(SCHEMA),
+                        "--platform",
+                        str(platform),
+                        "--history-repository",
+                        str(history),
+                    ]
+                )
+            self.assertEqual(status, 0, err)
+            options = entry.call_args.kwargs["overrides"]
+            self.assertEqual(options["NAS_V2_PLATFORM"], str(platform))
+            self.assertEqual(options["NAS_V2_HISTORY_REPOSITORY"], str(history))
+
+    def test_failed_entry_does_not_claim_apply_succeeded(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            with mock.patch("nas_v2_entry.main", return_value=1) as entry:
+                status, output, error = self.invoke(
+                    ["apply", "--spec", str(spec), "--schema", str(SCHEMA), "--no-platform"]
+                )
+            self.assertEqual(status, 1, error)
+            self.assertEqual(output, "")
+            entry.assert_called_once()
+
+    def test_entrypoint_exception_is_json_and_does_not_change_process_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            original_argv = sys.argv
+            with (
+                mock.patch.dict(os.environ, {"NAS_V2_DESIRED": str(root / "inherited.yaml")}),
+                mock.patch("nas_v2_entry.main", side_effect=RuntimeError("simulated entry failure")),
+            ):
+                environment = dict(os.environ)
+                status, output, error = self.invoke(
+                    ["apply", "--spec", str(spec), "--schema", str(SCHEMA), "--no-platform"]
+                )
+                self.assertEqual(dict(os.environ), environment)
+                self.assertIs(sys.argv, original_argv)
+            self.assertEqual(status, 2)
+            self.assertEqual(output, "")
+            message = json.loads(error)
+            self.assertEqual(message["error"]["type"], "RuntimeError")
+            self.assertIn("simulated entry failure", message["error"]["message"])
+
+    def test_apply_rejects_missing_explicit_platform_without_calling_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = self.write_spec(root)
+            with mock.patch("nas_v2_entry.main") as entry:
+                status, out, err = self.invoke(
+                    [
+                        "apply",
+                        "--spec",
+                        str(spec),
+                        "--schema",
+                        str(SCHEMA),
+                        "--platform",
+                        str(root / "missing.json"),
+                    ]
+                )
+            self.assertEqual(status, 2)
+            self.assertEqual(out, "")
+            self.assertIn("platform capability inventory does not exist", err)
+            entry.assert_not_called()
 
 
 if __name__ == "__main__":
