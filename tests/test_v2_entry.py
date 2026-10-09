@@ -33,9 +33,7 @@ class V2EntryTests(unittest.TestCase):
             mock.patch.object(nas_v2_entry, "apply") as apply_mock,
         ):
             self.assertEqual(nas_v2_entry.main(), 0)
-        self.assertEqual(
-            apply_mock.call_args.args[0].desired, pathlib.Path("/explicit/services.yaml")
-        )
+        self.assertEqual(apply_mock.call_args.args[0].desired, pathlib.Path("/explicit/services.yaml"))
 
     def test_disabled_firewalld_does_not_project_policy_when_runtime_parent_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
