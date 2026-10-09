@@ -26,6 +26,17 @@ class V2EntryTests(unittest.TestCase):
         paths = apply_mock.call_args.args[0]
         self.assertEqual(paths.desired, pathlib.Path("/var/lib/nas-control/services.yaml"))
 
+    def test_positional_authority_argument_remains_supported_for_nix_entrypoint(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {"NAS_V2_DESIRED": "/configured/services.yaml"}, clear=True),
+            mock.patch.object(sys, "argv", ["nas_v2_entry.py", "/explicit/services.yaml"]),
+            mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+        ):
+            self.assertEqual(nas_v2_entry.main(), 0)
+        self.assertEqual(
+            apply_mock.call_args.args[0].desired, pathlib.Path("/explicit/services.yaml")
+        )
+
     def test_disabled_firewalld_does_not_project_policy_when_runtime_parent_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runtime = pathlib.Path(temporary)
