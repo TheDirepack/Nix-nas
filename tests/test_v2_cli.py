@@ -120,10 +120,17 @@ services:
             root = pathlib.Path(raw)
             spec = self.write_spec(root)
             with mock.patch("nas_v2_entry.main") as entry:
-                status, out, err = self.invoke([
-                    "apply", "--spec", str(spec), "--schema", str(SCHEMA),
-                    "--platform", str(root / "missing.json"),
-                ])
+                status, out, err = self.invoke(
+                    [
+                        "apply",
+                        "--spec",
+                        str(spec),
+                        "--schema",
+                        str(SCHEMA),
+                        "--platform",
+                        str(root / "missing.json"),
+                    ]
+                )
             self.assertEqual(status, 2)
             self.assertEqual(out, "")
             self.assertIn("platform capability inventory does not exist", err)
