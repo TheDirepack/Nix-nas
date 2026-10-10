@@ -87,7 +87,8 @@ def _check_object(value: Any) -> dict[str, Any]:
     }:
         raise FirewalldReconcileError("invalid projected native policy")
     if (
-        not isinstance(value["target"], str) or value["target"] not in {"ACCEPT", "DROP", "CONTINUE"}
+        not isinstance(value["target"], str)
+        or value["target"] not in {"ACCEPT", "DROP", "CONTINUE"}
         or type(value["priority"]) is not int
         or (value["priority"] == 0 or not -32767 <= value["priority"] <= 32767)
     ):
