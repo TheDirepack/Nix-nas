@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import io
+import json
 import pathlib
 import sys
 import unittest
@@ -38,6 +39,7 @@ else:
     import nas_operation_lock as operation_lock
     import nas_setup as setup
     import nas_setup_config as setup_config
+    import nas_setup_first_start as first_start
     import nas_state as state
     import nas_syncthing_devices as syncthing
     import nas_v2_accelerator as accelerator
@@ -66,6 +68,7 @@ SERVICE_INPUT_MODULES = frozenset(
         "nas_operation_lock",
         "nas_setup",
         "nas_setup_config",
+        "nas_setup_first_start",
         "nas_state",
         "nas_syncthing_devices",
         "nas_v2_accelerator",
@@ -257,6 +260,71 @@ if HAS_HYPOTHESIS:
                 [],
                 False,
             )
+
+        @settings(max_examples=220, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(
+            field=st.sampled_from(
+                [
+                    "schemaVersion",
+                    "jobId",
+                    "reservationToken",
+                    "config",
+                    "planDigest",
+                    "devices",
+                    "allowDestructiveStorage",
+                    "confirmPasswordReapply",
+                    "encryptStorage",
+                ]
+            ),
+            value=JSON_VALUE,
+        )
+        def test_first_start_job_request_accepts_only_the_validated_contract(self, field: str, value: object) -> None:
+            payload = {
+                "schemaVersion": 1,
+                "jobId": "a" * 24,
+                "reservationToken": "b" * 32,
+                "config": "/etc/nas-control/setup.json",
+                "planDigest": "c" * 64,
+                "devices": ["/dev/disk/by-id/example"],
+                "allowDestructiveStorage": False,
+                "confirmPasswordReapply": False,
+                "encryptStorage": True,
+            }
+            payload[field] = value
+            try:
+                parsed = first_start.parse_first_start_request(json.dumps(payload))
+            except setup_config.SetupError:
+                return
+            self.assertEqual(parsed, payload)
+            self.assertEqual(set(parsed), set(payload))
+            self.assertIsInstance(parsed["jobId"], str)
+            self.assertIsInstance(parsed["reservationToken"], str)
+            self.assertIsInstance(parsed["planDigest"], str)
+            self.assertTrue(pathlib.Path(parsed["config"]).is_absolute())
+            self.assertEqual(len(parsed["devices"]), len(set(parsed["devices"])))
+            for flag in ("allowDestructiveStorage", "confirmPasswordReapply", "encryptStorage"):
+                self.assertIs(type(parsed[flag]), bool)
+
+        @settings(max_examples=220, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+        @given(field=st.sampled_from(["keepass", "administrator"]), value=JSON_VALUE)
+        def test_first_start_secret_parser_rejects_bad_shapes(self, field: str, value: object) -> None:
+            administrator = {
+                "username": "operator",
+                "name": "Operator",
+                "email": "operator@example.test",
+                "password": "example",
+            }
+            payload = {"keepass": "valid-secret", "administrator": administrator}
+            payload[field] = value
+            try:
+                password, parsed_admin = first_start.parse_first_start_secrets(json.dumps(payload))
+            except setup_config.SetupError:
+                return
+            self.assertTrue(password)
+            self.assertNotIn("\\n", password)
+            self.assertNotIn("\\r", password)
+            self.assertEqual(set(parsed_admin), set(administrator))
+            self.assertEqual(parsed_admin, payload["administrator"])
 
 else:
 
