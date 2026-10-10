@@ -248,22 +248,30 @@ def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 int
 _REMOTE_ADMIN_PORTS: list[tuple[str, str]] = _remote_admin_ports()
 
 
-
 def _zone(service_id: str) -> dict[str, Any]:
     return {"kind": "zone", "name": zone_name(service_id), "interface": bridge_interface_name(service_id)}
 
 
 def _policy(
-    name: str, target: str, priority: int, ingress: str, egress: str,
-    *, ports: list[tuple[str, str]] | None = None,
+    name: str,
+    target: str,
+    priority: int,
+    ingress: str,
+    egress: str,
+    *,
+    ports: list[tuple[str, str]] | None = None,
     forward_ports: list[tuple[str, str, str]] | None = None,
     rich_rules: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if target not in {"ACCEPT", "DROP", "CONTINUE"} or priority == 0 or not -32767 <= priority <= 32767:
         raise FirewalldProjectionError("invalid native firewalld policy")
     return {
-        "kind": "policy", "name": name, "target": target, "priority": priority,
-        "ingress": ingress, "egress": egress,
+        "kind": "policy",
+        "name": name,
+        "target": target,
+        "priority": priority,
+        "ingress": ingress,
+        "egress": egress,
         "ports": [list(item) for item in (ports or [])],
         "forwardPorts": [list(item) for item in (forward_ports or [])],
         "richRules": rich_rules or [],
@@ -287,8 +295,7 @@ def _egress_rules(rule: dict[str, Any]) -> list[dict[str, Any]]:
     if not ports:
         return [base]
     return [
-        {**base, "port": str(port), "protocol": protocol}
-        for port in sorted(set(ports)) for protocol in ("tcp", "udp")
+        {**base, "port": str(port), "protocol": protocol} for port in sorted(set(ports)) for protocol in ("tcp", "udp")
     ]
 
 
@@ -365,9 +372,11 @@ def _route_ports(service: dict[str, Any]) -> list[tuple[str, str]]:
     return sorted(ports)
 
 
-
 def _allow_policy(
-    name: str, *, ingress: str, egress: str,
+    name: str,
+    *,
+    ingress: str,
+    egress: str,
     ports: list[tuple[str, str]],
     forward_ports: list[tuple[str, str, str]] | None = None,
 ) -> dict[str, Any]:
@@ -375,8 +384,10 @@ def _allow_policy(
 
 
 def _validate_lan_zone(lan_zone: str) -> None:
-    if not lan_zone or len(lan_zone) > 17 or not all(
-        character.isalnum() or character in "_-" for character in lan_zone
+    if (
+        not lan_zone
+        or len(lan_zone) > 17
+        or not all(character.isalnum() or character in "_-" for character in lan_zone)
     ):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
 
@@ -388,7 +399,8 @@ def compile_remote_admin_projection(*, lan_zone: str) -> tuple[dict[str, dict[st
         f"policies/{name}": _policy(name, "CONTINUE", -300, lan_zone, "HOST", ports=_remote_admin_ports()),
     }
     return objects, {
-        "schemaVersion": 2, "objects": list(objects.values()),
+        "schemaVersion": 2,
+        "objects": list(objects.values()),
         "owners": [{"service": "_remote-admin", "target": f"policies/{name}"}],
     }
 
@@ -425,14 +437,19 @@ def compile_application_projection(
             zone = zone_name(service_id)
             generated[f"zones/{zone}"] = _zone(service_id)
             host_ports = [
-                (str(port), protocol) for port in sorted(set(policy.get("allowedHostPorts", [])))
+                (str(port), protocol)
+                for port in sorted(set(policy.get("allowedHostPorts", [])))
                 for protocol in ("tcp", "udp")
             ]
             name = host_policy_name(service_id)
             generated[f"policies/{name}"] = _policy(name, "DROP", -50, zone, "HOST", ports=host_ports)
             name = lan_policy_name(service_id)
             generated[f"policies/{name}"] = _policy(
-                name, "ACCEPT" if policy.get("lanAccess", False) else "DROP", -100, zone, lan_zone,
+                name,
+                "ACCEPT" if policy.get("lanAccess", False) else "DROP",
+                -100,
+                zone,
+                lan_zone,
             )
             rich_rules: list[dict[str, Any]] = []
             for entry in policy.get("allowedEgress", []):
@@ -441,8 +458,12 @@ def compile_application_projection(
                 rich_rules.extend(_egress_rules(entry))
             name = world_policy_name(service_id)
             generated[f"policies/{name}"] = _policy(
-                name, "ACCEPT" if policy.get("outboundDefault", "allow") == "allow" else "DROP",
-                50, zone, "ANY", rich_rules=rich_rules,
+                name,
+                "ACCEPT" if policy.get("outboundDefault", "allow") == "allow" else "DROP",
+                50,
+                zone,
+                "ANY",
+                rich_rules=rich_rules,
             )
             routes = _route_ports(service)
             if routes:
@@ -451,15 +472,21 @@ def compile_application_projection(
             if listeners:
                 name = listener_policy_name(service_id)
                 generated[f"policies/{name}"] = _allow_policy(
-                    name, ingress=lan_zone, egress=zone, ports=listeners,
+                    name,
+                    ingress=lan_zone,
+                    egress=zone,
+                    ports=listeners,
                 )
         elif mode == "host":
             host_ports, forward_ports = _host_listener_rules(service)
             if host_ports or forward_ports:
                 name = listener_policy_name(service_id)
                 generated[f"policies/{name}"] = _allow_policy(
-                    name, ingress=lan_zone, egress="HOST",
-                    ports=host_ports, forward_ports=forward_ports,
+                    name,
+                    ingress=lan_zone,
+                    egress="HOST",
+                    ports=host_ports,
+                    forward_ports=forward_ports,
                 )
         elif mode == "none":
             if _listener_ports(service):
@@ -478,9 +505,7 @@ def compile_application_projection(
     }
 
 
-def compile_projection(
-    effective: dict[str, Any], *, lan_zone: str
-) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+def compile_projection(effective: dict[str, Any], *, lan_zone: str) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     remote_objects, remote = compile_remote_admin_projection(lan_zone=lan_zone)
     app_objects, app = compile_application_projection(effective, lan_zone=lan_zone)
     objects = {**remote_objects, **app_objects}
