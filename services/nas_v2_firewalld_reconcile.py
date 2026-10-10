@@ -61,7 +61,7 @@ def _check_object(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise FirewalldReconcileError("invalid native firewall object")
     kind, name = value.get("kind"), value.get("name")
-    if kind not in {"zone", "policy"} or not isinstance(name, str) or not _OWNED_NAME.fullmatch(name):
+    if not isinstance(kind, str) or kind not in {"zone", "policy"} or not isinstance(name, str) or not _OWNED_NAME.fullmatch(name):
         raise FirewalldReconcileError("outside the V2 ownership namespace")
     if kind == "zone":
         if not name.startswith("nv2z") or set(value) != {"kind", "name", "interface"}:
@@ -82,7 +82,7 @@ def _check_object(value: Any) -> dict[str, Any]:
     }:
         raise FirewalldReconcileError("invalid projected native policy")
     if (
-        value["target"] not in {"ACCEPT", "DROP", "CONTINUE"}
+        not isinstance(value["target"], str) or value["target"] not in {"ACCEPT", "DROP", "CONTINUE"}
         or type(value["priority"]) is not int
         or (value["priority"] == 0 or not -32767 <= value["priority"] <= 32767)
     ):
