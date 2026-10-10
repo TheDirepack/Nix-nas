@@ -695,11 +695,7 @@ class NetworkGapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             t = pathlib.Path(tmp)
             with self.assertRaises(fwrec.FirewalldReconcileError):
-                fwrec.reconcile(
-                    manifest_path=t / "missing.json",
-                    projection_root=t,
-                    firewall_cmd="true",
-                )
+                fwrec.reconcile(manifest_path=t / "missing.json", firewall_cmd="true")
             with self.assertRaises(fwrec.FirewalldReconcileError):
                 fwrec._check_object({"kind": "zone", "name": "bad", "interface": "nv20123456789a"})
 
