@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pathlib
-import stat
 import sys
 import tempfile
 import unittest
@@ -43,59 +42,51 @@ class V2FirewalldTests(unittest.TestCase):
         effective = self.effective()
         files, manifest = firewalld.compile_projection(effective, lan_zone="nas-trusted")
         self.assertTrue(requires_firewalld(effective))
-        names = {
-            firewalld.zone_name("worker"),
-            firewalld.host_policy_name("worker"),
-            firewalld.lan_policy_name("worker"),
-            firewalld.world_policy_name("worker"),
-            firewalld.remote_admin_policy_name(),
-        }
+        names = {value["name"] for value in files.values()}
         self.assertTrue(all(len(name) <= 17 for name in names))
-        host = files[f"policies/{firewalld.host_policy_name('worker')}.xml"].decode()
-        self.assertIn('egress-zone name="HOST"', host)
-        self.assertIn('port="8080" protocol="tcp"', host)
-        self.assertIn('port="8080" protocol="udp"', host)
-        lan = files[f"policies/{firewalld.lan_policy_name('worker')}.xml"].decode()
-        self.assertIn('target="DROP"', lan)
-        self.assertIn('egress-zone name="nas-trusted"', lan)
-        world = files[f"policies/{firewalld.world_policy_name('worker')}.xml"].decode()
-        self.assertIn('target="DROP"', world)
-        self.assertIn('destination address="203.0.113.0/24"', world)
-        self.assertIn('port="443" protocol="tcp"', world)
-        self.assertIn('port="443" protocol="udp"', world)
-        self.assertIn('family="ipv6"', world)
-        # 4 service policies + 1 global remote admin (priority -300)
-        self.assertEqual(len(manifest["files"]), 5)
-        remote = files[f"policies/{firewalld.remote_admin_policy_name()}.xml"].decode()
-        self.assertIn('priority="-300"', remote)
-        self.assertIn("V2 remote admin", remote)
-        self.assertIn('port="22"', remote)
-        self.assertIn('port="9092"', remote)
-        self.assertNotIn('port="9090"', remote)
+        self.assertIn(f"zones/{firewalld.zone_name('worker')}", files)
+        host = files[f"policies/{firewalld.host_policy_name('worker')}"]
+        self.assertEqual(host["egress"], "HOST")
+        self.assertIn(["8080", "tcp"], host["ports"])
+        self.assertIn(["8080", "udp"], host["ports"])
+        lan = files[f"policies/{firewalld.lan_policy_name('worker')}"]
+        self.assertEqual((lan["target"], lan["egress"]), ("DROP", "nas-trusted"))
+        world = files[f"policies/{firewalld.world_policy_name('worker')}"]
+        self.assertEqual(world["target"], "DROP")
+        self.assertIn(
+            {"family": "ipv4", "destination": "203.0.113.0/24", "port": "443", "protocol": "tcp"},
+            world["richRules"],
+        )
+        self.assertIn(
+            {"family": "ipv4", "destination": "203.0.113.0/24", "port": "443", "protocol": "udp"},
+            world["richRules"],
+        )
+        self.assertIn({"family": "ipv6", "destination": "2001:db8::/32"}, world["richRules"])
+        self.assertEqual(manifest["schemaVersion"], 2)
+        self.assertEqual(len(manifest["objects"]), 5)
+        remote = files[f"policies/{firewalld.remote_admin_policy_name()}"]
+        self.assertEqual(remote["priority"], -300)
+        self.assertIn(["22", "tcp"], remote["ports"])
+        self.assertIn(["9092", "tcp"], remote["ports"])
+        self.assertNotIn(["9090", "tcp"], remote["ports"])
 
     def test_remote_admin_is_explicit_port_allowlist(self):
         files, _ = firewalld.compile_projection(self.effective(), lan_zone="nas-trusted")
-        remote = files[f"policies/{firewalld.remote_admin_policy_name()}.xml"].decode()
-        self.assertIn('target="CONTINUE"', remote)
-        self.assertNotIn('target="ACCEPT"', remote)
-        self.assertIn('ingress-zone name="nas-trusted"', remote)
-        self.assertIn('egress-zone name="HOST"', remote)
-        self.assertIn('port="22" protocol="tcp"', remote)
-        self.assertIn('port="443" protocol="tcp"', remote)
+        remote = files[f"policies/{firewalld.remote_admin_policy_name()}"]
+        self.assertEqual((remote["target"], remote["ingress"], remote["egress"]), ("CONTINUE", "nas-trusted", "HOST"))
+        self.assertIn(["22", "tcp"], remote["ports"])
+        self.assertIn(["443", "tcp"], remote["ports"])
 
     def test_world_policy_uses_valid_nonzero_priority(self):
         files, _ = firewalld.compile_projection(self.effective(), lan_zone="nas-trusted")
-        world = files[f"policies/{firewalld.world_policy_name('worker')}.xml"].decode()
-        self.assertIn('priority="50"', world)
-        self.assertNotIn('priority="0"', world)
+        world = files[f"policies/{firewalld.world_policy_name('worker')}"]
+        self.assertEqual(world["priority"], 50)
 
     def test_no_generated_policy_uses_reserved_priority_zero(self):
-        import re
-
         files, _ = firewalld.compile_projection(self.effective(), lan_zone="nas-trusted")
-        for target, payload in files.items():
-            for match in re.finditer(rb'priority="([^"]*)"', payload):
-                self.assertNotEqual(match.group(1).decode(), "0", f"reserved priority in {target}")
+        for target, obj in files.items():
+            if obj["kind"] == "policy":
+                self.assertNotEqual(obj["priority"], 0, target)
 
     def test_outbound_allow_and_deny_with_exceptions_validate(self):
         import copy
@@ -104,12 +95,11 @@ class V2FirewalldTests(unittest.TestCase):
             effective = copy.deepcopy(self.effective())
             effective["services"]["worker"]["network"]["outboundDefault"] = outbound
             files, _ = firewalld.compile_projection(effective, lan_zone="nas-trusted")
-            world = files[f"policies/{firewalld.world_policy_name('worker')}.xml"].decode()
-            expected = "ACCEPT" if outbound == "allow" else "DROP"
-            self.assertIn(f'target="{expected}"', world)
-            self.assertIn('priority="50"', world)
-            self.assertIn('destination address="203.0.113.0/24"', world)
-            self.assertIn('family="ipv6"', world)
+            world = files[f"policies/{firewalld.world_policy_name('worker')}"]
+            self.assertEqual(world["target"], "ACCEPT" if outbound == "allow" else "DROP")
+            self.assertEqual(world["priority"], 50)
+            self.assertTrue(any(rule["destination"] == "203.0.113.0/24" for rule in world["richRules"]))
+            self.assertTrue(any(rule["family"] == "ipv6" for rule in world["richRules"]))
 
     def test_disabled_host_listener_projects_no_firewall_opening(self):
         effective = self.effective()
@@ -128,11 +118,11 @@ class V2FirewalldTests(unittest.TestCase):
         files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
         self.assertFalse(requires_firewalld(effective))
         # Remote admin is global and remains even when no service requires firewalld
-        self.assertEqual(set(files), {f"policies/{firewalld.remote_admin_policy_name()}.xml"})
-        self.assertEqual(len(manifest["files"]), 1)
+        self.assertEqual(set(files), {f"policies/{firewalld.remote_admin_policy_name()}"})
+        self.assertEqual(len(manifest["objects"]), 1)
         self.assertEqual(
             manifest["owners"],
-            [{"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"}],
+            [{"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}"}],
         )
 
     def test_unmanaged_host_listener_still_projects_declared_network_policy(self):
@@ -158,16 +148,16 @@ class V2FirewalldTests(unittest.TestCase):
         }
         self.assertTrue(requires_firewalld(effective))
         files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('platform')}.xml"].decode()
-        self.assertIn('ingress-zone name="trusted"', policy)
-        self.assertIn('egress-zone name="HOST"', policy)
-        self.assertIn('port="3493" protocol="tcp"', policy)
+        policy = files[f"policies/{firewalld.listener_policy_name('platform')}"]
+        self.assertEqual(policy["ingress"], "trusted")
+        self.assertEqual(policy["egress"], "HOST")
+        self.assertIn(["3493", "tcp"], policy["ports"])
         self.assertEqual(
             sorted(manifest["owners"], key=lambda x: x["target"]),
             sorted(
                 [
-                    {"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}.xml"},
-                    {"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}.xml"},
+                    {"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}"},
+                    {"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}"},
                 ],
                 key=lambda x: x["target"],
             ),
@@ -205,10 +195,10 @@ class V2FirewalldTests(unittest.TestCase):
             },
         }
         files, _ = firewalld.compile_projection(effective, lan_zone="trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}.xml"].decode()
-        self.assertIn('forward-port port="69" protocol="udp" to-port="3969"', policy)
-        self.assertIn('port="40000-40099" protocol="udp"', policy)
-        self.assertNotIn('<port port="69" protocol="udp"', policy)
+        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}"]
+        self.assertIn(["69", "udp", "3969"], policy["forwardPorts"])
+        self.assertIn(["40000-40099", "udp"], policy["ports"])
+        self.assertNotIn(["69", "udp"], policy["ports"])
 
     def test_listener_target_port_requires_single_port_exposure(self):
         effective = {
@@ -250,10 +240,10 @@ class V2FirewalldTests(unittest.TestCase):
         policy["lanAccess"] = True
         policy["outboundDefault"] = "allow"
         files, _ = firewalld.compile_projection(effective, lan_zone="trusted")
-        lan = files[f"policies/{firewalld.lan_policy_name('worker')}.xml"].decode()
-        world = files[f"policies/{firewalld.world_policy_name('worker')}.xml"].decode()
-        self.assertIn('target="ACCEPT"', lan)
-        self.assertIn('target="ACCEPT"', world)
+        lan = files[f"policies/{firewalld.lan_policy_name('worker')}"]
+        world = files[f"policies/{firewalld.world_policy_name('worker')}"]
+        self.assertEqual(lan["target"], "ACCEPT")
+        self.assertEqual(world["target"], "ACCEPT")
 
     def test_invalid_cidr_fails_closed(self):
         effective = self.effective()
@@ -267,16 +257,21 @@ class V2FirewalldTests(unittest.TestCase):
         with self.assertRaisesRegex(firewalld.FirewalldProjectionError, "stable V2 bridge"):
             firewalld.compile_projection(effective, lan_zone="trusted")
 
-    def test_native_validator_is_invoked(self):
+    def test_native_manifest_replaces_xml_artifacts(self):
+        import json
+
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
-            validator = root / "firewall-offline-cmd"
-            log = root / "args"
-            validator.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {log}\nexit 0\n", encoding="utf-8")
-            validator.chmod(validator.stat().st_mode | stat.S_IXUSR)
-            files, _ = firewalld.compile_projection(self.effective(), lan_zone="trusted")
-            firewalld.validate_projection(files, firewall_offline_cmd=str(validator))
-            self.assertIn("--check-config", log.read_text(encoding="utf-8"))
+            files = firewalld.materialize_projection(
+                self.effective(),
+                output_dir=root,
+                lan_zone="trusted",
+            )
+            self.assertEqual([path.name for path, _payload, _mode in files], ["manifest.json"])
+            payload = json.loads(files[0][1])
+            self.assertEqual(payload["schemaVersion"], 2)
+            self.assertEqual(len(payload["objects"]), 5)
+            self.assertTrue(all(obj["kind"] in {"zone", "policy"} for obj in payload["objects"]))
 
     def test_apply_requires_firewalld_projection_for_rich_isolation(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -359,12 +354,12 @@ class V2FirewalldTests(unittest.TestCase):
             },
         }
         files, _ = firewalld.compile_projection(effective, lan_zone="trusted")
-        listener = files[f"policies/{firewalld.listener_policy_name('demo')}.xml"].decode()
-        route = files[f"policies/{firewalld.route_policy_name('demo')}.xml"].decode()
-        self.assertIn('target="DROP"', listener)
-        self.assertNotIn('target="CONTINUE"', listener)
-        self.assertIn('target="DROP"', route)
-        self.assertNotIn('target="CONTINUE"', route)
+        listener = files[f"policies/{firewalld.listener_policy_name('demo')}"]
+        route = files[f"policies/{firewalld.route_policy_name('demo')}"]
+        self.assertEqual(listener["target"], "DROP")
+        self.assertNotEqual(listener["target"], "CONTINUE")
+        self.assertEqual(route["target"], "DROP")
+        self.assertNotEqual(route["target"], "CONTINUE")
 
 
 if __name__ == "__main__":

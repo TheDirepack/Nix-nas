@@ -679,7 +679,7 @@ class NetworkGapTests(unittest.TestCase):
         with self.assertRaises(net.PodmanNetworkProjectionError):
             net.quadlet_network_reference({"services": {}}, "s", {"network": {"mode": "none"}, "listeners": {"x": {}}})
         files, manifest = net.compile_projection({"services": {}}, lan_zone="trusted")
-        self.assertEqual(set(files), {f"policies/{net.remote_admin_policy_name()}.xml"})
+        self.assertEqual(set(files), {f"policies/{net.remote_admin_policy_name()}"})
         with self.assertRaises(net.FirewalldProjectionError):
             net.compile_projection({"services": {}}, lan_zone="bad zone!")
 
@@ -695,13 +695,9 @@ class NetworkGapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             t = pathlib.Path(tmp)
             with self.assertRaises(fwrec.FirewalldReconcileError):
-                fwrec.reconcile(
-                    manifest_path=t / "missing.json",
-                    projection_root=t,
-                    firewall_cmd="true",
-                )
+                fwrec.reconcile(manifest_path=t / "missing.json", firewall_cmd="true")
             with self.assertRaises(fwrec.FirewalldReconcileError):
-                fwrec._safe_target("zones/bad.xml")
+                fwrec._check_object({"kind": "zone", "name": "bad", "interface": "nv20123456789a"})
 
 
 class BootstrapGapTests(unittest.TestCase):

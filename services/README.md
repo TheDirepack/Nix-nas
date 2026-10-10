@@ -45,3 +45,7 @@ Nix wrappers and native systemd/Podman/libvirt units
 ```
 
 Do not reintroduce a resident Managed Services controller, request-time authorization server, idle reaper, mutable V2 identity database, V1 compatibility authority, or application-name branches in generic adapters. Do not import one command entry point from another merely to reuse implementation details; move genuinely shared, side-effect-free behavior into a narrowly named helper module. Preserve test injection points when splitting large files.
+
+Firewalld projection emits one JSON native-object manifest; the guarded apply
+executes the corresponding `firewall-cmd` operations immediately after nmstate
+and before systemd activation. No generated XML or XML re-parsing is involved.
