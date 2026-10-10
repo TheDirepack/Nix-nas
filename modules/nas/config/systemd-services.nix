@@ -593,7 +593,8 @@ in
       description = "Check ZFS snapshot freshness with Sanoid";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${pkgs.sanoid}/bin/sanoid --monitor-snapshots --configdir ${sanoidMonitorConfig}";
+        # Monitor-only Sanoid otherwise permits a five-hour-old snapshot inventory.
+        ExecStart = "${pkgs.sanoid}/bin/sanoid --monitor-snapshots --force-update --configdir ${sanoidMonitorConfig}";
       };
     };
 
