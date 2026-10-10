@@ -85,6 +85,34 @@ class RunnerAccountingTests(unittest.TestCase):
                         break
                 self.assertTrue(has_import, msg=f"{module} -> {tests} has no import of {module_name}")
 
+    def test_fast_suite_selection_is_centralized(self) -> None:
+        import importlib.util
+
+        path = ROOT / "scripts" / "run-unit-tests.py"
+        spec = importlib.util.spec_from_file_location("nas_unit_runner_groups", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        expected = {
+            "test_maintainer_core.py",
+            "test_maintainer_matrix.py",
+            "test_maintainer_release.py",
+            "test_contract_tooling.py",
+            "test_fuzz_boundaries.py",
+            "test_fuzz_custom_inputs.py",
+            "test_property_invariants.py",
+            "test_secret_security_fuzz.py",
+        }
+        self.assertEqual(module.FAST_SUITE_EXCLUSIONS, expected)
+        all_files = module.select_test_files(ROOT / "tests", "test_*.py", set())
+        fast_files = module.select_test_files(ROOT / "tests", "test_*.py", set(module.FAST_SUITE_EXCLUSIONS))
+        self.assertEqual({p.name for p in all_files} - {p.name for p in fast_files}, expected)
+        preflight = (ROOT / "scripts" / "preflight.sh").read_text(encoding="utf-8")
+        ci = (ROOT / "scripts" / "ci-qualification.sh").read_text(encoding="utf-8")
+        self.assertIn("--group fast", preflight)
+        self.assertGreaterEqual(ci.count("--group fast"), 2)
+        self.assertNotIn("--exclude test_maintainer_core.py", preflight + ci)
+
     def test_runner_rejects_zero_and_all_skipped_files_by_default(self):
         text = (ROOT / "scripts" / "run-unit-tests.py").read_text(encoding="utf-8")
         self.assertIn("ALLOWLIST_ZERO", text)

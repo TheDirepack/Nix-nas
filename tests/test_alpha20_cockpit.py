@@ -199,13 +199,15 @@ class Alpha20CockpitContracts(unittest.TestCase):
         preflight = text("scripts/preflight.sh")
         security_runner = text("scripts/run-security-tests.py")
         fuzz_runner = text("scripts/run-fuzz.py")
+        runner = text("scripts/run-unit-tests.py")
         for name in (
             "test_fuzz_boundaries.py",
             "test_property_invariants.py",
             "test_secret_security_fuzz.py",
         ):
-            self.assertIn(f"--exclude {name}", qualification)
-        self.assertIn("--exclude test_secret_security_fuzz.py", preflight)
+            self.assertIn(f'"{name}"', runner)
+        self.assertIn("--group fast", qualification)
+        self.assertIn("--group fast", preflight)
         self.assertNotIn("tests.test_secret_security_fuzz", security_runner)
         self.assertIn("scripts/run-fuzz.py --jobs 6", workflow)
         self.assertNotIn("shard:", workflow)

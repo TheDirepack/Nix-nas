@@ -81,11 +81,7 @@ if [[ "${NAS_PREFLIGHT_INCLUDE_FUZZ:-0}" == "1" && "${NAS_PREFLIGHT_SKIP_FUZZ:-0
 fi
 
 if [[ "${NAS_PREFLIGHT_SKIP_TESTS:-0}" != "1" ]]; then
-  step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs "${NAS_UNIT_TEST_JOBS:-4}" \
-    --exclude test_maintainer_core.py --exclude test_maintainer_matrix.py --exclude test_maintainer_release.py \
-    --exclude test_contract_tooling.py --exclude test_fuzz_boundaries.py --exclude test_fuzz_custom_inputs.py \
-    --exclude test_property_invariants.py \
-    --exclude test_secret_security_fuzz.py
+  step "Python behavior and contracts" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs "${NAS_UNIT_TEST_JOBS:-4}" --group fast
   step "Maintainer core integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_core.py'
   step "Maintainer matrix integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_matrix.py'
   step "Maintainer release integration tests" ./scripts/run-unit-tests.py --quiet --timeout "$unit_test_timeout" --jobs 1 --pattern 'test_maintainer_release.py'
