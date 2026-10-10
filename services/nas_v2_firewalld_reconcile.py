@@ -29,8 +29,12 @@ class FirewalldReconcileError(RuntimeError):
 def _run(command: Sequence[str], *, timeout: int = 60, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
-            list(command), stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            timeout=timeout, check=False,
+            list(command),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise FirewalldReconcileError(f"unable to execute {command[0]}: {exc}") from exc
@@ -66,11 +70,21 @@ def _check_object(value: Any) -> dict[str, Any]:
             raise FirewalldReconcileError("unsafe projected interface")
         return value
     if name.startswith("nv2z") or set(value) != {
-        "kind", "name", "target", "priority", "ingress", "egress", "ports", "forwardPorts", "richRules",
+        "kind",
+        "name",
+        "target",
+        "priority",
+        "ingress",
+        "egress",
+        "ports",
+        "forwardPorts",
+        "richRules",
     }:
         raise FirewalldReconcileError("invalid projected native policy")
-    if value["target"] not in {"ACCEPT", "DROP", "CONTINUE"} or type(value["priority"]) is not int or (
-        value["priority"] == 0 or not -32767 <= value["priority"] <= 32767
+    if (
+        value["target"] not in {"ACCEPT", "DROP", "CONTINUE"}
+        or type(value["priority"]) is not int
+        or (value["priority"] == 0 or not -32767 <= value["priority"] <= 32767)
     ):
         raise FirewalldReconcileError("invalid policy target or priority")
     for field in ("ingress", "egress"):
@@ -89,7 +103,8 @@ def _check_object(value: Any) -> dict[str, Any]:
         _port(item[2], item[1])
     for rule in value["richRules"]:
         if not isinstance(rule, dict) or set(rule) not in (
-            {"family", "destination"}, {"family", "destination", "port", "protocol"}
+            {"family", "destination"},
+            {"family", "destination", "port", "protocol"},
         ):
             raise FirewalldReconcileError("invalid native rich rule")
         try:
@@ -140,8 +155,11 @@ def _current_owned(firewall_cmd: str) -> tuple[set[str], set[str]]:
 
 def _rich_rule(rule: dict[str, Any]) -> str:
     parts = [
-        "rule", f'family="{rule["family"]}"', 'priority="-10"',
-        "destination", f'address="{rule["destination"]}"',
+        "rule",
+        f'family="{rule["family"]}"',
+        'priority="-10"',
+        "destination",
+        f'address="{rule["destination"]}"',
     ]
     if "port" in rule:
         parts.extend(["port", f'port="{rule["port"]}"', f'protocol="{rule["protocol"]}"'])
@@ -166,7 +184,8 @@ def _apply_policy(firewall_cmd: str, policy: dict[str, Any]) -> None:
         _permanent(firewall_cmd, f"--policy={name}", f"--add-port={port}/{protocol}")
     for port, protocol, destination in policy["forwardPorts"]:
         _permanent(
-            firewall_cmd, f"--policy={name}",
+            firewall_cmd,
+            f"--policy={name}",
             f"--add-forward-port=port={port}:proto={protocol}:toport={destination}",
         )
     for rule in policy["richRules"]:
@@ -204,8 +223,13 @@ def reconcile(*, manifest_path: pathlib.Path, firewall_cmd: str = "firewall-cmd"
     _run([firewall_cmd, "--check-config"])
     _run([firewall_cmd, "--reload"])
     _verify_runtime(desired=desired, firewall_cmd=firewall_cmd)
-    return {"ok": True, "changed": bool(current_zones or current_policies or desired),
-            "objects": sorted(desired), "runtimeVerified": True, "nativePermanentApi": True}
+    return {
+        "ok": True,
+        "changed": bool(current_zones or current_policies or desired),
+        "objects": sorted(desired),
+        "runtimeVerified": True,
+        "nativePermanentApi": True,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
