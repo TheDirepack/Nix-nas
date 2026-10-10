@@ -263,7 +263,9 @@ class V2FirewalldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             files = firewalld.materialize_projection(
-                self.effective(), output_dir=root, lan_zone="trusted",
+                self.effective(),
+                output_dir=root,
+                lan_zone="trusted",
             )
             self.assertEqual([path.name for path, _payload, _mode in files], ["manifest.json"])
             payload = json.loads(files[0][1])
