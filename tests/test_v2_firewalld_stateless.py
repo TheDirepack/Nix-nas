@@ -138,6 +138,10 @@ class V2NativeFirewalldTests(unittest.TestCase):
                 "richRules": [],
             }
             for field, value in (
+                ("kind", []),
+                ("kind", {}),
+                ("target", []),
+                ("target", {}),
                 ("priority", 0),
                 ("ports", [["65536", "tcp"]]),
                 ("richRules", [{"family": "ipv4", "destination": "invalid"}]),
