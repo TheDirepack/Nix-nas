@@ -17,18 +17,21 @@ import nas_v2_network as network  # noqa: E402
 
 
 class V2NativeFirewalldTests(unittest.TestCase):
-    def fixture(
-        self, root: pathlib.Path, *, objects: list[dict] | None = None
-    ) -> pathlib.Path:
+    def fixture(self, root: pathlib.Path, *, objects: list[dict] | None = None) -> pathlib.Path:
         projection = root / "firewalld"
         projection.mkdir(parents=True)
         if objects is None:
             objects = [
                 {"kind": "zone", "name": "nv2z0123456789ab", "interface": "nv20123456789a"},
                 {
-                    "kind": "policy", "name": "nv2h0123456789ab", "target": "DROP",
-                    "priority": -50, "ingress": "nv2z0123456789ab", "egress": "HOST",
-                    "ports": [["443", "tcp"]], "forwardPorts": [],
+                    "kind": "policy",
+                    "name": "nv2h0123456789ab",
+                    "target": "DROP",
+                    "priority": -50,
+                    "ingress": "nv2z0123456789ab",
+                    "egress": "HOST",
+                    "ports": [["443", "tcp"]],
+                    "forwardPorts": [],
                     "richRules": [{"family": "ipv4", "destination": "10.0.0.0/8", "port": "53", "protocol": "udp"}],
                 },
             ]
@@ -40,8 +43,10 @@ class V2NativeFirewalldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             desired = firewalld._read_projection(self.fixture(pathlib.Path(raw)))
         calls = []
+
         def permanent(firewall_cmd: str, *args: str):
             calls.append(args)
+
         with mock.patch.object(firewalld, "_permanent", side_effect=permanent):
             firewalld._apply_zone("firewall-cmd", desired["nv2z0123456789ab"])
             firewalld._apply_policy("firewall-cmd", desired["nv2h0123456789ab"])
@@ -63,9 +68,11 @@ class V2NativeFirewalldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             manifest = self.fixture(pathlib.Path(raw))
             executed: list[tuple[str, ...]] = []
+
             def permanent(_cmd: str, *args: str):
                 executed.append(args)
                 return mock.Mock(returncode=0, stdout="", stderr="")
+
             with (
                 mock.patch.object(firewalld, "_current_owned", return_value=(set(), set())),
                 mock.patch.object(firewalld, "_permanent", side_effect=permanent),
@@ -82,9 +89,12 @@ class V2NativeFirewalldTests(unittest.TestCase):
 
     def test_bad_namespace_is_rejected_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            manifest = self.fixture(pathlib.Path(raw), objects=[
-                {"kind": "zone", "name": "nas-lan", "interface": "nv20123456789a"},
-            ])
+            manifest = self.fixture(
+                pathlib.Path(raw),
+                objects=[
+                    {"kind": "zone", "name": "nas-lan", "interface": "nv20123456789a"},
+                ],
+            )
             with mock.patch.object(firewalld, "_current_owned") as current:
                 with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "outside the V2 ownership namespace"):
                     firewalld.reconcile(manifest_path=manifest)
@@ -92,11 +102,22 @@ class V2NativeFirewalldTests(unittest.TestCase):
 
     def test_missing_zone_rejected_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            manifest = self.fixture(pathlib.Path(raw), objects=[{
-                "kind": "policy", "name": "nv2h0123456789ab", "target": "DROP",
-                "priority": -50, "ingress": "nv2zffffffffffff", "egress": "HOST",
-                "ports": [], "forwardPorts": [], "richRules": [],
-            }])
+            manifest = self.fixture(
+                pathlib.Path(raw),
+                objects=[
+                    {
+                        "kind": "policy",
+                        "name": "nv2h0123456789ab",
+                        "target": "DROP",
+                        "priority": -50,
+                        "ingress": "nv2zffffffffffff",
+                        "egress": "HOST",
+                        "ports": [],
+                        "forwardPorts": [],
+                        "richRules": [],
+                    }
+                ],
+            )
             with mock.patch.object(firewalld, "_current_owned") as current:
                 with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "missing zone"):
                     firewalld.reconcile(manifest_path=manifest)
@@ -106,9 +127,15 @@ class V2NativeFirewalldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             valid = {
-                "kind": "policy", "name": "nv2h0123456789ab", "target": "DROP",
-                "priority": -50, "ingress": "HOST", "egress": "ANY",
-                "ports": [], "forwardPorts": [], "richRules": [],
+                "kind": "policy",
+                "name": "nv2h0123456789ab",
+                "target": "DROP",
+                "priority": -50,
+                "ingress": "HOST",
+                "egress": "ANY",
+                "ports": [],
+                "forwardPorts": [],
+                "richRules": [],
             }
             for field, value in (
                 ("priority", 0),
@@ -137,7 +164,8 @@ class V2NativeFirewalldTests(unittest.TestCase):
             with (
                 mock.patch.object(firewalld, "_current_owned", return_value=(set(), set())),
                 mock.patch.object(
-                    firewalld, "_permanent",
+                    firewalld,
+                    "_permanent",
                     side_effect=[completed, firewalld.FirewalldReconcileError("injected failure")],
                 ),
                 mock.patch.object(firewalld, "_run") as run,
@@ -146,9 +174,11 @@ class V2NativeFirewalldTests(unittest.TestCase):
                     firewalld.reconcile(manifest_path=manifest)
                 run.assert_not_called()
             calls: list[tuple[str, ...]] = []
+
             def permanent(_cmd: str, *args: str):
                 calls.append(args)
                 return completed
+
             with (
                 mock.patch.object(firewalld, "_current_owned", return_value=({"nv2z0123456789ab"}, set())),
                 mock.patch.object(firewalld, "_permanent", side_effect=permanent),
@@ -163,7 +193,8 @@ class V2NativeFirewalldTests(unittest.TestCase):
     def test_runtime_verification_rejects_missing_objects(self) -> None:
         desired = {"nv2z0123456789ab": {"kind": "zone", "name": "nv2z0123456789ab"}}
         with mock.patch.object(
-            firewalld, "_run",
+            firewalld,
+            "_run",
             side_effect=[mock.Mock(stdout="running"), mock.Mock(stdout="nas-lan"), mock.Mock(stdout="")],
         ):
             with self.assertRaisesRegex(firewalld.FirewalldReconcileError, "omitted projected objects"):
@@ -171,22 +202,37 @@ class V2NativeFirewalldTests(unittest.TestCase):
 
     def test_projection_to_native_reconciler_contract(self) -> None:
         effective = {
-            "services": {"worker": {
-                "enabled": True, "managed": True, "runtime": {"type": "oci"},
-                "network": {
-                    "mode": "isolated", "outboundDefault": "deny",
-                    "lanAccess": False, "allowedHostPorts": [8080],
-                    "allowedEgress": [],
-                },
-            }},
+            "services": {
+                "worker": {
+                    "enabled": True,
+                    "managed": True,
+                    "runtime": {"type": "oci"},
+                    "network": {
+                        "mode": "isolated",
+                        "outboundDefault": "deny",
+                        "lanAccess": False,
+                        "allowedHostPorts": [8080],
+                        "allowedEgress": [],
+                    },
+                }
+            },
         }
         objects, manifest = network.compile_projection(effective, lan_zone="nas-lan")
-        self.assertEqual(set(objects), {f"zones/{network.zone_name('worker')}", *[
-            f"policies/{name}" for name in (
-                network.host_policy_name('worker'), network.lan_policy_name('worker'),
-                network.world_policy_name('worker'), network.remote_admin_policy_name(),
-            )
-        ]})
+        self.assertEqual(
+            set(objects),
+            {
+                f"zones/{network.zone_name('worker')}",
+                *[
+                    f"policies/{name}"
+                    for name in (
+                        network.host_policy_name("worker"),
+                        network.lan_policy_name("worker"),
+                        network.world_policy_name("worker"),
+                        network.remote_admin_policy_name(),
+                    )
+                ],
+            },
+        )
         with tempfile.TemporaryDirectory() as raw:
             path = pathlib.Path(raw) / "manifest.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
