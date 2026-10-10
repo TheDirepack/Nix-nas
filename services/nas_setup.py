@@ -49,6 +49,7 @@ from nas_operation_lock import (
     cancel_reservation,
     current_coordination_token,
 )
+from nas_setup_first_start import parse_first_start_request, parse_first_start_secrets
 from nas_setup_config import (
     SCHEMA_VERSION,
     SetupError,
@@ -1890,69 +1891,32 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
     try:
         request_text = _read_secure_job_file(request_file, "First-start job request", max_bytes=64 * 1024)
         try:
-            request = json.loads(request_text)
-        except json.JSONDecodeError as exc:
-            raise SetupError("First-start job request is invalid") from exc
-        required = {
-            "schemaVersion",
-            "jobId",
-            "reservationToken",
-            "config",
-            "planDigest",
-            "devices",
-            "allowDestructiveStorage",
-            "confirmPasswordReapply",
-            "encryptStorage",
-        }
-        if not isinstance(request, dict) or set(request) != required or request.get("schemaVersion") != 1:
-            raise SetupError("First-start job request contract is invalid")
-        candidate = request.get("reservationToken")
-        if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
-            reservation_token = candidate
-        if reservation_token is None:
-            raise SetupError("First-start reservation token is invalid")
-        job_id = request.get("jobId")
-        if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{24}", job_id):
-            raise SetupError("First-start job identifier is invalid")
+            request = parse_first_start_request(request_text)
+        except SetupError:
+            # A valid reservation belongs to this job even if a later request
+            # field fails validation; cancellation still runs in finally.
+            try:
+                unverified = json.loads(request_text)
+            except json.JSONDecodeError:
+                unverified = None
+            if isinstance(unverified, dict):
+                candidate = unverified.get("reservationToken")
+                if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
+                    reservation_token = candidate
+            raise
+        reservation_token = request["reservationToken"]
+        job_id = request["jobId"]
         result_root = STATE_PATH.parent / "jobs"
         result_path = result_root / f"{job_id}.json"
         result_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(result_root, 0o700)
         prune_first_start_job_results(result_root, keep=result_path)
-        config = request.get("config")
-        plan_digest = request.get("planDigest")
-        devices = request.get("devices")
-        if not isinstance(config, str) or not pathlib.Path(config).is_absolute():
-            raise SetupError("First-start job configuration path is invalid")
-        if not isinstance(plan_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
-            raise SetupError("First-start job plan digest is invalid")
-        if (
-            not isinstance(devices, list)
-            or not all(isinstance(item, str) and item for item in devices)
-            or len(devices) != len(set(devices))
-        ):
-            raise SetupError("First-start job devices are invalid")
-        if (
-            not isinstance(request.get("allowDestructiveStorage"), bool)
-            or not isinstance(request.get("confirmPasswordReapply"), bool)
-            or not isinstance(request.get("encryptStorage"), bool)
-        ):
-            raise SetupError("First-start job confirmation flags are invalid")
-        try:
-            secrets_payload = json.loads(
-                _read_secure_job_file(password_file, "First-start password file", max_bytes=8192)
-            )
-        except json.JSONDecodeError as exc:
-            raise SetupError("First-start secret payload is invalid") from exc
-        if not isinstance(secrets_payload, dict) or set(secrets_payload) != {"keepass", "administrator"}:
-            raise SetupError("First-start secret payload contract is invalid")
-        raw_password = secrets_payload.get("keepass")
-        if not isinstance(raw_password, str):
-            raise SetupError("First-start KeePass database password is invalid")
-        password = normalize_secret_line(raw_password, "KeePass database password")
-        administrator = secrets_payload.get("administrator")
-        if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
-            raise SetupError("First-start administrator secret payload is invalid")
+        config = request["config"]
+        plan_digest = request["planDigest"]
+        devices = request["devices"]
+        password, administrator = parse_first_start_secrets(
+            _read_secure_job_file(password_file, "First-start password file", max_bytes=8192)
+        )
         password_file.unlink(missing_ok=True)
         request_file.unlink(missing_ok=True)
         args = argparse.Namespace(

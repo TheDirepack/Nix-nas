@@ -35,6 +35,7 @@ let
       "nas_identity_sync"
       "nas_logging"
       "nas_setup"
+      "nas_setup_first_start"
       "nas_state"
       "nas_v2_backup"
       "nas_v2_control"

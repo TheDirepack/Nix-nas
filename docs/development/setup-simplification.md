@@ -17,7 +17,7 @@ Do not add a setup daemon, a second mutable desired-state store, or another lock
 
 ## Cleanup order
 
-1. Move pure first-start request parsing and validation out of `nas_setup.py`, preserving focused tests.
+1. Move pure first-start request parsing and validation out of `nas_setup.py`, preserving focused tests. **Implemented:** `nas_setup_first_start.py` now owns both JSON request and secret-payload contracts; filesystem permission checks and secret-file deletion remain in the privileged runner.
 2. Move systemd job/result-file handling next so the Cockpit API and CLI share one request contract.
 3. Move secret validation/install shell helpers out of the Nix string and source the standalone runtime library.
 4. Keep the Cockpit npm manifest limited to direct imports; transitive PatternFly packages stay lockfile-owned instead of being declared as direct dependencies.
