@@ -18,7 +18,7 @@ from typing import Any, Sequence
 
 _OWNED_NAME = re.compile(r"^nv2[zhwlrima][0-9a-f]{12}$")
 _INTERFACE = re.compile(r"^nv2[0-9a-f]{11}$")
-_ZONE = re.compile(r"^(?:nv2z[0-9a-f]{12}|[A-Za-z0-9_-]{1,17}|HOST|ANY)$")
+_ZONE = re.compile(r"^(?:nv2z[0-9a-f]{12}|[A-Za-z0-9_][A-Za-z0-9_-]{0,16}|HOST|ANY)$")
 _PORT = re.compile(r"^[0-9]{1,5}(?:-[0-9]{1,5})?$")
 
 
