@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -419,6 +420,26 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertNotIn("refs/heads/main", publish_text)
         self.assertNotIn("nix build", publish_text)
         self.assertNotIn("npm ", publish_text)
+
+    def test_release_unit_test_patterns_resolve_to_existing_tests(self) -> None:
+        workflow = yaml.load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
+        patterns = []
+        for job in workflow["jobs"].values():
+            for step in job["steps"]:
+                for line in step.get("run", "").splitlines():
+                    if "./scripts/run-unit-tests.py" not in line:
+                        continue
+                    command = shlex.split(line)
+                    if "./scripts/run-unit-tests.py" not in command:
+                        continue
+                    pattern = command[command.index("--pattern") + 1] if "--pattern" in command else "test_*.py"
+                    patterns.append(pattern)
+                    with self.subTest(pattern=pattern):
+                        self.assertTrue(list((ROOT / "tests").glob(pattern)), f"no test files matched {pattern!r}")
+        self.assertIn("test_release_automation.py", patterns)
 
     def test_release_workflow_uses_pinned_diceware_and_release_only_commit(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
