@@ -1992,6 +1992,12 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
                 candidate = unverified.get("reservationToken")
                 if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
                     reservation_token = candidate
+                candidate_job_id = unverified.get("jobId")
+                if isinstance(candidate_job_id, str) and re.fullmatch(r"[0-9a-f]{24}", candidate_job_id):
+                    # Recover only the bounded result identity, never execution
+                    # fields, so rejected detached jobs do not remain pending.
+                    job_id = candidate_job_id
+                    result_path = STATE_PATH.parent / "jobs" / f"{job_id}.json"
             raise
         reservation_token = request["reservationToken"]
         job_id = request["jobId"]
@@ -2040,6 +2046,9 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         return result
     except Exception as exc:
         if result_path is not None and job_id is not None:
+            result_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(result_path.parent, 0o700)
+            prune_first_start_job_results(result_path.parent, keep=result_path)
             atomic_write_json(
                 result_path,
                 {
