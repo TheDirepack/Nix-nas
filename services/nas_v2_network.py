@@ -384,12 +384,7 @@ def _allow_policy(
 
 
 def _validate_lan_zone(lan_zone: str) -> None:
-    if (
-        not lan_zone
-        or len(lan_zone) > 17
-        or not (lan_zone[0].isalnum() or lan_zone[0] == "_")
-        or not all(character.isalnum() or character in "_-" for character in lan_zone)
-    ):
+    if not isinstance(lan_zone, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,16}", lan_zone):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
 
 
