@@ -157,6 +157,114 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('"nas-bootstrap-runtime-select.service" ];', fixture)
         self.assertNotIn('UNIT = pathlib.Path("/etc/systemd/system/', source)
 
+    def test_failed_verification_reports_bridge_unit_state_before_disposal(self) -> None:
+        runner = self.runner()
+        stderr = io.StringIO()
+        commands: list[tuple[str, ...]] = []
+
+        def run(*command, **_kwargs):
+            commands.append(command)
+            if command[:2] == ("systemctl", "--failed"):
+                return subprocess.CompletedProcess(command, 0, "  UNIT loaded active running caddy\n", "")
+            if command[0] == "systemctl" and command[1] == "show":
+                unit = command[2]
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"Id={unit}\nActiveState=active\nSubState=running\nNRestarts=3\n"
+                    "Result=success\nExecMainStartTimestampMonotonic=100\n"
+                    "ExecMainExitTimestampMonotonic=0\n",
+                    "",
+                )
+            self.assertEqual(command[0], "journalctl")
+            return subprocess.CompletedProcess(command, 0, "BRIDGE-JOURNAL-EVIDENCE\n", "")
+
+        with (
+            mock.patch.object(runner.sys, "argv", ["setup-reboot-e2e.py", "--verify"]),
+            mock.patch.object(runner.sys, "stderr", stderr),
+            mock.patch.object(runner, "run", side_effect=run),
+            mock.patch.object(runner, "verify_reboot", side_effect=runner.CheckError("ORIGINAL-CHECK-FAILURE")),
+        ):
+            self.assertEqual(runner.main(), 1)
+
+        output = stderr.getvalue()
+        self.assertIn("setup reboot E2E failed: ORIGINAL-CHECK-FAILURE", output)
+        self.assertIn("failed units:", output)
+        self.assertIn("UNIT loaded active running caddy", output)
+        for unit in runner.BRIDGE_UNITS:
+            self.assertIn(f"{unit}:\nId={unit}", output)
+            self.assertIn("NRestarts=3", output)
+        self.assertIn("caddy and cockpit bridge journal:", output)
+        self.assertIn("BRIDGE-JOURNAL-EVIDENCE", output)
+        self.assertEqual(len([command for command in commands if command[1] == "show"]), len(runner.BRIDGE_UNITS))
+
+    def test_failed_verification_diagnostics_failures_preserve_the_original_error(self) -> None:
+        runner = self.runner()
+        stderr = io.StringIO()
+
+        def broken(*_command, **_kwargs):
+            raise RuntimeError("diagnostics-broke")
+
+        with (
+            mock.patch.object(runner.sys, "argv", ["setup-reboot-e2e.py", "--verify"]),
+            mock.patch.object(runner.sys, "stderr", stderr),
+            mock.patch.object(runner, "run", side_effect=broken),
+            mock.patch.object(runner, "verify_reboot", side_effect=runner.CheckError("ORIGINAL-CHECK-FAILURE")),
+        ):
+            self.assertEqual(runner.main(), 1)
+
+        output = stderr.getvalue()
+        self.assertIn("setup reboot E2E failed: ORIGINAL-CHECK-FAILURE", output)
+        self.assertIn("failure diagnostics unavailable: diagnostics-broke", output)
+
+    def test_detached_failure_emits_diagnostics_before_publishing_result_once(self) -> None:
+        for broken in (False, True):
+            with self.subTest(diagnostics_broken=broken):
+                runner = self.runner()
+                stderr = io.StringIO()
+                order = []
+
+                def diagnostics():
+                    order.append("diagnostics")
+                    if broken:
+                        raise RuntimeError("diagnostics-broke")
+                    return "DETACHED-FAILURE-EVIDENCE"
+
+                def finish(*_args, **_kwargs):
+                    order.append("result")
+
+                with (
+                    mock.patch.object(runner.sys, "argv", ["setup-reboot-e2e.py", "--resume"]),
+                    mock.patch.object(runner.sys, "stderr", stderr),
+                    mock.patch.object(runner, "read_state", return_value={"phase": "after-first-reboot"}),
+                    mock.patch.object(runner, "verify_reboot", side_effect=runner.CheckError("ORIGINAL-CHECK-FAILURE")),
+                    mock.patch.object(runner, "failure_diagnostics", side_effect=diagnostics),
+                    mock.patch.object(runner, "finish", side_effect=finish),
+                ):
+                    self.assertEqual(runner.main(), 1)
+                self.assertEqual(order, ["diagnostics", "result"])
+                self.assertIn("ORIGINAL-CHECK-FAILURE", stderr.getvalue())
+                self.assertIn("diagnostics-broke" if broken else "DETACHED-FAILURE-EVIDENCE", stderr.getvalue())
+
+    def test_bridge_diagnostics_are_bounded_read_only_and_failure_only(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        diagnostics = source.split("def failure_diagnostics() -> str:", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("systemctl", diagnostics)
+        self.assertIn('"--failed"', diagnostics)
+        self.assertIn(
+            '"--property=ActiveState,SubState,NRestarts,Result,ExecMainStartTimestampMonotonic,"', diagnostics
+        )
+        self.assertIn('"journalctl"', diagnostics)
+        self.assertIn("timeout=30", diagnostics)
+        self.assertIn("timeout=15", diagnostics)
+        for verb in ("stop", "restart", "start", "mask", "disable", "kill"):
+            self.assertNotIn(f'"{verb}"', diagnostics)
+        failure_handler = source.split("def report_failure(error: Exception) -> None:", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("failure_diagnostics()", failure_handler)
+        self.assertLess(
+            failure_handler.index("setup reboot E2E failed"), failure_handler.index("failure_diagnostics()")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

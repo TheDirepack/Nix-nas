@@ -415,6 +415,18 @@ wait_for_ssh() {
   return 1
 }
 
+setup_reboot_failure_diagnostics() {
+  local ssh_key=$1
+  local -a ssh_args
+  mapfile -t ssh_args < <(ssh_options "$ssh_key")
+  # The detached runner's stderr lives in the guest journal, not the result
+  # JSON. Export it before EXIT cleanup discards the failing VM.
+  timeout --foreground --signal=TERM --kill-after=5s 30s \
+    ssh "${ssh_args[@]}" -o ConnectTimeout=5 -o ConnectionAttempts=1 \
+      -p "$SSH_PORT" admin@127.0.0.1 \
+      'sudo -n journalctl -b -u nas-vm-setup-reboot-e2e.service -n 120 --no-pager | tail -c 16000' >&2 || true
+}
+
 run_setup_reboot_e2e() {
   local ssh_key=$1 now deadline result
   local -a ssh_args
@@ -428,6 +440,7 @@ run_setup_reboot_e2e() {
   while :; do
     now="$(date +%s)"
     if (( now >= deadline )); then
+      setup_reboot_failure_diagnostics "$ssh_key"
       die "timed out waiting for the setup reboot E2E report"
     fi
     if result="$(ssh "${ssh_args[@]}" -o ConnectTimeout=5 -p "$SSH_PORT" admin@127.0.0.1 \
@@ -437,6 +450,7 @@ run_setup_reboot_e2e() {
         return 0
       fi
       printf '%s\n' "$result" >&2
+      setup_reboot_failure_diagnostics "$ssh_key"
       die "setup reboot E2E reported a failure"
     fi
     sleep 3
