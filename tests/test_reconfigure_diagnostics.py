@@ -89,7 +89,9 @@ class RebuildFailureDiagnosticsTests(unittest.TestCase):
         # Never suppress an actual missing-snapshot alarm or silently ignore an
         # incomplete initial snapshot set to make nixos-rebuild appear green.
         self.assertIn('fail "could not initialize the first Sanoid snapshots"', prerequisite)
-        self.assertIn('fail "freshly initialized Sanoid snapshots did not pass live-inventory health checks"', prerequisite)
+        self.assertIn(
+            'fail "freshly initialized Sanoid snapshots did not pass live-inventory health checks"', prerequisite
+        )
         self.assertNotIn("systemctl mask", prerequisite)
         self.assertNotIn("systemctl disable", prerequisite)
 
