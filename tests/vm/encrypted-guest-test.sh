@@ -11,7 +11,12 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 on_error() {
   local rc=$?
-  printf '\nEncrypted VM validation failed with status %s.\n' "$rc" >&2
+  # Only script coordinates are logged: BASH_COMMAND and arguments can contain secrets.
+  local source_file="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+  local source_line="${BASH_LINENO[0]:-0}"
+  local source_function="${FUNCNAME[1]:-main}"
+  printf '\nEncrypted VM validation failed with status %s at %s:%s (%s).\n' \
+    "$rc" "$source_file" "$source_line" "$source_function" >&2
   systemctl --failed --no-pager >&2 || true
   journalctl -b -n 250 --no-pager >&2 || true
   zpool status >&2 || true
@@ -125,8 +130,8 @@ cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
   "schemaVersion": 2,
   "storage": {
     "createPool": true,
-    "device": "$ZFS_DEVICE",
-    "wipeDevice": true
+    "devices": ["$ZFS_DEVICE"],
+    "wipeDevices": true
   },
   "accounts": [],
   "runPreflight": false

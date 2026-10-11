@@ -375,6 +375,69 @@ def validate_storage_request(
         raise SetupError(f"Configured storage path(s) are not block devices: {', '.join(not_block)}")
     if aliases:
         raise SetupError(f"Multiple configured paths refer to the same block device: {', '.join(aliases)}")
+    validate_unused_devices(devices)
+
+
+def validate_unused_devices(devices: Sequence[str]) -> None:
+    try:
+        inventory = json.loads(
+            run_storage_host(
+                [
+                    "lsblk",
+                    "--json",
+                    "--paths",
+                    "--tree",
+                    "--output",
+                    "PATH,MAJ:MIN,TYPE,MOUNTPOINTS",
+                ]
+            ).stdout
+        )
+        roots = inventory["blockdevices"]
+        if not isinstance(roots, list) or not roots:
+            raise ValueError("missing blockdevices")
+        swap_output = run_storage_host(["cat", "/proc/swaps"]).stdout
+        swap_lines = swap_output.splitlines()
+        if not swap_lines or not swap_lines[0].startswith("Filename"):
+            raise ValueError("missing swap header")
+        swaps = {line.split()[0] for line in swap_lines[1:] if line.strip()}
+        swap_devices = set()
+        for path in swaps:
+            info = os.stat(path)
+            if stat.S_ISBLK(info.st_mode):
+                swap_devices.add(f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}")
+        unsafe: set[str] = set()
+        known: set[str] = set()
+
+        def visit(node: Any, parents: tuple[str, ...]) -> None:
+            if not isinstance(node, dict):
+                raise ValueError("invalid block device")
+            identity = node["maj:min"]
+            if not isinstance(identity, str) or re.fullmatch(r"\d+:\d+", identity) is None:
+                raise ValueError("invalid device identity")
+            path = node["path"]
+            mounts = node["mountpoints"]
+            if not isinstance(path, str) or not isinstance(mounts, list):
+                raise ValueError("invalid device mount information")
+            chain = (*parents, identity)
+            known.add(identity)
+            # Parents of mounted partitions/mappers are also in use. Refuse
+            # live mapper/RAID holders even when they have no mounted filesystem.
+            if any(mounts) or path in swaps or identity in swap_devices or node["type"] not in {"disk", "part", "loop"}:
+                unsafe.update(chain)
+            for child in node.get("children", []):
+                visit(child, chain)
+
+        for root in roots:
+            visit(root, ())
+        for device in devices:
+            info = os.stat(device)
+            identity = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+            if identity not in known:
+                raise ValueError(f"device missing from inventory: {device}")
+            if identity in unsafe:
+                raise SetupError(f"Configured storage device is in use: {device}")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SetupError(f"Unable to validate storage device inventory: {exc}") from exc
 
 
 def _managed_services_status(*, noninteractive: bool = False) -> dict[str, Any]:
@@ -614,6 +677,27 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     """Replace all temporary identity state without touching KeePass or ZFS."""
     authentik_root = control_root / "authentik"
     postgresql_root = control_root / "postgresql"
+    sync_units = ["nas-identity-sync.service"]
+    if SYNCTHING_ENABLED:
+        sync_units.append("nas-syncthing-sync.service")
+    timers = sorted(
+        {
+            timer
+            for unit in sync_units
+            for timer in run_root(["systemctl", "show", "--property=TriggeredBy", "--value", unit]).stdout.split()
+            if timer.endswith(".timer")
+        }
+    )
+    active_timers = [
+        timer for timer in timers if run_root(["systemctl", "is-active", "--quiet", timer], check=False).returncode == 0
+    ]
+    # Timer dependencies start before their service conditions are evaluated;
+    # skipped sync jobs can therefore replace an in-flight identity stop job.
+    if timers:
+        progress(f"pausing identity synchronization timers: {', '.join(timers)}")
+        progress(f"previously active synchronization timers: {', '.join(active_timers) or 'none'}")
+        run_root(["systemctl", "stop", *timers])
+    run_root(["systemctl", "stop", *sync_units])
     run_root(
         [
             "systemctl",
@@ -643,6 +727,10 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     )
     run_root(["systemctl", "start", "nas-bootstrap-authentik-secrets.service"])
     run_root(["systemctl", "start", "nas-bootstrap-runtime-select.service"])
+    # A failed regeneration requires manual recovery; do not resume triggers
+    # against partially regenerated identity state.
+    if active_timers:
+        run_root(["systemctl", "start", *active_timers])
     return {"regenerated": True, "bootSide": True}
 
 
@@ -733,12 +821,13 @@ def setup_storage(
         validate_storage_request(storage, confirmed_devices, allow_destructive)
         if storage.get("wipeDevices"):
             for device in devices:
-                run_root(["wipefs", "--all", "--force", device])
+                validate_unused_devices(devices)
+                run_storage_host(["wipefs", "--all", device])
+        validate_unused_devices(devices)
         vdev = devices if topology in {"single", "stripe"} else [topology, *devices]
         zpool_create = [
             "zpool",
             "create",
-            "-f",
             "-o",
             f"ashift={ashift}",
             "-O",

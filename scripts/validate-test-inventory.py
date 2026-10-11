@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Ensure every NAS-owned runtime executable remains attached to unit and system tests."""
+"""Validate test ownership/discovery metadata, not measured behavioral coverage."""
 
 from __future__ import annotations
 
 import json
+import ast
 import pathlib
 import re
 import sys
@@ -88,6 +89,18 @@ def load_inventory() -> dict[str, object]:
     return merged
 
 
+def require_test_cases(path: pathlib.Path) -> None:
+    if path.suffix != ".py":
+        return
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    if not path.name.startswith("test_") or not any(
+        isinstance(node, ast.ClassDef)
+        and any(isinstance(method, ast.FunctionDef) and method.name.startswith("test_") for method in node.body)
+        for node in ast.walk(tree)
+    ):
+        fail(f"{path}: no discoverable Python test candidates")
+
+
 def pyproject_commands() -> dict[str, set[str]]:
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     block = text.split("[project.scripts]", 1)[1].split("\n[", 1)[0]
@@ -164,6 +177,7 @@ def main() -> int:
         for test in tests:
             if not isinstance(test, str) or not (ROOT / test).is_file():
                 fail(f"{module}: missing declared module test {test!r}")
+            require_test_cases(ROOT / test)
 
     for name, sources in sorted(discovered.items()):
         row = entries[name]
@@ -180,6 +194,8 @@ def main() -> int:
         for test in [*tests, system_test]:
             if not isinstance(test, str) or not (ROOT / test).is_file():
                 fail(f"{name}: missing declared test {test!r}")
+        for test in tests:
+            require_test_cases(ROOT / test)
         if name in installed_commands:
             if not isinstance(fuzz_strategy, str) or not fuzz_strategy:
                 fail(f"{name}: installed executable has no fuzzStrategy")

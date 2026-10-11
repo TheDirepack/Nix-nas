@@ -153,6 +153,9 @@ function overview() {
 
 function hostileOverview(value) {
   const data = overview();
+  data.host = value;
+  data.managedServices.services[0].label = value;
+  data.managedServices.services[0].description = value;
   data.setup.firstStart.message = value;
   data.setup.firstStart.configPath = value;
   data.setup.firstStart.planDigest = value;
@@ -175,6 +178,8 @@ function hostileOverview(value) {
   data.services = [{unit: value, active: value, enabled: value, sub: value, load: value}];
   data.zpool.text = value;
   data.zfs.text = value;
+  data.zfs.summary = value;
+  data.zfs.dataset = value;
   for (const key of Object.keys(data.links)) data.links[key] = value;
   return data;
 }
@@ -277,11 +282,17 @@ test("renders hostile backend text as text, never executable markup", async ({pa
 });
 
 for (const [name, payload] of hostileDisplayCorpus) {
-  test(`every custom UI display surface stays inert: ${name}`, async ({page}) => {
+  test(`overview, managed-service label, and source branch stay inert: ${name}`, async ({page}) => {
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     await openApp(page, {payload: hostileOverview(payload)});
-    await expect(page.getByText(payload, {exact: true}).first()).toBeVisible();
+    await expect(page.locator("strong").filter({hasText: payload}).first()).toBeVisible();
+    await page.locator(".pf-v6-c-nav").getByText("Managed services", {exact: true}).click();
+    await expect(page.getByLabel(`${payload} runtime policy`)).toBeVisible();
+    await page.locator(".pf-v6-c-nav").getByText("Source & updates", {exact: true}).click();
+    await expect(
+      page.locator(".pf-v6-c-description-list__description").filter({hasText: payload}).first(),
+    ).toBeVisible();
     expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
     const unsafeNodes = await page
       .locator("script, iframe, svg, img, object, embed")
@@ -363,9 +374,7 @@ test("handles narrow, wide, and enlarged-text layouts without document overflow"
   }
 });
 
-test("all visible interactive controls stay inside the viewport and keyboard reachable", async ({
-  page,
-}) => {
+test("overview controls stay horizontally contained and keyboard reachable", async ({page}) => {
   await page.setViewportSize({width: 360, height: 740});
   await openApp(page);
   const controls = page.locator(
@@ -373,18 +382,28 @@ test("all visible interactive controls stay inside the viewport and keyboard rea
   );
   const count = await controls.count();
   expect(count).toBeGreaterThan(4);
-  for (let index = 0; index < Math.min(count, 40); index += 1) {
+  const visible = [];
+  for (let index = 0; index < count; index += 1) {
     const control = controls.nth(index);
     if (!(await control.isVisible())) continue;
+    if (await control.isDisabled()) continue;
+    visible.push(index);
     const box = await control.boundingBox();
     if (!box) continue;
     expect(box.width).toBeGreaterThan(0);
     expect(box.height).toBeGreaterThan(0);
-    expect(box.x).toBeLessThan(361);
-    expect(box.x + box.width).toBeGreaterThan(0);
+    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.x + box.width).toBeLessThanOrEqual(361);
   }
-  await page.keyboard.press("Tab");
-  expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+  const reached = new Set();
+  for (let step = 0; step < count * 2; step += 1) {
+    await page.keyboard.press("Tab");
+    for (const index of visible) {
+      if (await controls.nth(index).evaluate((node) => node === document.activeElement))
+        reached.add(index);
+    }
+  }
+  expect([...reached].sort((a, b) => a - b)).toEqual(visible);
 });
 
 test("has unique DOM ids and keeps the confirmation dialog usable at extreme zoom", async ({
@@ -412,35 +431,6 @@ test("has unique DOM ids and keeps the confirmation dialog usable at extreme zoo
   await expect(cancel).toBeVisible();
   await cancel.focus();
   await expect(cancel).toBeFocused();
-});
-
-test("hostile status corpus never creates executable elements", async ({page}) => {
-  await openApp(page);
-  const hostile = [
-    "<script>globalThis.__nas_xss=2</script>",
-    "<svg/onload=globalThis.__nas_xss=3>",
-    "javascript:globalThis.__nas_xss=4",
-    "../".repeat(256),
-    "' OR 1=1 --",
-    "\r\nX-Injected: yes",
-    "\u202e" + "W".repeat(1024),
-  ];
-  await page.evaluate((values) => {
-    const root = document.createElement("div");
-    root.id = "nas-hostile-corpus";
-    for (const value of values) {
-      const item = document.createElement("span");
-      item.textContent = value;
-      root.append(item);
-    }
-    document.body.append(root);
-  }, hostile);
-  expect(
-    await page
-      .locator("#nas-hostile-corpus script, #nas-hostile-corpus svg, #nas-hostile-corpus img")
-      .count(),
-  ).toBe(0);
-  expect(await page.evaluate(() => globalThis.__nas_xss)).toBe(0);
 });
 
 test("backend refresh failure becomes a bounded operator-visible error", async ({page}) => {
@@ -482,6 +472,7 @@ test("confirmation dialog supports keyboard cancellation", async ({page}) => {
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
   const actionCalls = await page.evaluate(
     () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length,
   );

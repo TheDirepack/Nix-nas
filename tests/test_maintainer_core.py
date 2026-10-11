@@ -44,14 +44,17 @@ class MaintainerCoreTests(MaintainerScriptMixin, unittest.TestCase):
         assert isinstance(floors, dict)
         report = pathlib.Path(self._temporary.name) / "synthetic-coverage.json"
         passing = {
-            "files": {path: {"summary": {"percent_covered": float(floor)}} for path, floor in floors.items()},
-            "totals": {"percent_covered": total_floor},
+            "files": {
+                path: {"summary": {"percent_covered": 100, "num_branches": 100, "covered_branches": int(floor)}}
+                for path, floor in floors.items()
+            },
+            "totals": {"percent_covered": 100, "num_branches": 100, "covered_branches": int(total_floor)},
         }
         report.write_text(json.dumps(passing), encoding="utf-8")
         result = self.run_clean(sys.executable, "scripts/check-coverage.py", str(report))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         first = next(iter(floors))
-        passing["files"][first]["summary"]["percent_covered"] = 0
+        passing["files"][first]["summary"]["covered_branches"] = 0
         report.write_text(json.dumps(passing), encoding="utf-8")
         result = self.run_clean(sys.executable, "scripts/check-coverage.py", str(report))
         self.assertEqual(result.returncode, 1)

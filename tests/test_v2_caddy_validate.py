@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import pathlib
 import shutil
 import sys
@@ -100,7 +101,8 @@ class ManagedServicesV2RealCaddyTests(unittest.TestCase):
             }
         )
         rendered = caddy.generate_caddyfile(effective)
-        self.assertIn("reverse_proxy unix//run/nas-control/activate/on-demand-web.sock", rendered)
+        route_name = "h_" + hashlib.sha256(b"on-demand\0web").hexdigest()
+        self.assertIn(f"reverse_proxy unix//run/nas-control/activate/{route_name}.sock", rendered)
         self.assertNotIn("/wake?", rendered)
         caddy.validate_caddyfile(rendered, caddy_bin=self.caddy_bin)
 
