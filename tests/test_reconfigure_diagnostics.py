@@ -76,6 +76,23 @@ class RebuildFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn("autosnap_cached_daily", result.stderr)
         self.assertEqual(len(calls), 6)
 
+    def test_installer_generation_drill_seeds_real_snapshots_before_rebuild(self) -> None:
+        source = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        prerequisite = source.split('if [[ "$PACKAGE_UPGRADE" == 1 ]]; then', 1)[0]
+        self.assertIn("systemctl start nas-zfs-manual-snapshot.service", prerequisite)
+        self.assertIn("systemctl reset-failed nas-zfs-snapshot-health.service", prerequisite)
+        self.assertIn("systemctl start nas-zfs-snapshot-health.service", prerequisite)
+        self.assertLess(
+            prerequisite.index("systemctl start nas-zfs-manual-snapshot.service"),
+            prerequisite.index("systemctl start nas-zfs-snapshot-health.service"),
+        )
+        # Never suppress an actual missing-snapshot alarm or silently ignore an
+        # incomplete initial snapshot set to make nixos-rebuild appear green.
+        self.assertIn('fail "could not initialize the first Sanoid snapshots"', prerequisite)
+        self.assertIn('fail "freshly initialized Sanoid snapshots did not pass live-inventory health checks"', prerequisite)
+        self.assertNotIn("systemctl mask", prerequisite)
+        self.assertNotIn("systemctl disable", prerequisite)
+
     def test_success_does_not_collect_failure_diagnostics(self):
         result, calls = self.rebuild(0)
         self.assertEqual(result.returncode, 0, result.stderr)
