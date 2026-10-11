@@ -12,6 +12,59 @@ from maintainer_test_base import MaintainerScriptMixin
 
 
 class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
+    def test_reconfigure_shellcheck_does_not_require_guest_repository_at_build_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                ["shellcheck", str(self.clean_root / "tests/vm/reconfigure-system.sh")],
+                cwd=directory,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_installer_package_baseline_is_explicit_and_preserves_reviewed_flake(self) -> None:
+        source = (self.clean_root / "tests/vm/install-system.sh").read_text(encoding="utf-8")
+        selection = source.split('install_args=(--flake "path:$SOURCE#$FLAKE")', 1)[1].split("\nnixos-install", 1)[0]
+        baseline = "github:NixOS/nixpkgs/36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac"
+        for mode in ("0", "1"):
+            with self.subTest(mode=mode):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'SOURCE="$1"; FLAKE=nas-qemu; PACKAGE_UPGRADE="$2"; '
+                        'install_args=(--flake "path:$SOURCE#$FLAKE")'
+                        + selection
+                        + '\nprintf "%s\\n" "${install_args[@]}"',
+                        "test",
+                        str(self.clean_root),
+                        mode,
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = ["--flake", f"path:{self.clean_root}#nas-qemu"]
+                if mode == "1":
+                    expected += ["--override-input", "nixpkgs", baseline]
+                self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_generation_rollback_selects_reviewed_flake_without_legacy_configuration(self) -> None:
+        source = (self.clean_root / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        rollback = next(line for line in source.splitlines() if line.startswith("rebuild --rollback"))
+        result = subprocess.run(
+            ["bash", "-c", 'SOURCE="/reviewed source"; rebuild() { printf "%s\\n" "$@"; }; ' + rollback],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(), ["--rollback", "switch", "--flake", "path:/reviewed source#nas-qemu"]
+        )
+
     def test_installer_rejects_missing_or_untrusted_inputs_before_destructive_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

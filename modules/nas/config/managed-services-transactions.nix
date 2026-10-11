@@ -207,6 +207,8 @@ in
     ];
     systemd.services.nas-v2-apply-failed = {
       description = "Restore the last applied Managed Services V2 desired state";
+      # Dependency failure before preStart is not a failed apply transaction.
+      unitConfig.ConditionPathExists = guardCurrentFile;
       serviceConfig = {
         Type = "oneshot";
         ExecStart = rollbackWithGuard;
