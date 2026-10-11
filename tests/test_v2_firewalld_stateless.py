@@ -137,7 +137,7 @@ class V2NativeFirewalldTests(unittest.TestCase):
                 "forwardPorts": [],
                 "richRules": [],
             }
-            for field, value in (
+            cases = (
                 ("kind", []),
                 ("kind", {}),
                 ("target", []),
@@ -146,9 +146,10 @@ class V2NativeFirewalldTests(unittest.TestCase):
                 ("ports", [["65536", "tcp"]]),
                 ("richRules", [{"family": "ipv4", "destination": "invalid"}]),
                 ("ingress", "--evil"),
-            ):
-                with self.subTest(field=field):
-                    manifest = self.fixture(root / field, objects=[{**valid, field: value}])
+            )
+            for index, (field, value) in enumerate(cases):
+                with self.subTest(field=field, value=value):
+                    manifest = self.fixture(root / str(index), objects=[{**valid, field: value}])
                     with self.assertRaises(firewalld.FirewalldReconcileError):
                         firewalld._read_projection(manifest)
 
