@@ -22,12 +22,22 @@ def _imports_in_file(test_path: pathlib.Path) -> set[str]:
     except (OSError, SyntaxError):
         return set()
     imports: set[str] = set()
+    if not any(isinstance(node, ast.FunctionDef) and node.name.startswith("test_") for node in ast.walk(tree)):
+        return imports
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.add(alias.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.add(node.module.split(".")[0])
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "spec_from_file_location"
+        ):
+            for value in ast.walk(node):
+                if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value.endswith(".py"):
+                    imports.add(pathlib.Path(value.value).stem)
     return imports
 
 
@@ -62,7 +72,7 @@ class RunnerAccountingTests(unittest.TestCase):
                     test_path = ROOT / test_rel
                     self.assertTrue(test_path.is_file(), msg=f"declared test {test_rel} missing")
                     imports = _imports_in_file(test_path)
-                    if module_name in imports or module_name in test_path.read_text(encoding="utf-8"):
+                    if module_name in imports:
                         found_import = True
                         break
                 self.assertTrue(
@@ -80,7 +90,7 @@ class RunnerAccountingTests(unittest.TestCase):
                     if not test_path.is_file():
                         continue
                     imports = _imports_in_file(test_path)
-                    if module_name in imports or module_name in test_path.read_text(encoding="utf-8"):
+                    if module_name in imports:
                         has_import = True
                         break
                 self.assertTrue(has_import, msg=f"{module} -> {tests} has no import of {module_name}")
