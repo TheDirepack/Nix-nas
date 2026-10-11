@@ -111,57 +111,19 @@ def _validate_staged_artifact_path(resource_id: str, artifact_path: str, artifac
 
 
 def _remove_staged_artifact(artifact_path: str) -> None:
-    candidate = pathlib.Path(artifact_path)
-    # If symlink, unlink without following - do not resolve escapes
+    candidate = pathlib.Path(_runtime_safe_absolute_path(artifact_path, label="native-dump artifact path"))
+    if BACKUP_STAGING_ROOT.is_symlink():
+        raise BackupRuntimeError(f"staging root {BACKUP_STAGING_ROOT} must not be a symlink")
     try:
-        if candidate.is_symlink():
-            # For symlink, we still ensure the link itself is inside staging root (not the target)
-            try:
-                # Use lstat parent check: the symlink path itself must be inside staging
-                # Check the symlink's own path (not resolved) is under staging via pure path containment
-                # Use resolve(strict=False) for parent but not following final symlink? Instead check PurePosix containment
-                # Simplest: ensure symlink location is within staging root via lexical check and that its parent resolves inside
-                parent_resolved = candidate.parent.resolve(strict=False)
-                staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
-                parent_resolved.relative_to(staging_resolved)
-                # Also ensure the symlink file itself is lexically under staging
-                if candidate.name not in {pathlib.Path(artifact_path).name}:
-                    pass
-            except ValueError as exc:
-                raise BackupRuntimeError(
-                    f"native-dump artifact symlink {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
-                ) from exc
-            candidate.unlink()
-            return
-    except OSError as exc:
-        raise BackupRuntimeError(f"unable to clean native-dump artifact symlink {candidate!r}: {exc}") from exc
-    # Reject paths outside staging root even on removal to avoid delete-escapes
-    try:
-        resolved = candidate.resolve(strict=False)
         staging_resolved = BACKUP_STAGING_ROOT.resolve(strict=False)
-        resolved.relative_to(staging_resolved)
-    except ValueError as exc:
-        raise BackupRuntimeError(
-            f"native-dump artifact path {artifact_path!r} escapes staging root {BACKUP_STAGING_ROOT}"
-        ) from exc
-    # If not exists, idempotent success
-    if not candidate.exists():
-        return
-    # Ensure we do not follow symlink directory - is_symlink already handled, but also check resolve vs path
-    try:
-        if candidate.resolve(strict=False) != candidate.resolve():
-            # If resolve differs due to symlink components, treat as escape
-            if candidate.is_symlink() or not candidate.exists():
-                pass
-    except OSError:
-        pass
-    try:
-        if candidate.is_file():
-            candidate.unlink()
-        elif candidate.is_dir():
+        if candidate.parent.resolve(strict=False) != staging_resolved:
+            raise BackupRuntimeError(
+                f"native-dump artifact path {artifact_path!r} must be directly under staging root {BACKUP_STAGING_ROOT}"
+            )
+        # Inspect only the parent: a replaced artifact symlink is unlinked, never followed.
+        if not candidate.is_symlink() and candidate.is_dir():
             shutil.rmtree(candidate)
         else:
-            # For other types, attempt unlink
             candidate.unlink(missing_ok=True)
     except OSError as exc:
         raise BackupRuntimeError(f"unable to clean native-dump artifact {candidate!r}: {exc}") from exc

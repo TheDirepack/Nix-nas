@@ -16,10 +16,14 @@ class SourceWatchProjectionError(RuntimeError):
 APP_ROOT = pathlib.Path("/var/lib/nas-control/apps")
 
 
-def _quote(value: str) -> str:
+def _path_value(value: str) -> str:
     if any(character in value for character in ("\x00", "\r", "\n")):
         raise SourceWatchProjectionError("managed source path contains a forbidden control character")
-    return '"' + value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"') + '"'
+    # The unit-file parser trims trailing whitespace and joins backslash-ended lines.
+    if value.endswith((" ", "\t", "\v", "\f", "\\")):
+        raise SourceWatchProjectionError("managed source path has an ending systemd cannot preserve")
+    # PathChanged takes one literal path, not systemd's quoted argument syntax.
+    return value.replace("%", "%%")
 
 
 def _managed_source(service_id: str, value: str) -> pathlib.Path:
@@ -67,7 +71,7 @@ def _path_unit(service_id: str, paths: list[pathlib.Path]) -> bytes:
         "",
         "[Path]",
     ]
-    lines.extend("PathChanged=" + _quote(str(path)) for path in paths)
+    lines.extend("PathChanged=" + _path_value(str(path)) for path in paths)
     lines.extend(
         [
             "Unit=nas-managed-services-reconcile.service",

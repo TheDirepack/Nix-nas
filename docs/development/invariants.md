@@ -22,8 +22,8 @@ Local console, SSH, or hardware KVM and a local PAM administrator are the recove
 ## Authorization
 
 - `nas_admin` is the only Authentik superuser group and must retain at least one enabled explicit member.
-- Ordinary users receive no application capability without `nas_allow_*` membership.
-- `nas_disabled` and matching deny groups fail closed.
+- Identity-protected V2 routes require `application.<service>.<capability>` membership or `nas_admin`; the compiler never assigns membership.
+- Authentik and the identity synchronizer own disabled-account enforcement; retired allow/deny groups are not V2 route grants.
 - Caddy strips client-supplied identity headers before trusted forward-auth headers are used.
 - Cockpit privileged actions use a fixed allow-list and validated arguments.
 
@@ -38,7 +38,7 @@ Local console, SSH, or hardware KVM and a local PAM administrator are the recove
 
 - KeePassXC, Authentik, and PostgreSQL are unlock/control-plane authorities and remain on the system partition under `/var/lib/nas-control-plane`; they must never be promoted into the managed ZFS data root.
 - Permanent human home directories and user/application data belong on the managed ZFS partition. Temporary first-start Linux home data is retired with the bootstrap identity.
-- New pool creation requires explicit destructive opt-in and exact confirmation of every unique block device.
+- New pool creation requires explicit destructive opt-in and exact confirmation of every unique block device. Mounted devices, swap devices, and their backing parents or active holders must be rejected before wiping or pool creation.
 - Dataset mount guards must verify the exact dataset and mountpoint before protected services start.
 - Snapshot restore creates a safety snapshot first.
 - Same-pool Restic is boot/appliance recovery, not independent whole-pool backup.

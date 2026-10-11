@@ -18,6 +18,37 @@ def text(relative: str) -> str:
 
 
 class Alpha20CockpitContracts(unittest.TestCase):
+    def test_public_proxy_enforces_https_without_upstream_technology_headers(self) -> None:
+        proxy = text("modules/nas/config/reverse-proxy.nix")
+        self.assertIn("-X-Powered-By", proxy)
+        self.assertIn('Strict-Transport-Security "max-age=31536000"', proxy)
+        self.assertIn("header ?Content-Security-Policy ${builtins.toJSON authentikCsp}", proxy)
+        self.assertIn("script-src 'self' 'unsafe-inline'", proxy)
+        browser = text("cockpit/e2e/final-vm.spec.mjs")
+        self.assertIn('response.headers()["strict-transport-security"]', browser)
+        self.assertIn('response.headers()["x-powered-by"]', browser)
+
+    def test_authentik_accessibility_backport_patches_source_for_all_consumers(self) -> None:
+        patch = text("authentik/patches/authentik-accessibility.patch")
+        self.assertIn("web/src/flow/components/ak-brand-footer.ts", patch)
+        self.assertIn("+        background-color: #151515;", patch)
+        self.assertNotIn("web/src/styles/authentik/components/Login/login.css", patch)
+        packages = text("modules/nas/internal/account-tools.nix")
+        self.assertIn("authentikPackage = pkgs.authentik.override", packages)
+        self.assertIn("pkgs.applyPatches", packages)
+        self.assertIn("authentik-accessibility.patch", packages)
+        application = text("modules/nas/config/application-services.nix")
+        self.assertNotIn("${pkgs.authentik}/bin/ak", application)
+        self.assertIn("${authentikPackage}/bin/ak server", application)
+        blueprint = text("modules/nas/config/managed-services-authentik-blueprint.nix")
+        self.assertIn("${authentikPackage}/bin/ak apply_blueprint", blueprint)
+
+    def test_stock_cockpit_smart_health_has_its_native_udisks_bus(self) -> None:
+        application = text("modules/nas/config/application-services.nix")
+        self.assertIn("services.udisks2.enable = true;", application)
+        native = text("tests/nixos/integration.nix")
+        self.assertIn("/org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects", native)
+
     def test_first_start_is_enabled(self) -> None:
         options = text("modules/nas/options/core.nix")
         services = text("modules/nas/config/systemd-services.nix")
@@ -280,10 +311,21 @@ class Alpha20CockpitContracts(unittest.TestCase):
             "iframe-srcdoc",
         ):
             self.assertIn(probe, deterministic)
-        self.assertIn("hostile status corpus never creates executable elements", security)
+        self.assertIn("overview, managed-service label, and source branch stay inert", security)
+        self.assertNotIn('document.createElement("span")', security)
         self.assertIn('frame.locator(".nas-actions button").first()', vm)
         self.assertIn("function firstMaintenanceAction", security)
-        self.assertIn("anonymous clients see only the Cockpit login boundary", vm)
+        self.assertIn("anonymous clients see only the Authentik login boundary", vm)
+        self.assertNotIn("#login-user-input", vm)
+        self.assertIn('page.getByRole("textbox", {name: "Email or Username", exact: true})', vm)
+        self.assertIn('page.getByRole("textbox", {name: "Password", exact: true})', vm)
+        self.assertIn("node.tabIndex === -1 && node.closest('[aria-hidden=\"true\"]')", vm)
+        self.assertIn('await page.goto("/console/")', vm)
+        self.assertIn('await page.goto("/console/nas")', vm)
+        self.assertNotIn("nixos-nas", vm)
+        login = vm.split("async function login(page) {", 1)[1].split("\n}", 1)[0]
+        self.assertIn('await page.goto("/console/nas")', login)
+        self.assertNotIn('await page.goto("/console/")', login)
         self.assertIn("unexpected interactive element overlaps", vm)
 
 

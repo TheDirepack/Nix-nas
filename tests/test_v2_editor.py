@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pathlib
+import json
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -217,6 +219,24 @@ class V2EditorTests(unittest.TestCase):
                 self.assertTrue(result["ok"])
                 reparsed = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
                 self.assertEqual(reparsed["services"]["demo"]["runtime"], runtime)
+
+    def test_compose_status_uses_compiled_target_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            desired = self.write_desired(root)
+            value = editor.read_document(desired_path=desired, schema_path=SCHEMA)["document"]
+            value["services"]["demo"]["runtime"] = runtime_cases()["compose"]
+            editor.replace_document_value(value, desired_path=desired, schema_path=SCHEMA, platform_path=None)
+            import nas_v2_spec as spec
+
+            effective = spec.compile_document(value, spec.load_schema(SCHEMA))
+            effective["provenance"] = {"desiredSha256": hashlib.sha256(desired.read_bytes()).hexdigest()}
+            path = root / "effective.json"
+            path.write_text(json.dumps(effective))
+            result = editor.status(desired_path=desired, effective_path=path)
+            self.assertTrue(result["services"][0]["verified"])
+            self.assertTrue(result["services"][0]["runtimeAvailable"])
+            self.assertEqual(result["services"][0]["units"][0]["unit"], "nas-v2-demo.target")
 
     def test_invalid_schema_editor_value_never_replaces_authority(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

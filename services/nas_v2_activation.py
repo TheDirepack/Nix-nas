@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import hashlib
 import re
 from typing import Any
 
@@ -22,8 +23,19 @@ def _safe_id(value: str, *, field: str) -> str:
     return value
 
 
+def _route_name(service_id: str, route_id: str) -> str:
+    service = _safe_id(service_id, field="service")
+    route = _safe_id(route_id, field="route")
+    name = f"{service}-{route}"
+    # An underscore cannot occur in IDs. Hash ambiguous/long pairs to keep
+    # socket names distinct and within Linux's 108-byte sockaddr_un buffer.
+    if "-" in service or "-" in route or len(str(ACTIVATION_ROOT / (name + ".sock")).encode()) > 107:
+        return "h_" + hashlib.sha256(f"{service}\0{route}".encode()).hexdigest()
+    return name
+
+
 def unit_base(service_id: str, route_id: str) -> str:
-    return f"nas-v2-activate-{_safe_id(service_id, field='service')}-{_safe_id(route_id, field='route')}"
+    return "nas-v2-activate-" + _route_name(service_id, route_id)
 
 
 def socket_unit(service_id: str, route_id: str) -> str:
@@ -35,7 +47,7 @@ def proxy_unit(service_id: str, route_id: str) -> str:
 
 
 def socket_path(service_id: str, route_id: str) -> pathlib.PurePosixPath:
-    return ACTIVATION_ROOT / f"{_safe_id(service_id, field='service')}-{_safe_id(route_id, field='route')}.sock"
+    return ACTIVATION_ROOT / (_route_name(service_id, route_id) + ".sock")
 
 
 def backend_target(route: dict[str, Any]) -> str:

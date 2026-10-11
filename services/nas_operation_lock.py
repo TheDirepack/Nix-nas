@@ -186,7 +186,6 @@ def validate_coordination_token(token: str, classes: Sequence[str]) -> None:
     requested = _normalize_classes(classes)
     handle = _open_lock()
     try:
-        value = _read_metadata(handle)
         try:
             _try_lock(handle, blocking=False)
         except BlockingIOError:
@@ -194,6 +193,7 @@ def validate_coordination_token(token: str, classes: Sequence[str]) -> None:
         else:
             fcntl.flock(handle, fcntl.LOCK_UN)
             raise OperationBusyError("The parent operation no longer owns the appliance mutation lock")
+        value = _read_metadata(handle)
         held = value.get("classes") if isinstance(value, dict) else None
         if value is None or value.get("token") != token:
             raise OperationBusyError("The appliance mutation lock is owned by a different operation")
