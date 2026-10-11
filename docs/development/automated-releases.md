@@ -14,7 +14,7 @@ The workflow has a single `manual-release-main` concurrency group with `cancel-i
 
 ## Versioning and retries
 
-`VERSION` and `.github/release-version-epoch.json` identify the development series. Preparation starts from the series anchor in Git first-parent history and allocates the next patch after validated existing generated tags. A later manual release may cover several main merges; it creates one release. Gaps or contradictory tagged release history fail closed.
+`VERSION` and `.github/release-version-epoch.json` identify the development series. Preparation starts from the series anchor in Git first-parent history and allocates the next patch after validated existing generated tags. A later manual release may cover several main merges; it creates one release. Gaps or contradictory tagged release history fail closed. A new manual publication is also rejected if its source is older than, or diverges from, any previously tagged generated release source in the current epoch. This ordering check lives in `scripts/prepare_release.py`; the removed automatic predecessor-wait workflow is not used. To publish further changes, qualify and select a newer `main` descendant instead.
 
 For a rerun of an already tagged source, preparation recovers the exact version and bootstrap password from the existing tagged release commit, and publication repairs the release rather than inventing a new identity. The same-commit rerun remains possible even after a later source has been released.
 
