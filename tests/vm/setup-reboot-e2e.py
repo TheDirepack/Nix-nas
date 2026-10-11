@@ -53,6 +53,12 @@ REQUIRED_SERVICES = {
     "grafana",
     "notifications",
 }
+BRIDGE_UNITS = (
+    "caddy.service",
+    "nas-cockpit-sso.service",
+    "authentik.service",
+    "nas-authentik-proxy-outpost.service",
+)
 
 
 class CheckError(RuntimeError):
@@ -85,6 +91,42 @@ def write_json(path: pathlib.Path, value: dict[str, Any]) -> None:
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)
+
+
+def failure_diagnostics() -> str:
+    """Bounded, read-only bridge-unit state at verification failure time.
+
+    Post-reboot refusals load identity assets while Cockpit assets behind
+    caddy/nas-cockpit-sso are refused; without this capture the disposable VM
+    discards the units' restart/exit state together with the failure.
+    """
+    sections: list[str] = []
+    failed = run("systemctl", "--failed", "--no-pager", timeout=30)
+    sections.append(f"failed units:\n{(failed.stdout or failed.stderr)[-1500:]}")
+    for unit in BRIDGE_UNITS:
+        state = run(
+            "systemctl",
+            "show",
+            unit,
+            "--property=ActiveState,SubState,NRestarts,Result,ExecMainStartTimestampMonotonic,"
+            "ExecMainExitTimestampMonotonic",
+            timeout=15,
+        )
+        sections.append(f"{unit}:\n{(state.stdout or state.stderr).strip()}")
+    journal = run(
+        "journalctl",
+        "-b",
+        "-u",
+        "caddy.service",
+        "-u",
+        "nas-cockpit-sso.service",
+        "-n",
+        "120",
+        "--no-pager",
+        timeout=30,
+    )
+    sections.append(f"caddy and cockpit bridge journal:\n{(journal.stdout or journal.stderr)[-6000:]}")
+    return "\n".join(sections)
 
 
 def read_state() -> dict[str, Any]:
@@ -412,6 +454,10 @@ def main() -> int:
             resume()
     except Exception as error:
         print(f"setup reboot E2E failed: {error}", file=sys.stderr)
+        try:
+            print(failure_diagnostics(), file=sys.stderr)
+        except Exception as diagnostic_error:
+            print(f"failure diagnostics unavailable: {diagnostic_error}", file=sys.stderr)
         return 1
     return 0
 
