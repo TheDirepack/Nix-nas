@@ -49,7 +49,12 @@ def _permanent(firewall_cmd: str, *args: str) -> subprocess.CompletedProcess[str
 
 
 def _port(value: Any, protocol: Any) -> str:
-    if not isinstance(value, str) or not _PORT.fullmatch(value) or protocol not in {"tcp", "udp"}:
+    if (
+        not isinstance(value, str)
+        or not _PORT.fullmatch(value)
+        or not isinstance(protocol, str)
+        or protocol not in {"tcp", "udp"}
+    ):
         raise FirewalldReconcileError("invalid native firewalld port or protocol")
     bounds = [int(item) for item in value.split("-")]
     if any(not 1 <= item <= 65535 for item in bounds) or len(bounds) == 2 and bounds[0] > bounds[1]:
