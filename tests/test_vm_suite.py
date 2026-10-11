@@ -24,6 +24,63 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_reboot_failure_exports_guest_journal_without_changing_failure_status(self) -> None:
+        source = QEMU.read_text(encoding="utf-8")
+        functions = source.split("ssh_options() {", 1)[1].split("\nsync_source_to_guest() {", 1)[0]
+        for outcome, diagnostics_status in (("failed", 0), ("failed", 23), ("timeout", 0), ("timeout", 23), ("ok", 0)):
+            with self.subTest(outcome=outcome, diagnostics_status=diagnostics_status):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        "set -euo pipefail\nssh_options() {"
+                        + functions
+                        + "\n"
+                        + """
+SSH_PORT=2222
+log() { :; }
+die() { echo "$*" >&2; exit 1; }
+nas_vm_timeout_value() { if [[ "$OUTCOME" == timeout ]]; then echo 0; else echo 600; fi; }
+ssh() {
+  case "$*" in
+    *journalctl*) echo "REBOOT-RUNNER-JOURNAL"; return "$DIAGNOSTICS_STATUS" ;;
+    *--start*) return 0 ;;
+    *setup-reboot-e2e-result.json*)
+      if [[ "$OUTCOME" == ok ]]; then
+        echo '{"schemaVersion":1,"ok":true,"verifiedReboots":2}'
+      else
+        echo '{"schemaVersion":1,"ok":false,"error":"ORIGINAL-BROWSER-FAILURE"}'
+      fi ;;
+    *) return 99 ;;
+  esac
+}
+timeout() { echo "DIAGNOSTICS-BOUND: $*" >&2; shift 4; "$@"; }
+run_setup_reboot_e2e unused-test-key
+""",
+                    ],
+                    env={**os.environ, "OUTCOME": outcome, "DIAGNOSTICS_STATUS": str(diagnostics_status)},
+                    text=True,
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                )
+                if outcome == "ok":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn("REBOOT-RUNNER-JOURNAL", result.stderr)
+                    self.assertNotIn("DIAGNOSTICS-BOUND", result.stderr)
+                    continue
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("REBOOT-RUNNER-JOURNAL", result.stderr)
+                self.assertIn("--kill-after=5s 30s", result.stderr)
+                self.assertIn("nas-vm-setup-reboot-e2e.service", result.stderr)
+                self.assertIn("-n 120", result.stderr)
+                self.assertIn("tail -c 16000", result.stderr)
+                if outcome == "failed":
+                    self.assertIn("ORIGINAL-BROWSER-FAILURE", result.stderr)
+                    self.assertIn("setup reboot E2E reported a failure", result.stderr)
+                else:
+                    self.assertIn("timed out waiting for the setup reboot E2E report", result.stderr)
+
     def test_isolated_authentik_outage_cancels_pending_sync_retries_and_restores_timers(self) -> None:
         source = GUEST_TEST.read_text(encoding="utf-8")
         block = source.split('log "Authentication dependency outage stays fail-closed"', 1)[1].split(
