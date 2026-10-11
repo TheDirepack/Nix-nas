@@ -92,7 +92,12 @@ start_browser_port_forward() {
 
 on_error() {
   local rc=$?
-  printf '\nVM validation failed with status %s.\n' "$rc" >&2
+  # Only script coordinates are logged: BASH_COMMAND and arguments can contain secrets.
+  local source_file="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+  local source_line="${BASH_LINENO[0]:-0}"
+  local source_function="${FUNCNAME[1]:-main}"
+  printf '\nVM validation failed with status %s at %s:%s (%s).\n' \
+    "$rc" "$source_file" "$source_line" "$source_function" >&2
   systemctl --failed --no-pager >&2 || true
   journalctl -b -n 250 --no-pager >&2 || true
   zpool status >&2 || true
