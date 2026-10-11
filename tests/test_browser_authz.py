@@ -1003,6 +1003,27 @@ class BrowserAuthzInputTests(unittest.TestCase):
             [False, False, False, True, False, True, False, False, False, False],
         )
 
+    def test_copy_party_isolation_logs_login_before_blocking_and_preserves_failure(self) -> None:
+        driver = mock.MagicMock()
+        output = StringIO()
+        error = RuntimeError("isolation login failed")
+        with (
+            mock.patch.object(self.authz, "browser", return_value=driver),
+            mock.patch.object(self.authz, "login", side_effect=error),
+            mock.patch.object(self.authz, "browser_diagnostics", return_value={"url": "https://nas-test.local/"}),
+            redirect_stderr(output),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                self.authz.verify_copy_party_user_isolation(
+                    "https://nas-test.local", ("nasadmin", "admin-secret"), [("post-a", "a-secret")]
+                )
+        self.assertIs(raised.exception, error)
+        self.assertIn("VM-BROWSER-STAGE-START: Isolation sentinel login (post-a)", output.getvalue())
+        self.assertIn("VM-BROWSER-STAGE-FAIL: Isolation sentinel login (post-a)", output.getvalue())
+        self.assertNotIn("a-secret", output.getvalue())
+        self.assertNotIn("admin-secret", output.getvalue())
+        driver.quit.assert_called_once_with()
+
     def test_allowed_route_retries_copy_party_first_user_reload(self) -> None:
         with (
             mock.patch.object(

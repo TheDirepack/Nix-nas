@@ -137,5 +137,7 @@ test("Cockpit runtime API uses the host script without a bare-module require", a
 test("manifest does not weaken Cockpit content security policy", async () => {
   const manifest = JSON.parse(await source("src/manifest.json"));
   assert.equal(manifest["content-security-policy"].includes("unsafe-inline"), false);
+  assert.doesNotMatch(manifest["content-security-policy"], /connect-src/);
+  assert.match(manifest["content-security-policy"], /frame-ancestors 'self'/);
   assert.equal(manifest.requires.cockpit, "300");
 });

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import pathlib
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -22,6 +24,68 @@ class SetupRebootE2eContracts(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def test_browser_failure_preserves_complete_diagnostics_and_proxy_status(self) -> None:
+        runner = self.runner()
+        detail = "head" * 400 + "UNCLIPPED-BROWSER-EXCEPTION" + "tail" * 600
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            (root / "bin").mkdir()
+            (root / "lib/systemd").mkdir(parents=True)
+            (root / "bin/systemd-socket-activate").touch()
+            (root / "lib/systemd/systemd-socket-proxyd").touch()
+            secrets = root / "secrets"
+            secrets.mkdir()
+            temporary = mock.MagicMock()
+            temporary.__enter__.return_value = str(secrets)
+            with (
+                mock.patch.object(runner.shutil, "which", return_value=str(root / "bin/systemctl")),
+                mock.patch.object(runner.tempfile, "TemporaryDirectory", return_value=temporary),
+                mock.patch.object(runner, "wait_http"),
+                mock.patch.object(runner.subprocess, "Popen") as popen,
+                mock.patch.object(
+                    runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", detail)
+                ),
+                mock.patch.object(runner.sys, "stderr", stderr),
+                self.assertRaises(runner.CheckError),
+            ):
+                popen.return_value.poll.return_value = -9
+                runner.browser_sign_in("test reboot")
+            self.assertIn(detail, stderr.getvalue())
+            self.assertIn("callback proxy exit status: -9", stderr.getvalue())
+            self.assertIs(popen.call_args.kwargs["stderr"], stderr)
+            popen.return_value.terminate.assert_called_once_with()
+            popen.return_value.wait.assert_called_once_with(timeout=20)
+
+    def test_final_reboot_verification_reuses_activation_health_and_browser_checks(self) -> None:
+        runner = self.runner()
+        calls = []
+        with (
+            mock.patch.object(runner.sys, "argv", ["setup-reboot-e2e.py", "--verify"]),
+            mock.patch.object(runner, "activate_after_reboot", side_effect=lambda: calls.append("activate")),
+            mock.patch.object(runner, "verify_services", side_effect=lambda stage: calls.append(("health", stage))),
+            mock.patch.object(runner, "browser_sign_in", side_effect=lambda stage: calls.append(("browser", stage))),
+        ):
+            self.assertEqual(runner.main(), 0)
+        self.assertEqual(calls, ["activate", ("health", "the final reboot"), ("browser", "the final reboot")])
+
+    def test_post_switch_doctor_runs_only_after_canonical_reboot_verification(self) -> None:
+        source = (ROOT / "scripts/qemu-test.sh").read_text(encoding="utf-8")
+        final_boot = source.split('log "Rebooting the switched generation for persistence verification"', 1)[1]
+        verification = "nas-vm-guest-test --setup-reboot-e2e --verify"
+        self.assertIn(verification, final_boot)
+        self.assertLess(final_boot.index(verification), final_boot.index("nas-doctor --json"))
+
+    def test_reboot_health_does_not_ignore_failed_rollback(self) -> None:
+        runner = self.runner()
+        status = '{"runtimeSecretsActive":true,"poolPresent":true,"datasetPresent":true}'
+        with (
+            mock.patch.object(runner, "require", return_value=status),
+            mock.patch.object(runner, "run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+            self.assertRaisesRegex(runner.CheckError, "rollback.*failed"),
+        ):
+            runner.verify_services("test reboot")
 
     def test_reboot_reactivation_checks_locked_state_and_sends_password_only_on_stdin(self) -> None:
         runner = self.runner()

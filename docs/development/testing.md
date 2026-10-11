@@ -18,8 +18,8 @@ The local matrix `fast` command runs source and security checks only. The
 generated smart-fuzz tier is explicit (`test-matrix.py fuzz`) and should be run
 locally during pre-merge qualification. CI qualifies the full-stack QEMU
 matrix and the official-ISO installer tier on every pull-request commit;
-schedule and main pushes additionally run the installed adversarial
-qualification. `all` additionally runs
+schedule, main pushes, and explicit `full` dispatches additionally run the installed adversarial
+qualification. A `full` dispatch requires every qualification tier, including installed-command and active ZAP checks. `all` additionally runs
 the smart-fuzz, Nix configuration/negative-fixture matrix, built-browser,
 native NixOS VM, and official-ISO installer tiers. Each stage has an outer
 deadline; missing heavyweight tools or reviewed frontend artifacts are reported
@@ -288,7 +288,7 @@ needs QEMU/KVM; Nix runs inside the guest, so host-side Nix is not required.
 
 ## 8. Dynamic web security
 
-The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI fails closed when the reviewed repository variable is absent and retains HTML, JSON, and Markdown reports.
+The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Local runs require `NAS_ZAP_IMAGE` to be an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI uses its committed upstream image digest unless the optional repository variable overrides it, and retains HTML, JSON, and Markdown reports.
 
 For a local run:
 

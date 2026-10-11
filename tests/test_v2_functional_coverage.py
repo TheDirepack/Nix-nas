@@ -677,7 +677,7 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         self.assertIn("application.demo.admin", groups)
 
     # --------------------------------------------------------------- Apply is finite projection (mocked validates)
-    def test_apply_projection_is_atomic_and_validated(self) -> None:
+    def test_in_memory_projection_bundle_contains_effective_and_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             app_root = root / "apps"

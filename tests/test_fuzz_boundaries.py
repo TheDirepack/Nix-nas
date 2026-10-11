@@ -17,7 +17,7 @@ if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
 try:
-    from hypothesis import HealthCheck, event, given, settings, strategies as st, target
+    from hypothesis import HealthCheck, event, example, given, settings, strategies as st, target
 except ImportError:
     HAS_HYPOTHESIS = False
 else:
@@ -142,11 +142,13 @@ if HAS_HYPOTHESIS:
 
         @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
         @given(json_values(max_leaves=60))
+        @example([{"username": "alice"}])
+        @example([{"username": "../escape"}])
         def test_setup_config_never_returns_unsafe_account_identifiers(self, accounts: object) -> None:
-            raw = {"schemaVersion": 1, "storage": {"createPool": False}, "accounts": accounts, "features": {}}
+            raw = {"schemaVersion": 2, "storage": {"createPool": False}, "accounts": accounts, "services": {}}
             try:
                 normalized = setup_config.normalize_config(raw)
-            except (setup_config.SetupError, TypeError, ValueError):
+            except setup_config.SetupError:
                 event("setup-accounts:rejected")
                 return
             event("setup-accounts:accepted")

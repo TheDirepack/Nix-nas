@@ -136,6 +136,19 @@ class OperationLockTests(unittest.TestCase):
             with self.assertRaisesRegex(locks.OperationBusyError, "different operation"):
                 locks.validate_coordination_token("0" * 32, ("state",))
 
+    def test_owner_handoff_before_probe_rejects_old_metadata(self) -> None:
+        with locks.acquire_operation("parent", ("state",)) as parent:
+            original_probe = locks._try_lock
+
+            def handoff(handle, *, blocking):
+                writer = self.root / locks.LOCK_PATH_NAME
+                writer.write_text(locks._metadata("b" * 32, "new-owner", ("state",)))
+                original_probe(handle, blocking=blocking)
+
+            with mock.patch.object(locks, "_try_lock", side_effect=handoff):
+                with self.assertRaisesRegex(locks.OperationBusyError, "different operation"):
+                    locks.validate_coordination_token(parent.coordination_token, ("state",))
+
     def test_process_crash_releases_lock_and_invalidates_nested_token(self) -> None:
         self.root.mkdir(mode=0o770)
         environment = {**os.environ, "NAS_OPERATION_ROOT": str(self.root), "PYTHONPATH": str(SERVICES)}

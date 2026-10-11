@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +19,41 @@ import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
 
 class V2SourceWatchTests(unittest.TestCase):
+    def test_path_value_preserves_literal_characters_and_escapes_specifiers(self):
+        value = '/managed/source with spaces %n "quoted" \\literal.yaml'
+        self.assertEqual(source_watch._path_value(value), value.replace("%", "%%"))
+
+    def test_path_value_rejects_unit_directive_injection(self):
+        for character in ("\x00", "\r", "\n"):
+            with self.subTest(character=character), self.assertRaises(source_watch.SourceWatchProjectionError):
+                source_watch._path_value(f"/managed/source{character}Unit=other.service")
+
+    def test_path_value_rejects_endings_systemd_cannot_preserve(self):
+        for ending in (" ", "\t", "\\"):
+            with self.subTest(ending=ending), self.assertRaises(source_watch.SourceWatchProjectionError):
+                source_watch._path_value(f"/managed/source{ending}")
+
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
+    def test_generated_source_watch_is_accepted_by_real_systemd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / 'source with spaces 100% "quoted" \\literal.yaml'
+            source.write_text("services: {}\n")
+            watch = root / "nas-v2-source-demo.path"
+            watch.write_bytes(source_watch._path_unit("demo", [source]))
+            target = root / "nas-managed-services-reconcile.service"
+            true_bin = shutil.which("true")
+            self.assertIsNotNone(true_bin)
+            target.write_text(f"[Service]\nType=oneshot\nExecStart={true_bin}\n")
+            result = subprocess.run(
+                ["systemd-analyze", "verify", str(watch), str(target)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def manifest(self) -> dict:
         return {
             "schemaVersion": 1,
@@ -53,7 +90,7 @@ class V2SourceWatchTests(unittest.TestCase):
 
         unit_name = "nas-v2-source-demo.path"
         unit = files[output / "units" / unit_name].decode()
-        self.assertIn(f'PathChanged="{source.resolve()}"', unit)
+        self.assertIn(f"PathChanged={source.resolve()}\n", unit)
         self.assertIn("Unit=nas-managed-services-reconcile.service", unit)
         self.assertIn(unit_name, manifest["ownedUnits"])
         self.assertIn(unit_name, manifest["startUnits"])

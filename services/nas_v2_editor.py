@@ -223,6 +223,8 @@ def owner_unit(service_id: str, service: dict[str, Any]) -> str | None:
     if runtime.get("type") == "systemd":
         unit = runtime.get("unit")
         return unit if isinstance(unit, str) and unit else None
+    if runtime.get("type") == "compose":
+        return f"nas-v2-{service_id}.target"
     return f"nas-v2-{service_id}.service"
 
 
