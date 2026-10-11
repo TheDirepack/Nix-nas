@@ -147,9 +147,9 @@ class ReleaseAutomationTests(unittest.TestCase):
             source_three = self.add_source_commit(root, 3)
             current = prepare_release.Version.parse("1.2.3")
 
-            # Before the predecessor release is published, raw first-parent
-            # commit count does not consume patch numbers. The ordering job is
-            # what prevents these sources from racing in production.
+            # Before any source is published, skipped main commits do not
+            # consume release patch numbers. The manual workflow serializes
+            # publication and the allocator checks existing tagged sources.
             for source in (source_one, source_two, source_three):
                 self.assertEqual(str(prepare_release.next_version(root, current, source)), "1.2.4")
 
@@ -177,6 +177,46 @@ class ReleaseAutomationTests(unittest.TestCase):
             source_five = self.add_source_commit(root, 5)
             self.assertEqual(str(prepare_release.next_version(root, current, source_four)), "1.2.5")
             self.assertEqual(str(prepare_release.next_version(root, current, source_five)), "1.2.5")
+
+    def test_manual_publication_rejects_older_source_after_newer_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_repo(root)
+            older = self.add_source_commit(root, 1)
+            newer = self.add_source_commit(root, 2)
+            current = prepare_release.Version.parse("1.2.3")
+
+            subprocess.run(["git", "checkout", "-q", newer], cwd=root, check=True)
+            metadata = prepare_release.prepare_release(
+                root,
+                source_sha=newer,
+                metadata_out=root / ".tmp" / "newer.json",
+                password="Alpha-Bravo-Cedar-Delta-Ember",
+                release_date="2026-08-26",
+            )
+            self.assertEqual(metadata["version"], "1.2.4")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "release newer"], cwd=root, check=True)
+            subprocess.run(["git", "tag", "-a", "v1.2.4", "-m", "release newer"], cwd=root, check=True)
+
+            subprocess.run(["git", "checkout", "-q", older], cwd=root, check=True)
+            with self.assertRaisesRegex(RuntimeError, "older or divergent source"):
+                prepare_release.next_version(root, current, older)
+            rejected_metadata = root / ".tmp" / "rejected.json"
+            with self.assertRaisesRegex(RuntimeError, "older or divergent source"):
+                prepare_release.prepare_release(
+                    root,
+                    source_sha=older,
+                    metadata_out=rejected_metadata,
+                    password="Beacon-Birch-Cedar-Delta-Ember",
+                    release_date="2026-08-26",
+                )
+            self.assertFalse(rejected_metadata.exists())
+
+            subprocess.run(["git", "checkout", "-q", newer], cwd=root, check=True)
+            later = self.add_source_commit(root, 3)
+            self.assertEqual(str(prepare_release.next_version(root, current, later)), "1.2.5")
+            self.assertEqual(str(prepare_release.next_version(root, current, newer)), "1.2.4")
 
     def test_noncontiguous_published_release_history_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
