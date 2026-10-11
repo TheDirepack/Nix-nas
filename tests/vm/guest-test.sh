@@ -91,13 +91,37 @@ start_browser_port_forward() {
 }
 
 on_error() {
-  local rc=$?
+  local rc=$? proxy_status callback_resolve="$AUTHENTIK_PUBLIC_HOST"
+  [[ "$callback_resolve" =~ :[0-9]+$ ]] || callback_resolve+=":443"
   # Only script coordinates are logged: BASH_COMMAND and arguments can contain secrets.
   local source_file="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
   local source_line="${BASH_LINENO[0]:-0}"
   local source_function="${FUNCNAME[1]:-main}"
   printf '\nVM validation failed with status %s at %s:%s (%s).\n' \
     "$rc" "$source_file" "$source_line" "$source_function" >&2
+  # Cleanup removes the test-owned proxy log; report it before EXIT handlers.
+  if [[ -n "$BROWSER_PORT_FORWARD_PID" ]]; then
+    if kill -0 "$BROWSER_PORT_FORWARD_PID" 2>/dev/null; then
+      printf 'browser callback proxy still running\n' >&2
+    else
+      if wait "$BROWSER_PORT_FORWARD_PID"; then
+        proxy_status=0
+      else
+        proxy_status=$?
+      fi
+      printf 'browser callback proxy exit status: %s\n' "$proxy_status" >&2
+    fi
+    timeout --kill-after=2s 5s tail -n 200 -- "$BROWSER_PORT_FORWARD_LOG" >&2 || true
+  fi
+  printf 'browser callback listener diagnostics\n' >&2
+  timeout --kill-after=2s 5s ss -tlnp >&2 || true
+  timeout --kill-after=2s 5s curl --insecure --silent --show-error --output /dev/null \
+    --write-out 'direct guest HTTPS: %{http_code}\n' --connect-timeout 2 --max-time 4 \
+    --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/identity/" >&2 || true
+  timeout --kill-after=2s 5s curl --insecure --silent --show-error --output /dev/null \
+    --write-out 'browser callback HTTPS: %{http_code}\n' --connect-timeout 2 --max-time 4 \
+    --resolve "$callback_resolve:${NAS_BROWSER_HOST_ADDRESS:-127.0.0.1}" \
+    "https://$AUTHENTIK_PUBLIC_HOST/identity/" >&2 || true
   systemctl --failed --no-pager >&2 || true
   journalctl -b -n 250 --no-pager >&2 || true
   zpool status >&2 || true

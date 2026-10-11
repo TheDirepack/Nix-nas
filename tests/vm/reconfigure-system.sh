@@ -9,8 +9,22 @@ PACKAGE_UPGRADE="${NAS_TEST_PACKAGE_UPGRADE:-0}"
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 rebuild() {
-  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
-    "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false
+  local status
+  if timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false; then
+    return 0
+  else
+    status=$?
+  fi
+  printf 'VM-REBUILD-FAILURE: exit %s; collecting read-only diagnostics\n' "$status" >&2
+  # Snapshot monitoring may use cached inventory; retain both views on failure.
+  timeout --kill-after=2s 15s systemctl --failed --no-pager >&2 || true
+  timeout --kill-after=2s 15s journalctl --boot --no-pager --lines=100 \
+    --unit=sanoid.service --unit=nas-zfs-snapshot-health.service >&2 || true
+  timeout --kill-after=2s 15s zfs get -Hrpt snapshot creation >&2 || true
+  timeout --kill-after=2s 15s stat /var/cache/sanoid/snapshots.txt >&2 || true
+  timeout --kill-after=2s 15s cat /var/cache/sanoid/snapshots.txt >&2 || true
+  return "$status"
 }
 check_doctor() {
   local report="$1" status=0
