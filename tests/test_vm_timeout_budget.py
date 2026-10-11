@@ -163,6 +163,32 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
                 )
                 self.assertGreater(int(budget), 0)
 
+    def test_guest_error_diagnostics_identify_safe_script_location(self) -> None:
+        for guest in (GUEST_TEST, ROOT / "tests" / "vm" / "encrypted-guest-test.sh"):
+            with self.subTest(guest=guest.name):
+                source = guest.read_text(encoding="utf-8")
+                beginning = source.index("on_error() {\n")
+                ending = source.index("\n}\n", beginning) + len("\n}\n")
+                trap_function = source[beginning:ending]
+                script = (
+                    "set -Eeuo pipefail\n"
+                    + trap_function
+                    + "\nsystemctl() { :; }\njournalctl() { :; }\nzpool() { :; }\n"
+                    + "trap on_error ERR\n"
+                    + "private_failure() { false 'do-not-print-this-secret'; }\n"
+                    + "private_failure\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertRegex(result.stderr, r"validation failed with status 1 at [^\n]+:[0-9]+ \(private_failure\)")
+                self.assertNotIn("do-not-print-this-secret", result.stderr)
+
     def test_browser_timeout_is_charged_to_both_authorization_passes(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertGreaterEqual(guest.count("nas_vm_timeout_value browserAuthorization"), 2)
