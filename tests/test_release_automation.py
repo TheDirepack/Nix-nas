@@ -218,6 +218,30 @@ class ReleaseAutomationTests(unittest.TestCase):
             self.assertEqual(str(prepare_release.next_version(root, current, later)), "1.2.5")
             self.assertEqual(str(prepare_release.next_version(root, current, newer)), "1.2.4")
 
+            later_metadata = prepare_release.prepare_release(
+                root,
+                source_sha=later,
+                metadata_out=root / ".tmp" / "later.json",
+                password="Beacon-Birch-Cedar-Delta-Ember",
+                release_date="2026-08-27",
+            )
+            self.assertEqual(later_metadata["version"], "1.2.5")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "release later"], cwd=root, check=True)
+            subprocess.run(["git", "tag", "-a", "v1.2.5", "-m", "release later"], cwd=root, check=True)
+
+            subprocess.run(["git", "checkout", "-q", newer], cwd=root, check=True)
+            recovered = prepare_release.prepare_release(
+                root,
+                source_sha=newer,
+                metadata_out=root / ".tmp" / "recovered.json",
+                password="Different-Fresh-Words-Should-Ignore",
+                release_date="2026-08-28",
+            )
+            self.assertEqual(recovered["version"], "1.2.4")
+            self.assertEqual(recovered["existing_tag"], "v1.2.4")
+            self.assertEqual(recovered["bootstrap_password"], "Alpha-Bravo-Cedar-Delta-Ember")
+
     def test_noncontiguous_published_release_history_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
