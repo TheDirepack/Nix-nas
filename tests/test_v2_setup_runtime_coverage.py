@@ -396,6 +396,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
             mock.patch.object(setup, "pool_exists", return_value=False),
             mock.patch.object(setup, "dataset_exists", return_value=False),
             mock.patch.object(setup, "validate_storage_request"),
+            mock.patch.object(setup, "validate_unused_devices"),
             mock.patch.object(setup, "ZFS_ENCRYPTION", False),
             mock.patch.object(
                 setup,
@@ -411,7 +412,7 @@ class SetupRuntimeCoverageTests(unittest.TestCase):
         self.assertTrue(result["createdPool"])
         self.assertTrue(result["createdDataset"])
         rendered = [" ".join(call) for call in calls]
-        self.assertTrue(any("wipefs --all --force /dev/a" in line for line in rendered))
+        self.assertTrue(any("wipefs --all /dev/a" in line for line in rendered))
         self.assertTrue(any("zpool create" in line and "mirror /dev/a /dev/b" in line for line in rendered))
         self.assertTrue(any("zfs create" in line for line in rendered))
 

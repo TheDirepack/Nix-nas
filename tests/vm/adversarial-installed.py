@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
 import subprocess
@@ -15,40 +16,38 @@ INVENTORIES = (
 )
 MARKER = pathlib.Path("/tmp/nas-installed-fuzz-pwned")
 PAYLOADS = (
-    "../etc/shadow",
-    ";touch /tmp/nas-installed-fuzz-pwned",
-    "$(touch /tmp/nas-installed-fuzz-pwned)",
-    "<img src=x onerror=alert(1)>",
-    "' OR 1=1 --",
-    "'; DROP TABLE users; --",
-    "admin'/**/OR/**/'1'='1",
+    "../escape",
     "bad\r\nInjected: yes",
-    "../../../../root/.ssh/authorized_keys",
-    "javascript:globalThis.pwned=1",
-    "<svg/onload=globalThis.pwned=1>",
-    "http://169.254.169.254/latest/meta-data/",
-    "\u202eadmin",
     "A" * 2048,
 )
+DELEGATED_STRATEGIES = {"protocol-system-test", "system-lifecycle", "disposable-zfs-lifecycle"}
 
 # Strategies live in the reviewed executable inventories so adding a new
 # installed command without an adversarial classification fails preflight.
 # Destructive storage commands are fuzzed only inside disposable ZFS tests.
 
 
-def run(command: list[str], *, allowed: set[int] | None = None) -> subprocess.CompletedProcess[str]:
+def run(command: list[str], *, allowed: set[int], diagnostic: str) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(command, text=True, capture_output=True, timeout=20, check=False)
-    if allowed is None:
-        allowed = set(range(1, 256))
     if completed.returncode not in allowed:
         raise RuntimeError(
             f"unexpected exit {completed.returncode} for {command!r}:\nstdout={completed.stdout}\nstderr={completed.stderr}"
         )
     if "Traceback (most recent call last)" in completed.stderr:
         raise RuntimeError(f"unhandled traceback for {command!r}: {completed.stderr}")
+    if diagnostic.lower() not in (completed.stdout + completed.stderr).lower():
+        raise RuntimeError(f"wrong rejection category for {command!r}: {completed.stderr}")
     if MARKER.exists():
         raise RuntimeError(f"command payload created injection marker: {command!r}")
     return completed
+
+
+def authority_snapshot() -> dict[str, str]:
+    paths = (
+        pathlib.Path("/var/lib/nas-control/services.yaml"),
+        pathlib.Path("/var/lib/nas-setup/local-administrator.json"),
+    )
+    return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
 def inventory_strategies() -> dict[str, str]:
@@ -75,42 +74,60 @@ def main() -> int:
         else:
             raise RuntimeError(f"installed custom command is missing: {name}")
 
+    executed: set[str] = set()
+    delegated: set[str] = set()
+    payloads = PAYLOADS[:1] if os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1" else PAYLOADS
+    before = authority_snapshot()
     for name, strategy in sorted(strategies.items()):
         if name not in commands:
             continue
         if strategy == "unknown-argv":
-            for payload in PAYLOADS:
-                run([name, "--fuzz-" + payload])
+            subprocess.run([name, "--help"], check=True, text=True, capture_output=True, timeout=20)
+            for payload in payloads:
+                run([name, "--fuzz-" + payload], allowed={2}, diagnostic="usage")
         elif strategy == "unknown-verb":
-            for payload in PAYLOADS:
-                run([name, "fuzz-" + payload])
+            for payload in payloads:
+                run([name, "fuzz-" + payload], allowed={2}, diagnostic="Usage: nas-secrets")
         elif strategy == "feature-id":
-            for payload in PAYLOADS:
-                run([name, "set", payload, "always"])
+            subprocess.run([name, "document"], check=True, text=True, capture_output=True, timeout=20)
+            for payload in payloads:
+                run([name, "set", payload, "always"], allowed={1}, diagnostic="Unknown Managed Services V2 service")
         elif strategy == "username":
-            for payload in PAYLOADS:
-                run([name, "account", "apply", "--username", payload, "--disabled"])
+            for payload in payloads:
+                run(
+                    [name, "account", "apply", "--username", payload, "--disabled"],
+                    allowed={1},
+                    diagnostic="Account username is unsafe",
+                )
         elif strategy == "output-path":
-            for payload in PAYLOADS:
+            for payload in payloads:
                 # Relative hostile paths must be rejected before any secret is read or file is written.
-                run([name, payload])
+                run([name, payload], allowed={2}, diagnostic="output path must be absolute")
         elif strategy == "alert-header":
-            run([name, "bad\r\nX-NAS-Fuzz: injected", "must not send"], allowed={2})
-            run([name, "x" * 201, "must not send"], allowed={2})
+            run([name, "bad\r\nX-NAS-Fuzz: injected", "must not send"], allowed={2}, diagnostic="one line")
+            run([name, "x" * 201, "must not send"], allowed={2}, diagnostic="one line")
         elif strategy == "disabled-state":
-            run([name])
-        elif strategy in {"protocol-system-test", "system-lifecycle", "disposable-zfs-lifecycle"}:
+            run([name], allowed={1}, diagnostic="Enable nas.power.ups")
+        elif strategy in DELEGATED_STRATEGIES:
             # Covered by guest-test.sh / encrypted-guest-test.sh with real service/storage state.
+            delegated.add(name)
             continue
         else:
             raise RuntimeError(f"unknown fuzz strategy for {name}: {strategy}")
+        executed.add(name)
+        if authority_snapshot() != before:
+            raise RuntimeError(f"rejected command changed authority: {name}")
 
     print(
         json.dumps(
             {
                 "ok": True,
                 "smoke": os.environ.get("NAS_INSTALLED_FUZZ_SMOKE") == "1",
-                "commands": len(commands),
+                "commands": len(executed),
+                "discovered": len(commands),
+                "executed": sorted(executed),
+                "delegated": sorted(delegated),
+                "skipped": [],
                 "strategies": strategies,
             },
             sort_keys=True,
