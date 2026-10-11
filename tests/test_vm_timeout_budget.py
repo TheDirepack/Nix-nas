@@ -172,6 +172,10 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
                 trap_function = source[beginning:ending]
                 script = (
                     "set -Eeuo pipefail\n"
+                    "AUTHENTIK_PUBLIC_HOST=nas-test.local:8443\n"
+                    "PUBLIC_HOST=nas-test.local\n"
+                    "BROWSER_PORT_FORWARD_PID=\n"
+                    "BROWSER_PORT_FORWARD_LOG=/tmp/nas-test-absent-proxy.log\n"
                     + trap_function
                     + "\nsystemctl() { :; }\njournalctl() { :; }\nzpool() { :; }\n"
                     + "trap on_error ERR\n"
