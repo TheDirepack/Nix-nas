@@ -48,6 +48,7 @@ JSON_VALUE = st.recursive(
     max_leaves=40,
 )
 
+
 class CustomInputSurfaceFuzzTests(unittest.TestCase):
     @settings(max_examples=200, deadline=None)
     @given(INVALID_UNIT)
