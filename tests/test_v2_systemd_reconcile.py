@@ -18,6 +18,34 @@ import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
 
 class V2SystemdReconcileTests(unittest.TestCase):
+    def test_on_demand_restart_failure_preserves_previous_state_and_retry(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            source = projection / "nas-v2-demo.service"
+            source.write_text("[Service]\nExecStart=/bin/true\n")
+            manifest = projection / "manifest.json"
+            runtime = root / "systemd"
+            runtime.mkdir()
+            state = root / "state.json"
+            ctl, log = self.make_systemctl(root)
+            self.write_manifest(manifest, source, start=False)
+            kwargs = dict(
+                manifest=manifest, projection=projection, runtime=runtime, state=state, systemctl=ctl, log=log
+            )
+            self.run_reconcile(**kwargs)
+            before = state.read_bytes()
+            self.write_manifest(manifest, source, start=False, fingerprint="changed")
+            self.make_systemctl(root, fail_on={"try-restart"})
+            with self.assertRaisesRegex(reconcile.SystemdReconcileError, "try-restart"):
+                self.run_reconcile(**kwargs)
+            self.assertEqual(state.read_bytes(), before)
+            self.assertEqual((runtime / source.name).resolve(), source)
+            self.make_systemctl(root)
+            self.assertFalse(self.run_reconcile(**kwargs)["noop"])
+            self.assertEqual(json.loads(state.read_text())["fingerprints"][source.name], "changed")
+
     def test_systemctl_timeout_leaves_headroom_for_the_outer_rollback_guard(self) -> None:
         completed = mock.Mock(returncode=0, stdout="", stderr="")
         with mock.patch.object(reconcile.subprocess, "run", return_value=completed) as run:

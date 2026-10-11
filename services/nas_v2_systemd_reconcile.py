@@ -491,7 +491,7 @@ def reconcile(
                 _run_systemctl(systemctl, "restart", unit)
                 restarted.add(unit)
             else:
-                _run_systemctl(systemctl, "try-restart", unit, check=False)
+                _run_systemctl(systemctl, "try-restart", unit)
 
         units_to_start = (start - previous_start) - restarted
         for unit in sorted(units_to_start):

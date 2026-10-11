@@ -300,13 +300,11 @@ let
         echo "The stored ZFS key is not a 32-byte hexadecimal key." >&2
         exit 1
       }
-      local_tmp="$(mktemp)"
       root_tmp="$(sudo mktemp /run/nas-zfs-bootstrap.XXXXXX)"
       cleanup() {
         local rc=$? cleanup_failed=false
         trap - EXIT HUP INT TERM
         set +e
-        rm -f -- "$local_tmp" || cleanup_failed=true
         if [[ "$rc" -ne 0 && "$created_dataset" == true && "$bootstrap_committed" != true ]]; then
           # The dataset was created by this invocation and canmount=off kept it
           # inaccessible to ordinary writers. Remove it rather than leaving an
@@ -332,10 +330,8 @@ let
       trap 'exit 129' HUP
       trap 'exit 130' INT
       trap 'exit 143' TERM
-      chmod 0600 "$local_tmp"
-      printf '%s' "$key" > "$local_tmp"
-      sudo install -m 0400 -o root -g root "$local_tmp" "$root_tmp"
-      fingerprint="$(sha256sum "$local_tmp" | cut -d ' ' -f1)"
+      printf '%s' "$key" | sudo -n install -m 0400 -o root -g root /dev/stdin "$root_tmp"
+      fingerprint="$(printf '%s' "$key" | sha256sum | cut -d ' ' -f1)"
 
       sudo "$zfs" create -p \
         -o encryption="$algorithm" \
@@ -436,11 +432,8 @@ let
         echo "The stored ZFS key does not match the configured encryption root." >&2
         exit 1
       }
-      tmp="$(mktemp)"
-      trap 'rm -f -- "$tmp"; unset key' EXIT
-      chmod 0600 "$tmp"
-      printf '%s' "$key" > "$tmp"
-      sudo install -m 0400 -o root -g root "$tmp" "$output"
+      trap 'unset key' EXIT
+      printf '%s' "$key" | sudo -n install -m 0400 -o root -g root /dev/stdin "$output"
       echo "Wrote a root-only recovery key to $output. Store it offline and test it before relying on encryption."
     '';
   };
