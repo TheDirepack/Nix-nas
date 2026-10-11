@@ -159,8 +159,8 @@ class CustomInputSurfaceFuzzTests(unittest.TestCase):
         except setup_config.SetupError:
             return
         self.assertTrue(password)
-        self.assertNotIn("\${ch}", password)
-        self.assertNotIn("\${ch}", password)
+        self.assertNotIn("\n", password)
+        self.assertNotIn("\r", password)
         self.assertEqual(set(parsed_admin), set(administrator))
         self.assertEqual(parsed_admin, payload["administrator"])
 
