@@ -387,6 +387,7 @@ def _validate_lan_zone(lan_zone: str) -> None:
     if (
         not lan_zone
         or len(lan_zone) > 17
+        or not (lan_zone[0].isalnum() or lan_zone[0] == "_")
         or not all(character.isalnum() or character in "_-" for character in lan_zone)
     ):
         raise FirewalldProjectionError(f"unsafe firewalld LAN zone name {lan_zone!r}")
