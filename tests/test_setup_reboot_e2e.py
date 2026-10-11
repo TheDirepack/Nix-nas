@@ -217,6 +217,35 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn("setup reboot E2E failed: ORIGINAL-CHECK-FAILURE", output)
         self.assertIn("failure diagnostics unavailable: diagnostics-broke", output)
 
+    def test_detached_failure_emits_diagnostics_before_publishing_result_once(self) -> None:
+        for broken in (False, True):
+            with self.subTest(diagnostics_broken=broken):
+                runner = self.runner()
+                stderr = io.StringIO()
+                order = []
+
+                def diagnostics():
+                    order.append("diagnostics")
+                    if broken:
+                        raise RuntimeError("diagnostics-broke")
+                    return "DETACHED-FAILURE-EVIDENCE"
+
+                def finish(*_args, **_kwargs):
+                    order.append("result")
+
+                with (
+                    mock.patch.object(runner.sys, "argv", ["setup-reboot-e2e.py", "--resume"]),
+                    mock.patch.object(runner.sys, "stderr", stderr),
+                    mock.patch.object(runner, "read_state", return_value={"phase": "after-first-reboot"}),
+                    mock.patch.object(runner, "verify_reboot", side_effect=runner.CheckError("ORIGINAL-CHECK-FAILURE")),
+                    mock.patch.object(runner, "failure_diagnostics", side_effect=diagnostics),
+                    mock.patch.object(runner, "finish", side_effect=finish),
+                ):
+                    self.assertEqual(runner.main(), 1)
+                self.assertEqual(order, ["diagnostics", "result"])
+                self.assertIn("ORIGINAL-CHECK-FAILURE", stderr.getvalue())
+                self.assertIn("diagnostics-broke" if broken else "DETACHED-FAILURE-EVIDENCE", stderr.getvalue())
+
     def test_bridge_diagnostics_are_bounded_read_only_and_failure_only(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         diagnostics = source.split("def failure_diagnostics() -> str:", 1)[1].split("\ndef ", 1)[0]
@@ -230,9 +259,11 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn("timeout=15", diagnostics)
         for verb in ("stop", "restart", "start", "mask", "disable", "kill"):
             self.assertNotIn(f'"{verb}"', diagnostics)
-        main_handler = source.split("    except Exception as error:", 1)[1]
-        self.assertIn("failure_diagnostics()", main_handler)
-        self.assertLess(main_handler.index("setup reboot E2E failed"), main_handler.index("failure_diagnostics()"))
+        failure_handler = source.split("def report_failure(error: Exception) -> None:", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("failure_diagnostics()", failure_handler)
+        self.assertLess(
+            failure_handler.index("setup reboot E2E failed"), failure_handler.index("failure_diagnostics()")
+        )
 
 
 if __name__ == "__main__":
