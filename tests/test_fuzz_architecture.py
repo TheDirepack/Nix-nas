@@ -46,11 +46,11 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         self.assertNotIn("NAS_FUZZ_CASES", source)
         self.assertNotIn("for _ in range(", source)
 
-    def test_custom_input_fuzzer_covers_every_python_service_module(self) -> None:
+    def test_custom_input_properties_do_not_swallow_arbitrary_runtime_errors(self) -> None:
         source = (ROOT / "tests/test_fuzz_custom_inputs.py").read_text(encoding="utf-8")
-        for module in sorted(path.stem for path in (ROOT / "services").glob("nas_*.py")):
-            with self.subTest(module=module):
-                self.assertIn(f'"{module}"', source)
+        self.assertNotIn("SERVICE_INPUT_MODULES", source)
+        self.assertNotIn("expected_boundary_error", source)
+        self.assertIn("assertRaises(v2_spec.ManagedServicesV2Error)", source)
 
     def test_long_custom_input_fuzzer_is_owned_by_final_fuzz_tier(self) -> None:
         orchestrator = (ROOT / "scripts/run-fuzz.py").read_text(encoding="utf-8")

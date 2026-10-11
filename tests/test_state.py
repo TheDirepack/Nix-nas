@@ -30,6 +30,9 @@ class StateBundleTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         root = pathlib.Path(self.temporary.name)
+        self.signing_key = root / "signing-key"
+        self.signing_key.write_text("ab" * 32 + "\n")
+        self.signing_key.chmod(0o600)
         path_patch = mock.patch.multiple(
             state,
             DEFAULT_ROLLBACK_ROOT=root / "rollbacks",
@@ -87,7 +90,7 @@ class StateBundleTests(unittest.TestCase):
     def environment(self, registry: str) -> dict[str, str]:
         return {
             "NAS_STATE_ALLOW_UNPRIVILEGED": "1",
-            "NAS_STATE_ALLOW_UNSIGNED": "1",
+            "NAS_STATE_SIGNING_KEY": str(self.signing_key),
             "NAS_STATE_EXPORT_QUIESCE": "0",
             "NAS_STATE_REGISTRY_JSON": registry,
         }
@@ -173,6 +176,59 @@ class StateBundleTests(unittest.TestCase):
                 state.main()
         self.assertEqual(1, raised.exception.code)
         export.assert_not_called()
+
+    def test_missing_signing_key_cannot_enable_unsigned_bundles(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NAS_STATE_ALLOW_UNSIGNED": "1",
+                "NAS_STATE_SIGNING_KEY": str(pathlib.Path(self.temporary.name) / "missing-key"),
+            },
+        ):
+            with self.assertRaisesRegex(state.StateError, "signing key is unavailable"):
+                state.sign_manifest({"entries": []})
+
+    def test_explicit_empty_quiesce_policy_overrides_effective_state(self) -> None:
+        effective = pathlib.Path(self.temporary.name) / "effective.json"
+        effective.write_text(json.dumps({"services": {}, "derived": {"runtime": {}}}))
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NAS_STATE_QUIESCE_UNITS_JSON": "[]",
+                "NAS_V2_EFFECTIVE": str(effective),
+            },
+        ):
+            self.assertEqual(state.export_quiesce_units(), ())
+
+    def test_database_preparation_failure_restores_stopped_units(self) -> None:
+        snapshot = {"authentik.service": True, "postgresql.service": True}
+        with (
+            mock.patch.object(state, "require_root"),
+            mock.patch.object(state, "authorities", return_value=()),
+            mock.patch.object(state, "export_quiesce_units", return_value=tuple(snapshot)),
+            mock.patch.object(state, "capture_unit_state", return_value=snapshot),
+            mock.patch.object(
+                state,
+                "run_systemctl",
+                side_effect=lambda *args, **kwargs: self.completed(1 if args[0] == "is-active" else 0),
+            ) as systemctl,
+            mock.patch.object(state, "prepare_database_export", side_effect=state.StateError("preparation failed")),
+        ):
+            with self.assertRaisesRegex(state.StateError, "preparation failed"):
+                state.export_bundle(
+                    pathlib.Path(self.temporary.name) / "bundle.tar.gz", include_sensitive=True, quiesce=True
+                )
+        self.assertEqual(
+            [call.args for call in systemctl.call_args_list],
+            [
+                ("stop", "postgresql.service"),
+                ("stop", "authentik.service"),
+                ("is-active", "--quiet", "authentik.service"),
+                ("start", "authentik.service"),
+                ("is-active", "--quiet", "postgresql.service"),
+                ("start", "postgresql.service"),
+            ],
+        )
 
     def test_export_validate_and_diff_preserve_private_state_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -359,11 +415,7 @@ class StateBundleTests(unittest.TestCase):
             sensitive.write_text("sensitive", encoding="utf-8")
             registry = self.registry(public, sensitive, root / "optional")
             bundle = root / "valid.tar.gz"
-            environment = self.environment(registry) | {
-                # Keep this structural-manifest test independent of a signing key
-                # exported by the installed VM's production environment.
-                "NAS_STATE_SIGNING_KEY": str(root / "missing-signing-key"),
-            }
+            environment = self.environment(registry)
             with mock.patch.dict(os.environ, environment, clear=False):
                 state.export_bundle(bundle, include_sensitive=True)
                 extracted = root / "extracted"
@@ -372,6 +424,7 @@ class StateBundleTests(unittest.TestCase):
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 manifest["entries"] = []
                 manifest["complete"] = True
+                manifest["signature"] = state.sign_manifest(manifest)
                 manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
                 forged = root / "forged.tar.gz"
                 with tarfile.open(forged, "w:gz") as archive:

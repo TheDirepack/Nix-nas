@@ -137,11 +137,19 @@ def wait_ready(descriptor: dict[str, Any], *, systemctl: str = "systemctl") -> N
 
     deadline = time.monotonic() + timeout
     while True:
-        if all(probe_ready(probe, systemctl=systemctl) for probe in probes):
-            return
-        if time.monotonic() >= deadline:
+        ready = True
+        for probe in probes:
+            if time.monotonic() >= deadline:
+                raise ReadinessError(f"readiness timed out after {timeout} seconds")
+            if not probe_ready(probe, systemctl=systemctl):
+                ready = False
+                break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise ReadinessError(f"readiness timed out after {timeout} seconds")
-        time.sleep(interval_ms / 1000)
+        if ready:
+            return
+        time.sleep(min(interval_ms / 1000, remaining))
 
 
 def build_parser() -> argparse.ArgumentParser:
