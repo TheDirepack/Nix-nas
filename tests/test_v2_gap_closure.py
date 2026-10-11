@@ -680,7 +680,7 @@ class NetworkGapTests(unittest.TestCase):
             net.quadlet_network_reference({"services": {}}, "s", {"network": {"mode": "none"}, "listeners": {"x": {}}})
         files, manifest = net.compile_projection({"services": {}}, lan_zone="trusted")
         self.assertEqual(set(files), {f"policies/{net.remote_admin_policy_name()}"})
-        for unsafe_zone in ("bad zone!", "-unsafe"):
+        for unsafe_zone in ("bad zone!", "-unsafe", "näs-lan"):
             with self.subTest(zone=unsafe_zone), self.assertRaises(net.FirewalldProjectionError):
                 net.compile_projection({"services": {}}, lan_zone=unsafe_zone)
 
