@@ -256,7 +256,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
         self.assertIn("vm-bundle-handoff", text)
-        self.assertIn("retention-days': '2", text)
+        self.assertIn("retention-days': '14", text)
         self.assertIn("scripts/system-handoff.sh save", text)
         self.assertIn("scripts/system-handoff.sh verify", text)
         self.assertIn("nixosConfigurations.nas-ci-ready", self.system_handoff)
