@@ -143,7 +143,10 @@ class V2NativeFirewalldTests(unittest.TestCase):
                 ("target", []),
                 ("target", {}),
                 ("priority", 0),
+                ("ports", [["443", []]]),
+                ("ports", [["443", {}]]),
                 ("ports", [["65536", "tcp"]]),
+                ("richRules", [{"family": "ipv4", "destination": "192.0.2.0/24", "port": "443", "protocol": []}]),
                 ("richRules", [{"family": "ipv4", "destination": "invalid"}]),
                 ("ingress", "--evil"),
             )
