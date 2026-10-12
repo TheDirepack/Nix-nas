@@ -24,6 +24,13 @@ def snapshot_health_arguments() -> list[str]:
 
 
 class SanoidSnapshotHealthTests(unittest.TestCase):
+    def test_manual_initial_snapshot_uses_generated_sanoid_policy(self):
+        source = (ROOT / "modules/nas/config/systemd-services.nix").read_text(encoding="utf-8")
+        self.assertIn(
+            'ExecStart = "${pkgs.sanoid}/bin/sanoid --take-snapshots --configdir ${sanoidMonitorConfig}";',
+            source,
+        )
+
     def test_native_snapshot_health_requires_live_inventory(self):
         self.assertEqual(
             snapshot_health_arguments(), ["--monitor-snapshots", "--force-update", "--configdir", "CONFIG"]

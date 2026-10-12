@@ -71,6 +71,14 @@ flag. Keep this patch until upstream provides equivalent protection. Do not
 make the CSRF cookie HttpOnly: the native interface reads it to construct its
 CSRF request header. Preserve upstream session SameSite behavior as well.
 
+`authentik-blueprint-apply-failure.patch` makes the native `ak apply_blueprint`
+command exit nonzero when the importer's atomic apply returns false. Validation
+and apply are separate transactions; successful validation does not guarantee
+successful apply. Keep this patch until upstream propagates apply failures, so
+the V2 reconciler cannot commit its object manifest after a rolled-back import.
+The behavioral fixture in `test_authentik_blueprint_patch.py` covers the command
+from upstream Authentik 2025.12.6; dependency updates must preserve this contract.
+
 Authentik's [documented CSP](https://docs.goauthentik.io/security/security-hardening/#content-security-policy-csp)
 requires inline scripts and styles. The proxy adds that baseline only when
 upstream has not supplied a policy, preserving the stricter policy on uploaded
