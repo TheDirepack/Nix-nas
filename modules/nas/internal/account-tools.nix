@@ -28,6 +28,7 @@ let
           patches = [
             ../../../authentik/patches/authentik-accessibility.patch
             ../../../authentik/patches/authentik-known-device-cookie.patch
+            ../../../authentik/patches/authentik-blueprint-apply-failure.patch
           ];
         }
       else source;
