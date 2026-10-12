@@ -1,0 +1,14 @@
+diff --git a/authentik/blueprints/management/commands/apply_blueprint.py b/authentik/blueprints/management/commands/apply_blueprint.py
+--- a/authentik/blueprints/management/commands/apply_blueprint.py
++++ b/authentik/blueprints/management/commands/apply_blueprint.py
+@@ -29,7 +29,9 @@ class Command(BaseCommand):
+                         for log in logs:
+                             self.stderr.write(f"\t{log.logger}: {log.event}: {log.attributes}")
+                         sys_exit(1)
+-                    importer.apply()
++                    if not importer.apply():
++                        self.stderr.write("Blueprint failed to apply")
++                        sys_exit(1)
+ 
+     def add_arguments(self, parser):
+         parser.add_argument("blueprints", nargs="+", type=str)

@@ -39,6 +39,22 @@ check_doctor() {
 [[ "$(cat "$SENTINEL" 2>/dev/null || true)" == preserve-me ]] || fail "installer persistence sentinel is missing"
 [[ "$PACKAGE_UPGRADE" == 0 || "$PACKAGE_UPGRADE" == 1 ]] || fail "invalid package upgrade test mode"
 
+# The official ISO test creates a fresh pool shortly before the generation
+# drills. If the real 06:00 health timer fires before Sanoid's first hourly
+# snapshot, its valid "no snapshots" alarm also makes nixos-rebuild report an
+# unrelated failed unit. Establish a real snapshot baseline rather than
+# disabling monitoring or treating Sanoid's exit 2 as success.
+log "Initialize and verify Sanoid snapshots before NixOS generation drills"
+if ! timeout --kill-after=5s 180s systemctl start nas-zfs-manual-snapshot.service; then
+  journalctl -u nas-zfs-manual-snapshot.service --no-pager -n 50 >&2 || true
+  fail "could not initialize the first Sanoid snapshots"
+fi
+systemctl reset-failed nas-zfs-snapshot-health.service
+if ! timeout --kill-after=5s 90s systemctl start nas-zfs-snapshot-health.service; then
+  journalctl -u nas-zfs-snapshot-health.service --no-pager -n 50 >&2 || true
+  fail "freshly initialized Sanoid snapshots did not pass live-inventory health checks"
+fi
+
 if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
   # shellcheck source=/dev/null
   source "$SOURCE/tests/vm/package-upgrade-baseline.sh"
