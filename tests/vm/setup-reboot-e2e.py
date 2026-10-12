@@ -53,6 +53,12 @@ REQUIRED_SERVICES = {
     "grafana",
     "notifications",
 }
+BRIDGE_UNITS = (
+    "caddy.service",
+    "nas-cockpit-sso.service",
+    "authentik.service",
+    "nas-authentik-proxy-outpost.service",
+)
 
 
 class CheckError(RuntimeError):
@@ -85,6 +91,45 @@ def write_json(path: pathlib.Path, value: dict[str, Any]) -> None:
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)
+
+
+def failure_diagnostics() -> str:
+    """Bounded, read-only bridge-unit state before the failing VM is discarded."""
+    sections: list[str] = []
+    failed = run("systemctl", "--failed", "--no-pager", timeout=30)
+    sections.append(f"failed units:\n{(failed.stdout or failed.stderr)[-1500:]}")
+    for unit in BRIDGE_UNITS:
+        state = run(
+            "systemctl",
+            "show",
+            unit,
+            "--property=ActiveState,SubState,NRestarts,Result,ExecMainStartTimestampMonotonic,"
+            "ExecMainExitTimestampMonotonic",
+            timeout=15,
+        )
+        sections.append(f"{unit}:\n{(state.stdout or state.stderr).strip()}")
+    journal = run(
+        "journalctl",
+        "-b",
+        "-u",
+        "caddy.service",
+        "-u",
+        "nas-cockpit-sso.service",
+        "-n",
+        "120",
+        "--no-pager",
+        timeout=30,
+    )
+    sections.append(f"caddy and cockpit bridge journal:\n{(journal.stdout or journal.stderr)[-6000:]}")
+    return "\n".join(sections)
+
+
+def report_failure(error: Exception) -> None:
+    print(f"setup reboot E2E failed: {error}", file=sys.stderr, flush=True)
+    try:
+        print(failure_diagnostics(), file=sys.stderr, flush=True)
+    except Exception as diagnostic_error:
+        print(f"failure diagnostics unavailable: {diagnostic_error}", file=sys.stderr, flush=True)
 
 
 def read_state() -> dict[str, Any]:
@@ -392,6 +437,9 @@ def resume() -> None:
             return
         raise CheckError(f"unexpected setup reboot lifecycle phase: {phase!r}")
     except Exception as error:
+        # The host treats the result file as completion and may discard the VM
+        # immediately, so flush failure evidence before publishing that result.
+        report_failure(error)
         finish(False, error=f"{type(error).__name__}: {error}")
         raise
 
@@ -411,7 +459,8 @@ def main() -> int:
         else:
             resume()
     except Exception as error:
-        print(f"setup reboot E2E failed: {error}", file=sys.stderr)
+        if not arguments.resume:
+            report_failure(error)
         return 1
     return 0
 
