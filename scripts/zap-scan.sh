@@ -115,6 +115,9 @@ if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
 fi
 
 printf 'Running OWASP ZAP %s scan against %s\n' "$MODE" "$TARGET"
+reports=("$OUT_DIR/zap-$REPORT_PREFIX-$MODE.html" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.json" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.md")
+# Reused output directories must not supply evidence for an incomplete scan.
+rm -f -- "${reports[@]}"
 set +e
 timeout --signal=TERM --kill-after=30s "${process_timeout}s" \
   "$RUNTIME" "${runtime_args[@]}" "$IMAGE" "$scanner" \
@@ -134,7 +137,7 @@ if (( scan_rc != 0 )); then
   exit "$scan_rc"
 fi
 
-for report in "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.html" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.json" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.md"; do
+for report in "${reports[@]}"; do
   [[ -s "$report" ]] || die "ZAP did not produce expected report: $report"
 done
 printf 'OWASP ZAP %s scan completed: %s\n' "$MODE" "$OUT_DIR"
