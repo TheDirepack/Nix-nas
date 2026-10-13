@@ -58,6 +58,13 @@ There is no `nas_feature_control.py` implementation and no installed `nas-featur
 
 Pure policy and schema helpers should contain no service-management side effects. Runtime adapters project normalized V3 state into native mechanisms and fail closed when a requested semantic cannot be represented.
 
+`nas-v2 apply` delegates compilation to the reconciler once. Reconciler failures,
+including invalid YAML or schema violations, return exit 1 with
+`V2 reconcile failed: ...` on stderr and no success JSON. Offline commands
+(`validate`, `effective`, `plan`) and exceptions escaping CLI dispatch return
+exit 2 with a JSON error envelope. Callers must not assume apply failures use the
+offline error format.
+
 ## Front end
 
 - `cockpit/src/index.jsx`: React 18 entry point, PatternFly stylesheet imports, and Cockpit dark-theme sync.

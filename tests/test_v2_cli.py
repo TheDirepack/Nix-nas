@@ -124,6 +124,39 @@ services:
             self.assertTrue(json.loads(output)["ok"])
             self.assertEqual(entry.call_count, 1)
 
+    def test_apply_compile_failure_uses_reconciler_error_contract_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = root / "bad.yaml"
+            output = root / "effective.json"
+            for document in ("schemaVersion: 3\nservices: [\n", "schemaVersion: 3\nservices: []\n"):
+                with self.subTest(document=document):
+                    spec.write_text(document, encoding="utf-8")
+                    with (
+                        mock.patch.dict(os.environ, {}, clear=True),
+                        mock.patch.object(cli, "_compile", side_effect=AssertionError("apply must not precompile")),
+                    ):
+                        original_env = dict(os.environ)
+                        original_argv = sys.argv
+                        status, stdout, stderr = self.invoke(
+                            [
+                                "apply",
+                                "--spec",
+                                str(spec),
+                                "--schema",
+                                str(SCHEMA),
+                                "--no-platform",
+                                "--output",
+                                str(output),
+                            ]
+                        )
+                        self.assertEqual(dict(os.environ), original_env)
+                        self.assertIs(sys.argv, original_argv)
+                    self.assertEqual(status, 1)
+                    self.assertEqual(stdout, "")
+                    self.assertTrue(stderr.startswith("V2 reconcile failed: "), stderr)
+                    self.assertFalse(output.exists())
+
     def test_apply_does_not_compile_twice_or_mutate_process_state(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
