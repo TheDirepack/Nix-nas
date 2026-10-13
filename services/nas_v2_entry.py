@@ -160,6 +160,7 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
                     paths,
                     effective=generation / stable_paths[effective],
                     plan=generation / stable_paths[plan],
+                    unpublished_generation=True,
                 )
                 generated_caddy = replace(caddy, output=generation / stable_paths[caddy_output])
                 generated_systemd = replace(systemd, output_dir=generation / stable_paths[systemd_output])
