@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 import tempfile
@@ -25,6 +26,34 @@ class V2EntryTests(unittest.TestCase):
 
         paths = apply_mock.call_args.args[0]
         self.assertEqual(paths.desired, pathlib.Path("/var/lib/nas-control/services.yaml"))
+
+    def test_environment_authority_precedence_matches_cli(self) -> None:
+        for desired_value, legacy_value, expected in (
+            ("/authoritative/services.yaml", "/legacy/services.yaml", "/authoritative/services.yaml"),
+            ("", "/legacy/services.yaml", "/legacy/services.yaml"),
+            ("", "", "/var/lib/nas-control/services.yaml"),
+        ):
+            with self.subTest(desired=desired_value, legacy=legacy_value):
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"NAS_V2_DESIRED": desired_value, "NAS_V2_SPEC": legacy_value},
+                        clear=True,
+                    ),
+                    mock.patch.object(sys, "argv", ["nas_v2_entry.py"]),
+                    mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+                ):
+                    self.assertEqual(nas_v2_entry.main(), 0)
+                self.assertEqual(apply_mock.call_args.args[0].desired, pathlib.Path(expected))
+
+    def test_positional_authority_argument_remains_supported_for_nix_entrypoint(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {"NAS_V2_DESIRED": "/configured/services.yaml"}, clear=True),
+            mock.patch.object(sys, "argv", ["nas_v2_entry.py", "/explicit/services.yaml"]),
+            mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+        ):
+            self.assertEqual(nas_v2_entry.main(), 0)
+        self.assertEqual(apply_mock.call_args.args[0].desired, pathlib.Path("/explicit/services.yaml"))
 
     def test_disabled_firewalld_does_not_project_policy_when_runtime_parent_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -74,6 +103,40 @@ class V2EntryTests(unittest.TestCase):
         self.assertFalse(hasattr(projection, "nmcli_bin"))
         self.assertFalse(hasattr(projection, "install_bin"))
         self.assertFalse(hasattr(projection, "rm_bin"))
+
+    def test_explicit_options_override_environment_without_mutating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            spec = root / "services.yaml"
+            schema = root / "schema.json"
+            effective = root / "effective.json"
+            env = {
+                "NAS_V2_PLATFORM": str(root / "host-platform.json"),
+                "NAS_V2_DESIRED": "/unexpected/services.yaml",
+            }
+            with (
+                mock.patch.dict("os.environ", env, clear=True),
+                mock.patch.object(sys, "argv", ["nas_v2_entry.py", "/unexpected/argv.yaml"]),
+                mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+            ):
+                before = dict(os.environ)
+                status = nas_v2_entry.main(
+                    overrides={
+                        "NAS_V2_DESIRED": str(spec),
+                        "NAS_V2_SCHEMA": str(schema),
+                        "NAS_V2_EFFECTIVE": str(effective),
+                        "NAS_V2_PLATFORM": None,
+                        "NAS_V2_HISTORY_REPOSITORY": None,
+                    }
+                )
+                self.assertEqual(dict(os.environ), before)
+            self.assertEqual(status, 0)
+            paths = apply_mock.call_args.args[0]
+            self.assertEqual(paths.desired, spec)
+            self.assertEqual(paths.schema, schema)
+            self.assertEqual(paths.effective, effective)
+            self.assertIsNone(paths.platform)
+            self.assertIsNone(paths.history_repository)
 
 
 if __name__ == "__main__":
