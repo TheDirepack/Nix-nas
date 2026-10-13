@@ -823,44 +823,25 @@ def semantic_validate(
             exposure = route["exposure"]
             if exposure["type"] == "path":
                 for route_path in exposure["paths"]:
-                    # Exact duplicates (including normalized trailing-slash variants) must fail closed
                     normalized = route_path.rstrip("/") or "/"
-                    for existing_path, existing_owner in route_paths.items():
-                        existing_norm = existing_path.rstrip("/") or "/"
-                        if normalized == existing_norm:
+                    for registered_path, registered_owner in route_paths.items():
+                        if not _routes_conflict(normalized, registered_path):
+                            continue
+                        # The Caddy renderer orders parent/child paths longest first;
+                        # only identical paths and root shadowing remain ambiguous.
+                        if normalized == registered_path:
                             raise ManagedServicesV2Error(
-                                f"Duplicate route path {route_path!r}; already used by {existing_owner}",
+                                f"Duplicate route path {route_path!r}; already used by {registered_owner}",
                                 path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
                                 code="route-conflict",
                             )
-                    # Parent/child overlaps are allowed only when longest-path-first ordering is guaranteed.
-                    # The Caddy renderer sorts by longest path first, so /shares/admin is matched before /shares.
-                    # Root "/" shadowing everything and ambiguous non-parent overlaps must still fail closed.
-                    for registered_path, registered_owner in route_paths.items():
-                        if _routes_conflict(route_path, registered_path):
-                            registered_norm = registered_path.rstrip("/") or "/"
-                            if normalized == registered_norm:
-                                continue  # already handled as duplicate
-                            if normalized == "/" or registered_norm == "/":
-                                raise ManagedServicesV2Error(
-                                    f"Route path {route_path!r} overlaps {registered_path!r} already used by {registered_owner}",
-                                    path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
-                                    code="route-overlap",
-                                )
-                            first_parts = normalized.strip("/").split("/") if normalized != "/" else []
-                            second_parts = registered_norm.strip("/").split("/") if registered_norm != "/" else []
-                            is_parent = (
-                                first_parts[: len(second_parts)] == second_parts
-                                or second_parts[: len(first_parts)] == first_parts
-                            )
-                            if is_parent:
-                                continue
+                        if normalized == "/" or registered_path == "/":
                             raise ManagedServicesV2Error(
                                 f"Route path {route_path!r} overlaps {registered_path!r} already used by {registered_owner}",
                                 path=f"$.services.{service_id}.routes.{route_id}.exposure.paths",
                                 code="route-overlap",
                             )
-                    route_paths[route_path] = f"{service_id}:{route_id}"
+                    route_paths[normalized] = f"{service_id}:{route_id}"
             else:
                 for hostname in exposure["hostnames"]:
                     owner = route_hostnames.get(hostname)
