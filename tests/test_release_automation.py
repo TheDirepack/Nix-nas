@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -147,9 +148,9 @@ class ReleaseAutomationTests(unittest.TestCase):
             source_three = self.add_source_commit(root, 3)
             current = prepare_release.Version.parse("1.2.3")
 
-            # Before the predecessor release is published, raw first-parent
-            # commit count does not consume patch numbers. The ordering job is
-            # what prevents these sources from racing in production.
+            # Before any source is published, skipped main commits do not
+            # consume release patch numbers. The manual workflow serializes
+            # publication and the allocator checks existing tagged sources.
             for source in (source_one, source_two, source_three):
                 self.assertEqual(str(prepare_release.next_version(root, current, source)), "1.2.4")
 
@@ -177,6 +178,70 @@ class ReleaseAutomationTests(unittest.TestCase):
             source_five = self.add_source_commit(root, 5)
             self.assertEqual(str(prepare_release.next_version(root, current, source_four)), "1.2.5")
             self.assertEqual(str(prepare_release.next_version(root, current, source_five)), "1.2.5")
+
+    def test_manual_publication_rejects_older_source_after_newer_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_repo(root)
+            older = self.add_source_commit(root, 1)
+            newer = self.add_source_commit(root, 2)
+            current = prepare_release.Version.parse("1.2.3")
+
+            subprocess.run(["git", "checkout", "-q", newer], cwd=root, check=True)
+            metadata = prepare_release.prepare_release(
+                root,
+                source_sha=newer,
+                metadata_out=root / ".tmp" / "newer.json",
+                password="Alpha-Bravo-Cedar-Delta-Ember",
+                release_date="2026-08-26",
+            )
+            self.assertEqual(metadata["version"], "1.2.4")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "release newer"], cwd=root, check=True)
+            subprocess.run(["git", "tag", "-a", "v1.2.4", "-m", "release newer"], cwd=root, check=True)
+
+            subprocess.run(["git", "checkout", "-q", older], cwd=root, check=True)
+            with self.assertRaisesRegex(RuntimeError, "older or divergent source"):
+                prepare_release.next_version(root, current, older)
+            rejected_metadata = root / ".tmp" / "rejected.json"
+            with self.assertRaisesRegex(RuntimeError, "older or divergent source"):
+                prepare_release.prepare_release(
+                    root,
+                    source_sha=older,
+                    metadata_out=rejected_metadata,
+                    password="Beacon-Birch-Cedar-Delta-Ember",
+                    release_date="2026-08-26",
+                )
+            self.assertFalse(rejected_metadata.exists())
+
+            subprocess.run(["git", "checkout", "-q", newer], cwd=root, check=True)
+            later = self.add_source_commit(root, 3)
+            self.assertEqual(str(prepare_release.next_version(root, current, later)), "1.2.5")
+            self.assertEqual(str(prepare_release.next_version(root, current, newer)), "1.2.4")
+
+            later_metadata = prepare_release.prepare_release(
+                root,
+                source_sha=later,
+                metadata_out=root / ".tmp" / "later.json",
+                password="Beacon-Birch-Cedar-Delta-Ember",
+                release_date="2026-08-27",
+            )
+            self.assertEqual(later_metadata["version"], "1.2.5")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "release later"], cwd=root, check=True)
+            subprocess.run(["git", "tag", "-a", "v1.2.5", "-m", "release later"], cwd=root, check=True)
+
+            subprocess.run(["git", "checkout", "-q", newer], cwd=root, check=True)
+            recovered = prepare_release.prepare_release(
+                root,
+                source_sha=newer,
+                metadata_out=root / ".tmp" / "recovered.json",
+                password="Different-Fresh-Words-Should-Ignore",
+                release_date="2026-08-28",
+            )
+            self.assertEqual(recovered["version"], "1.2.4")
+            self.assertEqual(recovered["existing_tag"], "v1.2.4")
+            self.assertEqual(recovered["bootstrap_password"], "Alpha-Bravo-Cedar-Delta-Ember")
 
     def test_noncontiguous_published_release_history_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -307,7 +372,7 @@ class ReleaseAutomationTests(unittest.TestCase):
         epoch = json.loads((ROOT / prepare_release.RELEASE_EPOCH_PATH).read_text(encoding="utf-8"))
         self.assertEqual(epoch, {"version": "0.1.0"})
 
-    def test_release_trigger_graph_is_ci_gated_ordered_and_loop_free(self) -> None:
+    def test_release_is_manual_only_and_requires_successful_main_ci(self) -> None:
         release = yaml.load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
             Loader=yaml.BaseLoader,
@@ -316,35 +381,22 @@ class ReleaseAutomationTests(unittest.TestCase):
             (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"),
             Loader=yaml.BaseLoader,
         )
-        release_triggers = release["on"]
-        ci_triggers = ci["on"]
-
-        self.assertEqual(set(release_triggers), {"workflow_run"})
-        self.assertEqual(release_triggers["workflow_run"]["workflows"], ["CI"])
-        self.assertEqual(release_triggers["workflow_run"]["types"], ["completed"])
-        self.assertEqual(release_triggers["workflow_run"]["branches"], ["main"])
-        self.assertNotIn("tags", ci_triggers["push"])
-        self.assertEqual(ci_triggers["push"]["branches"], ["main"])
-        self.assertIn("github.event.workflow_run.head_sha", release["concurrency"]["group"])
+        self.assertEqual(set(release["on"]), {"workflow_dispatch"})
+        self.assertEqual(ci["on"]["push"]["branches"], ["main"])
+        self.assertNotIn("tags", ci["on"]["push"])
+        self.assertEqual(release["concurrency"]["group"], "manual-release-main")
         self.assertEqual(release["concurrency"]["cancel-in-progress"], "false")
-        self.assertNotIn("queue", release["concurrency"])
-
+        self.assertNotIn("ordering", release["jobs"])
         eligibility = release["jobs"]["eligibility"]
-        eligibility_text = repr(eligibility)
-        self.assertIn("workflow_run.conclusion == 'success'", eligibility_text)
-        self.assertIn("workflow_run.event == 'push'", eligibility_text)
-        self.assertIn("workflow_run.head_branch == 'main'", eligibility_text)
-        self.assertIn("commits/$SOURCE_SHA/pulls", eligibility_text)
-        self.assertIn(".merged_at != null", eligibility_text)
-        self.assertIn('.base.ref == "main"', eligibility_text)
-        self.assertIn(".merge_commit_sha == env.SOURCE_SHA", eligibility_text)
-
-        ordering = release["jobs"]["ordering"]
-        self.assertEqual(ordering["needs"], ["eligibility"])
-        self.assertIn("wait-release-predecessor.py", repr(ordering))
-        self.assertIn("--workflow ci.yml", repr(ordering))
-        self.assertEqual(release["jobs"]["build"]["needs"], ["eligibility", "ordering"])
-        self.assertIn("needs.ordering.result == 'success'", str(release["jobs"]["build"]["if"]))
+        self.assertEqual(eligibility["if"], "github.ref == 'refs/heads/main'")
+        text = repr(eligibility)
+        self.assertIn("github.sha", text)
+        self.assertIn("commits/$SOURCE_SHA/pulls", text)
+        self.assertIn(".merge_commit_sha == env.SOURCE_SHA", text)
+        self.assertIn("workflow_runs[]", text)
+        self.assertIn('conclusion == "success"', text)
+        self.assertIn("ci_run_id", eligibility["outputs"])
+        self.assertEqual(release["jobs"]["build"]["needs"], ["eligibility"])
 
     def test_release_build_is_read_only_and_only_publish_job_can_write(self) -> None:
         workflow = yaml.load(
@@ -354,8 +406,6 @@ class ReleaseAutomationTests(unittest.TestCase):
         jobs = workflow["jobs"]
         self.assertEqual(workflow["permissions"]["contents"], "read")
         self.assertEqual(workflow["permissions"]["actions"], "read")
-        self.assertEqual(jobs["ordering"]["permissions"]["contents"], "read")
-        self.assertEqual(jobs["ordering"]["permissions"]["actions"], "read")
         self.assertEqual(jobs["build"]["permissions"]["contents"], "read")
         self.assertEqual(jobs["build"]["permissions"]["actions"], "read")
         self.assertEqual(jobs["publish"]["permissions"]["contents"], "write")
@@ -365,11 +415,31 @@ class ReleaseAutomationTests(unittest.TestCase):
         self.assertIn("persist-credentials", build_text)
         self.assertIn("release-candidate.bundle", build_text)
         self.assertIn("vm-bundle-handoff", build_text)
-        self.assertIn("workflow_run.id", build_text)
+        self.assertIn("needs.eligibility.outputs.ci_run_id", build_text)
         self.assertIn('git push origin "refs/tags/$tag"', publish_text)
         self.assertNotIn("refs/heads/main", publish_text)
         self.assertNotIn("nix build", publish_text)
         self.assertNotIn("npm ", publish_text)
+
+    def test_release_unit_test_patterns_resolve_to_existing_tests(self) -> None:
+        workflow = yaml.load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"),
+            Loader=yaml.BaseLoader,
+        )
+        patterns = []
+        for job in workflow["jobs"].values():
+            for step in job["steps"]:
+                for line in step.get("run", "").splitlines():
+                    if "./scripts/run-unit-tests.py" not in line:
+                        continue
+                    command = shlex.split(line)
+                    if "./scripts/run-unit-tests.py" not in command:
+                        continue
+                    pattern = command[command.index("--pattern") + 1] if "--pattern" in command else "test_*.py"
+                    patterns.append(pattern)
+                    with self.subTest(pattern=pattern):
+                        self.assertTrue(list((ROOT / "tests").glob(pattern)), f"no test files matched {pattern!r}")
+        self.assertIn("test_release_automation.py", patterns)
 
     def test_release_workflow_uses_pinned_diceware_and_release_only_commit(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -380,7 +450,6 @@ class ReleaseAutomationTests(unittest.TestCase):
         )
         self.assertIn("diceware", flake)
         self.assertIn("scripts/prepare_release.py", workflow)
-        self.assertIn("scripts/wait-release-predecessor.py", workflow)
         self.assertIn("./scripts/package-release.sh --source-only", workflow)
         self.assertIn("gh release create", workflow)
         self.assertIn("gh release upload", workflow)

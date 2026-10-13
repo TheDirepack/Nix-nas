@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import runpy
 import unittest
 from typing import Any
 
@@ -206,7 +207,17 @@ class CiWorkflowGraphTests(unittest.TestCase):
         def exclusions(text):
             return set(re.findall(r"--exclude\s+(test_\w+\.py)", text))
 
-        self.assertEqual(exclusions(str(baseline["run"])), exclusions(unit_script))
+        # Current qualification uses the centralized fast group; the checked-out
+        # main baseline still uses its explicit exclusions until this PR merges.
+        # Verify both select exactly the same tests rather than comparing flags.
+        baseline_exclusions = exclusions(str(baseline["run"]))
+        if "--group fast" in unit_script:
+            runner = runpy.run_path(str(ROOT / "scripts" / "run-unit-tests.py"))
+            current_exclusions = set(runner["FAST_SUITE_EXCLUSIONS"])
+        else:
+            current_exclusions = exclusions(unit_script)
+        self.assertTrue(baseline_exclusions)
+        self.assertEqual(baseline_exclusions, current_exclusions)
         for step in self.jobs["coverage-diff"]["steps"]:
             if step.get("id") == "main-coverage":
                 key = step["with"]["key"]
@@ -271,7 +282,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
         self.assertIn("vm-bundle-handoff", text)
-        self.assertIn("retention-days': '2", text)
+        self.assertIn("retention-days': '14", text)
         self.assertIn("scripts/system-handoff.sh save", text)
         self.assertIn("scripts/system-handoff.sh verify", text)
         self.assertIn("nixosConfigurations.nas-ci-ready", self.system_handoff)

@@ -224,6 +224,9 @@ process_timeout="${NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS:-$((DURATION * 60 + 600))}
 
 printf 'Running state-aware ZAP %s scan against %s (%s minute budget, %s browser workers)\n' \
   "$MODE" "$TARGET" "$DURATION" "$BROWSERS"
+reports=("$OUT_DIR/$report_prefix.html" "$OUT_DIR/$report_prefix.json")
+# Reused output directories must not supply evidence for an incomplete scan.
+rm -f -- "${reports[@]}"
 set +e
 timeout --signal=TERM --kill-after=60s "${process_timeout}s" \
   "$RUNTIME" "${runtime_args[@]}" "$IMAGE" \
@@ -236,7 +239,7 @@ if [[ "$rc" == 124 || "$rc" == 137 ]]; then
 fi
 (( rc == 0 )) || die "ZAP automation $MODE scan failed with exit code $rc"
 
-for report in "$OUT_DIR/$report_prefix.html" "$OUT_DIR/$report_prefix.json"; do
+for report in "${reports[@]}"; do
   [[ -s "$report" ]] || die "ZAP automation did not produce expected report: $report"
 done
 printf 'ZAP automation %s scan completed: %s\n' "$MODE" "$OUT_DIR"

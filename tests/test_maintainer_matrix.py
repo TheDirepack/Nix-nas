@@ -203,6 +203,71 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         self.assertEqual(result.returncode, 2)
         self.assertIn("NAS_ZAP_CONFIRM_ACTIVE=1", result.stderr)
 
+    def test_zap_wrappers_require_reports_from_the_current_scan(self) -> None:
+        fake_bin = pathlib.Path(self._temporary.name) / "fresh-evidence-bin"
+        fake_bin.mkdir()
+        runtime = fake_bin / "docker"
+        runtime.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "out = pathlib.Path(args[args.index('-v') + 1].split(':', 1)[0])\n"
+            "for name in os.environ['CURRENT_REPORTS'].split(','):\n"
+            "    if name:\n"
+            "        (out / name).write_text('current scan\\n')\n"
+            "raise SystemExit(int(os.environ['CURRENT_STATUS']))\n",
+            encoding="utf-8",
+        )
+        runtime.chmod(0o755)
+        scans = (
+            ("zap-scan.sh", "baseline", "zap-scan-baseline", ("html", "json", "md")),
+            ("zap-scan.sh", "full", "zap-scan-full", ("html", "json", "md")),
+            ("zap-automation-scan.sh", "unauthenticated", "zap-automation-unauthenticated", ("html", "json")),
+            ("zap-automation-scan.sh", "authenticated", "zap-automation-authenticated", ("html", "json")),
+        )
+        for script, mode, prefix, suffixes in scans:
+            names = [f"{prefix}.{suffix}" for suffix in suffixes]
+            cases = (([], 0), (names[:1], 0), (names, 0), (names, 2))
+            for index, (current, status) in enumerate(cases):
+                with self.subTest(script=script, mode=mode, reports=current, scanner_status=status):
+                    out = pathlib.Path(self._temporary.name) / f"evidence-{mode}-{index}"
+                    out.mkdir()
+                    for name in names:
+                        (out / name).write_text("stale scan\n", encoding="utf-8")
+                    unrelated = out / "other-scan.json"
+                    unrelated.write_text("preserve other scan\n", encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", f"scripts/{script}", mode, "https://127.0.0.1/"],
+                        cwd=self.clean_root,
+                        env={
+                            **os.environ,
+                            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                            "NAS_CONTAINER_RUNTIME": "docker",
+                            "NAS_ZAP_IMAGE": "example.invalid/zap@sha256:" + "a" * 64,
+                            "NAS_ZAP_OUT_DIR": str(out),
+                            "NAS_ZAP_CONFIRM_ACTIVE": "1",
+                            "NAS_ZAP_AUTH_USER": "fixture-user",
+                            "NAS_ZAP_AUTH_PASSWORD": "fixture-password",
+                            "CURRENT_REPORTS": ",".join(current),
+                            "CURRENT_STATUS": str(status),
+                        },
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    expected = 0 if current == names and status == 0 else 2
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    if status == 0 and current != names:
+                        self.assertIn("did not produce expected report", result.stderr)
+                    for name in names:
+                        path = out / name
+                        if name in current:
+                            self.assertEqual(path.read_text(), "current scan\n")
+                        else:
+                            self.assertFalse(path.exists(), f"stale evidence retained: {path}")
+                    self.assertEqual(unrelated.read_text(), "preserve other scan\n")
+
     def test_zap_automation_writes_reports_as_the_invoking_user(self) -> None:
         fake_bin = pathlib.Path(self._temporary.name) / "automation-bin"
         fake_bin.mkdir()

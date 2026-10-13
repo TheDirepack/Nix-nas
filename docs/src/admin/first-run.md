@@ -44,7 +44,7 @@ on the artifact you are running:
 - a development checkout or development-built image uses the fixed
   `nas-admin-first-boot` password so first-run, VM, and browser tests remain
   repeatable;
-- an automated tagged GitHub Release uses the five-word Diceware password shown
+- a manually published tagged GitHub Release uses the five-word Diceware password shown
   in that release's notes. The same password is embedded in that release-only
   source commit and package.
 
@@ -196,7 +196,7 @@ reachable only after signing in with the bootstrap Authentik identity.
 
 During first start, Authentik creates its temporary `akadmin` bootstrap identity
 using the credential for the exact source artifact: `nas-admin-first-boot` for
-the development tree, or the five-word password published with an automated
+the development tree, or the five-word password published with a manually published
 tagged release. Setup creates and verifies the chosen `nas_admin` administrator,
 then retires that bootstrap identity. After protected services are ready, use
 Authentik through Caddy for all browser access.
