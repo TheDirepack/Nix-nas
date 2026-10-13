@@ -127,7 +127,7 @@ def release_record(
     """Return one release tag's stamped version and main-source parent.
 
     Same-series tags that do not point at the release-only commit shape are
-    ignored. In particular, an unrelated/manual tag cannot move automatic
+    ignored. In particular, an unrelated/manual tag cannot move generated
     version allocation merely by using a larger numeric suffix.
     """
     version = Version(current.major, current.minor, patch)
@@ -170,7 +170,7 @@ def published_releases(
     for tag, version, _ in releases:
         if version.patch != expected_patch:
             raise RuntimeError(
-                f"published automated release history is not contiguous: expected "
+                f"published release history is not contiguous: expected "
                 f"v{current.major}.{current.minor}.{expected_patch}, found {tag}"
             )
         expected_patch += 1
@@ -193,17 +193,28 @@ def release_tag_for_source(root: pathlib.Path, current: Version, source_sha: str
 
 
 def next_version(root: pathlib.Path, current: Version, source_sha: str) -> Version:
-    """Allocate exactly one patch per published qualified main merge.
+    """Allocate the next patch for one explicitly selected main source.
 
-    Source ordering is guaranteed before this function runs by the release
-    predecessor barrier. Existing tags remain authoritative for publication
-    retries. Otherwise the first published release in a series is baseline+1
-    and each later published release advances exactly one patch, independent of
-    whether GitHub used merge, squash, or a multi-commit rebase merge.
+    A new manual publication must follow every previously tagged source in the
+    current version epoch. Previously published sources may still be rerun.
     """
     existing = release_tag_for_source(root, current, source_sha)
     if existing is not None:
         return existing[1]
+
+    anchor = version_anchor(root, current, source_sha)
+    for tag, patch in matching_tags(root, current):
+        if patch <= current.patch:
+            continue
+        record = release_record(root, current, tag, patch)
+        if record is None:
+            continue
+        tagged_source = record[2]
+        if is_ancestor(root, anchor, tagged_source) and not is_ancestor(root, tagged_source, source_sha):
+            raise RuntimeError(
+                f"cannot publish older or divergent source {source_sha[:12]} after tagged {tag}; "
+                "select a descendant of the latest published source, or rerun its existing tag"
+            )
 
     releases = published_releases(root, current, source_sha)
     patch = current.patch + 1 if not releases else releases[-1][1].patch + 1
@@ -413,7 +424,7 @@ def prepare_release(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stamp a qualified main source commit for an automated NixOS NAS release"
+        description="Stamp a qualified main source commit for a manually requested NixOS NAS release"
     )
     parser.add_argument(
         "--root",

@@ -13,7 +13,7 @@ This directory documents how the appliance is built and validated. It is intenti
 - [State bundle scope](state-bundle-scope.md) — boundary between small control-configuration bundles and Restic/ZFS/native application recovery.
 - [ADR-0001: Authentik-only browser access](adr-0001-authentik-only-browser-access.md) — browser authentication and recovery boundary.
 - [Dependency policy](dependencies.md) — immutable-input and upstream-update constraints.
-- [Automated merge releases](automated-releases.md) — release-only version stamping, Diceware bootstrap credentials, build/publish flow, and retry behavior.
+- [Manually triggered source releases](automated-releases.md) — explicit operator dispatch, exact-main-CI qualification, release-only version stamping, Diceware bootstrap credentials, and safe reruns.
 - [Release qualification checklist](release-checklist.md) — evidence required before an install-ready designation.
 - [Design system](../../.interface-design/system.md) — Cockpit UI direction, PatternFly authority, and component rules.
 
