@@ -55,6 +55,7 @@ FLOORS = {
     "services/nas_operation_lock.py": 73.0,
     "services/nas_setup.py": 62.0,
     "services/nas_setup_config.py": 95.0,
+    "services/nas_setup_first_start.py": 75.0,
     "services/nas_state.py": 65.0,
     "services/nas_syncthing_devices.py": 84.0,
     "services/nas_v2_accelerator.py": 69.0,

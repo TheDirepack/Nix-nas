@@ -5,10 +5,11 @@ from __future__ import annotations
 import copy
 import contextlib
 import io
+import json
 import pathlib
 import sys
 import unittest
-from hypothesis import given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services"))
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT / "services"))
 import nas_common as common  # noqa: E402
 import nas_logging  # noqa: E402
 import nas_setup_config as setup_config  # noqa: E402
+import nas_setup_first_start as first_start  # noqa: E402
 import nas_v2_caddy as caddy  # noqa: E402
 import nas_v2_spec as v2_spec  # noqa: E402
 import nas_v2_activation as activation  # noqa: E402
@@ -38,6 +40,13 @@ INVALID_TEXT = st.tuples(TEXT, st.sampled_from(["\x00", "\r", "\n"]), TEXT).map(
 )
 INVALID_UNIT = INVALID_TEXT | st.sampled_from(["", "../demo.service", "demo"])
 INVALID_ID = INVALID_TEXT | st.sampled_from(["", "A", "../escape", "a" * 65])
+
+
+JSON_VALUE = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.text(max_size=512),
+    lambda children: st.lists(children, max_size=12) | st.dictionaries(st.text(max_size=64), children, max_size=12),
+    max_leaves=40,
+)
 
 
 class CustomInputSurfaceFuzzTests(unittest.TestCase):
@@ -89,6 +98,71 @@ class CustomInputSurfaceFuzzTests(unittest.TestCase):
         self.assertEqual(sanitized["password"], "[redacted]")
         self.assertEqual(sanitized["nested"]["token"], "[redacted]")
         self.assertEqual(sanitized["status"], "failed")
+
+    @settings(max_examples=220, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @given(
+        field=st.sampled_from(
+            [
+                "schemaVersion",
+                "jobId",
+                "reservationToken",
+                "config",
+                "planDigest",
+                "devices",
+                "allowDestructiveStorage",
+                "confirmPasswordReapply",
+                "encryptStorage",
+            ]
+        ),
+        value=JSON_VALUE,
+    )
+    def test_first_start_job_request_accepts_only_the_validated_contract(self, field: str, value: object) -> None:
+        payload = {
+            "schemaVersion": 1,
+            "jobId": "a" * 24,
+            "reservationToken": "b" * 32,
+            "config": "/etc/nas-control/setup.json",
+            "planDigest": "c" * 64,
+            "devices": ["/dev/disk/by-id/example"],
+            "allowDestructiveStorage": False,
+            "confirmPasswordReapply": False,
+            "encryptStorage": True,
+        }
+        payload[field] = value
+        try:
+            parsed = first_start.parse_first_start_request(json.dumps(payload))
+        except setup_config.SetupError:
+            return
+        self.assertEqual(parsed, payload)
+        self.assertEqual(set(parsed), set(payload))
+        self.assertIsInstance(parsed["jobId"], str)
+        self.assertIsInstance(parsed["reservationToken"], str)
+        self.assertIsInstance(parsed["planDigest"], str)
+        self.assertTrue(pathlib.Path(parsed["config"]).is_absolute())
+        self.assertEqual(len(parsed["devices"]), len(set(parsed["devices"])))
+        for flag in ("allowDestructiveStorage", "confirmPasswordReapply", "encryptStorage"):
+            self.assertIs(type(parsed[flag]), bool)
+
+    @settings(max_examples=220, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @given(field=st.sampled_from(["keepass", "administrator"]), value=JSON_VALUE)
+    def test_first_start_secret_parser_rejects_bad_shapes(self, field: str, value: object) -> None:
+        administrator = {
+            "username": "operator",
+            "name": "Operator",
+            "email": "operator@example.test",
+            "password": "example",
+        }
+        payload = {"keepass": "valid-secret", "administrator": administrator}
+        payload[field] = value
+        try:
+            password, parsed_admin = first_start.parse_first_start_secrets(json.dumps(payload))
+        except setup_config.SetupError:
+            return
+        self.assertTrue(password)
+        self.assertNotIn("\n", password)
+        self.assertNotIn("\r", password)
+        self.assertEqual(set(parsed_admin), set(administrator))
+        self.assertEqual(parsed_admin, payload["administrator"])
 
     def test_valid_controls_are_accepted(self):
         compiled = v2_spec.compile_document(
