@@ -1,0 +1,445 @@
+diff --git a/authentik/root/settings.py b/authentik/root/settings.py
+--- a/authentik/root/settings.py
++++ b/authentik/root/settings.py
+@@ -6,6 +6,7 @@
+ from pathlib import Path
+ 
+ import orjson
++from csp.constants import NONCE, NONE, SELF
+ from django.utils import http as utils_http
+ from sentry_sdk import set_tag
+ from xmlsec import enable_debug_trace
+@@ -27,6 +28,20 @@
+ ALLOWED_HOSTS = ["*"]
+ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+ SECURE_CROSS_ORIGIN_OPENER_POLICY = None
+ LOGIN_URL = "authentik_flows:default-authentication"
++CONTENT_SECURITY_POLICY = {
++    "DIRECTIVES": {
++        "default-src": [SELF],
++        "script-src": [SELF, NONCE],
++        "style-src": [SELF, NONCE],
++        "style-src-attr": [NONE],
++        "img-src": [SELF, "data:"],
++        "object-src": [NONE],
++        "frame-ancestors": [SELF],
++        "base-uri": [SELF],
++        "form-action": [SELF],
++    }
++}
++
+ 
+ # Custom user model
+@@ -270,6 +285,7 @@
+     "authentik.brands.middleware.BrandMiddleware",
+     "authentik.events.middleware.AuditMiddleware",
+     "django.middleware.security.SecurityMiddleware",
++    "csp.middleware.CSPMiddleware",
+     "django.middleware.common.CommonMiddleware",
+     "authentik.root.middleware.CsrfViewMiddleware",
+     "django.contrib.messages.middleware.MessageMiddleware",
+diff --git a/authentik/core/templates/base/skeleton.html b/authentik/core/templates/base/skeleton.html
+--- a/authentik/core/templates/base/skeleton.html
++++ b/authentik/core/templates/base/skeleton.html
+@@ -18,12 +18,15 @@
+         <link rel="icon" href="{{ brand.branding_favicon_url }}">
+         <link rel="shortcut icon" href="{{ brand.branding_favicon_url }}">
+ 
++        <script nonce="{{ request.csp_nonce }}">
++            window.litNonce = "{{ request.csp_nonce }}";
++        </script>
+         {% block head_before %}
+         {% endblock %}
+ 
+         {% include "base/theme.html" %}
+ 
+-        <style data-id="brand-css">{{ brand_css }}</style>
++        <style nonce="{{ request.csp_nonce }}" data-id="brand-css">{{ brand_css }}</style>
+         <script src="{% versioned_script 'dist/poly-%v.js' %}" type="module"></script>
+         {% block head %}
+         {% endblock %}
+diff --git a/authentik/core/templates/base/header_js.html b/authentik/core/templates/base/header_js.html
+--- a/authentik/core/templates/base/header_js.html
++++ b/authentik/core/templates/base/header_js.html
+@@ -1,6 +1,6 @@
+ {% load i18n %}
+ {% get_current_language as LANGUAGE_CODE %}
+ 
+-<script data-id="authentik-config">
++<script nonce="{{ request.csp_nonce }}" data-id="authentik-config">
+     "use strict";
+ 
+diff --git a/authentik/core/templates/base/theme.html b/authentik/core/templates/base/theme.html
+--- a/authentik/core/templates/base/theme.html
++++ b/authentik/core/templates/base/theme.html
+@@ -11,7 +11,7 @@
+   <meta name="color-scheme" content="light" />
+   <meta name="theme-color" content="#ffffff">
+   {% else %}
+-  <script data-id="theme-script">
++  <script nonce="{{ request.csp_nonce }}" data-id="theme-script">
+     "use strict";
+ 
+     (function () {
+diff --git a/authentik/core/templates/login/base_full.html b/authentik/core/templates/login/base_full.html
+--- a/authentik/core/templates/login/base_full.html
++++ b/authentik/core/templates/login/base_full.html
+@@ -10,7 +10,7 @@
+ {% endblock %}
+ 
+ {% block head %}
+-<style data-id="static-styles">
++<style nonce="{{ request.csp_nonce }}" data-id="static-styles">
+     :root {
+         --ak-global--background-image: url("{{ request.brand.branding_default_flow_background_url }}");
+     }
+diff --git a/authentik/flows/templates/if/flow.html b/authentik/flows/templates/if/flow.html
+--- a/authentik/flows/templates/if/flow.html
++++ b/authentik/flows/templates/if/flow.html
+@@ -9,10 +9,10 @@
+ {{ block.super }}
+ <link rel="prefetch" href="{{ flow_background_url }}" />
+ {% if flow.compatibility_mode and not inspector %}
+-<script data-id="shady-dom">ShadyDOM = { force: true };</script>
++<script nonce="{{ request.csp_nonce }}" data-id="shady-dom">ShadyDOM = { force: true };</script>
+ {% endif %}
+ {% include "base/header_js.html" %}
+-<script data-id="flow-config">
++<script nonce="{{ request.csp_nonce }}" data-id="flow-config">
+     "use strict";
+ 
+     window.authentik.flow = {
+@@ -25,7 +25,7 @@
+ 
+ {% block head %}
+ <script src="{% versioned_script 'dist/flow/FlowInterface-%v.js' %}" type="module"></script>
+-<style data-id="flow-css">
++<style nonce="{{ request.csp_nonce }}" data-id="flow-css">
+   :root {
+       --ak-global--background-image: url("{{ flow_background_url }}");
+   }
+diff --git a/authentik/flows/templates/if/flow-sfe.html b/authentik/flows/templates/if/flow-sfe.html
+--- a/authentik/flows/templates/if/flow-sfe.html
++++ b/authentik/flows/templates/if/flow-sfe.html
+@@ -17,7 +17,7 @@
+         <meta name="sentry-trace" content="{{ sentry_trace }}" />
+         <link rel="prefetch" href="{{ flow_background_url }}" />
+         {% include "base/header_js.html" %}
+-        <style data-id="flow-sfe">
++        <style nonce="{{ request.csp_nonce }}" data-id="flow-sfe">
+           html,
+           body {
+             height: 100%;
+diff --git a/authentik/policies/templates/policies/buffer.html b/authentik/policies/templates/policies/buffer.html
+--- a/authentik/policies/templates/policies/buffer.html
++++ b/authentik/policies/templates/policies/buffer.html
+@@ -5,7 +5,7 @@
+ 
+ {% block head %}
+ {{ block.super }}
+-<script>
++<script nonce="{{ request.csp_nonce }}">
+ "use strict";
+ 
+ let redirecting = false;
+diff --git a/authentik/enterprise/stages/authenticator_endpoint_gdtc/templates/stages/authenticator_endpoint/google_chrome_dtc.html b/authentik/enterprise/stages/authenticator_endpoint_gdtc/templates/stages/authenticator_endpoint/google_chrome_dtc.html
+--- a/authentik/enterprise/stages/authenticator_endpoint_gdtc/templates/stages/authenticator_endpoint/google_chrome_dtc.html
++++ b/authentik/enterprise/stages/authenticator_endpoint_gdtc/templates/stages/authenticator_endpoint/google_chrome_dtc.html
+@@ -1,5 +1,5 @@
+ <html>
+-<script>
++<script nonce="{{ request.csp_nonce }}">
+   window.parent.postMessage({
+     message: "submit",
+     source: "goauthentik.io",
+diff --git a/web/src/user/LibraryPage/ApplicationList.ts b/web/src/user/LibraryPage/ApplicationList.ts
+--- a/web/src/user/LibraryPage/ApplicationList.ts
++++ b/web/src/user/LibraryPage/ApplicationList.ts
+@@ -54,7 +54,7 @@
+         role="presentation"
+         part="app-list"
+         data-anchor-strategy=${AnchorPositionSupported ? "anchor-position" : "fallback"}
+-        style="--app-list-column-count: ${columnCount}"
++        .style=${`--app-list-column-count: ${columnCount}`}
+         ${spread(props)}
+     >
+         ${repeat(
+diff --git a/web/src/user/LibraryApplication/CardMenu.ts b/web/src/user/LibraryApplication/CardMenu.ts
+--- a/web/src/user/LibraryApplication/CardMenu.ts
++++ b/web/src/user/LibraryApplication/CardMenu.ts
+@@ -47,7 +47,7 @@
+             part="card-header-actions-button"
+             class="pf-c-dropdown__toggle"
+             type="button"
+-            style="anchor-name: ${menuAnchor};"
++            .style=${`anchor-name: ${menuAnchor};`}
+             popovertarget=${menuID}
+             popovertargetaction="toggle"
+             tabindex="-1"
+@@ -58,7 +58,7 @@
+         <menu
+             class="pf-c-dropdown__menu"
+             part="card-header-actions-menu"
+-            style="position-anchor: ${menuAnchor};"
++            .style=${`position-anchor: ${menuAnchor};`}
+             id=${menuID}
+             ?popover=${AnchorPositionSupported}
+         >
+diff --git a/web/src/user/LibraryApplication/index.ts b/web/src/user/LibraryApplication/index.ts
+--- a/web/src/user/LibraryApplication/index.ts
++++ b/web/src/user/LibraryApplication/index.ts
+@@ -20,7 +20,6 @@
+ import { html, nothing } from "lit";
+ import { classMap } from "lit/directives/class-map.js";
+ import { createRef, ref, RefOrCallback } from "lit/directives/ref.js";
+-import { styleMap } from "lit/directives/style-map.js";
+ 
+ const RAC_LAUNCH_URL = "goauthentik.io://providers/rac/launch";
+ 
+@@ -81,7 +80,7 @@
+     return html`<div
+         part="card-wrapper"
+         data-application-name=${ifPresent(dataID)}
+-        style=${styleMap({ background: background || null })}
++        .style=${background ? `background: ${background};` : ""}
+     >
+         <div part="card" class="pf-c-card pf-m-hoverable pf-m-compact ${classMap(classes)}">
+             <ak-app-icon
+diff --git a/web/src/user/index.entrypoint.ts b/web/src/user/index.entrypoint.ts
+--- a/web/src/user/index.entrypoint.ts
++++ b/web/src/user/index.entrypoint.ts
+@@ -25,6 +25,5 @@
+     renderNotificationDrawerPanel,
+ } from "#elements/notifications/utils";
+-import { ifPresent } from "#elements/utils/attributes";
+ import { ThemedImage } from "#elements/utils/images";
+ 
+ import Styles from "#user/index.entrypoint.css";
+@@ -142,7 +141,7 @@
+ 
+         return html`<ak-enterprise-status interface="user"></ak-enterprise-status>
+             <div part="page" class="pf-c-page">
+-                <div part="background-wrapper" style=${ifPresent(backgroundStyles)}>
++                <div part="background-wrapper" .style=${backgroundStyles || ""}>
+                     ${!backgroundStyles
+                         ? html`<div part="background-default-slant"></div>`
+                         : nothing}
+diff --git a/web/src/elements/ak-progress-bar.ts b/web/src/elements/ak-progress-bar.ts
+--- a/web/src/elements/ak-progress-bar.ts
++++ b/web/src/elements/ak-progress-bar.ts
+@@ -5,7 +5,6 @@
+ 
+ import { css, html, nothing } from "lit";
+ import { customElement, property } from "lit/decorators.js";
+-import { styleMap } from "lit/directives/style-map.js";
+ 
+ import PFProgress from "@patternfly/patternfly/components/Progress/progress.css";
+ 
+@@ -115,9 +114,7 @@
+             >
+                 <div
+                     class="pf-c-progress__indicator"
+-                    style=${styleMap({
+-                        width: this.indeterminate ? "100%" : `${Math.min(this.value, 100)}%`,
+-                    })}
++                    .style=${`width: ${this.indeterminate ? "100%" : `${Math.min(this.value, 100)}%`};`}
+                 ></div>
+             </div>
+         </div> `;
+diff --git a/web/src/flow/stages/FlowFrameStage.ts b/web/src/flow/stages/FlowFrameStage.ts
+--- a/web/src/flow/stages/FlowFrameStage.ts
++++ b/web/src/flow/stages/FlowFrameStage.ts
+@@ -34,7 +34,7 @@
+                   </ak-empty-state>`
+                 : nothing}
+             <iframe
+-                style=${this.challenge.loadingOverlay ? "width:0;height:0;position:absolute;" : ""}
++                .style=${this.challenge.loadingOverlay ? "width:0;height:0;position:absolute;" : ""}
+                 src=${this.challenge.url}
+             ></iframe>
+         </ak-flow-card>`;
+diff --git a/web/src/flow/providers/IFrameLogoutStage.ts b/web/src/flow/providers/IFrameLogoutStage.ts
+--- a/web/src/flow/providers/IFrameLogoutStage.ts
++++ b/web/src/flow/providers/IFrameLogoutStage.ts
+@@ -232,7 +232,7 @@
+                     aria-valuemax="100"
+                     aria-valuenow="${percentage}"
+                 >
+-                    <div class="pf-c-progress__indicator" style="width: ${percentage}%;"></div>
++                    <div class="pf-c-progress__indicator" .style=${`width: ${percentage}%;`}></div>
+                 </div>
+             </div>
+         `;
+diff --git a/web/src/flow/stages/captcha/CaptchaStage.ts b/web/src/flow/stages/captcha/CaptchaStage.ts
+--- a/web/src/flow/stages/captcha/CaptchaStage.ts
++++ b/web/src/flow/stages/captcha/CaptchaStage.ts
+@@ -187,7 +187,7 @@
+                 <iframe
+                     aria-label=${msg("CAPTCHA challenge")}
+                     ${ref(this.iframeRef)}
+-                    style="height: ${this.iframeHeight}px;"
++                    .style=${`height: ${this.iframeHeight}px;`}
+                     data-ready=${this.#iframeLoaded ? "ready" : "loading"}
+                     class="ak-interactive-challenge"
+                     id="ak-captcha"
+diff --git a/web/src/components/ak-file-search-input.ts b/web/src/components/ak-file-search-input.ts
+--- a/web/src/components/ak-file-search-input.ts
++++ b/web/src/components/ak-file-search-input.ts
+@@ -133,7 +133,7 @@
+             )}
+ 
+             <ak-search-select
+-                style="width: 100%;"
++                .style=${"width: 100%;"}
+                 .fieldID=${this.fieldID}
+                 .fetchObjects=${this.#fetch.bind(this)}
+                 .renderElement=${renderElement}
+diff --git a/web/src/components/ak-hidden-text-input.ts b/web/src/components/ak-hidden-text-input.ts
+--- a/web/src/components/ak-hidden-text-input.ts
++++ b/web/src/components/ak-hidden-text-input.ts
+@@ -133,11 +133,11 @@
+             this.value = (ev.target as T).value;
+         };
+ 
+-        return html`<div style="display: flex;" part="control">
++        return html`<div .style=${"display: flex;"} part="control">
+             ${this.renderInputField(setValue, code)}
+             <ak-visibility-toggle
+                 part="toggle"
+-                style="flex: 0 0 auto; align-self: flex-start"
++                .style=${"flex: 0 0 auto; align-self: flex-start"}
+                 ?open=${this.revealed}
+                 show-message=${this.showMessage}
+                 hide-message=${this.hideMessage}
+diff --git a/web/src/components/ak-hidden-textarea-input.ts b/web/src/components/ak-hidden-textarea-input.ts
+--- a/web/src/components/ak-hidden-textarea-input.ts
++++ b/web/src/components/ak-hidden-textarea-input.ts
+@@ -107,7 +107,7 @@
+ 
+         return html`
+             <textarea
+-                style="flex: 1 1 auto; min-width: 0;"
++                .style=${"flex: 1 1 auto; min-width: 0;"}
+                 part="textarea"
+                 @input=${setValue}
+                 placeholder=${ifPresent(this.placeholder)}
+diff --git a/web/src/components/ak-hint/ShowHintController.ts b/web/src/components/ak-hint/ShowHintController.ts
+--- a/web/src/components/ak-hint/ShowHintController.ts
++++ b/web/src/components/ak-hint/ShowHintController.ts
+@@ -64,7 +64,7 @@
+ 
+     render() {
+         return html`<ak-hint-footer
+-            ><div style="text-align: right">
++            ><div .style=${"text-align: right"}>
+                 <input type="checkbox" @input=${this.hide} />&nbsp;${msg(
+                     "Don't show this message again.",
+                 )}
+diff --git a/web/src/elements/charts/Chart.ts b/web/src/elements/charts/Chart.ts
+--- a/web/src/elements/charts/Chart.ts
++++ b/web/src/elements/charts/Chart.ts
+@@ -216,7 +216,7 @@
+                 <canvas
+                     role="img"
+                     aria-label=${msg("Chart")}
+-                    style="${!this.chart ? "display: none;" : ""}"
++                    .style=${!this.chart ? "display: none;" : ""}
+                 ></canvas>
+             </div>
+         `;
+diff --git a/web/src/user/user-settings/details/stages/prompt/PromptStage.ts b/web/src/user/user-settings/details/stages/prompt/PromptStage.ts
+--- a/web/src/user/user-settings/details/stages/prompt/PromptStage.ts
++++ b/web/src/user/user-settings/details/stages/prompt/PromptStage.ts
+@@ -30,7 +30,7 @@
+                 name=${prompt.fieldKey}
+                 ?checked=${prompt.initialValue !== ""}
+                 ?required=${prompt.required}
+-                style="vertical-align: bottom"
++                .style=${"vertical-align: bottom"}
+             />`;
+         }
+ 
+diff --git a/web/src/admin/groups/GroupViewPage.ts b/web/src/admin/groups/GroupViewPage.ts
+--- a/web/src/admin/groups/GroupViewPage.ts
++++ b/web/src/admin/groups/GroupViewPage.ts
+@@ -154,7 +154,7 @@
+                                                                 >
+                                                                     <span
+                                                                         class="pf-c-label pf-m-outline pf-m-cyan"
+-                                                                        style="margin-left: 0.5rem;"
++                                                                        .style=${"margin-left: 0.5rem;"}
+                                                                     >
+                                                                         <span
+                                                                             class="pf-c-label__content"
+diff --git a/web/src/admin/providers/oauth2/OAuth2ProviderFormForm.ts b/web/src/admin/providers/oauth2/OAuth2ProviderFormForm.ts
+--- a/web/src/admin/providers/oauth2/OAuth2ProviderFormForm.ts
++++ b/web/src/admin/providers/oauth2/OAuth2ProviderFormForm.ts
+@@ -226,7 +226,7 @@
+                             return html`<ak-provider-oauth2-redirect-uri
+                                 .redirectURI=${redirectURI}
+                                 name="oauth2-redirect-uri"
+-                                style="width: 100%"
++                                .style=${"width: 100%"}
+                                 input-id="redirect-uri-${idx}"
+                             ></ak-provider-oauth2-redirect-uri>`;
+                         }}
+diff --git a/web/src/admin/applications/ApplicationWizardHint.ts b/web/src/admin/applications/ApplicationWizardHint.ts
+--- a/web/src/admin/applications/ApplicationWizardHint.ts
++++ b/web/src/admin/applications/ApplicationWizardHint.ts
+@@ -12,7 +12,6 @@
+ import { msg } from "@lit/localize";
+ import { css, html } from "lit";
+ import { customElement, property, state } from "lit/decorators.js";
+-import { styleMap } from "lit/directives/style-map.js";
+ 
+ import PFButton from "@patternfly/patternfly/components/Button/button.css";
+ import PFLabel from "@patternfly/patternfly/components/Label/label.css";
+@@ -26,7 +25,7 @@
+     viewBox="0 0 352 512"
+     aria-hidden="true"
+     role="img"
+-    style="vertical-align: -0.125em;"
++    .style=${"vertical-align: -0.125em;"}
+ >
+     <path
+         d="M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"
+@@ -67,21 +66,13 @@
+     }
+ 
+     renderReminder() {
+-        const sectionStyles = {
+-            paddingBottom: "0",
+-            marginBottom: "-0.5rem",
+-            marginRight: "0.0625rem",
+-            textAlign: "right",
+-        };
+-        const textStyle = { maxWidth: "60ch" };
+-
+         return html`<section
+             class="pf-c-page__main-section pf-m-no-padding-mobile"
+-            style="${styleMap(sectionStyles)}"
++            .style=${"padding-bottom: 0; margin-bottom: -0.5rem; margin-right: 0.0625rem; text-align: right;"}
+         >
+             <span class="pf-c-label">
+                 <a class="pf-c-label__content" @click=${this.showHintController.show}>
+-                    <span class="pf-c-label__text" style="${styleMap(textStyle)}">
++                    <span class="pf-c-label__text" .style=${"max-width: 60ch"}>
+                         ${msg("One hint, 'New Application Wizard', is currently hidden")}
+                     </span>
+                     <button
+diff --git a/web/src/admin/events/EventMap.ts b/web/src/admin/events/EventMap.ts
+--- a/web/src/admin/events/EventMap.ts
++++ b/web/src/admin/events/EventMap.ts
+@@ -35,10 +35,10 @@
+ export class Map extends OlMap {
+     public render() {
+         return html`
+-            <style>
++            <style nonce=${window.litNonce}>
+                 ${OL}
+             </style>
+-            <style>
++            <style nonce=${window.litNonce}>
+                 :host {
+                     display: block;
+                 }

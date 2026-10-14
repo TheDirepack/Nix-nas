@@ -27,11 +27,13 @@ are recorded in the worker journal. See [First start](../src/admin/first-run.md)
 
 ## Required external evidence
 
-Authentik's own interface requires inline scripts/styles under its documented
-CSP baseline. The proxy preserves upstream policies and supplies that baseline
-only where absent; it is not a strict nonce-based policy. ZAP qualification
-remains unresolved until the inline-script and cross-origin-policy findings are
-addressed without breaking upstream authentication/application interfaces.
+Authentik's source package supplies a per-response nonce CSP and CSSOM frontend
+bindings; both public proxy configurations enforce same-origin site isolation.
+These repairs require installed browser/API, CSRF/session and accessibility
+qualification, including Lit's nonce-bearing stylesheet fallback. External
+branding/assets cannot rely on wildcard image or inline script/style allowances.
+ZAP qualification remains unresolved until complete installed scans pass without
+breaking upstream authentication/application interfaces.
 The packaged scanner keeps the three known informational cache/application
 rules visible as `INFO`; every unclassified warning and security failure remains
 fatal.

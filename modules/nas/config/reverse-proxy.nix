@@ -10,8 +10,8 @@ let
     lanHost
   ;
   authentikPathNoSlash = lib.removeSuffix "/" cfg.identity.authentikPath;
-  # Authentik generates inline scripts; preserve its stricter uploaded-file CSP.
-  authentikCsp = "default-src 'self'; img-src https: data:; object-src 'none'; frame-ancestors 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'";
+  # Dynamic Authentik pages supply their own nonce CSP; never replace it.
+  authentikCsp = "default-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'";
 in
 {
   config.services.caddy = {
@@ -28,6 +28,9 @@ in
         X-Content-Type-Options "nosniff"
         Referrer-Policy "no-referrer"
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Cross-Origin-Embedder-Policy "require-corp"
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Resource-Policy "same-origin"
       }
 
       # Recreate identity headers only from Authentik forward-auth.
