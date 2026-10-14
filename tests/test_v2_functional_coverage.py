@@ -599,7 +599,8 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         import nas_v2_network as fw
 
         proj, _ = fw.compile_projection(eff, lan_zone="nas-lan")  # pyright: ignore[reportCallIssue]
-        self.assertIn("iso", str(proj).lower() if isinstance(proj, (str, bytes)) else str(proj))
+        self.assertIn(f"zones/{fw.zone_name('iso')}", proj)
+        self.assertEqual(proj[f"zones/{fw.zone_name('iso')}"]["interface"], fw.bridge_interface_name("iso"))
 
     # --------------------------------------------------------------- Backup
     def test_backup_compiles_all_consistencies(self) -> None:

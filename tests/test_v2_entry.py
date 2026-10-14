@@ -104,6 +104,34 @@ class V2EntryTests(unittest.TestCase):
         self.assertFalse(hasattr(projection, "install_bin"))
         self.assertFalse(hasattr(projection, "rm_bin"))
 
+    def test_explicit_firewall_options_survive_native_projection_merge(self) -> None:
+        env = {"NAS_V2_LAN_ZONE": "environment-zone", "NAS_V2_FIREWALLD_ENABLED": "0"}
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(sys, "argv", ["nas_v2_entry.py", "/unexpected/argv.yaml"]),
+            mock.patch.object(nas_v2_entry, "apply") as apply_mock,
+        ):
+            before = dict(os.environ)
+            argv = list(sys.argv)
+            self.assertEqual(
+                nas_v2_entry.main(
+                    overrides={
+                        "NAS_V2_FIREWALLD_ENABLED": "1",
+                        "NAS_V2_LAN_ZONE": "explicit-zone",
+                        "NAS_V2_FIREWALLD": "/explicit/firewalld",
+                        "NAS_V2_PLATFORM": None,
+                        "NAS_V2_HISTORY_REPOSITORY": None,
+                    }
+                ),
+                0,
+            )
+            self.assertEqual(dict(os.environ), before)
+            self.assertEqual(sys.argv, argv)
+        projection = apply_mock.call_args.kwargs["firewalld"]
+        self.assertEqual(projection.lan_zone, "explicit-zone")
+        self.assertEqual(projection.output_dir, pathlib.Path("/explicit/firewalld"))
+        self.assertFalse(hasattr(projection, "firewall_offline_cmd"))
+
     def test_explicit_options_override_environment_without_mutating_it(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)

@@ -47,8 +47,6 @@ let
     "${v2Source}/nas_v2_firewalld_reconcile.py"
     "--manifest"
     firewalldManifestPath
-    "--projection-root"
-    firewalldProjectionPath
     "--firewall-cmd"
     "${firewalldPackage}/bin/firewall-cmd"
   ];

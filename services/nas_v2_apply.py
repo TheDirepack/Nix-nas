@@ -100,7 +100,6 @@ class BackupProjection:
 class FirewalldProjection:
     output_dir: pathlib.Path
     lan_zone: str
-    firewall_offline_cmd: str
 
 
 @dataclass(frozen=True)
@@ -415,7 +414,6 @@ def _firewalld_files(
         effective,
         output_dir=projection.output_dir,
         lan_zone=projection.lan_zone,
-        firewall_offline_cmd=projection.firewall_offline_cmd,
     )
 
 

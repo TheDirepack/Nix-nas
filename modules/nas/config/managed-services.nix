@@ -21,7 +21,6 @@ let
   v2Python = nasInternal.v2PythonXml;
   podmanEnabled = lib.attrByPath [ "virtualisation" "podman" "enable" ] false config;
   firewalldEnabled = cfg.networking.enable && cfg.networking.firewall.enable;
-  firewalldPackage = config.services.firewalld.package;
 
   platformCapabilities = {
     schemaVersion = 1;
@@ -153,7 +152,6 @@ in
         NAS_V2_VIRT_XML_VALIDATE_BIN = "${pkgs.libvirt}/bin/virt-xml-validate";
         NAS_V2_LAN_ZONE = cfg.networking.firewall.zone;
         NAS_V2_COCKPIT_PORT = toString nasInternal.cockpitPort;
-        NAS_V2_FIREWALL_OFFLINE_CMD = "${firewalldPackage}/bin/firewall-offline-cmd";
         NAS_V2_FIREWALLD_ENABLED = if firewalldEnabled then "1" else "0";
       };
       preStart = ''

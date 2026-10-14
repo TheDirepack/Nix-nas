@@ -106,7 +106,6 @@ def main(*, overrides: dict[str, str | None] | None = None) -> int:
         FirewalldProjection(
             output_dir=firewalld_output,
             lan_zone=setting("NAS_V2_LAN_ZONE", "nas-lan"),
-            firewall_offline_cmd=setting("NAS_V2_FIREWALL_OFFLINE_CMD", "firewall-offline-cmd"),
         )
         if setting("NAS_V2_FIREWALLD_ENABLED") == "1"
         else None
