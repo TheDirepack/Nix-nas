@@ -38,6 +38,32 @@ Playwright is the browser-behavior layer for checks that require a browser engin
 
 CI defaults to the immutable upstream ZAP image declared in `.github/workflows/ci.yml`. The optional `NAS_ZAP_IMAGE` repository variable may override it with another reviewed digest; an absent variable must not prevent qualification. Both scanner wrappers reject floating tags.
 
+`scripts/lib/zap-addons.lock.json` pins the native add-on inventory for packaged
+and Automation Framework scans, including release and beta active/passive rules
+and browser dependencies. The shared container entrypoint checks archive SHA256
+values, copies matching image archives or downloads exact upstream release URLs,
+then asks ZAP to load its own dependencies. It rejects a missing, extra, or
+different runnable add-on before scanning. Scans use `-silent` with that verified
+home to prevent live updates and write the verified inventory beside each report
+as `.addons.json`.
+
+For an image or add-on update, capture the native resolved inventory for baseline,
+full, and browser automation modes, compare rule/dependency coverage, and refresh
+the lock from the captured archive hashes. Run `tests/test_zap_addons.py` and the
+scanner wrapper contracts, then qualify real scans and installed browsers on the
+combined revision. Disabling add-on updates without supplying the locked beta
+rules would remove security coverage.
+
+Authenticated active scans retain their configured user. ZAP's session layer
+can overwrite deliberate cookie mutations before sending requests, as recorded
+in [upstream issue 6506](https://github.com/zaproxy/zaproxy/issues/6506).
+Native fixture wire traces reproduce this with both autodetected and explicit
+cookie sessions: rule `90027` receives HTTP 200 because ZAP reinserted the removed
+session cookie. The finding remains fatal and blocks clean qualification.
+Removing the active-scan user or suppressing the rule is not a repair; a change
+must preserve authenticated coverage and prove that cookie mutations reach the
+target unchanged.
+
 ## Cockpit frontend
 
 The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`. Nix builds Cockpit and the first-run wizard from their reviewed npm lockfiles with `importNpmLock` and `buildNpmPackage`, then verifies their output with the existing build-integrity checks. Local `node_modules` and generated `dist` trees are excluded from derivation inputs. Release archives retain the compiled payload and source-hash metadata for browser qualification and source consumers; they are not the inputs to the installed frontend build. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.

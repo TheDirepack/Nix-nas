@@ -108,19 +108,22 @@ command -v id >/dev/null 2>&1 || die "id is required"
 
 # Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
 runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
-  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw")
+  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw"
+  -v "$SCRIPT_DIR/lib:/nas-zap:ro" --entrypoint bash -e NAS_ZAP_IMAGE
+  -e "NAS_ZAP_ADDON_EVIDENCE=/zap/wrk/zap-$REPORT_PREFIX-$MODE.addons.json")
 if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
   [[ "$NAS_ZAP_EXTRA_HOST" != *$'\n'* && "$NAS_ZAP_EXTRA_HOST" != *$'\r'* ]] || die "NAS_ZAP_EXTRA_HOST must be one line"
   runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")
 fi
 
 printf 'Running OWASP ZAP %s scan against %s\n' "$MODE" "$TARGET"
-reports=("$OUT_DIR/zap-$REPORT_PREFIX-$MODE.html" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.json" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.md")
+reports=("$OUT_DIR/zap-$REPORT_PREFIX-$MODE.html" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.json"
+  "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.md" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.addons.json")
 # Reused output directories must not supply evidence for an incomplete scan.
 rm -f -- "${reports[@]}"
 set +e
 timeout --signal=TERM --kill-after=30s "${process_timeout}s" \
-  "$RUNTIME" "${runtime_args[@]}" "$IMAGE" "$scanner" \
+  "$RUNTIME" "${runtime_args[@]}" "$IMAGE" /nas-zap/zap-entrypoint.sh "$scanner" \
     -t "$TARGET" \
     -c zap-packaged.conf \
     -m "$minutes" \
@@ -140,4 +143,6 @@ fi
 for report in "${reports[@]}"; do
   [[ -s "$report" ]] || die "ZAP did not produce expected report: $report"
 done
+python3 "$SCRIPT_DIR/lib/zap-addons.py" verify-evidence --image "$IMAGE" \
+  --evidence "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.addons.json" || die "invalid ZAP add-on evidence"
 printf 'OWASP ZAP %s scan completed: %s\n' "$MODE" "$OUT_DIR"

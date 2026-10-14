@@ -287,7 +287,17 @@ needs QEMU/KVM; Nix runs inside the guest, so host-side Nix is not required.
 
 ## 8. Dynamic web security
 
-The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans through the loopback-forwarded public Caddy endpoint and protected `/console/` routes while its disposable overlay is alive. The harness does not expose Cockpit's native listener. Local runs require `NAS_ZAP_IMAGE` to be an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI uses its committed upstream image digest unless the optional repository variable overrides it, and retains HTML, JSON, and Markdown reports.
+The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans through the loopback-forwarded public Caddy endpoint and protected `/console/` routes while its disposable overlay is alive. The harness does not expose Cockpit's native listener. Local runs require `NAS_ZAP_IMAGE` to be an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI uses its committed upstream image digest unless the optional repository variable overrides it, and retains HTML, JSON, and Markdown reports plus the scan's `.addons.json` inventory.
+
+Both wrappers use the shared hash-locked add-on preparation described in
+[`dependencies.md`](dependencies.md). A zero scanner exit also requires fresh
+reports and verified native add-on evidence from that invocation. Archive hash
+or runnable-inventory mismatches fail before the scan; scanner warnings remain
+fatal. Authenticated automation requests the same-origin users/me API after
+browser discovery and requires HTTP 200, the configured username in its response,
+and ZAP's site-scoped logged-in session state. Browser success counters alone
+cannot qualify authentication. Native fixtures must exercise accepted and rejected
+credentials. A successful fixture scan verifies the harness, not appliance security.
 
 For a local run:
 

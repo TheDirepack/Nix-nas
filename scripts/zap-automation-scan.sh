@@ -10,6 +10,7 @@ DURATION="${NAS_ZAP_AUTOMATION_MINUTES:-90}"
 BROWSERS="${NAS_ZAP_BROWSER_WORKERS:-2}"
 USER_NAME="${NAS_ZAP_AUTH_USER:-}"
 USER_PASSWORD="${NAS_ZAP_AUTH_PASSWORD:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -18,7 +19,7 @@ Usage: scripts/zap-automation-scan.sh [unauthenticated|authenticated] <target-ur
 Run OWASP ZAP's Automation Framework against an explicitly disposable target.
 The plan uses the modern Client Spider to discover live DOM/application state,
 then feeds the discovered attack surface into ZAP's passive and active scanners.
-Authenticated mode uses ZAP browser-based authentication and session auto-detection.
+Authenticated mode uses browser authentication and verifies the Authentik session.
 
 Required:
   NAS_ZAP_IMAGE              ZAP image pinned by immutable sha256 digest
@@ -31,6 +32,8 @@ Optional:
   NAS_ZAP_OUT_DIR            report directory
   NAS_ZAP_AUTOMATION_MINUTES active-scan/client-spider budget, 1..240 (default 90)
   NAS_ZAP_BROWSER_WORKERS    parallel Client Spider browsers, 1..4 (default 2)
+  NAS_ZAP_AUTH_VERIFY_PATH   same-origin user-session API path in authenticated
+                            mode (default /identity/api/v3/core/users/me/)
   NAS_ZAP_ALLOW_PUBLIC_TARGET=1
                               permit non-local/private targets; never use casually
 
@@ -99,15 +102,28 @@ python3 - "$MODE" "$TARGET" "$DURATION" "$BROWSERS" "$plan" "$report_prefix" <<'
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
+from urllib.parse import urlsplit
 
 mode, target, duration_text, browsers_text, output, prefix = sys.argv[1:]
 duration = int(duration_text)
 browsers = int(browsers_text)
-context = {"name": "nas-target", "urls": [target]}
+parsed = urlsplit(target)
+# Reports must include same-origin login redirects outside the starting path.
+context = {
+    "name": "nas-target",
+    "urls": [target],
+    "includePaths": [re.escape(f"{parsed.scheme}://{parsed.netloc}") + r"/.*"],
+}
 user_name = None
 if mode == "authenticated":
     user_name = "nas-browser-user"
+    verification_path = os.environ.get("NAS_ZAP_AUTH_VERIFY_PATH", "/identity/api/v3/core/users/me/")
+    verification_url = urlsplit(verification_path)
+    if not verification_path.startswith("/") or verification_path.startswith("//") or verification_url.netloc or verification_url.scheme:
+        raise SystemExit("NAS_ZAP_AUTH_VERIFY_PATH must be a same-origin absolute path")
     context.update(
         {
             "authentication": {
@@ -118,7 +134,13 @@ if mode == "authenticated":
                     "browserId": "firefox-headless",
                     "diagnostics": True,
                 },
-                "verification": {"method": "autodetect"},
+                "verification": {
+                    "method": "poll",
+                    "pollUrl": f"{parsed.scheme}://{parsed.netloc}{verification_path}",
+                    "pollFrequency": 60,
+                    "pollUnits": "requests",
+                    "loggedInRegex": r'"username"\s*:\s*' + re.escape(json.dumps(os.environ["NAS_ZAP_AUTH_USER"])),
+                },
             },
             "sessionManagement": {"method": "autodetect", "parameters": {}},
             "users": [
@@ -143,9 +165,36 @@ spider_parameters = {
     "maxChildren": 100,
 }
 active_parameters = {"context": "nas-target", "url": target}
+spider_job = {"type": "spiderClient", "parameters": spider_parameters}
+discovery_jobs = [spider_job]
 if user_name:
     spider_parameters["user"] = user_name
     active_parameters["user"] = user_name
+    session_tests = [
+        {
+            "name": "authenticated session verified",
+            "type": "stats",
+            "statistic": "stats.auth.state.loggedin",
+            "site": f"{parsed.scheme}://{parsed.netloc}",
+            "operator": ">=",
+            "value": 1,
+            "onFail": "error",
+        },
+        {
+            "name": "private identity response verified",
+            "type": "url",
+            "url": context["authentication"]["verification"]["pollUrl"],
+            "operator": "or",
+            "responseBodyRegex": context["authentication"]["verification"]["loggedInRegex"],
+            "onFail": "error",
+        },
+    ]
+    discovery_jobs.append({
+        "type": "requestor",
+        "parameters": {"user": user_name},
+        "requests": [{"url": context["authentication"]["verification"]["pollUrl"], "responseCode": 200}],
+        "tests": session_tests,
+    })
 
 plan = {
     "env": {
@@ -157,7 +206,7 @@ plan = {
         },
     },
     "jobs": [
-        {"type": "spiderClient", "parameters": spider_parameters},
+        *discovery_jobs,
         {"type": "passiveScan-wait"},
         {
             "type": "activeScan-config",
@@ -210,7 +259,9 @@ chmod 0644 "$plan"
 
 # Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
 runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
-  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw")
+  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw"
+  -v "$SCRIPT_DIR/lib:/nas-zap:ro" --entrypoint bash -e NAS_ZAP_IMAGE
+  -e "NAS_ZAP_ADDON_EVIDENCE=/zap/wrk/$report_prefix.addons.json")
 if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
   [[ "$NAS_ZAP_EXTRA_HOST" != *$'\n'* && "$NAS_ZAP_EXTRA_HOST" != *$'\r'* ]] || die "NAS_ZAP_EXTRA_HOST must be one line"
   runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")
@@ -224,13 +275,13 @@ process_timeout="${NAS_ZAP_AUTOMATION_TIMEOUT_SECONDS:-$((DURATION * 60 + 600))}
 
 printf 'Running state-aware ZAP %s scan against %s (%s minute budget, %s browser workers)\n' \
   "$MODE" "$TARGET" "$DURATION" "$BROWSERS"
-reports=("$OUT_DIR/$report_prefix.html" "$OUT_DIR/$report_prefix.json")
+reports=("$OUT_DIR/$report_prefix.html" "$OUT_DIR/$report_prefix.json" "$OUT_DIR/$report_prefix.addons.json")
 # Reused output directories must not supply evidence for an incomplete scan.
 rm -f -- "${reports[@]}"
 set +e
 timeout --signal=TERM --kill-after=60s "${process_timeout}s" \
   "$RUNTIME" "${runtime_args[@]}" "$IMAGE" \
-  zap.sh -cmd -autorun "/zap/wrk/$(basename "$plan")"
+  /nas-zap/zap-entrypoint.sh zap.sh -cmd -config stats.inMemoryEnabled=true -autorun "/zap/wrk/$(basename "$plan")"
 rc=$?
 set -e
 rm -f "$plan"
@@ -242,4 +293,6 @@ fi
 for report in "${reports[@]}"; do
   [[ -s "$report" ]] || die "ZAP automation did not produce expected report: $report"
 done
+python3 "$SCRIPT_DIR/lib/zap-addons.py" verify-evidence --image "$IMAGE" \
+  --evidence "$OUT_DIR/$report_prefix.addons.json" || die "invalid ZAP add-on evidence"
 printf 'ZAP automation %s scan completed: %s\n' "$MODE" "$OUT_DIR"
