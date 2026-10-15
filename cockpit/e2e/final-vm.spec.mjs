@@ -283,6 +283,139 @@ test("final VM protects remembered-device cookies without breaking native CSRF",
   expect(csrf.httpOnly).toBe(false);
 });
 
+for (const styleMode of ["native", "fallback"]) {
+  test(`Authentik nonce CSP preserves login, private APIs and ${styleMode} styles`, async ({
+    page,
+  }) => {
+    const violations = [];
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(String(error)));
+    if (styleMode === "fallback") {
+      await page.addInitScript(() => {
+        delete CSSStyleSheet.prototype.replace;
+      });
+    }
+    await page.exposeBinding("reportCspViolation", (_source, detail) => violations.push(detail));
+    await page.addInitScript(() => {
+      document.addEventListener("securitypolicyviolation", (event) => {
+        window.reportCspViolation({
+          directive: event.effectiveDirective,
+          blocked: event.blockedURI,
+          document: event.documentURI,
+        });
+      });
+    });
+    const nonces = new Set();
+    for (let index = 0; index < 2; index += 1) {
+      const response = await page.goto("/console/");
+      await expectLogin(page);
+      const headers = response.headers();
+      const csp = headers["content-security-policy"];
+      expect(csp).not.toContain("unsafe-inline");
+      expect(csp).not.toContain("unsafe-eval");
+      expect(csp).toContain("style-src-attr 'none'");
+      expect(headers["cross-origin-embedder-policy"]).toBe("require-corp");
+      expect(headers["cross-origin-opener-policy"]).toBe("same-origin");
+      expect(headers["cross-origin-resource-policy"]).toBe("same-origin");
+      const nonce = await page.evaluate(() => window.litNonce);
+      expect(nonce).toMatch(/^[A-Za-z0-9+/]+=*$/);
+      expect(csp).toContain(`'nonce-${nonce}'`);
+      expect(nonces.has(nonce)).toBe(false);
+      nonces.add(nonce);
+    }
+    await login(page);
+    const user = await page.request.get("/identity/api/v3/core/users/me/");
+    expect(user.status()).toBe(200);
+    expect((await user.json()).user.username).toBe(username);
+    await page.goto("/identity/if/user/");
+    await expect(page.locator('[part="app-list"]').first()).toBeVisible();
+    const columns = await page
+      .locator('[part="app-list"]')
+      .first()
+      .evaluate((element) => element.style.getPropertyValue("--app-list-column-count"));
+    expect(columns).toMatch(/^[1-3]$/);
+    const tooltipState = await page.evaluate(async () => {
+      await customElements.whenDefined("pf-tooltip");
+      const tooltip = document.createElement("pf-tooltip");
+      const trigger = document.createElement("button");
+      trigger.textContent = "CSP tooltip probe";
+      tooltip.append(trigger);
+      tooltip.content = "Floating tooltip";
+      document.body.append(tooltip);
+      const states = [];
+      try {
+        for (const position of ["top", "bottom"]) {
+          tooltip.position = position;
+          await tooltip.show();
+          await tooltip.updateComplete;
+          await new Promise(requestAnimationFrame);
+          const container = tooltip.shadowRoot.querySelector("#container");
+          const content = tooltip.shadowRoot.querySelector("#tooltip");
+          states.push({
+            declared: container.style.getPropertyValue("--_floating-content-translate"),
+            rendered: getComputedStyle(content).translate,
+            display: getComputedStyle(container.querySelector('[role="tooltip"]')).display,
+            open: container.classList.contains("open"),
+          });
+          await tooltip.hide();
+        }
+        return states;
+      } finally {
+        tooltip.remove();
+      }
+    });
+    for (const state of tooltipState) {
+      expect(state.declared).toMatch(/^-?[\d.]+px -?[\d.]+px$/);
+      const declared = state.declared.split(" ").map(parseFloat);
+      const rendered = state.rendered.split(" ").map(parseFloat);
+      expect(rendered).toHaveLength(2);
+      for (let index = 0; index < 2; index += 1) {
+        expect(rendered[index]).toBeCloseTo(declared[index], 4);
+      }
+      expect(state.display).toBe("contents");
+      expect(state.open).toBe(true);
+    }
+    await page.goto("/identity/if/admin/#/identity/users");
+    await expect(page.locator("ak-user-list")).toBeVisible();
+    const progressState = await page.evaluate(async () => {
+      const progress = document.createElement("ak-progress-bar");
+      progress.style.width = "200px";
+      progress.value = 25;
+      document.body.append(progress);
+      try {
+        await progress.updateComplete;
+        const indicator = progress.shadowRoot.querySelector(".pf-c-progress__indicator");
+        const bar = progress.shadowRoot.querySelector(".pf-c-progress__bar");
+        const first = indicator.style.width;
+        const firstRatio =
+          indicator.getBoundingClientRect().width / bar.getBoundingClientRect().width;
+        progress.value = 75;
+        await progress.updateComplete;
+        const secondRatio =
+          indicator.getBoundingClientRect().width / bar.getBoundingClientRect().width;
+        await new Promise(requestAnimationFrame);
+        return {
+          widths: [first, indicator.style.width],
+          ratios: [firstRatio, secondRatio],
+          nonces: [...progress.shadowRoot.querySelectorAll("style")].map((style) => style.nonce),
+          expectedNonce: window.litNonce,
+        };
+      } finally {
+        progress.remove();
+      }
+    });
+    expect(progressState.widths).toEqual(["25%", "75%"]);
+    expect(progressState.ratios[0]).toBeCloseTo(0.25, 2);
+    expect(progressState.ratios[1]).toBeCloseTo(0.75, 2);
+    if (styleMode === "fallback") {
+      expect(progressState.nonces.length).toBeGreaterThan(0);
+      expect(new Set(progressState.nonces)).toEqual(new Set([progressState.expectedNonce]));
+    }
+    expect(violations).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
 test("final VM component has no serious or critical accessibility violations", async ({page}) => {
   await openNasOverview(page);
   await expectNoSeriousAxeViolations(page);

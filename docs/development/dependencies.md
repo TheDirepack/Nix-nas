@@ -80,11 +80,29 @@ The behavioral fixture in `test_authentik_blueprint_patch.py` covers the command
 from upstream Authentik 2025.12.6; dependency updates must preserve this contract.
 
 Authentik's [documented CSP](https://docs.goauthentik.io/security/security-hardening/#content-security-policy-csp)
-requires inline scripts and styles. The proxy adds that baseline only when
-upstream has not supplied a policy, preserving the stricter policy on uploaded
-files. Do not replace it with a blanket strict script policy or add
-`unsafe-eval` to satisfy an unverified interface failure. The required
-`unsafe-inline` remains a scanner-visible constraint, not a qualified strict CSP.
+uses inline scripts and styles. `authentik-csp.patch` replaces that requirement
+with django-csp 4 per-response nonces in the canonical source package. Server
+templates nonce inline scripts/styles and set `window.litNonce` before loading
+Lit, including its stylesheet fallback. Dynamic frontend styles use CSSOM
+property bindings instead of CSP-blocked style attributes. The locked Web
+Components 2.8.0 bundle injects one fixed unresolved-element stylesheet without
+nonce support; `style-src` authorizes only its exact SHA256, tested against the
+complete upstream source fixture. Dependency changes must requalify that hash;
+style attributes and `unsafe-hashes` remain forbidden. The upstream build's
+style loader converts the locked PatternFly tooltip's two `styleMap` bindings
+to CSSOM property bindings, including its floating-position custom property;
+unrecognized dependency styling fails the build rather than silently weakening
+CSP. The proxy preserves
+upstream response policies, including stricter uploaded-file CSP, and supplies
+a same-origin fallback only when no policy exists.
+
+Keep script/style `unsafe-inline` and `unsafe-eval` disabled. Both public proxy
+configurations enforce COEP `require-corp`, COOP `same-origin` and CORP
+`same-origin`; the installed avatar default uses local initials. Dependency
+updates must retain these boundaries and pass installed login, private API,
+CSRF/session, accessibility and native/fallback stylesheet checks in every
+browser engine. Source patch applicability and fixture checks alone do not
+qualify installed compatibility or clean ZAP scans.
 
 ## Upgrade qualification pin
 

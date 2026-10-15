@@ -19,6 +19,15 @@ let
   ;
 
   authentikPackage = pkgs.authentik.override {
+    python3 = pkgs.python3 // {
+      override = pythonArgs: pkgs.python3.override (pythonArgs // {
+        packageOverrides = lib.composeExtensions pythonArgs.packageOverrides (final: previous: {
+          authentik-django = previous.authentik-django.overridePythonAttrs (old: {
+            dependencies = old.dependencies ++ [ final.django-csp ];
+          });
+        });
+      });
+    };
     fetchFromGitHub = sourceArgs:
       let source = pkgs.fetchFromGitHub sourceArgs;
       in if (sourceArgs.owner or "") == "goauthentik" && (sourceArgs.repo or "") == "authentik" then
@@ -29,6 +38,7 @@ let
             ../../../authentik/patches/authentik-accessibility.patch
             ../../../authentik/patches/authentik-known-device-cookie.patch
             ../../../authentik/patches/authentik-blueprint-apply-failure.patch
+            ../../../authentik/patches/authentik-csp.patch
           ];
         }
       else source;
