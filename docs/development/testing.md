@@ -295,10 +295,13 @@ reports and verified native add-on evidence from that invocation. Archive hash
 or runnable-inventory mismatches fail before the scan; scanner warnings remain
 fatal. Authenticated automation requests the same-origin users/me API after
 browser discovery and requires HTTP 200, the configured username in its response,
-and ZAP's site-scoped logged-in session state. Browser success counters alone
-cannot qualify authentication. Native fixtures must exercise accepted and rejected
-credentials, preserve cookie mutations on the wire and detect the deliberately
-vulnerable session control. The installed-security CI job runs these controls
+and ZAP's site-scoped logged-in session state. The fatal URL test checks status
+and username together; the requestor's response-code warning is not a fatal test.
+Browser success counters alone cannot qualify authentication. Native fixtures
+must exercise accepted and rejected credentials, reject an authenticated error
+response even when it contains the expected username, preserve cookie mutations
+on the wire and detect the deliberately vulnerable session control. The
+installed-security CI job runs these controls
 before appliance scanning and retains their evidence. A successful fixture scan
 verifies the harness, not appliance security.
 

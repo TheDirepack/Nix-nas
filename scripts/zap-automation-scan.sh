@@ -184,7 +184,11 @@ if user_name:
             "name": "private identity response verified",
             "type": "url",
             "url": context["authentication"]["verification"]["pollUrl"],
-            "operator": "or",
+            # The pinned URL test ANDs all four regexes; null request patterns fail.
+            "operator": "and",
+            "requestHeaderRegex": "",
+            "requestBodyRegex": "",
+            "responseHeaderRegex": r"^HTTP/\d+(?:\.\d+)? 200(?:\s|$)",
             "responseBodyRegex": context["authentication"]["verification"]["loggedInRegex"],
             "onFail": "error",
         },

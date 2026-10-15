@@ -92,6 +92,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 hardened = True
                 authenticated = False
                 broken_session = False
+                identity_status = 200
                 successful_logins = 0
                 private_requests = 0
                 events: list[dict] = []
@@ -157,7 +158,9 @@ with tempfile.TemporaryDirectory() as temporary:
                         )
                     elif self.path in ("/api/me", "/identity/api/v3/core/users/me/"):
                         self.respond(
-                            200 if valid_cookie else 401,
+                            (self.identity_status if self.path == "/identity/api/v3/core/users/me/" else 200)
+                            if valid_cookie
+                            else 401,
                             json.dumps(
                                 {"username": "fixture-user"} if valid_cookie else {"detail": "Not authenticated"}
                             ).encode(),
@@ -246,6 +249,7 @@ with tempfile.TemporaryDirectory() as temporary:
                         "/console/",
                     ),
                     ("vulnerable-session", "zap-automation-scan.sh", "authenticated", True, True, True, "/console/"),
+                    ("errored-identity", "zap-automation-scan.sh", "authenticated", True, True, False, "/console/"),
                     (
                         "rejected-authentication",
                         "zap-automation-scan.sh",
@@ -263,6 +267,7 @@ with tempfile.TemporaryDirectory() as temporary:
                             broken,
                         )
                         Handler.successful_logins, Handler.private_requests, Handler.events = 0, 0, []
+                        Handler.identity_status = 500 if name == "errored-identity" else 200
                         out = output / name
                         out.mkdir(exist_ok=True)
                         environment = {
@@ -293,7 +298,7 @@ with tempfile.TemporaryDirectory() as temporary:
                         prefix = f"zap-scan-{mode}" if script == "zap-scan.sh" else f"zap-automation-{mode}"
                         report = out / f"{prefix}.json"
                         log = (out / "scan.log").read_text()
-                        if name != "rejected-authentication":
+                        if name not in ("rejected-authentication", "errored-identity"):
                             self.assertTrue(report.is_file(), log)
                         alerts = {
                             str(alert["pluginid"])
@@ -332,14 +337,34 @@ with tempfile.TemporaryDirectory() as temporary:
                             check=True,
                             timeout=10,
                         )
-                        expected = 2 if name.startswith("vulnerable") or name == "rejected-authentication" else 0
+                        expected = (
+                            2
+                            if name.startswith("vulnerable") or name in ("rejected-authentication", "errored-identity")
+                            else 0
+                        )
                         self.assertEqual(result.returncode, expected, log)
                         if not hardened:
                             self.assertTrue({"10055", "90004"} <= alerts, alerts)
                         if mode == "authenticated":
                             self.assertIn("private identity response verified", log)
                             self.assertIn("authenticated session verified", log)
-                            if name == "rejected-authentication":
+                            if name == "errored-identity":
+                                self.assertIn("test of type stats passed: authenticated session verified", log)
+                                self.assertIn(
+                                    "test type url has failed. Test Name: private identity response verified.", log
+                                )
+                                self.assertGreater(Handler.successful_logins, 0)
+                                self.assertGreater(Handler.private_requests, 0)
+                                self.assertTrue(
+                                    any(
+                                        event["path"] == "/identity/api/v3/core/users/me/"
+                                        and event["validCookie"]
+                                        and event["status"] == 500
+                                        for event in Handler.events
+                                    ),
+                                    Handler.events,
+                                )
+                            elif name == "rejected-authentication":
                                 self.assertIn("test of type stats failed: authenticated session verified", log)
                                 self.assertIn(
                                     "test type url has failed. Test Name: private identity response verified.", log

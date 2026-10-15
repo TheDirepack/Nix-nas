@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import unittest
@@ -399,12 +400,42 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
                             "name": "private identity response verified",
                             "type": "url",
                             "url": verification["pollUrl"],
-                            "operator": "or",
+                            "operator": "and",
+                            "requestHeaderRegex": "",
+                            "requestBodyRegex": "",
+                            "responseHeaderRegex": r"^HTTP/\d+(?:\.\d+)? 200(?:\s|$)",
                             "responseBodyRegex": verification["loggedInRegex"],
                             "onFail": "error",
                         },
                         requestor.get("tests", []),
                     )
+                    identity_test = next(
+                        test for test in requestor["tests"] if test["name"] == "private identity response verified"
+                    )
+                    for status, body, accepted in (
+                        ("HTTP/1.1 200 OK", '{"username":"fixture-user"}', True),
+                        ("HTTP/2 200 OK", '{"username":"fixture-user"}', True),
+                        ("HTTP/1.1 500 Error", '{"username":"fixture-user"}', False),
+                        ("HTTP/1.1 401 Unauthorized", '{"username":"fixture-user"}', False),
+                        ("HTTP/1.1 302 Found", '{"username":"fixture-user"}', False),
+                        ("HTTP/1.1 2000 Invalid", '{"username":"fixture-user"}', False),
+                        ("HTTP/1.1 500 Error\r\nX-Detail: HTTP/1.1 200 OK", '{"username":"fixture-user"}', False),
+                        ("HTTP/1.1 200 OK", '{"username":"another-user"}', False),
+                        ("HTTP/1.1 200 OK", '{"detail":"Not authenticated"}', False),
+                    ):
+                        with self.subTest(status=status, body=body):
+                            self.assertEqual(
+                                all(
+                                    re.search(identity_test[key], value) is not None
+                                    for key, value in (
+                                        ("requestHeaderRegex", "GET /identity/api/v3/core/users/me/ HTTP/1.1"),
+                                        ("requestBodyRegex", ""),
+                                        ("responseHeaderRegex", status + "\r\nContent-Type: application/json\r\n"),
+                                        ("responseBodyRegex", body),
+                                    )
+                                ),
+                                accepted,
+                            )
                     self.assertIn(
                         {
                             "name": "authenticated session verified",
