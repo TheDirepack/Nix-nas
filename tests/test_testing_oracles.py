@@ -87,6 +87,34 @@ class TestingOracleTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 machine.rejected_document_preserves_model()
 
+    def test_stateful_generator_selects_only_valid_lifecycle_transitions(self):
+        from hypothesis import seed, settings
+        from hypothesis.stateful import get_state_machine_test
+
+        def require_valid(condition):
+            self.assertTrue(condition, "stateful generator selected a duplicate or deleted service")
+
+        generated = get_state_machine_test(
+            stateful.ManagedServiceStateMachine,
+            settings=settings(max_examples=5, stateful_step_count=25, deadline=None, database=None),
+        )
+        with mock.patch.object(stateful, "assume", side_effect=require_valid, create=True):
+            seed(44707005081531207893756870901078754582)(generated)()
+
+    def test_deleted_service_id_returns_to_the_generation_pool(self):
+        machine = stateful.ManagedServiceStateMachine()
+        ids = machine.available_service_ids().values
+        self.assertEqual(set(ids), {*(f"svc{index}" for index in range(64)), "a-b", "a", "a" * 64, "b" * 64})
+        self.assertEqual(len(ids), len(set(ids)))
+        for sid in ids:
+            self.assertEqual(machine.add_service(sid, True), sid)
+            machine.effective_routes_match_model()
+            self.assertEqual(machine.delete_service(sid), sid)
+            machine.effective_routes_match_model()
+            self.assertEqual(machine.add_service(sid, False), sid)
+            machine.portal_and_caddy_agree_on_visible_services()
+            machine.delete_service(sid)
+
     def test_inventory_rejects_comment_only_coverage_claim(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
