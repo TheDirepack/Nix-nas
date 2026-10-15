@@ -260,7 +260,7 @@ chmod 0644 "$plan"
 # Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
 runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
   -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw"
-  -v "$SCRIPT_DIR/lib:/nas-zap:ro" --entrypoint bash -e NAS_ZAP_IMAGE
+  -v "$SCRIPT_DIR/lib:/nas-zap:ro" --entrypoint bash -e NAS_ZAP_IMAGE -e NAS_ZAP_RUNTIME_IMAGE
   -e "NAS_ZAP_ADDON_EVIDENCE=/zap/wrk/$report_prefix.addons.json")
 if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
   [[ "$NAS_ZAP_EXTRA_HOST" != *$'\n'* && "$NAS_ZAP_EXTRA_HOST" != *$'\r'* ]] || die "NAS_ZAP_EXTRA_HOST must be one line"
@@ -278,9 +278,12 @@ printf 'Running state-aware ZAP %s scan against %s (%s minute budget, %s browser
 reports=("$OUT_DIR/$report_prefix.html" "$OUT_DIR/$report_prefix.json" "$OUT_DIR/$report_prefix.addons.json")
 # Reused output directories must not supply evidence for an incomplete scan.
 rm -f -- "${reports[@]}"
+qualified_image="$(python3 "$SCRIPT_DIR/lib/zap-addons.py" image --runtime "$RUNTIME" --image "$IMAGE")" || \
+  die "could not build the source-built scanner"
+export NAS_ZAP_RUNTIME_IMAGE="$qualified_image"
 set +e
 timeout --signal=TERM --kill-after=60s "${process_timeout}s" \
-  "$RUNTIME" "${runtime_args[@]}" "$IMAGE" \
+  "$RUNTIME" "${runtime_args[@]}" "$qualified_image" \
   /nas-zap/zap-entrypoint.sh zap.sh -cmd -config stats.inMemoryEnabled=true -autorun "/zap/wrk/$(basename "$plan")"
 rc=$?
 set -e
@@ -293,6 +296,6 @@ fi
 for report in "${reports[@]}"; do
   [[ -s "$report" ]] || die "ZAP automation did not produce expected report: $report"
 done
-python3 "$SCRIPT_DIR/lib/zap-addons.py" verify-evidence --image "$IMAGE" \
+python3 "$SCRIPT_DIR/lib/zap-addons.py" verify-evidence --image "$IMAGE" --runtime-image "$qualified_image" \
   --evidence "$OUT_DIR/$report_prefix.addons.json" || die "invalid ZAP add-on evidence"
 printf 'ZAP automation %s scan completed: %s\n' "$MODE" "$OUT_DIR"

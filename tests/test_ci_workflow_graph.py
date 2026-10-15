@@ -329,9 +329,22 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", prepare)
 
     def test_installed_zap_has_an_immutable_default_without_repository_variables(self) -> None:
-        step = next(step for step in self.jobs["installed-security"]["steps"] if step.get("id") == "zap")
-        image = step["env"]["NAS_ZAP_IMAGE"]
+        image = self.jobs["installed-security"]["env"]["NAS_ZAP_IMAGE"]
         self.assertRegex(image, r"vars\.NAS_ZAP_IMAGE\s*\|\|\s*'ghcr\.io/zaproxy/zaproxy@sha256:[a-f0-9]{64}'")
+
+    def test_native_scanner_controls_are_fatal_and_retain_their_evidence(self) -> None:
+        job = self.jobs["installed-security"]
+        controls = next((step for step in job["steps"] if step.get("id") == "zap-controls"), None)
+        self.assertIsNotNone(controls, "source-built scanners lack native hardened and vulnerable CI controls")
+        assert controls is not None
+        self.assertEqual(controls["env"]["NAS_ZAP_NATIVE_TEST"], "1")
+        self.assertIn("tests.slow_zap_native", controls["run"])
+        self.assertIn("NAS_ZAP_IMAGE", job["env"])
+        report = next(step for step in job["steps"] if step.get("name") == "Report all installed-security failures")
+        self.assertIn("zap-controls=${{ steps.zap-controls.outcome }}", report["run"])
+        artifact = next(step for step in job["steps"] if step.get("name") == "Retain installed security evidence")
+        self.assertEqual(artifact["if"], "always()")
+        self.assertIn("zap-native-controls", artifact["with"]["path"])
 
     def test_long_fuzz_searches_run_only_when_manually_triggered(self) -> None:
         fuzz = self.jobs["source-fuzz"]

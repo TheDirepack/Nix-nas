@@ -878,6 +878,8 @@ jobs:
     needs: [installer, prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 355
+    env:
+      NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE || 'ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -913,6 +915,16 @@ jobs:
           bash scripts/system-handoff.sh verify "$RUNNER_TEMP/vm-bundles"
           ./scripts/vm-bundles.sh import "$RUNNER_TEMP/vm-bundles"
           bash scripts/system-handoff.sh import "$RUNNER_TEMP/vm-bundles"
+      - name: Qualify native scanner transport and controls
+        id: zap-controls
+        continue-on-error: true
+        env:
+          NAS_ZAP_NATIVE_TEST: "1"
+          NAS_ZAP_NATIVE_OUT: zap-native-controls
+        run: |
+          mkdir -p zap-native-controls
+          set -o pipefail
+          python3 -m unittest tests.slow_zap_native -v 2>&1 | tee zap-native-controls/native-tests.log
       - name: Provision installed appliance once
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Installed-command and HTTP adversarial checks
@@ -928,7 +940,6 @@ jobs:
         continue-on-error: true
         env:
           NAS_FINAL_VM_WORKLOAD: zap-fuzz
-          NAS_ZAP_IMAGE: ${{ vars.NAS_ZAP_IMAGE || 'ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef' }}
           NAS_ZAP_CONFIRM_ACTIVE: "1"
           NAS_ZAP_OUT_DIR: zap-report
           NAS_ZAP_AUTOMATION_MINUTES: "90"
@@ -943,10 +954,8 @@ jobs:
           mkdir -p installed-security-logs
           cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
             installed-security-logs/browser-console.log 2>/dev/null || true
-      - name: Retain installed security failure evidence
-        if: >-
-          always() &&
-          (steps.installed-command.outcome != 'success' || steps.zap.outcome != 'success')
+      - name: Retain installed security evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installed-security-evidence
@@ -956,6 +965,7 @@ jobs:
             installed-command-fuzz.json
             http-adversarial.json
             zap-report
+            zap-native-controls
             installed-security-logs
       - name: Report all installed-security failures
         if: always()
@@ -963,6 +973,7 @@ jobs:
           CI_REPORT_TITLE: Installed appliance adversarial qualification
         run: |
           python3 scripts/ci-check-report.py \
+            "zap-controls=${{ steps.zap-controls.outcome }}" \
             "installed-command=${{ steps.installed-command.outcome }}" \
             "zap=${{ steps.zap.outcome }}"
 

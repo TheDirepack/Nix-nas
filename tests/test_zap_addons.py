@@ -39,7 +39,7 @@ class ZapAddonTests(unittest.TestCase):
         self.write_lock([self.row])
 
     def write_lock(self, rows: list[dict]) -> None:
-        self.lock_path.write_text(json.dumps({"schemaVersion": 1, "addons": rows}))
+        self.lock_path.write_text(json.dumps({"schemaVersion": 2, "addons": rows, "sourceBuild": None}))
 
     def test_bundled_archive_is_verified_and_copied_without_download(self) -> None:
         (self.bundled / self.row["archive"]).write_bytes(self.content)
@@ -171,22 +171,27 @@ class ZapAddonTests(unittest.TestCase):
 
     def test_native_evidence_must_match_the_image_lock_and_entire_inventory(self) -> None:
         image = "fixture@sha256:" + "a" * 64
+        runtime_image = "sha256:" + "b" * 64
         evidence = self.root / "evidence.json"
         valid = {
             "image": image,
+            "runtimeImage": runtime_image,
             "lockSha256": hashlib.sha256(self.lock_path.read_bytes()).hexdigest(),
             "runnableVerified": True,
             "addons": [self.row],
+            "sourceBuild": None,
         }
         evidence.write_text(json.dumps(valid))
         verify = getattr(self.addons, "verify_evidence", None)
         self.assertIsNotNone(verify, "ZAP evidence is accepted without parsing its native inventory")
         assert verify is not None
-        verify(self.lock_path, evidence, image)
+        verify(self.lock_path, evidence, image, runtime_image)
         for override in (
             {"image": "unexpected image"},
+            {"runtimeImage": "sha256:" + "c" * 64},
             {"lockSha256": "0" * 64},
             {"runnableVerified": False},
+            {"sourceBuild": {"outputs": {}}},
             {"addons": []},
             {"addons": [self.row, self.row]},
             {"addons": [{**self.row, "sha256": "0" * 64}]},
@@ -194,10 +199,10 @@ class ZapAddonTests(unittest.TestCase):
             with self.subTest(override=override):
                 evidence.write_text(json.dumps({**valid, **override}))
                 with self.assertRaisesRegex(ValueError, "evidence"):
-                    verify(self.lock_path, evidence, image)
+                    verify(self.lock_path, evidence, image, runtime_image)
         evidence.write_text("corrupt")
         with self.assertRaises(ValueError):
-            verify(self.lock_path, evidence, image)
+            verify(self.lock_path, evidence, image, runtime_image)
 
 
 if __name__ == "__main__":

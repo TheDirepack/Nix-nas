@@ -16,10 +16,21 @@ lib = pathlib.Path(args[args.index('-v', args.index('-v') + 1) + 1].split(':', 1
 lock = lib / 'zap-addons.lock.json'
 evidence = {
     'image': os.environ['NAS_ZAP_IMAGE'],
+    'runtimeImage': os.environ['NAS_ZAP_RUNTIME_IMAGE'],
     'lockSha256': hashlib.sha256(lock.read_bytes()).hexdigest(),
     'runnableVerified': True,
     'addons': json.loads(lock.read_text())['addons'],
+    'sourceBuild': json.loads(lock.read_text())['sourceBuild'],
 }
+"""
+
+IMAGE_BUILDER = """
+args = sys.argv[1:]
+if args[0] == 'build':
+    assert '--pull=false' in args
+    assert '--build-arg' in args
+    pathlib.Path(args[args.index('--iidfile') + 1]).write_text('sha256:' + 'b' * 64)
+    raise SystemExit(int(os.environ.get('FAKE_BUILD_RC', '0')))
 """
 
 
@@ -95,6 +106,9 @@ class MaintainerMatrixTests(MaintainerScriptMixin, unittest.TestCase):
         fake_runtime.write_text(
             """#!/usr/bin/env python3
 import os, pathlib, sys, time
+"""
+            + IMAGE_BUILDER
+            + """
 if os.environ.get('FAKE_ZAP_SLEEP'):
     time.sleep(float(os.environ['FAKE_ZAP_SLEEP']))
 args=sys.argv[1:]
@@ -143,6 +157,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         self.assertIn("--add-host\nnas-test.local:127.0.0.1", invocation)
         self.assertIn("zap-baseline.py", invocation)
         self.assertIn("/nas-zap/zap-entrypoint.sh", invocation)
+        self.assertIn("sha256:" + "b" * 64, invocation)
         self.assertIn("https://nas-test.local:8443/", invocation)
         self.assertNotIn("\n-I\n", f"\n{invocation}\n")
         self.assertTrue((reports / "zap-scan-baseline.json").is_file())
@@ -160,6 +175,17 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         )
         self.assertEqual(warning.returncode, 2)
         self.assertIn("warnings are fatal", warning.stderr)
+
+        rejected_build = subprocess.run(
+            ["bash", "scripts/zap-scan.sh", "baseline", "https://nas-test.local:8443/"],
+            cwd=self.clean_root,
+            env={**env, "FAKE_BUILD_RC": "1"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(rejected_build.returncode, 2)
+        self.assertIn("source-built scanner", rejected_build.stderr)
 
         public = subprocess.run(
             ["bash", "scripts/zap-scan.sh", "baseline", "https://example.com/"],
@@ -229,8 +255,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         runtime = fake_bin / "docker"
         runtime.write_text(
             "#!/usr/bin/env python3\n"
-            "import os, pathlib, sys\n"
-            "args = sys.argv[1:]\n"
+            "import os, pathlib, sys\n" + IMAGE_BUILDER + "args = sys.argv[1:]\n"
             "out = pathlib.Path(args[args.index('-v') + 1].split(':', 1)[0])\n"
             "for name in os.environ['CURRENT_REPORTS'].split(','):\n"
             "    if name:\n"
@@ -311,8 +336,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         runtime = fake_bin / "docker"
         runtime.write_text(
             "#!/usr/bin/env python3\n"
-            "import os, pathlib, sys\n"
-            "args = sys.argv[1:]\n"
+            "import os, pathlib, sys\n" + IMAGE_BUILDER + "args = sys.argv[1:]\n"
             "out = pathlib.Path(args[args.index('-v') + 1].split(':', 1)[0])\n"
             "(out / 'invocation.txt').write_text('\\n'.join(args))\n"
             "plan = pathlib.Path(next(arg for arg in args if arg.endswith('.yaml'))).name\n"
@@ -351,6 +375,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
                 self.assertIn("JAVA_TOOL_OPTIONS=-Duser.home=/tmp", invocation)
                 self.assertIn("HOME=/tmp", invocation)
                 self.assertIn("/nas-zap/zap-entrypoint.sh", invocation)
+                self.assertIn("sha256:" + "b" * 64, invocation)
                 plan = json.loads((out / "captured-plan.json").read_text())
                 context = plan["env"]["contexts"][0]
                 self.assertEqual(context["urls"], ["https://127.0.0.1:8443/console/"])
@@ -403,8 +428,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         runtime = fake_bin / "docker"
         runtime.write_text(
             "#!/usr/bin/env python3\n"
-            "import os, pathlib, sys\n"
-            "args = sys.argv[1:]\n"
+            "import os, pathlib, sys\n" + IMAGE_BUILDER + "args = sys.argv[1:]\n"
             "out = pathlib.Path(args[args.index('-v') + 1].split(':', 1)[0])\n"
             "if '-r' in args:\n"
             "    names = [args[args.index(flag) + 1] for flag in ('-r', '-J', '-w')]\n"
@@ -414,6 +438,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
             "    (out / name).write_text('fresh report')\n" + EVIDENCE_WRITER + "case = os.environ['BAD_EVIDENCE']\n"
             "if case == 'inventory': evidence['addons'].pop()\n"
             "if case == 'image': evidence['image'] = 'wrong image'\n"
+            "if case == 'runtime-image': evidence['runtimeImage'] = 'sha256:' + 'c' * 64\n"
             "if case == 'hash': evidence['lockSha256'] = '0' * 64\n"
             "if case == 'unverified': evidence['runnableVerified'] = False\n"
             "name = next(arg for arg in args if arg.startswith('NAS_ZAP_ADDON_EVIDENCE=')).split('=', 1)[1]\n"
@@ -427,7 +452,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
             ("zap-automation-scan.sh", "unauthenticated"),
             ("zap-automation-scan.sh", "authenticated"),
         ):
-            for bad_evidence in ("corrupt", "inventory", "image", "hash", "unverified"):
+            for bad_evidence in ("corrupt", "inventory", "image", "runtime-image", "hash", "unverified"):
                 with self.subTest(mode=mode, evidence=bad_evidence):
                     out = pathlib.Path(self._temporary.name) / f"invalid-{mode}-{bad_evidence}"
                     result = subprocess.run(
