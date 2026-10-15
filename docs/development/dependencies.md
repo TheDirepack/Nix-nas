@@ -84,7 +84,15 @@ uses inline scripts and styles. `authentik-csp.patch` replaces that requirement
 with django-csp 4 per-response nonces in the canonical source package. Server
 templates nonce inline scripts/styles and set `window.litNonce` before loading
 Lit, including its stylesheet fallback. Dynamic frontend styles use CSSOM
-property bindings instead of CSP-blocked style attributes. The proxy preserves
+property bindings instead of CSP-blocked style attributes. The locked Web
+Components 2.8.0 bundle injects one fixed unresolved-element stylesheet without
+nonce support; `style-src` authorizes only its exact SHA256, tested against the
+complete upstream source fixture. Dependency changes must requalify that hash;
+style attributes and `unsafe-hashes` remain forbidden. The upstream build's
+style loader converts the locked PatternFly tooltip's two `styleMap` bindings
+to CSSOM property bindings, including its floating-position custom property;
+unrecognized dependency styling fails the build rather than silently weakening
+CSP. The proxy preserves
 upstream response policies, including stricter uploaded-file CSP, and supplies
 a same-origin fallback only when no policy exists.
 

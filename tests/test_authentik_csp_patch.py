@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import ast
+import base64
+import hashlib
 import importlib
 import importlib.util
+import json
 import pathlib
 import re
 import shutil
@@ -112,6 +115,79 @@ class AuthentikCspPatchTests(unittest.TestCase):
         grid = (self.tree / "web/src/user/LibraryPage/ApplicationList.ts").read_text()
         self.assertIn("--app-list-column-count", grid)
         self.assertIn("columnCount", grid)
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node.js for the pinned Web Components fixture")
+    def test_style_hash_trusts_only_the_exact_pinned_polyfill_stylesheet(self):
+        source = (self.tree / "webcomponents/unresolved.js").read_text()
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=(
+                "let inserted; globalThis.document = {createElement: () => ({}), "
+                "querySelector: () => ({insertBefore: style => inserted = style})};\n"
+                + source
+                + "\nconsole.log(JSON.stringify(inserted.textContent));\n"
+            ),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        stylesheet = json.loads(result.stdout)
+        digest = base64.b64encode(hashlib.sha256(stylesheet.encode()).digest()).decode()
+        policy_source = ast.unparse(self.assignment("CONTENT_SECURITY_POLICY"))
+        self.assertIn(f"sha256-{digest}", policy_source)
+        modified_digest = base64.b64encode(hashlib.sha256((stylesheet + "*").encode()).digest()).decode()
+        self.assertNotIn(f"sha256-{modified_digest}", policy_source)
+        self.assertIn("'style-src-attr': [NONE]", policy_source)
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node.js for the pinned PatternFly build fixture")
+    def test_build_loader_uses_cssom_for_tooltips_and_refuses_dependency_drift(self):
+        loader = self.tree / "web/bundler/style-loader-plugin/node.js"
+        tooltip = self.tree / "patternfly/pf-tooltip.js"
+        probe = r"""
+            import assert from 'node:assert/strict';
+            import {readFileSync, writeFileSync} from 'node:fs';
+            const [loaderPath, tooltipPath] = process.argv.slice(2);
+            const source = readFileSync(loaderPath, 'utf8')
+                .replace('import { ConsoleLogger } from "#logger/node";',
+                    'const ConsoleLogger = {child: () => ({})};')
+                .replace('import { resolvePackage } from "@goauthentik/core/paths/node";',
+                    'const resolvePackage = () => "owned-patternfly-fixture";')
+                .replace('createRequire(import.meta.url)',
+                    'createRequire("file:///owned-style-loader.js")');
+            const {styleLoaderPlugin} = await import(
+                `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+            const loads = [];
+            styleLoaderPlugin().setup({initialOptions: {}, onDispose() {}, onResolve() {},
+                onLoad(options, callback) {loads.push({options, callback});}});
+            const loader = loads.find(({options}) => !options.namespace && options.filter.test(
+                '/node_modules/@patternfly/elements/pf-tooltip/pf-tooltip.js'));
+            assert.ok(loader, 'No CSP-safe PatternFly dependency loader registered');
+            assert.equal(loader.options.filter.test('/owned/pf-tooltip.js'), false);
+            const result = await loader.callback({path: tooltipPath});
+            assert.equal(result.loader, 'js');
+            assert.deepEqual(result.watchFiles, [tooltipPath]);
+            const binding = result.contents.match(/\.style="\$\{(Object\.entries\(styles\)[^\n]+)\}"/);
+            assert.ok(binding, 'Tooltip binding must preserve CSS custom properties');
+            const serialize = new Function('styles', 'return ' + binding[1]);
+            assert.equal(serialize({'--_floating-content-translate': '14px -25px'}),
+                '--_floating-content-translate: 14px -25px;');
+            assert.equal(serialize({}), '');
+            const original = readFileSync(tooltipPath, 'utf8');
+            writeFileSync(tooltipPath, original.replace('styleMap(styles)', 'styleMap(changedStyles)'));
+            await assert.rejects(() => loader.callback({path: tooltipPath}), /Unsupported PatternFly tooltip/);
+            console.log(JSON.stringify(result.contents));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-", str(loader), str(tooltip)],
+            input=probe,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        compiled_source = json.loads(result.stdout)
+        self.assertNotIn("styleMap", compiled_source)
+        self.assertEqual(compiled_source.count(".style="), 2)
+        self.assertIn("display", compiled_source)
 
     @unittest.skipUnless(importlib.util.find_spec("csp"), "requires the Nix test shell's django-csp")
     def test_real_middleware_renders_unique_nonces_and_preserves_stricter_response_csp(self):

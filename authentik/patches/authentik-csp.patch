@@ -9,7 +9,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
  from django.utils import http as utils_http
  from sentry_sdk import set_tag
  from xmlsec import enable_debug_trace
-@@ -27,6 +28,20 @@
+@@ -27,6 +28,24 @@
  ALLOWED_HOSTS = ["*"]
  SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
  SECURE_CROSS_ORIGIN_OPENER_POLICY = None
@@ -18,7 +18,11 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
 +    "DIRECTIVES": {
 +        "default-src": [SELF],
 +        "script-src": [SELF, NONCE],
-+        "style-src": [SELF, NONCE],
++        "style-src": [
++            SELF,
++            NONCE,
++            "'sha256-rJJyMDPmHMZS0mPmL877gjjApxGMVa4522UDb4ctw7I='",
++        ],
 +        "style-src-attr": [NONE],
 +        "img-src": [SELF, "data:"],
 +        "object-src": [NONE],
@@ -30,7 +34,7 @@ diff --git a/authentik/root/settings.py b/authentik/root/settings.py
 +
  
  # Custom user model
-@@ -270,6 +285,7 @@
+@@ -270,6 +289,7 @@
      "authentik.brands.middleware.BrandMiddleware",
      "authentik.events.middleware.AuditMiddleware",
      "django.middleware.security.SecurityMiddleware",
@@ -443,3 +447,40 @@ diff --git a/web/src/admin/events/EventMap.ts b/web/src/admin/events/EventMap.ts
                  :host {
                      display: block;
                  }
+diff --git a/web/bundler/style-loader-plugin/node.js b/web/bundler/style-loader-plugin/node.js
+--- a/web/bundler/style-loader-plugin/node.js
++++ b/web/bundler/style-loader-plugin/node.js
+@@ -85,6 +85,33 @@
+ 
+             build.onResolve(...fontResolverArgs);
+ 
++            build.onLoad({ filter: /\/@patternfly\/elements\/pf-tooltip\/pf-tooltip\.js$/ }, async (args) => {
++                let contents = await readFile(args.path, "utf8");
++                const replacements = [
++                    [
++                        "import { styleMap } from 'lit/directives/style-map.js';",
++                        "",
++                    ],
++                    [
++                        'style="${styleMap(styles)}"',
++                        '.style="${Object.entries(styles).map(([name, value]) => `${name}: ${value};`).join("")}"',
++                    ],
++                    ['style="${styleMap({ display })}"', '.style="${`display: ${display};`}"'],
++                ];
++                for (const [original, replacement] of replacements) {
++                    if (contents.split(original).length !== 2) {
++                        throw new Error(`Unsupported PatternFly tooltip styling: ${args.path}`);
++                    }
++                    contents = contents.replace(original, replacement);
++                }
++                return {
++                    contents,
++                    loader: "js",
++                    resolveDir: dirname(args.path),
++                    watchFiles: [args.path],
++                };
++            });
++
+             /**
+              * Files which should be processed as CSS throughout ESBuild's loader chain.
+              */

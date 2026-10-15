@@ -334,6 +334,47 @@ for (const styleMode of ["native", "fallback"]) {
       .first()
       .evaluate((element) => element.style.getPropertyValue("--app-list-column-count"));
     expect(columns).toMatch(/^[1-3]$/);
+    const tooltipState = await page.evaluate(async () => {
+      await customElements.whenDefined("pf-tooltip");
+      const tooltip = document.createElement("pf-tooltip");
+      const trigger = document.createElement("button");
+      trigger.textContent = "CSP tooltip probe";
+      tooltip.append(trigger);
+      tooltip.content = "Floating tooltip";
+      document.body.append(tooltip);
+      const states = [];
+      try {
+        for (const position of ["top", "bottom"]) {
+          tooltip.position = position;
+          await tooltip.show();
+          await tooltip.updateComplete;
+          await new Promise(requestAnimationFrame);
+          const container = tooltip.shadowRoot.querySelector("#container");
+          const content = tooltip.shadowRoot.querySelector("#tooltip");
+          states.push({
+            declared: container.style.getPropertyValue("--_floating-content-translate"),
+            rendered: getComputedStyle(content).translate,
+            display: getComputedStyle(container.querySelector('[role="tooltip"]')).display,
+            open: container.classList.contains("open"),
+          });
+          await tooltip.hide();
+        }
+        return states;
+      } finally {
+        tooltip.remove();
+      }
+    });
+    for (const state of tooltipState) {
+      expect(state.declared).toMatch(/^-?[\d.]+px -?[\d.]+px$/);
+      const declared = state.declared.split(" ").map(parseFloat);
+      const rendered = state.rendered.split(" ").map(parseFloat);
+      expect(rendered).toHaveLength(2);
+      for (let index = 0; index < 2; index += 1) {
+        expect(rendered[index]).toBeCloseTo(declared[index], 4);
+      }
+      expect(state.display).toBe("contents");
+      expect(state.open).toBe(true);
+    }
     await page.goto("/identity/if/admin/#/identity/users");
     await expect(page.locator("ak-user-list")).toBeVisible();
     const progressState = await page.evaluate(async () => {
