@@ -3,6 +3,8 @@
 import pathlib
 import unittest
 
+from ruamel.yaml import YAML
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BLUEPRINT = ROOT / "authentik/blueprints/nas-setup.yaml"
 
@@ -32,6 +34,15 @@ class ExplicitSetupApplicationTests(unittest.TestCase):
         content = BLUEPRINT.read_text(encoding="utf-8")
         self.assertIn("authentik_policies.policybinding", content)
         self.assertIn("nas_admin", content)
+
+    def test_blueprint_leaves_proxy_relationship_and_launch_url_to_bootstrap_reconciliation(self) -> None:
+        blueprint = YAML(typ="base").load(BLUEPRINT.read_text(encoding="utf-8"))
+        application = next(entry for entry in blueprint["entries"] if entry["model"] == "authentik_core.application")
+        self.assertEqual(application["identifiers"], {"slug": "nas-setup"})
+        self.assertNotIn("provider", application["attrs"])
+        self.assertNotIn("meta_launch_url", application["attrs"])
+        self.assertNotIn("metaLaunchUrl", application["attrs"])
+        self.assertNotIn("state", application)
 
 
 class SetupUtilityLifecycleTests(unittest.TestCase):
