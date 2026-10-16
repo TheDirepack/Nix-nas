@@ -22,8 +22,17 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 try:
-    from hypothesis import HealthCheck, assume, given, settings, strategies as st
-    from hypothesis.stateful import Bundle, RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
+    from hypothesis import HealthCheck, given, settings, strategies as st
+    from hypothesis.stateful import (
+        Bundle,
+        RuleBasedStateMachine,
+        consumes,
+        initialize,
+        invariant,
+        multiple,
+        rule,
+        run_state_machine_as_test,
+    )
 except ImportError:
     HAS_HYPOTHESIS = False
 else:
@@ -60,6 +69,7 @@ if HAS_HYPOTHESIS:
 
     class ManagedServiceStateMachine(RuleBasedStateMachine):
         services_bundle = Bundle("services")
+        available_services = Bundle("available_services")
 
         def __init__(self) -> None:
             super().__init__()
@@ -81,26 +91,28 @@ if HAS_HYPOTHESIS:
         def _bump(self) -> None:
             self._revision += 1
 
+        @initialize(target=available_services)
+        def available_service_ids(self):
+            return multiple(*(f"svc{index}" for index in range(64)), "a-b", "a", "a" * 64, "b" * 64)
+
         @rule(
             target=services_bundle,
-            sid=SAFE_SERVICE_ID,
+            sid=consumes(available_services),
             enabled=st.booleans(),
         )
         def add_service(self, sid: str, enabled: bool) -> str:
-            assume(sid not in self.services)
+            assert sid not in self.services
             self.services[sid] = _valid_service_doc(sid, enabled=enabled)
             self._bump()
             return sid
 
         @rule(sid=services_bundle, port=SAFE_PORT)
         def modify_port(self, sid: str, port: int) -> None:
-            assume(sid in self.services)
             self.services[sid]["routes"]["web"]["target"]["port"] = port
             self._bump()
 
         @rule(sid=services_bundle, protected=st.booleans(), on_demand=st.booleans())
         def change_auth_and_activation(self, sid: str, protected: bool, on_demand: bool) -> None:
-            assume(sid in self.services)
             service = self.services[sid]
             service["routes"]["web"]["auth"] = (
                 {"mode": "identity", "capability": "access"} if protected else {"mode": "public"}
@@ -113,21 +125,19 @@ if HAS_HYPOTHESIS:
 
         @rule(sid=services_bundle)
         def disable_service(self, sid: str) -> None:
-            assume(sid in self.services)
             self.services[sid]["enabled"] = False
             self._bump()
 
         @rule(sid=services_bundle)
         def enable_service(self, sid: str) -> None:
-            assume(sid in self.services)
             self.services[sid]["enabled"] = True
             self._bump()
 
-        @rule(sid=services_bundle)
-        def delete_service(self, sid: str) -> None:
-            assume(sid in self.services)
+        @rule(target=available_services, sid=consumes(services_bundle))
+        def delete_service(self, sid: str) -> str:
             del self.services[sid]
             self._bump()
+            return sid
 
         @invariant()
         def effective_routes_match_model(self) -> None:
