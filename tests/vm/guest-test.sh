@@ -384,7 +384,14 @@ wait_active authentik.service
 [[ "$(systemctl show nas-identity-bootstrap.service --property=NRestarts --value)" == 0 ]] || \
   fail "identity bootstrap retried before Authentik's default flows were ready"
 wait_active nas-authentik-proxy-outpost.service
-wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+[[ ! -e /run/nas-control/effective.json ]] || fail "managed state was compiled before unlock"
+systemctl start nas-managed-services-authentik-reconcile.service
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == no ]] || \
+  fail "managed Authentik projection was not condition-skipped while locked"
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ExecMainStartTimestampMonotonic --value)" == 0 ]] || \
+  fail "managed Authentik projection executed before unlock"
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ActiveState --value)" == inactive ]] || \
+  fail "managed Authentik projection is not inactive while locked"
 # The outpost caches provider configuration at startup and property-mapping
 # changes do not reliably trigger a refresh; restart it once the bootstrap
 # and reconcile transactions have settled so its cached config is final.
@@ -595,6 +602,11 @@ if ! jq -e '
   jq . /tmp/nas-first-run-job.json >&2 || cat /tmp/nas-first-run-job.json >&2
   fail "GUI first-start job report did not contain the expected storage, account, and administrator state"
 fi
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == yes ]] || \
+  fail "managed Authentik projection was skipped after secret activation"
+[[ -s /var/lib/nas-control/authentik-v2-objects.json ]] || fail "managed Authentik projection did not commit its object manifest"
+pass "managed Authentik projection executes after secret activation"
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 # Capability bytes must never reach backend or proxy logs.
 if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then

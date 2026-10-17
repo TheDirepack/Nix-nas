@@ -24,6 +24,103 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_locked_boot_requires_skipped_unexecuted_managed_authentik_projection(self) -> None:
+        for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
+            source = path.read_text(encoding="utf-8")
+            start = source.index("[[ ! -e /run/nas-secrets/ready ]]")
+            end = (
+                source.index("\n# The outpost caches", start)
+                if path == GUEST_TEST
+                else source.index("\nfor _ in", start)
+            )
+            block = source[start:end]
+            for started, condition, state, start_status, accepted in (
+                (0, "no", "inactive", 0, True),
+                (1, "no", "inactive", 0, False),
+                (0, "yes", "inactive", 0, False),
+                (0, "no", "activating", 0, False),
+                (0, "no", "inactive", 73, False),
+            ):
+                with self.subTest(
+                    path=path.name, started=started, condition=condition, state=state, status=start_status
+                ):
+                    result = self.run_projection_check(source, block, started, condition, state, start_status)
+                    self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+
+    def test_setup_requires_executed_managed_authentik_projection(self) -> None:
+        marker = 'pass "managed Authentik projection executes after secret activation"'
+        call = "wait_oneshot_completed nas-managed-services-authentik-reconcile.service"
+        for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.name):
+                self.assertTrue(marker in source, "post-activation projection assertion is absent")
+                before = source.split(marker, 1)[0]
+                block = call + before.rsplit(call, 1)[1]
+                self.assertGreater(before.rfind(call), source.index('"$setup_api/first-run"'))
+                for started, condition, state, accepted in (
+                    (1, "yes", "inactive", True),
+                    (0, "no", "inactive", False),
+                    (1, "no", "inactive", False),
+                    (1, "yes", "failed", False),
+                    (1, "yes", "activating", False),
+                ):
+                    with self.subTest(started=started, condition=condition, state=state):
+                        result = self.run_projection_check(source, block, started, condition, state, 0)
+                        self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+
+    def run_projection_check(
+        self, source: str, block: str, started: int, condition: str, state: str, start_status: int
+    ) -> subprocess.CompletedProcess[str]:
+        wait = (
+            "wait_oneshot_completed() {"
+            + source.split("wait_oneshot_completed() {", 1)[1].split("\n}\n", 1)[0]
+            + "\n}\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            control = pathlib.Path(directory)
+            (control / "authentik-v2-objects.json").write_text("{}\n", encoding="utf-8")
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """set -euo pipefail
+TEST_TIMEOUT=1
+wait_active() { :; }
+sleep() { SECONDS=$((SECONDS + 2)); }
+fail() { echo "$*" >&2; exit 1; }
+systemctl() {
+  case "$*" in
+    'show nas-identity-bootstrap.service --property=NRestarts --value') echo 0 ;;
+    'start nas-managed-services-authentik-reconcile.service') return "$START_STATUS" ;;
+    'show nas-managed-services-authentik-reconcile.service --property=ExecMainStartTimestampMonotonic --value') echo "$STARTED" ;;
+    'show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value') echo "$CONDITION" ;;
+    'show nas-managed-services-authentik-reconcile.service --property=ActiveState --value') echo "$STATE" ;;
+    'show nas-managed-services-authentik-reconcile.service --property=Result --value')
+      if [[ "$STATE" == failed ]]; then echo exit-code; else echo success; fi ;;
+    'is-active --quiet copyparty.service'|'is-active --quiet nas-protected-services.target') return 3 ;;
+    'status nas-managed-services-authentik-reconcile.service --no-pager') echo "projection: $STATE" ;;
+    *) echo "unexpected systemctl: $*" >&2; return 99 ;;
+  esac
+}
+"""
+                    + wait
+                    + block.replace("/run/nas-control", directory)
+                    .replace("/var/lib/nas-control", directory)
+                    .replace("/run/nas-secrets", directory + "/secrets"),
+                ],
+                env={
+                    **os.environ,
+                    "STARTED": str(started),
+                    "CONDITION": condition,
+                    "STATE": state,
+                    "START_STATUS": str(start_status),
+                },
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+
     def test_installed_zap_runs_every_mode_and_keeps_each_failure_fatal(self) -> None:
         source = FINAL_BROWSER.read_text(encoding="utf-8")
         block = source.split("  zap-fuzz)\n", 1)[1].split("\n    ;;", 1)[0]

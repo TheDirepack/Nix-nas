@@ -204,6 +204,12 @@ The reinstall, failed-candidate, candidate-switch, rollback, and final reconfigu
 
 The guest suite deliberately checks states that must never occur: protected services running while secrets are locked; a Cockpit listener or browser management route available while locked; unauthenticated or spoofed identities receiving protected access; destructive setup without exact confirmation; hostile identifiers reaching shell execution; SQL-shaped usernames passing account validation; traversal-shaped device paths; malformed alert requests producing tracebacks; unsafe state/archive members; stale operation residue; and recovery/rollback inconsistencies. It must also prove that initial static setup guidance cannot unlock secrets or create an authenticated Cockpit session, and that post-activation Cockpit access passes through Caddy and Authentik.
 
+Both native guest legs require the managed Authentik projection to remain
+condition-skipped and unexecuted before secret activation, with no compiled
+effective state. After setup activates secrets, they require that same job to
+execute successfully and commit its object manifest. A skipped job is not a
+completed oneshot; bootstrap identity reconciliation remains a separate owner.
+
 The installed guest also exercises a service identifier absent from the Nix seed. It loads two VM-only BusyBox images from the Nix store, creates an identity-protected routed OCI service with revision-CAS document replacement, updates the running image, verifies that an offline missing-image activation restores both desired and live applied state, and removes the service and its Quadlet, systemd, Caddy, Authentik, and container projections.
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.

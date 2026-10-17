@@ -115,7 +115,14 @@ ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session i
 ! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
-wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+[[ ! -e /run/nas-control/effective.json ]] || fail "managed state was compiled before unlock"
+systemctl start nas-managed-services-authentik-reconcile.service
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == no ]] || \
+  fail "managed Authentik projection was not condition-skipped while locked"
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ExecMainStartTimestampMonotonic --value)" == 0 ]] || \
+  fail "managed Authentik projection executed before unlock"
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ActiveState --value)" == inactive ]] || \
+  fail "managed Authentik projection is not inactive while locked"
 
 for _ in $(seq 1 60); do
   [[ -b "$ZFS_DEVICE" ]] && break
@@ -240,6 +247,11 @@ if ! jq -e '
   jq . <<<"$job_result" >&2
   fail "encrypted first-start job report did not contain the expected storage state"
 fi
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == yes ]] || \
+  fail "managed Authentik projection was skipped after secret activation"
+[[ -s /var/lib/nas-control/authentik-v2-objects.json ]] || fail "managed Authentik projection did not commit its object manifest"
+pass "managed Authentik projection executes after secret activation"
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 # Capability bytes must never reach backend or proxy logs.
 if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
