@@ -38,6 +38,47 @@ Playwright is the browser-behavior layer for checks that require a browser engin
 
 CI defaults to the immutable upstream ZAP image declared in `.github/workflows/ci.yml`. The optional `NAS_ZAP_IMAGE` repository variable may override it with another reviewed digest; an absent variable must not prevent qualification. Both scanner wrappers reject floating tags.
 
+`scripts/lib/zap-addons.lock.json` pins the native add-on inventory for packaged
+and Automation Framework scans, including release and beta active/passive rules
+and browser dependencies. The wrappers build one derived scanner image through
+`scripts/lib/zap.Dockerfile`. The build verifies the upstream core JAR and add-on
+archives, downloads five SHA256-locked Java sources at exact upstream revisions,
+and applies `zap-cookie-probes.patch`. The pinned image's JDK compiles those
+sources; the build replaces only their existing class entries and checks all
+three rebuilt archive hashes. Other classes, rule metadata and dependencies stay
+unchanged. A source, patch or output mismatch fails the build.
+
+The shared entrypoint checks the rebuilt core and all add-on hashes, prepares a
+private home, then asks ZAP to load its own dependencies. It rejects a missing,
+extra or different runnable add-on before scanning. Scans use `-silent` with
+that verified home to prevent live updates. Each `.addons.json` report records
+the base image digest, derived image ID, lock digest, source-build recipe and
+complete runnable inventory.
+
+For an image or add-on update, capture the native resolved inventory for baseline,
+full, and browser automation modes, compare rule/dependency coverage, and refresh
+the lock from the captured archive hashes. Run `tests/test_zap_addons.py`,
+`tests/test_zap_source_build.py` and the scanner wrapper contracts. Run the native
+transport and hardened/vulnerable authentication controls with
+`NAS_ZAP_NATIVE_TEST=1 NAS_ZAP_IMAGE=<reviewed-digest> python3 -m unittest tests.slow_zap_native -v`,
+then qualify installed scans and browsers on the combined revision. CI retains
+the native-control and installed-scanner evidence on success and failure.
+Disabling add-on updates without supplying the locked beta rules would remove
+security coverage.
+
+Authenticated active scans retain their configured user. ZAP's session layer
+can overwrite deliberate cookie mutations before sending requests, as recorded
+in [upstream issue 6506](https://github.com/zaproxy/zaproxy/issues/6506).
+Native fixture wire traces reproduce this with both autodetected and explicit
+cookie sessions: rule `90027` receives HTTP 200 because ZAP reinserted the removed
+session cookie. The source repair adds an explicit per-request session-management
+option and uses it only for that rule's cookie-removal probes. Those probes retain
+the requesting user, scanner hooks, anti-CSRF handling and listeners, but cannot
+inherit or update a shared cookie jar or trigger authentication retries. Normal
+requests retain session refresh and response-cookie updates. Rule `90027` remains
+fatal; a deliberately vulnerable session fixture must still trigger it. Removing
+the active-scan user or suppressing the rule cannot qualify a scanner.
+
 ## Cockpit frontend
 
 The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`. Nix builds Cockpit and the first-run wizard from their reviewed npm lockfiles with `importNpmLock` and `buildNpmPackage`, then verifies their output with the existing build-integrity checks. Local `node_modules` and generated `dist` trees are excluded from derivation inputs. Release archives retain the compiled payload and source-hash metadata for browser qualification and source consumers; they are not the inputs to the installed frontend build. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.
