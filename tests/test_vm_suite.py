@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +24,346 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_installed_zap_runs_every_mode_and_keeps_each_failure_fatal(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        block = source.split("  zap-fuzz)\n", 1)[1].split("\n    ;;", 1)[0]
+        labels = ("public", "cockpit", "unauthenticated", "authenticated")
+        for failures in ((), *[(label,) for label in labels], labels):
+            with self.subTest(failures=failures), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+ROOT=$1
+NAS_ZAP_OUT_DIR=$2/reports
+NAS_ZAP_IMAGE=fixture-pinned-image
+NAS_ZAP_CONFIRM_ACTIVE=1
+TEST_USER=fixture-user
+TEST_PASSWORD=must-not-appear-in-command-logs
+HTTPS_PORT=8443
+log() { :; }
+die() { echo "$*" >&2; exit 1; }
+bash() {
+  local label=$2
+  if [[ "$1" == */zap-scan.sh ]]; then label=$NAS_ZAP_REPORT_PREFIX; fi
+  printf '%s\n' "$label" >> "$ATTEMPTS"
+  if [[ "$label" == authenticated ]]; then
+    [[ "$NAS_ZAP_AUTH_USER" == "$TEST_USER" && "$NAS_ZAP_AUTH_PASSWORD" == "$TEST_PASSWORD" ]] || return 99
+  fi
+  [[ ",$FAILURES," != *",$label,"* ]] || return 2
+}
+"""
+                        + block
+                        + "\necho qualification-passed\n",
+                        "test",
+                        str(ROOT),
+                        directory,
+                    ],
+                    env={
+                        **os.environ,
+                        "FAILURES": ",".join(failures),
+                        "ATTEMPTS": str(pathlib.Path(directory) / "attempts"),
+                        "GITHUB_STEP_SUMMARY": str(pathlib.Path(directory) / "summary"),
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual((pathlib.Path(directory) / "attempts").read_text().splitlines(), list(labels))
+                self.assertEqual(result.returncode, 1 if failures else 0, result.stdout + result.stderr)
+                self.assertEqual("qualification-passed" in result.stdout, not failures)
+                results = pathlib.Path(directory) / "reports/final-vm/logs/results.tsv"
+                self.assertTrue(results.is_file(), "each installed scan needs an independent recorded outcome")
+                self.assertEqual(len(results.read_text().splitlines()), len(labels))
+                self.assertNotIn("must-not-appear-in-command-logs", results.read_text())
+
+    def test_final_workload_reuses_the_successful_ssh_probe_without_retrying_mutations(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        block = "ssh_args=(" + source.split("ssh_args=(", 1)[1].split("for _ in $(seq 1 90)", 1)[0]
+        for workload_status in (0, 73):
+            with self.subTest(workload_status=workload_status), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+SSH_KEY=fixture-key
+SSH_PORT=2222
+BOOT_LOG=/dev/null
+ssh_control_dir=$1/control
+mkdir -m 0700 "$ssh_control_dir"
+connections=0
+ssh() {
+  local option control_path='' master=0
+  for option in "$@"; do
+    case "$option" in
+      ControlPath=*) control_path=${option#ControlPath=} ;;
+      ControlMaster=auto) master=1 ;;
+    esac
+  done
+  if [[ -z "$control_path" || ! -e "$control_path" ]]; then
+    connections=$((connections + 1))
+    if (( connections > 1 )); then
+      echo 'new SSH connection stalled during banner exchange' >&2
+      return 255
+    fi
+    if [[ "$master" == 1 && -n "$control_path" ]]; then touch "$control_path"; fi
+  fi
+  if [[ "$*" == *nas-vm-guest-test* ]]; then
+    printf 'workload-invoked\n'
+    return "$WORKLOAD_STATUS"
+  fi
+}
+sleep() { :; }
+log() { :; }
+die() { echo "$*" >&2; exit 1; }
+"""
+                        + block,
+                        "test",
+                        directory,
+                    ],
+                    cwd=directory,
+                    env={**os.environ, "WORKLOAD_STATUS": str(workload_status)},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, workload_status, result.stderr)
+                self.assertEqual(result.stdout.count("workload-invoked"), 1)
+
+    def test_final_workload_cleanup_closes_and_removes_its_private_ssh_master(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        cleanup = "cleanup() {" + source.split("cleanup() {", 1)[1].split("\ntrap cleanup", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """set -euo pipefail
+PIDFILE=$1/qemu.pid
+OVERLAY=$1/os.qcow2
+DATA_DISK=$1/data.qcow2
+SSH_PORT=2222
+ssh_calls=$1/ssh-calls
+ssh_control_dir=$(mktemp -d "$1/ssh.XXXXXX")
+private_dir=$ssh_control_dir
+touch "$ssh_control_dir/control"
+nas_qemu_stop_pidfile() { :; }
+die() { echo "$*" >&2; exit 1; }
+ssh() { printf 'close-master: %s\n' "$*" >> "$ssh_calls"; }
+"""
+                    + cleanup
+                    + '\ncleanup\ncleanup\ntest ! -e "$private_dir"\n',
+                    "test",
+                    directory,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (pathlib.Path(directory) / "ssh-calls").read_text()
+            self.assertEqual(calls.count("close-master:"), 1)
+            self.assertIn("-O exit", calls)
+
+    def test_reboot_failure_exports_guest_journal_without_changing_failure_status(self) -> None:
+        source = QEMU.read_text(encoding="utf-8")
+        functions = source.split("ssh_options() {", 1)[1].split("\nsync_source_to_guest() {", 1)[0]
+        for outcome, diagnostics_status in (("failed", 0), ("failed", 23), ("timeout", 0), ("timeout", 23), ("ok", 0)):
+            with self.subTest(outcome=outcome, diagnostics_status=diagnostics_status):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        "set -euo pipefail\nssh_options() {"
+                        + functions
+                        + "\n"
+                        + """
+SSH_PORT=2222
+log() { :; }
+die() { echo "$*" >&2; exit 1; }
+nas_vm_timeout_value() { if [[ "$OUTCOME" == timeout ]]; then echo 0; else echo 600; fi; }
+ssh() {
+  case "$*" in
+    *journalctl*) echo "REBOOT-RUNNER-JOURNAL"; return "$DIAGNOSTICS_STATUS" ;;
+    *--start*) return 0 ;;
+    *setup-reboot-e2e-result.json*)
+      if [[ "$OUTCOME" == ok ]]; then
+        echo '{"schemaVersion":1,"ok":true,"verifiedReboots":2}'
+      else
+        echo '{"schemaVersion":1,"ok":false,"error":"ORIGINAL-BROWSER-FAILURE"}'
+      fi ;;
+    *) return 99 ;;
+  esac
+}
+timeout() { echo "DIAGNOSTICS-BOUND: $*" >&2; shift 4; "$@"; }
+run_setup_reboot_e2e unused-test-key
+""",
+                    ],
+                    env={**os.environ, "OUTCOME": outcome, "DIAGNOSTICS_STATUS": str(diagnostics_status)},
+                    text=True,
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                )
+                if outcome == "ok":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn("REBOOT-RUNNER-JOURNAL", result.stderr)
+                    self.assertNotIn("DIAGNOSTICS-BOUND", result.stderr)
+                    continue
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("REBOOT-RUNNER-JOURNAL", result.stderr)
+                self.assertIn("--kill-after=5s 30s", result.stderr)
+                self.assertIn("nas-vm-setup-reboot-e2e.service", result.stderr)
+                self.assertIn("-n 120", result.stderr)
+                self.assertIn("tail -c 16000", result.stderr)
+                if outcome == "failed":
+                    self.assertIn("ORIGINAL-BROWSER-FAILURE", result.stderr)
+                    self.assertIn("setup reboot E2E reported a failure", result.stderr)
+                else:
+                    self.assertIn("timed out waiting for the setup reboot E2E report", result.stderr)
+
+    def test_isolated_authentik_outage_cancels_pending_sync_retries_and_restores_timers(self) -> None:
+        source = GUEST_TEST.read_text(encoding="utf-8")
+        block = source.split('log "Authentication dependency outage stays fail-closed"', 1)[1].split(
+            'pass "protected proxy routes fail closed and recover after Authentik outage"', 1
+        )[0]
+        for enabled in (True, False):
+            with self.subTest(timers_active=enabled):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+PUBLIC_HOST=nas-test.local
+AUTHENTIK_PUBLIC_HOST=nas-test.local:8443
+AUTHENTIK_OUTPOST_PORT=9010
+timers_stopped=0
+retry_cancelled=0
+systemctl() {
+  printf '%s\\n' "$*"
+  case "$*" in
+    'is-active --quiet '*.timer) [[ "$1" && "$TIMERS_ACTIVE" == 1 ]]; return ;;
+    'stop nas-v2-timer-identity-sync-0.timer nas-v2-timer-syncthing-sync-0.timer') timers_stopped=1 ;;
+    'stop nas-syncthing-sync.service') retry_cancelled=1 ;;
+    'stop --job-mode=ignore-dependencies authentik.service')
+      [[ "$timers_stopped" == 1 && "$retry_cancelled" == 1 ]] || {
+        echo 'scheduled retry raced the isolated outage' >&2; return 1;
+      } ;;
+  esac
+}
+wait_inactive() { :; }
+wait_active() { :; }
+wait_http() { :; }
+curl() { echo 503; }
+fail() { echo "$*" >&2; exit 1; }
+"""
+                        + block,
+                    ],
+                    env={**os.environ, "TIMERS_ACTIVE": "1" if enabled else "0"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                restore = "start nas-v2-timer-identity-sync-0.timer nas-v2-timer-syncthing-sync-0.timer"
+                self.assertEqual(restore in result.stdout, enabled)
+                self.assertIn("start nas-identity-sync.service", result.stdout)
+
+    def test_installed_fuzz_evidence_matches_both_canonical_inventories(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        verifier = source.split("    python3 - ", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        strategies = {}
+        for name in ("custom-script-contracts.json", "custom-script-contracts-v2.json"):
+            inventory = json.loads((ROOT / "tests" / name).read_text(encoding="utf-8"))
+            strategies.update(
+                {name: row["fuzzStrategy"] for name, row in inventory["executables"].items() if row.get("fuzzStrategy")}
+            )
+        delegated = sorted(
+            name
+            for name, strategy in strategies.items()
+            if strategy in {"protocol-system-test", "system-lifecycle", "disposable-zfs-lifecycle"}
+        )
+        executed = sorted(set(strategies) - set(delegated))
+        complete = {
+            "ok": True,
+            "smoke": False,
+            "commands": len(executed),
+            "strategies": strategies,
+            "discovered": len(strategies),
+            "executed": executed,
+            "delegated": delegated,
+            "skipped": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            report = pathlib.Path(directory) / "fuzz.json"
+            for payload, accepted in (
+                (complete, True),
+                ({**complete, "commands": len(executed) - 1}, False),
+                ({**complete, "executed": []}, False),
+                ({**complete, "strategies": {}}, False),
+                ({**complete, "smoke": True}, False),
+                ({**complete, "ok": False}, False),
+            ):
+                with self.subTest(payload=payload):
+                    report.write_text(json.dumps(payload), encoding="utf-8")
+                    result = subprocess.run(
+                        ["python3", "-c", verifier, str(ROOT), str(report)],
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_final_workloads_preserve_storage_and_use_the_real_authentik_gate(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        self.assertIn('-b "$INSTALLED_DATA_DISK" "$DATA_DISK"', source)
+        self.assertIn("nas-vm-guest-test --setup-reboot-e2e --verify", source)
+        self.assertNotIn("useradd", source)
+        self.assertNotIn("chpasswd", source)
+        self.assertNotIn("COCKPIT_PORT", source)
+        self.assertIn('NAS_VM_BASE_URL="https://nas-test.local:$HTTPS_PORT"', source)
+
+    def test_final_browser_config_does_not_depend_on_npm_exec_working_directory(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        self.assertIn('--config "$ROOT/cockpit/e2e/playwright.config.mjs"', source)
+
+    def test_final_browser_and_scanner_resolve_the_public_test_hostname(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("127.0.0.1 nas-test.local", workflow)
+        scanner = (ROOT / "scripts/zap-automation-scan.sh").read_text(encoding="utf-8")
+        self.assertIn('runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")', scanner)
+
+    def test_installed_guest_emits_boot_diagnostics_to_the_harness_serial_log(self) -> None:
+        fixture = (ROOT / "tests/nixos/qemu-installed.nix").read_text(encoding="utf-8")
+        self.assertIn('boot.kernelParams = [ "console=ttyS0,115200n8" ];', fixture)
+
+    def test_live_setup_fixtures_use_canonical_storage_fields(self) -> None:
+        for path in (GUEST_TEST, ENCRYPTED_GUEST_TEST):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                fixture = re.search(r"<<EOFSETUP\n(.*?)\nEOFSETUP", source, re.S)
+                if fixture is None:
+                    self.fail(f"setup JSON fixture missing from {path}")
+                storage = json.loads(fixture.group(1))["storage"]
+                self.assertEqual(storage.get("devices"), ["$ZFS_DEVICE"])
+                self.assertIs(storage.get("wipeDevices"), True)
+                self.assertNotIn("device", storage)
+                self.assertNotIn("wipeDevice", storage)
+
+    def test_source_refresh_waits_for_boot_repository_materialization(self) -> None:
+        source = QEMU.read_text(encoding="utf-8")
+        refresh = source.split("sync_source_to_guest() {", 1)[1].split("\n}", 1)[0]
+        wait = "sudo -n systemctl start nas-vm-test-repository.service"
+        self.assertIn(wait, refresh)
+        self.assertLess(refresh.index(wait), refresh.index("sudo -n rm -rf /var/lib/nas-test/repo"))
+
     def test_reconfigure_prints_failed_doctor_report_and_preserves_status(self) -> None:
         source = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         self.assertIn("check_doctor() {", source)
@@ -119,7 +461,7 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443", qemu)
         self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", qemu)
         self.assertIn('HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"', final_browser)
-        self.assertIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
+        self.assertNotIn("hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092", final_browser)
         self.assertNotIn("-netdev tap", qemu)
         self.assertNotIn("bridge=", qemu)
         self.assertIn("sync_source_to_guest", qemu)
@@ -182,6 +524,11 @@ class VmSuiteWrapperTests(unittest.TestCase):
         self.assertIn("zfsEncryption.enable = lib.mkForce false;", fixture)
         self.assertIn("zfsEncryption.acknowledgeUnencrypted = lib.mkForce false;", fixture)
 
+    def test_native_unencrypted_leg_checks_the_wizard_selected_dataset(self) -> None:
+        fixture = (ROOT / "tests/nixos/integration.nix").read_text(encoding="utf-8")
+        self.assertIn("zfs get -H -o value encryption tank/nas) = off", fixture)
+        self.assertNotIn("nas.zfsEncryption.enable = pkgs.lib.mkForce false;", fixture)
+
     def test_first_run_uses_the_bootstrap_then_promoted_local_administrator(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")
         self.assertIn('administrator="akadmin"', guest)
@@ -223,12 +570,23 @@ class VmSuiteWrapperTests(unittest.TestCase):
         reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("NAS_TEST_PACKAGE_UPGRADE=$package_upgrade", qemu)
-        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", reconfigure)
+        baseline = (ROOT / "tests/vm/package-upgrade-baseline.sh").read_text(encoding="utf-8")
+        self.assertIn("36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac", baseline)
         self.assertIn("--override-input nixpkgs", reconfigure)
         self.assertIn("syncthing-$older_version", reconfigure)
         self.assertIn("syncthing-$current_version", reconfigure)
         self.assertIn('NAS_QEMU_PACKAGE_UPGRADE: "1"', workflow)
         self.assertIn("final-vm-evidence/installed-console.log", workflow)
+
+    def test_upgrade_initializes_older_packages_before_mutable_application_state(self) -> None:
+        installer = (ROOT / "tests/vm/install-system.sh").read_text(encoding="utf-8")
+        expect = (ROOT / "tests/vm/install.expect").read_text(encoding="utf-8")
+        reconfigure = (ROOT / "tests/vm/reconfigure-system.sh").read_text(encoding="utf-8")
+        self.assertIn("NAS_INSTALL_PACKAGE_UPGRADE=$package_upgrade", expect)
+        self.assertIn('--override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"', installer)
+        self.assertIn("install_args+=(--override-input nixpkgs", installer)
+        self.assertNotIn('rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input', reconfigure)
+        self.assertIn('fail "installed baseline does not contain the pinned older Syncthing package"', reconfigure)
 
     def test_secret_adversarial_retries_temporary_operation_conflicts(self) -> None:
         adversarial = SECRET_ADVERSARIAL.read_text(encoding="utf-8")

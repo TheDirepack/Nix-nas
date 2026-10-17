@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pathlib
+import re
+import runpy
 import unittest
 from typing import Any
 
@@ -198,6 +200,30 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("current-coverage.outcome == 'success'"), 4)
         self.assertNotIn("main-coverage-cache=", self.run_text(coverage))
 
+    def test_coverage_baseline_uses_the_same_test_population_as_current(self) -> None:
+        unit_script = self.qualification_script.split("  unit)\n", 1)[1].split("    # Invoked indirectly", 1)[0]
+        baseline = next(step for step in self.jobs["coverage-diff"]["steps"] if step.get("id") == "baseline-build")
+
+        def exclusions(text):
+            return set(re.findall(r"--exclude\s+(test_\w+\.py)", text))
+
+        # Current qualification uses the centralized fast group; the checked-out
+        # main baseline still uses its explicit exclusions until this PR merges.
+        # Verify both select exactly the same tests rather than comparing flags.
+        baseline_exclusions = exclusions(str(baseline["run"]))
+        if "--group fast" in unit_script:
+            runner = runpy.run_path(str(ROOT / "scripts" / "run-unit-tests.py"))
+            current_exclusions = set(runner["FAST_SUITE_EXCLUSIONS"])
+        else:
+            current_exclusions = exclusions(unit_script)
+        self.assertTrue(baseline_exclusions)
+        self.assertEqual(baseline_exclusions, current_exclusions)
+        for step in self.jobs["coverage-diff"]["steps"]:
+            if step.get("id") == "main-coverage":
+                key = step["with"]["key"]
+                self.assertIn("scripts/ci-qualification.sh", key)
+                self.assertIn(".github/workflows/ci.yml", key)
+
     def test_qualification_gate_joins_all_parallel_checks_once(self) -> None:
         gate = self.jobs["qualification"]
         expected = {"prerequisites", *self.PARALLEL, "coverage-diff"}
@@ -256,7 +282,7 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("save-missing", text)
         self.assertIn("verify-handoff", text)
         self.assertIn("vm-bundle-handoff", text)
-        self.assertIn("retention-days': '2", text)
+        self.assertIn("retention-days': '14", text)
         self.assertIn("scripts/system-handoff.sh save", text)
         self.assertIn("scripts/system-handoff.sh verify", text)
         self.assertIn("nixosConfigurations.nas-ci-ready", self.system_handoff)
@@ -302,6 +328,24 @@ class CiWorkflowGraphTests(unittest.TestCase):
         prepare = self.serialized(self.jobs["prepare"])
         self.assertIn("github.event_name == 'pull_request'", prepare)
 
+    def test_installed_zap_has_an_immutable_default_without_repository_variables(self) -> None:
+        image = self.jobs["installed-security"]["env"]["NAS_ZAP_IMAGE"]
+        self.assertRegex(image, r"vars\.NAS_ZAP_IMAGE\s*\|\|\s*'ghcr\.io/zaproxy/zaproxy@sha256:[a-f0-9]{64}'")
+
+    def test_native_scanner_controls_are_fatal_and_retain_their_evidence(self) -> None:
+        job = self.jobs["installed-security"]
+        controls = next((step for step in job["steps"] if step.get("id") == "zap-controls"), None)
+        self.assertIsNotNone(controls, "source-built scanners lack native hardened and vulnerable CI controls")
+        assert controls is not None
+        self.assertEqual(controls["env"]["NAS_ZAP_NATIVE_TEST"], "1")
+        self.assertIn("tests.slow_zap_native", controls["run"])
+        self.assertIn("NAS_ZAP_IMAGE", job["env"])
+        report = next(step for step in job["steps"] if step.get("name") == "Report all installed-security failures")
+        self.assertIn("zap-controls=${{ steps.zap-controls.outcome }}", report["run"])
+        artifact = next(step for step in job["steps"] if step.get("name") == "Retain installed security evidence")
+        self.assertEqual(artifact["if"], "always()")
+        self.assertIn("zap-native-controls", artifact["with"]["path"])
+
     def test_long_fuzz_searches_run_only_when_manually_triggered(self) -> None:
         fuzz = self.jobs["source-fuzz"]
         fuzz_if = str(fuzz.get("if", ""))
@@ -327,6 +371,11 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("zap-fuzz", text)
         self.assertIn("continue-on-error", text)
         self.assertIn("ci-check-report.py", text)
+
+    def test_full_dispatch_includes_installed_security(self) -> None:
+        condition = self.jobs["installed-security"]["if"]
+        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
+        self.assertIn("github.event.inputs.test-tier == 'full'", condition)
 
     def test_maintenance_prunes_only_repo_owned_state_without_blocking_ci(self) -> None:
         maintenance = self.jobs["maintenance"]

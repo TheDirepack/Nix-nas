@@ -599,7 +599,8 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         import nas_v2_network as fw
 
         proj, _ = fw.compile_projection(eff, lan_zone="nas-lan")  # pyright: ignore[reportCallIssue]
-        self.assertIn("iso", str(proj).lower() if isinstance(proj, (str, bytes)) else str(proj))
+        self.assertIn(f"zones/{fw.zone_name('iso')}", proj)
+        self.assertEqual(proj[f"zones/{fw.zone_name('iso')}"]["interface"], fw.bridge_interface_name("iso"))
 
     # --------------------------------------------------------------- Backup
     def test_backup_compiles_all_consistencies(self) -> None:
@@ -677,7 +678,7 @@ class V2FunctionalCoverageTests(unittest.TestCase):
         self.assertIn("application.demo.admin", groups)
 
     # --------------------------------------------------------------- Apply is finite projection (mocked validates)
-    def test_apply_projection_is_atomic_and_validated(self) -> None:
+    def test_in_memory_projection_bundle_contains_effective_and_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             app_root = root / "apps"

@@ -6,6 +6,16 @@ from repo_test_utils import ROOT, text
 
 
 class ContractTests(unittest.TestCase):
+    def test_managed_services_activation_requires_active_secrets_without_blocking_setup(self) -> None:
+        managed = text("modules/nas/config/managed-services.nix")
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile", 1
+        )[0]
+        self.assertIn("ConditionPathExists = [", reconcile)
+        conditions = reconcile.split("ConditionPathExists = [", 1)[1].split("]", 1)[0]
+        self.assertIn('"${nasInternal.secretRoot}/ready"', conditions)
+        self.assertNotIn("/var/lib/nas-setup/state.json", conditions)
+
     def test_caddy_wants_but_does_not_wait_for_managed_services_reconciliation(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")
         self.assertIn("systemd.services.caddy.wants = [", managed)
@@ -62,7 +72,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('TimeoutStartSec = "4min";', authentik)
         self.assertIn('blueprints_dir = "${nasAuthentikBlueprints}/share/authentik/blueprints";', authentik)
         blueprints = text("modules/nas/internal/account-tools.nix")
-        self.assertIn("${pkgs.authentik.src}/blueprints/.", blueprints)
+        self.assertIn("${authentikPackage.src}/blueprints/.", blueprints)
 
     def test_zfs_recovery_export_supports_piped_and_interactive_passwords(self):
         zfs_tools = text("modules/nas/internal/zfs-tools.nix")
@@ -77,7 +87,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('keylocation "$dataset"', exporter)
         self.assertIn("zfsKeyFingerprintProperty", exporter)
         self.assertIn('stored_fingerprint" == "$key_fingerprint', exporter)
-        self.assertLess(exporter.index("stored_fingerprint"), exporter.index('tmp="$(mktemp)"'))
+        self.assertLess(exporter.index("stored_fingerprint"), exporter.index("/dev/stdin"))
         self.assertIn("nas-zfs-export-recovery-key /tmp/nas-zfs-recovery.key", encrypted_guest)
 
     def test_zfs_mount_check_accepts_the_expected_mount_inside_a_stacked_namespace(self) -> None:

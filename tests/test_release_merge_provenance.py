@@ -22,8 +22,8 @@ class ReleaseMergeProvenanceTests(unittest.TestCase):
         release = yaml.load(RELEASE_WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         ci = yaml.load(CI_WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
-        self.assertEqual(set(release["on"]), {"workflow_run"})
-        self.assertEqual(release["on"]["workflow_run"]["workflows"], ["CI"])
+        self.assertEqual(set(release["on"]), {"workflow_dispatch"})
+        self.assertIn("status=success", RELEASE_WORKFLOW.read_text(encoding="utf-8"))
         self.assertEqual(ci["on"]["push"]["branches"], ["main"])
         self.assertNotIn("tags", ci["on"]["push"])
 

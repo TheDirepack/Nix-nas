@@ -6,6 +6,11 @@ from repo_test_utils import text
 
 
 class V2TransactionWiringTests(unittest.TestCase):
+    def test_dependency_failure_before_guard_arming_does_not_attempt_rollback(self) -> None:
+        managed = text("modules/nas/config/managed-services-transactions.nix")
+        failure_unit = managed.split("systemd.services.nas-v2-apply-failed = {", 1)[1].split("    };", 1)[0]
+        self.assertIn("unitConfig.ConditionPathExists = guardCurrentFile;", failure_unit)
+
     def test_core_apply_is_guarded_before_compile_and_marks_compiled_revision_last(self) -> None:
         managed = text("modules/nas/config/managed-services-transactions.nix")
         pre_start = managed.split("preStart = lib.mkBefore ''", 1)[1].split("    '';", 1)[0]
@@ -20,6 +25,10 @@ class V2TransactionWiringTests(unittest.TestCase):
         self.assertNotIn(" record", pre_start)
         self.assertIn("desiredRevision", post_start)
         firewall_reconcile = post_start.index("statelessFirewalldArgs")
+        self.assertNotIn(
+            "--projection-root",
+            managed.split("statelessFirewalldArgs =", 1)[1].split("systemdReconcileArgs =", 1)[0],
+        )
         systemd_reconcile = post_start.index("systemdReconcileArgs")
         mark_applied = post_start.index("mark-applied")
         cancel = post_start.index("cancel")

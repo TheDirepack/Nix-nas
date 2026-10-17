@@ -18,6 +18,32 @@ let
     syncthingGuiPort
   ;
 
+  authentikPackage = pkgs.authentik.override {
+    python3 = pkgs.python3 // {
+      override = pythonArgs: pkgs.python3.override (pythonArgs // {
+        packageOverrides = lib.composeExtensions pythonArgs.packageOverrides (final: previous: {
+          authentik-django = previous.authentik-django.overridePythonAttrs (old: {
+            dependencies = old.dependencies ++ [ final.django-csp ];
+          });
+        });
+      });
+    };
+    fetchFromGitHub = sourceArgs:
+      let source = pkgs.fetchFromGitHub sourceArgs;
+      in if (sourceArgs.owner or "") == "goauthentik" && (sourceArgs.repo or "") == "authentik" then
+        pkgs.applyPatches {
+          name = "authentik-accessible-source";
+          src = source;
+          patches = [
+            ../../../authentik/patches/authentik-accessibility.patch
+            ../../../authentik/patches/authentik-known-device-cookie.patch
+            ../../../authentik/patches/authentik-blueprint-apply-failure.patch
+            ../../../authentik/patches/authentik-csp.patch
+          ];
+        }
+      else source;
+  };
+
   nasPythonApplication = pkgs.python3Packages.buildPythonApplication {
     pname = "nixos-nas-control";
     version = lib.removeSuffix "\n" (builtins.readFile ../../../VERSION);
@@ -35,6 +61,7 @@ let
       "nas_identity_sync"
       "nas_logging"
       "nas_setup"
+      "nas_setup_first_start"
       "nas_state"
       "nas_v2_backup"
       "nas_v2_control"
@@ -211,7 +238,7 @@ let
 
   nasAuthentikBlueprints = pkgs.runCommand "nas-authentik-blueprints" { } ''
     mkdir -p "$out/share/authentik/blueprints"
-    cp -a ${pkgs.authentik.src}/blueprints/. "$out/share/authentik/blueprints/"
+    cp -a ${authentikPackage.src}/blueprints/. "$out/share/authentik/blueprints/"
     chmod -R u+w "$out/share/authentik/blueprints"
     install -m 0444 ${../../../authentik/blueprints/syncthing/nas-syncthing-user-settings.yaml} \
       "$out/share/authentik/blueprints/nas-user-settings.yaml"
@@ -246,6 +273,7 @@ let
 in
 {
   inherit
+    authentikPackage
     nasPythonApplication nasIdentitySyncScript nasIdentityPython nasIdentitySync
     nasSetupScript nasSetup nasStateScript nasState nasDoctorScript nasDoctor nasPortalStatic nasAuthentikBlueprints
     nasCockpitApiScript nasCockpitApi

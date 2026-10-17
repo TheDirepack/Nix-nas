@@ -180,6 +180,8 @@
               bandit
               coverage
               diceware
+              django
+              django-csp
               hypothesis
               jsonschema
               ruamel-yaml

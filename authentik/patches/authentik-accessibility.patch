@@ -1,0 +1,78 @@
+diff --git a/web/src/components/ak-label.ts b/web/src/components/ak-label.ts
+--- a/web/src/components/ak-label.ts
++++ b/web/src/components/ak-label.ts
+@@ -19,7 +19,6 @@ export const AKLabel: LitFC<FormLabelProps> = (
+     return html`<label
+         class="pf-c-form__label ${className || ""}"
+         for=${ifPresent(htmlFor)}
+-        aria-required=${required ? "true" : "false"}
+         ${spread(labelAttributes)}
+     >
+         <span
+diff --git a/web/src/flow/stages/identification/IdentificationStage.ts b/web/src/flow/stages/identification/IdentificationStage.ts
+--- a/web/src/flow/stages/identification/IdentificationStage.ts
++++ b/web/src/flow/stages/identification/IdentificationStage.ts
+@@ -221,6 +221,7 @@ export class IdentificationStage extends BaseStage<
+     #createHelperForm(): void {
+         const compatMode = "ShadyDOM" in window;
+         this.#form = document.createElement("form");
++        this.#form.setAttribute("aria-hidden", "true");
+         document.documentElement.appendChild(this.#form);
+         // Only add the additional username input if we're in a shadow dom
+         // otherwise it just confuses browsers
+@@ -231,6 +232,7 @@ export class IdentificationStage extends BaseStage<
+             username.setAttribute("type", "text");
+             username.setAttribute("name", "username"); // username as name for high compatibility
+             username.setAttribute("autocomplete", "username");
++            username.setAttribute("tabindex", "-1");
+             username.onkeyup = (ev: Event) => {
+                 const el = ev.target as HTMLInputElement;
+                 (this.shadowRoot || this)
+@@ -250,6 +252,7 @@ export class IdentificationStage extends BaseStage<
+             password.setAttribute("type", "password");
+             password.setAttribute("name", "password");
+             password.setAttribute("autocomplete", "current-password");
++            password.setAttribute("tabindex", "-1");
+             password.onkeyup = (event: KeyboardEvent) => {
+                 if (event.key === "Enter") {
+                     event.preventDefault();
+@@ -280,6 +283,7 @@ export class IdentificationStage extends BaseStage<
+         totp.setAttribute("type", "text");
+         totp.setAttribute("name", "code");
+         totp.setAttribute("autocomplete", "one-time-code");
++        totp.setAttribute("tabindex", "-1");
+         totp.onkeyup = (event: KeyboardEvent) => {
+             if (event.key === "Enter") {
+                 event.preventDefault();
+diff --git a/web/src/flow/FlowExecutor.css b/web/src/flow/FlowExecutor.css
+--- a/web/src/flow/FlowExecutor.css
++++ b/web/src/flow/FlowExecutor.css
+@@ -17,6 +17,7 @@
+ [part="locale-select"],
+ [part="locale-select"].style-scope {
+     --pf-global--Color--100: var(--pf-global--Color--light-100) !important;
++    background-color: #151515;
+     --ak-c-flow-executor__locale-select--Padding: var(--pf-global--spacer--md);
+     --ak-c-flow-executor__locale-select--Color: var(--pf-global--Color--100);
+     --ak-c-locale-select--label--Color: var(--ak-c-flow-executor__locale-select--Color);
+@@ -57,7 +58,7 @@
+     /* At least a third of the card cut-off is available. */
+     @media (width <= 61.25rem) and (height <= 61.25rem) {
+         --ak-global--background-contrast-Filter: none;
+-        --ak-c-flow-executor__locale-select--Color: var(--ak-global--background-contrast);
++        --ak-c-flow-executor__locale-select--Color: var(--pf-global--Color--light-100);
+ 
+         grid-area: main;
+     }
+diff --git a/web/src/flow/components/ak-brand-footer.ts b/web/src/flow/components/ak-brand-footer.ts
+--- a/web/src/flow/components/ak-brand-footer.ts
++++ b/web/src/flow/components/ak-brand-footer.ts
+@@ -18,6 +18,8 @@ const styles = css`
+         color: unset;
+     }
+     ul.pf-c-list.pf-m-inline {
++        background-color: #151515;
++        color: #ffffff;
+         justify-content: center;
+         padding: 0;
+         column-gap: var(--pf-global--spacer--xl);

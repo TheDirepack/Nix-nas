@@ -60,6 +60,7 @@ def _seed_current(runtime: pathlib.Path, revision: str, effective_text: str) -> 
 
 def _fake_apply(effective_text: str, revision: str):
     def _apply(*, paths, caddy, systemd, backup, firewalld, portal) -> dict:
+        assert paths.unpublished_generation
         paths.effective.parent.mkdir(parents=True, exist_ok=True)
         paths.effective.write_text(effective_text, encoding="utf-8")
         return {"desiredRevision": revision}

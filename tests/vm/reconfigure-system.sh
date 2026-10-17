@@ -5,13 +5,26 @@ SOURCE="${NAS_TEST_SOURCE:-/var/lib/nas-test/repo}"
 SENTINEL="${NAS_TEST_INSTALL_SENTINEL:-/var/lib/nas-install-test/reinstall-sentinel}"
 TIMEOUT="${NAS_TEST_REBUILD_TIMEOUT:-1800}"
 PACKAGE_UPGRADE="${NAS_TEST_PACKAGE_UPGRADE:-0}"
-OLDER_NIXPKGS_REV=36f2e6c0b6b6de4e7269e8996cf2dbb9cb5a29ac
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 rebuild() {
-  timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
-    "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false
+  local status
+  if timeout --foreground --signal=TERM --kill-after="$(nas_vm_kill_after_seconds)s" \
+    "$TIMEOUT" nixos-rebuild "$@" --option warn-dirty false; then
+    return 0
+  else
+    status=$?
+  fi
+  printf 'VM-REBUILD-FAILURE: exit %s; collecting read-only diagnostics\n' "$status" >&2
+  # Snapshot monitoring may use cached inventory; retain both views on failure.
+  timeout --kill-after=2s 15s systemctl --failed --no-pager >&2 || true
+  timeout --kill-after=2s 15s journalctl --boot --no-pager --lines=100 \
+    --unit=sanoid.service --unit=nas-zfs-snapshot-health.service >&2 || true
+  timeout --kill-after=2s 15s zfs get -Hrpt snapshot creation >&2 || true
+  timeout --kill-after=2s 15s stat /var/cache/sanoid/snapshots.txt >&2 || true
+  timeout --kill-after=2s 15s cat /var/cache/sanoid/snapshots.txt >&2 || true
+  return "$status"
 }
 check_doctor() {
   local report="$1" status=0
@@ -26,8 +39,26 @@ check_doctor() {
 [[ "$(cat "$SENTINEL" 2>/dev/null || true)" == preserve-me ]] || fail "installer persistence sentinel is missing"
 [[ "$PACKAGE_UPGRADE" == 0 || "$PACKAGE_UPGRADE" == 1 ]] || fail "invalid package upgrade test mode"
 
+# The official ISO test creates a fresh pool shortly before the generation
+# drills. If the real 06:00 health timer fires before Sanoid's first hourly
+# snapshot, its valid "no snapshots" alarm also makes nixos-rebuild report an
+# unrelated failed unit. Establish a real snapshot baseline rather than
+# disabling monitoring or treating Sanoid's exit 2 as success.
+log "Initialize and verify Sanoid snapshots before NixOS generation drills"
+if ! timeout --kill-after=5s 180s systemctl start nas-zfs-manual-snapshot.service; then
+  journalctl -u nas-zfs-manual-snapshot.service --no-pager -n 50 >&2 || true
+  fail "could not initialize the first Sanoid snapshots"
+fi
+systemctl reset-failed nas-zfs-snapshot-health.service
+if ! timeout --kill-after=5s 90s systemctl start nas-zfs-snapshot-health.service; then
+  journalctl -u nas-zfs-snapshot-health.service --no-pager -n 50 >&2 || true
+  fail "freshly initialized Sanoid snapshots did not pass live-inventory health checks"
+fi
+
 if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
-  log "Switch to pinned older NixOS packages and promote back to the reviewed lock"
+  # shellcheck source=/dev/null
+  source "$SOURCE/tests/vm/package-upgrade-baseline.sh"
+  log "Promote the initialized older NixOS baseline to the reviewed lock"
   older_version="$(nix eval --raw --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV" \
     "path:$SOURCE#nixosConfigurations.nas-qemu.pkgs.syncthing.version")"
   current_version="$(nix eval --raw "path:$SOURCE#nixosConfigurations.nas-qemu.pkgs.syncthing.version")"
@@ -35,15 +66,11 @@ if [[ "$PACKAGE_UPGRADE" == 1 ]]; then
   [[ "$older_version" == 2.0.15 ]] || fail "pinned older Syncthing package changed: $older_version"
   baseline_document="$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)"
   baseline_database="$(sha256sum /var/lib/nas-control-plane/nas-secrets/NAS.kdbx | cut -d ' ' -f1)"
-  current_system="$(readlink -f /run/current-system)"
-  rebuild switch --flake "path:$SOURCE#nas-qemu" --override-input nixpkgs "github:NixOS/nixpkgs/$OLDER_NIXPKGS_REV"
   older_system="$(readlink -f /run/current-system)"
-  [[ "$older_system" != "$current_system" ]] || fail "older package set did not activate a distinct generation"
   systemctl show --property=ExecStart --value syncthing.service | grep -q "syncthing-$older_version" ||
-    fail "older generation does not contain the pinned Syncthing package"
-  [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "older package activation destroyed the persistence sentinel"
+    fail "installed baseline does not contain the pinned older Syncthing package"
   rebuild switch --flake "path:$SOURCE#nas-qemu"
-  [[ "$(readlink -f /run/current-system)" == "$current_system" ]] || fail "reviewed generation was not restored"
+  [[ "$(readlink -f /run/current-system)" != "$older_system" ]] || fail "upgrade did not activate a distinct generation"
   systemctl show --property=ExecStart --value syncthing.service | grep -q "syncthing-$current_version" ||
     fail "reviewed generation does not contain the newer Syncthing package"
   [[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$baseline_document" ]] ||
@@ -106,7 +133,7 @@ candidate_system="$(readlink -f /run/current-system)"
 grep -qx 'candidate-generation' /etc/nas-generation-test || fail "candidate generation marker is missing"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "candidate switch damaged persistent state"
 
-rebuild --rollback switch
+rebuild --rollback switch --flake "path:$SOURCE#nas-qemu"
 [[ "$(readlink -f /run/current-system)" != "$candidate_system" ]] || fail "nixos-rebuild --rollback left candidate active"
 [[ ! -e /etc/nas-generation-test ]] || fail "rollback left candidate generation marker active"
 [[ "$(cat "$SENTINEL")" == preserve-me ]] || fail "rollback damaged persistent state"

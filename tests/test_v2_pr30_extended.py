@@ -1017,7 +1017,7 @@ class V2ReleaseManifestIdempotenceTests(unittest.TestCase):
         }
         files, manifest = net.compile_projection(eff, lan_zone="trusted")
         self.assertEqual(len(files), 2)
-        self.assertIn(f"policies/{net.remote_admin_policy_name()}.xml", files)
+        self.assertIn(f"policies/{net.remote_admin_policy_name()}", files)
 
     def test_backend_projection_has_no_application_names(self):
         text = (ROOT / "services/nas_v2_backup.py").read_text(encoding="utf-8").lower()

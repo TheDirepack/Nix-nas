@@ -46,19 +46,21 @@ class SmartFuzzArchitectureTests(unittest.TestCase):
         self.assertNotIn("NAS_FUZZ_CASES", source)
         self.assertNotIn("for _ in range(", source)
 
-    def test_custom_input_fuzzer_covers_every_python_service_module(self) -> None:
+    def test_custom_input_properties_do_not_swallow_arbitrary_runtime_errors(self) -> None:
         source = (ROOT / "tests/test_fuzz_custom_inputs.py").read_text(encoding="utf-8")
-        for module in sorted(path.stem for path in (ROOT / "services").glob("nas_*.py")):
-            with self.subTest(module=module):
-                self.assertIn(f'"{module}"', source)
+        self.assertNotIn("SERVICE_INPUT_MODULES", source)
+        self.assertNotIn("expected_boundary_error", source)
+        self.assertIn("assertRaises(v2_spec.ManagedServicesV2Error)", source)
 
     def test_long_custom_input_fuzzer_is_owned_by_final_fuzz_tier(self) -> None:
         orchestrator = (ROOT / "scripts/run-fuzz.py").read_text(encoding="utf-8")
         qualification = (ROOT / "scripts/ci-qualification.sh").read_text(encoding="utf-8")
         preflight = (ROOT / "scripts/preflight.sh").read_text(encoding="utf-8")
+        runner = (ROOT / "scripts/run-unit-tests.py").read_text(encoding="utf-8")
         self.assertIn('"custom-inputs": unittest_suite("custom-inputs", "tests.test_fuzz_custom_inputs")', orchestrator)
-        self.assertIn("--exclude test_fuzz_custom_inputs.py", qualification)
-        self.assertIn("--exclude test_fuzz_custom_inputs.py", preflight)
+        self.assertIn('"test_fuzz_custom_inputs.py"', runner)
+        self.assertIn("--group fast", qualification)
+        self.assertIn("--group fast", preflight)
 
     def test_executable_layer_is_a_contract_check_not_payload_fuzzer(self) -> None:
         source = (ROOT / "scripts/fuzz-executables.py").read_text(encoding="utf-8")

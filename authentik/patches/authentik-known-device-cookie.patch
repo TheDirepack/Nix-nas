@@ -1,0 +1,36 @@
+diff --git a/authentik/stages/user_login/stage.py b/authentik/stages/user_login/stage.py
+--- a/authentik/stages/user_login/stage.py
++++ b/authentik/stages/user_login/stage.py
+@@ -119,6 +119,8 @@ class UserLoginStageView(ChallengeStageView):
+             expires=expiry,
+             path=settings.SESSION_COOKIE_PATH,
+             domain=settings.SESSION_COOKIE_DOMAIN,
++            secure=self.request.is_secure(),
++            httponly=True,
+             samesite=settings.SESSION_COOKIE_SAMESITE,
+         )
+         return response
+diff --git a/authentik/root/middleware.py b/authentik/root/middleware.py
+--- a/authentik/root/middleware.py
++++ b/authentik/root/middleware.py
+@@ -29,7 +29,7 @@ SIGNING_HASH = sha512(settings.SECRET_KEY.encode()).hexdigest()
+ 
+ 
+ class SessionMiddleware(UpstreamSessionMiddleware):
+-    """Dynamically set SameSite depending if the upstream connection is TLS or not"""
++    """Use configured SameSite and transport-aware session security"""
+ 
+     @staticmethod
+     def is_secure(request: HttpRequest) -> bool:
+@@ -98,9 +98,9 @@ class SessionMiddleware(UpstreamSessionMiddleware):
+             empty = request.session.is_empty()
+         except AttributeError:
+             return response
+-        # Set SameSite based on whether or not the request is secure
++        # NAS browser applications share an origin; TLS does not require cross-site cookies.
+         secure = SessionMiddleware.is_secure(request)
+-        same_site = "None" if secure else "Lax"
++        same_site = settings.SESSION_COOKIE_SAMESITE
+         # First check if we need to delete this cookie.
+         # The session should be deleted only if the session is entirely empty.
+         if settings.SESSION_COOKIE_NAME in request.COOKIES and empty:

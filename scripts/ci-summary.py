@@ -64,6 +64,7 @@ def expected_jobs(
     manual_full_dispatch = event_name == "workflow_dispatch" and test_tier == "full"
     if manual_full_dispatch:
         expected.update(SLOW_JOBS)
+        expected.update(INSTALLED_SECURITY_JOBS)
 
     release_qualification = event_name == "schedule" or (event_name == "push" and _main_or_release_ref(ref))
     if release_qualification:
