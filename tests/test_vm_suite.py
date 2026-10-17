@@ -24,6 +24,152 @@ VM_COMMON = ROOT / "tests" / "nixos" / "vm-common.nix"
 
 
 class VmSuiteWrapperTests(unittest.TestCase):
+    def test_installed_zap_runs_every_mode_and_keeps_each_failure_fatal(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        block = source.split("  zap-fuzz)\n", 1)[1].split("\n    ;;", 1)[0]
+        labels = ("public", "cockpit", "unauthenticated", "authenticated")
+        for failures in ((), *[(label,) for label in labels], labels):
+            with self.subTest(failures=failures), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+ROOT=$1
+NAS_ZAP_OUT_DIR=$2/reports
+NAS_ZAP_IMAGE=fixture-pinned-image
+NAS_ZAP_CONFIRM_ACTIVE=1
+TEST_USER=fixture-user
+TEST_PASSWORD=must-not-appear-in-command-logs
+HTTPS_PORT=8443
+log() { :; }
+die() { echo "$*" >&2; exit 1; }
+bash() {
+  local label=$2
+  if [[ "$1" == */zap-scan.sh ]]; then label=$NAS_ZAP_REPORT_PREFIX; fi
+  printf '%s\n' "$label" >> "$ATTEMPTS"
+  if [[ "$label" == authenticated ]]; then
+    [[ "$NAS_ZAP_AUTH_USER" == "$TEST_USER" && "$NAS_ZAP_AUTH_PASSWORD" == "$TEST_PASSWORD" ]] || return 99
+  fi
+  [[ ",$FAILURES," != *",$label,"* ]] || return 2
+}
+"""
+                        + block
+                        + "\necho qualification-passed\n",
+                        "test",
+                        str(ROOT),
+                        directory,
+                    ],
+                    env={
+                        **os.environ,
+                        "FAILURES": ",".join(failures),
+                        "ATTEMPTS": str(pathlib.Path(directory) / "attempts"),
+                        "GITHUB_STEP_SUMMARY": str(pathlib.Path(directory) / "summary"),
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual((pathlib.Path(directory) / "attempts").read_text().splitlines(), list(labels))
+                self.assertEqual(result.returncode, 1 if failures else 0, result.stdout + result.stderr)
+                self.assertEqual("qualification-passed" in result.stdout, not failures)
+                results = pathlib.Path(directory) / "reports/final-vm/logs/results.tsv"
+                self.assertTrue(results.is_file(), "each installed scan needs an independent recorded outcome")
+                self.assertEqual(len(results.read_text().splitlines()), len(labels))
+                self.assertNotIn("must-not-appear-in-command-logs", results.read_text())
+
+    def test_final_workload_reuses_the_successful_ssh_probe_without_retrying_mutations(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        block = "ssh_args=(" + source.split("ssh_args=(", 1)[1].split("for _ in $(seq 1 90)", 1)[0]
+        for workload_status in (0, 73):
+            with self.subTest(workload_status=workload_status), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """set -euo pipefail
+SSH_KEY=fixture-key
+SSH_PORT=2222
+BOOT_LOG=/dev/null
+ssh_control_dir=$1/control
+mkdir -m 0700 "$ssh_control_dir"
+connections=0
+ssh() {
+  local option control_path='' master=0
+  for option in "$@"; do
+    case "$option" in
+      ControlPath=*) control_path=${option#ControlPath=} ;;
+      ControlMaster=auto) master=1 ;;
+    esac
+  done
+  if [[ -z "$control_path" || ! -e "$control_path" ]]; then
+    connections=$((connections + 1))
+    if (( connections > 1 )); then
+      echo 'new SSH connection stalled during banner exchange' >&2
+      return 255
+    fi
+    if [[ "$master" == 1 && -n "$control_path" ]]; then touch "$control_path"; fi
+  fi
+  if [[ "$*" == *nas-vm-guest-test* ]]; then
+    printf 'workload-invoked\n'
+    return "$WORKLOAD_STATUS"
+  fi
+}
+sleep() { :; }
+log() { :; }
+die() { echo "$*" >&2; exit 1; }
+"""
+                        + block,
+                        "test",
+                        directory,
+                    ],
+                    cwd=directory,
+                    env={**os.environ, "WORKLOAD_STATUS": str(workload_status)},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, workload_status, result.stderr)
+                self.assertEqual(result.stdout.count("workload-invoked"), 1)
+
+    def test_final_workload_cleanup_closes_and_removes_its_private_ssh_master(self) -> None:
+        source = FINAL_BROWSER.read_text(encoding="utf-8")
+        cleanup = "cleanup() {" + source.split("cleanup() {", 1)[1].split("\ntrap cleanup", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """set -euo pipefail
+PIDFILE=$1/qemu.pid
+OVERLAY=$1/os.qcow2
+DATA_DISK=$1/data.qcow2
+SSH_PORT=2222
+ssh_calls=$1/ssh-calls
+ssh_control_dir=$(mktemp -d "$1/ssh.XXXXXX")
+private_dir=$ssh_control_dir
+touch "$ssh_control_dir/control"
+nas_qemu_stop_pidfile() { :; }
+die() { echo "$*" >&2; exit 1; }
+ssh() { printf 'close-master: %s\n' "$*" >> "$ssh_calls"; }
+"""
+                    + cleanup
+                    + '\ncleanup\ncleanup\ntest ! -e "$private_dir"\n',
+                    "test",
+                    directory,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (pathlib.Path(directory) / "ssh-calls").read_text()
+            self.assertEqual(calls.count("close-master:"), 1)
+            self.assertIn("-O exit", calls)
+
     def test_reboot_failure_exports_guest_journal_without_changing_failure_status(self) -> None:
         source = QEMU.read_text(encoding="utf-8")
         functions = source.split("ssh_options() {", 1)[1].split("\nsync_source_to_guest() {", 1)[0]

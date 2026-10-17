@@ -68,6 +68,12 @@ if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
 [[ -s "$SSH_KEY" ]] || die "installer SSH key is missing; run qemu-test.sh installer first"
 
 cleanup() {
+  if [[ -n "${ssh_control_dir:-}" ]]; then
+    ssh -S "$ssh_control_dir/control" -O exit -p "$SSH_PORT" admin@127.0.0.1 >/dev/null 2>&1 || true
+    rm -f -- "$ssh_control_dir/control"
+    rmdir -- "$ssh_control_dir"
+    ssh_control_dir=""
+  fi
   nas_qemu_stop_pidfile "$PIDFILE" 20 ||
     die "refusing to clean up a pidfile owned by a non-QEMU process: $PIDFILE"
   rm -f "$PIDFILE" "$OVERLAY" "$DATA_DISK"
@@ -94,6 +100,7 @@ qemu-system-x86_64 \
   -device virtio-net-pci,netdev=net0 \
   -display none -serial "file:$BOOT_LOG" -daemonize -pidfile "$PIDFILE"
 
+ssh_control_dir="$(mktemp -d "${TMPDIR:-/tmp}/nas-final-vm-ssh.XXXXXX")"
 ssh_args=(
   -i "$SSH_KEY"
   -o IdentitiesOnly=yes
@@ -102,6 +109,10 @@ ssh_args=(
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
   -o ConnectTimeout=2
+  # Reuse the successful readiness transport; never retry a mutating command.
+  -o ControlMaster=auto
+  -o ControlPersist=60s
+  -o "ControlPath=$ssh_control_dir/control"
   -p "$SSH_PORT"
 )
 
@@ -254,26 +265,43 @@ PY
     [[ -n "${NAS_ZAP_IMAGE:-}" ]] || die "NAS_ZAP_IMAGE is required for zap-fuzz"
     fuzz_out="${NAS_ZAP_OUT_DIR:-$ROOT/zap-report}/final-vm"
     install -d -m 0755 "$fuzz_out"
+    CI_LOG_DIR="$fuzz_out/logs"
+    CI_RESULTS_FILE="$CI_LOG_DIR/results.tsv"
+    # shellcheck source=.github/ci-checks.sh
+    source "$ROOT/.github/ci-checks.sh"
+    : > "$CI_RESULTS_FILE"
+    zap_outcomes=()
+    run_zap_check() {
+      local name=$1
+      shift
+      if ci_run zap "$name" "$name" "$@"; then
+        zap_outcomes+=("$name=success")
+      else
+        zap_outcomes+=("$name=failure")
+      fi
+    }
     scan_mode="${NAS_ZAP_MODE:-baseline}"
     log "Running public and Cockpit ZAP $scan_mode scans"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
     NAS_ZAP_REPORT_PREFIX="public" \
-      bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/"
+      run_zap_check public bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_REPORT_PREFIX="cockpit" \
     NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
-      bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/console/"
+      run_zap_check cockpit bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/console/"
     log "Running state-aware unauthenticated ZAP Client Spider and active scan"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
-      bash "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://nas-test.local:$HTTPS_PORT/console/"
+      run_zap_check unauthenticated bash "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://nas-test.local:$HTTPS_PORT/console/"
     log "Running state-aware authenticated ZAP Client Spider and active scan"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_AUTH_USER="$TEST_USER" \
     NAS_ZAP_AUTH_PASSWORD="$TEST_PASSWORD" \
     NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
-      bash "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://nas-test.local:$HTTPS_PORT/console/"
+      run_zap_check authenticated bash "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://nas-test.local:$HTTPS_PORT/console/"
+    CI_REPORT_TITLE="Installed ZAP scans" python3 "$ROOT/scripts/ci-check-report.py" \
+      --results "$CI_RESULTS_FILE" "${zap_outcomes[@]}"
     ;;
 esac
 

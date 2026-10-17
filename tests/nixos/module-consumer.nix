@@ -30,6 +30,11 @@ in
 
   assertions = [
     {
+      assertion = config.systemd.services.nas-managed-services-reconcile.unitConfig.ConditionPathExists
+        == [ "/run/nas-secret-runtime/live/ready" ];
+      message = "Managed Services V2 activation must require active secrets without blocking reconciliation before setup publishes its final state.";
+    }
+    {
       assertion =
         !config.nas.networking.enable
         || lib.attrByPath [ "NAS_V2_VLAN_PARENT" ] null reconcileEnvironment == "eth0";

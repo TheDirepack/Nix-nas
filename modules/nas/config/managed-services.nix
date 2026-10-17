@@ -123,7 +123,12 @@ in
         "nas-managed-services-seed.service"
         "nas-zfs-mount-guard.service"
       ] ++ lib.optional firewalldEnabled "firewalld.service";
-      unitConfig.RequiresMountsFor = [ cfg.zfsRoot ];
+      unitConfig = {
+        RequiresMountsFor = [ cfg.zfsRoot ];
+        # A skipped mount guard does not block Caddy's Wants. Setup itself must
+        # reconcile after activating secrets, before publishing state.json.
+        ConditionPathExists = [ "${nasInternal.secretRoot}/ready" ];
+      };
       environment = {
         PYTHONPATH = "${v2Source}";
         NAS_V2_DESIRED = desiredPath;

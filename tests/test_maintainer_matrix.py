@@ -514,11 +514,14 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
         fake_bin = pathlib.Path(self._temporary.name) / "locked-addon-bin"
         fake_bin.mkdir()
         events = pathlib.Path(self._temporary.name) / "locked-addon-events"
+        workdirs = pathlib.Path(self._temporary.name) / "locked-addon-workdirs"
         for name in ("python3", "zap.sh", "zap-baseline.py", "zap-full-scan.py"):
             path = fake_bin / name
             path.write_text(
                 "#!/usr/bin/env bash\n"
                 'printf "%s\\n" "$0 $*" >> "$ADDON_EVENTS"\n'
+                'printf "%s\\n" "$PWD" >> "$ADDON_WORKDIRS"\n'
+                'if [[ "$0" == */zap-full-scan.py ]]; then printf "daemon output\\n" > zap.out; fi\n'
                 'if [[ "$*" == *verify-loaded* && "${REJECT_LOADED:-0}" == 1 ]]; then exit 1; fi\n'
             )
             path.chmod(0o755)
@@ -527,6 +530,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
             for reject in (False, True):
                 with self.subTest(scanner=scanner, reject=reject):
                     events.write_text("")
+                    workdirs.write_text("")
                     result = subprocess.run(
                         ["bash", str(helper), scanner, "scan-target"],
                         cwd=self.clean_root,
@@ -535,6 +539,7 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
                             "TMPDIR": self._temporary.name,
                             "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
                             "ADDON_EVENTS": str(events),
+                            "ADDON_WORKDIRS": str(workdirs),
                             "REJECT_LOADED": "1" if reject else "0",
                             "NAS_ZAP_ADDON_EVIDENCE": "/zap/wrk/fixture-addons.json",
                         },
@@ -557,6 +562,9 @@ sys.exit(int(os.environ.get('FAKE_ZAP_RC', '0')))
                         self.assertEqual(len(calls), 3, "scan ran without its complete locked rules")
                     else:
                         self.assertIn(f"{scanner} scan-target", calls[3])
+                        self.assertEqual(pathlib.Path(workdirs.read_text().splitlines()[3]), home)
+                        if scanner == "zap-full-scan.py":
+                            self.assertEqual((home / "zap.out").read_text(), "daemon output\n")
                         flags = f"-silent -dir {home}"
                         self.assertIn(flags, calls[3])
                         self.assertEqual("-z " in calls[3], scanner != "zap.sh")

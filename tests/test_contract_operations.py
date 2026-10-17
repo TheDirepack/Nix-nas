@@ -6,6 +6,16 @@ from repo_test_utils import ROOT, text
 
 
 class ContractTests(unittest.TestCase):
+    def test_managed_services_activation_requires_active_secrets_without_blocking_setup(self) -> None:
+        managed = text("modules/nas/config/managed-services.nix")
+        reconcile = managed.split("systemd.services.nas-managed-services-reconcile = {", 1)[1].split(
+            "systemd.paths.nas-managed-services-reconcile", 1
+        )[0]
+        self.assertIn("ConditionPathExists = [", reconcile)
+        conditions = reconcile.split("ConditionPathExists = [", 1)[1].split("]", 1)[0]
+        self.assertIn('"${nasInternal.secretRoot}/ready"', conditions)
+        self.assertNotIn("/var/lib/nas-setup/state.json", conditions)
+
     def test_caddy_wants_but_does_not_wait_for_managed_services_reconciliation(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")
         self.assertIn("systemd.services.caddy.wants = [", managed)

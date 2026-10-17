@@ -6,6 +6,8 @@ zap_home="$(mktemp -d)"
 python3 "$lib_dir/zap-addons.py" prepare --home "$zap_home"
 zap.sh -cmd -silent -dir "$zap_home" -addonlist
 python3 "$lib_dir/zap-addons.py" verify-loaded --home "$zap_home" --evidence "${NAS_ZAP_ADDON_EVIDENCE:?}"
+# The packaged full scanner opens zap.out in its working directory, not its home.
+cd "$zap_home"
 case "$1" in
   zap-baseline.py|zap-full-scan.py) exec "$@" -z "-silent -dir $zap_home" ;;
   zap.sh) exec "$@" -silent -dir "$zap_home" ;;

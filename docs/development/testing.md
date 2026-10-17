@@ -305,6 +305,13 @@ installed-security CI job runs these controls
 before appliance scanning and retains their evidence. A successful fixture scan
 verifies the harness, not appliance security.
 
+The installed workload runs both packaged endpoint scans and both automation
+modes even when an earlier scan fails. It uses the shared CI diagnostics helper
+to retain independent logs and exit codes under `final-vm/logs/`, then fails the
+workload if any scan failed. Authentication guards, finding policy, per-scan
+budgets and fresh provenance requirements remain unchanged; collecting later
+evidence does not waive an earlier finding.
+
 For a local run:
 
 ```bash

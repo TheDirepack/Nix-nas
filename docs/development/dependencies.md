@@ -51,7 +51,8 @@ unchanged. A source, patch or output mismatch fails the build.
 The shared entrypoint checks the rebuilt core and all add-on hashes, prepares a
 private home, then asks ZAP to load its own dependencies. It rejects a missing,
 extra or different runnable add-on before scanning. Scans use `-silent` with
-that verified home to prevent live updates. Each `.addons.json` report records
+that verified home to prevent live updates and run from it so the packaged
+scanner can write its relative `zap.out` as the caller's UID. Each `.addons.json` report records
 the base image digest, derived image ID, lock digest, source-build recipe and
 complete runnable inventory.
 
@@ -108,9 +109,14 @@ unchanged installed-login accessibility test passes without it.
 
 The same source package applies `authentik-known-device-cookie.patch` so the
 remembered-device cookie is HttpOnly and uses the request's secure transport
-flag. Keep this patch until upstream provides equivalent protection. Do not
-make the CSRF cookie HttpOnly: the native interface reads it to construct its
-CSRF request header. Preserve upstream session SameSite behavior as well.
+flag. It also makes the native session middleware honor Django's
+`SESSION_COOKIE_SAMESITE` (`Lax` by default) for creation, renewal and deletion
+instead of forcing `None` over TLS. NAS browser applications share an origin;
+retain native session signing, expiry, binding and transport security. Keep
+this patch until upstream provides equivalent protection. Do not make the CSRF
+cookie HttpOnly: the native interface reads it to construct its CSRF request
+header. Dependency updates require installed login, logout and CSRF/session
+qualification, not just source-patch checks.
 
 `authentik-blueprint-apply-failure.patch` makes the native `ak apply_blueprint`
 command exit nonzero when the importer's atomic apply returns false. Validation
