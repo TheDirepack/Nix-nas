@@ -84,6 +84,21 @@ the active-scan user or suppressing the rule cannot qualify a scanner.
 
 The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`. Nix builds Cockpit and the first-run wizard from their reviewed npm lockfiles with `importNpmLock` and `buildNpmPackage`, then verifies their output with the existing build-integrity checks. Local `node_modules` and generated `dist` trees are excluded from derivation inputs. Release archives retain the compiled payload and source-hash metadata for browser qualification and source consumers; they are not the inputs to the installed frontend build. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.
 
+The running Cockpit bridge applies `cockpit-frame-ancestors.patch` to the native
+package policy generator. Its default HTML policy adds `frame-ancestors 'self'`
+without replacing package-specific directives, nonces or WebSocket origins.
+Explicit stricter package policies still win. This does not repair upstream HTML
+error responses without CSP. Retain the patch until the pinned upstream provides
+an equivalent default; source fixtures alone do not establish installed browser
+compatibility or finding-policy clearance.
+
+Cockpit menu paths are package-qualified components, not paths relative to the
+declaring manifest. The shell normalizes a trailing `/index`, so NAS Help targets
+the existing `nas/docs/admin/installation.html` chapter rather than a nested index
+page. Keep that target in the book summary and qualify real shell navigation
+after package/router changes. Direct documentation links still use the packaged
+`nas/docs/index.html` home page.
+
 ## Unfree packages
 
 The unfree-package predicate in `modules/nas/config/host-platform.nix` admits only NVIDIA/CUDA/CUDNN/Libcu/NCCL package names, and only when `nas.hardware.gpuVendors` declares `nvidia`. Keep that exception exact to those package-name prefixes; broader unfree enablement would bypass the appliance dependency review boundary.
