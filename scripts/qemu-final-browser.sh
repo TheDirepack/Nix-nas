@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=scripts/lib/nas-qemu-process.sh
 source "$ROOT/scripts/lib/nas-qemu-process.sh"
 DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu"
@@ -22,7 +22,6 @@ SSH_KEY="$STATE_DIR/installer-admin-ed25519"
 OVERLAY="$STATE_DIR/browser-os-overlay.qcow2"
 DATA_DISK="$STATE_DIR/browser-data.qcow2"
 PIDFILE="$STATE_DIR/browser-qemu.pid"
-BOOT_LOG="$STATE_DIR/browser-console.log"
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -42,7 +41,7 @@ validate_host_bind_address() {
 
 validate_host_bind_address
 
-for cmd in qemu-system-x86_64 qemu-img ssh curl python3 realpath readlink; do need "$cmd"; done
+for cmd in qemu-system-x86_64 qemu-img ssh curl python3 realpath readlink timeout; do need "$cmd"; done
 validate_state_path() {
   local cache_resolved state_resolved
   [[ -n "$CACHE_DIR" ]] || die "NAS_QEMU_CACHE_DIR must not be empty"
@@ -67,6 +66,19 @@ if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
 [[ -s "$INSTALLED_DATA_DISK" ]] || die "installed data disk is missing; run qemu-test.sh installer first"
 [[ -s "$SSH_KEY" ]] || die "installer SSH key is missing; run qemu-test.sh installer first"
 
+evidence_root="$(realpath -m -- "${NAS_FINAL_VM_EVIDENCE_DIR:-$CACHE_DIR/evidence}")"
+case "$evidence_root" in
+  "$ROOT"|"$ROOT"/*) die "final-VM evidence path must be outside the checkout" ;;
+esac
+umask 077
+mkdir -p -- "$evidence_root"
+EVIDENCE_DIR="$(mktemp -d "$evidence_root/$WORKLOAD.XXXXXX")"
+BOOT_LOG="$EVIDENCE_DIR/browser-console.log"
+if [[ -f "$STATE_DIR/installed-console.log" ]]; then
+  cp -- "$STATE_DIR/installed-console.log" "$EVIDENCE_DIR/installed-console.log"
+fi
+log "Retaining final-VM evidence in $EVIDENCE_DIR"
+
 cleanup() {
   if [[ -n "${ssh_control_dir:-}" ]]; then
     ssh -S "$ssh_control_dir/control" -O exit -p "$SSH_PORT" admin@127.0.0.1 >/dev/null 2>&1 || true
@@ -78,7 +90,57 @@ cleanup() {
     die "refusing to clean up a pidfile owned by a non-QEMU process: $PIDFILE"
   rm -f "$PIDFILE" "$OVERLAY" "$DATA_DISK"
 }
-trap cleanup EXIT INT TERM
+
+collect_guest_diagnostics() {
+  timeout --foreground --signal=TERM --kill-after=5s 30s \
+    ssh "${ssh_args[@]}" admin@127.0.0.1 'sudo -n bash -s' <<'GUEST_DIAGNOSTICS'
+set -uo pipefail
+result=0
+record() {
+  local label=$1 status
+  shift
+  printf '\n==> %s\n' "$label"
+  "$@"
+  status=$?
+  printf 'exit\t%s\t%s\n' "$label" "$status"
+  if ((status != 0)); then result=$status; fi
+}
+record failed-units systemctl --failed --no-legend --plain --no-pager
+record identity-unit-state systemctl show --no-pager \
+  --property=Id,LoadState,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,InvocationID,ExecMainStartTimestampMonotonic,ExecMainExitTimestampMonotonic \
+  authentik-migrate.service 'nas-health-alert@*.service'
+record identity-and-gate-journal journalctl -b --no-pager -o short-iso-precise \
+  -u authentik-migrate.service -u 'nas-health-alert@*.service' \
+  -u authentik.service -u caddy.service -u nas-cockpit-sso.service
+exit "$result"
+GUEST_DIAGNOSTICS
+}
+
+finish() {
+  local status=$? diagnostics_status=125 cleanup_status=0
+  trap - EXIT INT TERM RETURN
+  if [[ "${ssh_ready:-0}" == 1 ]]; then
+    diagnostics_status=0
+    collect_guest_diagnostics >"$EVIDENCE_DIR/guest-diagnostics.log" 2>&1 || diagnostics_status=$?
+  else
+    printf 'Guest SSH readiness was not established; diagnostics unavailable.\n' >"$EVIDENCE_DIR/guest-diagnostics.log"
+  fi
+  # Capture read-only guest evidence before closing the master or removing overlays.
+  (cleanup) || cleanup_status=$?
+  if ! printf 'workload\t%s\nworkloadExit\t%s\nguestDiagnosticsExit\t%s\ncleanupExit\t%s\n' \
+    "$WORKLOAD" "$status" "$diagnostics_status" "$cleanup_status" >"$EVIDENCE_DIR/result.tsv"; then
+    printf 'warning: could not retain final-VM exit evidence\n' >&2
+    if ((status == 0)); then status=1; fi
+  fi
+  if ((diagnostics_status != 0)); then
+    printf 'warning: guest diagnostics incomplete (exit %s); see %s\n' "$diagnostics_status" "$EVIDENCE_DIR" >&2
+  fi
+  if ((status == 0 && cleanup_status != 0)); then status=$cleanup_status; fi
+  exit "$status"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 cleanup
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$OS_DISK" "$OVERLAY"
@@ -124,6 +186,7 @@ ssh "${ssh_args[@]}" admin@127.0.0.1 true >/dev/null 2>&1 || {
   cat "$BOOT_LOG" >&2 || true
   die "final browser VM did not become reachable over SSH"
 }
+ssh_ready=1
 
 log "Verifying canonical locked-boot activation and health in the disposable overlays"
 ssh "${ssh_args[@]}" admin@127.0.0.1 \
@@ -220,7 +283,9 @@ case "$WORKLOAD" in
     NAS_VM_BASE_URL="https://nas-test.local:$HTTPS_PORT" \
     NAS_VM_TEST_USER="$TEST_USER" \
     NAS_VM_TEST_PASSWORD="$TEST_PASSWORD" \
-    npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs"
+    PLAYWRIGHT_HTML_OUTPUT_DIR="$EVIDENCE_DIR/playwright-report" \
+    npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs" \
+      --output "$EVIDENCE_DIR/test-results"
     ;;
   installed-command-fuzz)
     fuzz_out="${NAS_INSTALLED_FUZZ_OUT:-$ROOT/installed-command-fuzz.json}"

@@ -176,6 +176,25 @@ The browser suite verifies that hostile backend strings remain inert, no executa
 
 The installed-system browser suite separately uses the running Cockpit, Caddy, and Authentik stack. It checks real login and authorization identities, capability grants and denials, XSS-shaped identity data, browser console errors, duplicate DOM IDs, interactive-control geometry, and multiple viewport widths. This gives the project both a deterministic mocked-backend browser layer and a real-appliance browser layer.
 
+CI retains browser reports and failure attachments even when the existing retry
+passes. Outputs live under the runner temporary directory, outside the checkout.
+Each `qemu-final-browser.sh` invocation creates a private, unique directory below
+`NAS_FINAL_VM_EVIDENCE_DIR` (default: `$NAS_QEMU_CACHE_DIR/evidence`), so the initial
+installation and package-upgrade runs cannot overwrite each other's reports,
+traces, screenshots or serial console. The directory also retains the associated
+installed-system console when available.
+
+Before closing SSH or removing overlays, the final-VM wrapper makes one bounded,
+read-only guest diagnostic collection: failed units, selected migration/notifier
+unit properties and their boot journal plus the authentication/proxy gate journal.
+`result.tsv` records the original workload exit, diagnostic exit and cleanup exit
+separately. Diagnostic failure never replaces an existing workload failure;
+missing SSH readiness is recorded as diagnostic exit 125. A successful collection
+is not a clean-health assertion. Treat traces and journals as potentially
+credential-bearing evidence: keep local directories private and review them
+before redistribution. CI artifacts expire after seven days; archive evidence
+needed for a merge decision before expiry.
+
 Automated accessibility and layout checks cannot detect every visual or usability defect; manual review remains part of release qualification.
 
 ## 6. Packaged-source consumer test

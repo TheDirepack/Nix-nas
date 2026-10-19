@@ -679,17 +679,18 @@ jobs:
       - name: Run complete deterministic browser suite
         env:
           NAS_BROWSER_SUITE: deterministic
-        run: npm --prefix cockpit run test:browser
-      - name: Retain browser failure evidence
-        if: failure()
+          PLAYWRIGHT_HTML_OUTPUT_DIR: ${{ runner.temp }}/browser-evidence/playwright-report
+        run: |
+          umask 077
+          npm --prefix cockpit run test:browser -- --output "$RUNNER_TEMP/browser-evidence/test-results"
+      - name: Retain browser evidence including successful retries
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-test-evidence
           if-no-files-found: ignore
           retention-days: 7
-          path: |
-            cockpit/playwright-report
-            cockpit/test-results
+          path: ${{ runner.temp }}/browser-evidence
 
   # Stage 4b: only the two expensive VM variants remain job-level parallelism.
   integration:
@@ -804,6 +805,8 @@ jobs:
       - name: Install from official NixOS media and reboot-test
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Final VM browser, layout, accessibility, and security checks
+        env:
+          NAS_FINAL_VM_EVIDENCE_DIR: ${{ runner.temp }}/final-vm-evidence/initial-install
         # All browser engines must resolve Authentik's canonical callback host.
         run: |
           echo '127.0.0.1 nas-test.local' | sudo tee -a /etc/hosts
@@ -813,26 +816,24 @@ jobs:
           NAS_QEMU_PACKAGE_UPGRADE: "1"
         run: nix develop .#qemu-test -c ./scripts/qemu-test.sh installer
       - name: Check the upgraded VM browser and security surfaces
+        env:
+          NAS_FINAL_VM_EVIDENCE_DIR: ${{ runner.temp }}/final-vm-evidence/package-upgrade
         run: nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#nodejs nixpkgs#python3 -c bash ./scripts/qemu-final-browser.sh
       - name: Collect final-VM console evidence
         if: always()
         run: |
-          mkdir -p final-vm-evidence
-          cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
-            final-vm-evidence/browser-console.log 2>/dev/null || true
+          umask 077
+          mkdir -p "$RUNNER_TEMP/final-vm-evidence"
           cp ~/.cache/nixos-nas-qemu/state/installed-console.log \
-            final-vm-evidence/installed-console.log 2>/dev/null || true
-      - name: Retain final-VM failure evidence
-        if: failure()
+            "$RUNNER_TEMP/final-vm-evidence/installed-console.log" 2>/dev/null || true
+      - name: Retain final-VM evidence including successful retries
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: final-vm-browser-evidence
           if-no-files-found: ignore
           retention-days: 7
-          path: |
-            cockpit/playwright-report
-            cockpit/test-results
-            final-vm-evidence
+          path: ${{ runner.temp }}/final-vm-evidence
 
   # Stage 6a: long smart-fuzz searches never run per commit; operators request
   # them explicitly through the full dispatch tier after deterministic
@@ -931,6 +932,7 @@ jobs:
         id: installed-command
         continue-on-error: true
         env:
+          NAS_FINAL_VM_EVIDENCE_DIR: ${{ runner.temp }}/installed-security-evidence/installed-command
           NAS_FINAL_VM_WORKLOAD: installed-command-fuzz
           NAS_INSTALLED_FUZZ_OUT: installed-command-fuzz.json
           NAS_HTTP_ADVERSARIAL_OUT: http-adversarial.json
@@ -939,6 +941,7 @@ jobs:
         id: zap
         continue-on-error: true
         env:
+          NAS_FINAL_VM_EVIDENCE_DIR: ${{ runner.temp }}/installed-security-evidence/zap
           NAS_FINAL_VM_WORKLOAD: zap-fuzz
           NAS_ZAP_CONFIRM_ACTIVE: "1"
           NAS_ZAP_OUT_DIR: zap-report
@@ -948,12 +951,6 @@ jobs:
           test -n "$NAS_ZAP_IMAGE"
           nix shell nixpkgs#qemu nixpkgs#openssh nixpkgs#curl nixpkgs#python3 \
             -c bash ./scripts/qemu-final-browser.sh
-      - name: Collect installed-security console evidence
-        if: always()
-        run: |
-          mkdir -p installed-security-logs
-          cp ~/.cache/nixos-nas-qemu/state/browser-console.log \
-            installed-security-logs/browser-console.log 2>/dev/null || true
       - name: Retain installed security evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -966,7 +963,7 @@ jobs:
             http-adversarial.json
             zap-report
             zap-native-controls
-            installed-security-logs
+            ${{ runner.temp }}/installed-security-evidence
       - name: Report all installed-security failures
         if: always()
         env:
