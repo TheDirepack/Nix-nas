@@ -492,6 +492,14 @@ in
       wantedBy = lib.mkOverride 90 [ ];
       partOf = [ "nas-protected-services.target" ];
       unitConfig.ConditionPathExists = "${observabilitySecretDir}/ntfy-environment";
+      # After= includes ExecStartPost; the upstream simple service can start
+      # before its HTTP listener is ready for notification delivery.
+      postStart = ''
+        ${pkgs.coreutils}/bin/timeout --signal=TERM --kill-after=2s 15s ${pkgs.curl}/bin/curl \
+          --fail --silent --show-error --connect-timeout 1 --max-time 2 \
+          --retry 15 --retry-delay 1 --retry-connrefused \
+          http://127.0.0.1:${toString cfg.observability.ntfy.port}/v1/health >/dev/null
+      '';
     };
 
     telegraf = lib.mkIf cfg.observability.enable {

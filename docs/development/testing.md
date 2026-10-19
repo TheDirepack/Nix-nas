@@ -229,6 +229,12 @@ effective state. After setup activates secrets, they require that same job to
 execute successfully and commit its object manifest. A skipped job is not a
 completed oneshot; bootstrap identity reconciliation remains a separate owner.
 
+`tests/test_ntfy_readiness.py` executes ntfy's native service post-start check
+against delayed, unavailable, unresponsive and error-returning HTTP listeners.
+The readiness check must fail closed within its bound and must never publish a
+notification. NixOS/installer qualification is still required for the packaged
+unit, protected-target lifecycle and notification delivery.
+
 The installed guest also exercises a service identifier absent from the Nix seed. It loads two VM-only BusyBox images from the Nix store, creates an identity-protected routed OCI service with revision-CAS document replacement, updates the running image, verifies that an offline missing-image activation restores both desired and live applied state, and removes the service and its Quadlet, systemd, Caddy, Authentik, and container projections.
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.

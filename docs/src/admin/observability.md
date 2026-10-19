@@ -27,6 +27,11 @@ The current routing policy groups by the complete alert label set, sends a new g
 
 When ntfy is enabled, Alertmanager sends its webhook notifications to `alertmanager-ntfy`. The bridge authenticates to the loopback ntfy service with runtime-only credentials rendered from the activated NAS secrets.
 
+`ntfy-sh.service` waits for its loopback health endpoint before completing startup,
+so health-failure notifications ordered after it do not race the HTTP listener.
+The readiness check is bounded to 15 seconds; failure remains visible in systemd.
+It does not clear failed units or retry notification publication.
+
 - **Alerts/status:** `/alerts/`
 - **Grafana:** `/metrics/`
 - **VictoriaMetrics:** `/victoriametrics/`
