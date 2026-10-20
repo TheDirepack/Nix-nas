@@ -191,6 +191,7 @@ async function installCockpitMock(page, behavior = {}) {
       globalThis.__nas_xss = 0;
       globalThis.__nas_spawn_calls = [];
       const response = structuredClone(payload);
+      const overviewOutputs = [...(configuredBehavior.overviewOutputs || [])];
       const rejected = (message) => {
         const promise = Promise.reject(new Error(message));
         promise.input = () => {};
@@ -236,7 +237,28 @@ async function installCockpitMock(page, behavior = {}) {
               schema: {},
             };
           }
-          const output = JSON.stringify(value);
+          let output = JSON.stringify(value);
+          if (args[0] === "nas-cockpit-api" && args[1] === "overview" && overviewOutputs.length) {
+            output = overviewOutputs.shift();
+          }
+          if (
+            args[0] === "nas-cockpit-api" &&
+            args[1] === "action" &&
+            Object.hasOwn(configuredBehavior, "actionOutput")
+          ) {
+            output = configuredBehavior.actionOutput;
+          }
+          if (configuredBehavior.cockpitThenable) {
+            return {
+              input() {},
+              then(fulfilled) {
+                // Cockpit Deferred lets callback exceptions escape instead of rejecting.
+                return new Promise((resolve) => {
+                  setTimeout(() => resolve(fulfilled(output)), 0);
+                });
+              },
+            };
+          }
           const promise = Promise.resolve(output);
           promise.input = () => {};
           promise.stream = () => promise;
@@ -444,6 +466,54 @@ test("backend refresh failure becomes a bounded operator-visible error", async (
   await expect(page.getByLabel("Loading NAS state")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
+
+for (const [name, output] of [["empty", ""], ["malformed", "not-json"], ["truncated", '{"ok":']]) {
+  test(`Cockpit ${name} overview JSON clears loading and permits explicit refresh`, async ({page}) => {
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    await openApp(page, {cockpitThenable: true, overviewOutputs: [output]});
+    await expect(page.getByRole("heading", {name: "Unable to load appliance status"})).toBeVisible();
+    await expect(page.getByLabel("Loading NAS state")).toHaveCount(0);
+    expect(
+      await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) => args[1] === "overview").length),
+    ).toBe(1);
+    await page
+      .locator("section")
+      .filter({has: page.getByRole("heading", {name: "NixOS NAS", exact: true})})
+      .getByRole("button", {name: "Refresh", exact: true})
+      .click();
+    await expect(page.getByText(xss, {exact: true}).first()).toBeVisible();
+    await expect(page.getByRole("heading", {name: "Unable to load appliance status"})).toHaveCount(0);
+    expect(
+      await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) => args[1] === "overview").length),
+    ).toBe(2);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test(`Cockpit ${name} action JSON reports failure and releases busy state`, async ({page}) => {
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    await openApp(page, {cockpitThenable: true, actionOutput: output});
+    await openOperationsSection(page);
+    await firstMaintenanceAction(page).click();
+    await page.getByRole("button", {name: "Confirm", exact: true}).click();
+    await expect(
+      page.locator(".pf-v6-c-alert__title").filter({hasText: "Operation failed"}),
+    ).toBeVisible();
+    await expect(
+      page.locator(".pf-v6-c-alert__title").filter({hasText: "Operation completed."}),
+    ).toHaveCount(0);
+    await expect(page.getByRole("button", {name: "Confirm", exact: true})).toBeEnabled();
+    await expect(page.getByRole("button", {name: "Cancel", exact: true})).toBeEnabled();
+    await page.getByRole("button", {name: "Cancel", exact: true}).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("heading", {name: "Operation failed"})).toBeVisible();
+    expect(
+      await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length),
+    ).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+}
 
 test("privileged action failure stays recoverable and never becomes an uncaught page error", async ({
   page,

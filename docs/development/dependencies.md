@@ -84,6 +84,12 @@ the active-scan user or suppressing the rule cannot qualify a scanner.
 
 The Cockpit UI uses the same React 18, PatternFly 6, esbuild, and Sass model as Cockpit Starter Kit. Direct dependency versions are exact in `cockpit/package.json`. Nix builds Cockpit and the first-run wizard from their reviewed npm lockfiles with `importNpmLock` and `buildNpmPackage`, then verifies their output with the existing build-integrity checks. Local `node_modules` and generated `dist` trees are excluded from derivation inputs. Release archives retain the compiled payload and source-hash metadata for browser qualification and source consumers; they are not the inputs to the installed frontend build. `nas-cockpit-api` remains the single privileged boundary, and backend response schemas and pure view-model tests remain mandatory.
 
+Cockpit process results are thenables whose callbacks let thrown exceptions escape
+instead of rejecting the chained result. Assimilate them with the standard native
+`Promise` before JSON decoding, so empty or malformed output reaches the caller's
+error handling and clears loading/busy state. Do not replace malformed output with
+success, retry privileged commands automatically, or change stdin-only payloads.
+
 The running Cockpit bridge applies `cockpit-frame-ancestors.patch` to the native
 package policy generator. Its default HTML policy adds `frame-ancestors 'self'`
 without replacing package-specific directives, nonces or WebSocket origins.
