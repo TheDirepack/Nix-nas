@@ -5,10 +5,12 @@ import os
 import re
 import selectors
 import shutil
+import signal
 import subprocess
 import threading
 import time
 import unittest
+from unittest import mock
 
 from repo_test_utils import text
 
@@ -102,14 +104,24 @@ class NtfyReadinessTests(unittest.TestCase):
     def test_delayed_listener_is_retried_before_readiness_succeeds(self) -> None:
         server = self.server(activate=False)
         process = subprocess.Popen(
-            ["bash", "-c", self.probe(server.server_port)], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            ["bash", "-c", self.probe(server.server_port)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             assert process.stderr is not None
+            deadline = time.monotonic() + 5
+            first_error = b""
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stderr, selectors.EVENT_READ)
-                self.assertTrue(selector.select(5), "readiness never attempted a connection")
-                first_error = os.read(process.stderr.fileno(), 4096)
+                while b"\n" not in first_error:
+                    remaining = deadline - time.monotonic()
+                    self.assertGreater(remaining, 0, "readiness never completed its connection diagnostic")
+                    self.assertTrue(selector.select(remaining), "readiness never attempted a connection")
+                    chunk = os.read(process.stderr.fileno(), 4096)
+                    self.assertTrue(chunk, "readiness stderr closed before its connection diagnostic")
+                    first_error += chunk
             self.assertIn(b"curl: (7)", first_error, "readiness returned before ntfy was listening")
             self.assertIsNone(process.poll(), "readiness did not retry the refused connection")
             self.activate(server)
@@ -119,8 +131,48 @@ class NtfyReadinessTests(unittest.TestCase):
             self.assertEqual(self.requests, [("GET", "/v1/health")])
         finally:
             if process.poll() is None:
-                process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             process.communicate(timeout=5)
+
+    def test_delayed_listener_handles_fragmented_stderr(self) -> None:
+        read = os.read
+        fragments = []
+
+        def fragmented(fd, size):
+            chunk = read(fd, min(size, 1))
+            if chunk:
+                fragments.append(chunk)
+            return chunk
+
+        with mock.patch("os.read", side_effect=fragmented):
+            self.test_delayed_listener_is_retried_before_readiness_succeeds()
+        self.assertGreater(len(fragments), 1)
+
+    def test_failed_listener_activation_reaps_probe_descendants(self) -> None:
+        popen = subprocess.Popen
+        processes = []
+
+        def spawn(*args, **kwargs):
+            process = popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        with (
+            mock.patch.object(
+                self, "probe", return_value="sleep 15 &\nprintf 'curl: (7) connection refused\\n' >&2\nwait\n"
+            ),
+            mock.patch.object(self, "activate", side_effect=RuntimeError("listener activation failed")),
+            mock.patch("subprocess.Popen", side_effect=spawn),
+            self.assertRaisesRegex(RuntimeError, "listener activation failed"),
+        ):
+            self.test_delayed_listener_is_retried_before_readiness_succeeds()
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].returncode, -signal.SIGKILL)
+        self.assertTrue(processes[0].stdout.closed)
+        self.assertTrue(processes[0].stderr.closed)
 
     def test_ready_server_is_probed_without_publishing_a_notification(self) -> None:
         server = self.server()

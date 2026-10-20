@@ -231,6 +231,10 @@ completed oneshot; bootstrap identity reconciliation remains a separate owner.
 
 `tests/test_ntfy_readiness.py` executes ntfy's native service post-start check
 against delayed, unavailable, unresponsive and error-returning HTTP listeners.
+The delayed-listener fixture assembles a complete stderr line within its original
+five-second deadline and isolates the probe in an owned process group for cleanup.
+Regression cases force one-byte pipe reads and a failed activation with a live
+descendant, without relaxing the connection-refusal or health assertions.
 The readiness check must fail closed within its bound and must never publish a
 notification. NixOS/installer qualification is still required for the packaged
 unit, protected-target lifecycle and notification delivery.
