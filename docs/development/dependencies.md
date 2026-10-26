@@ -93,10 +93,22 @@ success, retry privileged commands automatically, or change stdin-only payloads.
 The running Cockpit bridge applies `cockpit-frame-ancestors.patch` to the native
 package policy generator. Its default HTML policy adds `frame-ancestors 'self'`
 without replacing package-specific directives, nonces or WebSocket origins.
-Explicit stricter package policies still win. This does not repair upstream HTML
-error responses without CSP. Retain the patch until the pinned upstream provides
-an equivalent default; source fixtures alone do not establish installed browser
-compatibility or finding-policy clearance.
+Explicit stricter package policies still win. Retain the patch until the pinned
+upstream provides an equivalent default.
+
+The same native package applies `cockpit-error-csp.patch` to the web response
+handler. Only errors with no caller-supplied body receive its fallback policy;
+explicit response policies and custom bodies keep their existing behavior.
+The generated error page retains its native SAMEORIGIN framing and authorizes
+only the exact SHA256 hashes of the script and style blocks in
+`src/common/fail.html`, including whitespace. Keep `unsafe-inline` disabled.
+On upstream updates, review the complete template, refresh the hashes if needed
+and run `tests/test_cockpit_error_csp.py` against the pinned native fixtures.
+Those tests compile the response handler using GLib/GIO and JSON-GLib from the
+test shell and embed the unchanged HTML with upstream's `tools/escape-to-c`.
+Source fixtures do not establish installed browser compatibility, complete
+response coverage or finding-policy clearance; retain installed login,
+framing/theme and all four security scans for the exact combined revision.
 
 Cockpit menu paths are package-qualified components, not paths relative to the
 declaring manifest. The shell normalizes a trailing `/index`, so NAS Help targets

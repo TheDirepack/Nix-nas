@@ -1,0 +1,66 @@
+{
+  "repository": "https://github.com/cockpit-project/cockpit",
+  "commit": "ca0d360e3a858a7eb189edde15cf7b976018404b",
+  "files": {
+    "src/ws/cockpitwebresponse.c": {
+      "gitBlob": "63df41717337362efa5158ca9afa2e0dd049ba14",
+      "sha256": "3a6e001793b73452f26fe1694d5467157d64adfad3094defe25306a0e92cfd77"
+    },
+    "src/ws/cockpitwebresponse.h": {
+      "gitBlob": "1b570e410bbd981605afeae32f314f795bd3ec4c",
+      "sha256": "b63e650ff2ea760d848eb4078e0c077f761f0bba3859907e30032b59e2a9951b"
+    },
+    "src/ws/test-webresponse.c": {
+      "gitBlob": "f2203e81ab61a8cc70cf9598caa15ca0977c15ea",
+      "sha256": "0ac9baf5027e3761b11b67e3e201f5b619e164eb721534884586caa9d7e8a2be"
+    },
+    "src/ws/cockpitflow.c": {
+      "gitBlob": "e2a9b1550e1b982c1cc4488f406aa078380d5b5b",
+      "sha256": "0fa82fb27875c9902a8304ce6489e3d34592c153a6f8c09687a79be172e476e9"
+    },
+    "src/ws/cockpitflow.h": {
+      "gitBlob": "a37a8f570d49a783785caba88bc65b3df9436757",
+      "sha256": "341175a5b863d0854a6377730eb3e110c34e4c1b716d1f81bdf0bd8bcbb76653"
+    },
+    "src/ws/cockpitwebfilter.c": {
+      "gitBlob": "9883ec60af99021a033fdf33363991d0c8651ec1",
+      "sha256": "1aa2cb82819e390c0ed87199df2543b8ad98f05959c6671d3b16d3e5ad3b7eca"
+    },
+    "src/ws/cockpitwebfilter.h": {
+      "gitBlob": "c1b51cee60fc26f054bd1a6b38d29cd0534a1b1e",
+      "sha256": "1aa82d12e6a787d69722149359688f11efd63c3bba560dfe831e9ea264ee96ab"
+    },
+    "src/ws/cockpithash.c": {
+      "gitBlob": "b16e4c7c93563aa27c8f39d39da5628d0ad0354f",
+      "sha256": "e6fd96fa6bfc93d173fa37cf10b8965b0154c55d3e3ffde723da8f5c69937221"
+    },
+    "src/ws/cockpithash.h": {
+      "gitBlob": "8e956d4fa34682a16503e824085af2e662b13714",
+      "sha256": "d5a1a872301eec37a553a14e949e5c032671222f065bb335d55c0b772698f176"
+    },
+    "src/ws/cockpiterror.h": {
+      "gitBlob": "8ee197a8a3dcc1897a89629822656e817164b8ce",
+      "sha256": "3d76605811ccb8979866c818074e4dc606b539114c5013db785d7255d2d4f674"
+    },
+    "src/ws/cockpitlocale.h": {
+      "gitBlob": "ecc55a538b7a493c8ae96dbff01819ff68fc79f4",
+      "sha256": "671f42c1e3c3cea60e37a1d0ef77e389b4ae732fa9a04fecda1930520749a19e"
+    },
+    "src/ws/cockpittemplate.h": {
+      "gitBlob": "45b61b66cf2aba242b88be29129f987f5fb6dea7",
+      "sha256": "972f5ed6d7298400b377dbe3a27d05546f2b7312755ec5c220a9585407dc0b35"
+    },
+    "src/common/cockpitconf.h": {
+      "gitBlob": "6541abfe93aefe58c7e7c0f95cc8acf3f4d0b8e3",
+      "sha256": "7be88dcbb1a75c66c0784454317de92628c08aa68870d15d84dedc7a611aab5d"
+    },
+    "src/common/fail.html": {
+      "gitBlob": "a615f7bb120728fdc59e3629888e33fe2e7952fe",
+      "sha256": "666193ebd4ffb56856072b2c315faaddb25db1161cd7503281a4090d639649ff"
+    },
+    "tools/escape-to-c": {
+      "gitBlob": "b973261374d066ea0a59882008f6aa4d11b2e614",
+      "sha256": "335950055b604179a0e683bcf26c775d429b3e8a0ac53361076c0b234f8f3fd2"
+    }
+  }
+}

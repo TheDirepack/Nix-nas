@@ -190,12 +190,14 @@
             pkgs.bats
             pkgs.caddy
             pkgs.nodejs
+            pkgs.pkg-config
             pkgs.prettier
             pkgs.pyright
             pkgs.ruff
             pkgs.semgrep
             pkgs.shellcheck
           ];
+          buildInputs = [ pkgs.glib pkgs.json-glib ];
           shellHook = ''
             echo "NixOS NAS security, property, and fuzz test tools are available." >&2
           '';
