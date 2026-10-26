@@ -1454,24 +1454,25 @@ def capture_unit_state(units: Iterable[str]) -> dict[str, bool]:
 
 
 def stop_active_units(snapshot: Mapping[str, bool]) -> None:
-    """Quiesce active units; restore already-stopped units if quiescing fails."""
+    """Quiesce active units; restore attempted units if quiescing fails."""
 
-    stopped: list[str] = []
+    attempted: list[str] = []
     try:
         for unit, active in reversed(list(snapshot.items())):
             if active:
+                # A failed stop can have taken effect before its acknowledgement was lost.
+                attempted.append(unit)
                 run_systemctl("stop", unit)
-                stopped.append(unit)
     except Exception as original:
         recovery_errors: list[str] = []
-        for unit in reversed(stopped):
+        for unit in reversed(attempted):
             try:
                 run_systemctl("start", unit)
             except Exception as exc:
                 recovery_errors.append(f"{unit}: {exc}")
         if recovery_errors:
             raise StateError(
-                "Quiesce failed and previously stopped units could not all be restored: " + "; ".join(recovery_errors)
+                "Quiesce failed and previously active units could not all be restored: " + "; ".join(recovery_errors)
             ) from original
         raise
 
