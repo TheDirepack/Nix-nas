@@ -196,6 +196,7 @@
             pkgs.semgrep
             pkgs.shellcheck
           ];
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.systemd ];
           shellHook = ''
             echo "NixOS NAS security, property, and fuzz test tools are available." >&2
           '';
