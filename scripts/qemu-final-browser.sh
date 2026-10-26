@@ -192,11 +192,23 @@ log "Verifying canonical locked-boot activation and health in the disposable ove
 ssh "${ssh_args[@]}" admin@127.0.0.1 \
   'sudo -n nas-vm-guest-test --setup-reboot-e2e --verify'
 
+# Requests and sleeps share the existing 90 x 2-second readiness allowance.
+console_deadline=$((SECONDS + 180))
+console_ready=0
 for _ in $(seq 1 90); do
-  if curl --fail --insecure --silent --show-error --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null 2>&1; then break; fi
-  sleep 2
+  remaining=$((console_deadline - SECONDS))
+  ((remaining > 0)) || break
+  if curl --fail --insecure --silent --show-error --connect-timeout 2 \
+    --max-time "$((remaining < 2 ? remaining : 2))" \
+    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null 2>&1; then
+    if ((SECONDS < console_deadline)); then console_ready=1; fi
+    break
+  fi
+  remaining=$((console_deadline - SECONDS))
+  ((remaining > 0)) || break
+  sleep "$((remaining < 2 ? remaining : 2))"
 done
-curl --fail --insecure --silent --show-error --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null || die "Authenticated console gate did not become reachable"
+((console_ready == 1)) || die "Authenticated console gate did not become reachable"
 
 run_http_adversarial_contracts() {
   local evidence=${1:?evidence path is required}
