@@ -105,6 +105,24 @@ page. Keep that target in the book summary and qualify real shell navigation
 after package/router changes. Direct documentation links still use the packaged
 `nas/docs/index.html` home page.
 
+The running bridge also applies `cockpit-default-bus-cache.patch` to Cockpit's
+vendored systemd_ctypes source. Default system/user bus factories must publish
+their Python cache only after the native open and requested event attachment
+succeed. A failed initialization must preserve the original exception and leave
+the cache unset, not return a cached null or incompletely initialized bus to a
+later caller. Successful cache reuse and explicit `attach_event=False` behavior
+remain native. Each explicit client request makes at most one open attempt;
+there is no added retry loop, delay or fallback success.
+
+`test_cockpit_default_bus_patch.py` imports the complete hash-bound vendor source
+and injects failures only at native open/attachment boundaries. Its successful
+I/O stand-in allocates a local `sd_bus_new` handle without connecting or starting
+a bus. The test shell exposes libsystemd for the binding. Keep the patch until
+the pinned upstream has equivalent failure-safe cache publication, and refresh
+the fixture against Cockpit's exact vendor gitlink on updates. This source defect
+does not establish the cause of installed `sd_bus_add_match` EINVAL or browser
+login timeouts; package, installed-bus and browser qualification remain required.
+
 ## Unfree packages
 
 The unfree-package predicate in `modules/nas/config/host-platform.nix` admits only NVIDIA/CUDA/CUDNN/Libcu/NCCL package names, and only when `nas.hardware.gpuVendors` declares `nvidia`. Keep that exception exact to those package-name prefixes; broader unfree enablement would bypass the appliance dependency review boundary.
