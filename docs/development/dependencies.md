@@ -90,6 +90,11 @@ instead of rejecting the chained result. Assimilate them with the standard nativ
 error handling and clears loading/busy state. Do not replace malformed output with
 success, retry privileged commands automatically, or change stdin-only payloads.
 
+Systemd resource-accounting properties such as `MemoryCurrent` belong to the
+unit-type interface (`Service`, `Scope`, `Slice`, etc.), not the generic `Unit`
+interface. Derive that interface from the final unit-name suffix when reading
+memory over Cockpit D-Bus; unavailable properties remain `null`.
+
 The running Cockpit bridge applies `cockpit-frame-ancestors.patch` to the native
 package policy generator. Its default HTML policy adds `frame-ancestors 'self'`
 without replacing package-specific directives, nonces or WebSocket origins.
