@@ -26,6 +26,10 @@ For offline checks before installation or while debugging, use `nas-v2 validate`
 
 `nas-update` separates review/validation from deployment. It validates the candidate checkout, tests and builds the target generation, records update state, and retains NixOS rollback behavior.
 
+Use `sudo nas-update --status --json` to inspect the source checkout and current
+generation link without requiring deployment tools. Status does not build,
+activate a generation, or establish appliance health.
+
 Use **Preview and validate updates** before deployment. After applying an update, verify Cockpit, storage, authentication, and protected-service readiness before considering the deployment complete.
 
 ## Schedules
