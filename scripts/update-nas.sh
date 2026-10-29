@@ -87,9 +87,14 @@ firewall_zone="${NAS_FIREWALL_ZONE:-nas-lan}"
 lan_host="${NAS_LAN_HOST:-$(cat /proc/sys/kernel/hostname).local}"
 trusted_interfaces="${NAS_TRUSTED_INTERFACES:-}"
 
-for command in nix nixos-rebuild systemctl zfs zpool curl readlink sha256sum git jq ip ss firewall-cmd; do
-  command -v "$command" >/dev/null 2>&1 || { echo "Missing command: $command" >&2; exit 1; }
-done
+require_commands() {
+  local command
+  for command in "$@"; do
+    command -v "$command" >/dev/null 2>&1 || { echo "Missing command: $command" >&2; exit 1; }
+  done
+}
+
+require_commands readlink git jq
 
 export HOME=/var/empty
 export GIT_CONFIG_NOSYSTEM=1
@@ -153,6 +158,8 @@ if $status_only; then
   fi
   exit 0
 fi
+
+require_commands nix nixos-rebuild systemctl zfs zpool curl sha256sum ip ss firewall-cmd
 
 if $inside_git; then
   [[ -z "$(git_safe status --porcelain --untracked-files=normal)" ]] || {
