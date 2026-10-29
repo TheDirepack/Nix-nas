@@ -164,11 +164,13 @@ const jsonRequests = [
   ["managed document", (spawn) => managedServicesDocument(spawn)],
   [
     "YAML replacement",
-    (spawn) => replaceManagedServicesDocument("schemaVersion: 3\nservices: {}\n", "a".repeat(64), spawn),
+    (spawn) =>
+      replaceManagedServicesDocument("schemaVersion: 3\nservices: {}\n", "a".repeat(64), spawn),
   ],
   [
     "JSON replacement",
-    (spawn) => replaceManagedServicesJsonDocument({schemaVersion: 3, services: {}}, "b".repeat(64), spawn),
+    (spawn) =>
+      replaceManagedServicesJsonDocument({schemaVersion: 3, services: {}}, "b".repeat(64), spawn),
   ],
   ["service mode", (spawn) => setManagedServiceMode("grafana", "on-demand", spawn)],
   [

@@ -467,15 +467,25 @@ test("backend refresh failure becomes a bounded operator-visible error", async (
   expect(pageErrors).toEqual([]);
 });
 
-for (const [name, output] of [["empty", ""], ["malformed", "not-json"], ["truncated", '{"ok":']]) {
-  test(`Cockpit ${name} overview JSON clears loading and permits explicit refresh`, async ({page}) => {
+for (const [name, output] of [
+  ["empty", ""],
+  ["malformed", "not-json"],
+  ["truncated", '{"ok":'],
+]) {
+  test(`Cockpit ${name} overview JSON clears loading and permits explicit refresh`, async ({
+    page,
+  }) => {
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(String(error)));
     await openApp(page, {cockpitThenable: true, overviewOutputs: [output]});
-    await expect(page.getByRole("heading", {name: "Unable to load appliance status"})).toBeVisible();
+    await expect(
+      page.getByRole("heading", {name: "Unable to load appliance status"}),
+    ).toBeVisible();
     await expect(page.getByLabel("Loading NAS state")).toHaveCount(0);
     expect(
-      await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) => args[1] === "overview").length),
+      await page.evaluate(
+        () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "overview").length,
+      ),
     ).toBe(1);
     await page
       .locator("section")
@@ -483,9 +493,13 @@ for (const [name, output] of [["empty", ""], ["malformed", "not-json"], ["trunca
       .getByRole("button", {name: "Refresh", exact: true})
       .click();
     await expect(page.getByText(xss, {exact: true}).first()).toBeVisible();
-    await expect(page.getByRole("heading", {name: "Unable to load appliance status"})).toHaveCount(0);
+    await expect(page.getByRole("heading", {name: "Unable to load appliance status"})).toHaveCount(
+      0,
+    );
     expect(
-      await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) => args[1] === "overview").length),
+      await page.evaluate(
+        () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "overview").length,
+      ),
     ).toBe(2);
     expect(pageErrors).toEqual([]);
   });
@@ -509,7 +523,9 @@ for (const [name, output] of [["empty", ""], ["malformed", "not-json"], ["trunca
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByRole("heading", {name: "Operation failed"})).toBeVisible();
     expect(
-      await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length),
+      await page.evaluate(
+        () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length,
+      ),
     ).toBe(1);
     expect(pageErrors).toEqual([]);
   });
