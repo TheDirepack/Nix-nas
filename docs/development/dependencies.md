@@ -117,6 +117,24 @@ page. Keep that target in the book summary and qualify real shell navigation
 after package/router changes. Direct documentation links still use the packaged
 `nas/docs/index.html` home page.
 
+The same running bridge applies `cockpit-dbus-readiness.patch` to the named
+D-Bus channel's asynchronous readiness boundary. An `OSError` while installing
+name-owner tracking must log the original traceback and close that channel with
+`internal-error` and the native error message, rather than leave its frozen
+endpoint routed without a readiness result. Keep native task draining, message
+ordering, successful readiness, missing-owner behavior and programming-error
+handling unchanged. Do not retry failed bus operations or treat EINVAL as
+successful readiness. The pre-existing installed `attach_event` tolerance is a
+separate boundary and is not evidence of the cause of an `add_match` failure.
+
+`test_cockpit_dbus_readiness_patch.py` imports complete, hash-bound Cockpit and
+vendored systemd sources, injecting errors only at Bus I/O. The test shell exposes
+`libsystemd.so.0` for the native binding; fixtures never connect to a live bus.
+Keep the patch until upstream provides equivalent readiness failure propagation.
+This regression establishes neither the underlying native bus failure's cause
+nor its relationship to browser login timeouts. Dependency updates still require
+package, installed D-Bus and browser qualification.
+
 ## Unfree packages
 
 The unfree-package predicate in `modules/nas/config/host-platform.nix` admits only NVIDIA/CUDA/CUDNN/Libcu/NCCL package names, and only when `nas.hardware.gpuVendors` declares `nvidia`. Keep that exception exact to those package-name prefixes; broader unfree enablement would bypass the appliance dependency review boundary.

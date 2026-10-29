@@ -90,6 +90,7 @@ let
     patches = (old.patches or [ ]) ++ [
       ../../../cockpit/patches/cockpit-frame-ancestors.patch
       ../../../cockpit/patches/cockpit-error-csp.patch
+      ../../../cockpit/patches/cockpit-dbus-readiness.patch
     ];
     postFixup =
       (old.postFixup or "")
