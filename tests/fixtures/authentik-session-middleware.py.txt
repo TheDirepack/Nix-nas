@@ -1,0 +1,143 @@
+# Classes from goauthentik/authentik e1c90f3fae9d86d6a7a4f36018dafa9a1554f670, authentik/root/middleware.py (MIT).
+
+
+class SessionMiddleware(UpstreamSessionMiddleware):
+    """Dynamically set SameSite depending if the upstream connection is TLS or not"""
+
+    @staticmethod
+    def is_secure(request: HttpRequest) -> bool:
+        """Check if request is TLS'd or localhost"""
+        if request.is_secure():
+            return True
+        host, _, _ = request.get_host().partition(":")
+        if host == "localhost" and settings.DEBUG:
+            # Since go does not consider localhost with http a secure origin
+            # we can't set the secure flag.
+            user_agent = request.META.get("HTTP_USER_AGENT", "")
+            if user_agent.startswith("goauthentik.io/outpost/") or (
+                "safari" in user_agent.lower() and "chrome" not in user_agent.lower()
+            ):
+                return False
+            return True
+        return False
+
+    @staticmethod
+    def decode_session_key(key: str | None) -> str | None:
+        """Decode raw session cookie, and parse JWT"""
+        # We need to support the standard django format of just a session key
+        # for testing setups, where the session is directly set
+        session_key = key if settings.TEST else None
+        try:
+            session_payload = decode(key, SIGNING_HASH, algorithms=["HS256"])
+            session_key = session_payload["sid"]
+        except (KeyError, PyJWTError):
+            pass
+        return session_key
+
+    @staticmethod
+    def encode_session(session_key: str, user: User):
+        payload = {
+            "sid": session_key,
+            "iss": "authentik",
+            "sub": "anonymous",
+            "authenticated": user.is_authenticated,
+            "acr": ACR_AUTHENTIK_SESSION,
+        }
+        if user.is_authenticated:
+            payload["sub"] = user.uid
+        value = encode(payload=payload, key=SIGNING_HASH)
+        if settings.TEST:
+            value = session_key
+        return value
+
+    def process_request(self, request: HttpRequest):
+        raw_session = request.COOKIES.get(settings.SESSION_COOKIE_NAME)
+        session_key = SessionMiddleware.decode_session_key(raw_session)
+        request.session = self.SessionStore(
+            session_key,
+            last_ip=ClientIPMiddleware.get_client_ip(request),
+            last_user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        )
+
+    def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
+        """
+        If request.session was modified, or if the configuration is to save the
+        session every time, save the changes and set a session cookie or delete
+        the session cookie if the session has been emptied.
+        """
+        try:
+            accessed = request.session.accessed
+            modified = request.session.modified
+            empty = request.session.is_empty()
+        except AttributeError:
+            return response
+        # Set SameSite based on whether or not the request is secure
+        secure = SessionMiddleware.is_secure(request)
+        same_site = "None" if secure else "Lax"
+        # First check if we need to delete this cookie.
+        # The session should be deleted only if the session is entirely empty.
+        if settings.SESSION_COOKIE_NAME in request.COOKIES and empty:
+            response.delete_cookie(
+                settings.SESSION_COOKIE_NAME,
+                path=settings.SESSION_COOKIE_PATH,
+                domain=settings.SESSION_COOKIE_DOMAIN,
+                samesite=same_site,
+            )
+            patch_vary_headers(response, ("Cookie",))
+        else:
+            if accessed:
+                patch_vary_headers(response, ("Cookie",))
+            if (modified or settings.SESSION_SAVE_EVERY_REQUEST) and not empty:
+                if request.session.get_expire_at_browser_close():
+                    max_age = None
+                    expires = None
+                else:
+                    max_age = request.session.get_expiry_age()
+                    expires_time = time() + max_age
+                    expires = http_date(expires_time)
+                # Save the session data and refresh the client cookie.
+                # Skip session save for 500 responses, refs #3881.
+                if response.status_code != HttpResponseServerError.status_code:
+                    try:
+                        request.session.save()
+                    except UpdateError:
+                        raise SessionInterrupted(
+                            "The request's session was deleted before the "
+                            "request completed. The user may have logged "
+                            "out in a concurrent request, for example."
+                        ) from None
+                    response.set_cookie(
+                        settings.SESSION_COOKIE_NAME,
+                        SessionMiddleware.encode_session(request.session.session_key, request.user),
+                        max_age=max_age,
+                        expires=expires,
+                        domain=settings.SESSION_COOKIE_DOMAIN,
+                        path=settings.SESSION_COOKIE_PATH,
+                        secure=secure,
+                        httponly=settings.SESSION_COOKIE_HTTPONLY or None,
+                        samesite=same_site,
+                    )
+        return response
+
+
+class CsrfViewMiddleware(UpstreamCsrfViewMiddleware):
+    """Dynamically set secure depending if the upstream connection is TLS or not"""
+
+    def _set_csrf_cookie(self, request: HttpRequest, response: HttpResponse):
+        if settings.CSRF_USE_SESSIONS:
+            if request.session.get(CSRF_SESSION_KEY) != request.META["CSRF_COOKIE"]:
+                request.session[CSRF_SESSION_KEY] = request.META["CSRF_COOKIE"]
+        else:
+            secure = SessionMiddleware.is_secure(request)
+            response.set_cookie(
+                settings.CSRF_COOKIE_NAME,
+                request.META["CSRF_COOKIE"],
+                max_age=settings.CSRF_COOKIE_AGE,
+                domain=settings.CSRF_COOKIE_DOMAIN,
+                path=settings.CSRF_COOKIE_PATH,
+                secure=secure,
+                httponly=settings.CSRF_COOKIE_HTTPONLY,
+                samesite=settings.CSRF_COOKIE_SAMESITE,
+            )
+            # Set the Vary header since content varies with the CSRF cookie.
+            patch_vary_headers(response, ("Cookie",))

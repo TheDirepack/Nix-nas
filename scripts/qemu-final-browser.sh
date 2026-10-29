@@ -10,14 +10,14 @@ STATE_DIR="${NAS_QEMU_STATE_DIR:-$CACHE_DIR/state}"
 SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
 HTTP_PORT="${NAS_QEMU_HTTP_PORT:-8088}"
 HTTPS_PORT="${NAS_QEMU_HTTPS_PORT:-8443}"
-COCKPIT_PORT="${NAS_QEMU_COCKPIT_PORT:-9094}"
 HOST_BIND_ADDRESS="${NAS_QEMU_HOST_BIND_ADDRESS:-127.0.0.1}"
 MEMORY_MIB="${NAS_QEMU_MEMORY_MIB:-10240}"
 CPUS="${NAS_QEMU_CPUS:-4}"
-TEST_USER="${NAS_VM_TEST_USER:-nas-browser-test}"
-TEST_PASSWORD="${NAS_VM_TEST_PASSWORD:-NasBrowser-${GITHUB_RUN_ID:-local}-${RANDOM}!}"
+TEST_USER="${NAS_VM_TEST_USER:-nasadmin}"
+TEST_PASSWORD="${NAS_VM_TEST_PASSWORD:-nasadmin-vm-password}"
 WORKLOAD="${NAS_FINAL_VM_WORKLOAD:-deterministic-browser}"
 OS_DISK="$STATE_DIR/nixos-nas-os.qcow2"
+INSTALLED_DATA_DISK="$STATE_DIR/nixos-nas-zfs.qcow2"
 SSH_KEY="$STATE_DIR/installer-admin-ed25519"
 OVERLAY="$STATE_DIR/browser-os-overlay.qcow2"
 DATA_DISK="$STATE_DIR/browser-data.qcow2"
@@ -64,9 +64,16 @@ validate_state_path
 if [[ "$WORKLOAD" == deterministic-browser ]]; then need npm; fi
 [[ "$TEST_USER" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] || die "invalid NAS_VM_TEST_USER"
 [[ -s "$OS_DISK" ]] || die "installed VM disk is missing; run qemu-test.sh installer first"
+[[ -s "$INSTALLED_DATA_DISK" ]] || die "installed data disk is missing; run qemu-test.sh installer first"
 [[ -s "$SSH_KEY" ]] || die "installer SSH key is missing; run qemu-test.sh installer first"
 
 cleanup() {
+  if [[ -n "${ssh_control_dir:-}" ]]; then
+    ssh -S "$ssh_control_dir/control" -O exit -p "$SSH_PORT" admin@127.0.0.1 >/dev/null 2>&1 || true
+    rm -f -- "$ssh_control_dir/control"
+    rmdir -- "$ssh_control_dir"
+    ssh_control_dir=""
+  fi
   nas_qemu_stop_pidfile "$PIDFILE" 20 ||
     die "refusing to clean up a pidfile owned by a non-QEMU process: $PIDFILE"
   rm -f "$PIDFILE" "$OVERLAY" "$DATA_DISK"
@@ -75,7 +82,7 @@ trap cleanup EXIT INT TERM
 cleanup
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$OS_DISK" "$OVERLAY"
-qemu-img create -q -f qcow2 "$DATA_DISK" 8G
+qemu-img create -q -f qcow2 -F qcow2 -b "$INSTALLED_DATA_DISK" "$DATA_DISK"
 
 accel=(-machine accel=tcg -cpu max)
 if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
@@ -89,10 +96,11 @@ qemu-system-x86_64 \
   -drive "file=$OVERLAY,format=qcow2,if=virtio" \
   -drive "file=$DATA_DISK,format=qcow2,if=virtio" \
   -device virtio-rng-pci \
-  -netdev "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTP_PORT-:80,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443,hostfwd=tcp:$HOST_BIND_ADDRESS:$COCKPIT_PORT-:9092" \
+  -netdev "user,id=net0,hostfwd=tcp:$HOST_BIND_ADDRESS:$SSH_PORT-:22,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTP_PORT-:80,hostfwd=tcp:$HOST_BIND_ADDRESS:$HTTPS_PORT-:443" \
   -device virtio-net-pci,netdev=net0 \
   -display none -serial "file:$BOOT_LOG" -daemonize -pidfile "$PIDFILE"
 
+ssh_control_dir="$(mktemp -d "${TMPDIR:-/tmp}/nas-final-vm-ssh.XXXXXX")"
 ssh_args=(
   -i "$SSH_KEY"
   -o IdentitiesOnly=yes
@@ -101,6 +109,10 @@ ssh_args=(
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
   -o ConnectTimeout=2
+  # Reuse the successful readiness transport; never retry a mutating command.
+  -o ControlMaster=auto
+  -o ControlPersist=60s
+  -o "ControlPath=$ssh_control_dir/control"
   -p "$SSH_PORT"
 )
 
@@ -113,20 +125,15 @@ ssh "${ssh_args[@]}" admin@127.0.0.1 true >/dev/null 2>&1 || {
   die "final browser VM did not become reachable over SSH"
 }
 
-if [[ "$WORKLOAD" != installed-command-fuzz ]]; then
-  log "Creating an overlay-only Cockpit test identity"
-  printf '%s\n' "$TEST_USER" | \
-    ssh "${ssh_args[@]}" admin@127.0.0.1 \
-      'IFS= read -r test_user; sudo -n id -u "$test_user" >/dev/null 2>&1 || sudo -n useradd --create-home --groups wheel --shell /bin/bash "$test_user"'
-  printf '%s:%s\n' "$TEST_USER" "$TEST_PASSWORD" | \
-    ssh "${ssh_args[@]}" admin@127.0.0.1 'sudo -n chpasswd'
-fi
+log "Verifying canonical locked-boot activation and health in the disposable overlays"
+ssh "${ssh_args[@]}" admin@127.0.0.1 \
+  'sudo -n nas-vm-guest-test --setup-reboot-e2e --verify'
 
 for _ in $(seq 1 90); do
-  if curl --fail --insecure --silent --show-error "https://127.0.0.1:$COCKPIT_PORT/" >/dev/null 2>&1; then break; fi
+  if curl --fail --insecure --silent --show-error --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null 2>&1; then break; fi
   sleep 2
 done
-curl --fail --insecure --silent --show-error "https://127.0.0.1:$COCKPIT_PORT/" >/dev/null || die "Cockpit did not become reachable"
+curl --fail --insecure --silent --show-error --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" "https://nas-test.local:$HTTPS_PORT/console/" >/dev/null || die "Authenticated console gate did not become reachable"
 
 run_http_adversarial_contracts() {
   local evidence=${1:?evidence path is required}
@@ -172,9 +179,11 @@ run_http_adversarial_contracts() {
 
   log "Running curl-based HTTP adversarial contracts"
   probe_not_5xx "Cockpit hostile query" \
-    "https://127.0.0.1:$COCKPIT_PORT/?q=%3Cscript%3EglobalThis.__nas_xss%3D1%3C%2Fscript%3E"
+    "https://nas-test.local:$HTTPS_PORT/console/?q=%3Cscript%3EglobalThis.__nas_xss%3D1%3C%2Fscript%3E" \
+    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1"
   probe_not_5xx "Cockpit encoded traversal" \
-    "https://127.0.0.1:$COCKPIT_PORT/%2e%2e/%2e%2e/etc/passwd" --path-as-is
+    "https://nas-test.local:$HTTPS_PORT/console/%2e%2e/%2e%2e/etc/passwd" \
+    --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" --path-as-is
   probe_not_5xx "Caddy hostile query" \
     "https://nas-test.local:$HTTPS_PORT/?q=%3Csvg%2Fonload%3Dalert%281%29%3E" \
     --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1"
@@ -208,10 +217,10 @@ case "$WORKLOAD" in
     log "Running deterministic authenticated and unauthenticated browser checks against the final VM"
     CI=1 \
     NAS_BROWSER_SUITE=vm \
-    NAS_VM_BASE_URL="https://127.0.0.1:$COCKPIT_PORT" \
+    NAS_VM_BASE_URL="https://nas-test.local:$HTTPS_PORT" \
     NAS_VM_TEST_USER="$TEST_USER" \
     NAS_VM_TEST_PASSWORD="$TEST_PASSWORD" \
-    npm --prefix "$ROOT/cockpit" exec -- playwright test --config e2e/playwright.config.mjs
+    npm --prefix "$ROOT/cockpit" exec -- playwright test --config "$ROOT/cockpit/e2e/playwright.config.mjs"
     ;;
   installed-command-fuzz)
     fuzz_out="${NAS_INSTALLED_FUZZ_OUT:-$ROOT/installed-command-fuzz.json}"
@@ -220,15 +229,34 @@ case "$WORKLOAD" in
     log "Running installed-command adversarial fuzzing in the disposable VM"
     ssh "${ssh_args[@]}" admin@127.0.0.1 \
       'sudo -n python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py' >"$fuzz_out"
-    python3 - "$ROOT/tests/custom-script-contracts.json" "$fuzz_out" <<'PY'
+    python3 - "$ROOT" "$fuzz_out" <<'PY'
+import importlib.util
 import json
 import pathlib
 import sys
 
-contracts = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+root = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("installed_adversarial", root / "tests/vm/adversarial-installed.py")
+if spec is None or spec.loader is None:
+    raise SystemExit("cannot load the canonical installed-command inventory")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+runner.INVENTORIES = tuple(root / "tests" / path.name for path in runner.INVENTORIES)
+strategies = runner.inventory_strategies()
+delegated = sorted(name for name, strategy in strategies.items() if strategy in runner.DELEGATED_STRATEGIES)
+executed = sorted(set(strategies) - set(delegated))
 result = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
-expected = sum(item.get("fuzzStrategy") is not None for item in contracts["executables"])
-if result.get("ok") is not True or result.get("commands") != expected or expected == 0:
+if (
+    not strategies
+    or result.get("ok") is not True
+    or result.get("smoke") is not False
+    or result.get("discovered") != len(strategies)
+    or result.get("commands") != len(executed)
+    or result.get("executed") != executed
+    or result.get("delegated") != delegated
+    or result.get("skipped") != []
+    or result.get("strategies") != strategies
+):
     raise SystemExit("installed-command fuzz evidence is empty or incomplete")
 PY
     run_http_adversarial_contracts "$http_out"
@@ -237,23 +265,43 @@ PY
     [[ -n "${NAS_ZAP_IMAGE:-}" ]] || die "NAS_ZAP_IMAGE is required for zap-fuzz"
     fuzz_out="${NAS_ZAP_OUT_DIR:-$ROOT/zap-report}/final-vm"
     install -d -m 0755 "$fuzz_out"
+    CI_LOG_DIR="$fuzz_out/logs"
+    CI_RESULTS_FILE="$CI_LOG_DIR/results.tsv"
+    # shellcheck source=.github/ci-checks.sh
+    source "$ROOT/.github/ci-checks.sh"
+    : > "$CI_RESULTS_FILE"
+    zap_outcomes=()
+    run_zap_check() {
+      local name=$1
+      shift
+      if ci_run zap "$name" "$name" "$@"; then
+        zap_outcomes+=("$name=success")
+      else
+        zap_outcomes+=("$name=failure")
+      fi
+    }
     scan_mode="${NAS_ZAP_MODE:-baseline}"
     log "Running public and Cockpit ZAP $scan_mode scans"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
     NAS_ZAP_REPORT_PREFIX="public" \
-      bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/"
+      run_zap_check public bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_REPORT_PREFIX="cockpit" \
-      bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://127.0.0.1:$COCKPIT_PORT/"
+    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+      run_zap_check cockpit bash "$ROOT/scripts/zap-scan.sh" "$scan_mode" "https://nas-test.local:$HTTPS_PORT/console/"
     log "Running state-aware unauthenticated ZAP Client Spider and active scan"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
-      bash "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://127.0.0.1:$COCKPIT_PORT/"
+    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+      run_zap_check unauthenticated bash "$ROOT/scripts/zap-automation-scan.sh" unauthenticated "https://nas-test.local:$HTTPS_PORT/console/"
     log "Running state-aware authenticated ZAP Client Spider and active scan"
     NAS_ZAP_OUT_DIR="$fuzz_out" \
     NAS_ZAP_AUTH_USER="$TEST_USER" \
     NAS_ZAP_AUTH_PASSWORD="$TEST_PASSWORD" \
-      bash "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://127.0.0.1:$COCKPIT_PORT/"
+    NAS_ZAP_EXTRA_HOST="nas-test.local:127.0.0.1" \
+      run_zap_check authenticated bash "$ROOT/scripts/zap-automation-scan.sh" authenticated "https://nas-test.local:$HTTPS_PORT/console/"
+    CI_REPORT_TITLE="Installed ZAP scans" python3 "$ROOT/scripts/ci-check-report.py" \
+      --results "$CI_RESULTS_FILE" "${zap_outcomes[@]}"
     ;;
 esac
 

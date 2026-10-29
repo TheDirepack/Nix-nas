@@ -17,7 +17,26 @@ operational boundaries remain here.
 | Network/firewall state restore | Restoring NetworkManager/firewalld state can still sever remote administration after the mutation begins; there is no independent acknowledgement/deadman rollback yet. | Perform network-affecting restore with NanoKVM/out-of-band access until a timed remote-confirmation rollback contract is implemented and VM-tested. |
 | Direct storage lifecycle mutations | Setup/state/update/identity/feature/secret paths now share the operation coordinator, but systemd-owned ZFS lifecycle helpers still require runtime proof before being wrapped because naïve nesting can deadlock protected-target startup. | Treat overlapping manual storage lifecycle operations as unsupported until the native/QEMU service-ordering tests prove a coordinator-safe integration. |
 
+## First-start recovery
+
+Failed first-start identity regeneration intentionally leaves its discovered
+identity/Syncthing timers stopped. Their prior active state is not persisted
+across a failed worker; manual recovery must restore the previously active
+timers after repairing the identity stack and completing setup. Timer names
+are recorded in the worker journal. See [First start](../src/admin/first-run.md).
+
 ## Required external evidence
+
+Authentik's source package supplies a per-response nonce CSP and CSSOM frontend
+bindings; both public proxy configurations enforce same-origin site isolation.
+These repairs require installed browser/API, CSRF/session and accessibility
+qualification, including Lit's nonce-bearing stylesheet fallback. External
+branding/assets cannot rely on wildcard image or inline script/style allowances.
+ZAP qualification remains unresolved until complete installed scans pass without
+breaking upstream authentication/application interfaces.
+The packaged scanner keeps the three known informational cache/application
+rules visible as `INFO`; every unclassified warning and security failure remains
+fatal.
 
 A source-only release is not hardware evidence. Nix evaluation, closure builds,
 the native NixOS tests, evaluated service-user ownership tests, the official-ISO

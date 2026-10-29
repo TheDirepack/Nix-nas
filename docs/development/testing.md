@@ -1,6 +1,6 @@
 # Testing and validation
 
-The 2.2 test architecture is deliberately layered. Cheap source checks reject malformed input, unsafe code patterns, and missing test contracts before CI spends time on Nix builds, browser engines, or full QEMU installation tests.
+Source checks reject malformed input, unsafe code patterns, and missing test contracts before CI starts Nix builds, browser engines, or full QEMU installation tests.
 
 ## Verification matrix harness
 
@@ -18,8 +18,8 @@ The local matrix `fast` command runs source and security checks only. The
 generated smart-fuzz tier is explicit (`test-matrix.py fuzz`) and should be run
 locally during pre-merge qualification. CI qualifies the full-stack QEMU
 matrix and the official-ISO installer tier on every pull-request commit;
-schedule and main pushes additionally run the installed adversarial
-qualification. `all` additionally runs
+schedule, main pushes, and explicit `full` dispatches additionally run the installed adversarial
+qualification. A `full` dispatch requires every qualification tier, including installed-command and active ZAP checks. `all` additionally runs
 the smart-fuzz, Nix configuration/negative-fixture matrix, built-browser,
 native NixOS VM, and official-ISO installer tiers. Each stage has an outer
 deadline; missing heavyweight tools or reviewed frontend artifacts are reported
@@ -123,7 +123,7 @@ GitHub CI runs deterministic checks through the QEMU and installer tiers; it doe
 
 CI does not cache qualification pass markers. Dependency downloads, immutable installer media, and incremental Nix build outputs may be cached because they accelerate execution without replacing test evidence.
 
-After the fast gates pass, one `build` job uses one runner to materialize and verify Cockpit (compiling it on a cache miss), round-trip the source archive, and build the NixOS closures in sequence. Browser qualification and KVM/QEMU integration remain downstream jobs. This runner consolidation does not remove or pass-cache any qualification tier.
+The Cockpit job builds and verifies the frontend artifacts. After the source gates pass, the preparation job consumes those artifacts, round-trips the source archive, and builds or imports the NixOS closure handoff. Browser qualification and KVM/QEMU integration run downstream. Reusing a verified build artifact does not qualify a source or runtime test.
 
 To qualify the cold handoff path on demand, dispatch the GitHub `CI` workflow with
 `test-tier=full` and `force-cache-miss=true`. The run uses a unique cache
@@ -204,6 +204,12 @@ The reinstall, failed-candidate, candidate-switch, rollback, and final reconfigu
 
 The guest suite deliberately checks states that must never occur: protected services running while secrets are locked; a Cockpit listener or browser management route available while locked; unauthenticated or spoofed identities receiving protected access; destructive setup without exact confirmation; hostile identifiers reaching shell execution; SQL-shaped usernames passing account validation; traversal-shaped device paths; malformed alert requests producing tracebacks; unsafe state/archive members; stale operation residue; and recovery/rollback inconsistencies. It must also prove that initial static setup guidance cannot unlock secrets or create an authenticated Cockpit session, and that post-activation Cockpit access passes through Caddy and Authentik.
 
+Both native guest legs require the managed Authentik projection to remain
+condition-skipped and unexecuted before secret activation, with no compiled
+effective state. After setup activates secrets, they require that same job to
+execute successfully and commit its object manifest. A skipped job is not a
+completed oneshot; bootstrap identity reconciliation remains a separate owner.
+
 The installed guest also exercises a service identifier absent from the Nix seed. It loads two VM-only BusyBox images from the Nix store, creates an identity-protected routed OCI service with revision-CAS document replacement, updates the running image, verifies that an offline missing-image activation restores both desired and live applied state, and removes the service and its Quadlet, systemd, Caddy, Authentik, and container projections.
 
 The final installed-command workload also records curl-based HTTP adversarial evidence from the same disposable VM. That keeps protocol checks on the real appliance without confusing them with browser-rendering tests.
@@ -242,24 +248,23 @@ This checks every archive checksum, the complete manifest, and the
 closed; a missing reusable cache remains a functional cache miss and rebuilds
 the exact base as needed.
 
-Pull requests run the deterministic source, contract, build, and handoff
-checks. Browser, native QEMU, and reboot/installer tiers are qualification
-work: they run on the scheduled workflow, protected main/tag pushes, or an
-explicit `workflow_dispatch` full/installer tier. The `full` tier includes the
-official installer and installed-VM checks; `installer` is the narrower
-on-demand tier for rerunning that portion. Long fuzzing remains a local,
-one-suite-at-a-time pre-merge qualification step. The summary still reports
-every release-critical job and calls out cache persistence failures as
-non-authoritative warnings.
+Pull requests include deterministic browser, both native QEMU, and
+official-ISO install/reboot qualification after the source and handoff gates.
+Installed adversarial checks run on main pushes, schedules, and explicit
+`full` dispatches. Final source fuzz runs on explicit `full` dispatches.
+The `installer` tier selects the installer path without qualifying the full
+release matrix. The pipeline summary rejects skipped or failed jobs required
+by the selected event and tier. Cache persistence warnings do not qualify
+source or runtime behavior.
 
 The build job has an exact-reuse path. A commit-keyed, manifest-verified
 source archive skips the package/re-extract/reference-evaluation round-trip on
-reruns. When all six VM bundle keys are exact cache hits, the build imports
+reruns. When all five VM bundle keys are exact cache hits, the build imports
 those archives, skips `save-missing`, skips the large handoff upload, and the
 integration matrix restores the same cache keys directly. A cache miss exports
 only the missing bundle and keeps the short-lived handoff path for the current
 run. The core bundle contains boot, recovery, unlock, primary-access, and
-deterministic-test packages. Identity, observability, storage add-ons, and AI
+deterministic-test packages. Identity, observability, and storage add-ons
 remain separate application bundles; `vm-drivers` contains only the small
 configuration-sensitive driver delta.
 
@@ -288,7 +293,30 @@ needs QEMU/KVM; Nix runs inside the guest, so host-side Nix is not required.
 
 ## 8. Dynamic web security
 
-The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans against the loopback-only forwarded Cockpit port while its disposable overlay is alive. Set `NAS_ZAP_IMAGE` to an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI fails closed when the reviewed repository variable is absent and retains HTML, JSON, and Markdown reports.
+The Playwright suite is the deterministic application-level browser layer. Curl handles focused request/response adversarial probes, while the final ZAP workload provisions an independent official-ISO VM and runs broader unauthenticated and authenticated active scans through the loopback-forwarded public Caddy endpoint and protected `/console/` routes while its disposable overlay is alive. The harness does not expose Cockpit's native listener. Local runs require `NAS_ZAP_IMAGE` to be an immutable `@sha256:` image reference; the harness intentionally refuses floating tags. CI uses its committed upstream image digest unless the optional repository variable overrides it, and retains HTML, JSON, and Markdown reports plus the scan's `.addons.json` inventory.
+
+Both wrappers use the shared hash-locked source build and add-on preparation described in
+[`dependencies.md`](dependencies.md). A zero scanner exit also requires fresh
+reports and verified native add-on evidence from that invocation. Archive hash
+or runnable-inventory mismatches fail before the scan; scanner warnings remain
+fatal. Authenticated automation requests the same-origin users/me API after
+browser discovery and requires HTTP 200, the configured username in its response,
+and ZAP's site-scoped logged-in session state. The fatal URL test checks status
+and username together; the requestor's response-code warning is not a fatal test.
+Browser success counters alone cannot qualify authentication. Native fixtures
+must exercise accepted and rejected credentials, reject an authenticated error
+response even when it contains the expected username, preserve cookie mutations
+on the wire and detect the deliberately vulnerable session control. The
+installed-security CI job runs these controls
+before appliance scanning and retains their evidence. A successful fixture scan
+verifies the harness, not appliance security.
+
+The installed workload runs both packaged endpoint scans and both automation
+modes even when an earlier scan fails. It uses the shared CI diagnostics helper
+to retain independent logs and exit codes under `final-vm/logs/`, then fails the
+workload if any scan failed. Authentication guards, finding policy, per-scan
+budgets and fresh provenance requirements remain unchanged; collecting later
+evidence does not waive an earlier finding.
 
 For a local run:
 
@@ -304,3 +332,8 @@ NAS_ZAP_IMAGE='registry.example/zaproxy@sha256:<digest>' \
 ## Evidence policy
 
 Do not claim Nix, QEMU, browser-engine, ZFS, systemd, installer, static-tool, or hardware validation unless that environment actually ran. Source-only artifacts may report locally executed tests and must list every heavyweight tier that remains unexecuted.
+
+The `run-unit-tests.py --group fast` selector is the single authoritative set of
+fast-suite exclusions. Preflight, CI unit qualification, and the non-root CI
+run all use that selector; targeted integration and tooling tests still run
+separately. `--pattern` and `--exclude` remain available for focused runs.

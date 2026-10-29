@@ -545,7 +545,7 @@ in
       onFailure = failureAlert;
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${pkgs.sanoid}/bin/sanoid --take-snapshots";
+        ExecStart = "${pkgs.sanoid}/bin/sanoid --take-snapshots --configdir ${sanoidMonitorConfig}";
         Nice = 10;
         IOSchedulingClass = "idle";
         TimeoutStartSec = "2h";
@@ -593,7 +593,8 @@ in
       description = "Check ZFS snapshot freshness with Sanoid";
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = "${pkgs.sanoid}/bin/sanoid --monitor-snapshots --configdir ${sanoidMonitorConfig}";
+        # Monitor-only Sanoid otherwise permits a five-hour-old snapshot inventory.
+        ExecStart = "${pkgs.sanoid}/bin/sanoid --monitor-snapshots --force-update --configdir ${sanoidMonitorConfig}";
       };
     };
 

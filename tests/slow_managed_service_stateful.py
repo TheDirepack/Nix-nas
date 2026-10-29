@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import pathlib
+import tempfile
 import sys
 import unittest
 
@@ -21,14 +22,25 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 try:
-    from hypothesis import HealthCheck, assume, given, settings, strategies as st
-    from hypothesis.stateful import Bundle, RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
+    from hypothesis import HealthCheck, given, settings, strategies as st
+    from hypothesis.stateful import (
+        Bundle,
+        RuleBasedStateMachine,
+        consumes,
+        initialize,
+        invariant,
+        multiple,
+        rule,
+        run_state_machine_as_test,
+    )
 except ImportError:
     HAS_HYPOTHESIS = False
 else:
     HAS_HYPOTHESIS = True
     import nas_v2_caddy as caddy
     import nas_v2_spec as v2
+    import nas_v2_editor as editor
+    import nas_v2_apply as apply
 
 
 def _valid_service_doc(service_id: str, enabled: bool = True) -> dict:
@@ -49,11 +61,15 @@ def _valid_service_doc(service_id: str, enabled: bool = True) -> dict:
 
 
 if HAS_HYPOTHESIS:
-    SAFE_SERVICE_ID = st.integers(min_value=0, max_value=63).map(lambda index: f"svc{index}")
+    SAFE_SERVICE_ID = st.one_of(
+        st.integers(min_value=0, max_value=63).map(lambda index: f"svc{index}"),
+        st.sampled_from(["a-b", "a", "a" * 64, "b" * 64]),
+    )
     SAFE_PORT = st.integers(1024, 65535)
 
     class ManagedServiceStateMachine(RuleBasedStateMachine):
         services_bundle = Bundle("services")
+        available_services = Bundle("available_services")
 
         def __init__(self) -> None:
             super().__init__()
@@ -75,40 +91,53 @@ if HAS_HYPOTHESIS:
         def _bump(self) -> None:
             self._revision += 1
 
+        @initialize(target=available_services)
+        def available_service_ids(self):
+            return multiple(*(f"svc{index}" for index in range(64)), "a-b", "a", "a" * 64, "b" * 64)
+
         @rule(
             target=services_bundle,
-            sid=SAFE_SERVICE_ID,
+            sid=consumes(available_services),
             enabled=st.booleans(),
         )
         def add_service(self, sid: str, enabled: bool) -> str:
-            assume(sid not in self.services)
+            assert sid not in self.services
             self.services[sid] = _valid_service_doc(sid, enabled=enabled)
             self._bump()
             return sid
 
         @rule(sid=services_bundle, port=SAFE_PORT)
         def modify_port(self, sid: str, port: int) -> None:
-            assume(sid in self.services)
             self.services[sid]["routes"]["web"]["target"]["port"] = port
+            self._bump()
+
+        @rule(sid=services_bundle, protected=st.booleans(), on_demand=st.booleans())
+        def change_auth_and_activation(self, sid: str, protected: bool, on_demand: bool) -> None:
+            service = self.services[sid]
+            service["routes"]["web"]["auth"] = (
+                {"mode": "identity", "capability": "access"} if protected else {"mode": "public"}
+            )
+            workload: dict = {"kind": "daemon", "activation": "on-demand" if on_demand else "persistent"}
+            service["workload"] = workload
+            if on_demand:
+                workload["idleSeconds"] = 60
             self._bump()
 
         @rule(sid=services_bundle)
         def disable_service(self, sid: str) -> None:
-            assume(sid in self.services)
             self.services[sid]["enabled"] = False
             self._bump()
 
         @rule(sid=services_bundle)
         def enable_service(self, sid: str) -> None:
-            assume(sid in self.services)
             self.services[sid]["enabled"] = True
             self._bump()
 
-        @rule(sid=services_bundle)
-        def delete_service(self, sid: str) -> None:
-            assume(sid in self.services)
+        @rule(target=available_services, sid=consumes(services_bundle))
+        def delete_service(self, sid: str) -> str:
             del self.services[sid]
             self._bump()
+            return sid
 
         @invariant()
         def effective_routes_match_model(self) -> None:
@@ -136,7 +165,6 @@ if HAS_HYPOTHESIS:
 
         @invariant()
         def rejected_document_preserves_model(self) -> None:
-            snapshot = copy.deepcopy(self.services)
             bad = copy.deepcopy(self.services)
             for index, sid in enumerate(("svc0", "svc1")):
                 if sid not in bad:
@@ -144,14 +172,16 @@ if HAS_HYPOTHESIS:
             first, second = ("svc0", "svc1")
             duplicate_path = bad[first]["routes"]["web"]["exposure"]["paths"][0]
             bad[second]["routes"]["web"]["exposure"]["paths"] = [duplicate_path]
+            document = {"schemaVersion": 3, "generation": 1, "services": bad}
+            snapshot = copy.deepcopy(document)
             try:
                 v2.compile_document(
-                    {"schemaVersion": 3, "generation": 1, "services": bad},
+                    document,
                     self.schema,
                 )
             except v2.ManagedServicesV2Error as exc:
                 assert "route path" in str(exc).lower() or "route" in str(exc).lower()
-                assert self.services == snapshot, "rejected write mutated the model"
+                assert document == snapshot, "rejected compilation mutated its input"
             else:
                 raise AssertionError("duplicate route path unexpectedly committed")
 
@@ -166,6 +196,67 @@ if HAS_HYPOTHESIS:
             run_state_machine_as_test(ManagedServiceStateMachine)
 
     class ProjectionDifferentialTests(unittest.TestCase):  # pyright: ignore[reportRedeclaration]
+        @settings(max_examples=15, deadline=None)
+        @given(st.lists(st.tuples(st.booleans(), st.booleans()), min_size=1, max_size=6))
+        def test_real_editor_apply_sequence_rejects_stale_changes_without_mutation(self, steps):
+            with tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                authority = root / "services.yaml"
+                authority.write_text("schemaVersion: 3\nservices: {}\n")
+                effective_path = root / "effective.json"
+                plan_path = root / "plan.json"
+
+                def project():
+                    return apply.apply(
+                        apply.ApplyPaths(
+                            desired=authority, schema=SCHEMA, platform=None, effective=effective_path, plan=plan_path
+                        )
+                    )
+
+                project()
+                for enabled, stale in steps:
+                    before = {
+                        path.relative_to(root): path.read_bytes()
+                        for path in root.rglob("*")
+                        if path.is_file() and path.suffix != ".lock"
+                    }
+                    service = _valid_service_doc("demo", enabled=enabled)
+                    document = {"schemaVersion": 3, "services": {"demo": service}}
+                    revision = editor.read_document(desired_path=authority, schema_path=SCHEMA)["revision"]
+                    if stale:
+                        with self.assertRaises(editor.ManagedServicesEditorError):
+                            editor.replace_document_value(
+                                document,
+                                desired_path=authority,
+                                schema_path=SCHEMA,
+                                platform_path=None,
+                                expected_revision="0" * 64,
+                            )
+                        self.assertEqual(
+                            {
+                                path.relative_to(root): path.read_bytes()
+                                for path in root.rglob("*")
+                                if path.is_file() and path.suffix != ".lock"
+                            },
+                            before,
+                        )
+                    else:
+                        editor.replace_document_value(
+                            document,
+                            desired_path=authority,
+                            schema_path=SCHEMA,
+                            platform_path=None,
+                            expected_revision=revision,
+                        )
+                        project()
+                        import json
+
+                        effective = json.loads(effective_path.read_text())
+                        self.assertEqual(effective["services"]["demo"]["enabled"], enabled)
+                        self.assertEqual(
+                            editor.read_document(desired_path=authority, schema_path=SCHEMA)["document"], document
+                        )
+
         @settings(
             max_examples=80,
             deadline=None,

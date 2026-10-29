@@ -7,6 +7,7 @@ OUT_DIR="${NAS_ZAP_OUT_DIR:-$PWD/zap-report}"
 IMAGE="${NAS_ZAP_IMAGE:-}"
 REPORT_PREFIX="${NAS_ZAP_REPORT_PREFIX:-scan}"
 RUNTIME="${NAS_CONTAINER_RUNTIME:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -84,6 +85,7 @@ command -v "$RUNTIME" >/dev/null 2>&1 || die "$RUNTIME is not installed"
 
 install -d -m 0755 "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd -P)"
+install -m 0644 "$SCRIPT_DIR/lib/zap-packaged.conf" "$OUT_DIR/zap-packaged.conf"
 case "$MODE" in
   baseline)
     scanner=zap-baseline.py
@@ -102,18 +104,31 @@ process_timeout="${NAS_ZAP_PROCESS_TIMEOUT_SECONDS:-$((minutes * 60 + 120))}"
 (( process_timeout <= 18000 )) || die "NAS_ZAP_PROCESS_TIMEOUT_SECONDS must not exceed 18000"
 [[ "$REPORT_PREFIX" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "NAS_ZAP_REPORT_PREFIX contains unsafe characters"
 command -v timeout >/dev/null 2>&1 || die "timeout is required"
+command -v id >/dev/null 2>&1 || die "id is required"
 
-runtime_args=(run --rm --network host -v "$OUT_DIR:/zap/wrk:rw")
+# Match report bind-mount ownership; arbitrary UIDs need an existing Java home.
+runtime_args=(run --rm --network host --user "$(id -u):$(id -g)"
+  -e HOME=/tmp -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v "$OUT_DIR:/zap/wrk:rw"
+  -v "$SCRIPT_DIR/lib:/nas-zap:ro" --entrypoint bash -e NAS_ZAP_IMAGE -e NAS_ZAP_RUNTIME_IMAGE
+  -e "NAS_ZAP_ADDON_EVIDENCE=/zap/wrk/zap-$REPORT_PREFIX-$MODE.addons.json")
 if [[ -n "${NAS_ZAP_EXTRA_HOST:-}" ]]; then
   [[ "$NAS_ZAP_EXTRA_HOST" != *$'\n'* && "$NAS_ZAP_EXTRA_HOST" != *$'\r'* ]] || die "NAS_ZAP_EXTRA_HOST must be one line"
   runtime_args+=(--add-host "$NAS_ZAP_EXTRA_HOST")
 fi
 
 printf 'Running OWASP ZAP %s scan against %s\n' "$MODE" "$TARGET"
+reports=("$OUT_DIR/zap-$REPORT_PREFIX-$MODE.html" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.json"
+  "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.md" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.addons.json")
+# Reused output directories must not supply evidence for an incomplete scan.
+rm -f -- "${reports[@]}"
+qualified_image="$(python3 "$SCRIPT_DIR/lib/zap-addons.py" image --runtime "$RUNTIME" --image "$IMAGE")" || \
+  die "could not build the source-built scanner"
+export NAS_ZAP_RUNTIME_IMAGE="$qualified_image"
 set +e
 timeout --signal=TERM --kill-after=30s "${process_timeout}s" \
-  "$RUNTIME" "${runtime_args[@]}" "$IMAGE" "$scanner" \
+  "$RUNTIME" "${runtime_args[@]}" "$qualified_image" /nas-zap/zap-entrypoint.sh "$scanner" \
     -t "$TARGET" \
+    -c zap-packaged.conf \
     -m "$minutes" \
     -r "zap-$REPORT_PREFIX-$MODE.html" \
     -J "zap-$REPORT_PREFIX-$MODE.json" \
@@ -128,7 +143,9 @@ if (( scan_rc != 0 )); then
   exit "$scan_rc"
 fi
 
-for report in "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.html" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.json" "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.md"; do
+for report in "${reports[@]}"; do
   [[ -s "$report" ]] || die "ZAP did not produce expected report: $report"
 done
+python3 "$SCRIPT_DIR/lib/zap-addons.py" verify-evidence --image "$IMAGE" --runtime-image "$qualified_image" \
+  --evidence "$OUT_DIR/zap-$REPORT_PREFIX-$MODE.addons.json" || die "invalid ZAP add-on evidence"
 printf 'OWASP ZAP %s scan completed: %s\n' "$MODE" "$OUT_DIR"

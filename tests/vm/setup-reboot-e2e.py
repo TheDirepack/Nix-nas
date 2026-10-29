@@ -53,6 +53,12 @@ REQUIRED_SERVICES = {
     "grafana",
     "notifications",
 }
+BRIDGE_UNITS = (
+    "caddy.service",
+    "nas-cockpit-sso.service",
+    "authentik.service",
+    "nas-authentik-proxy-outpost.service",
+)
 
 
 class CheckError(RuntimeError):
@@ -85,6 +91,45 @@ def write_json(path: pathlib.Path, value: dict[str, Any]) -> None:
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)
+
+
+def failure_diagnostics() -> str:
+    """Bounded, read-only bridge-unit state before the failing VM is discarded."""
+    sections: list[str] = []
+    failed = run("systemctl", "--failed", "--no-pager", timeout=30)
+    sections.append(f"failed units:\n{(failed.stdout or failed.stderr)[-1500:]}")
+    for unit in BRIDGE_UNITS:
+        state = run(
+            "systemctl",
+            "show",
+            unit,
+            "--property=ActiveState,SubState,NRestarts,Result,ExecMainStartTimestampMonotonic,"
+            "ExecMainExitTimestampMonotonic",
+            timeout=15,
+        )
+        sections.append(f"{unit}:\n{(state.stdout or state.stderr).strip()}")
+    journal = run(
+        "journalctl",
+        "-b",
+        "-u",
+        "caddy.service",
+        "-u",
+        "nas-cockpit-sso.service",
+        "-n",
+        "120",
+        "--no-pager",
+        timeout=30,
+    )
+    sections.append(f"caddy and cockpit bridge journal:\n{(journal.stdout or journal.stderr)[-6000:]}")
+    return "\n".join(sections)
+
+
+def report_failure(error: Exception) -> None:
+    print(f"setup reboot E2E failed: {error}", file=sys.stderr, flush=True)
+    try:
+        print(failure_diagnostics(), file=sys.stderr, flush=True)
+    except Exception as diagnostic_error:
+        print(f"failure diagnostics unavailable: {diagnostic_error}", file=sys.stderr, flush=True)
 
 
 def read_state() -> dict[str, Any]:
@@ -217,6 +262,8 @@ def verify_services(stage: str) -> None:
     health = {key: setup.get(key) for key in ("runtimeSecretsActive", "poolPresent", "datasetPresent")}
     if not all(value is True for value in health.values()):
         raise CheckError(f"setup is not complete after {stage}: {health}")
+    if run("systemctl", "is-failed", "--quiet", "nas-v2-apply-failed.service").returncode == 0:
+        raise CheckError(f"Managed Services V2 rollback is failed after {stage}")
     if not SENTINEL.is_file() or SENTINEL.read_text(encoding="utf-8") != "setup-reboot-e2e\n":
         raise CheckError(f"ZFS-backed setup sentinel did not survive {stage}")
     require(("zpool", "status", "-x", "tank"))
@@ -291,10 +338,11 @@ def browser_sign_in(stage: str) -> None:
             path = secrets / name
             path.write_text(value + "\n", encoding="utf-8")
             path.chmod(0o600)
+        # Inherit the journal stream: an unread stderr pipe can stall the proxy.
         proxy = subprocess.Popen(
             [str(activate), "--listen", "127.0.0.1:8443", str(proxyd), "127.0.0.1:443"],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=sys.stderr,
             text=True,
         )
         try:
@@ -336,6 +384,8 @@ def browser_sign_in(stage: str) -> None:
             )
             if result.returncode:
                 detail = result.stderr or result.stdout
+                print(detail, file=sys.stderr, flush=True)
+                print(f"browser callback proxy exit status: {proxy.poll()}", file=sys.stderr, flush=True)
                 raise CheckError(
                     f"authenticated browser checks failed after {stage}: {detail[:1100]}\n{detail[-1900:]}"
                 )
@@ -367,24 +417,29 @@ def finish(ok: bool, **extra: Any) -> None:
     write_json(RESULT, payload)
 
 
+def verify_reboot(stage: str) -> None:
+    activate_after_reboot()
+    verify_services(stage)
+    browser_sign_in(stage)
+
+
 def resume() -> None:
     try:
         phase = read_state().get("phase")
         if phase == "after-first-reboot":
-            activate_after_reboot()
-            verify_services("the first reboot")
-            browser_sign_in("the first reboot")
+            verify_reboot("the first reboot")
             schedule_reboot("after-second-reboot")
             return
         if phase == "after-second-reboot":
-            activate_after_reboot()
-            verify_services("the second reboot")
-            browser_sign_in("the second reboot")
+            verify_reboot("the second reboot")
             finish(True, phase="complete", verifiedReboots=2)
             STATE.unlink()
             return
         raise CheckError(f"unexpected setup reboot lifecycle phase: {phase!r}")
     except Exception as error:
+        # The host treats the result file as completion and may discard the VM
+        # immediately, so flush failure evidence before publishing that result.
+        report_failure(error)
         finish(False, error=f"{type(error).__name__}: {error}")
         raise
 
@@ -394,14 +449,18 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--start", action="store_true")
     group.add_argument("--resume", action="store_true")
+    group.add_argument("--verify", action="store_true")
     arguments = parser.parse_args()
     try:
         if arguments.start:
             start()
+        elif arguments.verify:
+            verify_reboot("the final reboot")
         else:
             resume()
     except Exception as error:
-        print(f"setup reboot E2E failed: {error}", file=sys.stderr)
+        if not arguments.resume:
+            report_failure(error)
         return 1
     return 0
 

@@ -14,7 +14,6 @@ entries:
       metaDescription: First-run setup wizard – create the administrator and review storage.
       metaPublisher: NAS
       openInNewTab: false
-      provider: null
 
   - model: authentik_policies.policybinding
     identifiers:

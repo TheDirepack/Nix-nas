@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 2,
+  "addons": [
+    {"id":"alertFilters","version":"29.0.0","status":"release","archive":"alertFilters-release-29.zap","sha256":"aa27b4b38e0124a3af9c975622b01d9381e80aeba0ceb3a603b03a502217f665","url":"https://github.com/zaproxy/zap-extensions/releases/download/alertFilters-v29/alertFilters-release-29.zap"},
+    {"id":"ascanrules","version":"84.0.0","status":"release","archive":"ascanrules-release-84.zap","sha256":"f3c0f8a9c1bcac5a8b43b63d219a698fc5656f96cf4ad4197f8b088d089d2d84","url":"https://github.com/zaproxy/zap-extensions/releases/download/ascanrules-v84/ascanrules-release-84.zap"},
+    {"id":"ascanrulesBeta","version":"67.0.0","status":"beta","archive":"ascanrulesBeta-beta-67.zap","sha256":"81e84d592b1f7ad803470bcc8d8b659d4f7e21370546a482b606207e57a7db69","url":"https://github.com/zaproxy/zap-extensions/releases/download/ascanrulesBeta-v67/ascanrulesBeta-beta-67.zap"},
+    {"id":"authhelper","version":"0.43.0","status":"beta","archive":"authhelper-beta-0.43.0.zap","sha256":"a0d25032f7590336515d01ed43a2b47de006f7bb4d4de998989a56be23a894b9","url":"https://github.com/zaproxy/zap-extensions/releases/download/authhelper-v0.43.0/authhelper-beta-0.43.0.zap"},
+    {"id":"automation","version":"0.61.0","status":"beta","archive":"automation-beta-0.61.0.zap","sha256":"3a51587d164813883823d1091a4b19e248a15bd0dc19f37c3ef86a7b7c6aa223","url":"https://github.com/zaproxy/zap-extensions/releases/download/automation-v0.61.0/automation-beta-0.61.0.zap"},
+    {"id":"bruteforce","version":"21.0.0","status":"beta","archive":"bruteforce-beta-21.zap","sha256":"54dfb10a64d35fbb829968f7fe53bff1cf8a30753d3e22b3172e478304facb86","url":"https://github.com/zaproxy/zap-extensions/releases/download/bruteforce-v21/bruteforce-beta-21.zap"},
+    {"id":"callhome","version":"0.23.0","status":"release","archive":"callhome-release-0.23.0.zap","sha256":"eadebd4ae60c1865f6811a276a643ebe954328e2e903447bf460d8b3ef691d7f","url":"https://github.com/zaproxy/zap-extensions/releases/download/callhome-v0.23.0/callhome-release-0.23.0.zap"},
+    {"id":"client","version":"0.33.0","status":"alpha","archive":"client-alpha-0.33.0.zap","sha256":"08588c9ee924d126c2f7bf12fd5b3f57952d5b31fa0279595291618e6dd7c752","url":"https://github.com/zaproxy/zap-extensions/releases/download/client-v0.33.0/client-alpha-0.33.0.zap"},
+    {"id":"commonlib","version":"1.44.0","status":"release","archive":"commonlib-release-1.44.0.zap","sha256":"6450205e07248c20e9c8de185268cf1cd571f3cec7f7c0e5d10178b2126834f9","url":"https://github.com/zaproxy/zap-extensions/releases/download/commonlib-v1.44.0/commonlib-release-1.44.0.zap"},
+    {"id":"database","version":"0.9.0","status":"alpha","archive":"database-alpha-0.9.0.zap","sha256":"4c58ca142288d9ddc6ae3fd8fe6815e3894462bae67eb0776e540a2d9ddaf87d","url":"https://github.com/zaproxy/zap-extensions/releases/download/database-v0.9.0/database-alpha-0.9.0.zap"},
+    {"id":"diff","version":"18.0.0","status":"beta","archive":"diff-beta-18.zap","sha256":"a0b1326c0d8a520cd3fd56cc422a73d2eba7b6a1853aad3e61a9f2ddf8dc0717","url":"https://github.com/zaproxy/zap-extensions/releases/download/diff-v18/diff-beta-18.zap"},
+    {"id":"directorylistv1","version":"9.0.0","status":"release","archive":"directorylistv1-release-9.zap","sha256":"71e5b57bcf89774267375426f2e67f789cf13a4b69c97c8946a325fa321d18ce","url":"https://github.com/zaproxy/zap-extensions/releases/download/directorylistv1-v9/directorylistv1-release-9.zap"},
+    {"id":"domxss","version":"24.0.0","status":"release","archive":"domxss-release-24.zap","sha256":"6f99b18d4af4a9f5277369b802ecf333b337ecce4e972d7dc08827253b604108","url":"https://github.com/zaproxy/zap-extensions/releases/download/domxss-v24/domxss-release-24.zap"},
+    {"id":"encoder","version":"1.9.0","status":"release","archive":"encoder-release-1.9.0.zap","sha256":"5f826627a98cfa368b8b7e178850bebde73447f91eec852fa7f0af81ddd6a76c","url":"https://github.com/zaproxy/zap-extensions/releases/download/encoder-v1.9.0/encoder-release-1.9.0.zap"},
+    {"id":"exim","version":"0.22.0","status":"beta","archive":"exim-beta-0.22.0.zap","sha256":"80ce526c6366f053c5428f663cfc6abdab313616475cdcf0b296e33fdb146f57","url":"https://github.com/zaproxy/zap-extensions/releases/download/exim-v0.22.0/exim-beta-0.22.0.zap"},
+    {"id":"formhandler","version":"6.9.0","status":"beta","archive":"formhandler-beta-6.9.0.zap","sha256":"8eab7ea81b630abca1ece0fef2b134c5f43fbf54624a8ff0f9891b539e50b3df","url":"https://github.com/zaproxy/zap-extensions/releases/download/formhandler-v6.9.0/formhandler-beta-6.9.0.zap"},
+    {"id":"fuzz","version":"13.17.0","status":"beta","archive":"fuzz-beta-13.17.0.zap","sha256":"f9b84c1aa5e84e6228608af4979dd45e9701d5a8aa312db87966d6763db7534b","url":"https://github.com/zaproxy/zap-extensions/releases/download/fuzz-v13.17.0/fuzz-beta-13.17.0.zap"},
+    {"id":"gettingStarted","version":"20.0.0","status":"release","archive":"gettingStarted-release-20.zap","sha256":"2f48cfe5b0bff4973279ef812510a4e61f064952aed215855c4358ad94ee7e07","url":"https://github.com/zaproxy/zap-extensions/releases/download/gettingStarted-v20/gettingStarted-release-20.zap"},
+    {"id":"graaljs","version":"0.14.0","status":"alpha","archive":"graaljs-alpha-0.14.0.zap","sha256":"1e196453fe9f660eb92e8debd6d0e07993741b52123a920c619c3bc5013c5020","url":"https://github.com/zaproxy/zap-extensions/releases/download/graaljs-v0.14.0/graaljs-alpha-0.14.0.zap"},
+    {"id":"graphql","version":"0.35.0","status":"alpha","archive":"graphql-alpha-0.35.0.zap","sha256":"7bbf1607228556063825964ac842863a97f01b21fbe11013e94f8fe80aa935e6","url":"https://github.com/zaproxy/zap-extensions/releases/download/graphql-v0.35.0/graphql-alpha-0.35.0.zap"},
+    {"id":"help","version":"22.0.0","status":"release","archive":"help-release-22.zap","sha256":"a99fcf18187ae3e232fafbe8150d3d65cbdd328c2284bd04016d82f2d2a5c945","url":"https://github.com/zaproxy/zap-extensions/releases/download/help-v22/help-release-22.zap"},
+    {"id":"hud","version":"0.19.0","status":"beta","archive":"hud-beta-0.19.0.zap","sha256":"737239ce1b765ff32f9351a647594f22d725d319b94f7a2ef2cb153aadf832df","url":"https://github.com/zaproxy/zap-extensions/releases/download/hud-v0.19.0/hud-beta-0.19.0.zap"},
+    {"id":"insights","version":"0.6.0","status":"alpha","archive":"insights-alpha-0.6.0.zap","sha256":"720620d11bbe00df6a653ea249aa615b416ea38103b7edb54033524d7c9d0351","url":"https://github.com/zaproxy/zap-extensions/releases/download/insights-v0.6.0/insights-alpha-0.6.0.zap"},
+    {"id":"invoke","version":"17.0.0","status":"beta","archive":"invoke-beta-17.zap","sha256":"8f016524b25a73aae7b50f13f91c53483e1ff43d7b15d96cf0917cfe580e3b46","url":"https://github.com/zaproxy/zap-extensions/releases/download/invoke-v17/invoke-beta-17.zap"},
+    {"id":"network","version":"0.30.0","status":"beta","archive":"network-beta-0.30.0.zap","sha256":"009d203e50c9908c468bcc19a40c23b424ef2c2bedf9fb0e477177faa63fb209","url":"https://github.com/zaproxy/zap-extensions/releases/download/network-v0.30.0/network-beta-0.30.0.zap"},
+    {"id":"oast","version":"0.26.0","status":"beta","archive":"oast-beta-0.26.0.zap","sha256":"d1471b0bbcd75315d7d142bbd4675d950aefbd31ad39e999b6df8f09a97bda0e","url":"https://github.com/zaproxy/zap-extensions/releases/download/oast-v0.26.0/oast-beta-0.26.0.zap"},
+    {"id":"onlineMenu","version":"15.0.0","status":"release","archive":"onlineMenu-release-15.zap","sha256":"6d0c4706f0570f60143efaaaa86f98cb539fcf7279aa620af7e2934da43a141f","url":"https://github.com/zaproxy/zap-extensions/releases/download/onlineMenu-v15/onlineMenu-release-15.zap"},
+    {"id":"openapi","version":"58.0.0","status":"beta","archive":"openapi-beta-58.zap","sha256":"42356d818f994d3e19a2b892cebf9c058bd59ef372137411a1bacd8b4d19424b","url":"https://github.com/zaproxy/zap-extensions/releases/download/openapi-v58/openapi-beta-58.zap"},
+    {"id":"params","version":"0.1.0","status":"release","archive":"params-release-0.1.0.zap","sha256":"f171bc5660c2122a2c2dd47de7ee5c5c1721ce4780acc1fa3b73f7b641116919","url":"https://github.com/zaproxy/zap-extensions/releases/download/params-v0.1.0/params-release-0.1.0.zap"},
+    {"id":"postman","version":"0.10.0","status":"alpha","archive":"postman-alpha-0.10.0.zap","sha256":"59174af853be32fb8fdfc48dcd4e18fdcbb5a0e7ee24279d2c6621981214a81a","url":"https://github.com/zaproxy/zap-extensions/releases/download/postman-v0.10.0/postman-alpha-0.10.0.zap"},
+    {"id":"pscan","version":"0.6.0","status":"alpha","archive":"pscan-alpha-0.6.0.zap","sha256":"269ff66f0d8a8012f156e90e13238606a8d503b99521170649b62c9aa7295927","url":"https://github.com/zaproxy/zap-extensions/releases/download/pscan-v0.6.0/pscan-alpha-0.6.0.zap"},
+    {"id":"pscanrules","version":"76.0.0","status":"release","archive":"pscanrules-release-76.zap","sha256":"6201955247e538ddf8d11fd4332450e5821dbf419dbd29ed616b2909e9aabcaa","url":"https://github.com/zaproxy/zap-extensions/releases/download/pscanrules-v76/pscanrules-release-76.zap"},
+    {"id":"pscanrulesBeta","version":"50.0.0","status":"beta","archive":"pscanrulesBeta-beta-50.zap","sha256":"a979f7cd5d8be10e0338b417e006ec1e2f6ec79101010d570ddb5199892e921b","url":"https://github.com/zaproxy/zap-extensions/releases/download/pscanrulesBeta-v50/pscanrulesBeta-beta-50.zap"},
+    {"id":"quickstart","version":"60.0.0","status":"release","archive":"quickstart-release-60.zap","sha256":"5b826775cd2a3b312bd54c36b59a354a5ced680be0e32f7317c142022f40e45e","url":"https://github.com/zaproxy/zap-extensions/releases/download/quickstart-v60/quickstart-release-60.zap"},
+    {"id":"replacer","version":"22.0.0","status":"release","archive":"replacer-release-22.zap","sha256":"e2cc4478f69fb0ea3fd65f21449e09664ae128df7b3903f1a1aa3ec026ed5b51","url":"https://github.com/zaproxy/zap-extensions/releases/download/replacer-v22/replacer-release-22.zap"},
+    {"id":"reports","version":"0.46.0","status":"release","archive":"reports-release-0.46.0.zap","sha256":"2e8d42a48e23aefa8a6174b52aa0a8a6b90aca2da0a8bf94ac61f4aaa070bc2c","url":"https://github.com/zaproxy/zap-extensions/releases/download/reports-v0.46.0/reports-release-0.46.0.zap"},
+    {"id":"requester","version":"7.10.0","status":"beta","archive":"requester-beta-7.10.0.zap","sha256":"cca0589258a1c1c2a75dbffef5abf1ff46defa970800cf2748245f8e283aba3f","url":"https://github.com/zaproxy/zap-extensions/releases/download/requester-v7.10.0/requester-beta-7.10.0.zap"},
+    {"id":"retest","version":"0.11.0","status":"alpha","archive":"retest-alpha-0.11.0.zap","sha256":"26ad328ba5bcb144c20076949aacacf6c352121ee74f5bf4a813ccdd8945e35f","url":"https://github.com/zaproxy/zap-extensions/releases/download/retest-v0.11.0/retest-alpha-0.11.0.zap"},
+    {"id":"retire","version":"0.66.0","status":"release","archive":"retire-release-0.66.0.zap","sha256":"38f68b7fcb3831a308d8e3a1391feb8db48990a4b5a464ebc8e629d4bff671cd","url":"https://github.com/zaproxy/zap-extensions/releases/download/retire-v0.66.0/retire-release-0.66.0.zap"},
+    {"id":"reveal","version":"10.0.0","status":"release","archive":"reveal-release-10.zap","sha256":"18368c13aa8a31a6470a465e9aef7c93d9a45b2c34cfe90f4200cbd04637fd0e","url":"https://github.com/zaproxy/zap-extensions/releases/download/reveal-v10/reveal-release-10.zap"},
+    {"id":"scanpolicies","version":"0.8.0","status":"alpha","archive":"scanpolicies-alpha-0.8.0.zap","sha256":"bb1e2e0ce2d9febd41a9fab5a73aa536e1e88002e60e41065d2d9d492e7e7d1d","url":"https://github.com/zaproxy/zap-extensions/releases/download/scanpolicies-v0.8.0/scanpolicies-alpha-0.8.0.zap"},
+    {"id":"scripts","version":"45.20.0","status":"release","archive":"scripts-release-45.20.0.zap","sha256":"7f80df5e1bd692af6827c7d9b950ccda5ef9fd67e641969100d11011f057fe6d","url":"https://github.com/zaproxy/zap-extensions/releases/download/scripts-v45.20.0/scripts-release-45.20.0.zap"},
+    {"id":"selenium","version":"15.58.0","status":"release","archive":"selenium-release-15.58.0.zap","sha256":"b7b217047f64979500d4335ab1b40718fac9af9128098be5a59b0ac9b758dd19","url":"https://github.com/zaproxy/zap-extensions/releases/download/selenium-v15.58.0/selenium-release-15.58.0.zap"},
+    {"id":"sequence","version":"10.0.0","status":"beta","archive":"sequence-beta-10.zap","sha256":"8690dfccaf7fe18a7f1975b3f4fa01c6e1b19e1907699adc3f811eb14f94358f","url":"https://github.com/zaproxy/zap-extensions/releases/download/sequence-v10/sequence-beta-10.zap"},
+    {"id":"soap","version":"32.0.0","status":"beta","archive":"soap-beta-32.zap","sha256":"e7767272723a9ffee7e4cddb65d1b4941da756a380cc4c8db5ccb6012badf9fd","url":"https://github.com/zaproxy/zap-extensions/releases/download/soap-v32/soap-beta-32.zap"},
+    {"id":"spider","version":"0.20.0","status":"release","archive":"spider-release-0.20.0.zap","sha256":"82acf7e307fdd4f46ac4d387656370ecad9c2ab940e1c81d9776768bacdedcd5","url":"https://github.com/zaproxy/zap-extensions/releases/download/spider-v0.20.0/spider-release-0.20.0.zap"},
+    {"id":"spiderAjax","version":"23.33.0","status":"release","archive":"spiderAjax-release-23.33.0.zap","sha256":"38ce8c3d68fe460a17762af40d22cd43f5dc6a5cab5d7538801c8057e30198c6","url":"https://github.com/zaproxy/zap-extensions/releases/download/spiderAjax-v23.33.0/spiderAjax-release-23.33.0.zap"},
+    {"id":"tips","version":"16.0.0","status":"beta","archive":"tips-beta-16.zap","sha256":"c75be57814a6f430d967edf22352ae51b9050ec6cf79215ee0e98b21cfe384d2","url":"https://github.com/zaproxy/zap-extensions/releases/download/tips-v16/tips-beta-16.zap"},
+    {"id":"webdriverlinux","version":"227.0.0","status":"release","archive":"webdriverlinux-release-227.zap","sha256":"307870b582ae28e95634bf9a4bf9113665f209ad7a768056c404eeda463d78e3","url":"https://github.com/zaproxy/zap-extensions/releases/download/webdriverlinux-v227/webdriverlinux-release-227.zap"},
+    {"id":"websocket","version":"38.0.0","status":"release","archive":"websocket-release-38.zap","sha256":"eec15ac0fc5c211d529c3cd853ec4a1310865ce94dd7a0abca27aa4b240c9623","url":"https://github.com/zaproxy/zap-extensions/releases/download/websocket-v38/websocket-release-38.zap"},
+    {"id":"zest","version":"48.14.0","status":"beta","archive":"zest-beta-48.14.0.zap","sha256":"27a8833d3d692c8e18337d2133e983956fe25ba920be0639d3067069cea50051","url":"https://github.com/zaproxy/zap-extensions/releases/download/zest-v48.14.0/zest-beta-48.14.0.zap"}
+  ],
+  "sourceBuild": {
+    "core": {
+      "archive": "zap-2.17.0.jar",
+      "sha256": "015dda4709b5ef79736086bb41e8e2a4e95b04cf6625f14d6bcc02b197c99c0c"
+    },
+    "sources": [
+      {
+        "path": "zap/src/main/java/org/zaproxy/zap/network/HttpRequestConfig.java",
+        "url": "https://raw.githubusercontent.com/zaproxy/zaproxy/8a1bff313f4d183dba5aa154ecbe89ad751c9153/zap/src/main/java/org/zaproxy/zap/network/HttpRequestConfig.java",
+        "sha256": "fa70be4c2a17688de40a2a73866693e5edebf3d57ec2dc49f1566e44f7c5eaa4"
+      },
+      {
+        "path": "zap/src/main/java/org/parosproxy/paros/core/scanner/AbstractPlugin.java",
+        "url": "https://raw.githubusercontent.com/zaproxy/zaproxy/8a1bff313f4d183dba5aa154ecbe89ad751c9153/zap/src/main/java/org/parosproxy/paros/core/scanner/AbstractPlugin.java",
+        "sha256": "25ecec9175591616f0c38e7209476723aedc4bbae716308038a5687cf69c29e4"
+      },
+      {
+        "path": "addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/BaseHttpSender.java",
+        "url": "https://raw.githubusercontent.com/zaproxy/zap-extensions/06c3ade40fcc51a85d1227734c64451b95794ba2/addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/BaseHttpSender.java",
+        "sha256": "8330e1f3641b794f4a5d999e42713e1104269d2ed40157354acd1e71de8f5a30"
+      },
+      {
+        "path": "addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/apachev5/HttpSenderApache.java",
+        "url": "https://raw.githubusercontent.com/zaproxy/zap-extensions/06c3ade40fcc51a85d1227734c64451b95794ba2/addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/apachev5/HttpSenderApache.java",
+        "sha256": "33504fc05008e995440122e4a70a201f4bd61a8841146bfdc6d6f90ae8879abc"
+      },
+      {
+        "path": "addOns/ascanrulesBeta/src/main/java/org/zaproxy/zap/extension/ascanrulesBeta/SlackerCookieScanRule.java",
+        "url": "https://raw.githubusercontent.com/zaproxy/zap-extensions/06c3ade40fcc51a85d1227734c64451b95794ba2/addOns/ascanrulesBeta/src/main/java/org/zaproxy/zap/extension/ascanrulesBeta/SlackerCookieScanRule.java",
+        "sha256": "e095be8fea7e8053595c132c54ff44a95ff941be2ab64b5a3f5ccf8e0bd9d6f3"
+      }
+    ],
+    "patch": {
+      "file": "zap-cookie-probes.patch",
+      "sha256": "172381372e66c88d991c07e9f8b97892fd9f7a39cdcaa713da6203b92c46fcaf"
+    },
+    "outputs": {
+      "zap-2.17.0.jar": "88cfdcac4d46118381315a3ac8fd40912f42a5c52a393dea5d05e5fc61dd7f5b",
+      "network-beta-0.30.0.zap": "03d79d886e6d40dc4a0185de921619e9cdbf1eb040412f6c85615a78e645a313",
+      "ascanrulesBeta-beta-67.zap": "aa91264e3324c4e4ee45169410c5ee1d1fd4c0cc1a863253016a22a3283a8440"
+    }
+  }
+}

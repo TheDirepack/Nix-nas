@@ -49,6 +49,7 @@ from nas_operation_lock import (
     cancel_reservation,
     current_coordination_token,
 )
+from nas_setup_first_start import parse_first_start_request, parse_first_start_secrets
 from nas_setup_config import (
     SCHEMA_VERSION,
     SetupError,
@@ -374,6 +375,69 @@ def validate_storage_request(
         raise SetupError(f"Configured storage path(s) are not block devices: {', '.join(not_block)}")
     if aliases:
         raise SetupError(f"Multiple configured paths refer to the same block device: {', '.join(aliases)}")
+    validate_unused_devices(devices)
+
+
+def validate_unused_devices(devices: Sequence[str]) -> None:
+    try:
+        inventory = json.loads(
+            run_storage_host(
+                [
+                    "lsblk",
+                    "--json",
+                    "--paths",
+                    "--tree",
+                    "--output",
+                    "PATH,MAJ:MIN,TYPE,MOUNTPOINTS",
+                ]
+            ).stdout
+        )
+        roots = inventory["blockdevices"]
+        if not isinstance(roots, list) or not roots:
+            raise ValueError("missing blockdevices")
+        swap_output = run_storage_host(["cat", "/proc/swaps"]).stdout
+        swap_lines = swap_output.splitlines()
+        if not swap_lines or not swap_lines[0].startswith("Filename"):
+            raise ValueError("missing swap header")
+        swaps = {line.split()[0] for line in swap_lines[1:] if line.strip()}
+        swap_devices = set()
+        for path in swaps:
+            info = os.stat(path)
+            if stat.S_ISBLK(info.st_mode):
+                swap_devices.add(f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}")
+        unsafe: set[str] = set()
+        known: set[str] = set()
+
+        def visit(node: Any, parents: tuple[str, ...]) -> None:
+            if not isinstance(node, dict):
+                raise ValueError("invalid block device")
+            identity = node["maj:min"]
+            if not isinstance(identity, str) or re.fullmatch(r"\d+:\d+", identity) is None:
+                raise ValueError("invalid device identity")
+            path = node["path"]
+            mounts = node["mountpoints"]
+            if not isinstance(path, str) or not isinstance(mounts, list):
+                raise ValueError("invalid device mount information")
+            chain = (*parents, identity)
+            known.add(identity)
+            # Parents of mounted partitions/mappers are also in use. Refuse
+            # live mapper/RAID holders even when they have no mounted filesystem.
+            if any(mounts) or path in swaps or identity in swap_devices or node["type"] not in {"disk", "part", "loop"}:
+                unsafe.update(chain)
+            for child in node.get("children", []):
+                visit(child, chain)
+
+        for root in roots:
+            visit(root, ())
+        for device in devices:
+            info = os.stat(device)
+            identity = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+            if identity not in known:
+                raise ValueError(f"device missing from inventory: {device}")
+            if identity in unsafe:
+                raise SetupError(f"Configured storage device is in use: {device}")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SetupError(f"Unable to validate storage device inventory: {exc}") from exc
 
 
 def _managed_services_status(*, noninteractive: bool = False) -> dict[str, Any]:
@@ -613,6 +677,27 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     """Replace all temporary identity state without touching KeePass or ZFS."""
     authentik_root = control_root / "authentik"
     postgresql_root = control_root / "postgresql"
+    sync_units = ["nas-identity-sync.service"]
+    if SYNCTHING_ENABLED:
+        sync_units.append("nas-syncthing-sync.service")
+    timers = sorted(
+        {
+            timer
+            for unit in sync_units
+            for timer in run_root(["systemctl", "show", "--property=TriggeredBy", "--value", unit]).stdout.split()
+            if timer.endswith(".timer")
+        }
+    )
+    active_timers = [
+        timer for timer in timers if run_root(["systemctl", "is-active", "--quiet", timer], check=False).returncode == 0
+    ]
+    # Timer dependencies start before their service conditions are evaluated;
+    # skipped sync jobs can therefore replace an in-flight identity stop job.
+    if timers:
+        progress(f"pausing identity synchronization timers: {', '.join(timers)}")
+        progress(f"previously active synchronization timers: {', '.join(active_timers) or 'none'}")
+        run_root(["systemctl", "stop", *timers])
+    run_root(["systemctl", "stop", *sync_units])
     run_root(
         [
             "systemctl",
@@ -642,6 +727,10 @@ def regenerate_boot_identity_databases(control_root: pathlib.Path) -> dict[str, 
     )
     run_root(["systemctl", "start", "nas-bootstrap-authentik-secrets.service"])
     run_root(["systemctl", "start", "nas-bootstrap-runtime-select.service"])
+    # A failed regeneration requires manual recovery; do not resume triggers
+    # against partially regenerated identity state.
+    if active_timers:
+        run_root(["systemctl", "start", *active_timers])
     return {"regenerated": True, "bootSide": True}
 
 
@@ -732,12 +821,13 @@ def setup_storage(
         validate_storage_request(storage, confirmed_devices, allow_destructive)
         if storage.get("wipeDevices"):
             for device in devices:
-                run_root(["wipefs", "--all", "--force", device])
+                validate_unused_devices(devices)
+                run_storage_host(["wipefs", "--all", device])
+        validate_unused_devices(devices)
         vdev = devices if topology in {"single", "stripe"} else [topology, *devices]
         zpool_create = [
             "zpool",
             "create",
-            "-f",
             "-o",
             f"ashift={ashift}",
             "-O",
@@ -1890,69 +1980,38 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
     try:
         request_text = _read_secure_job_file(request_file, "First-start job request", max_bytes=64 * 1024)
         try:
-            request = json.loads(request_text)
-        except json.JSONDecodeError as exc:
-            raise SetupError("First-start job request is invalid") from exc
-        required = {
-            "schemaVersion",
-            "jobId",
-            "reservationToken",
-            "config",
-            "planDigest",
-            "devices",
-            "allowDestructiveStorage",
-            "confirmPasswordReapply",
-            "encryptStorage",
-        }
-        if not isinstance(request, dict) or set(request) != required or request.get("schemaVersion") != 1:
-            raise SetupError("First-start job request contract is invalid")
-        candidate = request.get("reservationToken")
-        if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
-            reservation_token = candidate
-        if reservation_token is None:
-            raise SetupError("First-start reservation token is invalid")
-        job_id = request.get("jobId")
-        if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{24}", job_id):
-            raise SetupError("First-start job identifier is invalid")
+            request = parse_first_start_request(request_text)
+        except SetupError:
+            # A valid reservation belongs to this job even if a later request
+            # field fails validation; cancellation still runs in finally.
+            try:
+                unverified = json.loads(request_text)
+            except json.JSONDecodeError:
+                unverified = None
+            if isinstance(unverified, dict):
+                candidate = unverified.get("reservationToken")
+                if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{32}", candidate):
+                    reservation_token = candidate
+                candidate_job_id = unverified.get("jobId")
+                if isinstance(candidate_job_id, str) and re.fullmatch(r"[0-9a-f]{24}", candidate_job_id):
+                    # Recover only the bounded result identity, never execution
+                    # fields, so rejected detached jobs do not remain pending.
+                    job_id = candidate_job_id
+                    result_path = STATE_PATH.parent / "jobs" / f"{job_id}.json"
+            raise
+        reservation_token = request["reservationToken"]
+        job_id = request["jobId"]
         result_root = STATE_PATH.parent / "jobs"
         result_path = result_root / f"{job_id}.json"
         result_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(result_root, 0o700)
         prune_first_start_job_results(result_root, keep=result_path)
-        config = request.get("config")
-        plan_digest = request.get("planDigest")
-        devices = request.get("devices")
-        if not isinstance(config, str) or not pathlib.Path(config).is_absolute():
-            raise SetupError("First-start job configuration path is invalid")
-        if not isinstance(plan_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", plan_digest):
-            raise SetupError("First-start job plan digest is invalid")
-        if (
-            not isinstance(devices, list)
-            or not all(isinstance(item, str) and item for item in devices)
-            or len(devices) != len(set(devices))
-        ):
-            raise SetupError("First-start job devices are invalid")
-        if (
-            not isinstance(request.get("allowDestructiveStorage"), bool)
-            or not isinstance(request.get("confirmPasswordReapply"), bool)
-            or not isinstance(request.get("encryptStorage"), bool)
-        ):
-            raise SetupError("First-start job confirmation flags are invalid")
-        try:
-            secrets_payload = json.loads(
-                _read_secure_job_file(password_file, "First-start password file", max_bytes=8192)
-            )
-        except json.JSONDecodeError as exc:
-            raise SetupError("First-start secret payload is invalid") from exc
-        if not isinstance(secrets_payload, dict) or set(secrets_payload) != {"keepass", "administrator"}:
-            raise SetupError("First-start secret payload contract is invalid")
-        raw_password = secrets_payload.get("keepass")
-        if not isinstance(raw_password, str):
-            raise SetupError("First-start KeePass database password is invalid")
-        password = normalize_secret_line(raw_password, "KeePass database password")
-        administrator = secrets_payload.get("administrator")
-        if not isinstance(administrator, dict) or set(administrator) != {"username", "name", "email", "password"}:
-            raise SetupError("First-start administrator secret payload is invalid")
+        config = request["config"]
+        plan_digest = request["planDigest"]
+        devices = request["devices"]
+        password, administrator = parse_first_start_secrets(
+            _read_secure_job_file(password_file, "First-start password file", max_bytes=8192)
+        )
         password_file.unlink(missing_ok=True)
         request_file.unlink(missing_ok=True)
         args = argparse.Namespace(
@@ -1987,6 +2046,9 @@ def run_first_start_job(request_file: pathlib.Path, password_file: pathlib.Path)
         return result
     except Exception as exc:
         if result_path is not None and job_id is not None:
+            result_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(result_path.parent, 0o700)
+            prune_first_start_job_results(result_path.parent, keep=result_path)
             atomic_write_json(
                 result_path,
                 {

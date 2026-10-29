@@ -455,6 +455,9 @@
       "tests/test_adversarial_security.py",
       "tests/test_setup.py"
     ],
+    "services/nas_setup_first_start.py": [
+      "tests/test_setup_first_start.py"
+    ],
     "services/nas_setup_config.py": [
       "tests/test_adversarial_security.py",
       "tests/test_fuzz_boundaries.py",

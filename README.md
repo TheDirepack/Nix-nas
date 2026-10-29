@@ -7,16 +7,16 @@ NixOS NAS is a NixOS-based NAS appliance that keeps storage, identity, secrets, 
 - ZFS pool management with snapshots and replication (Sanoid/Syncoid), plus Restic backups.
 - Single sign-on with MFA through Authentik.
 - File sharing with volumes, ACLs, quotas, share links, and WebDAV through CopyParty.
-- Web administration through Cockpit, including guided first-start setup and locked-boot unlock.
+- Web administration through Cockpit and guided browser first-start setup.
 - Machine secrets in a KeePassXC database, staged under `/run` only while the system is unlocked.
 - Optional Syncthing, Vaultwarden, virtualization, and a VictoriaMetrics/Telegraf observability stack.
-- Recovery-first design: a cold-boot Cockpit/PAM recovery plane, `nas-state` export/restore for appliance state, and Restic for backups.
+- Out-of-band cold-boot recovery through console, provisioned SSH recovery access, or hardware KVM; `nas-state` export/restore and Restic backups.
 
 ## Release status
 
 > **Release status:** 0.1.0 is a source-only development artifact. It is not an install-ready appliance image until its exact Cockpit frontend, Nix closures, VM tests, installer path, and hardware recovery drills are qualified; see [`docs/development/release-checklist.md`](docs/development/release-checklist.md).
 
-Every successfully qualified pull-request merge to `main` produces a separate, tagged source-only GitHub Release. The release workflow starts only after the full main-branch CI run succeeds, requires the CI source to be the pull request's exact recorded merge result, and preserves main's first-parent release order before publication; direct pushes are not automatically published. The development tree keeps the fixed `akadmin / nas-admin-first-boot` credential for repeatable testing, while the tagged release commit receives a five-word Diceware bootstrap password whose matching username/password are published in that release's notes. The generated release commit is never pushed back onto `main`, CI does not trigger on release tags, and the release workflow does not trigger on push/tag events, so publication cannot recurse into another release cycle. See [`docs/development/automated-releases.md`](docs/development/automated-releases.md) for the exact qualification, ordering, versioning, credential, retry, and publication behavior.
+Releases are **manually started** from the GitHub Actions “Merge build and release” workflow on `main`. The workflow refuses publication unless the selected main commit is the exact result of a merged pull request and has already passed its push-triggered CI run. It then reuses that CI run's handoff artifacts, creates a separate release-only commit and tag, and publishes the source-only release. Ordinary merges and CI completion do not publish releases. See [manual releases](docs/development/automated-releases.md) for the qualification, versioning, credential, rerun, and publication policy.
 
 **Version note:** `0.1.0` is the NixOS NAS project/release version. The `system.stateVersion = "26.05"` value in `local.nix` is the NixOS compatibility baseline for stateful module defaults; it is not the project version and must not be changed merely to match a project release.
 
@@ -26,8 +26,8 @@ You should be comfortable with Linux administration; NixOS basics help but are e
 
 1. Prepare the host configuration (`hardware-configuration.nix`, `local.nix`).
 2. Build and install NixOS from the flake target `.#nas`.
-3. Prepare the first-run plan (accounts, storage plan, feature modes).
-4. Complete guided setup (browser wizard or CLI).
+3. Prepare the first-run plan (accounts, storage plan, service modes).
+4. Complete the browser setup wizard. Fresh setup does not yet have a command-only execution path.
 5. Verify the result and record your offline recovery material.
 
 The full walkthrough is [Install and set up](docs/src/admin/installation.md).
@@ -50,7 +50,7 @@ The complete authority map is in [`docs/src/admin/service-map.md`](docs/src/admi
 
 ## Recovery model
 
-Protected services stay stopped until secrets and storage checks succeed. Cockpit and the local PAM administrator remain available as the cold-boot recovery plane. Mutable appliance state can be exported, validated, compared, and restored with `nas-state`, while ZFS snapshots/replication and Restic cover different recovery layers.
+Protected services stay stopped until secrets and storage checks succeed. No browser management endpoint, including Cockpit, is exposed while locked. Keep local console, a provisioned SSH recovery key, or hardware KVM access for the local PAM administrator; Authentik membership does not grant host access. Mutable appliance state can be exported, validated, compared, and restored with `nas-state`, while ZFS snapshots/replication and Restic cover different recovery layers.
 
 Keep an offline copy of the recovery material listed in [`docs/operator/recovery.md`](docs/operator/recovery.md).
 

@@ -11,7 +11,12 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 on_error() {
   local rc=$?
-  printf '\nEncrypted VM validation failed with status %s.\n' "$rc" >&2
+  # Only script coordinates are logged: BASH_COMMAND and arguments can contain secrets.
+  local source_file="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+  local source_line="${BASH_LINENO[0]:-0}"
+  local source_function="${FUNCNAME[1]:-main}"
+  printf '\nEncrypted VM validation failed with status %s at %s:%s (%s).\n' \
+    "$rc" "$source_file" "$source_line" "$source_function" >&2
   systemctl --failed --no-pager >&2 || true
   journalctl -b -n 250 --no-pager >&2 || true
   zpool status >&2 || true
@@ -110,7 +115,14 @@ ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session i
 ! ss -tln | grep -Eq '(0\.0\.0\.0|\[::\]):9092[[:space:]]' || fail "Cockpit listener is exposed while locked"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
-wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+[[ ! -e /run/nas-control/effective.json ]] || fail "managed state was compiled before unlock"
+systemctl start nas-managed-services-authentik-reconcile.service
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == no ]] || \
+  fail "managed Authentik projection was not condition-skipped while locked"
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ExecMainStartTimestampMonotonic --value)" == 0 ]] || \
+  fail "managed Authentik projection executed before unlock"
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ActiveState --value)" == inactive ]] || \
+  fail "managed Authentik projection is not inactive while locked"
 
 for _ in $(seq 1 60); do
   [[ -b "$ZFS_DEVICE" ]] && break
@@ -125,8 +137,8 @@ cat >/var/lib/nas-test/setup/encrypted-first-run.json <<EOFSETUP
   "schemaVersion": 2,
   "storage": {
     "createPool": true,
-    "device": "$ZFS_DEVICE",
-    "wipeDevice": true
+    "devices": ["$ZFS_DEVICE"],
+    "wipeDevices": true
   },
   "accounts": [],
   "runPreflight": false
@@ -235,6 +247,11 @@ if ! jq -e '
   jq . <<<"$job_result" >&2
   fail "encrypted first-start job report did not contain the expected storage state"
 fi
+wait_oneshot_completed nas-managed-services-authentik-reconcile.service
+[[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ConditionResult --value)" == yes ]] || \
+  fail "managed Authentik projection was skipped after secret activation"
+[[ -s /var/lib/nas-control/authentik-v2-objects.json ]] || fail "managed Authentik projection did not commit its object manifest"
+pass "managed Authentik projection executes after secret activation"
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 # Capability bytes must never reach backend or proxy logs.
 if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then

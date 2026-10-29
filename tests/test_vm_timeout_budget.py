@@ -20,6 +20,14 @@ class VmTimeoutBudgetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
+    def test_persistent_outpost_waits_use_the_shared_readiness_budget(self) -> None:
+        wrapper = QEMU.read_text(encoding="utf-8")
+        startup = wrapper.split('log "Running the complete source and appliance suite inside the persistent VM"', 1)[1]
+        startup = startup.split('log "Persistent VM is ready', 1)[0]
+        self.assertNotIn("timeout 120s", startup)
+        self.assertEqual(startup.count("$(nas_vm_ordinary_wait_seconds)s sh -c"), 2)
+        self.assertEqual(startup.count("systemctl is-failed --quiet nas-identity-bootstrap.service && exit 1"), 2)
+
     def test_manifest_derives_guest_watchdog_and_is_used_by_wrappers(self) -> None:
         expected = (
             sum(
@@ -154,6 +162,36 @@ printf '%s\n' "$(nas_vm_ci_installer_timeout_seconds)"
                     phase_id, next(phase["id"] for phase in self.manifest["phases"] if phase["label"] == label)
                 )
                 self.assertGreater(int(budget), 0)
+
+    def test_guest_error_diagnostics_identify_safe_script_location(self) -> None:
+        for guest in (GUEST_TEST, ROOT / "tests" / "vm" / "encrypted-guest-test.sh"):
+            with self.subTest(guest=guest.name):
+                source = guest.read_text(encoding="utf-8")
+                beginning = source.index("on_error() {\n")
+                ending = source.index("\n}\n", beginning) + len("\n}\n")
+                trap_function = source[beginning:ending]
+                script = (
+                    "set -Eeuo pipefail\n"
+                    "AUTHENTIK_PUBLIC_HOST=nas-test.local:8443\n"
+                    "PUBLIC_HOST=nas-test.local\n"
+                    "BROWSER_PORT_FORWARD_PID=\n"
+                    "BROWSER_PORT_FORWARD_LOG=/tmp/nas-test-absent-proxy.log\n"
+                    + trap_function
+                    + "\nsystemctl() { :; }\njournalctl() { :; }\nzpool() { :; }\n"
+                    + "trap on_error ERR\n"
+                    + "private_failure() { false 'do-not-print-this-secret'; }\n"
+                    + "private_failure\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertRegex(result.stderr, r"validation failed with status 1 at [^\n]+:[0-9]+ \(private_failure\)")
+                self.assertNotIn("do-not-print-this-secret", result.stderr)
 
     def test_browser_timeout_is_charged_to_both_authorization_passes(self) -> None:
         guest = GUEST_TEST.read_text(encoding="utf-8")

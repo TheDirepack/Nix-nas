@@ -288,6 +288,19 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route path"):
             self.compile({"schemaVersion": 3, "services": {"a": slash_a, "b": slash_b}})
 
+        # Duplicates in the same exposure are also rejected after normalization.
+        repeated = minimal_service()
+        repeated["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8082},
+                "exposure": {"type": "path", "paths": ["/api", "/api/"]},
+                "auth": {"mode": "public"},
+            }
+        }
+        with self.assertRaises(v2.ManagedServicesV2Error) as raised:
+            self.compile({"schemaVersion": 3, "services": {"repeated": repeated}})
+        self.assertEqual(raised.exception.code, "route-conflict")
+
         # Root "/" shadowing everything is ambiguous and must still fail closed
         root = minimal_service()
         root["routes"] = {

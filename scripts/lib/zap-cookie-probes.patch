@@ -1,0 +1,254 @@
+--- a/zap/src/main/java/org/zaproxy/zap/network/HttpRequestConfig.java
++++ b/zap/src/main/java/org/zaproxy/zap/network/HttpRequestConfig.java
+@@ -41,16 +41,19 @@
+     private final HttpRedirectionValidator redirectionValidator;
+     private final boolean notifyListeners;
+     private final int soTimeout;
++    private final boolean manageSession;
+ 
+     HttpRequestConfig(
+             boolean followRedirects,
+             HttpRedirectionValidator redirectionValidator,
+             boolean notifyListeners,
+-            int soTimeout) {
++            int soTimeout,
++            boolean manageSession) {
+         this.followRedirects = followRedirects;
+         this.redirectionValidator = redirectionValidator;
+         this.notifyListeners = notifyListeners;
+         this.soTimeout = soTimeout;
++        this.manageSession = manageSession;
+     }
+ 
+     /**
+@@ -100,6 +103,18 @@
+      */
+     public int getSoTimeout() {
+         return soTimeout;
++    }
++
++    /**
++     * Whether the sender should apply, update, or reauthenticate the user's session.
++     *
++     * <p>Defaults to {@code true}. Disable only for probes that deliberately alter session
++     * identifiers. The requesting user and listener notifications are retained.
++     *
++     * @return whether automatic session management is enabled for this request and its redirects.
++     */
++    public boolean isManageSession() {
++        return manageSession;
+     }
+ 
+     /**
+@@ -132,18 +147,22 @@
+         private HttpRedirectionValidator redirectionValidator;
+         private boolean notifyListeners;
+         private int soTimeout;
++        private boolean manageSession;
+ 
+         private Builder() {
+             this.followRedirects = false;
+             this.redirectionValidator = DefaultHttpRedirectionValidator.INSTANCE;
+             this.notifyListeners = true;
+             this.soTimeout = NO_VALUE_SET;
++            this.manageSession = true;
+         }
+ 
+         private Builder(HttpRequestConfig config) {
+             this.followRedirects = config.isFollowRedirects();
+             this.redirectionValidator = config.getRedirectionValidator();
+             this.notifyListeners = config.isNotifyListeners();
++            this.soTimeout = config.getSoTimeout();
++            this.manageSession = config.isManageSession();
+         }
+ 
+         /**
+@@ -194,6 +213,18 @@
+         }
+ 
+         /**
++         * Sets whether automatic session management may modify the request or its response.
++         *
++         * @param manageSession {@code false} to send deliberate session mutations unchanged.
++         * @return the builder.
++         * @see HttpRequestConfig#isManageSession()
++         */
++        public Builder setManageSession(boolean manageSession) {
++            this.manageSession = manageSession;
++            return this;
++        }
++
++        /**
+          * Sets the value of the socket timeout ({@link java.net.SocketOptions#SO_TIMEOUT
+          * SO_TIMEOUT}), in milliseconds.
+          *
+@@ -220,7 +251,7 @@
+          */
+         public HttpRequestConfig build() {
+             return new HttpRequestConfig(
+-                    followRedirects, redirectionValidator, notifyListeners, soTimeout);
++                    followRedirects, redirectionValidator, notifyListeners, soTimeout, manageSession);
+         }
+     }
+ }
+--- a/zap/src/main/java/org/parosproxy/paros/core/scanner/AbstractPlugin.java
++++ b/zap/src/main/java/org/parosproxy/paros/core/scanner/AbstractPlugin.java
+@@ -107,6 +107,7 @@
+ import org.zaproxy.zap.extension.custompages.CustomPage;
+ import org.zaproxy.zap.model.Tech;
+ import org.zaproxy.zap.model.TechSet;
++import org.zaproxy.zap.network.HttpRequestConfig;
+ 
+ public abstract class AbstractPlugin implements Plugin, Comparable<Object> {
+ 
+@@ -292,6 +293,26 @@
+     protected void sendAndReceive(
+             HttpMessage message, boolean isFollowRedirect, boolean handleAntiCSRF)
+             throws IOException {
++        sendAndReceive(
++                message,
++                isFollowRedirect
++                        ? getParent().getRedirectRequestConfig()
++                        : HttpRequestConfig.builder().build(),
++                handleAntiCSRF);
++    }
++
++    /**
++     * Sends a probe with explicit transport configuration, retaining scanner hooks, anti-CSRF
++     * handling, throttling, history, and listener notifications.
++     *
++     * @param message the probe.
++     * @param requestConfig the transport configuration.
++     * @param handleAntiCSRF whether anti-CSRF tokens should be regenerated.
++     * @throws IOException if sending the message fails.
++     */
++    protected void sendAndReceive(
++            HttpMessage message, HttpRequestConfig requestConfig, boolean handleAntiCSRF)
++            throws IOException {
+ 
+         if (this.parent.getScannerParam().isInjectPluginIdInHeader()) {
+             message.getRequestHeader()
+@@ -322,13 +343,13 @@
+                         !extAntiCSRF.regenerateAntiCsrfToken(
+                                 message,
+                                 tokenMsg -> sendAndReceive(tokenMsg, true, false),
+-                                msg -> sendMessageImpl(msg, isFollowRedirect),
++                                msg -> sendMessageImpl(msg, requestConfig),
+                                 false);
+             }
+         }
+ 
+         if (send) {
+-            sendMessageImpl(message, isFollowRedirect);
++            sendMessageImpl(message, requestConfig);
+         }
+ 
+         decodeResponseBody(message);
+@@ -339,12 +360,9 @@
+         parent.performScannerHookAfterScan(message, this);
+     }
+ 
+-    private void sendMessageImpl(HttpMessage message, boolean isFollowRedirect) throws IOException {
+-        if (isFollowRedirect) {
+-            parent.getHttpSender().sendAndReceive(message, getParent().getRedirectRequestConfig());
+-        } else {
+-            parent.getHttpSender().sendAndReceive(message, false);
+-        }
++    private void sendMessageImpl(HttpMessage message, HttpRequestConfig requestConfig)
++            throws IOException {
++        parent.getHttpSender().sendAndReceive(message, requestConfig);
+     }
+ 
+     /**
+--- a/addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/BaseHttpSender.java
++++ b/addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/BaseHttpSender.java
+@@ -371,7 +371,7 @@
+             ResponseBodyConsumer<T3> responseBodyConsumer)
+             throws IOException {
+         User user = ctx.getUser(message);
+-        if (user != null) {
++        if (user != null && requestConfig.isManageSession()) {
+             if (ctx.getInitiator() == HttpSender.AUTHENTICATION_POLL_INITIATOR) {
+                 user.processMessageToMatchAuthenticatedSession(message);
+             } else if (ctx.getInitiator() != HttpSender.AUTHENTICATION_INITIATOR) {
+@@ -382,7 +382,9 @@
+         LOGGER.debug("Sending message to: {}", message.getRequestHeader().getURI());
+         sendRateLimited(ctx, requestCtx, requestConfig, message, responseBodyConsumer);
+ 
+-        if (user != null && isAuthenticationRequired(ctx, message, user)) {
++        if (user != null
++                && requestConfig.isManageSession()
++                && isAuthenticationRequired(ctx, message, user)) {
+             LOGGER.debug(
+                     "First try to send authenticated message failed for {}. Authenticating and trying again...",
+                     message.getRequestHeader().getURI());
+--- a/addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/apachev5/HttpSenderApache.java
++++ b/addOns/network/src/main/java/org/zaproxy/addon/network/internal/client/apachev5/HttpSenderApache.java
+@@ -38,6 +38,7 @@
+ import org.apache.hc.client5.http.config.ConnectionConfig;
+ import org.apache.hc.client5.http.config.RequestConfig;
+ import org.apache.hc.client5.http.config.TlsConfig;
++import org.apache.hc.client5.http.cookie.BasicCookieStore;
+ import org.apache.hc.client5.http.cookie.CookieStore;
+ import org.apache.hc.client5.http.cookie.StandardCookieSpec;
+ import org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient;
+@@ -384,7 +385,7 @@
+             ResponseBodyConsumer<HttpEntity> responseBodyConsumer)
+             throws IOException {
+         try {
+-            sendImpl0(ctx, requestContext, message, responseBodyConsumer);
++            sendImpl0(ctx, requestContext, requestConfig, message, responseBodyConsumer);
+         } catch (SocketTimeoutException e) {
+             LOGGER.debug("A timeout occurred while sending the request:", e);
+             Stats.incCounter("stats.network.timeout");
+@@ -412,6 +413,7 @@
+     private void sendImpl0(
+             HttpSenderContextApache ctx,
+             ZapHttpClientContext requestCtx,
++            HttpRequestConfig requestConfig,
+             HttpMessage message,
+             ResponseBodyConsumer<HttpEntity> responseBodyConsumer)
+             throws IOException {
+@@ -434,7 +436,12 @@
+             requestCtx.setAttribute(ZapProtocolExec.PROXY_AUTH_DISABLED_ATTR, Boolean.TRUE);
+         }
+         User user = ctx.getUser(message);
+-        if (user != null) {
++        if (!requestConfig.isManageSession()) {
++            // A probe must not inherit a user/global cookie jar or write its response into it.
++            requestConfigBuilder.setCookieSpec(StandardCookieSpec.IGNORE);
++            requestCtx.setCookieStore(new BasicCookieStore());
++            requestCtx.setCredentialsProvider(credentialsProvider);
++        } else if (user != null) {
+             requestConfigBuilder.setCookieSpec(StandardCookieSpec.RELAXED);
+             requestCtx.setCookieStore(
+                     LegacyUtils.httpStateToCookieStore(user.getCorrespondingHttpState()));
+@@ -548,7 +555,7 @@
+             message.getResponseHeader().setContentLength(message.getResponseBody().length());
+         }
+ 
+-        if (user != null) {
++        if (user != null && requestConfig.isManageSession()) {
+             LegacyUtils.updateHttpState(
+                     user.getCorrespondingHttpState(), requestCtx.getCookieStore());
+         }
+--- a/addOns/ascanrulesBeta/src/main/java/org/zaproxy/zap/extension/ascanrulesBeta/SlackerCookieScanRule.java
++++ b/addOns/ascanrulesBeta/src/main/java/org/zaproxy/zap/extension/ascanrulesBeta/SlackerCookieScanRule.java
+@@ -42,6 +42,7 @@
+ import org.zaproxy.addon.commonlib.PolicyTag;
+ import org.zaproxy.addon.commonlib.vulnerabilities.Vulnerabilities;
+ import org.zaproxy.addon.commonlib.vulnerabilities.Vulnerability;
++import org.zaproxy.zap.network.HttpRequestConfig;
+ 
+ /**
+  * Goal: automate discovery of areas of a website where authentication via session cookies, or
+@@ -185,7 +186,8 @@
+         msg.setCookieParams(allCookiesExceptOne);
+         try {
+             // Send the request and retrieve the response
+-            sendAndReceive(msg, false);
++            sendAndReceive(
++                    msg, HttpRequestConfig.builder().setManageSession(false).build(), true);
+             int responseLength = msg.getResponseBody().length();
+ 
+             LOGGER.debug(
