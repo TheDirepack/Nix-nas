@@ -4,7 +4,6 @@ const SYSTEMD_NAME = "org.freedesktop.systemd1";
 const MANAGER_PATH = "/org/freedesktop/systemd1";
 const MANAGER_INTERFACE = "org.freedesktop.systemd1.Manager";
 const PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties";
-const UNIT_INTERFACE = "org.freedesktop.systemd1.Unit";
 
 function onlyReturnValue(reply) {
   return Array.isArray(reply) && reply.length === 1 ? reply[0] : reply;
@@ -22,11 +21,13 @@ function unitFromListRow(row) {
   };
 }
 
-async function memoryCurrent(client, objectPath) {
-  if (!objectPath) return null;
+async function memoryCurrent(client, {unit, objectPath}) {
+  const type = unit.slice(unit.lastIndexOf(".") + 1);
+  if (!objectPath || !type) return null;
+  const unitInterface = `${SYSTEMD_NAME}.${type[0].toUpperCase()}${type.slice(1)}`;
   try {
     const reply = await client.call(objectPath, PROPERTIES_INTERFACE, "Get", [
-      UNIT_INTERFACE,
+      unitInterface,
       "MemoryCurrent",
     ]);
     const variant = onlyReturnValue(reply);
@@ -73,7 +74,7 @@ export async function readSystemdState(unitNames = []) {
       namedUnits.map(async (unit) => ({
         ...unit,
         active: unit.activeState === "active",
-        memoryBytes: await memoryCurrent(client, unit.objectPath),
+        memoryBytes: await memoryCurrent(client, unit),
       })),
     );
     return {

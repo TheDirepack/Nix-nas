@@ -118,6 +118,66 @@ test("readSystemdState reports null memory when the property is unavailable", as
   }
 });
 
+for (const [unit, type] of [
+  ["grafana.service", "Service"],
+  ["worker@tenant.example.service", "Service"],
+  ["session-1.scope", "Scope"],
+  ["workload.slice", "Slice"],
+]) {
+  test(`readSystemdState reads MemoryCurrent from the native ${type} interface for ${unit}`, async () => {
+    const interfaces = {
+      "org.freedesktop.systemd1.Unit": {ActiveState: {t: "s", v: "active"}},
+      [`org.freedesktop.systemd1.${type}`]: {MemoryCurrent: {t: "t", v: 4096}},
+    };
+    const requests = [];
+    let closed = 0;
+    globalThis.systemdTestClient = {
+      call(_path, _iface, method, args) {
+        if (method === "ListUnitsByNames") return Promise.resolve([[unitRow(unit)]]);
+        if (method === "ListUnitsByPatterns") return Promise.resolve([[]]);
+        requests.push({method, args});
+        const property = interfaces[args[0]]?.[args[1]];
+        return property
+          ? Promise.resolve([property])
+          : Promise.reject(new Error("org.freedesktop.DBus.Error.UnknownProperty"));
+      },
+      close() {
+        closed += 1;
+      },
+    };
+    try {
+      const state = await readSystemdState([unit]);
+      assert.equal(state.units[unit].memoryBytes, 4096);
+      assert.deepEqual(requests, [
+        {method: "Get", args: [`org.freedesktop.systemd1.${type}`, "MemoryCurrent"]},
+      ]);
+      assert.equal(closed, 1);
+    } finally {
+      delete globalThis.systemdTestClient;
+    }
+  });
+}
+
+test("readSystemdState keeps timer memory unavailable on its native interface", async () => {
+  const requests = [];
+  globalThis.systemdTestClient = {
+    call(_path, _iface, method, args) {
+      if (method === "ListUnitsByNames") return Promise.resolve([[unitRow("backup.timer")]]);
+      if (method === "ListUnitsByPatterns") return Promise.resolve([[]]);
+      requests.push(args);
+      return Promise.reject(new Error("org.freedesktop.DBus.Error.UnknownProperty"));
+    },
+    close() {},
+  };
+  try {
+    const state = await readSystemdState(["backup.timer"]);
+    assert.equal(state.units["backup.timer"].memoryBytes, null);
+    assert.deepEqual(requests, [["org.freedesktop.systemd1.Timer", "MemoryCurrent"]]);
+  } finally {
+    delete globalThis.systemdTestClient;
+  }
+});
+
 test("mergeSystemdState projects unit state into service health", () => {
   const data = {
     failedUnits: ["stale.service"],
