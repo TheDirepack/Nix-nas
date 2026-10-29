@@ -249,6 +249,8 @@ for item in value:
     sys.stdout.buffer.write(item.encode() + b"\0")
 PY_EXTERNAL_PROBE
   )
+  # mapfile does not propagate the process substitution's exit status.
+  wait "$!" || return $?
   ((${#probe[@]})) || { echo "External management probe command is empty." >&2; return 1; }
   timeout 60 "${probe[@]}"
 }

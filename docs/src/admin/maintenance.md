@@ -28,6 +28,13 @@ For offline checks before installation or while debugging, use `nas-v2 validate`
 
 Use **Preview and validate updates** before deployment. After applying an update, verify Cockpit, storage, authentication, and protected-service readiness before considering the deployment complete.
 
+Persistent deployment requires an independent management probe configured through
+`NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON`, a nonempty JSON array of nonempty command
+arguments. The updater must finish decoding successfully before running that
+command; invalid arguments or decoder failures cannot run a partial command.
+Probe failures stop deployment. `--allow-local-health-only` is an explicit recovery
+override for an absent probe, not permission to ignore an invalid configured probe.
+
 ## Schedules
 
 Managed Services V2 job schedules compile to native systemd timers. Do not create a parallel timer for the same V2-owned job. The optional Cockpit Scheduler integration remains available for host tasks that are not owned by V2.
