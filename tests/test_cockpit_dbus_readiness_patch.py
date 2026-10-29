@@ -145,8 +145,29 @@ class CockpitDBusReadinessPatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_owner_query_io_failure_closes_instead_of_leaving_open(self):
         error = OSError(errno.EIO, "sd_bus_call_async: Input/output error")
         self.bus.call_method_async.side_effect = error
+        handlers = []
+
+        def add_match(_rule, handler):
+            handlers.append(handler)
+            return self.slot
+
+        self.bus.add_match.side_effect = add_match
         channel = self.open_channel()
+
+        def cancel():
+            self.assertFalse(channel.is_closing())
+            handlers.clear()
+
+        self.slot.cancel.side_effect = cancel
         await self.assert_readiness_failure(channel, error)
+        self.slot.cancel.assert_called_once_with()
+        self.assertEqual(channel.matches, [])
+        frames = self.frames()
+        signal = mock.Mock(spec=["get_body"])
+        signal.get_body.return_value = (NAME, "", OWNER)
+        for handler in handlers:
+            handler(signal)
+        self.assertEqual(self.frames(), frames)
         self.bus.add_match.assert_called_once()
         self.bus.call_method_async.assert_awaited_once_with(
             "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner", "s", NAME

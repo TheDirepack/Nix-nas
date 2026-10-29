@@ -1,7 +1,7 @@
 diff --git a/src/cockpit/channels/dbus.py b/src/cockpit/channels/dbus.py
 --- a/src/cockpit/channels/dbus.py
 +++ b/src/cockpit/channels/dbus.py
-@@ -246,7 +246,12 @@
+@@ -246,7 +246,15 @@
              async def get_ready() -> None:
                  async with self.watch_processing_lock:
 -                    await self.setup_name_owner_tracking()
@@ -9,6 +9,9 @@ diff --git a/src/cockpit/channels/dbus.py b/src/cockpit/channels/dbus.py
 +                        await self.setup_name_owner_tracking()
 +                    except OSError as exc:
 +                        logger.exception('Failed to set up D-Bus name owner tracking')
++                        for slot in self.matches:
++                            slot.cancel()
++                        self.matches = []
 +                        self.close({'problem': 'internal-error', 'message': str(exc)})
 +                        return
                      if self.owner:
