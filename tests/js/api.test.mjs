@@ -158,6 +158,79 @@ test("backend JSON parsing fails closed", () => {
   assert.throws(() => parseJsonOutput("not-json"), SyntaxError);
 });
 
+const jsonRequests = [
+  ["overview", (spawn) => api(["overview"], spawn)],
+  ["structured mutation", (spawn) => apiInput(["source-control"], {action: "status"}, spawn)],
+  ["managed document", (spawn) => managedServicesDocument(spawn)],
+  [
+    "YAML replacement",
+    (spawn) => replaceManagedServicesDocument("schemaVersion: 3\nservices: {}\n", "a".repeat(64), spawn),
+  ],
+  [
+    "JSON replacement",
+    (spawn) => replaceManagedServicesJsonDocument({schemaVersion: 3, services: {}}, "b".repeat(64), spawn),
+  ],
+  ["service mode", (spawn) => setManagedServiceMode("grafana", "on-demand", spawn)],
+  [
+    "first start",
+    (spawn) =>
+      startFirstRun(
+        "correct horse battery staple",
+        {
+          username: "nasadmin",
+          name: "Admin",
+          email: "admin@example.test",
+          password: "long-enough-password",
+        },
+        {planDigest: "c".repeat(64)},
+        spawn,
+      ),
+  ],
+];
+
+for (const [name, request] of jsonRequests) {
+  for (const output of ["", "not-json", '{"ok":', '{"ok":true}']) {
+    test(`${name} parses thenable output inside a native promise: ${JSON.stringify(output)}`, async () => {
+      const process = {
+        input() {},
+        then(fulfilled) {
+          return fulfilled(output);
+        },
+      };
+      let result;
+      assert.doesNotThrow(() => {
+        result = request(() => process);
+      }, "JSON decoding must reject the returned promise, not escape a Cockpit callback");
+      assert.equal(result instanceof Promise, true);
+      if (output === '{"ok":true}') {
+        assert.deepEqual(await result, {ok: true});
+      } else {
+        await assert.rejects(result, SyntaxError);
+      }
+    });
+  }
+
+  test(`${name} preserves the original thenable rejection`, async () => {
+    const reason = new Error("privileged process failed");
+    const process = {
+      input() {},
+      then(_fulfilled, rejected) {
+        return rejected(reason);
+      },
+    };
+    let result;
+    assert.doesNotThrow(() => {
+      result = request(() => process);
+    });
+    assert.equal(result instanceof Promise, true);
+    await assert.rejects(result, (error) => error === reason);
+  });
+}
+
+test("JSON transport still rejects an unavailable Cockpit process API before spawning", () => {
+  assert.throws(() => api(["overview"], null), /Cockpit process API is unavailable/);
+});
+
 test("first-start sends password and safety choices only in a JSON stdin request", async () => {
   const calls = [];
   const spawn = (command, options) => {

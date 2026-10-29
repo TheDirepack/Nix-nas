@@ -17,6 +17,11 @@ export function parseJsonOutput(output) {
   return JSON.parse(output);
 }
 
+function jsonResult(process) {
+  // Cockpit Deferred callbacks do not turn thrown parse errors into rejections.
+  return Promise.resolve(process).then(parseJsonOutput);
+}
+
 function sha256(value, label) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
     throw new Error(`${label} must be a lowercase SHA-256 digest.`);
@@ -25,10 +30,11 @@ function sha256(value, label) {
 }
 
 export function api(args, spawn = globalThis.cockpit?.spawn) {
-  return requireSpawn(spawn)(["nas-cockpit-api", ...args], {
+  const process = requireSpawn(spawn)(["nas-cockpit-api", ...args], {
     superuser: "require",
     err: "message",
-  }).then(parseJsonOutput);
+  });
+  return jsonResult(process);
 }
 
 export function apiInput(args, payload, spawn = globalThis.cockpit?.spawn) {
@@ -37,14 +43,15 @@ export function apiInput(args, payload, spawn = globalThis.cockpit?.spawn) {
     err: "message",
   });
   process.input(JSON.stringify(payload));
-  return process.then(parseJsonOutput);
+  return jsonResult(process);
 }
 
 export function managedServicesDocument(spawn = globalThis.cockpit?.spawn) {
-  return requireSpawn(spawn)(["nas-managed-services-control", "document"], {
+  const process = requireSpawn(spawn)(["nas-managed-services-control", "document"], {
     superuser: "require",
     err: "message",
-  }).then(parseJsonOutput);
+  });
+  return jsonResult(process);
 }
 
 export function replaceManagedServicesDocument(yaml, revision, spawn = globalThis.cockpit?.spawn) {
@@ -59,7 +66,7 @@ export function replaceManagedServicesDocument(yaml, revision, spawn = globalThi
     },
   );
   process.input(yaml);
-  return process.then(parseJsonOutput);
+  return jsonResult(process);
 }
 
 export function replaceManagedServicesJsonDocument(
@@ -78,7 +85,7 @@ export function replaceManagedServicesJsonDocument(
     },
   );
   process.input(JSON.stringify(document));
-  return process.then(parseJsonOutput);
+  return jsonResult(process);
 }
 
 export function setManagedServiceMode(serviceId, mode, spawn = globalThis.cockpit?.spawn) {
@@ -88,10 +95,11 @@ export function setManagedServiceMode(serviceId, mode, spawn = globalThis.cockpi
   if (!new Set(["off", "on-demand", "always"]).has(mode)) {
     throw new Error("Invalid Managed Services V2 service mode.");
   }
-  return requireSpawn(spawn)(["nas-managed-services-control", "set", serviceId, mode], {
+  const process = requireSpawn(spawn)(["nas-managed-services-control", "set", serviceId, mode], {
     superuser: "require",
     err: "message",
-  }).then(parseJsonOutput);
+  });
+  return jsonResult(process);
 }
 
 export function startFirstRun(
