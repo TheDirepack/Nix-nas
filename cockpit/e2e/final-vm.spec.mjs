@@ -270,6 +270,46 @@ test("final VM exposes the installed Cockpit NAS component after real authentica
   expect(errors).toEqual([]);
 });
 
+test("native Cockpit HTML retains same-origin framing and isolation", async ({page}) => {
+  await openNasOverview(page);
+  for (const path of [
+    "/console/",
+    "/console/cockpit/@localhost/system/index.html",
+    "/console/cockpit/@localhost/system/services.html",
+    "/console/cockpit/@localhost/zfs/index.html",
+    "/console/system",
+  ]) {
+    const response = await page.request.get(path);
+    expect(response.status(), path).toBe(200);
+    const headers = response.headers();
+    expect(headers["content-security-policy"], path).toContain("frame-ancestors 'self'");
+    expect(headers["content-security-policy"], path).not.toContain("unsafe-inline");
+    expect(headers["x-frame-options"].toLowerCase(), path).toBe("sameorigin");
+    expect(headers["cross-origin-embedder-policy"], path).toBe("require-corp");
+    expect(headers["cross-origin-opener-policy"], path).toBe("same-origin");
+    expect(headers["cross-origin-resource-policy"], path).toBe("same-origin");
+  }
+});
+
+test("NAS Help menu opens the installed manual instead of an error page", async ({page}) => {
+  await page.setViewportSize({width: 1366, height: 900});
+  await openNasOverview(page);
+  const loaded = page.waitForResponse((response) => {
+    const path = new URL(response.url()).pathname;
+    return (
+      path.startsWith("/console/cockpit/") && path.endsWith("/nas/docs/admin/installation.html")
+    );
+  });
+  await page.getByRole("link", {name: "NAS Help", exact: true}).click();
+  const response = await loaded;
+  expect(response.status()).toBe(200);
+  expect(response.headers()["content-security-policy"]).toContain("frame-ancestors 'self'");
+  const frame = page.frameLocator('iframe[src*="/nas/docs/admin/installation.html#"]');
+  await expect(
+    frame.getByRole("heading", {name: "Install and set up your NAS", exact: true}),
+  ).toBeVisible();
+});
+
 test("final VM protects remembered-device cookies without breaking native CSRF", async ({page}) => {
   await openNasOverview(page);
   const cookies = await page.context().cookies();

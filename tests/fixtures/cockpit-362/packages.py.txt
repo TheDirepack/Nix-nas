@@ -1,0 +1,50 @@
+# Copyright (C) 2022 Red Hat, Inc.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+import logging
+import mimetypes
+from typing import BinaryIO, NamedTuple, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class Document(NamedTuple):
+    data: BinaryIO
+    content_type: str
+    content_encoding: Optional[str] = None
+    content_security_policy: Optional[str] = None
+
+
+class Package:
+    def get_content_security_policy(self) -> str:
+        policy = {
+            "default-src": "'self'",
+            "connect-src": "'self'",
+            "form-action": "'self'",
+            "base-uri": "'self'",
+            "object-src": "'none'",
+            "font-src": "'self' data:",
+            "img-src": "'self' data:",
+        }
+
+        for item in self.manifest.csp.split(';'):
+            item = item.strip()
+            if item:
+                key, _, value = item.strip().partition(' ')
+                policy[key] = value
+
+        return ' '.join(f'{k} {v};' for k, v in policy.items()) + ' block-all-mixed-content'
+
+    def load_file(self, filename: str) -> Document:
+        content_type, content_encoding = mimetypes.guess_type(filename)
+        content_security_policy = None
+
+        if content_type is None:
+            content_type = 'text/plain'
+        elif content_type.startswith('text/html'):
+            content_security_policy = self.get_content_security_policy()
+
+        path = self.path / filename
+        logger.debug('  loading data from %s', path)
+
+        return Document(path.open('rb'), content_type, content_encoding, content_security_policy)

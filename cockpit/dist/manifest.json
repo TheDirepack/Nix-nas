@@ -16,7 +16,7 @@
     "documentation": {
       "label": "NAS Help",
       "order": 21,
-      "path": "docs/index.html",
+      "path": "nas/docs/admin/installation.html",
       "keywords": [
         {
           "matches": ["documentation", "help", "configuration", "copyparty", "syncthing", "recovery"]

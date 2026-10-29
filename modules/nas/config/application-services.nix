@@ -87,6 +87,7 @@ let
   # Tolerating EINVAL turns a fatal shared-session crash into a per-channel
   # error, keeping the Authentik-gated session alive.
   cockpitPatched = pkgs.cockpit.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [ ../../../cockpit/patches/cockpit-frame-ancestors.patch ];
     postFixup =
       (old.postFixup or "")
       + ''
