@@ -224,6 +224,7 @@ test("invalid credentials cannot expose the NAS component", async ({page}) => {
     .fill("definitely-not-a-password");
   await page.locator('button[type="submit"]').filter({visible: true}).first().click();
   await expect(page.getByRole("textbox", {name: "Password", exact: true})).toBeVisible();
+  await expect(page.getByRole("alert", {name: "Invalid password", exact: true})).toBeVisible();
   await expect(page).toHaveURL(/\/identity\//);
   expect(page.frames().some(isNasComponentFrame)).toBe(false);
 });
@@ -253,6 +254,7 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     await expect(pass).toBeVisible();
     await pass.fill(payload);
     await page.locator('button[type="submit"]').filter({visible: true}).first().click();
+    await expect(page.getByRole("alert", {name: "Invalid password", exact: true})).toBeVisible();
     await expect(page).toHaveURL(/\/identity\//);
     expect(await page.evaluate(() => globalThis.__nas_login_xss)).toBe(0);
     expect(page.frames().some(isNasComponentFrame)).toBe(false);

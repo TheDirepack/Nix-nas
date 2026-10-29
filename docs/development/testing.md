@@ -176,6 +176,15 @@ The browser suite verifies that hostile backend strings remain inert, no executa
 
 The installed-system browser suite separately uses the running Cockpit, Caddy, and Authentik stack. It checks real login and authorization identities, capability grants and denials, XSS-shaped identity data, browser console errors, duplicate DOM IDs, interactive-control geometry, and multiple viewport widths. This gives the project both a deterministic mocked-backend browser layer and a real-appliance browser layer.
 
+Negative login cases must observe Authentik's rendered `Invalid password` alert
+before asserting rejection/inertness or clearing cookies for another payload.
+An unchanged identity URL or still-visible password field is not proof that the
+submission completed. `tests/js/final-vm-login.test.mjs` executes the complete
+installed-test callbacks with deferred page/locator I/O to protect this ordering
+and retain delayed marker/page-error failures. These source regressions do not
+qualify browser rendering, installed authentication or timeout recovery; the
+unchanged installed-browser projects and deadlines remain required.
+
 CI retains browser reports and failure attachments even when the existing retry
 passes. Outputs live under the runner temporary directory, outside the checkout.
 Each `qemu-final-browser.sh` invocation creates a private, unique directory below
