@@ -134,6 +134,7 @@ CURL_CONFIG
     name = "nas-update";
     excludeShellChecks = [ "SC1007" "SC2086" ];
     runtimeInputs = [
+      config.services.firewalld.package
       pkgs.coreutils
       pkgs.curl
       pkgs.findutils
@@ -147,6 +148,7 @@ CURL_CONFIG
       pkgs.nix
       pkgs.nixos-rebuild-ng
       pkgs.nut
+      pkgs.python3
       pkgs.skopeo
       pkgs.systemd
       pkgs.zfs

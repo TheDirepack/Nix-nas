@@ -24,6 +24,17 @@ The CopyParty flake is consumed as one reviewed upstream input and follows this 
 
 The privileged control plane uses the Python standard library, immutable dataclasses at internal boundaries, and committed closed JSON Schemas for external payloads. A runtime framework such as Pydantic is not required for the current recovery plane and would add a new boot-critical dependency. Reconsider only when schema generation or cross-process model reuse clearly exceeds the existing validators.
 
+## Updater runtime tools
+
+`nas-update` declares its deployment tools in `maintenance-tools.nix` through
+`writeShellApplication.runtimeInputs`. Include `config.services.firewalld.package`
+for firewall zone checks, so package overrides match the configured service, and
+`pkgs.python3` for the independent management probe's JSON-to-argv validation.
+Do not rely on an interactive/system profile or another package's interpreter.
+The inherited PATH remains available for administrator-supplied probe commands.
+Source-derived PATH fixtures are not Nix wrapper, package or installed-deployment
+qualification; changes still require those tiers before release.
+
 ## Test-only property and fuzz engines
 
 Structured Python fuzz/property testing uses **Hypothesis** from the pinned Nix test shell. Hypothesis is test-only and must not enter appliance runtime closures. Project-local RNG mutation engines are forbidden: tests define strategies and invariants while Hypothesis owns generation, shrinking, replay, and state-machine sequences.
