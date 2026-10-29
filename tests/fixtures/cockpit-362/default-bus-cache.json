@@ -1,0 +1,117 @@
+{
+  "cockpitCommit": "ca0d360e3a858a7eb189edde15cf7b976018404b",
+  "vendorGitlink": {
+    "path": "vendor/systemd_ctypes",
+    "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397"
+  },
+  "files": [
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/__init__.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/__init__.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/__init__.py",
+      "gitBlob": "a9973b5753be5f28bb0f8d19f6e4b514d8e76541",
+      "sha256": "9b7fed01833e4c5c685e287accffacbad17cc913eb99a83689367fc327905b78"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/bus.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/bus.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/bus.py",
+      "gitBlob": "26cb2353e42a0e45e23f640a3a732fcc7f7252d6",
+      "sha256": "d77afec654d096b3010c4847da4caef3c73ec94d39f318c34a82abee4603b860"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/bustypes.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/bustypes.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/bustypes.py",
+      "gitBlob": "ecdb42b0d12d3b70e5cb95b8d8d359d5d067bd28",
+      "sha256": "f9d6f5e357016fb488379016a862ec283ce6aa9247c1dcb6c907a7a7b4ae4076"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/event.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/event.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/event.py",
+      "gitBlob": "d56b1f182582843e63aa2be9252697dd321c9587",
+      "sha256": "f15bbc8abd958da59bc76be6af6133e8584ec2ca0669d98356d3eb06feec9c9b"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/handle.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/handle.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/handle.py",
+      "gitBlob": "9a4fac9a5e7e02e461a6cb7d87df1532a790be85",
+      "sha256": "646c714d7a7b2ff8cce5429e8c76507c0b1d664b7ecd7fa24fda028fa9897fbc"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/inotify.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/inotify.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/inotify.py",
+      "gitBlob": "8ede74f5d6d3ad4b4d4400bacede6b0ccbefadd6",
+      "sha256": "0aa262b9371d1d8465f7e5c5e460401ab4e7d2d751061df7994675d47857697c"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/introspection.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/introspection.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/introspection.py",
+      "gitBlob": "e66c6e79f23a68853def536663ccedb7624de096",
+      "sha256": "add80f816971dcb0db5fbcd859441f9c15a7736800c35f045fe8ba4633d8e0cb"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/librarywrapper.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/librarywrapper.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/librarywrapper.py",
+      "gitBlob": "7d81a94a59228b1d0f3885fb05a917c9c6b688b1",
+      "sha256": "a85c823aefdba54f7949c73d909561acda915655877c13935e77ca95af9260ba"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/libsystemd.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/libsystemd.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/libsystemd.py",
+      "gitBlob": "cb2d27b608986a24ddcd8768fa2e5361c5bef9e5",
+      "sha256": "3560527a0c2933893b99adc3464a0ad78803d63ffed41a3ad4280bbdfd1e46ce"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/pathwatch.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/pathwatch.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/pathwatch.py",
+      "gitBlob": "d74859d63b055a2b1935aaa2885944dfffc84605",
+      "sha256": "87de8c32bbdecbed0d4b0faab67130ab12b99e8b8fd7b5dcef8776672dfe332e"
+    },
+    {
+      "fixture": "dbus-readiness/systemd_ctypes/typing.py.txt",
+      "target": "vendor/systemd_ctypes/src/systemd_ctypes/typing.py",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "src/systemd_ctypes/typing.py",
+      "gitBlob": "4be2bf2e7af75fde7a4c54005d323ca9ad91d623",
+      "sha256": "67523c29127574cb6aa1fc82c555c4535e36b271723f0bb9a90362b56c814f19"
+    },
+    {
+      "fixture": "dbus-readiness/COPYING",
+      "target": "vendor/systemd_ctypes/COPYING",
+      "repository": "allisonkarlitskaya/systemd_ctypes",
+      "commit": "a627fb8b2b58e6dead4ab85aa14abb41d1a48397",
+      "upstreamPath": "COPYING",
+      "gitBlob": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    }
+  ]
+}

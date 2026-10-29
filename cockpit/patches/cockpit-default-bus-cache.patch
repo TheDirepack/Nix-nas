@@ -1,0 +1,27 @@
+diff --git a/vendor/systemd_ctypes/src/systemd_ctypes/bus.py b/vendor/systemd_ctypes/src/systemd_ctypes/bus.py
+--- a/vendor/systemd_ctypes/src/systemd_ctypes/bus.py
++++ b/vendor/systemd_ctypes/src/systemd_ctypes/bus.py
+@@ -303,7 +303,8 @@
+     def default_system(attach_event: bool = True) -> 'Bus':
+         if Bus._default_system_instance is None:
+-            Bus._default_system_instance = Bus()
+-            Bus._default_system(byref(Bus._default_system_instance))
++            bus = Bus()
++            Bus._default_system(byref(bus))
+             if attach_event:
+-                Bus._default_system_instance.attach_event(None, 0)
++                bus.attach_event(None, 0)
++            Bus._default_system_instance = bus
+         return Bus._default_system_instance
+@@ -312,7 +313,8 @@
+     def default_user(attach_event: bool = True) -> 'Bus':
+         if Bus._default_user_instance is None:
+-            Bus._default_user_instance = Bus()
+-            Bus._default_user(byref(Bus._default_user_instance))
++            bus = Bus()
++            Bus._default_user(byref(bus))
+             if attach_event:
+-                Bus._default_user_instance.attach_event(None, 0)
++                bus.attach_event(None, 0)
++            Bus._default_user_instance = bus
+         return Bus._default_user_instance

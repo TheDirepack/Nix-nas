@@ -91,6 +91,7 @@ let
       ../../../cockpit/patches/cockpit-frame-ancestors.patch
       ../../../cockpit/patches/cockpit-error-csp.patch
       ../../../cockpit/patches/cockpit-dbus-readiness.patch
+      ../../../cockpit/patches/cockpit-default-bus-cache.patch
     ];
     postFixup =
       (old.postFixup or "")
