@@ -560,8 +560,51 @@ class StateBundleTests(unittest.TestCase):
                 state.stop_active_units(snapshot)
         self.assertEqual(
             calls,
-            [("stop", "two.service"), ("stop", "one.service"), ("start", "two.service")],
+            [("stop", "two.service"), ("stop", "one.service"), ("start", "one.service"), ("start", "two.service")],
         )
+
+    def test_quiesce_failure_restores_the_unit_whose_stop_partially_succeeded(self) -> None:
+        snapshot = {"unattempted.service": True, "one.service": True, "two.service": True, "inactive.service": False}
+        active = dict(snapshot)
+        error = state.StateError("stop acknowledgement failed")
+        calls: list[tuple[str, str]] = []
+
+        def systemctl(action: str, unit: str, **_kwargs: object) -> mock.Mock:
+            calls.append((action, unit))
+            active[unit] = action == "start"
+            if (action, unit) == ("stop", "one.service"):
+                raise error
+            return self.completed()
+
+        with mock.patch.object(state, "run_systemctl", side_effect=systemctl):
+            with self.assertRaises(state.StateError) as raised:
+                state.stop_active_units(snapshot)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(active, snapshot)
+        self.assertEqual(
+            calls,
+            [("stop", "two.service"), ("stop", "one.service"), ("start", "one.service"), ("start", "two.service")],
+        )
+
+    def test_quiesce_recovery_attempts_every_affected_unit_and_retains_both_failures(self) -> None:
+        original = state.StateError("stop acknowledgement failed")
+        calls: list[tuple[str, str]] = []
+
+        def systemctl(action: str, unit: str, **_kwargs: object) -> mock.Mock:
+            calls.append((action, unit))
+            if action == "start":
+                raise state.StateError(f"{unit} recovery failed")
+            if unit == "one.service":
+                raise original
+            return self.completed()
+
+        with mock.patch.object(state, "run_systemctl", side_effect=systemctl):
+            with self.assertRaises(state.StateError) as raised:
+                state.stop_active_units({"one.service": True, "two.service": True})
+        self.assertIs(raised.exception.__cause__, original)
+        self.assertIn("one.service recovery failed", str(raised.exception))
+        self.assertIn("two.service recovery failed", str(raised.exception))
+        self.assertEqual(calls[-2:], [("start", "one.service"), ("start", "two.service")])
 
     def test_restore_units_honors_generated_profile_list(self) -> None:
         with mock.patch.dict(
