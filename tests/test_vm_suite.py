@@ -233,7 +233,7 @@ die() { echo "$*" >&2; exit 1; }
 
     def test_final_workload_cleanup_closes_and_removes_its_private_ssh_master(self) -> None:
         source = FINAL_BROWSER.read_text(encoding="utf-8")
-        cleanup = "cleanup() {" + source.split("cleanup() {", 1)[1].split("\ntrap cleanup", 1)[0]
+        cleanup = "cleanup() {" + source.split("cleanup() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(
                 [

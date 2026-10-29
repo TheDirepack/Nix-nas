@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import runpy
+import subprocess
+import tempfile
 import unittest
 from typing import Any
 
@@ -308,6 +311,78 @@ class CiWorkflowGraphTests(unittest.TestCase):
         self.assertIn("npm --prefix cockpit run test:browser", text)
         self.assertNotIn("NAS_BROWSER_GREP", text)
 
+    def test_browser_artifacts_survive_successful_retries_and_use_external_output_paths(self) -> None:
+        browser = self.jobs["browser"]
+        run = next(step for step in browser["steps"] if step.get("name") == "Run complete deterministic browser suite")
+        self.assertIn("--output", run["run"])
+        self.assertIn("RUNNER_TEMP", run["run"])
+        self.assertIn("runner.temp", run["env"].get("PLAYWRIGHT_HTML_OUTPUT_DIR", ""))
+        artifact = next(
+            step for step in browser["steps"] if step.get("with", {}).get("name") == "browser-test-evidence"
+        )
+        self.assertEqual(artifact["if"], "always()")
+        self.assertIn("runner.temp", artifact["with"]["path"])
+
+    def test_browser_step_keeps_artifacts_private_with_the_default_host_umask(self) -> None:
+        step = next(
+            step
+            for step in self.jobs["browser"]["steps"]
+            if step.get("name") == "Run complete deterministic browser suite"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            binary = root / "bin/npm"
+            binary.parent.mkdir()
+            binary.write_text(
+                "#!/usr/bin/env bash\nset -eu\nwhile (($#)); do\n"
+                'if [[ "$1" == --output ]]; then mkdir -p "$2"; printf test > "$2/attachment"; fi\n'
+                'shift\ndone\nmkdir -p "$PLAYWRIGHT_HTML_OUTPUT_DIR"\n'
+                'printf html > "$PLAYWRIGHT_HTML_OUTPUT_DIR/index.html"\n',
+                encoding="utf-8",
+            )
+            binary.chmod(0o700)
+            result = subprocess.run(
+                ["bash", "-c", "umask 022\n" + step["run"]],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "PATH": str(binary.parent) + os.pathsep + os.environ["PATH"],
+                    "RUNNER_TEMP": str(root / "runner"),
+                    "PLAYWRIGHT_HTML_OUTPUT_DIR": str(root / "runner/browser-evidence/playwright-report"),
+                },
+                text=True,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            evidence = root / "runner/browser-evidence"
+            self.assertTrue((evidence / "playwright-report/index.html").is_file())
+            self.assertTrue((evidence / "test-results/attachment").is_file())
+            for path in (evidence, *evidence.rglob("*")):
+                self.assertEqual(path.stat().st_mode & 0o077, 0, str(path))
+
+    def test_installed_workloads_retain_unique_external_diagnostics_on_success_and_failure(self) -> None:
+        for name in ("installer", "installed-security"):
+            with self.subTest(job=name):
+                job = self.jobs[name]
+                artifact = next(
+                    step
+                    for step in job["steps"]
+                    if step.get("with", {}).get("name") in ("final-vm-browser-evidence", "installed-security-evidence")
+                )
+                self.assertEqual(artifact["if"], "always()")
+                paths = artifact["with"]["path"].splitlines()
+                if name == "installer":
+                    self.assertTrue(all("runner.temp" in path for path in paths))
+                workloads = [step for step in job["steps"] if "qemu-final-browser.sh" in step.get("run", "")]
+                self.assertEqual(len(workloads), 2)
+                roots = [step.get("env", {}).get("NAS_FINAL_VM_EVIDENCE_DIR", "") for step in workloads]
+                self.assertEqual(len(set(roots)), len(roots))
+                for root in roots:
+                    self.assertIn("runner.temp", root)
+                    self.assertTrue(any(root.startswith(path + "/") for path in paths))
+
     def test_integration_keeps_only_the_two_useful_parallel_vm_legs(self) -> None:
         integration = self.jobs["integration"]
         self.assertEqual(integration["strategy"]["fail-fast"], "false")
@@ -354,12 +429,12 @@ class CiWorkflowGraphTests(unittest.TestCase):
         for event in ("pull_request", "schedule", "github.event_name == 'push'"):
             self.assertNotIn(event, fuzz_if)
 
-    def test_console_evidence_is_copied_out_of_hidden_cache_directories(self) -> None:
+    def test_console_evidence_is_retained_outside_hidden_cache_directories(self) -> None:
         installer = self.serialized(self.jobs["installer"])
         installed = self.serialized(self.jobs["installed-security"])
-        self.assertIn("final-vm-evidence/browser-console.log", installer)
-        self.assertIn("installed-security-logs/browser-console.log", installed)
-        self.assertNotIn("~/.cache/nixos-nas-qemu/state/browser-console.log'", installer)
+        self.assertIn("runner.temp }}/final-vm-evidence", installer)
+        self.assertIn("runner.temp }}/installed-security-evidence", installed)
+        self.assertNotIn("~/.cache/nixos-nas-qemu/state/browser-console.log", installer + installed)
 
     def test_installed_security_provisions_once_and_aggregates_both_workloads(
         self,
