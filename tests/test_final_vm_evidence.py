@@ -109,6 +109,52 @@ exit "${FIXTURE_WORKLOAD_EXIT:-0}"
     def evidence(self) -> list[pathlib.Path]:
         return sorted((self.root / "evidence").glob("deterministic-browser.*"))
 
+    def run_console_gate(self, curl: str) -> subprocess.CompletedProcess[str]:
+        source = text("scripts/qemu-final-browser.sh")
+        gate = source.split("'sudo -n nas-vm-guest-test --setup-reboot-e2e --verify'\n", 1)[1].split(
+            "\nrun_http_adversarial_contracts()", 1
+        )[0]
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -euo pipefail\nSECONDS=0\nHTTPS_PORT=8443\nexec 3>&1\n"
+                "sleep() { SECONDS=$((SECONDS + $1)); }\n"
+                'die() { printf "%s\\n" "$*" >&2; exit 1; }\n'
+                'trap \'printf "elapsed=%s\\n" "$SECONDS" >&2\' EXIT\n' + curl + "\n" + gate,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+
+    def test_console_readiness_bounds_connection_and_response_time(self) -> None:
+        result = self.run_console_gate("curl() { printf 'argument=%s\\n' \"$@\" >&3; return 0; }")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = [
+            line.removeprefix("argument=") for line in result.stdout.splitlines() if line.startswith("argument=")
+        ]
+        self.assertIn("--connect-timeout", arguments)
+        self.assertIn("--max-time", arguments)
+        self.assertEqual(arguments[arguments.index("--connect-timeout") + 1], "2")
+        self.assertEqual(arguments[arguments.index("--max-time") + 1], "2")
+        for flag in ("--fail", "--insecure", "--resolve"):
+            self.assertIn(flag, arguments)
+        self.assertIn("nas-test.local:8443:127.0.0.1", arguments)
+        self.assertIn("https://nas-test.local:8443/console/", arguments)
+
+    def test_console_readiness_charges_requests_and_sleeps_to_the_original_180_seconds(self) -> None:
+        result = self.run_console_gate("curl() { SECONDS=$((SECONDS + 2)); return 28; }")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("elapsed=180\n", result.stderr)
+        self.assertIn("Authenticated console gate did not become reachable", result.stderr)
+
+    def test_console_response_after_the_deadline_does_not_pass_readiness(self) -> None:
+        result = self.run_console_gate("curl() { SECONDS=$((SECONDS + 180)); return 0; }")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("Authenticated console gate did not become reachable", result.stderr)
+
     def test_each_invocation_retains_its_retry_artifacts_and_console_outside_the_checkout(self) -> None:
         for marker in ("initial-install", "package-upgrade"):
             with self.subTest(marker=marker):
