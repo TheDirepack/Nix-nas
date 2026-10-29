@@ -1,0 +1,48 @@
+diff --git a/src/ws/cockpitwebresponse.c b/src/ws/cockpitwebresponse.c
+--- a/src/ws/cockpitwebresponse.c
++++ b/src/ws/cockpitwebresponse.c
+@@ -1093,6 +1093,12 @@ cockpit_web_response_error_with_body (CockpitWebResponse *self,
+   g_autofree gchar *escaped = NULL;
+   g_autofree gchar *reason_local = NULL;
+   const gchar *message;
++  /* Hash the exact inline blocks in src/common/fail.html, including whitespace. */
++  const gchar *error_policy =
++    "default-src 'none'; base-uri 'none'; form-action 'none'; "
++    "frame-ancestors 'self'; font-src 'self'; object-src 'none'; "
++    "script-src 'sha256-wtDBwevxfND3ij3avgmCoZqLpmZ2d9MiWf6U6P9AlNI='; "
++    "style-src 'sha256-90B8pOknFknJ5WQc0JWGVsUu8fo+fPgL09RkN30RCyQ='";
+ 
+   g_return_if_fail (COCKPIT_IS_WEB_RESPONSE (self));
+ 
+@@ -1148,13 +1154,16 @@ cockpit_web_response_error_with_body (CockpitWebResponse *self,
+ 
+   if (headers)
+     {
++      if (body == NULL && !g_hash_table_lookup (headers, "Content-Security-Policy"))
++        g_hash_table_replace (headers, g_strdup ("Content-Security-Policy"), g_strdup (error_policy));
+       if (!g_hash_table_lookup (headers, "Content-Type"))
+         g_hash_table_replace (headers, g_strdup ("Content-Type"), g_strdup ("text/html; charset=utf8"));
+       cockpit_web_response_headers_full (self, code, message, -1, headers);
+     }
+   else
+     {
+-      cockpit_web_response_headers (self, code, message, -1, "Content-Type", "text/html; charset=utf8", NULL);
++      cockpit_web_response_headers (self, code, message, -1, "Content-Type", "text/html; charset=utf8",
++                                    "Content-Security-Policy", body == NULL ? error_policy : NULL, NULL);
+     }
+ 
+   if (!g_str_equal (self->method, "HEAD"))
+diff --git a/src/ws/test-webresponse.c b/src/ws/test-webresponse.c
+--- a/src/ws/test-webresponse.c
++++ b/src/ws/test-webresponse.c
+@@ -161,6 +161,10 @@ test_return_error (TestCase *tc,
+   g_assert_cmpstr (resp, ==,
+     "HTTP/1.1 500 Reason here: booyah\r\n"
+     "Content-Type: text/html; charset=utf8\r\n"
++    "Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; "
++    "frame-ancestors 'self'; font-src 'self'; object-src 'none'; "
++    "script-src 'sha256-wtDBwevxfND3ij3avgmCoZqLpmZ2d9MiWf6U6P9AlNI='; "
++    "style-src 'sha256-90B8pOknFknJ5WQc0JWGVsUu8fo+fPgL09RkN30RCyQ='\r\n"
+     "Transfer-Encoding: chunked\r\n"
+     STATIC_HEADERS
+     "5d\r\n<html><head><title>Reason here: booyah</title></head><body>Reason here: booyah</body></html>\n\r\n"

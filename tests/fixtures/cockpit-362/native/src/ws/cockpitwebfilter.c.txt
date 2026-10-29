@@ -1,0 +1,55 @@
+/*
+ * Copyright (C) 2015 Red Hat, Inc.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ */
+
+#include "config.h"
+
+/* This gets logged as part of the (more verbose) protocol logging */
+#ifdef G_LOG_DOMAIN
+#undef G_LOG_DOMAIN
+#endif
+#define G_LOG_DOMAIN "cockpit-protocol"
+
+#include "cockpitwebfilter.h"
+
+/**
+ * CockpitWebFilter
+ *
+ * A filter used to filter the output of a CockpitWebResponse.
+ */
+
+G_DEFINE_INTERFACE (CockpitWebFilter, cockpit_web_filter, 0);
+
+static void
+cockpit_web_filter_default_init (CockpitWebFilterInterface *iface)
+{
+
+}
+
+/**
+ * cockpit_web_filter_push:
+ * @filter: filter to push a block of bytes into
+ * @queue: block of bytes to filter
+ * @function: filter calls this function with bytes generated
+ * @data: value to pass to function
+ *
+ * Called to send data through a filter. The filter should call
+ * the @function with any data it generates. If the filter wants
+ * to pass through the @queue data, then it needs to call @function
+ * with it.
+ */
+void
+cockpit_web_filter_push (CockpitWebFilter *filter,
+                         GBytes *queue,
+                         void (* function) (gpointer, GBytes *),
+                         gpointer data)
+{
+  CockpitWebFilterInterface *iface;
+
+  iface = COCKPIT_WEB_FILTER_GET_IFACE (filter);
+  g_return_if_fail (iface != NULL);
+
+  g_assert (iface->push);
+  (iface->push) (filter, queue, function, data);
+}
