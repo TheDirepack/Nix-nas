@@ -112,7 +112,7 @@ def _canonical_compose(
     # model whose meaning would depend on ambient reconciliation environment;
     # V2 credentials/environment-file attachments are the deterministic secret
     # path instead.
-    if b"${" in source_bytes:
+    if re.search(rb"\$(?:\{|[A-Za-z_])", source_bytes.replace(b"$$", b"")):
         raise ComposeImportError(
             f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
             "use literal configuration or V2 credential/environment-file attachments"
