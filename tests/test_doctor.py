@@ -130,6 +130,36 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("Checks: 2 ok, 1 warning, 0 critical, 1 info", rendered)
         self.assertIn("Next: Run the complete preflight", rendered)
 
+    def test_authority_lstat_errors_are_reported_and_other_authorities_continue(self) -> None:
+        authorities = (Authority("broken", "/broken"), Authority("absent", "/absent", optional=True))
+        for error in (PermissionError("denied"), NotADirectoryError("bad parent")):
+            with (
+                self.subTest(error=error),
+                mock.patch.object(nas_doctor, "authorities", return_value=authorities),
+                mock.patch.object(pathlib.Path, "lstat", side_effect=[error, FileNotFoundError()]),
+            ):
+                checks, _ = nas_doctor._authority_checks(False)
+                by_id = {check.id: check for check in checks}
+                self.assertEqual(by_id["state.authority.broken"].status, "critical")
+                self.assertEqual(by_id["state.authority.broken"].detail, str(error))
+                self.assertEqual(by_id["state.authority.absent"].status, "ok")
+
+    def test_unsafe_operation_root_is_reported_instead_of_crashing(self) -> None:
+        ok = nas_doctor.Check("test", "ok", "ok")
+        with (
+            mock.patch.object(nas_doctor, "_version_check", return_value=ok),
+            mock.patch.object(nas_doctor, "_setup_checks", return_value=[]),
+            mock.patch.object(nas_doctor, "_managed_services_check", return_value=ok),
+            mock.patch.object(nas_doctor, "_operation_hygiene_checks", return_value=[]),
+            mock.patch.object(nas_doctor, "_authority_checks", return_value=([], None)),
+            mock.patch.object(nas_doctor, "operation_state", side_effect=RuntimeError("unsafe operation root")),
+        ):
+            report = nas_doctor.build_report()
+        coordinator = next(check for check in report["checks"] if check["id"] == "operations.coordinator")
+        self.assertEqual(coordinator["status"], "warning")
+        self.assertIn("unsafe operation root", coordinator["detail"])
+        self.assertEqual(report["status"], "degraded")
+
     def test_doctor_warns_about_coordination_environment_contamination(self) -> None:
         with mock.patch.dict(
             os.environ,
