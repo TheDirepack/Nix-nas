@@ -1065,8 +1065,6 @@ def interrupted_syncthing_ownership(state: Mapping[str, Any]) -> tuple[set[str],
         return set(), set()
     if journal.get("schemaVersion") != 1 or journal.get("phase") not in {"prepared", "mutated"}:
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
-    if journal.get("previousState") != state:
-        raise SyncError("Syncthing reconciliation journal does not match committed ownership state")
     desired = journal.get("desired")
     if not isinstance(desired, dict):
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
@@ -1076,6 +1074,25 @@ def interrupted_syncthing_ownership(state: Mapping[str, Any]) -> tuple[set[str],
         raise SyncError(f"Invalid Syncthing reconciliation journal: {SYNCTHING_JOURNAL_PATH}")
     if journal.get("generation") != syncthing_generation(folders, devices):
         raise SyncError("Syncthing reconciliation journal generation does not match its desired configuration")
+    if journal.get("previousState") != state:
+        retained = journal.get("retainedDevices")
+        if (
+            journal.get("phase") == "mutated"
+            and isinstance(retained, list)
+            and all(isinstance(device, str) for device in retained)
+            and state
+            == {
+                "schemaVersion": 2,
+                "generation": journal["generation"],
+                "folders": sorted(folders),
+                "devices": sorted(set(devices) | set(retained)),
+            }
+        ):
+            # State is durable before the final journal write; recover only an
+            # exact committed ownership snapshot, not a generation label alone.
+            remove_file_durable(SYNCTHING_JOURNAL_PATH)
+            return set(), set()
+        raise SyncError("Syncthing reconciliation journal does not match committed ownership state")
     return {str(value) for value in folders}, {str(value) for value in devices}
 
 
@@ -1119,12 +1136,12 @@ def reconcile_syncthing(model: IdentityModel) -> dict[str, int]:
     for folder_id, folder in folders.items():
         ensure_syncthing_folder(pathlib.Path(folder["path"]))
         syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="PUT", body=folder)
-    removed_folders = old_folders - folders.keys()
+    removed_folders = (old_folders - folders.keys()) & observed_folders.keys()
     for folder_id in sorted(removed_folders):
         syncthing_request(f"/rest/config/folders/{urllib.parse.quote(folder_id, safe='')}", method="DELETE")
     removed_devices: set[str] = set()
     retained_devices: set[str] = set()
-    for device_id in sorted(old_devices - devices.keys()):
+    for device_id in sorted((old_devices - devices.keys()) & observed_devices.keys()):
         try:
             syncthing_request(f"/rest/config/devices/{urllib.parse.quote(device_id, safe='')}", method="DELETE")
             removed_devices.add(device_id)
