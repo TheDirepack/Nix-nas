@@ -62,7 +62,7 @@ def backend_target(route: dict[str, Any]) -> str:
             raise ActivationProjectionError(f"unsafe on-demand upstream host {host!r}")
         if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
             raise ActivationProjectionError(f"invalid on-demand upstream port {port!r}")
-        return f"{host}:{port}"
+        return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
     if target_type == "unix-http":
         raw = target.get("socket")
         if not isinstance(raw, str) or any(ch in raw for ch in "\x00\r\n"):
