@@ -509,6 +509,35 @@ class IdentitySyncTests(unittest.TestCase):
                 )
                 self.assertEqual(sync.syncthing_api_key(), "xml-key")
 
+    def test_syncthing_endpoint_resolution_failure_never_reads_or_sends_the_key(self) -> None:
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": ""}),
+            mock.patch("nas_common.load_effective_authority", side_effect=ValueError("invalid effective state")),
+            mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key") as key,
+            mock.patch.object(sync, "http_json") as http,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "unable to resolve syncthing URL"):
+                sync.syncthing_request("/rest/config/folders")
+        key.assert_not_called()
+        http.assert_not_called()
+
+    def test_syncthing_endpoint_keeps_explicit_and_missing_state_defaults(self) -> None:
+        for explicit, expected in (("http://127.0.0.1:9999/", "http://127.0.0.1:9999"), ("", "http://127.0.0.1:8384")):
+            with (
+                self.subTest(explicit=explicit),
+                mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": explicit}),
+                mock.patch("nas_common.load_effective_authority", side_effect=FileNotFoundError()),
+                mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key"),
+                mock.patch.object(sync, "http_json", return_value={}) as http,
+            ):
+                self.assertEqual(sync.syncthing_request("/rest/config/folders"), {})
+                http.assert_called_once_with(
+                    expected + "/rest/config/folders",
+                    method="GET",
+                    body=None,
+                    headers={"X-API-Key": "synthetic-key"},
+                )
+
     def test_source_never_reintroduces_copyparty_or_legacy_capability_authority(self) -> None:
         source = (ROOT / "services" / "nas_identity_sync.py").read_text(encoding="utf-8")
         model = (ROOT / "services" / "nas_identity_model.py").read_text(encoding="utf-8")

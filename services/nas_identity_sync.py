@@ -102,11 +102,6 @@ def _resolve_syncthing_url() -> str:  # pragma: no cover - V2 integration
         raise RuntimeError(f"unable to resolve syncthing URL from effective state: {exc}") from exc
 
 
-try:
-    SYNCTHING_URL = _resolve_syncthing_url()
-except RuntimeError:
-    # Defer failure to call site; keep module importable in test harnesses.
-    SYNCTHING_URL = "http://127.0.0.1:8384"
 SYNCTHING_CONFIG_DIR = pathlib.Path(os.environ.get("NAS_SYNCTHING_CONFIG_DIR", "/var/lib/syncthing/.config/syncthing"))
 
 
@@ -864,7 +859,11 @@ def syncthing_api_key() -> str:
 
 
 def syncthing_request(path: str, *, method: str = "GET", body: Any | None = None) -> Any:
-    return http_json(f"{SYNCTHING_URL}{path}", method=method, body=body, headers={"X-API-Key": syncthing_api_key()})
+    try:
+        url = _resolve_syncthing_url()
+    except RuntimeError as exc:
+        raise SyncError(str(exc)) from exc
+    return http_json(f"{url}{path}", method=method, body=body, headers={"X-API-Key": syncthing_api_key()})
 
 
 def load_state() -> dict[str, Any]:
