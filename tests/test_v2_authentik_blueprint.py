@@ -136,6 +136,32 @@ class V2AuthentikBlueprintTests(unittest.TestCase):
                 previous={"schemaVersion": 1, "groups": ["nas_admin"], "applications": []},
             )
 
+    def test_non_object_routes_are_skipped_before_sorting(self) -> None:
+        state = effective()
+        state["derived"]["routes"].extend([None, "bad", [], 1])
+        actual = blueprint.render_blueprint(state, public_host="nas.example.test")
+        expected = blueprint.render_blueprint(effective(), public_host="nas.example.test")
+        self.assertEqual(actual, expected)
+
+    def test_commit_rejects_invalid_object_lists_without_advancing_manifest(self) -> None:
+        for invalid in (
+            {"groups": ["nas_admin"], "applications": []},
+            {"groups": "not-a-list", "applications": []},
+            {"groups": [], "applications": ["../escape"]},
+            {"groups": [], "applications": None},
+        ):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                manifest = root / "objects.json"
+                staged = root / "objects.next.json"
+                previous = b'{"schemaVersion":1,"groups":[],"applications":[]}\n'
+                manifest.write_bytes(previous)
+                staged.write_text(json.dumps({"schemaVersion": 1, **invalid}), encoding="utf-8")
+                with self.assertRaises(blueprint.AuthentikBlueprintError):
+                    blueprint.commit_manifest(next_manifest_path=staged, manifest_path=manifest)
+                self.assertEqual(manifest.read_bytes(), previous)
+                self.assertTrue(staged.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
