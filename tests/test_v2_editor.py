@@ -342,6 +342,22 @@ class V2EditorTests(unittest.TestCase):
         self.assertTrue(hasattr(editor, "authority_lock"))
         self.assertIn("authority_lock", editor.__all__)
 
+    def test_status_wraps_structural_errors_without_mutating_authority(self) -> None:
+        for service in (
+            {"name": "Missing runtime", "workload": {"kind": "daemon"}},
+            {"runtime": None, "workload": {"kind": "daemon"}},
+            {"runtime": {"type": "systemd", "unit": "demo.service"}},
+            [],
+        ):
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as raw:
+                root = pathlib.Path(raw)
+                desired = root / "services.yaml"
+                before = json.dumps({"schemaVersion": 3, "services": {"demo": service}})
+                desired.write_text(before, encoding="utf-8")
+                with self.assertRaisesRegex(editor.ManagedServicesEditorError, "structurally invalid"):
+                    editor.status(desired_path=desired, effective_path=root / "effective.json")
+                self.assertEqual(desired.read_text(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

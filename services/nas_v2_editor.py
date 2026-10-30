@@ -338,7 +338,10 @@ def status(
     services = desired.get("services")
     if not isinstance(services, dict):
         raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
-    normalized_services = normalize(desired).get("services")
+    try:
+        normalized_services = normalize(desired).get("services")
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ManagedServicesEditorError(f"Managed Services V2 authority is structurally invalid: {exc}") from exc
     if not isinstance(normalized_services, dict):
         raise ManagedServicesEditorError("Managed Services V2 authority is missing its services mapping")
     effective_value = _load_effective_value(
