@@ -313,8 +313,6 @@ def _transient_command(
         "--",
         *run,
     ]
-    if user_id is not None:
-        command.extend(["--user", user_id])
     return command
 
 
@@ -738,6 +736,7 @@ def generate_projection(
         if not service["managed"]:
             continue
         target = _session_target(service_id)
+        owned.add(target)
         if not service["enabled"]:
             stop.add(target)
             continue
@@ -753,20 +752,7 @@ def generate_projection(
         target_path = unit_dir / target
         files[target_path] = _target_unit(service_id)
         links.append({"target": target, "source": str(target_path)})
-        owned.add(target)
-        fingerprints[target] = _fingerprint(
-            {
-                "runtime": service["runtime"],
-                "dependencies": service["dependencies"],
-                "resources": service["resources"],
-                "sandbox": service["sandbox"],
-                "storage": service["storage"],
-                "credentials": service["credentials"],
-                "network": service.get("network"),
-                "networkProfile": service.get("networkProfile"),
-                "requiresUser": descriptor["requiresUser"],
-            }
-        )
+        fingerprints[target] = _fingerprint(descriptor)
 
     manifest["links"] = sorted(links, key=lambda item: item["target"])
     manifest["ownedUnits"] = sorted(owned)
