@@ -71,6 +71,28 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], {"ok": True})
 
+    def test_committed_mutation_reports_post_commit_status_failure_separately(self):
+        for action in ("single", "many", "reconcile"):
+            with self.subTest(action=action):
+                with (
+                    mock.patch.object(control, "set_service_mode", return_value={"ok": True}) as single,
+                    mock.patch.object(control, "set_service_modes", return_value={"ok": True}) as many,
+                    mock.patch.object(control, "_reconcile") as reconciler,
+                    mock.patch.object(control, "status", side_effect=control.ControlError("bus unavailable")),
+                ):
+                    if action == "single":
+                        result = control.set_mode("demo", "always")
+                        single.assert_called_once()
+                    elif action == "many":
+                        result = control.set_modes({"demo": "off"})
+                        many.assert_called_once()
+                    else:
+                        result = control.reconcile()
+                    reconciler.assert_called_once()
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(result["statusError"], "bus unavailable")
+                    self.assertEqual(result["status"], {"ok": False, "error": "bus unavailable"})
+
     def test_failed_status_query_is_an_error_not_an_inactive_snapshot(self):
         desired = {"services": [{"id": "demo", "units": [{"unit": "demo.service"}]}]}
         with (
