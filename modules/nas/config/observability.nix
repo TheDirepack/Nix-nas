@@ -90,7 +90,7 @@ let
     [[ "$device" == /dev/* && "$device" != *".."* && "$device" != *$'\n'* ]] || die
     if [[ $# -eq 10 ]]; then
       [[ "$9" == "-d" ]] || die
-      [[ "$10" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
+      [[ "''${10}" =~ ^[A-Za-z0-9_,:+.-]+$ ]] || die
     elif [[ $# -ne 8 ]]; then
       die
     fi
@@ -180,7 +180,7 @@ let
       - name: nas-host
         rules:
           - alert: NasTelemetryStale
-            expr: time() - timestamp(system_uptime) > 180
+            expr: absent_over_time(system_uptime[3m])
             for: 2m
             labels:
               severity: critical
@@ -331,7 +331,8 @@ in
       systemd.services.telegraf = {
         after = [ "victoriametrics.service" ];
         requires = [ "victoriametrics.service" ];
-        path = [ pkgs.sudo ];
+        # NixOS installs the privileged sudo wrapper outside the Nix store.
+        environment.PATH = lib.mkForce "/run/wrappers/bin:/run/current-system/sw/bin";
         serviceConfig = {
           AmbientCapabilities = lib.mkForce [ ];
           RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
@@ -379,9 +380,14 @@ in
           };
           inhibit_rules = [
             {
-              source_matchers = [ ''severity="critical"'' ];
-              target_matchers = [ ''severity="warning"'' ];
-              equal = [ "alertname" "instance" ];
+              source_matchers = [ ''alertname="NasFilesystemCriticalSpace"'' ];
+              target_matchers = [ ''alertname="NasFilesystemLowSpace"'' ];
+              equal = [ "host" "path" ];
+            }
+            {
+              source_matchers = [ ''alertname="NasSmartHealthFailed"'' ];
+              target_matchers = [ ''alertname="NasDiskTemperatureHigh"'' ];
+              equal = [ "host" "device" ];
             }
           ];
           receivers = [ { name = "discard"; } ] ++ lib.optional obs.ntfy.enable {
