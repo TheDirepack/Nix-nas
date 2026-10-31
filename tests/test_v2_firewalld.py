@@ -201,6 +201,12 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertEqual(policy["forwardPorts"], [["69", "udp", "3969"]])
         self.assertEqual(manifest["owners"], [{"service": "_host-listeners", "target": target}])
 
+    def test_aggregate_policy_name_is_outside_service_policy_namespace(self):
+        name = firewalld.host_listener_policy_name()
+        self.assertNotEqual(name, firewalld.listener_policy_name("combined-host-listeners"))
+        self.assertNotEqual(name, firewalld.host_policy_name("combined-host-listeners"))
+        self.assertTrue(name.startswith("nv2a"))
+
     def test_host_listener_can_forward_to_unprivileged_target_port(self):
         effective = {
             "schemaVersion": 3,
