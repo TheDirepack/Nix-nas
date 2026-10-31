@@ -1657,9 +1657,12 @@ def restore_bundle(
         try:
             export_bundle(rollback, include_sensitive=True, quiesce=False)
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
+            # Reject absence conflicts before stopping any runtime consumers.
+            # With CleanupOnExit=yes, stopping firewalld flushes its rules;
+            # failing before the stop preserves firewall continuity.
+            preflight_restore_absence(manifest, restore_absence=restore_absence)
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
-            preflight_restore_absence(manifest, restore_absence=restore_absence)
             state_mutated = True
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")

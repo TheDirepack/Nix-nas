@@ -973,8 +973,14 @@ class StateBundleTests(unittest.TestCase):
                         )
                 self.assertEqual(
                     events,
-                    ["stop-writers", "verify-path", "restart-writers", "verify-database",
-                     "stop-writers", "restart-writers"],
+                    [
+                        "stop-writers",
+                        "verify-path",
+                        "restart-writers",
+                        "verify-database",
+                        "stop-writers",
+                        "restart-writers",
+                    ],
                 )
                 self.assertEqual(public.read_text(encoding="utf-8"), "live-before-restore\n")
                 self.assertEqual(sensitive.read_text(encoding="utf-8"), "live-secret-before-restore\n")
@@ -1050,12 +1056,9 @@ class StateBundleTests(unittest.TestCase):
                     state.export_bundle(bundle, include_sensitive=True)
                     optional.write_text("new optional state", encoding="utf-8")
 
-                    def stop(_snapshot):
-                        public.write_text("latest shutdown write", encoding="utf-8")
-
                     with (
                         mock.patch.object(state, "capture_unit_state", return_value={}),
-                        mock.patch.object(state, "stop_active_units", side_effect=stop),
+                        mock.patch.object(state, "stop_active_units") as stop_units,
                         mock.patch.object(state, "restore_unit_state") as recover,
                         mock.patch.object(state, "apply_extracted", wraps=state.apply_extracted) as apply,
                         mock.patch.object(state, "reapply_runtime_consumers"),
@@ -1064,9 +1067,10 @@ class StateBundleTests(unittest.TestCase):
                             state.restore_bundle(
                                 bundle, confirm_host=socket.gethostname(), allow_partial=False, include_sensitive=True
                             )
+                    stop_units.assert_not_called()
                     apply.assert_not_called()
                     recover.assert_called_once()
-                    self.assertEqual(public.read_text(encoding="utf-8"), "latest shutdown write")
+                    self.assertEqual(public.read_text(encoding="utf-8"), "old snapshot")
                     self.assertEqual(optional.read_text(encoding="utf-8"), "new optional state")
                     self.assertEqual(json.loads(state.RESTORE_JOURNAL.read_text())["status"], "failed-before-apply")
 
