@@ -147,14 +147,20 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.assertEqual(self.probe_args.read_bytes(), b"failure-control\0")
 
     def test_invalid_probe_is_rejected_without_launch(self):
-        result = self.run_function(
-            "external_management_probe", inherited=("pkgs.python3",), NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON="{}"
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("external probe command must be a nonempty JSON string array", result.stderr)
-        self.assertIn("External management probe command is empty", result.stderr)
-        self.assertFalse(self.trace.exists())
-        self.assertFalse(self.probe_args.exists())
+        # The Python validator fails first; wait propagates that failure before
+        # the later empty-argv safeguard, so it must not print both diagnostics.
+        invalid_commands = ({}, [], "", [""], ["echo", 3], [None])
+        for invalid in invalid_commands:
+            with self.subTest(command=invalid):
+                result = self.run_function(
+                    "external_management_probe",
+                    inherited=("pkgs.python3",),
+                    NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps(invalid),
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("external probe command must be a nonempty JSON string array", result.stderr)
+                self.assertFalse(self.trace.exists())
+                self.assertFalse(self.probe_args.exists())
 
     def test_external_probe_is_required_without_explicit_override(self):
         result = self.run_function("external_management_probe")
