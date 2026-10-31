@@ -25,7 +25,7 @@ from typing import Any, Sequence
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from nas_v2_compose import ComposeProjectionError, render_compose_override
+from nas_v2_compose import ComposeProjectionError, render_compose_override_snapshot
 
 
 class ComposeImportError(RuntimeError):
@@ -64,11 +64,13 @@ def _run(
     *,
     env: dict[str, str] | None = None,
     timeout: int = 120,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
             list(command),
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL if input_text is None else None,
+            input=input_text,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -189,14 +191,14 @@ def _canonical_compose(
     _absolute_binary(podman_bin, label=f"Compose service {service_id!r} Podman binary")
     _absolute_binary(compose_provider_bin, label=f"Compose service {service_id!r} provider binary")
     try:
-        source, override = render_compose_override(effective, service_id, service)
+        source, override, source_bytes = render_compose_override_snapshot(
+            effective,
+            service_id,
+            service,
+            validate_source=lambda data: _validate_compose_source(service_id, data),
+        )
     except ComposeProjectionError as exc:
         raise ComposeImportError(str(exc)) from exc
-    try:
-        source_bytes = source.read_bytes()
-    except OSError as exc:
-        raise ComposeImportError(f"unable to read Compose source {source}: {exc}") from exc
-    _validate_compose_source(service_id, source_bytes)
 
     with tempfile.TemporaryDirectory(prefix=f"nas-v2-compose-config-{service_id}-") as raw:
         root = pathlib.Path(raw)
@@ -204,18 +206,21 @@ def _canonical_compose(
         override_path.write_bytes(override)
         env = os.environ.copy()
         env["PODMAN_COMPOSE_PROVIDER"] = compose_provider_bin
+        # Podman Compose 1.5.0 reads '-f -' from stdin and uses
+        # COMPOSE_PROJECT_DIR as the base for relative source paths.
+        env["COMPOSE_PROJECT_DIR"] = str(source.parent)
         command = [
             podman_bin,
             "compose",
             "--project-name",
             f"nas-v2-{service_id}",
             "--file",
-            str(source),
+            "-",
             "--file",
             str(override_path),
             "config",
         ]
-        canonical = _run(command, env=env).stdout.encode("utf-8")
+        canonical = _run(command, env=env, input_text=source_bytes.decode("utf-8")).stdout.encode("utf-8")
     if not canonical.strip():
         raise ComposeImportError(f"Compose service {service_id!r} resolved to an empty model")
     _validate_canonical_networking(service_id, canonical)
