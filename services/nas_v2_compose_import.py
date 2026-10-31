@@ -112,7 +112,7 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
 
     def check(value: Any) -> None:
         if isinstance(value, str):
-            if _INTERPOLATION.search(value.replace("$", "")):
+            if _INTERPOLATION.search(value.replace(chr(36) * 2, "")):
                 raise ComposeImportError(
                     f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
                     "use literal configuration or V2 credential/environment-file attachments"
