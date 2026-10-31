@@ -109,6 +109,25 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
         raise ComposeImportError(
             f"Compose service {service_id!r} uses include files which cannot be validated before provider invocation"
         )
+    services = model.get("services", {})
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            # Compose can load additional configuration or environment values
+            # from these files before emitting its canonical model. They have
+            # not been validated and could interpolate ambient variables.
+            if "env_file" in service:
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses an external env_file which cannot be "
+                    "validated before provider invocation; use V2 environment-file attachments"
+                )
+            extends = service.get("extends")
+            if isinstance(extends, dict) and "file" in extends:
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses an external extends file which "
+                    "cannot be validated before provider invocation"
+                )
 
     def check(value: Any) -> None:
         if isinstance(value, str):
