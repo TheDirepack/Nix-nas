@@ -8,6 +8,7 @@ let
   recoveryUsers = lib.attrValues (lib.filterAttrs (name: user:
     name != "root" && (
       lib.elem "nas-administrators" (user.extraGroups or [ ])
+      || (user.group or null) == "nas-administrators"
       || lib.elem name adminMembers
     )
   ) config.users.users);
