@@ -1094,6 +1094,32 @@ def _first_start_worker_live(job_id: str) -> bool:
     raise SetupApiError("First-start worker state is indeterminate", status=503)
 
 
+def _storage_host_units_active() -> bool:
+    """Return True if any detached nas-storage-host-*.service is still active.
+
+    run_storage_host() launches an independent transient systemd unit that can
+    outlive the first-start worker. Before admitting a replacement submission,
+    confirm no storage-host unit is still running so wipefs/zpool create on the
+    same devices cannot overlap.
+    """
+    command = [
+        "systemctl",
+        "list-units",
+        "--state=active",
+        "--plain",
+        "--no-legend",
+        "--no-pager",
+        "nas-storage-host-*.service",
+    ]
+    try:
+        result = run(command, check=False, timeout_seconds=10)
+    except OSError as exc:
+        raise SetupApiError("Unable to verify whether storage-host work is still active", status=503) from exc
+    if result.returncode != 0:
+        raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
+    return bool(result.stdout.strip())
+
+
 def clear_active_setup_job() -> None:
     with contextlib.suppress(OSError):
         SETUP_ACTIVE_JOB_PATH.unlink()
@@ -1347,6 +1373,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
             self._api_error(exc)
 
     def _handle_post(self, request: dict[str, Any]) -> None:
+        """Route a setup API POST to the first-run, resume, or reboot handler."""
         if self.path == "/setup/api/first-run":
             active_job = read_active_setup_job()
             if active_job is not None:
@@ -1354,6 +1381,8 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
                 if saved_status not in {"failed", "cancelled", "complete", "complete-unverified"}:
                     if _first_start_worker_live(active_job):
                         raise SetupApiError("A first-start job is already active; resume it instead", status=409)
+            if _storage_host_units_active():
+                raise SetupApiError("A storage-host operation is still active; retry after it exits", status=409)
             result = start_first_start(request)
             if result.get("status") == "submitted" and isinstance(result.get("jobId"), str):
                 revoke_all_setup_capabilities()
