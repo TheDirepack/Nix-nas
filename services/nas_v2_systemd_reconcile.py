@@ -460,9 +460,7 @@ def reconcile(
     # Session instances are transient systemd-run units. try-restart on their
     # owning target restarts them with OLD Podman argv. Stop the owner instead;
     # sessions must be explicitly relaunched from the new descriptor.
-    changed_sessions = {
-        unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned
-    }
+    changed_sessions = {unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned}
     units_to_stop.update(changed_sessions)
 
     def is_active(unit: str) -> bool | None:
