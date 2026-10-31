@@ -96,6 +96,9 @@ in
       description = "Seed Managed Services V2 desired state once";
       wantedBy = [ "multi-user.target" ];
       before = [ "nas-managed-services-reconcile.service" ];
+      requires = [ "nas-zfs-mount-guard.service" ];
+      after = [ "nas-zfs-mount-guard.service" ];
+      unitConfig.RequiresMountsFor = [ cfg.zfsRoot ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
