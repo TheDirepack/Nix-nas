@@ -225,7 +225,9 @@ def listener_policy_name(service_id: str) -> str:
 
 def host_listener_policy_name() -> str:
     """A single default-deny policy for every enabled host-mode listener."""
-    return listener_policy_name("combined-host-listeners")
+    # Reserve a distinct namespace: user-controlled service IDs may contain
+    # "combined-host-listeners" and must never overwrite isolated policies.
+    return f"nv2a{_digest('combined-host-listeners')}"
 
 
 def remote_admin_policy_name() -> str:
