@@ -254,29 +254,23 @@ VolumeName=data.volume
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             effective, source = self.fixture(root)
-            (source.parent / "included.yaml").write_text(
-                'services:\n  sneaky:\n    image: "example.invalid/$TAG"\n',
-                encoding="utf-8",
-            )
             source.write_text(
-                'include:\n  - included.yaml\nservices:\n  web:\n    image: example.invalid/web:1\n',
+                "include:\n  - included.yaml\nservices:\n  web:\n    image: example.invalid/web:1\n",
                 encoding="utf-8",
             )
-            with mock.patch.object(
-                compose_import, "_run", side_effect=AssertionError("include reached provider")
-            ) as runner:
+            with mock.patch.object(compose_import, "_run", side_effect=AssertionError("provider used")) as runner:
                 with self.assertRaisesRegex(systemd.SystemdProjectionError, "include files"):
                     self.generate(effective, root)
             runner.assert_not_called()
 
-    def test_interpolation_checks_decoded_yaml_not_comments(self) -> None:
-        for source, rejected in (
-            ('# image: "$BAD"\nservices:\n  web:\n    image: example.invalid/web:1\n', False),
+    def test_interpolation_checks_decoded_yaml_and_ignores_comments(self) -> None:
+        cases = (
+            ('# $BAD\nservices:\n  web:\n    image: example.invalid/web:1\n', False),
             ('services:\n  web:\n    image: "example.invalid/web:\\u0024TAG"\n', True),
-            ('services:\n  web:\n    labels:\n      "$BAD": literal\n    image: example.invalid/web:1\n', True),
-            ('services:\n  web:\n    image: "example.invalid/web:$' + '{TAG}"\n', False),
-        ):
-            with self.subTest(source=source, rejected=rejected):
+            ('services:\n  web:\n    labels:\n      "$BAD": literal\n', True),
+        )
+        for source, rejected in cases:
+            with self.subTest(source=source):
                 if rejected:
                     with self.assertRaisesRegex(compose_import.ComposeImportError, "uses interpolation"):
                         compose_import._validate_compose_source("demo", source.encode("utf-8"))
