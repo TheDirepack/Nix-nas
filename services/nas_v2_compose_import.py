@@ -12,6 +12,7 @@ Compose model or tool identities change.  Runtime lifecycle never calls
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -96,8 +97,8 @@ def _json_bytes(value: Any) -> bytes:
 _INTERPOLATION = re.compile(r"\$(?:\{|[A-Za-z_])")
 
 
-def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
-    """Check YAML-decoded values before the Compose provider can interpolate."""
+def _validate_compose_source(service_id: str, source_bytes: bytes) -> bytes:
+    """Validate source and quote scalars to preserve types across provider YAML versions."""
     parser = YAML(typ="safe", pure=True)
     parser.version = (1, 2)
     parser.allow_duplicate_keys = False
@@ -178,6 +179,11 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
                         raise ComposeImportError(
                             f"Compose service {service_id!r} has malformed {field} quoting"
                         ) from exc
+    # Podman Compose's PyYAML loader otherwise treats names such as 'on' as booleans.
+    parser.representer.default_style = '"'
+    output = io.StringIO()
+    parser.dump(model, output)
+    return output.getvalue().encode("utf-8")
 
 
 def _canonical_compose(
@@ -190,15 +196,22 @@ def _canonical_compose(
 ) -> tuple[pathlib.Path, bytes, bytes]:
     _absolute_binary(podman_bin, label=f"Compose service {service_id!r} Podman binary")
     _absolute_binary(compose_provider_bin, label=f"Compose service {service_id!r} provider binary")
+    provider_source: bytes | None = None
+
+    def validate_source(data: bytes) -> None:
+        nonlocal provider_source
+        provider_source = _validate_compose_source(service_id, data)
+
     try:
-        source, override, source_bytes = render_compose_override_snapshot(
+        source, override, _source_bytes = render_compose_override_snapshot(
             effective,
             service_id,
             service,
-            validate_source=lambda data: _validate_compose_source(service_id, data),
+            validate_source=validate_source,
         )
     except ComposeProjectionError as exc:
         raise ComposeImportError(str(exc)) from exc
+    assert provider_source is not None
 
     with tempfile.TemporaryDirectory(prefix=f"nas-v2-compose-config-{service_id}-") as raw:
         root = pathlib.Path(raw)
@@ -220,7 +233,7 @@ def _canonical_compose(
             str(override_path),
             "config",
         ]
-        canonical = _run(command, env=env, input_text=source_bytes.decode("utf-8")).stdout.encode("utf-8")
+        canonical = _run(command, env=env, input_text=provider_source.decode("utf-8")).stdout.encode("utf-8")
     if not canonical.strip():
         raise ComposeImportError(f"Compose service {service_id!r} resolved to an empty model")
     _validate_canonical_networking(service_id, canonical)

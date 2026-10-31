@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+from ruamel.yaml import YAML
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -276,8 +279,8 @@ VolumeName=data.volume
                 effective, source = self.fixture(root)
                 source.write_text(source_text.replace("\\n", "\n"), encoding="utf-8")
                 with mock.patch.object(
-                compose_import, "_run", side_effect=AssertionError("unvalidated Compose file reached provider")
-            ) as provider:
+                    compose_import, "_run", side_effect=AssertionError("unvalidated Compose file reached provider")
+                ) as provider:
                     with self.assertRaisesRegex(systemd.SystemdProjectionError, reason):
                         self.generate(effective, root)
                 provider.assert_not_called()
@@ -314,10 +317,48 @@ VolumeName=data.volume
             self.assertEqual(result_source, source)
             self.assertEqual(result_canonical.decode("utf-8"), canonical)
             command, env, input_text = inspected[0]
-            self.assertEqual(input_text, original)
+            parser = YAML(typ="safe", pure=True)
+            parser.version = (1, 2)
+            self.assertEqual(parser.load(input_text), parser.load(original))
             self.assertEqual(env["COMPOSE_PROJECT_DIR"], str(source.parent))
             self.assertEqual(command[command.index("--file") + 1], "-")
             self.assertIn("include:", source.read_text(encoding="utf-8"))
+
+    def test_provider_yaml_11_cannot_retype_yaml_12_service_names_or_values(self) -> None:
+        for name in ("on", "off", "yes", "no"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                effective["services"]["demo"]["resources"]["pidsMax"] = 100
+                original = f"services:\n  {name}:\n    image: on\n    labels: {{yes: no}}\n"
+                source.write_text(original, encoding="utf-8")
+                podman, provider, _podlet = self.fake_tools(root / "tools")
+
+                def provider_call(command, **kwargs):
+                    parser = YAML(typ="safe", pure=True)
+                    parser.version = (1, 1)
+                    # PyYAML retains YAML 1.1 resolution even with a 1.2 directive.
+                    model = parser.load(kwargs["input_text"].replace("%YAML 1.2\n", ""))
+                    self.assertEqual(list(model["services"]), [name])
+                    self.assertEqual(model["services"][name], {"image": "on", "labels": {"yes": "no"}})
+                    override = json.loads(pathlib.Path(command[-2]).read_text(encoding="utf-8"))
+                    self.assertEqual(list(override["services"]), [name])
+                    self.assertEqual(override["services"][name]["pids_limit"], 100)
+                    return mock.Mock(returncode=0, stdout=kwargs["input_text"])
+
+                with (
+                    mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                    mock.patch.object(compose_import, "_run", side_effect=provider_call) as runner,
+                ):
+                    compose_import._canonical_compose(
+                        effective,
+                        "demo",
+                        effective["services"]["demo"],
+                        podman_bin=str(podman),
+                        compose_provider_bin=str(provider),
+                    )
+                runner.assert_called_once()
+                self.assertEqual(source.read_text(encoding="utf-8"), original)
 
     def test_decoded_yaml_interpolation_is_rejected_but_comments_are_allowed(self) -> None:
         for source in (
@@ -334,26 +375,21 @@ VolumeName=data.volume
 
     def test_compose_command_normalization_cannot_introduce_interpolation(self) -> None:
         for field in ("command", "entrypoint"):
-            source = (
-                "services:\n  web:\n    image: example.invalid/web:1\n"
-                + f'    {field}: "echo $\'TAG\'"\n'
-            )
+            source = "services:\n  web:\n    image: example.invalid/web:1\n" + f"    {field}: \"echo $'TAG'\"\n"
             with self.subTest(field=field):
                 with self.assertRaisesRegex(compose_import.ComposeImportError, "uses interpolation"):
                     compose_import._validate_compose_source("demo", source.encode("utf-8"))
 
     def test_yaml_aliases_are_bounded_and_recursive_aliases_fail_closed(self) -> None:
-        recursive = (
-            "services:\n  web:\n    image: example.invalid/web:1\n"
-            "    x-recursive: &cycle [*cycle]\n"
-        )
+        recursive = "services:\n  web:\n    image: example.invalid/web:1\n    x-recursive: &cycle [*cycle]\n"
         with self.assertRaisesRegex(compose_import.ComposeImportError, "recursive YAML alias"):
             compose_import._validate_compose_source("demo", recursive.encode("utf-8"))
 
         lines = ["services:", "  web:", "    image: example.invalid/web:1", "    x-a0: &a0 [safe]"]
         for number in range(1, 26):
             lines.append(f"    x-a{number}: &a{number} [*a{number - 1}, *a{number - 1}]")
-        compose_import._validate_compose_source("demo", ("\n".join(lines) + "\n").encode("utf-8"))
+        snapshot = compose_import._validate_compose_source("demo", ("\n".join(lines) + "\n").encode("utf-8"))
+        self.assertLess(len(snapshot), 10000, "shared YAML aliases must not expand into an exponential snapshot")
 
     def test_escaped_dollars_and_non_variable_dollars_reach_the_provider(self) -> None:
         for value in ("$${TAG}", "$$TAG", "$$$$TAG", "$5", "dollar$"):
