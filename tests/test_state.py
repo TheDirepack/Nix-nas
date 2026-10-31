@@ -568,8 +568,11 @@ class StateBundleTests(unittest.TestCase):
             with mock.patch.dict(os.environ, self.environment(registry), clear=False):
                 state.export_bundle(bundle, include_sensitive=True)
                 optional.write_text("appeared", encoding="utf-8")
+                public.write_text("live-public", encoding="utf-8")
+                sensitive.write_text("live-sensitive", encoding="utf-8")
                 with (
                     mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "apply_extracted", wraps=state.apply_extracted) as apply_spy,
                     mock.patch.object(
                         state,
                         "run_systemctl",
@@ -585,7 +588,14 @@ class StateBundleTests(unittest.TestCase):
                             allow_partial=False,
                             include_sensitive=True,
                         )
+                apply_spy.assert_not_called()
                 self.assertTrue(optional.exists())
+                self.assertEqual(public.read_text(encoding="utf-8"), "live-public")
+                self.assertEqual(sensitive.read_text(encoding="utf-8"), "live-sensitive")
+                self.assertEqual(
+                    json.loads(state.RESTORE_JOURNAL.read_text(encoding="utf-8"))["status"],
+                    "failed-before-apply",
+                )
 
     def test_restore_preserves_existing_subpath_modes_instead_of_flattening_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -912,6 +922,64 @@ class StateBundleTests(unittest.TestCase):
 
         self.assertIn("postgresql.service", units)
         self.assertIn("nas-authentik-proxy-outpost.service", units)
+
+    def test_database_verification_failure_requiesces_writers_before_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            sensitive = root / "sensitive.txt"
+            public.write_text("bundle-public\n", encoding="utf-8")
+            sensitive.write_text("bundle-sensitive\n", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, sensitive, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("live-before-restore\n", encoding="utf-8")
+                sensitive.write_text("live-secret-before-restore\n", encoding="utf-8")
+                events: list[str] = []
+                original_verify = state.verify_restored_state
+
+                def fail_database_verification(staging: pathlib.Path, manifest: dict, *, kinds: frozenset[str]):
+                    events.append("verify-" + ",".join(sorted(kinds)))
+                    if kinds == frozenset({"database"}):
+                        raise state.StateError("simulated database comparison digest mismatch")
+                    return original_verify(staging, manifest, kinds=kinds)
+
+                def record_stop(_snapshot: object) -> None:
+                    events.append("stop-writers")
+
+                def record_reapply(_snapshot: object) -> None:
+                    events.append("restart-writers")
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                    mock.patch.object(state, "stop_active_units", side_effect=record_stop),
+                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=record_reapply),
+                    mock.patch.object(state, "verify_restored_state", side_effect=fail_database_verification),
+                ):
+                    with self.assertRaisesRegex(state.StateError, "database comparison digest mismatch"):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+                self.assertEqual(
+                    events,
+                    ["stop-writers", "verify-path", "restart-writers", "verify-database",
+                     "stop-writers", "restart-writers"],
+                )
+                self.assertEqual(public.read_text(encoding="utf-8"), "live-before-restore\n")
+                self.assertEqual(sensitive.read_text(encoding="utf-8"), "live-secret-before-restore\n")
+                journal = json.loads(state.RESTORE_JOURNAL.read_text(encoding="utf-8"))
+                self.assertEqual(journal["status"], "failed-rolled-back")
 
     def test_post_restore_validation_triggers_rollback_when_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
