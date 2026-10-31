@@ -34,6 +34,8 @@ class LiveValidationSafetyTests(unittest.TestCase):
             NAS_LIVE_CONFIRM="SYNCOID_DRILL,RESTIC_DRILL",
             NAS_SYNCOID_SOURCE="tank/source",
             NAS_SYNCOID_TARGET="tank/target",
+            NAS_SYNCOID_LOCAL_CLONE="",
+            NAS_SYNCOID_REMOTE_CLONE="",
             NAS_RESTIC_SOURCE=str(self.source),
             NAS_RESTIC_RESTORE_TARGET=str(self.restore),
             RESTIC_REPOSITORY="test-repository",
