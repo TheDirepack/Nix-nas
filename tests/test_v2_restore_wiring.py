@@ -58,7 +58,7 @@ class V2RestoreWiringTests(unittest.TestCase):
                     '${lib.escapeShellArg "${cfg.zfsRoot}/nas-control"}',
                     shlex.quote(str(zfs_root / "nas-control")),
                 )
-                + "\\n"
+                + "\n"
                 + control_check.replace(
                     "${lib.escapeShellArg cfg.secrets.keepassDatabase}", shlex.quote(str(live_secret))
                 ).replace(
@@ -67,7 +67,7 @@ class V2RestoreWiringTests(unittest.TestCase):
                 )
             )
             self.assertNotIn("${lib.escapeShellArg", checks)
-            command = "set -euo pipefail\\nrestore_root=" + shlex.quote(str(restore_root)) + "\\n" + checks
+            command = "set -euo pipefail\nrestore_root=" + shlex.quote(str(restore_root)) + "\\n" + checks
             # Live paths exist but the recovered payload is absent: must fail.
             missing = subprocess.run(
                 ["bash", "-c", command], check=False, capture_output=True, text=True, timeout=5
