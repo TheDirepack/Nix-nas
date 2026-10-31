@@ -841,6 +841,39 @@ class SetupApiCapabilityTests(unittest.TestCase):
                     api._first_start_worker_live("a" * 24)
                 self.assertEqual(caught.exception.status, 503)
 
+    def test_collected_worker_not_found_can_be_recovered_only_after_confirmed_absence(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        missing = mock.Mock(returncode=4, stdout="", stderr=f"Unit {unit} could not be found.")
+        list_args = [
+            "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit
+        ]
+        with mock.patch.object(
+            api, "run", side_effect=[missing, mock.Mock(returncode=0, stdout="", stderr="")]
+        ) as query:
+            self.assertFalse(api._first_start_worker_live("a" * 24))
+        self.assertEqual(query.call_args_list[1], mock.call(list_args, check=False, timeout_seconds=10))
+
+        for listed in (
+            mock.Mock(returncode=1, stdout="", stderr="bus unavailable"),
+            mock.Mock(returncode=0, stdout=unit + " loaded failed failed", stderr=""),
+        ):
+            with self.subTest(listed=listed):
+                with mock.patch.object(api, "run", side_effect=[missing, listed]):
+                    with self.assertRaises(api.SetupApiError) as caught:
+                        api._first_start_worker_live("a" * 24)
+                self.assertEqual(caught.exception.status, 503)
+
+    def test_active_worker_requires_consistent_load_state(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        for load in ("not-found", "error", ""):
+            output = f"Id={unit}\nLoadState={load}\nActiveState=active\n"
+            with self.subTest(load=load), mock.patch.object(
+                api, "run", return_value=mock.Mock(returncode=0, stdout=output)
+            ):
+                with self.assertRaises(api.SetupApiError) as caught:
+                    api._first_start_worker_live("a" * 24)
+                self.assertEqual(caught.exception.status, 503)
+
     def test_stale_running_job_can_be_resubmitted_after_worker_exits(self) -> None:
         for state in ("running", "pending", "submitted", "unknown"):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
