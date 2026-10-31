@@ -506,7 +506,8 @@ def reconcile(
 
     def rollback_active_state() -> None:
         for unit, was_active in active_snapshot.items():
-            if was_active is None:
+            if was_active is None or unit in disrupted_sessions:
+                # Starting this target cannot recreate its lost transient instances.
                 continue
             now_active = is_active(unit)
             if now_active is None or now_active == was_active:
@@ -516,16 +517,20 @@ def reconcile(
             except SystemdReconcileError:
                 continue
 
+    disrupted_sessions: set[str] = set()
     try:
         for unit in sorted(units_to_stop):
             if (
-                unit in stop
-                and _SESSION_TARGET.fullmatch(unit)
+                _SESSION_TARGET.fullmatch(unit)
                 and unit not in previous_links_raw
                 and unit not in current_links
             ):
-                # A newly disabled session has no installed target to stop.
+                # A disabled or retired session has no installed target to stop.
                 continue
+            if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned:
+                # Stopping a target can terminate its transient instances.
+                # Record this before the call, including partial stop failures.
+                disrupted_sessions.add(unit)
             _run_systemctl(systemctl, "stop", unit)
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)
@@ -591,6 +596,13 @@ def reconcile(
             rollback_active_state()
         except Exception as rollback_exc:  # noqa: BLE001
             rollback_error = rollback_exc
+        if disrupted_sessions:
+            details = ", ".join(sorted(disrupted_sessions))
+            rollback_detail = f"; native rollback failed: {rollback_error}" if rollback_error else ""
+            raise SystemdReconcileError(
+                f"systemd reconcile failed: {exc}{rollback_detail}; transient instances may have been "
+                f"terminated under {details} and cannot be recreated by target restart; manual recovery required"
+            ) from exc
         if rollback_error is not None:
             raise SystemdReconcileError(
                 f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"
