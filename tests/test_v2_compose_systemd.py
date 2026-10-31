@@ -258,24 +258,23 @@ VolumeName=data.volume
                 "include:\n  - included.yaml\nservices:\n  web:\n    image: example.invalid/web:1\n",
                 encoding="utf-8",
             )
-            with mock.patch.object(compose_import, "_run", side_effect=AssertionError("provider used")) as runner:
+            with mock.patch.object(compose_import, "_run") as provider:
                 with self.assertRaisesRegex(systemd.SystemdProjectionError, "include files"):
                     self.generate(effective, root)
-            runner.assert_not_called()
+            provider.assert_not_called()
 
-    def test_interpolation_checks_decoded_yaml_and_ignores_comments(self) -> None:
-        cases = (
-            ('# $BAD\nservices:\n  web:\n    image: example.invalid/web:1\n', False),
-            ('services:\n  web:\n    image: "example.invalid/web:\\u0024TAG"\n', True),
-            ('services:\n  web:\n    labels:\n      "$BAD": literal\n', True),
-        )
-        for source, rejected in cases:
+    def test_decoded_yaml_interpolation_is_rejected_but_comments_are_allowed(self) -> None:
+        for source in (
+            'services:\n  web:\n    image: "image:\\u0024TAG"\n',
+            'services:\n  web:\n    labels:\n      "$BAD": literal\n',
+        ):
             with self.subTest(source=source):
-                if rejected:
-                    with self.assertRaisesRegex(compose_import.ComposeImportError, "uses interpolation"):
-                        compose_import._validate_compose_source("demo", source.encode("utf-8"))
-                else:
+                with self.assertRaisesRegex(compose_import.ComposeImportError, "uses interpolation"):
                     compose_import._validate_compose_source("demo", source.encode("utf-8"))
+        compose_import._validate_compose_source(
+            "demo",
+            b"# $COMMENT\nservices:\n  web:\n    image: example.invalid/web:1\n",
+        )
 
     def test_escaped_dollars_and_non_variable_dollars_reach_the_provider(self) -> None:
         for value in ("$${TAG}", "$$TAG", "$$$$TAG", "$5", "dollar$"):
