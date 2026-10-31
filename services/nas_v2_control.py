@@ -71,7 +71,8 @@ def _unit_snapshot(units: list[str]) -> dict[str, dict[str, str]]:
         timeout_seconds=30,
     )
     if result.returncode != 0:
-        return {}
+        detail = (result.stderr or result.stdout).strip()[:2000]
+        raise ControlError(detail or f"systemctl show failed with exit {result.returncode}")
     return parse_systemd_show(result.stdout)
 
 

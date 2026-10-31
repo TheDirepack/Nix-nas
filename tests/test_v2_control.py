@@ -71,6 +71,22 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], {"ok": True})
 
+    def test_failed_status_query_is_an_error_not_an_inactive_snapshot(self):
+        desired = {"services": [{"id": "demo", "units": [{"unit": "demo.service"}]}]}
+        with (
+            mock.patch.object(control, "desired_status", return_value=desired),
+            mock.patch.object(
+                control, "run_command", return_value=mock.Mock(returncode=1, stderr="bus unavailable", stdout="")
+            ),
+        ):
+            with self.assertRaisesRegex(control.ControlError, "bus unavailable"):
+                control.status()
+
+    def test_empty_status_query_needs_no_systemd_bus(self):
+        with mock.patch.object(control, "run_command") as run:
+            self.assertEqual(control._unit_snapshot([]), {})
+        run.assert_not_called()
+
     def test_failed_reconcile_is_reported_without_a_second_editor_rollback(self):
         with tempfile.TemporaryDirectory() as tmp:
             desired_path = pathlib.Path(tmp) / "services.yaml"
