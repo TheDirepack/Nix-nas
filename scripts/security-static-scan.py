@@ -24,7 +24,7 @@ class Finding:
     detail: str
 
 
-SHELL_EVAL_RE = re.compile(r"(?:^|&&|\|\||[;|&()])\s*(?:(?:if|elif|while|until|then|do)\s+)?(?:builtin\s+|command\s+(?:(?:-p|--)\s+)*)?eval(?:\s|$)")
+SHELL_EVAL_RE = re.compile(r"(?:^|&&|\|\||[;|&()])\s*(?:(?:if|elif|while|until|then|do)\s+)?(?:(?:builtin|command)\s+(?:(?:-p|--)\s+)*)?eval(?:\s|$)")
 SHELL_XTRACE_RE = re.compile(
     r"(?:^|&&|\|\||[;|&()])\s*(?:set\s+(?:-[A-Za-z]*x[A-Za-z]*|-o\s+xtrace)(?:\s|$)|(?:bash|sh)\s+-[A-Za-z]*x[A-Za-z]*(?:\s|$))"
 )
