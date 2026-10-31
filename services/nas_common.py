@@ -294,8 +294,12 @@ def resolve_v2_service_capability(
             return service, capability
         if isinstance(derived, dict) and derived:
             return None
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
+    except FileNotFoundError:
+        # First boot may have no compiled authority yet.
+        return service, capability
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        # An existing invalid authority cannot be treated as granting access.
+        return None
     return service, capability
 
 
