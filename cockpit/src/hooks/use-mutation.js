@@ -7,13 +7,13 @@ export function useMutation(refresh) {
   const [notice, setNotice] = useState("");
 
   const mutate = useCallback(
-    async (operation) => {
+    async (operation, {successNotice = "Operation completed."} = {}) => {
       setBusy(true);
       setError("");
       setNotice("");
       try {
         const result = await operation();
-        setNotice("Operation completed.");
+        if (successNotice) setNotice(successNotice);
         await refresh();
         return result;
       } catch (reason) {
