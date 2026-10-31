@@ -55,7 +55,8 @@ remote_zfs() {
     '  clone) exec zfs clone -- "$first" "$second" ;;' \
     '  destroy) exec zfs destroy -- "$first" ;;' \
     '  destroy-recursive) exec zfs destroy -r -- "$first" ;;' \
-    '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;' \
+    '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;'
+    '  list) exec zfs list -H -o name -t filesystem,volume ;;' \
     '  *) exit 64 ;;' \
     'esac' \
     | ssh -o BatchMode=yes "$host" bash -s -- "$action" "$first" "$second"
@@ -157,8 +158,9 @@ syncoid_drill() (
   need_env NAS_SYNCOID_SOURCE
   need_env NAS_SYNCOID_TARGET
   local stamp child snapshot mountpoint marker target_dataset target_host clone cleanup_remote=false
-  local target_spec remote_path
-  stamp=$(date -u +%Y%m%d%H%M%S)
+  local target_spec remote_path local_datasets target_datasets
+  local owned_child=false owned_target=false owned_clone=false
+  stamp="$(date -u +%Y%m%d%H%M%S)-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   child="${NAS_SYNCOID_SOURCE}/nas-live-$stamp"
   snapshot="$child@validation"
   validate_dataset "$child"
@@ -181,38 +183,58 @@ syncoid_drill() (
   fi
   validate_dataset "$target_dataset"
   validate_dataset "$clone"
+  [[ "$clone" != "$child" && "$clone" != "$target_dataset" ]] || fail "drill clone must differ from source and target"
+
+  # Inventory must be readable *before* any mutation. A failed list is not
+  # evidence of absence. Never treat a name collision as our own data.
+  local_datasets=$(zfs list -H -o name -t filesystem,volume) || fail "cannot inspect local ZFS datasets"
+  if "$cleanup_remote"; then
+    target_datasets=$(remote_zfs "$target_host" list "$remote_path") || fail "cannot inspect remote ZFS datasets"
+  else
+    target_datasets=$local_datasets
+  fi
+  ! grep -Fxq -- "$child" <<< "$local_datasets" || fail "source dataset already exists: $child"
+  ! grep -Fxq -- "$target_dataset" <<< "$target_datasets" || fail "target dataset already exists: $target_dataset"
+  ! grep -Fxq -- "$clone" <<< "$target_datasets" || fail "clone dataset already exists: $clone"
+
   cleanup_syncoid() {
     if "$cleanup_remote"; then
-      [[ -z "${clone:-}" ]] || remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true
-      remote_zfs "$target_host" destroy-recursive "$target_dataset" >/dev/null 2>&1 || true
+      if "$owned_clone"; then remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true; fi
+      if "$owned_target"; then remote_zfs "$target_host" destroy-recursive "$target_dataset" >/dev/null 2>&1 || true; fi
     else
-      [[ -z "${clone:-}" ]] || zfs destroy -r -- "$clone" >/dev/null 2>&1 || true
-      [[ -z "${target_dataset:-}" ]] || zfs destroy -r -- "$target_dataset" >/dev/null 2>&1 || true
+      if "$owned_clone"; then zfs destroy -r -- "$clone" >/dev/null 2>&1 || true; fi
+      if "$owned_target"; then zfs destroy -r -- "$target_dataset" >/dev/null 2>&1 || true; fi
     fi
-    [[ -z "$child" ]] || zfs destroy -r -- "$child" >/dev/null 2>&1 || true
+    if "$owned_child"; then zfs destroy -r -- "$child" >/dev/null 2>&1 || true; fi
   }
   trap cleanup_syncoid EXIT
   zfs create -- "$child"
+  owned_child=true
   mountpoint=$(zfs get -H -o value mountpoint "$child")
   marker="nas-live-$stamp"
   printf '%s
 ' "$marker" > "$mountpoint/marker.txt"
   zfs snapshot -- "$snapshot"
+  # If replication fails after creating a partial destination, leave it
+  # for operator inspection; do not assume ownership of an incomplete run.
   syncoid --no-sync-snap "$child" "$target_dataset"
+  owned_target=true
   if "$cleanup_remote"; then
     remote_zfs "$target_host" clone "$target_dataset@validation" "$clone"
+    owned_clone=true
     remote_mount=$(remote_zfs "$target_host" mountpoint "$clone")
     [[ "$(ssh -o BatchMode=yes "$target_host" cat -- "$remote_mount/marker.txt")" == "$marker" ]]
     remote_zfs "$target_host" destroy "$clone"
-    clone=""
+    owned_clone=false
   else
     zfs clone -- "$target_dataset@validation" "$clone"
+    owned_clone=true
     [[ "$(cat "$(zfs get -H -o value mountpoint "$clone")/marker.txt")" == "$marker" ]]
     zfs destroy -- "$clone"
-    clone=""
+    owned_clone=false
   fi
   zfs destroy -r -- "$child"
-  child=""
+  owned_child=false
 )
 
 restic_drill() (
