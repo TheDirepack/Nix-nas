@@ -212,6 +212,31 @@ verify_handoff() {
     return 1
   }
   verify_export_manifest "$dir"
+  # sha256sum --check validates listed entries, not completeness of the list.
+  local filename line
+  local -A required=()
+  for filename in "$PATHS" "$DELTA_PATHS" "$BUNDLE_MANIFEST" "$EXPORTS" "$EXPORT_ORDER"; do
+    required["$filename"]=1
+  done
+  while IFS= read -r filename; do
+    required["$filename"]=1
+  done < "$dir/$EXPORTS"
+  while IFS= read -r line; do
+    if [[ ! "$line" =~ ^[[:xdigit:]]{64}[[:space:]][[:space:]]([^[:space:]]+)$ ]]; then
+      printf 'system-handoff: malformed checksum record\n' >&2
+      return 1
+    fi
+    filename="${BASH_REMATCH[1]}"
+    if [[ -z "${required[$filename]+present}" ]]; then
+      printf 'system-handoff: duplicate or unexpected checksum for %s\n' "$filename" >&2
+      return 1
+    fi
+    unset 'required[$filename]'
+  done < "$dir/$CHECKSUM"
+  if ((${#required[@]})); then
+    printf 'system-handoff: missing checksum entry for required handoff file\n' >&2
+    return 1
+  fi
   (
     cd -- "$dir"
     sha256sum --check --strict --quiet "$CHECKSUM"
