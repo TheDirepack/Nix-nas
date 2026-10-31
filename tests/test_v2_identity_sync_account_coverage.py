@@ -278,7 +278,7 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             "MANUAL-DEVICE": {"deviceID": "MANUAL-DEVICE", "name": "Manual"},
         }
 
-        def request(path: str, *, method: str = "GET", body: object = None) -> object:
+        def request(path: str, *, method: str = "GET", body: object = None, base_url: str | None = None) -> object:
             calls.append((path, method, body))
             if path == "/rest/config/folders":
                 return list(observed_folders.values())
@@ -335,7 +335,7 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             state.write_text('{"folders":[],"devices":["OLD"]}', encoding="utf-8")
             journal = root / "journal.json"
 
-            def request(path: str, *, method: str = "GET", body: object = None) -> object:
+            def request(path: str, *, method: str = "GET", body: object = None, base_url: str | None = None) -> object:
                 if path.endswith("/OLD") and method == "DELETE":
                     raise sync.SyncError("HTTP 409 still referenced")
                 if path == "/rest/config/devices":
@@ -363,7 +363,7 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             state, journal = root / "state.json", root / "journal.json"
             state.write_text('{"folders":["missing"],"devices":["MISSING"]}', encoding="utf-8")
 
-            def request(path: str, *, method: str = "GET", body: object = None) -> object:
+            def request(path: str, *, method: str = "GET", body: object = None, base_url: str | None = None) -> object:
                 if method == "DELETE":
                     self.fail("absent objects must not receive DELETE")
                 if path in {"/rest/config/folders", "/rest/config/devices"}:
@@ -546,7 +546,9 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                 state.write_text('{"schemaVersion":2,"folders":[],"devices":[]}', encoding="utf-8")
                 calls: list[tuple[str, str]] = []
 
-                def request(path: str, *, method: str = "GET", body: object = None) -> object:
+                def request(
+                    path: str, *, method: str = "GET", body: object = None, base_url: str | None = None
+                ) -> object:
                     calls.append((path, method))
                     if path == "/rest/config/folders":
                         return observed_folders
@@ -574,7 +576,7 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
         observed_folders = {key: dict(value) for key, value in folders.items()}
         observed_devices = {key: dict(value) for key, value in devices.items()}
 
-        def request(path: str, *, method: str = "GET", body: object = None) -> object:
+        def request(path: str, *, method: str = "GET", body: object = None, base_url: str | None = None) -> object:
             if path == "/rest/config/folders":
                 return list(observed_folders.values())
             if path == "/rest/config/devices":
