@@ -791,16 +791,100 @@ class SetupApiCapabilityTests(unittest.TestCase):
                 api.record_active_setup_job("a" * 24)
                 with (
                     mock.patch.object(api, "first_start_job_status", return_value={"status": state}),
+                    mock.patch.object(api, "_first_start_worker_live", return_value=True) as worker,
                     mock.patch.object(
                         api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
                     ) as submit,
                 ):
                     status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
                 self.assertIn(b"409", status)
+                worker.assert_called_once_with("a" * 24)
                 submit.assert_not_called()
                 self.assertEqual(api.read_active_setup_job(), "a" * 24)
                 with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
                     self.assertEqual(api.lookup_setup_capability(token), "a" * 24)
+
+    def test_setup_worker_state_checks_the_exact_transient_unit(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        for load, active, expected in (
+            ("loaded", "active", True),
+            ("loaded", "activating", True),
+            ("loaded", "deactivating", True),
+            ("loaded", "inactive", False),
+            ("loaded", "failed", False),
+            ("not-found", "inactive", False),
+        ):
+            with self.subTest(load=load, active=active):
+                output = f"Id={unit}\\nLoadState={load}\\nActiveState={active}\\n"
+                with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)) as query:
+                    self.assertIs(api._first_start_worker_live("a" * 24), expected)
+                query.assert_called_once_with(
+                    ["systemctl", "show", "--property=Id,LoadState,ActiveState", unit],
+                    check=False,
+                    timeout_seconds=10,
+                )
+
+    def test_setup_worker_query_failures_keep_the_claim(self) -> None:
+        unit = "nas-first-start-" + "a" * 24 + ".service"
+        for value in (
+            mock.Mock(returncode=1, stdout=f"Id={unit}\\nLoadState=not-found\\nActiveState=inactive\\n"),
+            mock.Mock(returncode=0, stdout=""),
+            mock.Mock(returncode=0, stdout=f"Id={unit}\\nLoadState=error\\nActiveState=unknown\\n"),
+            OSError("systemd unavailable"),
+        ):
+            with self.subTest(value=value), mock.patch.object(api, "run") as query:
+                if isinstance(value, OSError):
+                    query.side_effect = value
+                else:
+                    query.return_value = value
+                with self.assertRaises(api.SetupApiError) as caught:
+                    api._first_start_worker_live("a" * 24)
+                self.assertEqual(caught.exception.status, 503)
+
+    def test_stale_running_job_can_be_resubmitted_after_worker_exits(self) -> None:
+        for state in ("running", "pending", "submitted", "unknown"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                _, socket_path = self.live_server(directory)
+                api.record_active_setup_job("a" * 24)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    old_capability = api.issue_setup_capability("a" * 24)
+                with (
+                    mock.patch.object(api, "first_start_job_status", return_value={"status": state}),
+                    mock.patch.object(api, "_first_start_worker_live", return_value=False) as worker,
+                    mock.patch.object(
+                        api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
+                    ) as submit,
+                ):
+                    status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                self.assertIn(b"200", status)
+                worker.assert_called_once_with("a" * 24)
+                submit.assert_called_once_with({})
+                self.assertEqual(response["jobId"], "b" * 24)
+                self.assertEqual(api.read_active_setup_job(), "b" * 24)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    self.assertIsNone(api.lookup_setup_capability(old_capability))
+                    self.assertEqual(api.lookup_setup_capability(response["capability"]), "b" * 24)
+
+    def test_unavailable_worker_state_never_overwrites_tracked_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            api.record_active_setup_job("a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                token = api.issue_setup_capability("a" * 24)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(
+                    api, "_first_start_worker_live", side_effect=api.SetupApiError("systemd unavailable", status=503)
+                ),
+                mock.patch.object(api, "start_first_start") as submit,
+            ):
+                status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"503", status)
+            self.assertIn("systemd unavailable", response["error"])
+            submit.assert_not_called()
+            self.assertEqual(api.read_active_setup_job(), "a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                self.assertEqual(api.lookup_setup_capability(token), "a" * 24)
 
     def test_submission_obeys_process_shared_claim_lock(self) -> None:
         lock_path = self.active_job.parent / ".submission.lock"
