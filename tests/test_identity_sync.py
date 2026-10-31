@@ -509,6 +509,119 @@ class IdentitySyncTests(unittest.TestCase):
                 )
                 self.assertEqual(sync.syncthing_api_key(), "xml-key")
 
+    def test_syncthing_endpoint_resolution_failure_never_reads_or_sends_the_key(self) -> None:
+        with (
+            mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": ""}),
+            mock.patch("nas_common.load_effective_authority", side_effect=ValueError("invalid effective state")),
+            mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key") as key,
+            mock.patch.object(sync, "http_json") as http,
+        ):
+            with self.assertRaisesRegex(sync.SyncError, "unable to resolve syncthing URL"):
+                sync.syncthing_request("/rest/config/folders")
+        key.assert_not_called()
+        http.assert_not_called()
+
+    def test_syncthing_endpoint_keeps_explicit_and_missing_state_defaults(self) -> None:
+        for explicit, expected in (("http://127.0.0.1:9999/", "http://127.0.0.1:9999"), ("", "http://127.0.0.1:8384")):
+            with (
+                self.subTest(explicit=explicit),
+                mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": explicit}),
+                mock.patch("nas_common.load_effective_authority", side_effect=FileNotFoundError()),
+                mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key"),
+                mock.patch.object(sync, "http_json", return_value={}) as http,
+            ):
+                self.assertEqual(sync.syncthing_request("/rest/config/folders"), {})
+                http.assert_called_once_with(
+                    expected + "/rest/config/folders",
+                    method="GET",
+                    body=None,
+                    headers={"X-API-Key": "synthetic-key"},
+                )
+
+    def test_syncthing_endpoint_resolves_port_from_effective_state(self) -> None:
+        """Successful request-time port resolution from effective state must use the current port."""
+        for port, expected in ((8384, "http://127.0.0.1:8384"), (9999, "http://127.0.0.1:9999")):
+            with (
+                self.subTest(port=port),
+                mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": ""}),
+                mock.patch(
+                    "nas_common.load_effective_authority",
+                    return_value={"services": {"syncthing": {"routes": {"web": {"target": {"port": port}}}}}},
+                ),
+                mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key"),
+                mock.patch.object(sync, "http_json", return_value={}) as http,
+            ):
+                self.assertEqual(sync.syncthing_request("/rest/config/folders"), {})
+                http.assert_called_once_with(
+                    expected + "/rest/config/folders",
+                    method="GET",
+                    body=None,
+                    headers={"X-API-Key": "synthetic-key"},
+                )
+
+    def test_syncthing_reconcile_binds_ownership_mutation_and_verification_to_one_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state = root / "state.json"
+            journal = root / "journal.json"
+            state.write_text(json.dumps({"folders": ["old"], "devices": ["OLD"]}), encoding="utf-8")
+            folder = {"id": "nas-new", "path": str(root / "shares/users/alice/syncthing")}
+            device = {"deviceID": "NEW"}
+            observed_folders = {"old": {"id": "old"}}
+            observed_devices = {"OLD": {"deviceID": "OLD"}}
+            port = 8384
+            calls = []
+
+            def effective():
+                return {"services": {"syncthing": {"routes": {"web": {"target": {"port": port}}}}}}
+
+            def http(url, *, method="GET", body=None, headers=None):
+                nonlocal port
+                self.assertTrue(url.startswith("http://127.0.0.1:8384/"), "endpoint changed after ownership read")
+                self.assertEqual(headers, {"X-API-Key": "synthetic-key"})
+                port = 9999
+                path = sync.urllib.parse.urlsplit(url).path
+                calls.append((method, path))
+                if path == "/rest/config/folders":
+                    return list(observed_folders.values())
+                if path == "/rest/config/devices":
+                    return list(observed_devices.values())
+                if path == "/rest/config/restart-required":
+                    return {"requiresRestart": True}
+                objects = observed_folders if "/folders/" in path else observed_devices
+                if method == "PUT":
+                    assert isinstance(body, dict)
+                    objects[path.rsplit("/", 1)[1]] = body
+                elif method == "DELETE":
+                    objects.pop(path.rsplit("/", 1)[1])
+                return {}
+
+            with (
+                mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": ""}),
+                mock.patch("nas_common.load_effective_authority", side_effect=effective) as authority,
+                mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                mock.patch.object(sync, "STATE_PATH", state),
+                mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal),
+                mock.patch.object(sync, "desired_syncthing", return_value=({"nas-new": folder}, {"NEW": device})),
+                mock.patch.object(sync, "ensure_syncthing_folder"),
+                mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key"),
+                mock.patch.object(sync, "http_json", side_effect=http) as transport,
+            ):
+                result = sync.reconcile_syncthing(identity_model.IdentityModel((), (), ("admin",)))
+                authority.assert_called_once_with()
+                transport.side_effect = None
+                transport.return_value = []
+                sync.syncthing_request("/rest/config/folders")
+                self.assertEqual(transport.call_args.args[0], "http://127.0.0.1:9999/rest/config/folders")
+            self.assertEqual(result, {"folders": 1, "devices": 1, "removedFolders": 1, "removedDevices": 1})
+            self.assertEqual(observed_folders, {"nas-new": folder})
+            self.assertEqual(observed_devices, {"NEW": device})
+            self.assertEqual(calls.count(("GET", "/rest/config/folders")), 2)
+            self.assertEqual(calls.count(("GET", "/rest/config/devices")), 2)
+            self.assertIn(("POST", "/rest/system/restart"), calls)
+            self.assertEqual(json.loads(state.read_text())["devices"], ["NEW"])
+            self.assertFalse(journal.exists())
+
     def test_source_never_reintroduces_copyparty_or_legacy_capability_authority(self) -> None:
         source = (ROOT / "services" / "nas_identity_sync.py").read_text(encoding="utf-8")
         model = (ROOT / "services" / "nas_identity_model.py").read_text(encoding="utf-8")

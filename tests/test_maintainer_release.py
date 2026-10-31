@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -153,19 +155,32 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
                 self.assertIn("usage", (result.stdout + result.stderr).lower())
 
     def test_preflight_wrapper_runs_its_safe_local_tier(self) -> None:
-        result = self.run_clean(
-            "env",
-            "NAS_PREFLIGHT_REQUIRE_COMPLETE=0",
-            "NAS_PREFLIGHT_SKIP_TESTS=1",
-            "NAS_PREFLIGHT_SKIP_FUZZ=1",
-            "NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1",
-            "NAS_PREFLIGHT_SKIP_NIX=1",
-            "bash",
-            "scripts/preflight.sh",
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["NAS_PREFLIGHT_REQUIRE_COMPLETE"] = "0"
+        env["NAS_PREFLIGHT_SKIP_TESTS"] = "1"
+        env["NAS_PREFLIGHT_SKIP_FUZZ"] = "1"
+        env["NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE"] = "1"
+        env["NAS_PREFLIGHT_SKIP_NIX"] = "1"
+        status_file = self.clean_root.parent / "preflight-status.json"
+        env["NAS_PREFLIGHT_STATUS_FILE"] = str(status_file)
+        result = subprocess.run(
+            ["bash", "scripts/preflight.sh"],
+            cwd=self.clean_root,
+            env=env,
+            text=True,
+            capture_output=True,
             timeout=90,
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("Preflight partial: 0", result.stdout)
+        status = json.loads(status_file.read_text(encoding="utf-8"))
+        self.assertEqual(status["result"], "partial")
+        incomplete = status["incompleteChecks"]
+        required = {"python-tests", "nix"}
+        required.update({"cockpit-bundle", "javascript-tests"} if shutil.which("node") else {"node"})
+        self.assertLessEqual(required, set(incomplete))
+        self.assertIn(f"Preflight partial: {len(incomplete)} check(s) were not executed:", result.stdout)
         self.assertIn("repository structure", result.stdout)
         self.assertIn("static security boundaries", result.stdout)
         self.assertFalse((self.clean_root / ".ruff_cache").exists())
