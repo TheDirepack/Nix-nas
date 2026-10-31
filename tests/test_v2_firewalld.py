@@ -148,7 +148,7 @@ class V2FirewalldTests(unittest.TestCase):
         }
         self.assertTrue(requires_firewalld(effective))
         files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('platform')}"]
+        policy = files[f"policies/{firewalld.host_listener_policy_name()}"]
         self.assertEqual(policy["ingress"], "trusted")
         self.assertEqual(policy["egress"], "HOST")
         self.assertIn(["3493", "tcp"], policy["ports"])
@@ -157,11 +157,42 @@ class V2FirewalldTests(unittest.TestCase):
             sorted(
                 [
                     {"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}"},
-                    {"service": "platform", "target": f"policies/{firewalld.listener_policy_name('platform')}"},
+                    {"service": "_host-listeners", "target": f"policies/{firewalld.host_listener_policy_name()}"},
                 ],
                 key=lambda x: x["target"],
             ),
         )
+
+    def test_multiple_host_services_share_one_default_deny_policy(self):
+        services = {}
+        for name, port in (("web", 8080), ("api", 8081)):
+            services[name] = {
+                "managed": True,
+                "enabled": True,
+                "runtime": {"type": "systemd", "unit": f"{name}.service"},
+                "network": {
+                    "mode": "host",
+                    "outboundDefault": "allow",
+                    "lanAccess": False,
+                    "allowedHostPorts": [],
+                    "allowedEgress": [],
+                },
+                "listeners": {
+                    "server": {"protocol": "tcp", "exposure": {"port": port}, "firewall": True}
+                },
+            }
+        objects, manifest = firewalld.compile_application_projection(
+            {"schemaVersion": 3, "services": services}, lan_zone="trusted"
+        )
+        target = f"policies/{firewalld.host_listener_policy_name()}"
+        self.assertEqual(set(objects), {target})
+        policy = objects[target]
+        self.assertEqual(policy["target"], "DROP")
+        self.assertEqual(policy["priority"], -50)
+        self.assertEqual(policy["ingress"], "trusted")
+        self.assertEqual(policy["egress"], "HOST")
+        self.assertEqual(policy["ports"], [["8080", "tcp"], ["8081", "tcp"]])
+        self.assertEqual(manifest["owners"], [{"service": "_host-listeners", "target": target}])
 
     def test_host_listener_can_forward_to_unprivileged_target_port(self):
         effective = {
@@ -195,7 +226,7 @@ class V2FirewalldTests(unittest.TestCase):
             },
         }
         files, _ = firewalld.compile_projection(effective, lan_zone="trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}"]
+        policy = files[f"policies/{firewalld.host_listener_policy_name()}"]
         self.assertIn(["69", "udp", "3969"], policy["forwardPorts"])
         self.assertIn(["40000-40099", "udp"], policy["ports"])
         self.assertNotIn(["69", "udp"], policy["ports"])
