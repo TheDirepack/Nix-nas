@@ -1123,7 +1123,7 @@ def _storage_host_units_active() -> bool:
         raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
     for row in jobs.stdout.splitlines():
         fields = row.split()
-        if len(fields) >= 2 and re.fullmatch(r"nas-storage-host-[0-9a-f]+\\.service", fields[1]):
+        if len(fields) >= 2 and re.fullmatch(r"nas-storage-host-[0-9a-f]+\.service", fields[1]):
             return True
     return False
 
