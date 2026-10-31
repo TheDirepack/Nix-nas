@@ -50,9 +50,11 @@ class V2SystemdReconcileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
             generation = root / "generations" / ("a" * 40) / "systemd"
-            current = root / "systemd"
+            current = root / "generations" / ("b" * 40) / "systemd"
+            changed = root / "generations" / ("c" * 40) / "systemd"
+            projection_link = root / "current"
             unit = "nas-v2-session-agent.target"
-            for projection in (generation, current):
+            for projection in (generation, current, changed):
                 (projection / "units").mkdir(parents=True)
                 (projection / "descriptors").mkdir()
                 (projection / "units" / unit).write_text("[Unit]\nStopWhenUnneeded=yes\n", encoding="utf-8")
@@ -60,6 +62,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                     json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/old:/data"]}),
                     encoding="utf-8",
                 )
+            projection_link.symlink_to(generation)
             manifest = root / "manifest.json"
             runtime = root / "live-systemd"
             runtime.mkdir()
@@ -67,13 +70,15 @@ class V2SystemdReconcileTests(unittest.TestCase):
             systemctl, log = self.make_systemctl(root)
 
             def run(projection, fingerprint):
+                projection_link.unlink()
+                projection_link.symlink_to(projection)
                 manifest.write_text(json.dumps({
                     "schemaVersion": 1,
                     "links": [{"target": unit, "source": str(projection / "units" / unit)}],
                     "quadletLinks": [], "ownedUnits": [unit], "startUnits": [],
                     "stopUnits": [], "fingerprints": {unit: fingerprint},
                 }), encoding="utf-8")
-                return self.run_reconcile(manifest=manifest, projection=projection,
+                return self.run_reconcile(manifest=manifest, projection=projection_link,
                                           runtime=runtime, state=state, systemctl=systemctl, log=log)
 
             run(generation, "legacy-hash")
@@ -87,12 +92,12 @@ class V2SystemdReconcileTests(unittest.TestCase):
 
             # Changed resolved mount argument: stop the target, never
             # try-restart the old transient command/argv.
-            (current / "descriptors" / "agent.session.json").write_text(
+            (changed / "descriptors" / "agent.session.json").write_text(
                 json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/new:/data"]}),
                 encoding="utf-8",
             )
             log.write_text("", encoding="utf-8")
-            run(current, "path-changed-hash")
+            run(changed, "path-changed-hash")
             commands = log.read_text(encoding="utf-8")
             self.assertIn("stop " + unit, commands)
             self.assertNotIn("try-restart " + unit, commands)
