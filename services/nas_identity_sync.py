@@ -1490,6 +1490,8 @@ def export_account(token: str, username: str) -> dict[str, Any]:
 
 def retire_bootstrap_administrator(token: str, administrator: str) -> dict[str, str]:
     administrator = validate_uid(administrator)
+    if administrator == "akadmin":
+        raise SyncError("The bootstrap administrator cannot be its own replacement")
     users = authentik_list(token, "core/users/?include_groups=true")
     groups = authentik_list(token, "core/groups/?include_users=true")
     admin_group = next((group for group in groups if group.get("name") == ADMIN_GROUP), None)
