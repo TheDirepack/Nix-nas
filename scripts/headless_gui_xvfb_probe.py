@@ -66,9 +66,13 @@ def private_xvfb(*, width: int = 800, height: int = 600, depth: int = 24, timeou
                     if proc.poll() is not None:
                         # Another process could have acquired this display first.
                         break
-                    probe = subprocess.run(
-                        ["xdpyinfo"], env=env, capture_output=True, timeout=1, check=False,
-                    )
+                    try:
+                        probe = subprocess.run(
+                            ["xdpyinfo"], env=env, capture_output=True, timeout=1, check=False,
+                        )
+                    except subprocess.TimeoutExpired:
+                        # A slow client is not a failed display until the outer deadline.
+                        continue
                     if probe.returncode == 0:
                         yield display, env, private_dir, proc
                         return
