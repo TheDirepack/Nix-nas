@@ -79,6 +79,62 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.run_reconcile(**kwargs)
             self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
 
+    def test_enabling_previously_disabled_session_never_stops_uninstalled_target(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            unit = "nas-v2-session-agent.target"
+            source = units / unit
+            source.write_text("[Unit]\\nDescription=Agent\\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root, fail_on={f"stop {unit}"})
+            kwargs = dict(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=root / "state.json",
+                systemctl=systemctl,
+                log=log,
+            )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [unit],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_reconcile(**kwargs)
+            log.write_text("", encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [{"target": unit, "source": str(source)}],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [],
+                        "fingerprints": {unit: "enabled-generation"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_reconcile(**kwargs)
+            self.assertFalse(result["noop"])
+            self.assertEqual((runtime / unit).resolve(), source.resolve())
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+
     def test_session_fingerprint_migration_preserves_unchanged_transients(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
