@@ -250,6 +250,39 @@ VolumeName=data.volume
                         self.generate(effective, root)
                 run.assert_not_called()
 
+    def test_compose_include_is_rejected_before_provider_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, source = self.fixture(root)
+            (source.parent / "included.yaml").write_text(
+                'services:\n  sneaky:\n    image: "example.invalid/$TAG"\n',
+                encoding="utf-8",
+            )
+            source.write_text(
+                'include:\n  - included.yaml\nservices:\n  web:\n    image: example.invalid/web:1\n',
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                compose_import, "_run", side_effect=AssertionError("include reached provider")
+            ) as runner:
+                with self.assertRaisesRegex(systemd.SystemdProjectionError, "include files"):
+                    self.generate(effective, root)
+            runner.assert_not_called()
+
+    def test_interpolation_checks_decoded_yaml_not_comments(self) -> None:
+        for source, rejected in (
+            ('# image: "$BAD"\nservices:\n  web:\n    image: example.invalid/web:1\n', False),
+            ('services:\n  web:\n    image: "example.invalid/web:\\u0024TAG"\n', True),
+            ('services:\n  web:\n    labels:\n      "$BAD": literal\n    image: example.invalid/web:1\n', True),
+            ('services:\n  web:\n    image: "example.invalid/web:$' + '{TAG}"\n', False),
+        ):
+            with self.subTest(source=source, rejected=rejected):
+                if rejected:
+                    with self.assertRaisesRegex(compose_import.ComposeImportError, "uses interpolation"):
+                        compose_import._validate_compose_source("demo", source.encode("utf-8"))
+                else:
+                    compose_import._validate_compose_source("demo", source.encode("utf-8"))
+
     def test_escaped_dollars_and_non_variable_dollars_reach_the_provider(self) -> None:
         for value in ("$${TAG}", "$$TAG", "$$$$TAG", "$5", "dollar$"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
