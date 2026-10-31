@@ -155,8 +155,6 @@ def build_model(data: Mapping[str, Any]) -> IdentityModel:
             continue
         user_groups = group_names(raw, groups_by_pk)
         user_groups.update(explicit_groups_by_uid.get(uid, set()))
-        if raw.get("is_active") is not True:
-            user_groups.add(DISABLED_GROUP)
         user = User(
             uid,
             str(raw.get("email") or f"{uid}@invalid.local"),
