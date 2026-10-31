@@ -114,7 +114,7 @@ class V2HistoryTests(unittest.TestCase):
             repository = root / "history.git"
             history.ensure_bootstrap_applied(authority=authority, repository=repository)
             result = subprocess.run(
-                ["git", f"--git-dir={repository}", "fsck", "--strict", "--full"],
+                ["git", "-c", "fsck.badFilemode=error", f"--git-dir={repository}", "fsck", "--strict", "--full"],
                 capture_output=True,
                 text=True,
                 check=False,
