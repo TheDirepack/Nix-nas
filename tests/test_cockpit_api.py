@@ -844,9 +844,7 @@ class SetupApiCapabilityTests(unittest.TestCase):
     def test_collected_worker_not_found_can_be_recovered_only_after_confirmed_absence(self) -> None:
         unit = "nas-first-start-" + "a" * 24 + ".service"
         missing = mock.Mock(returncode=4, stdout="", stderr=f"Unit {unit} could not be found.")
-        list_args = [
-            "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit
-        ]
+        list_args = ["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit]
         with mock.patch.object(
             api, "run", side_effect=[missing, mock.Mock(returncode=0, stdout="", stderr="")]
         ) as query:
