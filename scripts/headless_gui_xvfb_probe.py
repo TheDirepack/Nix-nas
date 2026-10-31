@@ -25,7 +25,7 @@ def _require(*names: str) -> None:
 
 @contextmanager
 def private_xvfb(*, width: int = 800, height: int = 600, depth: int = 24, timeout: float = 6.0):
-    """Yield (display, subprocess env, private directory); clean up on exit.
+    """Yield (display, subprocess env, private directory, Xvfb process); clean up on exit.
 
     Each attempt uses a random display number. Xvfb's own socket/lock protocol
     decides whether it is free, so an existing display is never stopped.
@@ -70,7 +70,7 @@ def private_xvfb(*, width: int = 800, height: int = 600, depth: int = 24, timeou
                         ["xdpyinfo"], env=env, capture_output=True, timeout=1, check=False,
                     )
                     if probe.returncode == 0:
-                        yield display, env, private_dir
+                        yield display, env, private_dir, proc
                         return
                     time.sleep(0.08)
                 if proc.poll() is None:
@@ -117,7 +117,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--screenshot", type=Path, help="save a screenshot during this disposable probe")
     args = parser.parse_args()
-    with private_xvfb() as (display, env, private_dir):
+    with private_xvfb() as (display, env, private_dir, _proc):
         status: dict[str, object] = {"display": display, "isolated_cookie": True,
                                      "private_dir_mode": oct(private_dir.stat().st_mode & 0o777),
                                      "tcp_listener": False}
