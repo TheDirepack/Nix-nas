@@ -433,6 +433,104 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                         sync.interrupted_syncthing_ownership({**state, "folders": folders})
                 self.assertEqual(json.loads(journal.read_text()), payload)
 
+    def test_recovery_succeeds_with_retained_device_in_state(self) -> None:
+        """Recovery must succeed when retainedDevices contains a device present in the committed state."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["OLD", "d"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "mutated",
+            "generation": generation,
+            "previousState": {},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": ["OLD"],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                folders, devices = sync.interrupted_syncthing_ownership(state)
+                self.assertEqual(folders, set())
+                self.assertEqual(devices, set())
+            self.assertFalse(journal_path.exists())
+
+    def test_prepared_phase_mismatched_previous_state_remains_fatal(self) -> None:
+        """A prepared-phase journal with mismatched previousState must stay fatal."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["d"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "prepared",
+            "generation": generation,
+            "previousState": {"schemaVersion": 2, "generation": generation, "folders": [], "devices": []},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": [],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                with self.assertRaisesRegex(sync.SyncError, "does not match committed ownership state"):
+                    sync.interrupted_syncthing_ownership(state)
+
+    def test_non_string_retained_devices_entry_remains_fatal(self) -> None:
+        """A non-string entry in retainedDevices must stay fatal."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["d", "OLD"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "mutated",
+            "generation": generation,
+            "previousState": {},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": ["OLD", 123],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                with self.assertRaisesRegex(sync.SyncError, "does not match committed ownership state"):
+                    sync.interrupted_syncthing_ownership(state)
+
+    def test_mutated_journal_missing_retained_device_in_state_remains_fatal(self) -> None:
+        """A mutated journal whose state omits a retained device must stay fatal."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["d"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "mutated",
+            "generation": generation,
+            "previousState": {},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": ["OLD"],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                with self.assertRaisesRegex(sync.SyncError, "does not match committed ownership state"):
+                    sync.interrupted_syncthing_ownership(state)
+
     def test_reconcile_syncthing_rejects_unmanaged_collisions_before_mutation(self) -> None:
         identity = identity_model.IdentityModel((), (), ("admin",))
         folders = {"nas-alice-backup": {"id": "nas-alice-backup", "path": "/shares/users/alice/syncthing"}}
