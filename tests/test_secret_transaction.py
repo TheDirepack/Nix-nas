@@ -140,6 +140,24 @@ class SecretTransactionShellTests(unittest.TestCase):
         )
         self.assert_ok(result)
 
+    def test_failed_pre_swap_cleanup_reports_retained_stage_and_recovery_tree(self) -> None:
+        result = self.run_scenario(
+            """
+            mkdir tx; cp -a stage tx/new
+            nas_secret_tx_init "$PWD/root" "$PWD/tx/new" "$PWD/tx/previous" nas-protected-services.target "$PWD/tx"
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_STAGE" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 78 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && "$NAS_SECRET_TX_PHASE" == rollback-incomplete ]]
+            [[ -f root/old && -f root/ready && -f tx/new/new ]]
+            grep -Fq "$PWD/tx" recovery.log
+            grep -Fq "$PWD/tx/new" recovery.log
+            [[ ! -s systemctl.log ]]
+            """
+        )
+        self.assert_ok(result)
     def test_failed_restart_reports_incomplete_rollback(self) -> None:
         result = self.run_scenario(
             """
