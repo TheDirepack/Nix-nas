@@ -10,6 +10,7 @@ cd "$ROOT" || exit
 NIX="${NAS_SYSTEM_HANDOFF_NIX:-nix}"
 NIX_STORE_CMD="${NAS_SYSTEM_HANDOFF_NIX_STORE:-nix-store}"
 ARCHIVE=system-closures.nar.gz
+EXPORTS=system-closures.exports
 PATHS=system-closures.paths
 DELTA_PATHS=system-closures.delta.paths
 CHECKSUM=system-closures.sha256
@@ -79,8 +80,45 @@ verify_manifest_coverage() {
   fi
 }
 
+# Each archive is one complete nix-store --export stream, independently
+# importable. Bound argv count so larger closures never exceed ARG_MAX.
+export_delta_batch() {
+  local dir=$1 index=$2 name archive_tmp
+  shift 2
+  if ((index == 0)); then
+    name=$ARCHIVE
+  else
+    printf -v name 'system-closures.part-%06d.nar.gz' "$index"
+  fi
+  archive_tmp="$dir/$name.tmp.$"
+  "$NIX_STORE_CMD" --export "$@" | gzip -1 -n > "$archive_tmp"
+  mv -- "$archive_tmp" "$dir/$name"
+  printf '%s\n' "$name" >> "$dir/$EXPORTS"
+}
+
+verify_export_manifest() {
+  local dir=$1 line expected index=0
+  [[ -s "$dir/$EXPORTS" ]] || {
+    printf 'system-handoff: missing export stream manifest\n' >&2
+    return 1
+  }
+  while IFS= read -r line; do
+    if ((index == 0)); then
+      expected=$ARCHIVE
+    else
+      printf -v expected 'system-closures.part-%06d.nar.gz' "$index"
+    fi
+    [[ "$line" == "$expected" && -s "$dir/$line" ]] || {
+      printf 'system-handoff: missing or out-of-order export stream: %s\n' "$expected" >&2
+      return 1
+    }
+    index=$((index + 1))
+  done < "$dir/$EXPORTS"
+  ((index > 0))
+}
+
 save_handoff() {
-  local dir=$1 archive_tmp
+  local dir=$1
   local -a roots=()
   mkdir -p "$dir"
 
@@ -105,16 +143,33 @@ save_handoff() {
   # and can exhaust a standard GitHub-hosted runner while it is being imported.
   LC_ALL=C comm -23 "$dir/$PATHS" <(bundle_paths "$dir") > "$dir/$DELTA_PATHS"
 
-  archive_tmp="$dir/$ARCHIVE.tmp.$$"
   printf 'system-handoff: exporting %s system-only store paths (%s total already covered)\n' \
     "$(wc -l < "$dir/$DELTA_PATHS")" "$(wc -l < "$dir/$PATHS")" >&2
-  xargs --no-run-if-empty "$NIX_STORE_CMD" --export < "$dir/$DELTA_PATHS" \
-    | gzip -1 -n > "$archive_tmp"
-  mv -- "$archive_tmp" "$dir/$ARCHIVE"
+  : > "$dir/$EXPORTS"
+  local -a batch=()
+  local path index=0
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || { printf 'system-handoff: empty delta entry\n' >&2; return 1; }
+    batch+=("$path")
+    if ((${#batch[@]} == 128)); then
+      export_delta_batch "$dir" "$index" "${batch[@]}"
+      index=$((index + 1))
+      batch=()
+    fi
+  done < "$dir/$DELTA_PATHS"
+  if ((${#batch[@]})); then
+    export_delta_batch "$dir" "$index" "${batch[@]}"
+  elif ((index == 0)); then
+    gzip -1 -n </dev/null > "$dir/$ARCHIVE"
+    printf '%s\n' "$ARCHIVE" >> "$dir/$EXPORTS"
+  fi
 
   (
     cd -- "$dir"
-    sha256sum "$ARCHIVE" "$PATHS" "$DELTA_PATHS" "$BUNDLE_MANIFEST" > "$CHECKSUM"
+    sha256sum "$PATHS" "$DELTA_PATHS" "$BUNDLE_MANIFEST" "$EXPORTS" > "$CHECKSUM"
+    while IFS= read -r path; do
+      sha256sum "$path" >> "$CHECKSUM"
+    done < "$EXPORTS"
   )
   verify_handoff "$dir"
 }
@@ -142,6 +197,7 @@ verify_handoff() {
     printf 'system-handoff: missing checksum: %s/%s\n' "$dir" "$CHECKSUM" >&2
     return 1
   }
+  verify_export_manifest "$dir"
   (
     cd -- "$dir"
     sha256sum --check --strict --quiet "$CHECKSUM"
@@ -154,7 +210,10 @@ import_handoff() {
   verify_handoff "$dir"
   if [[ -s "$dir/$DELTA_PATHS" ]]; then
     printf 'system-handoff: importing exact system-only closure delta\n' >&2
-    gzip -dc -- "$dir/$ARCHIVE" | "$NIX_STORE_CMD" --import >/dev/null
+    local name
+    while IFS= read -r name; do
+      gzip -dc -- "$dir/$name" | "$NIX_STORE_CMD" --import >/dev/null
+    done < "$dir/$EXPORTS"
   else
     printf 'system-handoff: reusable bundles already cover the exact system closures\n' >&2
   fi
