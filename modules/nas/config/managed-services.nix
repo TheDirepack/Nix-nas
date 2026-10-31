@@ -156,7 +156,6 @@ in
         NAS_V2_VIRSH_BIN = "${pkgs.libvirt}/bin/virsh";
         NAS_V2_VIRT_XML_VALIDATE_BIN = "${pkgs.libvirt}/bin/virt-xml-validate";
         NAS_V2_LAN_ZONE = cfg.networking.firewall.zone;
-        NAS_V2_COCKPIT_PORT = toString nasInternal.cockpitPort;
         NAS_V2_FIREWALLD_ENABLED = if firewalldEnabled then "1" else "0";
       };
       preStart = ''
