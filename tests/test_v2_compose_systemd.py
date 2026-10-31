@@ -284,11 +284,11 @@ VolumeName=data.volume
             effective, source = self.fixture(root)
             original = source.read_text(encoding="utf-8")
             podman, provider, _podlet = self.fake_tools(root / "tools")
-            canonical = "services:\\n  web:\\n    image: example.invalid/web:1\\n"
+            canonical = "services:\n  web:\n    image: example.invalid/web:1\n"
             inspected: list[tuple[list[str], dict[str, str], str]] = []
 
             def mutate_source(*_args, **_kwargs):
-                source.write_text("include:\\n  - unvalidated.yaml\\n", encoding="utf-8")
+                source.write_text("include:\n  - unvalidated.yaml\n", encoding="utf-8")
 
             def provider_call(command, **kwargs):
                 inspected.append((list(command), kwargs["env"], kwargs["input_text"]))
