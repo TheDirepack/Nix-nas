@@ -132,7 +132,8 @@ def validate_source_watches(files: dict[pathlib.Path, bytes], *, systemd_analyze
             destination.write_bytes(content)
             paths.append(str(destination))
         result = subprocess.run(
-            [systemd_analyze_bin, "verify", *paths],
+            # Warning-sensitive verification must retain systemd's dependency checks.
+            [systemd_analyze_bin, "verify", "--recursive-errors=one", *paths],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
