@@ -51,6 +51,27 @@ class CiSummaryTests(unittest.TestCase):
         )
         self.assertEqual(bad, [])
 
+    def test_shared_fix_stacked_pull_request_keeps_main_coverage_gate(self) -> None:
+        expected = ci_summary.expected_jobs(
+            "pull_request",
+            "refs/pull/113/merge",
+            "fix/shared-pr-qualification-probe-contract",
+            "fast",
+        )
+        self.assertEqual(expected, set(ci_summary.BASE_JOBS) | {"coverage-diff", "integration", "installer"})
+        needs = self.results(expected)
+        needs["coverage-diff"]["result"] = "skipped"
+        _, bad = ci_summary.summarize(
+            needs,
+            "pull_request",
+            "refs/pull/113/merge",
+            "fix/shared-pr-qualification-probe-contract",
+            "fast",
+        )
+        self.assertIn("coverage-diff=skipped (required)", bad)
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn("github.base_ref == 'fix/shared-pr-qualification-probe-contract'", workflow)
+
     def test_non_main_pull_request_skips_main_coverage_baseline(self) -> None:
         expected = ci_summary.expected_jobs(
             "pull_request",
