@@ -158,6 +158,7 @@ class SecretTransactionShellTests(unittest.TestCase):
             """
         )
         self.assert_ok(result)
+
     def test_failed_restart_reports_incomplete_rollback(self) -> None:
         result = self.run_scenario(
             """
