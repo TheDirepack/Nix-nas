@@ -169,6 +169,17 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
         self.assertIn("--exit-idle-time=120s", proxy)
         self.assertNotIn("nas-v2-demo.target", manifest["startUnits"])
 
+    def test_on_demand_proxy_brackets_ipv6_without_changing_ipv4_or_hostnames(self) -> None:
+        for host, backend in (("::1", "[::1]:8080"), ("127.0.0.1", "127.0.0.1:8080"), ("localhost", "localhost:8080")):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, _ = self.fixture(root, on_demand=True)
+                for route in effective["derived"]["routes"]:
+                    route["target"]["host"] = host
+                files, _ = self.generate(effective, root)
+                proxy = files[root / "projection/units/nas-v2-activate-demo-web.service"].decode()
+                self.assertIn(f' "{backend}"\n', proxy)
+
     def test_unchanged_import_reuses_podlet_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
