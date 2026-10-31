@@ -520,11 +520,7 @@ def reconcile(
     disrupted_sessions: set[str] = set()
     try:
         for unit in sorted(units_to_stop):
-            if (
-                _SESSION_TARGET.fullmatch(unit)
-                and unit not in previous_links_raw
-                and unit not in current_links
-            ):
+            if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
                 # A disabled or retired session has no installed target to stop.
                 continue
             if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned:
