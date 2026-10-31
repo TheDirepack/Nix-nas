@@ -11,9 +11,17 @@ let
       lock = "/run/restic-backups-nas-boot-system/resticprofile.lock";
       backup = {
         "files-from" = [ "/run/restic-backups-nas-boot-system/includes" ];
+        # V2 snapshot mount paths carry unique snapshot names. Selecting the
+        # parent by hostname and this stable profile tag prevents the path
+        # list from fragmenting parent selection between runs.
+        "group-by" = "host,tags";
+        tag = [ "nas-boot-system" ];
         "check-after" = true;
       };
       retention = {
+        # Match backup's stable identity, not ephemeral ZFS snapshot paths.
+        "group-by" = "host,tags";
+        tag = true;
         "after-backup" = true;
         "before-backup" = false;
         prune = true;
