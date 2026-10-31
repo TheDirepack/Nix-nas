@@ -313,17 +313,19 @@ def operation_state() -> dict[str, Any]:
             raw_classes = value.get("classes") if isinstance(value, dict) else None
             classes = raw_classes if isinstance(raw_classes, list) else []
             busy = sorted(item for item in classes if isinstance(item, str))
-            active = (
-                [
+            if isinstance(value, dict):
+                active = [
                     {
                         "action": value.get("action", "operation"),
                         "classes": busy,
                         "pid": value.get("pid"),
                     }
                 ]
-                if isinstance(value, dict)
-                else []
-            )
+            else:
+                # The kernel lock is authoritative; metadata can be absent
+                # while the holder is publishing or clearing its claim.
+                busy = sorted(KNOWN_CLASSES)
+                active = [{"action": "unknown-locked-operation", "classes": busy, "pid": None}]
         else:
             fcntl.flock(handle, fcntl.LOCK_UN)
             busy = []
