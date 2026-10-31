@@ -238,16 +238,10 @@ _REMOTE_ADMIN_PRIORITY = "-300"
 _WORLD_POLICY_PRIORITY = "50"
 
 
-def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 integration
-    cockpit_port = os.environ.get("NAS_V2_COCKPIT_PORT", "9092")
-    try:
-        port_int = int(cockpit_port)
-        if not 1 <= port_int <= 65535:
-            raise ValueError
-        cockpit_port = str(port_int)
-    except (ValueError, TypeError):
-        cockpit_port = "9092"
-    return [("22", "tcp"), (cockpit_port, "tcp"), ("443", "tcp")]
+def _remote_admin_ports() -> list[tuple[str, str]]:
+    # The root Cockpit session is a Caddy-group Unix socket (see #177), not
+    # a direct LAN service. Never advertise the old 9092 listener as admin.
+    return [("22", "tcp"), ("443", "tcp")]
 
 
 _REMOTE_ADMIN_PORTS: list[tuple[str, str]] = _remote_admin_ports()
