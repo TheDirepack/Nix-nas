@@ -67,7 +67,7 @@ class V2FirewalldTests(unittest.TestCase):
         remote = files[f"policies/{firewalld.remote_admin_policy_name()}"]
         self.assertEqual(remote["priority"], -300)
         self.assertIn(["22", "tcp"], remote["ports"])
-        self.assertIn(["9092", "tcp"], remote["ports"])
+        self.assertNotIn(["9092", "tcp"], remote["ports"])
         self.assertNotIn(["9090", "tcp"], remote["ports"])
 
     def test_remote_admin_is_explicit_port_allowlist(self):
