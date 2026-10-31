@@ -94,9 +94,11 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                 mock.patch.object(entry, "_apply_once", side_effect=_fake_apply(EFFECTIVE_V2, REV2)),
                 mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune),
                 mock.patch.object(entry, "discard_generation", side_effect=_spy_discard),
-                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()) as diagnostics,
             ):
-                self.assertEqual(1, entry.main())
+                self.assertEqual(0, entry.main())
+            self.assertIn("V2 generation pruning deferred:", diagnostics.getvalue())
+            self.assertIn("injected post-publication prune failure", diagnostics.getvalue())
             published = generations / REV2
             self.assertTrue(published.is_dir(), "post-publication prune failure must not discard current output")
             self.assertNotIn(REV2, discarded)
@@ -123,11 +125,15 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             for patch in patches:
                 patch.start()
                 self.addCleanup(patch.stop)
-            with mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune):
+            with mock.patch.object(entry, "prune_generations", side_effect=_flaky_prune) as failed_prune:
+                with contextlib.redirect_stderr(io.StringIO()) as diagnostics:
+                    self.assertEqual(0, entry.main())
+            failed_prune.assert_called_once()
+            self.assertIn("V2 generation pruning deferred:", diagnostics.getvalue())
+            with mock.patch.object(entry, "prune_generations", wraps=generation.prune_generations) as retried_prune:
                 with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(1, entry.main())
-            with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(0, entry.main())
+                    self.assertEqual(0, entry.main())
+                retried_prune.assert_called_once()
             self.assertEqual(EFFECTIVE_V2, (runtime / "effective.json").read_text(encoding="utf-8"))
             self.assertTrue((runtime / "current").resolve(strict=True).is_dir())
 
