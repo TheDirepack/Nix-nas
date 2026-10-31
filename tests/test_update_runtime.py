@@ -193,11 +193,11 @@ class UpdateRuntimeTests(unittest.TestCase):
             'echo "Evaluating reviewed flake inputs', 1
         )[0]
         script = (
-            "set -euo pipefail\\n"
-            "apply=true\\n"
-            "old_profile_link=''\\n"
-            "old_profile=''\\n"
-            'validate_external_probe_configuration() { echo PROBE_CALLED; }\\n'
+            "set -euo pipefail\n"
+            "apply=true\n"
+            "old_profile_link=''\n"
+            "old_profile=''\n"
+            'validate_external_probe_configuration() { echo PROBE_CALLED; }\n'
             + section
         )
         result = subprocess.run(
@@ -211,8 +211,8 @@ class UpdateRuntimeTests(unittest.TestCase):
     def test_persistent_profile_rollback_uses_symlink_target_changes(self):
         source = text("scripts/update-nas.sh")
         rollback_source = "rollback() {" + source.split("rollback() {", 1)[1].split(
-            "\\n}\\n\\ntrap rollback EXIT", 1
-        )[0] + "\\n}"
+            "\n}\n\ntrap rollback EXIT", 1
+        )[0] + "\n}"
         for changed in (False, True):
             with self.subTest(changed=changed):
                 with tempfile.TemporaryDirectory() as folder:
@@ -221,19 +221,19 @@ class UpdateRuntimeTests(unittest.TestCase):
                     system_profile.symlink_to("generation-2" if changed else "generation-1")
                     log = location / "rollback.log"
                     command = (
-                        "set -euo pipefail\\n"
-                        f"system_profile={shlex.quote(str(system_profile))}\\n"
-                        f"trace={shlex.quote(str(log))}\\n"
-                        'old_profile_link="generation-1"\\n'
-                        'old_profile=""\\n'
-                        'rollback_needed=true\\n'
-                        'runtime_activation_attempted=false\\n'
-                        'source_promoted=false\\n'
-                        'original_source_commit=""\\n'
-                        'cleanup_candidate() { :; }\\n'
-                        'nixos-rebuild() { printf "%s\\\\n" "$*" >> "$trace"; ln -sfn generation-1 "$system_profile"; }\\n'
+                        "set -euo pipefail\n"
+                        f"system_profile={shlex.quote(str(system_profile))}\n"
+                        f"trace={shlex.quote(str(log))}\n"
+                        'old_profile_link="generation-1"\n'
+                        'old_profile=""\n'
+                        'rollback_needed=true\n'
+                        'runtime_activation_attempted=false\n'
+                        'source_promoted=false\n'
+                        'original_source_commit=""\n'
+                        'cleanup_candidate() { :; }\n'
+                        'nixos-rebuild() { printf "%s\\n" "$*" >> "$trace"; ln -sfn generation-1 "$system_profile"; }\n'
                         + rollback_source
-                        + "\\nset +e\\nfalse\\nrollback\\n"
+                        + "\nset +e\nfalse\nrollback\n"
                     )
                     result = subprocess.run(
                         [self.bash, "--noprofile", "--norc", "-c", command],
