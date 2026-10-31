@@ -141,12 +141,54 @@ test("dynamic map keys commit on blur without dropping typed characters or map v
 
   await renamed.fill("beta");
   await renamed.press("Tab");
-  await expect(renamed).toHaveValue("alpha-renamed");
+  await expect(renamed).toHaveValue("beta");
+  await expect(page.getByRole("alert")).toContainText("already exists");
+  await expect(renamed).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveCount(1);
 
   await renamed.fill("invalid key");
   await renamed.press("Tab");
-  await expect(renamed).toHaveValue("alpha-renamed");
+  await expect(renamed).toHaveValue("invalid key");
+  await expect(page.getByRole("alert")).toContainText("Key must match");
+  await expect(renamed).toHaveAttribute("aria-describedby", /.+/);
+  await renamed.fill("alpha-renamed");
+  await renamed.press("Tab");
+  await expect(page.getByRole("alert")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors.filter((message) => message.includes("requires either an id or aria-label"))).toEqual([]);
+});
+
+test("untouched padded keys retain their exact identity on blur", async ({page}) => {
+  const schema = {
+    type: "object",
+    additionalProperties: {type: "string"},
+  };
+  await openEditor(page, {" padded ": "intact"}, schema);
+  const key = page.getByRole("textbox", {name: "Key for  padded ", exact: true});
+  await key.focus();
+  await key.press("Tab");
+  await expect(key).toHaveValue(" padded ");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("IME Enter does not commit a dynamic key and rename preserves a pending Remove click", async ({page}) => {
+  const schema = {
+    type: "object",
+    additionalProperties: {type: "string"},
+  };
+  const {pageErrors} = await openEditor(page, {alpha: "one", beta: "two"}, schema);
+  const key = page.getByRole("textbox", {name: "Key for alpha", exact: true});
+  await key.fill("gamma");
+  await key.focus();
+  await key.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Enter", isComposing: true, bubbles: true,
+  })));
+  await expect(key).toBeFocused();
+  await expect(page.getByRole("textbox", {name: "Key for gamma", exact: true})).toHaveCount(0);
+  const row = page.locator(".nas-schema-map-entry", {has: key});
+  await row.getByRole("button", {name: "Remove", exact: true}).click();
+  await expect(page.getByRole("textbox", {name: "Key for gamma", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for alpha", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
 });
