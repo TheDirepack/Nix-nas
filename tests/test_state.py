@@ -346,6 +346,97 @@ class StateBundleTests(unittest.TestCase):
                 self.assertEqual("pre-restore\n", public.read_text(encoding="utf-8"))
                 self.assertEqual("pre-restore-secret\n", sensitive.read_text(encoding="utf-8"))
 
+    def test_file_digest_normalizes_manifest_name_in_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            original = root / "actual-name.txt"
+            extracted = root / "authority-name"
+            original.write_text("same content", encoding="utf-8")
+            extracted.write_text("same content", encoding="utf-8")
+            self.assertEqual(
+                state.hash_path(original, root_name=extracted.name),
+                state.hash_path(extracted),
+            )
+            self.assertNotEqual(state.hash_path(original), state.hash_path(extracted))
+
+    def test_restore_verifies_paths_before_restarting_runtime_consumers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            secret = root / "secret.txt"
+            public.write_text("restored", encoding="utf-8")
+            secret.write_text("secret", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, secret, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("old", encoding="utf-8")
+                events: list[str] = []
+                original_verify = state.verify_restored_state
+
+                def verify(staging, manifest, *, kinds=None):
+                    events.append("path" if kinds == frozenset({"path"}) else "database")
+                    return original_verify(staging, manifest, kinds=kinds)
+
+                def reactivate(_snapshot):
+                    events.append("reactivate")
+
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "verify_restored_state", side_effect=verify),
+                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=reactivate),
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    state.restore_bundle(
+                        bundle,
+                        confirm_host=socket.gethostname(),
+                        allow_partial=False,
+                        include_sensitive=True,
+                    )
+                self.assertEqual(events, ["path", "reactivate", "database"])
+
+    def test_failed_quiesce_never_applies_data_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public = root / "public.txt"
+            secret = root / "secret.txt"
+            public.write_text("original", encoding="utf-8")
+            secret.write_text("secret", encoding="utf-8")
+            bundle = root / "state.tar.gz"
+            registry = self.registry(public, secret, root / "missing")
+            with mock.patch.dict(os.environ, self.environment(registry), clear=False):
+                state.export_bundle(bundle, include_sensitive=True)
+                public.write_text("current", encoding="utf-8")
+                with (
+                    mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "stop_active_units", side_effect=state.StateError("stop failed")),
+                    mock.patch.object(state, "restore_unit_state") as recover,
+                    mock.patch.object(state, "apply_extracted") as mutate,
+                    mock.patch.object(
+                        state,
+                        "run_systemctl",
+                        side_effect=lambda *args, **kwargs: self.completed(
+                            1 if args[:2] == ("is-active", "--quiet") else 0
+                        ),
+                    ),
+                ):
+                    with self.assertRaisesRegex(state.StateError, "stop failed"):
+                        state.restore_bundle(
+                            bundle,
+                            confirm_host=socket.gethostname(),
+                            allow_partial=False,
+                            include_sensitive=True,
+                        )
+                recover.assert_called_once()
+                mutate.assert_not_called()
+                self.assertEqual(public.read_text(encoding="utf-8"), "current")
+
     def test_restore_requires_matching_host_and_sensitive_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
