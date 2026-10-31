@@ -865,8 +865,9 @@ class SetupApiCapabilityTests(unittest.TestCase):
         unit = "nas-first-start-" + "a" * 24 + ".service"
         for load in ("not-found", "error", ""):
             output = f"Id={unit}\nLoadState={load}\nActiveState=active\n"
-            with self.subTest(load=load), mock.patch.object(
-                api, "run", return_value=mock.Mock(returncode=0, stdout=output)
+            with (
+                self.subTest(load=load),
+                mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)),
             ):
                 with self.assertRaises(api.SetupApiError) as caught:
                     api._first_start_worker_live("a" * 24)
@@ -895,6 +896,59 @@ class SetupApiCapabilityTests(unittest.TestCase):
                 with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
                     self.assertIsNone(api.lookup_setup_capability(old_capability))
                     self.assertEqual(api.lookup_setup_capability(response["capability"]), "b" * 24)
+
+    def test_storage_host_units_active_detects_running_service(self) -> None:
+        output = "nas-storage-host-abcd1234.service active active running\n"
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)):
+            self.assertTrue(api._storage_host_units_active())
+
+    def test_storage_host_units_active_false_when_no_units(self) -> None:
+        with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout="")):
+            self.assertFalse(api._storage_host_units_active())
+
+    def test_storage_host_units_active_raises_on_query_failure(self) -> None:
+        with mock.patch.object(api, "run", side_effect=OSError("bus unavailable")):
+            with self.assertRaisesRegex(api.SetupApiError, "storage-host work is still active"):
+                api._storage_host_units_active()
+
+    def test_first_run_blocks_when_storage_host_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            api.record_active_setup_job("a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                old_capability = api.issue_setup_capability("a" * 24)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(api, "_first_start_worker_live", return_value=False),
+                mock.patch.object(api, "_storage_host_units_active", return_value=True),
+                mock.patch.object(api, "start_first_start") as submit,
+            ):
+                status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"409", status)
+            submit.assert_not_called()
+            self.assertEqual(api.read_active_setup_job(), "a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                self.assertEqual(api.lookup_setup_capability(old_capability), "a" * 24)
+
+    def test_first_run_proceeds_when_no_storage_host_is_active(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            api.record_active_setup_job("a" * 24)
+            with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                api.issue_setup_capability("a" * 24)
+            with (
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(api, "_first_start_worker_live", return_value=False),
+                mock.patch.object(api, "_storage_host_units_active", return_value=False),
+                mock.patch.object(
+                    api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
+                ) as submit,
+            ):
+                status, response = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"200", status)
+            submit.assert_called_once_with({})
+            self.assertEqual(response["jobId"], "b" * 24)
+            self.assertEqual(api.read_active_setup_job(), "b" * 24)
 
     def test_unavailable_worker_state_never_overwrites_tracked_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
