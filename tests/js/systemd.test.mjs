@@ -101,6 +101,23 @@ test("readSystemdState hydrates named units and failed units over D-Bus", async 
   }
 });
 
+test("readSystemdState treats systemd UINT64_MAX as unavailable", async () => {
+  globalThis.systemdTestClient = {
+    call(_path, _iface, method) {
+      if (method === "Get") return Promise.resolve([{t: "t", v: 18446744073709551615}]);
+      if (method === "ListUnitsByNames") return Promise.resolve([[unitRow("stopped.service")]]);
+      return Promise.resolve([[]]);
+    },
+    close() {},
+  };
+  try {
+    const state = await readSystemdState(["stopped.service"]);
+    assert.equal(state.units["stopped.service"].memoryBytes, null);
+  } finally {
+    delete globalThis.systemdTestClient;
+  }
+});
+
 test("readSystemdState reports null memory when the property is unavailable", async () => {
   globalThis.systemdTestClient = {
     call(_path, _iface, method) {
