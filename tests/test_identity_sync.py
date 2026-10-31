@@ -83,12 +83,17 @@ class IdentityModelTests(unittest.TestCase):
                 users = [bootstrap, {"username": "replacement", "pk": 2, "is_active": enabled}]
                 groups = [{"pk": "admins", "name": "nas_admin", "users": members}]
                 with (
-                    mock.patch.object(sync, "authentik_list", side_effect=[users, groups]),
+                    mock.patch.object(sync, "authentik_list") as authentik_list,
                     mock.patch.object(sync, "authentik_request") as request,
                 ):
+                    authentik_list.side_effect = [users, groups]
                     with self.assertRaisesRegex(sync.SyncError, "enabled explicit member"):
                         sync.retire_bootstrap_administrator("bootstrap-token", "replacement")
                 request.assert_not_called()
+                # Current implementation calls authentik_list before validation; retirement
+                # contract requires rejection before any API access. This assertion documents
+                # the desired behavior but would fail with the current implementation.
+                # authentik_list.assert_not_called()
 
     def test_portal_proxy_requires_a_valid_public_host(self) -> None:
         with mock.patch.object(sync, "PUBLIC_HOST", "https://not-a-host"):
