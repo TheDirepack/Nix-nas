@@ -2,7 +2,15 @@
 
 let
   cfg = config.nas;
-  recoveryUsers = lib.attrValues config.users.users;
+  # Root SSH is disabled and only nas-administrators may log in.
+  # Do not count keys owned by accounts excluded by sshd AllowGroups.
+  adminMembers = lib.attrByPath [ "nas-administrators" "members" ] [ ] config.users.groups;
+  recoveryUsers = lib.attrValues (lib.filterAttrs (name: user:
+    name != "root" && (
+      lib.elem "nas-administrators" (user.extraGroups or [ ])
+      || lib.elem name adminMembers
+    )
+  ) config.users.users);
   sshRecoveryConfigured =
     config.services.openssh.enable
     && lib.any (user:
