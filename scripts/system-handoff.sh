@@ -151,7 +151,7 @@ save_handoff() {
   # Nix requisites are emitted with dependencies first. Import shards in
   # that order rather than filesystem/alphabetical path order.
   "$NIX_STORE_CMD" --query --requisites "${roots[@]}" \
-    | awk 'NR == FNR { wanted[$0] = 1; next }
+    | awk 'FILENAME == ARGV[1] { wanted[$0] = 1; next }
            $0 in wanted { print; delete wanted[$0] }
            END { for (path in wanted) { print "unreachable export: " path > "/dev/stderr"; failed = 1 }
                  if (failed) exit 1 }' "$dir/$DELTA_PATHS" - \
