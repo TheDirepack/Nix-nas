@@ -90,6 +90,44 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
+_INTERPOLATION = re.compile(r"\$(?:\{|[A-Za-z_])")
+
+
+def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
+    """Check YAML-decoded values before the Compose provider can interpolate."""
+    parser = YAML(typ="safe", pure=True)
+    parser.version = (1, 2)
+    parser.allow_duplicate_keys = False
+    try:
+        model = parser.load(source_bytes.decode("utf-8"))
+    except (UnicodeError, YAMLError) as exc:
+        raise ComposeImportError(f"invalid Compose source for {service_id!r}: {exc}") from exc
+    if not isinstance(model, dict):
+        raise ComposeImportError(f"Compose source for {service_id!r} must be a YAML object")
+    # Includes load unvalidated files with their own interpolation environment.
+    if "include" in model:
+        raise ComposeImportError(
+            f"Compose service {service_id!r} uses include files which cannot be validated before provider invocation"
+        )
+
+    def check(value: Any) -> None:
+        if isinstance(value, str):
+            if _INTERPOLATION.search(value.replace("$", "")):
+                raise ComposeImportError(
+                    f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
+                    "use literal configuration or V2 credential/environment-file attachments"
+                )
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                check(key)
+                check(item)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                check(item)
+
+    check(model)
+
+
 def _canonical_compose(
     effective: dict[str, Any],
     service_id: str,
@@ -108,15 +146,7 @@ def _canonical_compose(
         source_bytes = source.read_bytes()
     except OSError as exc:
         raise ComposeImportError(f"unable to read Compose source {source}: {exc}") from exc
-    # Podlet deliberately does not implement Compose interpolation.  Refuse a
-    # model whose meaning would depend on ambient reconciliation environment;
-    # V2 credentials/environment-file attachments are the deterministic secret
-    # path instead.
-    if re.search(rb"\$(?:\{|[A-Za-z_])", source_bytes.replace(b"$$", b"")):
-        raise ComposeImportError(
-            f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
-            "use literal configuration or V2 credential/environment-file attachments"
-        )
+    _validate_compose_source(service_id, source_bytes)
 
     with tempfile.TemporaryDirectory(prefix=f"nas-v2-compose-config-{service_id}-") as raw:
         root = pathlib.Path(raw)
