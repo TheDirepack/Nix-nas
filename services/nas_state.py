@@ -1345,6 +1345,19 @@ def canonical_apply_entries(manifest: Mapping[str, Any]) -> list[Mapping[str, An
     return [by_name[authority.name] for authority in authorities()]
 
 
+def validate_restore_absence_conflicts(manifest: Mapping[str, Any], *, restore_absence: bool) -> None:
+    """Reject absent-source conflicts before the first destination is modified."""
+    if restore_absence:
+        return
+    registry = {item.name: item for item in authorities()}
+    for entry in canonical_apply_entries(manifest):
+        if entry["status"] != "absent":
+            continue
+        authority = registry[entry["name"]]
+        if authority.kind == "path" and lstat_type(pathlib.Path(authority.source)) != 0:
+            raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
+
+
 def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
     registry = {item.name: item for item in authorities()}
     for entry in canonical_apply_entries(manifest):
@@ -1656,6 +1669,7 @@ def restore_bundle(
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+            validate_restore_absence_conflicts(manifest, restore_absence=restore_absence)
             state_mutated = True
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
