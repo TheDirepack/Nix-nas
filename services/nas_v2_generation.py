@@ -211,11 +211,11 @@ def prune_generations(
     for path in candidates:
         if len(keep) >= retain:
             break
-        keep.add(path)
+        keep.add(path.resolve())
 
     removed: list[pathlib.Path] = []
     for path in candidates:
-        if path in keep:
+        if path.resolve() in keep:
             continue
         try:
             _unseal_tree(path)

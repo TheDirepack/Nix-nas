@@ -122,6 +122,28 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             self.assertTrue(old.exists())
             self.assertEqual(current.resolve(), active)
 
+    def test_relative_root_prune_preserves_current_and_retention_count(self) -> None:
+        for retain in (1, 3):
+            with self.subTest(retain=retain), tempfile.TemporaryDirectory() as tmp:
+                runtime = pathlib.Path(tmp)
+                root = runtime / "generations"
+                candidates = [generation.allocate_generation(root, char * 40) for char in "abcd"]
+                active = candidates[0]
+                for index, candidate in enumerate(candidates):
+                    (candidate / "file").write_bytes(b"projection\n")
+                    generation._seal_tree(candidate)
+                    os.utime(candidate, (index + 1, index + 1))
+                current = runtime / "current"
+                current.symlink_to(os.path.relpath(active, runtime))
+                relative_root = pathlib.Path(os.path.relpath(root))
+                removed = generation.prune_generations(relative_root, current_link=current, retain=retain)
+                self.assertTrue(active.is_dir(), "relative roots must never delete the active generation")
+                self.assertEqual(current.resolve(strict=True), active)
+                self.assertEqual((active / "file").read_bytes(), b"projection\n")
+                self.assertEqual(stat.S_IMODE(active.stat().st_mode), 0o555)
+                self.assertEqual(len(list(root.iterdir())), retain)
+                self.assertEqual(len(removed), 4 - retain)
+
     def test_revision_mismatch_never_switches_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = pathlib.Path(tmp) / "nas-control"
