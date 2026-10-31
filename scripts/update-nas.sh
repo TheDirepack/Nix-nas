@@ -298,7 +298,7 @@ health_check() {
       systemctl is-active --quiet "$unit" || { echo "$unit is not active" >&2; return 1; }
     done
     [[ -S /run/copyparty/http.sock ]]
-    listener_present "$cockpit_port" || { echo "Cockpit is not listening on $cockpit_port" >&2; return 1; }
+    [[ -S /run/nas-cockpit-sso/ws.sock ]] || { echo "Cockpit Unix listener is missing" >&2; return 1; }
     listener_present 443 || { echo "Caddy is not listening on 443" >&2; return 1; }
     curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:${authentik_port}${authentik_path}-/health/ready/" >/dev/null
     curl --fail --silent --show-error --max-time 10 --unix-socket /run/copyparty/http.sock http://localhost/ >/dev/null
