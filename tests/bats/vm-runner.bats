@@ -159,3 +159,61 @@ SH
   ' js-deps "$BATS_TEST_DIRNAME/../../scripts/lib/nas-vm-js-deps.sh"
   [ "$status" -eq 0 ]
 }
+
+@test "process cleanup rejects zero before any signal probe" {
+  for pid in 0 00 000 -1 invalid; do
+    marker=$(mktemp -u -t kill-marker.XXXXXX)
+    run bash -c '
+      source "$1"
+      kill() { touch "$2"; return 1; }
+      nas_vm_stop_process "$3" 1
+      rc=$?
+      [[ "$rc" -eq 2 ]]
+    ' process-cleanup "$process_cleanup_lib" "$marker" "$pid"
+    [ "$status" -eq 0 ]
+    [ ! -f "$marker" ]
+  done
+}
+
+@test "dependency setup never claims or removes a dangling preexisting symlink" {
+  repo="$work/repo"
+  mkdir -p "$repo/tests/js-fuzz" "$repo/cockpit"
+  for kind in fuzz cockpit; do
+    if [ "$kind" = fuzz ]; then target="$repo/tests/js-fuzz/node_modules"; else target="$repo/cockpit/node_modules"; fi
+    ln -s "$work/missing-$kind" "$target"
+    run bash -c '
+      source "$1"
+      npm() { return 99; }
+      if [[ "$3" == fuzz ]]; then nas_vm_js_deps_prepare "$2"; else nas_vm_cockpit_js_deps_prepare "$2"; fi
+      rc=$?
+      nas_vm_js_deps_cleanup
+      [[ "$rc" -ne 0 ]]
+    ' js-deps "$deps_lib" "$repo" "$kind"
+    [ "$status" -eq 0 ]
+    [ -L "$target" ]
+  done
+}
+
+@test "dependency setup loses an exclusive creation race without removing the winner" {
+  repo="$work/repo"
+  mkdir -p "$repo/tests/js-fuzz" "$repo/cockpit"
+  for kind in fuzz cockpit; do
+    if [ "$kind" = fuzz ]; then target="$repo/tests/js-fuzz/node_modules"; else target="$repo/cockpit/node_modules"; fi
+    run bash -c '
+      source "$1"
+      target=$4
+      mkdir() {
+        command mkdir "$target"
+        touch "$target/concurrent-owner"
+        command mkdir "$@"
+      }
+      npm() { return 99; }
+      if [[ "$3" == fuzz ]]; then nas_vm_js_deps_prepare "$2"; else nas_vm_cockpit_js_deps_prepare "$2"; fi
+      rc=$?
+      nas_vm_js_deps_cleanup
+      [[ "$rc" -ne 0 && -f "$target/concurrent-owner" ]]
+    ' js-deps "$deps_lib" "$repo" "$kind" "$target"
+    [ "$status" -eq 0 ]
+    [ -f "$target/concurrent-owner" ]
+  done
+}
