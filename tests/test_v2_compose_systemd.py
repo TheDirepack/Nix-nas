@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import socket
 import sys
 import tempfile
 import unittest
@@ -169,8 +170,8 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
         self.assertIn("--exit-idle-time=120s", proxy)
         self.assertNotIn("nas-v2-demo.target", manifest["startUnits"])
 
-    def test_on_demand_proxy_brackets_ipv6_without_changing_ipv4_or_hostnames(self) -> None:
-        for host, backend in (("::1", "[::1]:8080"), ("127.0.0.1", "127.0.0.1:8080"), ("localhost", "localhost:8080")):
+    def test_on_demand_proxy_uses_systemd_last_colon_host_port_contract(self) -> None:
+        for host, backend in (("::1", "::1:8080"), ("127.0.0.1", "127.0.0.1:8080"), ("localhost", "localhost:8080")):
             with self.subTest(host=host), tempfile.TemporaryDirectory() as tmp:
                 root = pathlib.Path(tmp)
                 effective, _ = self.fixture(root, on_demand=True)
@@ -179,6 +180,15 @@ if [ -n "${NAS_V2_PODLET_COUNT_FILE:-}" ]; then printf '1\n' >> "$NAS_V2_PODLET_
                 files, _ = self.generate(effective, root)
                 proxy = files[root / "projection/units/nas-v2-activate-demo-web.service"].decode()
                 self.assertIn(f' "{backend}"\n', proxy)
+                node, port = backend.rsplit(":", 1)
+                self.assertEqual((node, port), (host, "8080"))
+                if host != "localhost":
+                    addresses = socket.getaddrinfo(node, port, type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST)
+                    self.assertEqual(addresses[0][4][0], host)
+
+    def test_resolver_rejects_uri_brackets_in_numeric_ipv6_host(self) -> None:
+        with self.assertRaises(socket.gaierror):
+            socket.getaddrinfo("[::1]", "8080", type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST)
 
     def test_unchanged_import_reuses_podlet_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
