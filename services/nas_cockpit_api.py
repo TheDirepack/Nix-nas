@@ -1102,22 +1102,30 @@ def _storage_host_units_active() -> bool:
     confirm no storage-host unit is still running so wipefs/zpool create on the
     same devices cannot overlap.
     """
+    # A detached transient unit may be activating or shutting down when the
+    # first-start worker dies. A queued systemd start job must also block
+    # replacement, even before ActiveState becomes 'activating'.
     command = [
-        "systemctl",
-        "list-units",
-        "--state=active",
-        "--plain",
-        "--no-legend",
-        "--no-pager",
-        "nas-storage-host-*.service",
+        "systemctl", "list-units", "--state=activating,active,reloading,deactivating",
+        "--plain", "--no-legend", "--no-pager", "nas-storage-host-*.service",
     ]
+    jobs_command = ["systemctl", "list-jobs", "--plain", "--no-legend", "--no-pager"]
     try:
         result = run(command, check=False, timeout_seconds=10)
+        if result.returncode != 0:
+            raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
+        if result.stdout.strip():
+            return True
+        jobs = run(jobs_command, check=False, timeout_seconds=10)
     except OSError as exc:
         raise SetupApiError("Unable to verify whether storage-host work is still active", status=503) from exc
-    if result.returncode != 0:
+    if jobs.returncode != 0:
         raise SetupApiError("Unable to verify whether storage-host work is still active", status=503)
-    return bool(result.stdout.strip())
+    for row in jobs.stdout.splitlines():
+        fields = row.split()
+        if len(fields) >= 2 and re.fullmatch(r"nas-storage-host-[0-9a-f]+\\.service", fields[1]):
+            return True
+    return False
 
 
 def clear_active_setup_job() -> None:
