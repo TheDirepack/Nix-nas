@@ -1072,9 +1072,7 @@ def _first_start_worker_live(job_id: str) -> bool:
         # Collected transient units can disappear before status is queried.
         # An independent successful list-units query must confirm absence;
         # an unavailable bus or still-listed unit cannot authorize retry.
-        list_command = [
-            "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit
-        ]
+        list_command = ["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit]
         try:
             listed = run(list_command, check=False, timeout_seconds=10)
         except OSError as exc:
