@@ -37,14 +37,21 @@ class SystemHandoffTests(unittest.TestCase):
                 esac
                 ;;
               path-info)
-                printf '%s\n' \
-                  /nix/store/base-a \
-                  /nix/store/base-b \
-                  /nix/store/ci-root \
-                  /nix/store/qemu-root \
-                  /nix/store/system-only
-                if [[ -n "${FAKE_EXTRA_PATHS_FILE:-}" ]]; then
-                  cat -- "$FAKE_EXTRA_PATHS_FILE"
+                if [[ "${2:-}" == "-r" ]]; then
+                  printf '%s\n' \
+                    /nix/store/base-a \
+                    /nix/store/base-b \
+                    /nix/store/ci-root \
+                    /nix/store/qemu-root \
+                    /nix/store/system-only
+                  if [[ -n "${FAKE_EXTRA_PATHS_FILE:-}" ]]; then
+                    cat -- "$FAKE_EXTRA_PATHS_FILE"
+                  fi
+                else
+                  shift
+                  for path in "$@"; do
+                    grep -Fxq -- "$path" "${FAKE_IMPORTED_PATHS:?}" || exit 92
+                  done
                 fi
                 ;;
               *)
@@ -77,10 +84,18 @@ class SystemHandoffTests(unittest.TestCase):
                 printf '%s\n' "$@" >> "${FAKE_EXPORT_LOG:?}"
                 printf 'export:%s\n' "$#" >> "${FAKE_EXPORT_CALLS:?}"
                 printf 'fake-nix-export\n'
+                printf '%s\n' "$@"
+                printf 'fake-nix-end\n'
                 ;;
               --import)
-                content=$(cat)
-                [[ "$content" == "fake-nix-export" ]] || exit 91
+                mapfile -t content
+                [[ "${content[0]:-}" == "fake-nix-export" ]] || exit 91
+                [[ "${content[-1]:-}" == "fake-nix-end" ]] || exit 91
+                for ((i=1; i<${#content[@]}-1; i++)); do
+                  if [[ "${content[i]}" != "${FAKE_OMIT_IMPORTED_PATH:-}" ]]; then
+                    printf '%s\n' "${content[i]}" >> "${FAKE_IMPORTED_PATHS:?}"
+                  fi
+                done
                 printf 'import\n' >> "${FAKE_IMPORT_LOG:?}"
                 ;;
               *)
@@ -105,6 +120,7 @@ class SystemHandoffTests(unittest.TestCase):
                 "FAKE_EXPORT_LOG": str(export_log),
                 "FAKE_EXPORT_CALLS": str(export_log.parent / "export-calls.log"),
                 "FAKE_IMPORT_LOG": str(export_log.parent / "import-calls.log"),
+                "FAKE_IMPORTED_PATHS": str(export_log.parent / "imported-paths.log"),
             }
         )
         return env
@@ -239,6 +255,25 @@ class SystemHandoffTests(unittest.TestCase):
                 ["import", "import", "import"],
             )
             self.assertFalse(list(handoff.glob("*.nar.gz")))
+
+    def test_import_keeps_archives_when_a_promised_store_path_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            handoff = root / "handoff"
+            handoff.mkdir()
+            (handoff / "bundle-manifest.tsv").write_text(
+                "core\t/nix/store/base-a\nidentity\t/nix/store/base-b\n",
+                encoding="utf-8",
+            )
+            export_log = root / "export.log"
+            fake_nix, fake_store = self.make_tools(root)
+            env = self.environment(fake_nix, fake_store, export_log)
+            env["FAKE_OMIT_IMPORTED_PATH"] = "/nix/store/qemu-root"
+            self.run_handoff("save", handoff, env)
+            failed = self.run_handoff("import", handoff, env, check=False)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertTrue((handoff / "system-closures.nar.gz").exists())
+            self.assertIn("system-only", (root / "imported-paths.log").read_text(encoding="utf-8"))
 
     def test_verify_rejects_missing_or_out_of_order_export_shards(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
