@@ -280,25 +280,28 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
 
 def resolve_v2_service_capability(
     service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
-) -> tuple[str, str] | None:  # pragma: no cover - V2 integration branch, exercised in VM
+) -> tuple[str, str] | None:
+    """Resolve capabilities only from a validated compiled authority.
+
+    Before initial compilation, absence of the file preserves the bootstrap
+    defaults. Once a file exists, any malformed or missing authorization must
+    fail closed instead of granting a synthetic default capability.
+    """
     service = os.environ.get(service_env, fallback_service)
     capability = os.environ.get(capability_env, fallback_capability)
-    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    effective_path = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
     try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        derived = data.get("derived", {}).get("authorization", {})
-        if not isinstance(derived, dict):
-            raise ValueError("derived.authorization is not a dict")
-        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
-        if isinstance(caps, dict) and capability in caps:
-            return service, capability
-        if isinstance(derived, dict) and derived:
-            return None
+        data = load_effective_authority(effective_path)
     except FileNotFoundError:
-        # First boot may have no compiled authority yet.
         return service, capability
     except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
-        # An existing invalid authority cannot be treated as granting access.
+        return None
+    authorization = data["derived"]["authorization"]
+    entry = authorization.get(service)
+    if not isinstance(entry, dict):
+        return None
+    caps = entry.get("capabilities")
+    if not isinstance(caps, dict) or capability not in caps:
         return None
     return service, capability
 
