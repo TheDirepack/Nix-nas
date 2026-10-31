@@ -263,6 +263,21 @@ VolumeName=data.volume
                     self.generate(effective, root)
             provider.assert_not_called()
 
+    def test_external_compose_files_are_rejected_before_provider_execution(self) -> None:
+        cases = (
+            ("services:\\n  web:\\n    extends:\\n      file: common.yml\\n      service: shared\\n", "extends file"),
+            ("services:\\n  web:\\n    env_file: ./runtime.env\\n    image: example.invalid/web:1\\n", "env_file"),
+        )
+        for source_text, reason in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                source.write_text(source_text.replace("\\n", "\n"), encoding="utf-8")
+                with mock.patch.object(compose_import, "_run") as provider:
+                    with self.assertRaisesRegex(systemd.SystemdProjectionError, reason):
+                        self.generate(effective, root)
+                provider.assert_not_called()
+
     def test_decoded_yaml_interpolation_is_rejected_but_comments_are_allowed(self) -> None:
         for source in (
             'services:\n  web:\n    image: "image:\\u0024TAG"\n',
