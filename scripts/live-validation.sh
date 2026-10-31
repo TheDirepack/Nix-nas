@@ -55,7 +55,7 @@ remote_zfs() {
     '  clone) exec zfs clone -- "$first" "$second" ;;' \
     '  destroy) exec zfs destroy -- "$first" ;;' \
     '  destroy-recursive) exec zfs destroy -r -- "$first" ;;' \
-    '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;'
+    '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;' \
     '  list) exec zfs list -H -o name -t filesystem,volume ;;' \
     '  *) exit 64 ;;' \
     'esac' \
