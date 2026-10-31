@@ -192,6 +192,7 @@ async function installCockpitMock(page, behavior = {}) {
       globalThis.__nas_spawn_calls = [];
       const response = structuredClone(payload);
       const overviewOutputs = [...(configuredBehavior.overviewOutputs || [])];
+      const firstStartResponses = [...(configuredBehavior.firstStartResponses || [])];
       const rejected = (message) => {
         const promise = Promise.reject(new Error(message));
         promise.input = () => {};
@@ -221,6 +222,15 @@ async function installCockpitMock(page, behavior = {}) {
             configuredBehavior.actionError
           ) {
             return rejected(configuredBehavior.actionError);
+          }
+          if (args[0] === "nas-cockpit-api" && args[1] === "first-start" && firstStartResponses.length) {
+            const next = firstStartResponses.shift();
+            if (next.error) return rejected(next.error);
+            const output = JSON.stringify(next.value || {status: "submitted", jobId: "a".repeat(24)});
+            const promise = new Promise((resolve) => setTimeout(() => resolve(output), next.delayMs || 0));
+            promise.input = () => {};
+            promise.stream = () => promise;
+            return promise;
           }
           let value = {ok: true};
           if (args[0] === "nas-cockpit-api" && args[1] === "overview") value = response;
@@ -563,4 +573,84 @@ test("confirmation dialog supports keyboard cancellation", async ({page}) => {
     () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length,
   );
   expect(actionCalls).toBe(0);
+});
+
+test("first-start form cannot submit twice while pending and does not report completion early", async ({page}) => {
+  const payload = overview();
+  payload.setup.firstStart = {
+    status: "ready", message: "Ready for initial setup", planDigest: "a".repeat(64),
+    storage: {devices: []},
+  };
+  payload.setup.setupState = {status: "ready"};
+  await openApp(page, {
+    payload,
+    firstStartResponses: [{delayMs: 350, value: {status: "submitted", jobId: "a".repeat(24)}}],
+  });
+  await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
+  await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
+  await page.getByLabel("Confirm KeePassXC database password").fill("test-keystore-key");
+  await page.getByLabel("Administrator username").fill("operator");
+  await page.getByLabel("Administrator name").fill("Operator");
+  await page.getByLabel("Administrator email").fill("operator@example.invalid");
+  await page.getByLabel("Administrator password").fill("long-test-password");
+  const start = page.getByRole("button", {name: "Start", exact: true});
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(start).toBeDisabled();
+  await expect(page.getByText("Operation completed.")).toHaveCount(0);
+  await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
+  const calls = await page.evaluate(() =>
+    globalThis.__nas_spawn_calls.filter((parts) =>
+      parts[0] === "nas-cockpit-api" && parts[1] === "first-start"
+    ).length
+  );
+  expect(calls).toBe(1);
+  await expect(page.getByText("Operation completed.")).toHaveCount(0);
+});
+
+test("failed first-start submission reports its error and allows a retry", async ({page}) => {
+  const payload = overview();
+  payload.setup.firstStart = {
+    status: "ready", message: "Ready for initial setup", planDigest: "a".repeat(64),
+    storage: {devices: []},
+  };
+  payload.setup.setupState = {status: "ready"};
+  await openApp(page, {
+    payload,
+    firstStartResponses: [
+      {error: "simulated first-start submission failure"},
+      {value: {status: "submitted", jobId: "b".repeat(24)}},
+    ],
+  });
+  await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
+  await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
+  await page.getByLabel("Confirm KeePassXC database password").fill("test-keystore-key");
+  await page.getByLabel("Administrator username").fill("operator");
+  await page.getByLabel("Administrator name").fill("Operator");
+  await page.getByLabel("Administrator email").fill("operator@example.invalid");
+  await page.getByLabel("Administrator password").fill("long-test-password");
+  const start = page.getByRole("button", {name: "Start", exact: true});
+  await start.click();
+  await expect(page.getByText("simulated first-start submission failure")).toBeVisible();
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(page.getByRole("heading", {name: "First-start job"})).toBeVisible();
+  await expect(page.getByText("Operation completed.")).toHaveCount(0);
+  expect(await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) =>
+    args[0] === "nas-cockpit-api" && args[1] === "first-start"
+  ).length)).toBe(2);
+});
+
+test("locked-screen Enter unlocks exactly once without navigating away", async ({page}) => {
+  const payload = overview();
+  payload.protectedReady = false;
+  await openApp(page, {payload});
+  const input = page.locator(".nas-page form").first().locator('input[type="password"]');
+  await input.fill("unlock-on-enter");
+  await input.press("Enter");
+  await expect(page.getByText("Runtime secrets activated.")).toBeVisible();
+  expect(await page.evaluate(() => globalThis.__nas_spawn_calls.filter((args) =>
+    args[0] === "nas-secrets" && args[1] === "activate-stdin"
+  ).length)).toBe(1);
+  expect(new URL(page.url()).pathname).toBe("/index.html");
 });
