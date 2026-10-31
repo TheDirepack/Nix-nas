@@ -260,6 +260,37 @@ class SystemHandoffTests(unittest.TestCase):
             self.assertNotEqual(invalid.returncode, 0)
             self.assertIn("missing or out-of-order export stream", invalid.stderr)
 
+    def test_fully_covered_reusable_bundles_need_no_store_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            handoff = root / "handoff"
+            handoff.mkdir()
+            full = (
+                "/nix/store/base-a",
+                "/nix/store/base-b",
+                "/nix/store/ci-root",
+                "/nix/store/qemu-root",
+                "/nix/store/system-only",
+            )
+            (handoff / "bundle-manifest.tsv").write_text(
+                "".join(f"bundle\t{path}\n" for path in full),
+                encoding="utf-8",
+            )
+            export_log = root / "export.log"
+            fake_nix, fake_store = self.make_tools(root)
+            env = self.environment(fake_nix, fake_store, export_log)
+            self.run_handoff("save", handoff, env)
+            self.assertEqual((handoff / "system-closures.delta.paths").read_text(), "")
+            self.assertEqual((handoff / "system-closures.delta.import-order").read_text(), "")
+            self.assertEqual(
+                (handoff / "system-closures.exports").read_text().splitlines(),
+                ["system-closures.nar.gz"],
+            )
+            self.assertFalse((root / "export-calls.log").exists())
+            self.run_handoff("verify", handoff, env)
+            self.run_handoff("import", handoff, env)
+            self.assertFalse((root / "import-calls.log").exists())
+
     def test_verify_rejects_delta_that_duplicates_bundle_transport(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
