@@ -911,7 +911,7 @@ class SetupApiCapabilityTests(unittest.TestCase):
             mock.Mock(returncode=0, stdout=""),
             mock.Mock(
                 returncode=0,
-                stdout="43 nas-storage-host-deadbeef.service start waiting\\n",
+                stdout="43 nas-storage-host-deadbeef.service start waiting\n",
             ),
         ]
         with mock.patch.object(api, "run", side_effect=responses) as query:
@@ -936,7 +936,7 @@ class SetupApiCapabilityTests(unittest.TestCase):
     def test_storage_host_job_list_ignores_unrelated_units(self) -> None:
         responses = [
             mock.Mock(returncode=0, stdout=""),
-            mock.Mock(returncode=0, stdout="45 unrelated.service start waiting\\nNo jobs running.\\n"),
+            mock.Mock(returncode=0, stdout="45 unrelated.service start waiting\nNo jobs running.\n"),
         ]
         with mock.patch.object(api, "run", side_effect=responses):
             self.assertFalse(api._storage_host_units_active())
