@@ -159,11 +159,12 @@ class V2ReferenceTests(unittest.TestCase):
         self.assertIn("derived", effective)
 
     def test_cockpit_port_consistency(self):
-        # Cockpit remains private on 9092; browser clients use the Caddy route.
+        # Cockpit is reachable only through the Caddy-group Unix listener.
+        # No dedicated root-session TCP port belongs in LAN firewall policy.
         network = (ROOT / "services/nas_v2_network.py").read_text(encoding="utf-8")
-        self.assertIn("NAS_V2_COCKPIT_PORT", network)
+        self.assertNotIn("NAS_V2_COCKPIT_PORT", network)
         self.assertIn("_remote_admin_ports", network)
-        self.assertIn('"9092"', network)
+        self.assertNotIn('("9092", "tcp")', network)
         self.assertNotIn('("9090", "tcp")', network)
         # Check the private listener declaration and public interface documentation.
         base = (ROOT / "modules/nas/internal/base.nix").read_text(encoding="utf-8")
