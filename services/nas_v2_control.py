@@ -161,6 +161,21 @@ def _reconcile() -> None:
     _systemctl("start", RECONCILE_UNIT)
 
 
+def _attach_post_commit_status(result: dict[str, Any]) -> dict[str, Any]:
+    """Never turn a completed reconcile into an ambiguous failed mutation.
+
+    A systemd query can fail after the editor has committed and reconcile has
+    finished. Preserve a successful mutation result, with an explicit status
+    failure so callers never retry the write thinking it did not happen.
+    """
+    try:
+        result["status"] = status()
+    except ControlError as exc:
+        result["status"] = {"ok": False, "error": str(exc)}
+        result["statusError"] = str(exc)
+    return result
+
+
 def set_mode(service_id: str, mode: str) -> dict[str, Any]:
     try:
         result = set_service_mode(
@@ -173,8 +188,7 @@ def set_mode(service_id: str, mode: str) -> dict[str, Any]:
         _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
-    result["status"] = status()
-    return result
+    return _attach_post_commit_status(result)
 
 
 def set_modes(modes: dict[str, str]) -> dict[str, Any]:
@@ -188,8 +202,7 @@ def set_modes(modes: dict[str, str]) -> dict[str, Any]:
         _reconcile()
     except (OSError, ManagedServicesEditorError) as exc:
         raise ControlError(str(exc)) from exc
-    result["status"] = status()
-    return result
+    return _attach_post_commit_status(result)
 
 
 def replace_from_source(source: str, expected_revision: str) -> dict[str, Any]:
@@ -233,7 +246,7 @@ def document() -> dict[str, Any]:
 
 def reconcile() -> dict[str, Any]:
     _reconcile()
-    return {"ok": True, "status": status()}
+    return _attach_post_commit_status({"ok": True})
 
 
 def _revision_argument(value: str) -> str:
