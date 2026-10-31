@@ -385,6 +385,23 @@ class IdentityModelTests(unittest.TestCase):
         self.assertEqual(folders["nas-alice-backup"]["devices"], [{"deviceID": alice_device}])
         self.assertEqual(folders["nas-bob-backup"]["devices"], [{"deviceID": bob_device}])
 
+    def test_upstream_email_usernames_do_not_block_managed_identity_model(self) -> None:
+        model = identity_model.build_model(
+            {
+                "users": [
+                    {"pk": 1, "username": "akadmin", "is_active": True, "groups_obj": [{"name": "nas_admin"}]},
+                    {"pk": 2, "username": "alice@example.com", "is_active": True, "groups_obj": [{"name": "nas_users"}]},
+                    {"pk": 3, "username": "disabled@example.com", "is_active": False, "groups_obj": []},
+                ],
+                "groups": [
+                    {"pk": 4, "name": "nas_admin", "users_obj": [{"username": "akadmin"}]},
+                    {"pk": 5, "name": "nas_users", "users_obj": [{"username": "alice@example.com"}]},
+                ],
+            }
+        )
+        self.assertEqual(model.administrators, ("akadmin",))
+        self.assertEqual(tuple(user.uid for user in model.users), ("akadmin",))
+
     def test_build_model_requires_explicit_enabled_nas_admin(self) -> None:
         with self.assertRaisesRegex(identity_model.SyncError, "No enabled members of nas_admin"):
             identity_model.build_model(
