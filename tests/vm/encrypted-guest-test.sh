@@ -112,6 +112,7 @@ log "Verify encrypted fixture starts locked"
 ! systemctl is-active --quiet cockpit.socket || fail "stock Cockpit socket must stay inactive while locked"
 wait_active nas-cockpit-sso.service
 [[ -S /run/nas-cockpit-sso/ws.sock ]] || fail "Cockpit permissioned Unix listener is missing"
+! ss -ltnp | grep -F 'cockpit-ws' || fail "Unauthenticated Cockpit root bridge opened a TCP listener"
 ! ss -tln | grep -Eq ':9092[[:space:]]' || fail "Unauthenticated root Cockpit TCP listener is exposed"
 [[ ! -e /run/nas-secrets/ready ]] || fail "runtime secrets were unexpectedly active"
 ! systemctl is-active --quiet nas-protected-services.target || fail "protected services started before unlock"
