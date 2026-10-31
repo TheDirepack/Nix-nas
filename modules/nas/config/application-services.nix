@@ -116,9 +116,9 @@ let
     }
     trap term TERM INT
     while true; do
+      # cockpit-ws inherits the permissioned Unix listener from systemd.
+      # Never expose the unauthenticated root bridge on a loopback TCP port.
       ${cockpitPatched}/libexec/cockpit-ws \
-        --address 127.0.0.1 \
-        --port ${toString cockpitPort} \
         --no-tls \
         --local-session ${cockpitPatched}/bin/cockpit-bridge &
       WSPID=$!
@@ -189,12 +189,27 @@ in
       };
     };
 
+    systemd.sockets.nas-cockpit-sso = {
+      description = "Caddy-only Cockpit root session Unix listener";
+      wantedBy = [ "sockets.target" ];
+      socketConfig = {
+        ListenStream = "/run/nas-cockpit-sso/ws.sock";
+        SocketUser = "root";
+        SocketGroup = config.services.caddy.group;
+        SocketMode = "0660";
+        DirectoryMode = "0755";
+        Service = "nas-cockpit-sso.service";
+        RemoveOnStop = true;
+      };
+    };
+
     systemd.services.nas-cockpit-sso = {
       description = "Cockpit web service behind the Caddy Authentik gate";
       path = [ nasCockpitApi nasPythonApplication nasSecrets ];
       wantedBy = [ "multi-user.target" ];
       after = [ "nas-first-start.service" ];
-      requires = [ "nas-first-start.service" ];
+      requires = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
+      after = lib.mkAfter [ "nas-cockpit-sso.socket" ];
       # NixOS activation restarts first-start while switching generations;
       # propagate that restart so the shared Cockpit bridge is not left dead.
       partOf = [ "nas-first-start.service" ];
@@ -202,6 +217,7 @@ in
       # Authentik gate; it needs a writable HOME for agent/ssh state.
       environment.HOME = "/var/lib/nas-cockpit-sso";
       serviceConfig = {
+        Sockets = [ "nas-cockpit-sso.socket" ];
         ExecStart = cockpitWebService;
         # A crashed shared bridge must never degrade into a second login
         # prompt; restarting ws respawns the local session within seconds.
