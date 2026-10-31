@@ -291,6 +291,29 @@ VolumeName=data.volume
             b"# $COMMENT\nservices:\n  web:\n    image: example.invalid/web:1\n",
         )
 
+    def test_compose_command_normalization_cannot_introduce_interpolation(self) -> None:
+        for field in ("command", "entrypoint"):
+            source = (
+                "services:\\n  web:\\n    image: example.invalid/web:1\\n"
+                + f'    {field}: "echo $\\'TAG\\'"\\n'
+            )
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(compose_import.ComposeImportError, "uses interpolation"):
+                    compose_import._validate_compose_source("demo", source.encode("utf-8"))
+
+    def test_yaml_aliases_are_bounded_and_recursive_aliases_fail_closed(self) -> None:
+        recursive = (
+            "services:\\n  web:\\n    image: example.invalid/web:1\\n"
+            "    x-recursive: &cycle [*cycle]\\n"
+        )
+        with self.assertRaisesRegex(compose_import.ComposeImportError, "recursive YAML alias"):
+            compose_import._validate_compose_source("demo", recursive.encode("utf-8"))
+
+        lines = ["services:", "  web:", "    image: example.invalid/web:1", "    x-a0: &a0 [safe]"]
+        for number in range(1, 26):
+            lines.append(f"    x-a{number}: &a{number} [*a{number - 1}, *a{number - 1}]")
+        compose_import._validate_compose_source("demo", ("\\n".join(lines) + "\\n").encode("utf-8"))
+
     def test_escaped_dollars_and_non_variable_dollars_reach_the_provider(self) -> None:
         for value in ("$${TAG}", "$$TAG", "$$$$TAG", "$5", "dollar$"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
