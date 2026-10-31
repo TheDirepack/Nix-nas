@@ -306,6 +306,45 @@ def _discover_quadlet_links(runtime_root: pathlib.Path) -> set[str]:
     return discovered
 
 
+_SESSION_TARGET = re.compile(r"^nas-v2-session-[a-z][a-z0-9-]*\\.target$")
+
+
+def _same_session_descriptor(
+    unit: str,
+    previous_links: dict[str, Any],
+    current_links: dict[str, str],
+) -> bool:
+    """Migrate legacy session fingerprints only if source descriptors match.
+
+    Older manifests hashed a subset of service settings. Reading both
+    generation-owned descriptors allows an unchanged active session to keep
+    running, without accidentally masking resolved path/credential changes.
+    Missing/malformed descriptions are conservatively treated as changed.
+    """
+    previous_source = previous_links.get(unit)
+    current_source = current_links.get(unit)
+    if not isinstance(previous_source, str) or not isinstance(current_source, str):
+        return False
+    name = unit.removeprefix("nas-v2-session-").removesuffix(".target") + ".session.json"
+
+    def read(source: str) -> dict[str, Any] | None:
+        path = pathlib.Path(source)
+        if not path.is_absolute() or path.parent.name != "units" or ".." in path.parts:
+            return None
+        descriptor = path.parent.parent / "descriptors" / name
+        try:
+            if descriptor.is_symlink() or not descriptor.is_file() or descriptor.stat().st_size > 524288:
+                return None
+            result = json.loads(descriptor.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return None
+        return result if isinstance(result, dict) and result.get("serviceId") == name.removesuffix(".session.json") else None
+
+    previous = read(previous_source)
+    current = read(current_source)
+    return previous is not None and current is not None and previous == current
+
+
 def reconcile(
     *,
     manifest_path: pathlib.Path,
@@ -403,7 +442,20 @@ def reconcile(
             changed_units.add(quadlet_affected[target_rel])
     for unit, digest in fingerprints.items():
         if previous_fingerprints.get(unit) != digest:
+            if (
+                _SESSION_TARGET.fullmatch(unit)
+                and unit in previous_owned
+                and _same_session_descriptor(unit, previous_links_raw, current_links)
+            ):
+                # Hash-format migration, not a changed launch descriptor.
+                continue
             changed_units.add(unit)
+
+    # Session instances are transient systemd-run units. try-restart on their
+    # owning target restarts them with OLD Podman argv. Stop the owner instead;
+    # sessions must be explicitly relaunched from the new descriptor.
+    changed_sessions = {unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned}
+    units_to_stop.update(changed_sessions)
 
     def is_active(unit: str) -> bool | None:
         try:
@@ -460,6 +512,14 @@ def reconcile(
 
     try:
         for unit in sorted(units_to_stop):
+            if (
+                unit in stop
+                and _SESSION_TARGET.fullmatch(unit)
+                and unit not in previous_owned
+                and unit not in current_links
+            ):
+                # A newly disabled session has no installed target to stop.
+                continue
             _run_systemctl(systemctl, "stop", unit)
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)
@@ -487,6 +547,9 @@ def reconcile(
 
         restarted: set[str] = set()
         for unit in sorted(changed_units & owned):
+            if unit in changed_sessions:
+                # A stopped transient must not be restarted with stale args.
+                continue
             if unit in start:
                 _run_systemctl(systemctl, "restart", unit)
                 restarted.add(unit)
