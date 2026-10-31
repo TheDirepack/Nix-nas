@@ -326,7 +326,7 @@ def _same_session_descriptor(
     if not isinstance(previous_source, str) or not isinstance(current_source, str):
         return False
     if previous_source == current_source:
-        # There is no historical descriptor to compare when the same path is
+        # There is no separate descriptor to compare when the same path is
         # reused. Conservatively apply the changed-fingerprint lifecycle.
         return False
     name = unit.removeprefix("nas-v2-session-").removesuffix(".target") + ".session.json"
@@ -342,7 +342,9 @@ def _same_session_descriptor(
             result = json.loads(descriptor.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError):
             return None
-        return result if isinstance(result, dict) and result.get("serviceId") == name.removesuffix(".session.json") else None
+        if isinstance(result, dict) and result.get("serviceId") == name.removesuffix(".session.json"):
+            return result
+        return None
 
     previous = read(previous_source)
     current = read(current_source)
@@ -458,7 +460,9 @@ def reconcile(
     # Session instances are transient systemd-run units. try-restart on their
     # owning target restarts them with OLD Podman argv. Stop the owner instead;
     # sessions must be explicitly relaunched from the new descriptor.
-    changed_sessions = {unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned}
+    changed_sessions = {
+        unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_owned
+    }
     units_to_stop.update(changed_sessions)
 
     def is_active(unit: str) -> bool | None:
