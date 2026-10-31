@@ -292,11 +292,7 @@ let
         exit 1
       fi
 
-      if [[ -t 0 ]]; then
-        key="$($secret_reader show-zfs-key)"
-      else
-        key="$($secret_reader show-zfs-key-stdin)"
-      fi || {
+      key="$($secret_reader $(if [[ -t 0 ]]; then echo show-zfs-key; else echo show-zfs-key-stdin; fi))" || {
         echo "The KeePassXC ZFS key is missing. Run nas-secrets init first." >&2
         exit 1
       }
