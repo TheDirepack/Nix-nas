@@ -256,9 +256,9 @@ except (ValueError, TypeError) as exc:
 if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
     raise SystemExit("external probe command must be a nonempty JSON string array")
 for item in value:
-    if "\\x00" in item:
+    if "\x00" in item:
         raise SystemExit("external probe argument contains NUL")
-    sys.stdout.buffer.write(item.encode() + b"\\0")
+    sys.stdout.buffer.write(item.encode() + b"\0")
 PY_EXTERNAL_PROBE_VALIDATE
   )
   wait "$!" || return $?
@@ -403,13 +403,11 @@ old_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
 old_profile_link="$(readlink "$system_profile" 2>/dev/null || true)"
 rollback_needed=false
 runtime_activation_attempted=false
-persistent_switch_attempted=false
 rollback() {
   local rc=$?
   local -a rollback_errors=()
   if (( rc != 0 )) && $rollback_needed; then
     echo "Deployment failed; reversing only deployment phases that were entered" >&2
-    current_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
     current_profile_link="$(readlink "$system_profile" 2>/dev/null || true)"
     if [[ -n "$old_profile_link" && "$current_profile_link" != "$old_profile_link" ]]; then
       nixos-rebuild --rollback switch || rollback_errors+=("nixos generation rollback failed")
@@ -446,6 +444,10 @@ trap rollback EXIT
 # Check external probe *configuration* before any candidate activation or
 # state snapshot; a bad JSON setting must never trigger an appliance rollback.
 if $apply; then
+  if [[ -z "$old_profile_link" || -z "$old_profile" ]]; then
+    echo "The existing persistent system profile is missing or unreadable; refusing activation without a rollback baseline." >&2
+    exit 1
+  fi
   validate_external_probe_configuration
 fi
 
@@ -475,9 +477,7 @@ if $apply; then
   external_management_probe
 
   echo "Health checks passed; making the generation persistent."
-  persistent_switch_attempted=true
   nixos-rebuild switch --flake "$flake_ref" --show-trace
-  new_profile="$(readlink -f "$system_profile" 2>/dev/null || true)"
   new_profile_link="$(readlink "$system_profile" 2>/dev/null || true)"
   [[ -n "$new_profile_link" && "$new_profile_link" != "$old_profile_link" ]] || { echo "Persistent system profile did not advance" >&2; exit 1; }
   restart_protected
