@@ -87,7 +87,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
             units.mkdir(parents=True)
             unit = "nas-v2-session-agent.target"
             source = units / unit
-            source.write_text("[Unit]\\nDescription=Agent\\n", encoding="utf-8")
+            source.write_text("[Unit]\nDescription=Agent\n", encoding="utf-8")
             manifest = projection / "manifest.json"
             runtime = root / "systemd"
             runtime.mkdir()
