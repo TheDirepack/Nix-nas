@@ -21,6 +21,20 @@ The test suite skips the whole integration group if Xvfb / Xauthority tools are 
 - Two independent displays can coexist with different cookies; cross-using their credentials fails.
 - Exiting the context terminates the owned Xvfb process and removes its temporary credentials. The probe does not stop unrelated X11 servers and retries a random-display collision.
 
+### Additional local security/lifecycle evidence
+
+The probe now has **eight deterministic tests**: two dependency-free contracts and six real-display checks when the optional Linux X11 tools and Pillow/xterm are available. In addition to Xauthority separation and a real GUI pixel change, the tests explicitly assert that the owned Xvfb process is **reaped** and its credential directory removed after normal completion, an injected exception, and abrupt Xvfb termination. Every direct `xdpyinfo` client call is bounded by a timeout.
+
+A local Linux run passed **8/8** using the normal user and another **8/8** when executed as a separate UID with `no_new_privs` and all Linux capabilities dropped, using:
+
+```sh
+setpriv --reuid 1000 --regid 1000 --init-groups \
+  --no-new-privs --bounding-set=-all \
+  python3 -m unittest discover -s tests -p test_headless_gui_xvfb_probe.py -v
+```
+
+The UID in the example is **environment-specific** and must be replaced by a disposable local test identity; it is not a NixNAS system account specification. This local `setpriv` test does **not** exercise Podman or user namespaces, seccomp, NixOS service hardening, systemd deployment or actual V2 policy.
+
 ### Remaining qualification (do not assert as passed)
 
 - NixOS package/closure selection and normal V2 `schema → effective → projection → apply` integration.
