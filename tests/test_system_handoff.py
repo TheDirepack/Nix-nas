@@ -275,6 +275,37 @@ class SystemHandoffTests(unittest.TestCase):
             self.assertTrue((handoff / "system-closures.nar.gz").exists())
             self.assertIn("system-only", (root / "imported-paths.log").read_text(encoding="utf-8"))
 
+    def test_verify_rejects_missing_shard_checksum_even_with_valid_other_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            handoff = root / "handoff"
+            handoff.mkdir()
+            (handoff / "bundle-manifest.tsv").write_text(
+                "core\t/nix/store/base-a\nidentity\t/nix/store/base-b\n",
+                encoding="utf-8",
+            )
+            extra = root / "extra-paths.txt"
+            extra.write_text(
+                "".join(f"/nix/store/test-{index:04d}\n" for index in range(140)),
+                encoding="utf-8",
+            )
+            export_log = root / "export.log"
+            fake_nix, fake_store = self.make_tools(root)
+            env = self.environment(fake_nix, fake_store, export_log)
+            env["FAKE_EXTRA_PATHS_FILE"] = str(extra)
+            self.run_handoff("save", handoff, env)
+            checksum = handoff / "system-closures.sha256"
+            checksum.write_text(
+                "".join(
+                    line for line in checksum.read_text(encoding="utf-8").splitlines(keepends=True)
+                    if "system-closures.part-000001.nar.gz" not in line
+                ),
+                encoding="utf-8",
+            )
+            failed = self.run_handoff("verify", handoff, env, check=False)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("missing checksum entry", failed.stderr)
+
     def test_verify_rejects_missing_or_out_of_order_export_shards(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
