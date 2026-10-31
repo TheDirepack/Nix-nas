@@ -285,7 +285,7 @@ def generate_caddyfile(
         route, hostname, path = item
         norm = path.rstrip("/") or "/"
         seg_count = 0 if norm == "/" else len(norm.strip("/").split("/"))
-        return (hostname, -seg_count, -len(norm), path, route["service"], route["route"])
+        return (hostname.lower(), -seg_count, -len(norm), path, route["service"], route["route"])
 
     path_routes.sort(key=_path_sort_key)
     hostname_routes.sort(key=_hostname_sort_key)
@@ -303,8 +303,25 @@ def generate_caddyfile(
         )
         lines.append("  }")
     lines.extend(["}", ""])
+    # A Caddy site is keyed by the normalized hostname, not by a route.
+    # Emit one site block for every host and collect its longest-first paths.
+    identity_hosts = {host.lower() for route, host, _ in hostname_routes if route["authMode"] == "identity"}
+    current_host: str | None = None
     for index, (route, hostname, path) in enumerate(hostname_routes):
-        lines.extend([f"https://{hostname} {{", "  tls internal"])
+        host = hostname.lower()
+        if host != current_host:
+            if current_host is not None:
+                lines.extend(["}", ""])
+            current_host = host
+            lines.extend([f"https://{host} {{", "  tls internal"])
+            if host in identity_hosts:
+                lines.extend(
+                    [
+                        "  handle /outpost.goauthentik.io/* {",
+                        f"    reverse_proxy {authentik_upstream}",
+                        "  }",
+                    ]
+                )
         matcher = _matcher(route["service"], route["route"], f"hostpath_{index}")
         patterns = " ".join(_q(item) for item in _path_patterns(path))
         lines.extend([f"  @{matcher} path {patterns}", f"  handle @{matcher} {{"])
@@ -315,7 +332,9 @@ def generate_caddyfile(
             authentik_path=authentik_path,
             indent="    ",
         )
-        lines.extend(["  }", "}", ""])
+        lines.append("  }")
+    if current_host is not None:
+        lines.extend(["}", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -362,15 +381,25 @@ class PortalProjectionError(RuntimeError):
     """Raised when portal metadata cannot be projected safely."""
 
 
+def _safe_portal_path(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("/")
+        and not value.startswith("//")
+        and "\\\\" not in value
+        and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+    )
+
+
 def _route_url(exposure: dict[str, Any], portal: dict[str, Any]) -> str:
     explicit = portal.get("url")
-    if isinstance(explicit, str) and explicit.startswith("/") and not explicit.startswith("//"):
+    if _safe_portal_path(explicit):
         return explicit
     exposure_type = exposure.get("type")
     if exposure_type == "path":
         paths = exposure.get("paths")
         candidate = paths[0] if isinstance(paths, list) and paths and isinstance(paths[0], str) else None
-        if isinstance(candidate, str) and candidate.startswith("/") and not candidate.startswith("//"):
+        if _safe_portal_path(candidate):
             return candidate
         raise PortalProjectionError("visible portal path route has no safe path")
     if exposure_type == "hostname":
