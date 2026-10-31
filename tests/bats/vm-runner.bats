@@ -162,15 +162,16 @@ SH
 
 @test "process cleanup rejects zero before any signal probe" {
   for pid in 0 00 000 -1 invalid; do
+    marker=$(mktemp -u -t kill-marker.XXXXXX)
     run bash -c '
       source "$1"
-      kill() { echo kill-called >&2; return 1; }
-      nas_vm_stop_process "$2" 1
+      kill() { touch "$2"; return 1; }
+      nas_vm_stop_process "$3" 1
       rc=$?
       [[ "$rc" -eq 2 ]]
-    ' process-cleanup "$process_cleanup_lib" "$pid"
+    ' process-cleanup "$process_cleanup_lib" "$marker" "$pid"
     [ "$status" -eq 0 ]
-    [[ "$output" != *kill-called* ]]
+    [ ! -f "$marker" ]
   done
 }
 
