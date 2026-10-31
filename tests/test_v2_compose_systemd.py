@@ -278,6 +278,43 @@ VolumeName=data.volume
                         self.generate(effective, root)
                 provider.assert_not_called()
 
+    def test_provider_uses_validated_source_snapshot_after_watched_file_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            effective, source = self.fixture(root)
+            original = source.read_text(encoding="utf-8")
+            podman, provider, _podlet = self.fake_tools(root / "tools")
+            canonical = "services:\\n  web:\\n    image: example.invalid/web:1\\n"
+            inspected: list[tuple[list[str], dict[str, str], str]] = []
+
+            def mutate_source(*_args, **_kwargs):
+                source.write_text("include:\\n  - unvalidated.yaml\\n", encoding="utf-8")
+
+            def provider_call(command, **kwargs):
+                inspected.append((list(command), kwargs["env"], kwargs["input_text"]))
+                return mock.Mock(returncode=0, stdout=canonical)
+
+            with (
+                mock.patch.object(compose, "APP_ROOT", root / "apps"),
+                mock.patch.object(compose, "_apply_sandbox_policy", side_effect=mutate_source),
+                mock.patch.object(compose_import, "_run", side_effect=provider_call) as runner,
+            ):
+                result_source, _override, result_canonical = compose_import._canonical_compose(
+                    effective,
+                    "demo",
+                    effective["services"]["demo"],
+                    podman_bin=str(podman),
+                    compose_provider_bin=str(provider),
+                )
+            runner.assert_called_once()
+            self.assertEqual(result_source, source)
+            self.assertEqual(result_canonical.decode("utf-8"), canonical)
+            command, env, input_text = inspected[0]
+            self.assertEqual(input_text, original)
+            self.assertEqual(env["COMPOSE_PROJECT_DIR"], str(source.parent))
+            self.assertEqual(command[command.index("--file") + 1], "-")
+            self.assertIn("include:", source.read_text(encoding="utf-8"))
+
     def test_decoded_yaml_interpolation_is_rejected_but_comments_are_allowed(self) -> None:
         for source in (
             'services:\n  web:\n    image: "image:\\u0024TAG"\n',
