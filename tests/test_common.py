@@ -141,6 +141,34 @@ class CommonPolicyTests(unittest.TestCase):
             self.assertEqual(common.split_groups("nas_users, bad\x0bname"), set())
             self.assertEqual(common.split_groups("\x7f"), set())
 
+    def test_capability_resolver_fails_closed_when_existing_effective_is_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                # Missing compiled state is an explicit early-boot fallback.
+                self.assertEqual(
+                    common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"),
+                    ("demo", "view"),
+                )
+                for value in ([], {"derived": {}}, {"schemaVersion": 3, "derived": {"authorization": {}}, "services": {}}):
+                    with self.subTest(value=value):
+                        effective.write_text(json.dumps(value), encoding="utf-8")
+                        self.assertIsNone(
+                            common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view")
+                        )
+                effective.write_text(
+                    json.dumps({
+                        "schemaVersion": 3,
+                        "derived": {"authorization": {"demo": {"capabilities": {"view": {}}}}},
+                        "services": {"demo": {}},
+                    }),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"),
+                    ("demo", "view"),
+                )
+
     def test_load_effective_authority_validates_shape_and_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
