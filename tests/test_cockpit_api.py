@@ -815,7 +815,7 @@ class SetupApiCapabilityTests(unittest.TestCase):
             ("not-found", "inactive", False),
         ):
             with self.subTest(load=load, active=active):
-                output = f"Id={unit}\\nLoadState={load}\\nActiveState={active}\\n"
+                output = f"Id={unit}\nLoadState={load}\nActiveState={active}\n"
                 with mock.patch.object(api, "run", return_value=mock.Mock(returncode=0, stdout=output)) as query:
                     self.assertIs(api._first_start_worker_live("a" * 24), expected)
                 query.assert_called_once_with(
@@ -827,9 +827,9 @@ class SetupApiCapabilityTests(unittest.TestCase):
     def test_setup_worker_query_failures_keep_the_claim(self) -> None:
         unit = "nas-first-start-" + "a" * 24 + ".service"
         for value in (
-            mock.Mock(returncode=1, stdout=f"Id={unit}\\nLoadState=not-found\\nActiveState=inactive\\n"),
+            mock.Mock(returncode=1, stdout=f"Id={unit}\nLoadState=not-found\nActiveState=inactive\n"),
             mock.Mock(returncode=0, stdout=""),
-            mock.Mock(returncode=0, stdout=f"Id={unit}\\nLoadState=error\\nActiveState=unknown\\n"),
+            mock.Mock(returncode=0, stdout=f"Id={unit}\nLoadState=error\nActiveState=unknown\n"),
             OSError("systemd unavailable"),
         ):
             with self.subTest(value=value), mock.patch.object(api, "run") as query:
