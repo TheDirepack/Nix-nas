@@ -207,9 +207,8 @@ in
       description = "Cockpit web service behind the Caddy Authentik gate";
       path = [ nasCockpitApi nasPythonApplication nasSecrets ];
       wantedBy = [ "multi-user.target" ];
-      after = [ "nas-first-start.service" ];
+      after = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
       requires = [ "nas-first-start.service" "nas-cockpit-sso.socket" ];
-      after = lib.mkAfter [ "nas-cockpit-sso.socket" ];
       # NixOS activation restarts first-start while switching generations;
       # propagate that restart so the shared Cockpit bridge is not left dead.
       partOf = [ "nas-first-start.service" ];
