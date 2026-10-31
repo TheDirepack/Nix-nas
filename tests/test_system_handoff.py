@@ -59,6 +59,19 @@ class SystemHandoffTests(unittest.TestCase):
             #!/usr/bin/env bash
             set -euo pipefail
             case "${1:-}" in
+              --query)
+                [[ "${2:-}" == "--requisites" ]] || exit 2
+                # A non-alphabetical dependency-first ordering is deliberate.
+                printf '%s\n' \
+                  /nix/store/base-a \
+                  /nix/store/base-b \
+                  /nix/store/qemu-root \
+                  /nix/store/system-only \
+                  /nix/store/ci-root
+                if [[ -n "${FAKE_EXTRA_PATHS_FILE:-}" ]]; then
+                  cat -- "$FAKE_EXTRA_PATHS_FILE"
+                fi
+                ;;
               --export)
                 shift
                 printf '%s\n' "$@" >> "${FAKE_EXPORT_LOG:?}"
@@ -122,6 +135,7 @@ class SystemHandoffTests(unittest.TestCase):
                 "system-closures.delta.paths",
                 "bundle-manifest.tsv",
                 "system-closures.exports",
+                "system-closures.delta.import-order",
                 *exports,
             ],
             cwd=handoff,
@@ -171,7 +185,10 @@ class SystemHandoffTests(unittest.TestCase):
                     "/nix/store/system-only",
                 ],
             )
-            self.assertEqual(exported, delta_paths)
+            order = (handoff / "system-closures.delta.import-order").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(exported, order)
+            self.assertEqual(sorted(exported), delta_paths)
+            self.assertNotEqual(exported, delta_paths)
             self.run_handoff("verify", handoff, env)
 
             # Simulate other reusable archives present in the complete transport.
@@ -213,7 +230,7 @@ class SystemHandoffTests(unittest.TestCase):
             )
             self.assertEqual(
                 export_log.read_text(encoding="utf-8").splitlines(),
-                (handoff / "system-closures.delta.paths").read_text(encoding="utf-8").splitlines(),
+                (handoff / "system-closures.delta.import-order").read_text(encoding="utf-8").splitlines(),
             )
             self.run_handoff("verify", handoff, env)
             self.run_handoff("import", handoff, env)
