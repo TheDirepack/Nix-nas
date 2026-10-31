@@ -118,9 +118,14 @@ let
     while true; do
       # cockpit-ws inherits the permissioned Unix listener from systemd.
       # Never expose the unauthenticated root bridge on a loopback TCP port.
-      ${cockpitPatched}/libexec/cockpit-ws \
-        --no-tls \
-        --local-session ${cockpitPatched}/bin/cockpit-bridge &
+      (
+        # systemd sets LISTEN_PID for the supervisor, not its children.
+        # Exec keeps the background subshell's BASHPID stable for sd_listen_fds.
+        export LISTEN_PID="$BASHPID"
+        exec ${cockpitPatched}/libexec/cockpit-ws \
+          --no-tls \
+          --local-session ${cockpitPatched}/bin/cockpit-bridge
+      ) &
       WSPID=$!
       while kill -0 "$WSPID" 2>/dev/null; do
         sleep 2
