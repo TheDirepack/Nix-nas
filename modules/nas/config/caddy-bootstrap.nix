@@ -103,7 +103,7 @@ https://${lanHost} {
       ${caddyForwardAuth}
       @missingCockpitAdmin not header_regexp Remote-Groups (?i)(^|[|,][[:space:]]*)nas_admin([[:space:]]*[|,]|$)
       respond @missingCockpitAdmin 403
-      reverse_proxy 127.0.0.1:${toString cockpitPort} {
+      reverse_proxy unix//run/nas-cockpit-sso/ws.sock {
         header_up X-Forwarded-Proto https
         header_up X-Forwarded-Prefix /console
       }
