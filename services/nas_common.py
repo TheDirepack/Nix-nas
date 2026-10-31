@@ -255,8 +255,6 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError(f"effective state top-level must be object, got {type(data).__name__}")
-    if isinstance(data, list):
-        raise ValueError("effective state top-level must be object, not list")
     schema_version = data.get("schemaVersion")
     if schema_version not in {2, 3}:
         raise ValueError(f"effective state has unsupported schemaVersion {schema_version!r}")
@@ -275,6 +273,12 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
         caps = entry.get("capabilities")
         if caps is not None and not isinstance(caps, dict):
             raise ValueError(f"authorization capabilities for {svc_id!r} must be object")
+        if isinstance(caps, dict):
+            for capability, group in caps.items():
+                if group != application_capability_group(svc_id, capability):
+                    raise ValueError(
+                        f"authorization capability {svc_id!r}/{capability!r} must map to its canonical group"
+                    )
     return data
 
 
@@ -293,9 +297,27 @@ def resolve_v2_service_capability(
     try:
         data = load_effective_authority(effective_path)
     except FileNotFoundError:
-        return service, capability
-    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        try:
+            effective_path.lstat()
+        except FileNotFoundError:
+            return service, capability
+        except OSError:
+            return None
         return None
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        return None
+    service_entry = data["services"].get(service)
+    if not isinstance(service_entry, dict):
+        return None
+    if capability != "access":
+        declared_authorization = service_entry.get("authorization")
+        if not isinstance(declared_authorization, dict):
+            return None
+        declared = declared_authorization.get("capabilities")
+        if not isinstance(declared, list) or not any(
+            isinstance(item, dict) and item.get("id") == capability for item in declared
+        ):
+            return None
     authorization = data["derived"]["authorization"]
     entry = authorization.get(service)
     if not isinstance(entry, dict):

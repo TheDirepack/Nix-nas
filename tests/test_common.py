@@ -150,24 +150,112 @@ class CommonPolicyTests(unittest.TestCase):
                     common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"),
                     ("demo", "view"),
                 )
-                for value in ([], {"derived": {}}, {"schemaVersion": 3, "derived": {"authorization": {}}, "services": {}}):
+                for value in (
+                    [],
+                    {"derived": {}},
+                    {"schemaVersion": 3, "derived": {"authorization": {}}, "services": {}},
+                ):
                     with self.subTest(value=value):
                         effective.write_text(json.dumps(value), encoding="utf-8")
-                        self.assertIsNone(
-                            common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view")
-                        )
+                        self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"))
                 effective.write_text(
-                    json.dumps({
-                        "schemaVersion": 3,
-                        "derived": {"authorization": {"demo": {"capabilities": {"view": {}}}}},
-                        "services": {"demo": {}},
-                    }),
+                    json.dumps(
+                        {
+                            "schemaVersion": 3,
+                            "derived": {"authorization": {"demo": {"capabilities": {"view": "application.demo.view"}}}},
+                            "services": {"demo": {"authorization": {"capabilities": [{"id": "view"}]}}},
+                        }
+                    ),
                     encoding="utf-8",
                 )
                 self.assertEqual(
                     common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"),
                     ("demo", "view"),
                 )
+
+    def test_capability_resolver_rejects_invalid_grants_and_declarations(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                for group in (None, {}, [], False, 1, "", "nas_admin", "application.other.view"):
+                    with self.subTest(group=group):
+                        effective.write_text(
+                            json.dumps(
+                                {
+                                    "schemaVersion": 3,
+                                    "services": {"demo": {"authorization": {"capabilities": [{"id": "view"}]}}},
+                                    "derived": {"authorization": {"demo": {"capabilities": {"view": group}}}},
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"))
+                        with self.assertRaises(ValueError):
+                            common.load_effective_authority(effective)
+                for services in (
+                    {},
+                    {"demo": None},
+                    {"demo": {}},
+                    {"demo": {"authorization": {"capabilities": []}}},
+                    {"demo": {"authorization": {"capabilities": [{"id": "other"}]}}},
+                ):
+                    with self.subTest(services=services):
+                        effective.write_text(
+                            json.dumps(
+                                {
+                                    "schemaVersion": 3,
+                                    "services": services,
+                                    "derived": {
+                                        "authorization": {"demo": {"capabilities": {"view": "application.demo.view"}}}
+                                    },
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"))
+
+    def test_capability_resolver_rejects_unavailable_existing_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            effective.symlink_to("current/effective.json")
+            with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                with self.subTest(authority="dangling-link"):
+                    self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"))
+                effective.unlink()
+                for payload in (b"\xff", b"{", b"[" * 2000 + b"0" + b"]" * 2000):
+                    with self.subTest(payload=payload[:10]):
+                        effective.write_bytes(payload)
+                        self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"))
+                with mock.patch.object(common.json, "loads", side_effect=RecursionError("parser nesting limit")):
+                    self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "view"))
+
+    def test_capability_resolver_accepts_compiler_output_and_implicit_access(self) -> None:
+        from nas_v2_spec import build_effective, normalize
+
+        compiled = build_effective(
+            normalize(
+                {
+                    "schemaVersion": 3,
+                    "services": {
+                        "demo": {
+                            "runtime": {"type": "systemd", "unit": "demo.service"},
+                            "workload": {"kind": "daemon"},
+                            "authorization": {"capabilities": [{"id": "view"}]},
+                        }
+                    },
+                }
+            )
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            effective.write_text(json.dumps(compiled), encoding="utf-8")
+            with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                for capability in ("access", "view"):
+                    with self.subTest(capability=capability):
+                        self.assertEqual(
+                            common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", capability),
+                            ("demo", capability),
+                        )
 
     def test_load_effective_authority_validates_shape_and_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
