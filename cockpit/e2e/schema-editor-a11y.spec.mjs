@@ -26,7 +26,7 @@ const NESTED_SCHEMA = {
   required: [],
 };
 
-async function openEditor(page, value) {
+async function openEditor(page, value, schema = NESTED_SCHEMA) {
   const entry = `
     import React, {useState} from "react";
     import {createRoot} from "react-dom/client";
@@ -56,7 +56,7 @@ async function openEditor(page, value) {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   await page.setContent(
-    `<!doctype html><html lang="en"><head><title>Schema editor accessibility fixture</title></head><body><div id="root"></div><script>window.__SCHEMA__=${JSON.stringify(NESTED_SCHEMA)};window.__VALUE__=${JSON.stringify(value)};</script><script>${result.outputFiles[0].text}</script></body></html>`,
+    `<!doctype html><html lang="en"><head><title>Schema editor accessibility fixture</title></head><body><div id="root"></div><script>window.__SCHEMA__=${JSON.stringify(schema)};window.__VALUE__=${JSON.stringify(value)};</script><script>${result.outputFiles[0].text}</script></body></html>`,
   );
   await expect(page.locator(".nas-schema-editor")).toBeVisible();
   return {pageErrors, consoleErrors};
@@ -111,4 +111,42 @@ test("optional-field add flow reports no serious or critical axe violations", as
     ["serious", "critical"].includes(item.impact),
   );
   expect(blocking).toEqual([]);
+});
+
+test("dynamic map keys commit on blur without dropping typed characters or map values", async ({page}) => {
+  const schema = {
+    type: "object",
+    properties: {
+      entries: {
+        type: "object",
+        propertyNames: {pattern: "^[a-z][a-z0-9-]*$"},
+        additionalProperties: {type: "string", title: "Entry value"},
+      },
+    },
+    required: ["entries"],
+  };
+  const {pageErrors, consoleErrors} = await openEditor(page, {entries: {alpha: "one", beta: "two"}}, schema);
+  const original = page.getByRole("textbox", {name: "Key for alpha"});
+  await expect(original).toHaveValue("alpha");
+
+  await original.fill("alpha-renamed");
+  await expect(original).toHaveValue("alpha-renamed");
+  await expect(page.getByRole("textbox", {name: "Key for alpha-renamed"})).toHaveCount(0);
+  await original.press("Enter");
+  const renamed = page.getByRole("textbox", {name: "Key for alpha-renamed"});
+  await expect(renamed).toHaveValue("alpha-renamed");
+  await expect(page.getByRole("textbox", {name: "Key for alpha"})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for beta"})).toHaveValue("beta");
+  await expect(page.getByRole("textbox", {name: "Entry value"}).first()).toHaveValue("one");
+
+  await renamed.fill("beta");
+  await renamed.press("Tab");
+  await expect(renamed).toHaveValue("alpha-renamed");
+  await expect(page.getByRole("textbox", {name: "Key for beta"})).toHaveCount(1);
+
+  await renamed.fill("invalid key");
+  await renamed.press("Tab");
+  await expect(renamed).toHaveValue("alpha-renamed");
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors.filter((message) => message.includes("requires either an id or aria-label"))).toEqual([]);
 });
