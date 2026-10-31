@@ -239,6 +239,14 @@ def build_sources(lock: dict[str, Any], installation: pathlib.Path, output: path
         for row in lock["addons"]:
             source = compiled / row["archive"] if row["archive"] in hashes else directory / "plugin" / row["archive"]
             shutil.copyfile(source, output / row["archive"])
+            if row["archive"] in hashes:
+                # ZAP searches installed add-ons before the runtime home.
+                # Replace the stock installation copy, not only the later
+                # home plugin copy, or equal-version stock code wins.
+                installed = installation / "plugin" / row["archive"]
+                installed.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, installed)
+                verify_hash(installed, recipe["outputs"][row["archive"]])
         shutil.copyfile(compiled / core.name, core)
 
 
@@ -301,7 +309,12 @@ def verify_artifacts(lock: dict[str, Any], home: pathlib.Path, installation: pat
     if recipe is not None:
         verify_hash(installation / recipe["core"]["archive"], outputs[recipe["core"]["archive"]])
     for row in lock["addons"]:
-        verify_hash(home / "plugin" / row["archive"], outputs.get(row["archive"], row["sha256"]))
+        digest = outputs.get(row["archive"], row["sha256"])
+        verify_hash(home / "plugin" / row["archive"], digest)
+        if row["archive"] in outputs:
+            # A matching home artifact is insufficient if the installation
+            # still contains an equally versioned upstream implementation.
+            verify_hash(installation / "plugin" / row["archive"], digest)
 
 
 def verify_evidence(lock_path: pathlib.Path, evidence_path: pathlib.Path, image: str, runtime_image: str) -> None:
