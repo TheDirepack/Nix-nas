@@ -74,6 +74,45 @@ class RepositoryDataShapeTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assert_file_error(self.run_fixture({FIRST: value}))
 
+    def test_nonobject_schema_top_level_error_message_is_specific(self) -> None:
+        for value, expected in (
+            ([], "schema must be a JSON object"),
+            (None, "schema must be a JSON object"),
+            ("fixture", "schema must be a JSON object"),
+            (True, "schema must be a JSON object"),
+            (42, "schema must be a JSON object"),
+        ):
+            with self.subTest(value=value):
+                result = self.run_fixture({FIRST: value})
+                self.assert_file_error(result)
+                self.assertIn(expected, result.stderr)
+
+    def test_nonobject_properties_error_message_is_specific(self) -> None:
+        for value, expected in (
+            ([], "schema properties must be a JSON object"),
+            (None, "schema properties must be a JSON object"),
+            ("fixture", "schema properties must be a JSON object"),
+            (True, "schema properties must be a JSON object"),
+            (42, "schema properties must be a JSON object"),
+        ):
+            with self.subTest(value=value):
+                result = self.run_fixture({FIRST: {**schema(), "properties": value}})
+                self.assert_file_error(result)
+                self.assertIn(expected, result.stderr)
+
+    def test_nonobject_schema_version_def_error_message_is_specific(self) -> None:
+        for value, expected in (
+            ([], "schemaVersion schema must be a JSON object"),
+            (None, "schemaVersion schema must be a JSON object"),
+            ("fixture", "schemaVersion schema must be a JSON object"),
+            (True, "schemaVersion schema must be a JSON object"),
+            (42, "schemaVersion schema must be a JSON object"),
+        ):
+            with self.subTest(value=value):
+                result = self.run_fixture({FIRST: {**schema(), "properties": {"schemaVersion": value}}})
+                self.assert_file_error(result)
+                self.assertIn(expected, result.stderr)
+
     def test_nonobject_properties_have_file_diagnostics(self) -> None:
         for value in ([], None, "fixture", True, 42):
             with self.subTest(value=value):
