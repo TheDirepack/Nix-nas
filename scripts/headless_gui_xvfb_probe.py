@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Disposable Xvfb isolation smoke-test; not a V2 runtime/controller.
 
 This developer probe deliberately exercises an actual display session. It is not
@@ -33,9 +32,9 @@ def private_xvfb(*, width: int = 800, height: int = 600, depth: int = 24, timeou
     The Xauthority cookie is created *before* the server starts. No -ac,
     host X11 socket mounts, TCP listener, or privileged device access.
     """
-    _require("Xvfb", "xauth", "xdpyinfo")
     if width < 64 or height < 64 or depth not in (16, 24, 32):
         raise ValueError("unsupported smoke-test screen geometry")
+    _require("Xvfb", "xauth", "xdpyinfo")
 
     with tempfile.TemporaryDirectory(prefix="v2-xvfb-probe-") as root:
         private_dir = Path(root)
