@@ -33,6 +33,7 @@ class CockpitSocketBoundaryTests(unittest.TestCase):
             "systemd.services.nas-setup-api = {", 1
         )[0]
         self.assertIn('Sockets = [ "nas-cockpit-sso.socket" ];', service)
+        self.assertIn('SocketBindDeny = "any";', service)
 
     def test_caddy_is_only_proxy_to_socket_and_updater_uses_unix_probe(self) -> None:
         config = CADDY.read_text(encoding="utf-8")
