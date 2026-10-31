@@ -150,6 +150,7 @@ in
     # so an edit that arrives while reconciliation is active cannot be lost.
     systemd.services.nas-managed-services-dirty = {
       description = "Queue Managed Services V2 desired-state reconciliation";
+      unitConfig.ConditionPathExists = [ "${nasInternal.secretRoot}/ready" ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${pkgs.coreutils}/bin/touch ${reconcilePendingPath}";
