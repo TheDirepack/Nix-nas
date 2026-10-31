@@ -32,7 +32,7 @@ async function memoryCurrent(client, {unit, objectPath}) {
     ]);
     const variant = onlyReturnValue(reply);
     const value = variant && typeof variant === "object" ? variant.v : null;
-    return Number.isFinite(value) && value >= 0 ? value : null;
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
   } catch (_error) {
     return null;
   }
