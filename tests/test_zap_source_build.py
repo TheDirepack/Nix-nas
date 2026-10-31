@@ -89,13 +89,41 @@ class ZapSourceBuildTests(unittest.TestCase):
         }
         core.write_bytes(compiled_core)
         plugin.write_bytes(compiled_plugin)
+        installed = self.directory / "plugin" / plugin.name
+        installed.parent.mkdir()
+        installed.write_bytes(compiled_plugin)
         self.addons.verify_artifacts(lock, plugins.parent, self.directory)
-        for artifact, correct in ((core, compiled_core), (plugin, compiled_plugin)):
+        for artifact, correct in ((core, compiled_core), (plugin, compiled_plugin), (installed, compiled_plugin)):
             with self.subTest(artifact=artifact.name):
                 artifact.write_bytes(b"unreviewed artifact")
                 with self.assertRaisesRegex(ValueError, "SHA256"):
                     self.addons.verify_artifacts(lock, plugins.parent, self.directory)
                 artifact.write_bytes(correct)
+
+    def test_patched_addon_overwrites_equal_version_stock_installation_copy(self) -> None:
+        install = self.directory / "installation"
+        output = self.directory / "bundled"
+        compiled = self.directory / "compiled"
+        source = self.directory / "upstream"
+        (install / "plugin").mkdir(parents=True)
+        compiled.mkdir()
+        source.mkdir()
+        patched = b"patched network code"
+        upstream = b"unchanged upstream code"
+        patched_name = "network-beta-0.30.0.zap"
+        regular_name = "ordinary-addon.zap"
+        (install / "plugin" / patched_name).write_bytes(b"stock equal-version code")
+        (compiled / patched_name).write_bytes(patched)
+        (source / regular_name).write_bytes(upstream)
+        lock = {
+            "sourceBuild": {"outputs": {patched_name: hashlib.sha256(patched).hexdigest()}},
+            "addons": [{"archive": patched_name}, {"archive": regular_name}],
+        }
+        self.addons.publish_source_built_addons(lock, compiled, source, output, install)
+        self.assertEqual((install / "plugin" / patched_name).read_bytes(), patched)
+        self.assertEqual((output / patched_name).read_bytes(), patched)
+        self.assertEqual((output / regular_name).read_bytes(), upstream)
+        self.assertFalse((install / "plugin" / regular_name).exists())
 
     def test_canonical_recipe_pins_sources_patch_and_all_three_outputs(self) -> None:
         lock = self.addons.load_lock(ROOT / "scripts/lib/zap-addons.lock.json")
