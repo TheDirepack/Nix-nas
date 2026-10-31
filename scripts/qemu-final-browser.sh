@@ -218,12 +218,20 @@ run_http_adversarial_contracts() {
   trap 'rm -f -- "$body"' RETURN
 
   probe_not_5xx() {
+    local curl_status
     label=$1
     url=$2
     shift 2
     code="$(curl --insecure --silent --show-error --output "$body" --write-out '%{http_code}' \
-      --connect-timeout 5 --max-time 20 "$@" "$url" || true)"
-    [[ "$code" =~ ^[0-9]{3}$ ]] || die "$label did not return an HTTP status"
+      --connect-timeout 5 --max-time 20 "$@" "$url")" || {
+      curl_status=$?
+      cat "$body" >&2 || true
+      die "$label curl failed (exit $curl_status, HTTP ${code:-none})"
+    }
+    [[ "$code" =~ ^[1-5][0-9]{2}$ ]] || {
+      cat "$body" >&2 || true
+      die "$label did not return a valid HTTP status: ${code:-none}"
+    }
     [[ "$code" != 5* ]] || {
       cat "$body" >&2 || true
       die "$label returned server error HTTP $code"
