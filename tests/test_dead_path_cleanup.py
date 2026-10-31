@@ -115,7 +115,7 @@ assert '[name, "custom_admin"]' in blueprint.render_blueprint(state, public_host
         accounts = text("modules/nas/internal/account-tools.nix")
         self.assertIn("export NAS_SYNCTHING_URL=http://127.0.0.1:${toString syncthingGuiPort}", accounts)
         managed = text("modules/nas/config/managed-services.nix")
-        self.assertIn("NAS_V2_COCKPIT_PORT = toString nasInternal.cockpitPort;", managed)
+        self.assertNotIn("NAS_V2_COCKPIT_PORT = toString nasInternal.cockpitPort;", managed)
         self.assertNotIn("pyyaml", accounts.lower())
         self.assertNotIn("pyyaml", text("modules/nas/internal/secret-tools.nix").lower())
         self.assertNotIn("rcloneExtraArgs", text("modules/nas/options/operations.nix"))
