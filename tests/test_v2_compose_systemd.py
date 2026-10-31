@@ -237,6 +237,28 @@ VolumeName=data.volume
         module = (ROOT / "modules/nas/config/managed-services-compose-import.nix").read_text(encoding="utf-8")
         self.assertIn('"${pkgs.podlet}/bin/podlet"', module)
 
+    def test_interpolation_is_rejected_before_calling_the_provider(self) -> None:
+        for value in ("${TAG}", "$TAG", "$$$TAG", "$${prefix}$TAG", "$_TAG"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                source.write_text(f'services:\n  web:\n    image: "example.invalid/web:{value}"\n', encoding="utf-8")
+                with mock.patch.object(
+                    compose_import, "_run", side_effect=AssertionError("interpolation reached provider")
+                ) as run:
+                    with self.assertRaisesRegex(systemd.SystemdProjectionError, "uses interpolation"):
+                        self.generate(effective, root)
+                run.assert_not_called()
+
+    def test_escaped_dollars_and_non_variable_dollars_reach_the_provider(self) -> None:
+        for value in ("$${TAG}", "$$TAG", "$$$$TAG", "$5", "dollar$"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                effective, source = self.fixture(root)
+                source.write_text(f'services:\n  web:\n    image: "example.invalid/web:{value}"\n', encoding="utf-8")
+                files, _ = self.generate(effective, root)
+                self.assertIn(root / "projection/quadlet/nas-v2-demo-web.container", files)
+
 
 if __name__ == "__main__":
     unittest.main()
