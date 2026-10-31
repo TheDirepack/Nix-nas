@@ -140,8 +140,13 @@ exec "$@"
         source_destroy = "zfs destroy -r -- " + source
         self.assertEqual(rows.count(source_destroy), 1)
         self.assertTrue(any(row.startswith("zfs clone -- ") for row in rows))
-        self.assertTrue(any(row.startswith("zfs destroy -r -- tank/target/nas-live-") for row in rows))
-        self.assertFalse(any(row == "zfs destroy -r -- tank/target" for row in rows))
+        run_suffix = source.removeprefix("tank/source/")
+        target = "tank/target/" + run_suffix
+        clone = target + "-restore"
+        self.assertEqual(
+            [row for row in rows if row.startswith("zfs destroy ")],
+            ["zfs destroy -- " + clone, source_destroy, "zfs destroy -r -- " + target],
+        )
 
     def test_restic_preserves_preexisting_restore_directory_and_cleans_owned_paths(self) -> None:
         existing = self.restore / "nas-live-existing"
