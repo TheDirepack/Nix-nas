@@ -222,6 +222,10 @@ in
       environment.HOME = "/var/lib/nas-cockpit-sso";
       serviceConfig = {
         Sockets = [ "nas-cockpit-sso.socket" ];
+        # Fail closed if Cockpit loses its activation FD: it must never
+        # fall back to binding 0.0.0.0:9090 or another TCP listener.
+        # This restricts AF_INET/AF_INET6 binds, not the inherited AF_UNIX FD.
+        SocketBindDeny = "any";
         ExecStart = cockpitWebService;
         # A crashed shared bridge must never degrade into a second login
         # prompt; restarting ws respawns the local session within seconds.
