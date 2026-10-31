@@ -230,7 +230,14 @@ nas_secret_tx_rollback() {
     if ! "$failed"; then
       nas_secret_tx_remove_directory || failed=true
     fi
-    "$failed" && return 1 || return 0
+    if "$failed"; then
+      NAS_SECRET_TX_PHASE=rollback-incomplete
+      printf 'nas-secret-transaction: pre-swap cleanup was incomplete; retained recovery tree %s; staged tree %s\n' \
+        "${NAS_SECRET_TX_DIRECTORY:-$NAS_SECRET_TX_STAGE}" "$NAS_SECRET_TX_STAGE" >&2
+      return 1
+    fi
+    NAS_SECRET_TX_PHASE=rolled-back
+    return 0
   fi
 
   nas_secret_tx_stop_target >/dev/null 2>&1 || failed=true
