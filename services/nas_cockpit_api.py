@@ -1069,14 +1069,29 @@ def _first_start_worker_live(job_id: str) -> bool:
     except OSError as exc:
         raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503) from exc
     if result.returncode != 0:
-        raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503)
+        # Collected transient units can disappear before status is queried.
+        # An independent successful list-units query must confirm absence;
+        # an unavailable bus or still-listed unit cannot authorize retry.
+        list_command = [
+            "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", unit
+        ]
+        try:
+            listed = run(list_command, check=False, timeout_seconds=10)
+        except OSError as exc:
+            raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503) from exc
+        if listed.returncode != 0:
+            raise SetupApiError("Unable to verify whether the first-start worker is still running", status=503)
+        if not listed.stdout.strip():
+            return False
+        raise SetupApiError("First-start worker state is indeterminate", status=503)
     state = parse_systemd_show(result.stdout).get(unit)
     if state is None:
         raise SetupApiError("First-start worker state is unavailable", status=503)
     active = state.get("ActiveState")
-    if active in {"active", "activating", "reloading", "deactivating"}:
+    load = state.get("LoadState")
+    if active in {"active", "activating", "reloading", "deactivating"} and load == "loaded":
         return True
-    if active in {"inactive", "failed"} and state.get("LoadState") in {"loaded", "not-found"}:
+    if active in {"inactive", "failed"} and load in {"loaded", "not-found"}:
         return False
     raise SetupApiError("First-start worker state is indeterminate", status=503)
 
