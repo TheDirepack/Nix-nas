@@ -24,13 +24,19 @@ ci_run() {
 
   local log="$CI_LOG_DIR/$section-$slug.log"
   local command_text start end elapsed rc
+  local -a pipeline_status
   printf -v command_text '%q ' "$@"
   command_text=${command_text% }
   start=$(date +%s)
 
   printf '::group::%s\n' "$label"
-  "$@" 2>&1 | tee "$log"
-  rc=${PIPESTATUS[0]}
+  if "$@" 2>&1 | tee "$log"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  rc=${pipeline_status[0]}
+  if ((rc == 0)); then rc=${pipeline_status[1]}; fi
   printf '::endgroup::\n'
 
   end=$(date +%s)
