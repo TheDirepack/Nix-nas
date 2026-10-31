@@ -51,13 +51,26 @@ class OperationLockTests(unittest.TestCase):
         self.assertEqual((self.root / locks.LOCK_PATH_NAME).read_text(encoding="utf-8"), "")
         self.assertEqual(locks.operation_state()["busyClasses"], [])
 
-    def test_flock_without_published_metadata_still_reports_unknown_active_operation(self) -> None:
+    def test_flock_without_valid_metadata_reports_unknown_active_operation(self) -> None:
+        invalid = (
+            None,
+            {},
+            {"action": "backup", "classes": [], "pid": 1, "token": "a" * 32},
+            {"action": "", "classes": ["storage"], "pid": 1, "token": "a" * 32},
+            {"action": "backup", "classes": ["storage"], "pid": True, "token": "a" * 32},
+            {"action": "backup", "classes": ["storage"], "pid": 0, "token": "a" * 32},
+            {"action": "backup", "classes": ["invalid"], "pid": 1, "token": "a" * 32},
+            {"action": "backup", "classes": ["storage"], "pid": 1, "token": "bad"},
+            {"action": "backup", "classes": ["storage"], "pid": 1},
+        )
         with locks.acquire_operation("backup", ("storage",)):
-            with mock.patch.object(locks, "_read_metadata", return_value=None):
-                state = locks.operation_state()
-            self.assertEqual(state["busyClasses"], sorted(locks.KNOWN_CLASSES))
-            self.assertEqual(state["active"][0]["action"], "unknown-locked-operation")
-            self.assertIsNone(state["active"][0]["pid"])
+            for metadata in invalid:
+                with self.subTest(metadata=metadata):
+                    with mock.patch.object(locks, "_read_metadata", return_value=metadata):
+                        state = locks.operation_state()
+                    self.assertEqual(state["busyClasses"], sorted(locks.KNOWN_CLASSES))
+                    self.assertEqual(state["active"][0]["action"], "unknown-locked-operation")
+                    self.assertIsNone(state["active"][0]["pid"])
 
     def test_disjoint_mutation_classes_still_serialize(self) -> None:
         with locks.acquire_operation("backup", ("storage",)):
