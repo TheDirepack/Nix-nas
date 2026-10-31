@@ -134,12 +134,18 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
                     self.assertEqual(0, entry.main())
             failed_prune.assert_called_once()
             self.assertIn("V2 generation pruning deferred:", diagnostics.getvalue())
-            with mock.patch.object(entry, "prune_generations", wraps=generation.prune_generations) as retried_prune:
+            removed: list[pathlib.Path] = []
+
+            def _record_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
+                paths = generation.prune_generations(*args, **kwargs)
+                removed.extend(paths)
+                return paths
+
+            with mock.patch.object(entry, "prune_generations", side_effect=_record_prune) as retried_prune:
                 with contextlib.redirect_stderr(io.StringIO()) as retry_diagnostics:
                     self.assertEqual(0, entry.main())
                 retried_prune.assert_called_once()
                 self.assertNotIn("V2 generation pruning deferred:", retry_diagnostics.getvalue())
-                removed = retried_prune.return_value
             self.assertEqual(set(older), set(removed))
             for old in older:
                 self.assertFalse(old.exists(), "deferred cleanup should remove older generations")
