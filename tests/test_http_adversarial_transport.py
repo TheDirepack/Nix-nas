@@ -81,6 +81,7 @@ class HttpAdversarialTransportTests(unittest.TestCase):
     esac
     shift
   done
+  [[ ! -s "$output" ]] || { printf 'stale probe body detected\\n' >&2; return 91; }
   printf 'first-probe-body\\n' > "$output"
   printf '403'
   return 0
@@ -101,10 +102,10 @@ class HttpAdversarialTransportTests(unittest.TestCase):
                 check=False,
                 timeout=10,
             )
-            # All curl invocations should get fresh body files; the test fixture shows
-            # the function clears the body variable. Real implementation must > "$body"
-            # before every curl to prevent stale content after transport failures.
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("stale probe body detected", result.stderr)
+            payload = json.loads(evidence.read_text(encoding="utf-8"))
+            self.assertEqual(payload["spoofedIdentityPathsBlocked"], 7)
 
     def test_transport_failure_never_writes_success_evidence(self) -> None:
         for code, status in (("000", 7), ("200", 28)):
