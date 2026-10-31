@@ -515,7 +515,7 @@ def reconcile(
             if (
                 unit in stop
                 and _SESSION_TARGET.fullmatch(unit)
-                and unit not in previous_owned
+                and unit not in previous_links_raw
                 and unit not in current_links
             ):
                 # A newly disabled session has no installed target to stop.
