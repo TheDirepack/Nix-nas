@@ -157,14 +157,33 @@ syncoid_drill() (
   need_env NAS_SYNCOID_SOURCE
   need_env NAS_SYNCOID_TARGET
   local stamp child snapshot mountpoint marker target_dataset target_host clone cleanup_remote=false
+  local target_spec remote_path
   stamp=$(date -u +%Y%m%d%H%M%S)
   child="${NAS_SYNCOID_SOURCE}/nas-live-$stamp"
   snapshot="$child@validation"
   validate_dataset "$child"
   validate_dataset "$snapshot"
+  target_spec=${NAS_SYNCOID_TARGET%/}
+  # Validate the target and clone BEFORE creating the local drill dataset.
+  if [[ "$target_spec" == *:* ]]; then
+    need ssh
+    target_host=${target_spec%%:*}
+    remote_path=${target_spec#*:}
+    [[ "$target_host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || fail "unsafe Syncoid target host"
+    validate_dataset "$remote_path"
+    target_dataset="$remote_path/nas-live-$stamp"
+    clone="${NAS_SYNCOID_REMOTE_CLONE:-${target_dataset}-restore}"
+    cleanup_remote=true
+  else
+    validate_dataset "$target_spec"
+    target_dataset="$target_spec/nas-live-$stamp"
+    clone="${NAS_SYNCOID_LOCAL_CLONE:-${target_dataset}-restore}"
+  fi
+  validate_dataset "$target_dataset"
+  validate_dataset "$clone"
   cleanup_syncoid() {
     if "$cleanup_remote"; then
-      remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true
+      [[ -z "${clone:-}" ]] || remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true
       remote_zfs "$target_host" destroy-recursive "$target_dataset" >/dev/null 2>&1 || true
     else
       [[ -z "${clone:-}" ]] || zfs destroy -r -- "$clone" >/dev/null 2>&1 || true
@@ -179,25 +198,14 @@ syncoid_drill() (
   printf '%s
 ' "$marker" > "$mountpoint/marker.txt"
   zfs snapshot -- "$snapshot"
-  syncoid --no-sync-snap "$child" "${NAS_SYNCOID_TARGET%/}/nas-live-$stamp"
-  if [[ "$NAS_SYNCOID_TARGET" == *:* ]]; then
-    need ssh
-    target_host=${NAS_SYNCOID_TARGET%%:*}
-    target_dataset=${NAS_SYNCOID_TARGET#*:}/nas-live-$stamp
-    clone="${NAS_SYNCOID_REMOTE_CLONE:-${target_dataset}-restore}"
-    validate_dataset "$target_dataset"
-    validate_dataset "$clone"
-    cleanup_remote=true
+  syncoid --no-sync-snap "$child" "$target_dataset"
+  if "$cleanup_remote"; then
     remote_zfs "$target_host" clone "$target_dataset@validation" "$clone"
     remote_mount=$(remote_zfs "$target_host" mountpoint "$clone")
     [[ "$(ssh -o BatchMode=yes "$target_host" cat -- "$remote_mount/marker.txt")" == "$marker" ]]
     remote_zfs "$target_host" destroy "$clone"
     clone=""
   else
-    target_dataset="${NAS_SYNCOID_TARGET%/}/nas-live-$stamp"
-    clone="${NAS_SYNCOID_LOCAL_CLONE:-${target_dataset}-restore}"
-    validate_dataset "$target_dataset"
-    validate_dataset "$clone"
     zfs clone -- "$target_dataset@validation" "$clone"
     [[ "$(cat "$(zfs get -H -o value mountpoint "$clone")/marker.txt")" == "$marker" ]]
     zfs destroy -- "$clone"
