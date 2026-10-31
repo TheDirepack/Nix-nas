@@ -401,6 +401,35 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         with self.assertRaisesRegex(caddy.CaddyProjectionError, "collides"):
             caddy.generate_caddyfile(self.compile(service), lan_host="nas.local")
 
+    def test_hostname_routes_share_one_site_and_identity_callbacks(self):
+        service = self.base_service()
+        service["authorization"] = {"capabilities": [{"id": "admin", "title": "Administration"}]}
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "hostname", "hostnames": ["Example.local"], "path": "/one/"},
+                "auth": {"mode": "identity", "capability": "admin"},
+            }
+        }
+        effective = self.compile(service)
+        original = effective["derived"]["routes"][0]
+        sibling = dict(original)
+        sibling["route"] = "web2"
+        sibling["exposure"] = {"type": "hostname", "hostnames": ["example.local"], "path": "/two/"}
+        effective["derived"]["routes"].append(sibling)
+        rendered = caddy.generate_caddyfile(effective)
+        self.assertEqual(rendered.count("https://example.local {"), 1)
+        self.assertEqual(rendered.count("handle /outpost.goauthentik.io/*"), 1)
+        self.assertIn("reverse_proxy 127.0.0.1:9010", rendered)
+        self.assertIn('path "/one/"', rendered)
+        self.assertIn('path "/two/"', rendered)
+
+    def test_portal_rejects_backslash_and_control_character_paths(self):
+        for bad in ("/\\\\evil.example", "/\\tevil.example", "/\\nevil.example", "//evil.example"):
+            with self.subTest(path=bad):
+                self.assertFalse(caddy._safe_portal_path(bad))
+        self.assertTrue(caddy._safe_portal_path("/safe/"))
+
     def test_unix_target_and_proxy_headers(self):
         service = self.base_service()
         service["routes"] = {
