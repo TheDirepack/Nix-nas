@@ -165,7 +165,13 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
             timeout=90,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("Preflight partial: 0", result.stdout)
+        # With skip flags set, preflight reports partial status with these incomplete checks
+        self.assertIn("Preflight partial: 5 check(s) were not executed:", result.stdout)
+        self.assertIn("python-tests", result.stdout)
+        self.assertIn("cockpit-bundle", result.stdout)
+        self.assertIn("cockpit-jsx-syntax", result.stdout)
+        self.assertIn("javascript-tests", result.stdout)
+        self.assertIn("nix", result.stdout)
         self.assertIn("repository structure", result.stdout)
         self.assertIn("static security boundaries", result.stdout)
         self.assertFalse((self.clean_root / ".ruff_cache").exists())
