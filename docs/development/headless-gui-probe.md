@@ -23,9 +23,9 @@ The test suite skips the whole integration group if Xvfb / Xauthority tools are 
 
 ### Additional local security/lifecycle evidence
 
-The probe now has **eight deterministic tests**: two dependency-free contracts and six real-display checks when the optional Linux X11 tools and Pillow/xterm are available. In addition to Xauthority separation and a real GUI pixel change, the tests explicitly assert that the owned Xvfb process is **reaped** and its credential directory removed after normal completion, an injected exception, and abrupt Xvfb termination. Every direct `xdpyinfo` client call is bounded by a timeout.
+The probe now has **nine deterministic tests**: two dependency-free contracts and seven real-display checks when the optional Linux X11 tools and Pillow/xterm are available. In addition to Xauthority separation and a real GUI pixel change, the tests explicitly assert that the owned Xvfb process is **reaped** and its credential directory removed after normal completion, an injected exception, and abrupt Xvfb termination. Every direct `xdpyinfo` client call is bounded by a timeout, and startup readiness retries one client timeout within the outer startup deadline. Cross-display authentication deliberately re-keys B's actual cookie to A's display name to prove cookie rejection rather than merely a missing authority entry.
 
-A local Linux run passed **8/8** using the normal user and another **8/8** when executed as a separate UID with `no_new_privs` and all Linux capabilities dropped, using:
+A local Linux run passed **9/9** using the normal user and another **9/9** when executed as a separate UID with `no_new_privs` and all Linux capabilities dropped, using:
 
 ```sh
 setpriv --reuid 1000 --regid 1000 --init-groups \
