@@ -22,9 +22,7 @@ RUNNER_EXCLUSION_REPLACEMENT = """    excluded = set(args.exclude)
 # The source validation already fails closed; coverage must use the same test
 # oracle as the current branch, without changing main or excluding this test.
 PROBE_DIAGNOSTIC_STALE = '        self.assertIn("External management probe command is empty", result.stderr)\n'
-PROBE_DIAGNOSTIC_REPLACEMENT = (
-    '        # The validator failure preempts the secondary empty-argv check.\n'
-)
+PROBE_DIAGNOSTIC_REPLACEMENT = '        # The validator failure preempts the secondary empty-argv check.\n'
 
 
 FIXES: tuple[tuple[str, str, str], ...] = (
