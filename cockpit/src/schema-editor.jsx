@@ -1,4 +1,4 @@
-import React, {useMemo, useState} from "react";
+import React, {useId, useMemo, useRef, useState} from "react";
 import {
   Button,
   Checkbox,
@@ -150,28 +150,41 @@ function ArrayEditor({root, schema, value, onChange, path}) {
 
 function MapKeyInput({name, names, pattern, onRename}) {
   const [draft, setDraft] = useState(name);
+  const [error, setError] = useState("");
+  const errorId = useId();
   const commit = () => {
+    if (draft === name) return;
     const next = draft.trim();
-    if (next === name) return;
-    if (!next || hasOwn(names, next) || (pattern && !new RegExp(pattern).test(next))) {
-      setDraft(name);
-      return;
+    if (!next) return setError("A map key cannot be empty.");
+    if (next !== name && hasOwn(names, next)) return setError("That key already exists.");
+    if (pattern && !new RegExp(pattern).test(next)) {
+      return setError(`Key must match ${pattern}.`);
     }
-    onRename(next);
+    setError("");
+    setDraft(next);
+    if (next !== name) onRename(next);
   };
   return (
-    <TextInput
-      value={draft}
-      aria-label={`Key for ${name}`}
-      onChange={(_event, next) => setDraft(next)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          event.currentTarget.blur();
-        }
-      }}
-    />
+    <>
+      <TextInput
+        value={draft}
+        aria-label={`Key for ${name}`}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        onChange={(_event, next) => {
+          setDraft(next);
+          setError("");
+        }}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      {error ? <span id={errorId} className="nas-schema-error" role="alert">{error}</span> : null}
+    </>
   );
 }
 
@@ -192,6 +205,12 @@ function ObjectEditor({root, schema, value, onChange, path}) {
   const [fieldToAdd, setFieldToAdd] = useState("");
   const [newKey, setNewKey] = useState("");
   const [keyError, setKeyError] = useState("");
+  const entryIds = useRef(new Map());
+  const nextEntryId = useRef(0);
+  const entryKey = (name) => {
+    if (!entryIds.current.has(name)) entryIds.current.set(name, nextEntryId.current++);
+    return entryIds.current.get(name);
+  };
   const namePattern = propertyNamePattern(root, resolved);
 
   const setProperty = (name, next) => {
@@ -271,13 +290,17 @@ function ObjectEditor({root, schema, value, onChange, path}) {
       ) : null}
 
       {dynamicEntries.map(([name, entry]) => (
-        <div className="nas-schema-map-entry" key={`${path}.${name}`}>
+        <div className="nas-schema-map-entry" key={`${path}.${entryKey(name)}`}>
           <div className="nas-schema-map-key">
             <MapKeyInput
               name={name}
               names={object}
               pattern={namePattern}
-              onRename={(next) => onChange(replaceObjectKey(object, name, next))}
+              onRename={(next) => {
+                entryIds.current.set(next, entryKey(name));
+                entryIds.current.delete(name);
+                onChange(replaceObjectKey(object, name, next));
+              }}
             />
             <Button variant="danger" size="sm" onClick={() => setProperty(name, undefined)}>
               Remove
