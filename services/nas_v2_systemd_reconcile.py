@@ -325,6 +325,10 @@ def _same_session_descriptor(
     current_source = current_links.get(unit)
     if not isinstance(previous_source, str) or not isinstance(current_source, str):
         return False
+    if previous_source == current_source:
+        # There is no historical descriptor to compare when the same path is
+        # reused. Conservatively apply the changed-fingerprint lifecycle.
+        return False
     name = unit.removeprefix("nas-v2-session-").removesuffix(".target") + ".session.json"
 
     def read(source: str) -> dict[str, Any] | None:
