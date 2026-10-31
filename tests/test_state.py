@@ -929,16 +929,14 @@ class StateBundleTests(unittest.TestCase):
                 journal = root / "journal.json"
 
                 corrupted = False
+                original_restore_path = state.restore_path
 
-                def corrupting_reapply(snapshot: object) -> None:
+                def corrupting_path_restore(source: pathlib.Path, destination: pathlib.Path, authority: object) -> None:
                     nonlocal corrupted
-                    if not corrupted:
-                        state.run_systemctl("daemon-reload")
+                    original_restore_path(source, destination, authority)
+                    if destination == public and not corrupted:
                         public.write_text("corrupted-after-apply\n", encoding="utf-8")
                         corrupted = True
-                    else:
-                        # rollback path should not re-corrupt
-                        state.run_systemctl("daemon-reload")
 
                 with (
                     mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
@@ -950,7 +948,7 @@ class StateBundleTests(unittest.TestCase):
                             1 if args[:2] == ("is-active", "--quiet") else 0
                         ),
                     ),
-                    mock.patch.object(state, "reapply_runtime_consumers", side_effect=corrupting_reapply),
+                    mock.patch.object(state, "restore_path", side_effect=corrupting_path_restore),
                 ):
                     with self.assertRaisesRegex(state.StateError, "Post-restore validation failed"):
                         state.restore_bundle(
