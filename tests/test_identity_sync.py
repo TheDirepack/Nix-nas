@@ -508,6 +508,26 @@ class IdentitySyncTests(unittest.TestCase):
                     headers={"X-API-Key": "synthetic-key"},
                 )
 
+    def test_syncthing_endpoint_resolves_port_from_effective_state(self) -> None:
+        """Successful request-time port resolution from effective state must use the current port."""
+        for port, expected in ((8384, "http://127.0.0.1:8384"), (9999, "http://127.0.0.1:9999")):
+            with (
+                self.subTest(port=port),
+                mock.patch.dict(sync.os.environ, {"NAS_SYNCTHING_URL": ""}),
+                mock.patch("nas_common.load_effective_authority", return_value={
+                    "services": {"syncthing": {"routes": {"web": {"target": {"port": port}}}}}
+                }),
+                mock.patch.object(sync, "syncthing_api_key", return_value="synthetic-key"),
+                mock.patch.object(sync, "http_json", return_value={}) as http,
+            ):
+                self.assertEqual(sync.syncthing_request("/rest/config/folders"), {})
+                http.assert_called_once_with(
+                    expected + "/rest/config/folders",
+                    method="GET",
+                    body=None,
+                    headers={"X-API-Key": "synthetic-key"},
+                )
+
     def test_source_never_reintroduces_copyparty_or_legacy_capability_authority(self) -> None:
         source = (ROOT / "services" / "nas_identity_sync.py").read_text(encoding="utf-8")
         model = (ROOT / "services" / "nas_identity_model.py").read_text(encoding="utf-8")
