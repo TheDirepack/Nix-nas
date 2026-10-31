@@ -73,6 +73,14 @@ def run(command: Sequence[str], *, timeout: int) -> subprocess.CompletedProcess[
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
+def print_output_tails(stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    for output in (stdout, stderr):
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        if output:
+            print(output[-16000:], file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=int, default=180, help="deadline for each security check")
@@ -88,15 +96,13 @@ def main() -> int:
             return 2
         try:
             result = run(check.command, timeout=args.timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             print(f"security check timed out: {check.name} after {args.timeout}s", file=sys.stderr)
+            print_output_tails(exc.stdout, exc.stderr)
             return 1
         if result.returncode != 0:
             print(f"security check failed: {check.name}", file=sys.stderr)
-            if result.stdout:
-                print(result.stdout[-16000:], file=sys.stderr)
-            if result.stderr:
-                print(result.stderr[-16000:], file=sys.stderr)
+            print_output_tails(result.stdout, result.stderr)
             return 1
         print(f"security check ok: {check.name}")
 
