@@ -245,20 +245,21 @@ restic_drill() (
   need_env RESTIC_PASSWORD_FILE
   need_env NAS_RESTIC_SOURCE
   need_env NAS_RESTIC_RESTORE_TARGET
-  local stamp marker snapshot_id restored restore_root
-  stamp=$(date -u +%Y%m%d%H%M%S)
-  marker="$NAS_RESTIC_SOURCE/.nas-live-$stamp"
-  restore_root="$NAS_RESTIC_RESTORE_TARGET/nas-live-$stamp"
-  restored="$restore_root${NAS_RESTIC_SOURCE}/.nas-live-$stamp"
+  local marker="" snapshot_id restored restore_root="" run_id
+  [[ -d "$NAS_RESTIC_SOURCE" ]] || fail "Restic source directory is missing: $NAS_RESTIC_SOURCE"
+  [[ -d "$NAS_RESTIC_RESTORE_TARGET" ]] || fail "Restic restore parent is missing: $NAS_RESTIC_RESTORE_TARGET"
+  # mktemp atomically claims a unique marker; never overwrite another run's file.
+  marker=$(mktemp -- "$NAS_RESTIC_SOURCE/.nas-live-XXXXXXXX")
   cleanup_restic() {
-    rm -f -- "$marker"
-    rm -rf -- "$restore_root"
+    [[ -z "$marker" ]] || rm -f -- "$marker"
+    [[ -z "$restore_root" ]] || rm -rf -- "$restore_root"
   }
   trap cleanup_restic EXIT
-  [[ -d "$NAS_RESTIC_SOURCE" ]] || fail "Restic source directory is missing: $NAS_RESTIC_SOURCE"
-  install -d -m 0700 "$restore_root"
-  printf '%s
-' "$stamp" > "$marker"
+  # Only a successfully created, run-owned directory may enter the cleanup trap.
+  restore_root=$(mktemp -d -- "$NAS_RESTIC_RESTORE_TARGET/nas-live-XXXXXXXX")
+  run_id=${marker##*/}
+  restored="$restore_root${NAS_RESTIC_SOURCE}/$run_id"
+  printf '%s\n' "$run_id" > "$marker"
   snapshot_id=$(restic backup --json "$NAS_RESTIC_SOURCE" | jq -r 'select(.message_type == "summary") | .snapshot_id')
   [[ -n "$snapshot_id" && "$snapshot_id" != null ]] || fail "restic did not return a snapshot id"
   restic restore "$snapshot_id" --target "$restore_root"
