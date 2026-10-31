@@ -258,7 +258,9 @@ VolumeName=data.volume
                 "include:\n  - included.yaml\nservices:\n  web:\n    image: example.invalid/web:1\n",
                 encoding="utf-8",
             )
-            with mock.patch.object(compose_import, "_run") as provider:
+            with mock.patch.object(
+                compose_import, "_run", side_effect=AssertionError("unvalidated Compose file reached provider")
+            ) as provider:
                 with self.assertRaisesRegex(systemd.SystemdProjectionError, "include files"):
                     self.generate(effective, root)
             provider.assert_not_called()
@@ -273,7 +275,9 @@ VolumeName=data.volume
                 root = pathlib.Path(tmp)
                 effective, source = self.fixture(root)
                 source.write_text(source_text.replace("\\n", "\n"), encoding="utf-8")
-                with mock.patch.object(compose_import, "_run") as provider:
+                with mock.patch.object(
+                compose_import, "_run", side_effect=AssertionError("unvalidated Compose file reached provider")
+            ) as provider:
                     with self.assertRaisesRegex(systemd.SystemdProjectionError, reason):
                         self.generate(effective, root)
                 provider.assert_not_called()
