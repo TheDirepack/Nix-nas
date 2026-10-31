@@ -208,6 +208,7 @@ test("refreshing an already approved destructive plan requires fresh consent", a
   await expect(consent).not.toBeChecked();
 
   await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByText("No running setup job")).toBeVisible();
   await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
   expect(submissions).toHaveLength(0);
 
@@ -215,6 +216,35 @@ test("refreshing an already approved destructive plan requires fresh consent", a
   await consent.check();
   await page.getByRole("button", {name: "Next"}).click();
   await expect(page.getByRole("button", {name: "Run setup"})).toBeEnabled();
+  expect(submissions).toHaveLength(0);
+});
+
+test("refreshing an identical storage plan still invalidates destructive consent", async ({page}) => {
+  let refreshes = 0;
+  const submissions = [];
+  await mockSetupApi(page, async ({request, pathname}) => {
+    if (request.method() === "GET" && pathname.endsWith("/first-start")) {
+      refreshes += 1;
+      return plan;
+    }
+    if (request.method() === "POST" && pathname.endsWith("/first-run")) {
+      submissions.push(request.postDataJSON());
+      return {jobId: "a".repeat(24), status: "submitted", capability: "d".repeat(48)};
+    }
+    return {statusCode: 404, body: {error: "Not found"}};
+  });
+  await openWizard(page);
+  await fillAdministrator(page);
+  await page.getByRole("button", {name: "Next"}).click();
+  const consent = page.getByLabel("I understand the listed devices will be wiped");
+  await consent.check();
+  await expect(consent).toBeChecked();
+  await page.getByRole("button", {name: "Refresh plan"}).click();
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  await expect(consent).not.toBeChecked();
+  await page.getByRole("button", {name: "Next"}).click();
+  await expect(page.getByText("No running setup job")).toBeVisible();
+  await expect(page.getByRole("button", {name: "Run setup"})).toBeDisabled();
   expect(submissions).toHaveLength(0);
 });
 
