@@ -16,6 +16,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -129,6 +130,9 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
                     "cannot be validated before provider invocation"
                 )
 
+    visited: set[int] = set()
+    active: set[int] = set()
+
     def check(value: Any) -> None:
         if isinstance(value, str):
             if _INTERPOLATION.search(value.replace(chr(36) * 2, "")):
@@ -136,15 +140,42 @@ def _validate_compose_source(service_id: str, source_bytes: bytes) -> None:
                     f"Compose service {service_id!r} uses interpolation, which Podlet import does not support; "
                     "use literal configuration or V2 credential/environment-file attachments"
                 )
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                check(key)
-                check(item)
-        elif isinstance(value, (list, tuple, set)):
-            for item in value:
-                check(item)
+            return
+        if not isinstance(value, (dict, list, tuple, set)):
+            return
+        identity = id(value)
+        if identity in active:
+            raise ComposeImportError(f"Compose service {service_id!r} contains a recursive YAML alias")
+        if identity in visited:
+            return
+        active.add(identity)
+        try:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    check(key)
+                    check(item)
+            else:
+                for item in value:
+                    check(item)
+        finally:
+            active.remove(identity)
+        visited.add(identity)
 
     check(model)
+    if isinstance(services, dict):
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            for field in ("command", "entrypoint"):
+                value = service.get(field)
+                if isinstance(value, str):
+                    try:
+                        for argument in shlex.split(value):
+                            check(argument)
+                    except ValueError as exc:
+                        raise ComposeImportError(
+                            f"Compose service {service_id!r} has malformed {field} quoting"
+                        ) from exc
 
 
 def _canonical_compose(
