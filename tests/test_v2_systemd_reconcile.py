@@ -233,7 +233,7 @@ class V2SystemdReconcileTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 'printf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
                 'case "$1" in\n'
-                '  is-active)\n'
+                "  is-active)\n"
                 '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; fi ;;\n'
                 '  stop) rm -f -- "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 '  start) : > "$NAS_V2_ACTIVE_MARKER" ;;\n'
@@ -270,15 +270,18 @@ class V2SystemdReconcileTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"NAS_V2_ACTIVE_MARKER": str(active_marker)}):
                 apply(old, "v1")
+                log.write_text("", encoding="utf-8")
                 active_marker.touch()
                 before = state.read_bytes()
                 with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("disk full")):
                     with self.assertRaisesRegex(reconcile.SystemdReconcileError, "manual recovery required") as error:
                         apply(new, "v2")
             self.assertIn("transient instances may have been terminated", str(error.exception))
-            commands = log.read_text(encoding="utf-8")
+            commands = log.read_text(encoding="utf-8").splitlines()
             self.assertIn("stop " + unit, commands)
             self.assertNotIn("start " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+            self.assertNotIn("try-restart " + unit, commands)
             self.assertFalse(active_marker.exists())
             self.assertEqual(before, state.read_bytes())
             self.assertEqual((runtime / unit).resolve(), (old / "units" / unit).resolve())
