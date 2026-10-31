@@ -51,9 +51,11 @@ log "Probing the Console redirect through Caddy"
 ready=0
 for _ in $(seq 1 30); do
   code="$(curl -ksS -o /dev/null -w '%{http_code}' \
+    --noproxy '*' \
     --resolve "nas-test.local:${HTTPS_PORT}:127.0.0.1" \
-    "https://nas-test.local:${HTTPS_PORT}/console/" || true)"
-  if [[ "$code" == 302 || "$code" == 200 ]]; then
+    "https://nas-test.local:${HTTPS_PORT}/console/")"
+  curl_status=$?
+  if (( curl_status == 0 )) && [[ "$code" == 302 || "$code" == 200 ]]; then
     ready=1
     break
   fi
