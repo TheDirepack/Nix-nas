@@ -846,15 +846,24 @@ def semantic_validate(
                 for hostname in exposure["hostnames"]:
                     route_path = exposure.get("path", "/")
                     normalized = route_path.rstrip("/") or "/"
-                    key = (hostname, normalized)
-                    owner = route_hostpaths.get(key)
-                    if owner is not None:
-                        raise ManagedServicesV2Error(
-                            f"Duplicate route hostname+path {hostname!r} {normalized!r}; already used by {owner}",
-                            path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
-                            code="route-conflict",
-                        )
-                    route_hostpaths[key] = f"{service_id}:{route_id}"
+                    host = hostname.lower()
+                    for (registered_host, registered_path), owner in route_hostpaths.items():
+                        if registered_host != host or not _routes_conflict(normalized, registered_path):
+                            continue
+                        if normalized == registered_path:
+                            raise ManagedServicesV2Error(
+                                f"Duplicate route hostname+path {hostname!r} {normalized!r}; already used by {owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.hostnames",
+                                code="route-conflict",
+                            )
+                        if normalized == "/" or registered_path == "/":
+                            raise ManagedServicesV2Error(
+                                f"Route hostname {hostname!r} path {normalized!r} overlaps "
+                                f"{registered_path!r} already used by {owner}",
+                                path=f"$.services.{service_id}.routes.{route_id}.exposure.path",
+                                code="route-overlap",
+                            )
+                    route_hostpaths[(host, normalized)] = f"{service_id}:{route_id}"
 
         for listener_id, listener in service["listeners"].items():
             exposure = listener["exposure"]
