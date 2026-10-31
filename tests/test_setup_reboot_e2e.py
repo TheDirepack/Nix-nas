@@ -138,7 +138,7 @@ class SetupRebootE2eContracts(unittest.TestCase):
         self.assertIn('"--resolve"', source)
         self.assertIn('"nas-test.local:8443:127.0.0.1"', source)
         self.assertIn('"http://127.0.0.1:8222/vault/alive"', source)
-        self.assertIn('"http://127.0.0.1:9092/console/"', source)
+        self.assertIn('"--unix-socket", "/run/nas-cockpit-sso/ws.sock"', source)
         self.assertIn('"http://127.0.0.1:9010/outpost.goauthentik.io/ping"', source)
         self.assertIn('require(("zpool", "import", "-N", "tank"))', source)
         self.assertIn('input_text="nixos-nas-vm-test-password\\n"', source)
