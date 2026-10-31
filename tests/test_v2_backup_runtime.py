@@ -84,9 +84,11 @@ class V2BackupRuntimeTests(unittest.TestCase):
                         systemctl_bin="/bin/false",
                     )
             self.assertEqual(sentinel.read_bytes(), b"must not be backed up")
+            artifact.unlink(missing_ok=True)
             self.assertFalse(artifact.is_symlink())
             self.assertFalse(paths_path.exists())
-            self.assertFalse(state_path.exists())
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(state.get("nativeDumps", [])), 1)
 
     def inventory(
         self,
@@ -545,9 +547,16 @@ class V2BackupRuntimeTests(unittest.TestCase):
                 "artifactResource": "database-artifact",
                 "artifactPath": str(artifact),
             }
-            state_path.write_text(json.dumps({
-                "schemaVersion": 1, "snapshots": [], "nativeDumps": [entry],
-            }), encoding="utf-8")
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "snapshots": [],
+                        "nativeDumps": [entry],
+                    }
+                ),
+                encoding="utf-8",
+            )
             paths_path.write_text(str(artifact) + "\n", encoding="utf-8")
             calls = []
 
@@ -561,12 +570,12 @@ class V2BackupRuntimeTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "systemd stop timed out"):
                     runtime.cleanup(
-                        state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs",
+                        state_path=state_path,
+                        paths_path=paths_path,
+                        zfs_bin="/bin/zfs",
                         systemctl_bin="/bin/systemctl",
                     )
-            self.assertEqual(
-                calls, [(["/bin/systemctl", "stop", "nas-v2-database-dump.service"], {"timeout": 120})]
-            )
+            self.assertEqual(calls, [(["/bin/systemctl", "stop", "nas-v2-database-dump.service"], {"timeout": 120})])
             self.assertEqual(sentinel.read_bytes(), b"writer must finish before deletion")
             self.assertEqual(json.loads(state_path.read_text())["nativeDumps"], [entry])
             self.assertTrue(paths_path.exists())
