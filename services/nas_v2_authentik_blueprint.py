@@ -111,10 +111,12 @@ def desired_applications(effective: dict[str, Any], *, public_host: str) -> dict
     routes = derived.get("routes") if isinstance(derived, dict) else None
     if not isinstance(services, dict) or not isinstance(routes, list):
         raise AuthentikBlueprintError("compiled effective state is missing services or routes")
+    if any(not isinstance(route, dict) for route in routes):
+        raise AuthentikBlueprintError("compiled routes must contain objects")
 
     apps: dict[str, dict[str, str]] = {}
     for route in sorted(
-        (item for item in routes if isinstance(item, dict)),
+        routes,
         key=lambda item: (str(item.get("service")), str(item.get("route"))),
     ):
         if route.get("authMode") != "identity":

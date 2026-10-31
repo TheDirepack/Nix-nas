@@ -136,12 +136,32 @@ class V2AuthentikBlueprintTests(unittest.TestCase):
                 previous={"schemaVersion": 1, "groups": ["nas_admin"], "applications": []},
             )
 
-    def test_non_object_routes_are_skipped_before_sorting(self) -> None:
-        state = effective()
-        state["derived"]["routes"].extend([None, "bad", [], 1])
-        actual = blueprint.render_blueprint(state, public_host="nas.example.test")
-        expected = blueprint.render_blueprint(effective(), public_host="nas.example.test")
-        self.assertEqual(actual, expected)
+    def test_non_object_routes_fail_without_replacing_any_projection(self) -> None:
+        for invalid in (None, "bad", [], 1):
+            for mixed in (False, True):
+                with self.subTest(invalid=invalid, mixed=mixed), tempfile.TemporaryDirectory() as raw:
+                    root = pathlib.Path(raw)
+                    state = effective()
+                    state["derived"]["routes"] = [*state["derived"]["routes"], invalid] if mixed else [invalid]
+                    source, output, manifest, staged = (
+                        root / name for name in ("effective", "blueprint", "manifest", "next")
+                    )
+                    source.write_text(json.dumps(state), encoding="utf-8")
+                    output.write_bytes(b"prior blueprint\n")
+                    previous = b'{"schemaVersion":1,"groups":[],"applications":["v2-demo-web"]}\n'
+                    manifest.write_bytes(previous)
+                    staged.write_bytes(b"prior staged manifest\n")
+                    with self.assertRaisesRegex(blueprint.AuthentikBlueprintError, "routes must contain objects"):
+                        blueprint.generate(
+                            effective_path=source,
+                            blueprint_path=output,
+                            manifest_path=manifest,
+                            next_manifest_path=staged,
+                            public_host="nas.example.test",
+                        )
+                    self.assertEqual(output.read_bytes(), b"prior blueprint\n")
+                    self.assertEqual(manifest.read_bytes(), previous)
+                    self.assertEqual(staged.read_bytes(), b"prior staged manifest\n")
 
     def test_commit_rejects_invalid_object_lists_without_advancing_manifest(self) -> None:
         for invalid in (
