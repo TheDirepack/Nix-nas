@@ -47,6 +47,16 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
         self.assertFalse(path.exists(), "private directory must be removed")
         self.assertFalse(authority.exists(), "secret Xauthority file must be removed")
 
+    def test_cleanup_when_owned_xvfb_is_killed(self):
+        with probe.private_xvfb() as (_display, env, path, proc):
+            self.assertIsNone(proc.poll())
+            authority = Path(env["XAUTHORITY"])
+            proc.kill()
+            proc.wait(timeout=3)
+        self.assertIsNotNone(proc.poll(), "crashed Xvfb must be reaped")
+        self.assertFalse(path.exists(), "crashed Xvfb's credentials must be cleaned up")
+        self.assertFalse(authority.exists())
+
     def test_process_and_credentials_cleanup_on_body_failure(self):
         proc = None
         path = None
@@ -116,7 +126,9 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
                 self.assertEqual(subprocess.run(["xdpyinfo"], env=env_a, capture_output=True, timeout=2).returncode, 0)
                 self.assertEqual(subprocess.run(["xdpyinfo"], env=env_b, capture_output=True, timeout=2).returncode, 0)
                 crossed = dict(env_a, XAUTHORITY=env_b["XAUTHORITY"])
-                self.assertNotEqual(subprocess.run(["xdpyinfo"], env=crossed, capture_output=True, timeout=2).returncode, 0)
+                self.assertNotEqual(
+                    subprocess.run(["xdpyinfo"], env=crossed, capture_output=True, timeout=2).returncode, 0
+                )
 
 
 if __name__ == "__main__":
