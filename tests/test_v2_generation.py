@@ -6,6 +6,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "services"
@@ -88,6 +89,38 @@ class ManagedServicesV2GenerationTests(unittest.TestCase):
             current.symlink_to(outside)
             with self.assertRaisesRegex(generation.GenerationError, "beneath the generation root"):
                 generation.prune_generations(root, current_link=current)
+
+    def test_prune_removes_sealed_nested_generations_without_unsealing_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp)
+            root = runtime / "generations"
+            old = generation.allocate_generation(root, "b" * 40)
+            active = generation.allocate_generation(root, REVISION)
+            for candidate in (old, active):
+                (candidate / "nested").mkdir()
+                (candidate / "nested/file").write_text("projection", encoding="utf-8")
+                generation._seal_tree(candidate)
+            current = runtime / "current"
+            current.symlink_to(active)
+            removed = generation.prune_generations(root, current_link=current, retain=1)
+            self.assertEqual(removed, [old])
+            self.assertFalse(old.exists())
+            self.assertEqual(stat.S_IMODE(active.stat().st_mode), 0o555)
+            self.assertEqual((active / "nested/file").read_text(), "projection")
+
+    def test_prune_still_reports_removal_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = pathlib.Path(tmp)
+            root = runtime / "generations"
+            old = generation.allocate_generation(root, "b" * 40)
+            active = generation.allocate_generation(root, REVISION)
+            current = runtime / "current"
+            current.symlink_to(active)
+            with mock.patch.object(generation.shutil, "rmtree", side_effect=PermissionError("denied")):
+                with self.assertRaisesRegex(generation.GenerationError, "unable to prune"):
+                    generation.prune_generations(root, current_link=current, retain=1)
+            self.assertTrue(old.exists())
+            self.assertEqual(current.resolve(), active)
 
     def test_revision_mismatch_never_switches_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
