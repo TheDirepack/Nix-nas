@@ -60,6 +60,11 @@ class CiCheckReportingTests(unittest.TestCase):
         self.assertEqual(status, 29)
         self.assertEqual(rows.split("\t")[3], "29")
 
+    def test_command_failure_takes_precedence_over_log_writer_failure(self) -> None:
+        status, _, rows = self.scenario(failure=17, tee_failure=True)
+        self.assertEqual(status, 17)
+        self.assertEqual(rows.split("\t")[3], "17")
+
     def test_success_records_success(self) -> None:
         status, output, rows = self.scenario(failure=0)
         self.assertEqual(status, 0)
