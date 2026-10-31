@@ -60,6 +60,7 @@ def run(command: Sequence[str], *, timeout: int) -> subprocess.CompletedProcess[
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        errors="replace",
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
