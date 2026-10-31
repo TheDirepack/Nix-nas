@@ -25,20 +25,35 @@ class V2SystemdReconcileTests(unittest.TestCase):
             projection.mkdir()
             unit = "nas-v2-session-agent.target"
             manifest = projection / "manifest.json"
-            manifest.write_text(json.dumps({
-                "schemaVersion": 1, "links": [], "quadletLinks": [],
-                "ownedUnits": [unit], "startUnits": [], "stopUnits": [unit],
-                "fingerprints": {},
-            }), encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [unit],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
             runtime = root / "systemd"
             runtime.mkdir()
             systemctl, log = self.make_systemctl(root)
-            kwargs = dict(manifest=manifest, projection=projection, runtime=runtime,
-                          state=root / "state.json", systemctl=systemctl, log=log)
+            kwargs = dict(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=root / "state.json",
+                systemctl=systemctl,
+                log=log,
+            )
             self.run_reconcile(**kwargs)
             self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
-            # Even if another unit changes, an already disabled session still
-            # has no target file; it must never issue a nonexistent stop.
+            # A disabled target has no unit file, even if the old state had
+            # marked it for start.
             state = json.loads((root / "state.json").read_text(encoding="utf-8"))
             state["startUnits"] = [unit]
             (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -72,26 +87,41 @@ class V2SystemdReconcileTests(unittest.TestCase):
             def run(projection, fingerprint):
                 projection_link.unlink()
                 projection_link.symlink_to(projection)
-                manifest.write_text(json.dumps({
-                    "schemaVersion": 1,
-                    "links": [{"target": unit, "source": str(projection / "units" / unit)}],
-                    "quadletLinks": [], "ownedUnits": [unit], "startUnits": [],
-                    "stopUnits": [], "fingerprints": {unit: fingerprint},
-                }), encoding="utf-8")
-                return self.run_reconcile(manifest=manifest, projection=projection_link,
-                                          runtime=runtime, state=state, systemctl=systemctl, log=log)
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "links": [{"target": unit, "source": str(projection / "units" / unit)}],
+                            "quadletLinks": [],
+                            "ownedUnits": [unit],
+                            "startUnits": [],
+                            "stopUnits": [],
+                            "fingerprints": {unit: fingerprint},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return self.run_reconcile(
+                    manifest=manifest,
+                    projection=projection_link,
+                    runtime=runtime,
+                    state=state,
+                    systemctl=systemctl,
+                    log=log,
+                )
 
             run(generation, "legacy-hash")
             log.write_text("", encoding="utf-8")
-            # New hash format, same descriptor: must not restart/stop.
+            # A digest-format change with an identical launch descriptor
+            # must preserve running sessions.
             run(current, "full-descriptor-hash")
             commands = log.read_text(encoding="utf-8")
             self.assertNotIn("stop " + unit, commands)
             self.assertNotIn("restart " + unit, commands)
             self.assertIn("full-descriptor-hash", state.read_text(encoding="utf-8"))
 
-            # Changed resolved mount argument: stop the target, never
-            # try-restart the old transient command/argv.
+            # Changed mount arguments must stop the target rather than
+            # restarting running transient units with stale arguments.
             (changed / "descriptors" / "agent.session.json").write_text(
                 json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/new:/data"]}),
                 encoding="utf-8",
