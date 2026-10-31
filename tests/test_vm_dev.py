@@ -18,7 +18,7 @@ class VmDevTests(unittest.TestCase):
         self,
         *,
         codes: tuple[str, ...] = ("302",),
-        curl_status: int = 0,
+        curl_statuses: tuple[int, ...] = (0,),
         service_ready_after: int = 1,
         start_status: int = 0,
         cache: bool = False,
@@ -45,7 +45,7 @@ class VmDevTests(unittest.TestCase):
                 PATH=str(bindir) + os.pathsep + os.environ["PATH"],
                 FIXTURE_LOGS=str(logdir),
                 FIXTURE_CODES=json.dumps(codes),
-                FIXTURE_CURL_STATUS=str(curl_status),
+                FIXTURE_CURL_STATUSES=json.dumps(curl_statuses),
                 FIXTURE_SERVICE_READY_AFTER=str(service_ready_after),
                 FIXTURE_START_STATUS=str(start_status),
                 NAS_QEMU_SSH_PORT="2288",
@@ -94,7 +94,8 @@ if name == "ssh":
 if name == "curl":
     codes = json.loads(os.environ["FIXTURE_CODES"])
     print(codes[min(attempt - 1, len(codes) - 1)], end="")
-    sys.exit(int(os.environ["FIXTURE_CURL_STATUS"]))
+    statuses = json.loads(os.environ["FIXTURE_CURL_STATUSES"])
+    sys.exit(statuses[min(attempt - 1, len(statuses) - 1)])
 """
             )
             for program in (scripts / "vm-start.sh", *(bindir / name for name in ("ssh", "curl", "sleep"))):
@@ -126,9 +127,23 @@ if name == "curl":
         self.assertEqual(calls["sleep"], [["2"]] * 30)
 
     def test_console_transport_failures_are_fatal(self) -> None:
-        result, calls = self.run_fixture(codes=("000",), curl_status=7)
+        result, calls = self.run_fixture(codes=("000",), curl_statuses=(7,))
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertNotIn("VM ready", result.stdout)
+        self.assertEqual(len(calls["curl"]), 30)
+
+    def test_console_transport_failure_is_retried_before_success(self) -> None:
+        result, calls = self.run_fixture(codes=("000", "302"), curl_statuses=(7, 0))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("VM ready", result.stdout)
+        self.assertEqual(len(calls["curl"]), 2)
+        self.assertEqual(calls["sleep"], [["2"]])
+
+    def test_console_transport_failure_cannot_accept_a_success_code(self) -> None:
+        result, calls = self.run_fixture(codes=("200",), curl_statuses=(18,))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("VM ready", result.stdout)
+        self.assertIn("Console did not become ready", result.stderr)
         self.assertEqual(len(calls["curl"]), 30)
 
     def test_accepted_console_codes_stop_probing_and_publish_the_configured_urls(self) -> None:
