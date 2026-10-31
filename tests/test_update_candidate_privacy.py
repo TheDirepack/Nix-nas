@@ -20,7 +20,10 @@ class UpdateCandidatePrivacyTests(unittest.TestCase):
         checkout = source[start.start() : source.index('\nfi\n\ncd "$deployment_dir"')]
         cleanup = source[source.index("cleanup_candidate() {") : source.index("\ntrap cleanup_candidate EXIT")]
         with tempfile.TemporaryDirectory() as raw:
-            root = pathlib.Path(raw)
+            private = pathlib.Path(raw)
+            self.assertEqual(private.stat().st_mode & 0o777, 0o700)
+            root = private / "shared"
+            root.mkdir()
             root.chmod(0o777)
             script = "\n".join(
                 [
