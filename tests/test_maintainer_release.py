@@ -153,16 +153,21 @@ class MaintainerReleaseTests(MaintainerScriptMixin, unittest.TestCase):
                 self.assertIn("usage", (result.stdout + result.stderr).lower())
 
     def test_preflight_wrapper_runs_its_safe_local_tier(self) -> None:
-        result = self.run_clean(
-            "env",
-            "NAS_PREFLIGHT_REQUIRE_COMPLETE=0",
-            "NAS_PREFLIGHT_SKIP_TESTS=1",
-            "NAS_PREFLIGHT_SKIP_FUZZ=1",
-            "NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE=1",
-            "NAS_PREFLIGHT_SKIP_NIX=1",
-            "bash",
-            "scripts/preflight.sh",
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["NAS_PREFLIGHT_REQUIRE_COMPLETE"] = "0"
+        env["NAS_PREFLIGHT_SKIP_TESTS"] = "1"
+        env["NAS_PREFLIGHT_SKIP_FUZZ"] = "1"
+        env["NAS_PREFLIGHT_SKIP_COCKPIT_BUNDLE"] = "1"
+        env["NAS_PREFLIGHT_SKIP_NIX"] = "1"
+        result = subprocess.run(
+            ["bash", "scripts/preflight.sh"],
+            cwd=self.clean_root,
+            env=env,
+            text=True,
+            capture_output=True,
             timeout=90,
+            check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # With skip flags set, preflight reports partial status with these incomplete checks
