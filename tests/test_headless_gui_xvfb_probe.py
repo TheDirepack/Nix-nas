@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 MODULE = Path(__file__).resolve().parents[1] / "scripts" / "headless_gui_xvfb_probe.py"
 spec = importlib.util.spec_from_file_location("headless_gui_xvfb_probe", MODULE)
@@ -16,6 +17,23 @@ spec.loader.exec_module(probe)
 
 REQUIRED = ("Xvfb", "xauth", "xdpyinfo")
 HAVE = all(shutil.which(p) for p in REQUIRED)
+
+
+class AlwaysAvailableContractTests(unittest.TestCase):
+    def test_invalid_geometry_is_rejected_before_launch(self):
+        with mock.patch.object(probe, "_require") as require:
+            for options in ({"width": 0}, {"height": 10}, {"depth": 12}):
+                with self.subTest(options=options):
+                    with self.assertRaises(ValueError):
+                        with probe.private_xvfb(**options):
+                            self.fail("invalid geometry accepted")
+            require.assert_not_called()
+
+    def test_missing_external_tools_fail_explicitly(self):
+        with mock.patch.object(probe.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Xvfb.*xauth.*xdpyinfo"):
+                with probe.private_xvfb():
+                    self.fail("missing tools accepted")
 
 
 @unittest.skipUnless(HAVE, "needs an installed Xvfb, xauth and xdpyinfo")
