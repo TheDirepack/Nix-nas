@@ -48,7 +48,7 @@ export function SetupPage({data, mutate, busy}) {
         devices: selectedDevices,
         allowDestructiveStorage: allowDestructive,
         confirmPasswordReapply,
-      }));
+      }), {successNotice: null});
       setPassword("");
       setPasswordConfirm("");
       setAdministrator({...administrator, password: ""});
