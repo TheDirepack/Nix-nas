@@ -67,7 +67,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
 
-            def unexpected_run(argv: list[str]) -> str:
+            def unexpected_run(argv: list[str], timeout: int = 60) -> str:
                 raise AssertionError(f"prepare must require cleanup before native work: {argv}")
 
             backup._run = unexpected_run
@@ -100,11 +100,13 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
             backup._run = fake_run
@@ -141,11 +143,13 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_remove = backup._remove_staged_artifact
             backup.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     artifact.mkdir(parents=True, exist_ok=True)
                     (artifact / "partial.dump").write_bytes(b"partial-sensitive-bytes")
                     raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == ["/bin/systemctl", "stop", "nas-v2-database-dump.service"]:
+                    return ""
                 raise AssertionError(f"unexpected command: {argv}")
 
             def failing_remove(_path: str) -> None:
@@ -196,7 +200,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             calls: list[list[str]] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 calls.append(argv)
                 if argv == ["/bin/zfs", "destroy", "tank/b@snap-bad"]:
                     raise backup.BackupRuntimeError("destroy failed")
@@ -237,7 +241,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             absence_probed: list[list[str]] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv == ["/bin/zfs", "destroy", "tank/a@snap-gone"]:
                     raise backup.BackupRuntimeError("dataset does not exist")
                 if argv[:3] == ["/bin/zfs", "list", "tank/a@snap-gone"] or (
@@ -280,7 +284,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             destroys: list[str] = []
             attempt = {"count": 0}
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if len(argv) >= 2 and argv[0] == "/bin/zfs" and argv[1] == "destroy":
                     destroys.append(argv[2])
                     if argv[2] == "tank/a@snap-a":
@@ -329,7 +333,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             destroys: list[str] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if len(argv) >= 2 and argv[0] == "/bin/zfs" and argv[1] == "destroy":
                     destroys.append(argv[2])
                     if argv[2] == "tank/b@snap-b":
@@ -387,7 +391,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             original_run = backup._run
             snapshots: list[str] = []
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
                 if argv[:2] == ["/bin/zfs", "get"]:
                     dataset = argv[-1]
                     if dataset == "tank/c":
@@ -447,6 +451,16 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
             inventory_path.write_text(json.dumps(_native_inventory(artifact)), encoding="utf-8")
             original_root = backup.BACKUP_STAGING_ROOT
             backup.BACKUP_STAGING_ROOT = staging
+            original_run = backup._run
+
+            def fake_run(argv: list[str], timeout: int = 60) -> str:
+                if argv == [str(ctl_fake), "restart", "nas-v2-database-dump.service"]:
+                    raise backup.BackupRuntimeError("preparation unit failed")
+                if argv == [str(ctl_fake), "stop", "nas-v2-database-dump.service"]:
+                    return ""
+                raise AssertionError(f"unexpected command: {argv}")
+
+            backup._run = fake_run
             try:
                 with self.assertRaises(backup.BackupRuntimeError):
                     backup.prepare(
@@ -457,6 +471,7 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                         systemctl_bin=str(ctl_fake),
                     )
             finally:
+                backup._run = original_run
                 backup.BACKUP_STAGING_ROOT = original_root
             self.assertFalse(paths_path.exists())
             leftovers = [p for p in staging.rglob("*") if p.is_file()] if staging.exists() else []
@@ -521,7 +536,9 @@ class Ws03CleanupRecoveryTests(unittest.TestCase):
                 with sqlite3.connect(f"file:{dumped}?mode=ro", uri=True) as handle:
                     rows = handle.execute("SELECT value FROM t").fetchall()
                 self.assertEqual(rows, [("hello",)])
-                cleanup_result = backup.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin=str(zfs_fake))
+                cleanup_result = backup.cleanup(
+                    state_path=state_path, paths_path=paths_path, zfs_bin=str(zfs_fake), systemctl_bin=str(ctl_fake)
+                )
                 self.assertEqual(cleanup_result["destroyed"], [])
             finally:
                 backup._run = original_run_impl  # type: ignore[assignment]
