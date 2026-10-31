@@ -61,6 +61,24 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.run_reconcile(**kwargs)
             self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
 
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [],
+                        "startUnits": [],
+                        "stopUnits": [],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log.write_text("", encoding="utf-8")
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+
     def test_session_fingerprint_migration_preserves_unchanged_transients(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
@@ -132,6 +150,64 @@ class V2SystemdReconcileTests(unittest.TestCase):
             self.assertIn("stop " + unit, commands)
             self.assertNotIn("try-restart " + unit, commands)
             self.assertNotIn("restart " + unit, commands)
+
+    def test_failed_reconcile_reports_transient_loss_instead_of_false_rollback(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            old = root / "generations" / ("a" * 40) / "systemd"
+            new = root / "generations" / ("b" * 40) / "systemd"
+            unit = "nas-v2-session-agent.target"
+            for directory, image in ((old, "v1"), (new, "v2")):
+                (directory / "units").mkdir(parents=True)
+                (directory / "descriptors").mkdir()
+                (directory / "units" / unit).write_text("[Unit]\\n", encoding="utf-8")
+                (directory / "descriptors" / "agent.session.json").write_text(
+                    json.dumps({"serviceId": "agent", "image": image}),
+                    encoding="utf-8",
+                )
+            current = root / "current"
+            current.symlink_to(old)
+            runtime = root / "systemd"
+            runtime.mkdir()
+            manifest = root / "manifest.json"
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+
+            def apply(directory, digest):
+                current.unlink()
+                current.symlink_to(directory)
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "links": [{"target": unit, "source": str(directory / "units" / unit)}],
+                            "quadletLinks": [],
+                            "ownedUnits": [unit],
+                            "startUnits": [],
+                            "stopUnits": [],
+                            "fingerprints": {unit: digest},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return self.run_reconcile(
+                    manifest=manifest,
+                    projection=current,
+                    runtime=runtime,
+                    state=state,
+                    systemctl=systemctl,
+                    log=log,
+                )
+
+            apply(old, "v1")
+            before = state.read_bytes()
+            with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "manual recovery required") as error:
+                    apply(new, "v2")
+            self.assertIn("transient instances may have been terminated", str(error.exception))
+            self.assertIn("stop " + unit, log.read_text(encoding="utf-8"))
+            self.assertEqual(before, state.read_bytes())
+            self.assertEqual((runtime / unit).resolve(), (old / "units" / unit).resolve())
 
     def test_on_demand_restart_failure_preserves_previous_state_and_retry(self):
         with tempfile.TemporaryDirectory() as raw:
