@@ -1345,15 +1345,25 @@ def canonical_apply_entries(manifest: Mapping[str, Any]) -> list[Mapping[str, An
     return [by_name[authority.name] for authority in authorities()]
 
 
+def preflight_restore_absence(manifest: Mapping[str, Any], *, restore_absence: bool) -> None:
+    """Reject absence conflicts before any authority is changed."""
+    if restore_absence:
+        return
+    registry = {item.name: item for item in authorities()}
+    for entry in canonical_apply_entries(manifest):
+        authority = registry[entry["name"]]
+        if entry["status"] == "absent" and authority.kind == "path" and lstat_type(pathlib.Path(authority.source)) != 0:
+            raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
+
+
 def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
+    preflight_restore_absence(manifest, restore_absence=restore_absence)
     registry = {item.name: item for item in authorities()}
     for entry in canonical_apply_entries(manifest):
         authority = registry[entry["name"]]
         if entry["status"] == "absent":
             destination = pathlib.Path(authority.source)
             if authority.kind == "path" and lstat_type(destination) != 0:
-                if not restore_absence:
-                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
                 remove_path(destination)
             continue
         if entry["status"] != "captured":
@@ -1642,20 +1652,14 @@ def restore_bundle(
         prune_rollbacks()
         rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
         unit_snapshot = capture_unit_state(restore_units())
-        # BUG 2 fix: capture rollback BEFORE quiescing. Services that finalize
-        # writes on shutdown would otherwise leave a post-stop quiesced baseline
-        # in the rollback instead of the true pre-restore state. We export
-        # with quiesce=False while units are still running (mildly incoherent
-        # snapshot) and then stop; post-restore digest validation (BUG 1) covers
-        # incoherence by failing the restore before it is marked committed.
-        rollback_ready = False
+        # Retain the pre-stop baseline; shutdown hooks may change authority data.
         state_mutated = False
         try:
             export_bundle(rollback, include_sensitive=True, quiesce=False)
-            rollback_ready = True
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+            preflight_restore_absence(manifest, restore_absence=restore_absence)
             state_mutated = True
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
