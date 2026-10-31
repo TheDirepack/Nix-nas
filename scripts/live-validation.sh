@@ -4,7 +4,14 @@ set -Eeuo pipefail
 fail() { printf 'live-validation: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || fail "missing command: $1"; }
 need_env() { [[ -n "${!1:-}" ]] || fail "set $1"; }
-confirm() { [[ "${NAS_LIVE_CONFIRM:-}" == "$1" ]] || fail "set NAS_LIVE_CONFIRM=$1"; }
+confirm() {
+  # Accept exact tokens or an explicit comma-separated authorization set.
+  local wanted=$1
+  case ",${NAS_LIVE_CONFIRM:-}," in
+    *,"$wanted",*) ;;
+    *) fail "set NAS_LIVE_CONFIRM=$wanted (or include it in a comma-separated list)" ;;
+  esac
+}
 
 read_secret_file() {
   local path=$1 mode
@@ -47,6 +54,7 @@ remote_zfs() {
     'case "$action" in' \
     '  clone) exec zfs clone -- "$first" "$second" ;;' \
     '  destroy) exec zfs destroy -- "$first" ;;' \
+    '  destroy-recursive) exec zfs destroy -r -- "$first" ;;' \
     '  mountpoint) exec zfs get -H -o value mountpoint "$first" ;;' \
     '  *) exit 64 ;;' \
     'esac' \
@@ -76,15 +84,18 @@ sys.stdout.write("".join(out))
 curl_basic() {
   local username=$1 password=$2
   shift 2
-  printf 'user = "%s:%s"\n' "$(curl_config_escape "$username")" "$(curl_config_escape "$password")" \
-    | curl --config - "$@"
+  local escaped_user escaped_password
+  escaped_user=$(curl_config_escape "$username")
+  escaped_password=$(curl_config_escape "$password")
+  printf 'user = "%s:%s"\n' "$escaped_user" "$escaped_password" | curl --config - "$@"
 }
 
 curl_bearer() {
   local token=$1
   shift
-  printf 'header = "Authorization: Bearer %s"\n' "$(curl_config_escape "$token")" \
-    | curl --config - "$@"
+  local escaped_token
+  escaped_token=$(curl_config_escape "$token")
+  printf 'header = "Authorization: Bearer %s"\n' "$escaped_token" | curl --config - "$@"
 }
 
 locked_boot() {
@@ -113,8 +124,9 @@ locked_boot() {
   nas-zfs-mount-check
 }
 
-copyparty() {
+copyparty() (
   need curl
+  need python3
   need_env NAS_COPY_USER
   need_env NAS_COPY_PASSWORD_FILE
   need_env NAS_COPY_BASE_URL
@@ -122,7 +134,7 @@ copyparty() {
   local password=$REPLY temp remote downloaded
   temp=$(mktemp)
   downloaded=$(mktemp)
-  trap 'rm -f "$temp" "$downloaded"' RETURN
+  trap 'rm -f "$temp" "$downloaded"' EXIT
   printf 'nas live validation %s\n' "$(date -u +%FT%TZ)" > "$temp"
   nas-identity-sync sync >/dev/null
   if [[ -n "${NAS_COPY_EXPECTED_PATH:-}" ]]; then
@@ -136,9 +148,9 @@ copyparty() {
   if [[ -n "${NAS_COPY_NATIVE_SHARE_URL:-}" ]]; then
     curl --fail --silent --show-error "$NAS_COPY_NATIVE_SHARE_URL" >/dev/null
   fi
-}
+)
 
-syncoid_drill() {
+syncoid_drill() (
   confirm SYNCOID_DRILL
   need syncoid
   need zfs
@@ -151,17 +163,16 @@ syncoid_drill() {
   validate_dataset "$child"
   validate_dataset "$snapshot"
   cleanup_syncoid() {
-    set +e
     if "$cleanup_remote"; then
       remote_zfs "$target_host" destroy "$clone" >/dev/null 2>&1 || true
-      remote_zfs "$target_host" destroy "$target_dataset" >/dev/null 2>&1 || true
+      remote_zfs "$target_host" destroy-recursive "$target_dataset" >/dev/null 2>&1 || true
     else
       [[ -z "${clone:-}" ]] || zfs destroy -r -- "$clone" >/dev/null 2>&1 || true
       [[ -z "${target_dataset:-}" ]] || zfs destroy -r -- "$target_dataset" >/dev/null 2>&1 || true
     fi
-    zfs destroy -r -- "$child" >/dev/null 2>&1 || true
+    [[ -z "$child" ]] || zfs destroy -r -- "$child" >/dev/null 2>&1 || true
   }
-  trap cleanup_syncoid RETURN
+  trap cleanup_syncoid EXIT
   zfs create -- "$child"
   mountpoint=$(zfs get -H -o value mountpoint "$child")
   marker="nas-live-$stamp"
@@ -194,9 +205,9 @@ syncoid_drill() {
   fi
   zfs destroy -r -- "$child"
   child=""
-}
+)
 
-restic_drill() {
+restic_drill() (
   confirm RESTIC_DRILL
   need jq
   need restic
@@ -213,15 +224,16 @@ restic_drill() {
     rm -f -- "$marker"
     rm -rf -- "$restore_root"
   }
-  trap cleanup_restic RETURN
-  install -d -m 0700 "$NAS_RESTIC_SOURCE" "$restore_root"
+  trap cleanup_restic EXIT
+  [[ -d "$NAS_RESTIC_SOURCE" ]] || fail "Restic source directory is missing: $NAS_RESTIC_SOURCE"
+  install -d -m 0700 "$restore_root"
   printf '%s
 ' "$stamp" > "$marker"
   snapshot_id=$(restic backup --json "$NAS_RESTIC_SOURCE" | jq -r 'select(.message_type == "summary") | .snapshot_id')
   [[ -n "$snapshot_id" && "$snapshot_id" != null ]] || fail "restic did not return a snapshot id"
   restic restore "$snapshot_id" --target "$restore_root"
   cmp "$marker" "$restored"
-}
+)
 
 authentik() {
   need curl
@@ -253,9 +265,17 @@ observability() {
   metric="nas_live_validation,run=$stamp value=1i"
   curl --fail --silent --show-error --data-binary "$metric" \
     http://127.0.0.1:8428/victoriametrics/write >/dev/null
-  curl --fail --silent --show-error \
-    "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D" \
-    | jq -e '.status == "success" and (.data.result | length) == 1' >/dev/null
+  local observed=false
+  for attempt in {1..10}; do
+    if curl --fail --silent --show-error \
+      "http://127.0.0.1:8428/victoriametrics/api/v1/query?query=nas_live_validation_value%7Brun%3D%22$stamp%22%7D" \
+      | jq -e '.status == "success" and (.data.result | length) == 1' >/dev/null; then
+      observed=true
+      break
+    fi
+    sleep 5
+  done
+  "$observed" || fail "VictoriaMetrics did not expose the written sample within 50 seconds"
   curl --fail --silent --show-error http://127.0.0.1:8880/-/healthy >/dev/null
   curl --fail --silent --show-error http://127.0.0.1:8880/api/v1/rules \
     | jq -e '.status == "success"' >/dev/null
@@ -279,6 +299,12 @@ case "${1:-}" in
   restic) restic_drill ;;
   authentik) authentik ;;
   observability) observability ;;
-  all) locked_boot; copyparty; syncoid_drill; restic_drill; authentik; observability ;;
+  all)
+    # Validate every required destructive consent before the first mutation.
+    confirm LOCKED_BOOT
+    confirm SYNCOID_DRILL
+    confirm RESTIC_DRILL
+    locked_boot; copyparty; syncoid_drill; restic_drill; authentik; observability
+    ;;
   *) fail "usage: $0 {locked-boot|copyparty|syncoid|restic|authentik|observability|all}" ;;
 esac
