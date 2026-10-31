@@ -219,6 +219,21 @@ verify_handoff() {
   verify_manifest_coverage "$dir"
 }
 
+verify_imported_delta() {
+  local dir=$1 path
+  local -a batch=()
+  while IFS= read -r path; do
+    batch+=("$path")
+    if ((${#batch[@]} == 128)); then
+      "$NIX" path-info "${batch[@]}" >/dev/null
+      batch=()
+    fi
+  done < "$dir/$DELTA_PATHS"
+  if ((${#batch[@]})); then
+    "$NIX" path-info "${batch[@]}" >/dev/null
+  fi
+}
+
 import_handoff() {
   local dir=$1
   verify_handoff "$dir"
@@ -228,6 +243,9 @@ import_handoff() {
     while IFS= read -r name; do
       gzip -dc -- "$dir/$name" | "$NIX_STORE_CMD" --import >/dev/null
     done < "$dir/$EXPORTS"
+    # A successful import command is insufficient evidence on its own:
+    # verify every promised delta path exists before deleting the transport.
+    verify_imported_delta "$dir"
   else
     printf 'system-handoff: reusable bundles already cover the exact system closures\n' >&2
   fi
