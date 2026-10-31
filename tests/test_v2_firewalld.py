@@ -181,6 +181,12 @@ class V2FirewalldTests(unittest.TestCase):
                     "server": {"protocol": "tcp", "exposure": {"port": port}, "firewall": True}
                 },
             }
+        services["api"]["listeners"]["forwarded"] = {
+            "protocol": "udp",
+            "exposure": {"port": 69},
+            "targetPort": 3969,
+            "firewall": True,
+        }
         objects, manifest = firewalld.compile_application_projection(
             {"schemaVersion": 3, "services": services}, lan_zone="trusted"
         )
@@ -192,6 +198,7 @@ class V2FirewalldTests(unittest.TestCase):
         self.assertEqual(policy["ingress"], "trusted")
         self.assertEqual(policy["egress"], "HOST")
         self.assertEqual(policy["ports"], [["8080", "tcp"], ["8081", "tcp"]])
+        self.assertEqual(policy["forwardPorts"], [["69", "udp", "3969"]])
         self.assertEqual(manifest["owners"], [{"service": "_host-listeners", "target": target}])
 
     def test_host_listener_can_forward_to_unprivileged_target_port(self):
