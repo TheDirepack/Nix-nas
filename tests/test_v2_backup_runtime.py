@@ -66,7 +66,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             inventory_path, paths_path, state_path = root / "inventory.json", root / "paths.txt", root / "state.json"
             inventory_path.write_text(json.dumps(self.inventory(artifact)))
 
-            def replace_artifact(_argv):
+            def replace_artifact(_argv, **_kwargs):
                 shutil.rmtree(artifact)
                 artifact.symlink_to(outside, target_is_directory=True)
                 return ""
@@ -164,7 +164,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 commands.append(argv)
                 if argv == ["/bin/systemctl", "restart", "nas-v2-database-dump.service"]:
                     (artifact / "database.dump").write_bytes(b"fresh-dump")
@@ -204,7 +204,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_run = runtime._run
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "completed without producing data"):
                     runtime.prepare(
@@ -235,7 +235,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
 
-            def fake_run(_argv: list[str]) -> str:
+            def fake_run(_argv: list[str], **_kwargs) -> str:
                 nonlocal called
                 called = True
                 return ""
@@ -271,7 +271,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_run = runtime._run
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "completed without producing data"):
                     runtime.prepare(
@@ -300,7 +300,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "escapes staging root|must be.*staging"):
                     runtime.prepare(
@@ -334,7 +334,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 with self.assertRaisesRegex(runtime.BackupRuntimeError, "must not be a symlink|escapes staging"):
                     runtime.prepare(
@@ -363,7 +363,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 (artifact / "dump").write_bytes(b"data")
                 return ""
 
@@ -393,7 +393,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             finally:
@@ -419,7 +419,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 if argv == ["/bin/systemctl", "restart", "nas-v2-first-dump.service"]:
                     (artifact_a / "dump").write_bytes(b"first")
                     return ""
@@ -459,7 +459,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 (artifact / "dump").write_bytes(b"data")
                 return ""
 
@@ -479,7 +479,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             # Now cleanup
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
             finally:
@@ -517,7 +517,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             # Make rmtree fail via mock
             with mock.patch("nas_v2_backup.shutil.rmtree", side_effect=OSError("permission denied")):
                 with self.assertRaisesRegex(
@@ -542,7 +542,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = staging
             original_run = runtime._run
 
-            def fake_run(argv: list[str]) -> str:
+            def fake_run(argv: list[str], **_kwargs) -> str:
                 (artifact / "dump").write_bytes(b"data")
                 return ""
 
@@ -561,7 +561,7 @@ class V2BackupRuntimeTests(unittest.TestCase):
             # first cleanup
             original_root = runtime.BACKUP_STAGING_ROOT
             runtime.BACKUP_STAGING_ROOT = staging
-            runtime._run = lambda _argv: ""
+            runtime._run = lambda _argv, **_kwargs: ""
             try:
                 runtime.cleanup(state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs")
                 # second cleanup should be idempotent even though state gone
