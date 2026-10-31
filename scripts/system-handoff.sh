@@ -11,6 +11,7 @@ NIX="${NAS_SYSTEM_HANDOFF_NIX:-nix}"
 NIX_STORE_CMD="${NAS_SYSTEM_HANDOFF_NIX_STORE:-nix-store}"
 ARCHIVE=system-closures.nar.gz
 EXPORTS=system-closures.exports
+EXPORT_ORDER=system-closures.delta.import-order
 PATHS=system-closures.paths
 DELTA_PATHS=system-closures.delta.paths
 CHECKSUM=system-closures.sha256
@@ -50,6 +51,10 @@ verify_manifest_coverage() {
 
   LC_ALL=C sort -c -u "$dir/$PATHS"
   LC_ALL=C sort -c -u "$dir/$DELTA_PATHS"
+  [[ -f "$dir/$EXPORT_ORDER" ]] || return 1
+  # Export ordering is a permutation of the delta, with no duplicates.
+  [[ "$(wc -l < "$dir/$EXPORT_ORDER")" -eq "$(wc -l < "$dir/$DELTA_PATHS")" ]] || return 1
+  LC_ALL=C sort -u "$dir/$EXPORT_ORDER" | cmp - "$dir/$DELTA_PATHS"
 
   unexpected="$({
     LC_ALL=C comm -23 "$dir/$DELTA_PATHS" "$dir/$PATHS"
@@ -143,6 +148,15 @@ save_handoff() {
   # and can exhaust a standard GitHub-hosted runner while it is being imported.
   LC_ALL=C comm -23 "$dir/$PATHS" <(bundle_paths "$dir") > "$dir/$DELTA_PATHS"
 
+  # Nix requisites are emitted with dependencies first. Import shards in
+  # that order rather than filesystem/alphabetical path order.
+  "$NIX_STORE_CMD" --query --requisites "${roots[@]}" \
+    | awk 'NR == FNR { wanted[$0] = 1; next }
+           $0 in wanted { print; delete wanted[$0] }
+           END { for (path in wanted) { print "unreachable export: " path > "/dev/stderr"; failed = 1 }
+                 if (failed) exit 1 }' "$dir/$DELTA_PATHS" - \
+    > "$dir/$EXPORT_ORDER"
+
   printf 'system-handoff: exporting %s system-only store paths (%s total already covered)\n' \
     "$(wc -l < "$dir/$DELTA_PATHS")" "$(wc -l < "$dir/$PATHS")" >&2
   : > "$dir/$EXPORTS"
@@ -156,7 +170,7 @@ save_handoff() {
       index=$((index + 1))
       batch=()
     fi
-  done < "$dir/$DELTA_PATHS"
+  done < "$dir/$EXPORT_ORDER"
   if ((${#batch[@]})); then
     export_delta_batch "$dir" "$index" "${batch[@]}"
   elif ((index == 0)); then
@@ -166,7 +180,7 @@ save_handoff() {
 
   (
     cd -- "$dir"
-    sha256sum "$PATHS" "$DELTA_PATHS" "$BUNDLE_MANIFEST" "$EXPORTS" > "$CHECKSUM"
+    sha256sum "$PATHS" "$DELTA_PATHS" "$BUNDLE_MANIFEST" "$EXPORTS" "$EXPORT_ORDER" > "$CHECKSUM"
     while IFS= read -r path; do
       sha256sum "$path" >> "$CHECKSUM"
     done < "$EXPORTS"
