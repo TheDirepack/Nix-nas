@@ -189,9 +189,9 @@ class UpdateRuntimeTests(unittest.TestCase):
 
     def test_missing_profile_baseline_aborts_before_probe_preflight(self):
         source = text("scripts/update-nas.sh")
-        section = source.split("# Check external probe *configuration*", 1)[1].split(
-            'echo "Evaluating reviewed flake inputs', 1
-        )[0]
+        section = "if $apply; then" + source.split("# Check external probe *configuration*", 1)[1].split(
+            "if $apply; then", 1
+        )[1].split('echo "Evaluating reviewed flake inputs', 1)[0]
         script = (
             "set -euo pipefail\n"
             "apply=true\n"
