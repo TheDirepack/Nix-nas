@@ -231,10 +231,10 @@ class V2SystemdReconcileTests(unittest.TestCase):
             active_marker = root / "active-marker"
             systemctl.write_text(
                 "#!/bin/sh\n"
-                'printf "%s\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+                'printf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
                 'case "$1" in\n'
                 '  is-active)\n'
-                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\n"; else printf "inactive\n"; fi ;;\n'
+                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; fi ;;\n'
                 '  stop) rm -f -- "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 '  start) : > "$NAS_V2_ACTIVE_MARKER" ;;\n'
                 "esac\n"
