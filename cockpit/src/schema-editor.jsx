@@ -41,13 +41,14 @@ function replaceObjectKey(value, oldKey, newKey) {
   return result;
 }
 
-function ScalarEditor({root, schema, value, onChange, id}) {
+function ScalarEditor({root, schema, value, onChange, id, label}) {
   const resolved = resolveSchema(root, schema);
   if (Object.hasOwn(resolved, "const")) return <code>{String(resolved.const)}</code>;
   if (Array.isArray(resolved.enum)) {
     return (
       <FormSelect
         id={id}
+        aria-label={label}
         value={value ?? ""}
         onChange={(event) => {
           const option = resolved.enum.find((entry) => String(entry) === event.target.value);
@@ -66,6 +67,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
     return (
       <Checkbox
         id={id}
+        aria-label={label}
         isChecked={value === true}
         onChange={(_event, checked) => onChange(checked)}
       />
@@ -75,6 +77,7 @@ function ScalarEditor({root, schema, value, onChange, id}) {
     return (
       <TextInput
         id={id}
+        aria-label={label}
         type="number"
         value={value ?? ""}
         min={resolved.minimum}
@@ -90,11 +93,12 @@ function ScalarEditor({root, schema, value, onChange, id}) {
   }
   const text = typeof value === "string" ? value : "";
   if ((resolved.maxLength || 0) > 256 || resolved.format === "textarea") {
-    return <TextArea id={id} value={text} onChange={(_event, next) => onChange(next)} rows={4} />;
+    return <TextArea id={id} aria-label={label} value={text} onChange={(_event, next) => onChange(next)} rows={4} />;
   }
   return (
     <TextInput
       id={id}
+      aria-label={label}
       value={text}
       onChange={(_event, next) => onChange(next)}
       type="text"
@@ -141,6 +145,33 @@ function ArrayEditor({root, schema, value, onChange, path}) {
         Add item
       </Button>
     </div>
+  );
+}
+
+function MapKeyInput({name, names, pattern, onRename}) {
+  const [draft, setDraft] = useState(name);
+  const commit = () => {
+    const next = draft.trim();
+    if (next === name) return;
+    if (!next || hasOwn(names, next) || (pattern && !new RegExp(pattern).test(next))) {
+      setDraft(name);
+      return;
+    }
+    onRename(next);
+  };
+  return (
+    <TextInput
+      value={draft}
+      aria-label={`Key for ${name}`}
+      onChange={(_event, next) => setDraft(next)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -242,19 +273,11 @@ function ObjectEditor({root, schema, value, onChange, path}) {
       {dynamicEntries.map(([name, entry]) => (
         <div className="nas-schema-map-entry" key={`${path}.${name}`}>
           <div className="nas-schema-map-key">
-            <TextInput
-              value={name}
-              aria-label={`Key for ${name}`}
-              onChange={(_event, next) => {
-                if (
-                  !next ||
-                  hasOwn(object, next) ||
-                  (namePattern && !new RegExp(namePattern).test(next))
-                ) {
-                  return;
-                }
-                onChange(replaceObjectKey(object, name, next));
-              }}
+            <MapKeyInput
+              name={name}
+              names={object}
+              pattern={namePattern}
+              onRename={(next) => onChange(replaceObjectKey(object, name, next))}
             />
             <Button variant="danger" size="sm" onClick={() => setProperty(name, undefined)}>
               Remove
@@ -329,7 +352,7 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
       ) : type === "array" ? (
         <ArrayEditor root={root} schema={active} value={value} onChange={onChange} path={path} />
       ) : (
-        <ScalarEditor root={root} schema={active} value={value} onChange={onChange} id={id} />
+        <ScalarEditor root={root} schema={active} value={value} onChange={onChange} id={id} label={titleFor(active, label)} />
       )}
     </fieldset>
   );
