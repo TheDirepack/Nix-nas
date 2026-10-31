@@ -1,0 +1,85 @@
+"""Opt-in local Linux display proof: no NixOS/Podman claim from host tests."""
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+MODULE = Path(__file__).resolve().parents[1] / "scripts" / "headless_gui_xvfb_probe.py"
+spec = importlib.util.spec_from_file_location("headless_gui_xvfb_probe", MODULE)
+assert spec and spec.loader
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+
+REQUIRED = ("Xvfb", "xauth", "xdpyinfo")
+HAVE = all(shutil.which(p) for p in REQUIRED)
+
+
+@unittest.skipUnless(HAVE, "needs an installed Xvfb, xauth and xdpyinfo")
+class PrivateDisplaySmokeTest(unittest.TestCase):
+    def test_authentication_and_screenshot(self):
+        with probe.private_xvfb(width=640, height=480) as (display, env, path):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(Path(env["XAUTHORITY"]).stat().st_mode & 0o777, 0o600)
+            self.assertEqual(subprocess.run(["xdpyinfo"], env=env, capture_output=True).returncode, 0)
+            # Prove a separate, incorrect cookie cannot inspect the display.
+            bad = dict(env, XAUTHORITY=str(path / "not-a-cookie"))
+            self.assertNotEqual(subprocess.run(["xdpyinfo"], env=bad, capture_output=True).returncode, 0)
+            try:
+                import PIL  # noqa: F401
+            except ImportError:
+                self.skipTest("Pillow screenshot backend not installed")
+            with tempfile.TemporaryDirectory() as out:
+                file = Path(out) / "screen.png"
+                self.assertEqual(probe.snapshot_png(env, file), (640, 480))
+                self.assertTrue(file.is_file())
+        self.assertFalse(path.exists(), "private runtime directory must be cleaned up")
+
+    @unittest.skipUnless(shutil.which("xterm"), "needs a sample GUI application (xterm)")
+    def test_actual_gui_window_changes_capture(self):
+        try:
+            from PIL import Image, ImageChops  # noqa: F401
+        except ImportError:
+            self.skipTest("Pillow is not installed")
+        with probe.private_xvfb(width=640, height=480) as (_display, env, _root):
+            with tempfile.TemporaryDirectory() as out:
+                before = Path(out) / "before.png"
+                after = Path(out) / "after.png"
+                probe.snapshot_png(env, before)
+                app = subprocess.Popen(
+                    ["xterm", "-geometry", "40x10+20+20", "-bg", "white", "-fg", "black",
+                     "-e", "sh", "-c", "sleep 4"],
+                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                )
+                try:
+                    import time
+                    for _ in range(20):
+                        time.sleep(0.1)
+                        if app.poll() is not None:
+                            self.fail("example GUI exited before screenshot")
+                        probe.snapshot_png(env, after)
+                        if ImageChops.difference(Image.open(before), Image.open(after)).getbbox():
+                            break
+                    else:
+                        self.fail("X11 application did not produce any visible pixels")
+                finally:
+                    app.terminate()
+                    app.wait(timeout=3)
+                    if app.stderr:
+                        app.stderr.close()
+
+    def test_two_concurrent_displays_cannot_reuse_credentials(self):
+        with probe.private_xvfb() as (a, env_a, _):
+            with probe.private_xvfb() as (b, env_b, _):
+                self.assertNotEqual(a, b)
+                self.assertEqual(subprocess.run(["xdpyinfo"], env=env_a, capture_output=True).returncode, 0)
+                self.assertEqual(subprocess.run(["xdpyinfo"], env=env_b, capture_output=True).returncode, 0)
+                crossed = dict(env_a, XAUTHORITY=env_b["XAUTHORITY"])
+                self.assertNotEqual(subprocess.run(["xdpyinfo"], env=crossed, capture_output=True).returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
