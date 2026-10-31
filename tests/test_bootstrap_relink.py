@@ -49,7 +49,7 @@ class BootstrapRelinkTests(unittest.TestCase):
     def assert_linked(self) -> None:
         for name in NAMES:
             self.assertTrue((self.homes / name).is_symlink())
-            self.assertEqual((self.homes / name).resolve(), self.target / name)
+            self.assertEqual((self.homes / name).resolve(), (self.target / name).resolve())
 
     def test_missing_paths_are_linked_and_repeated_boot_is_safe(self) -> None:
         self.make_paths()
