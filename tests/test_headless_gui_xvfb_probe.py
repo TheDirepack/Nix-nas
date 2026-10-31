@@ -29,6 +29,22 @@ class AlwaysAvailableContractTests(unittest.TestCase):
                             self.fail("invalid geometry accepted")
             require.assert_not_called()
 
+    @unittest.skipUnless(HAVE, "needs Xvfb to verify a real startup retry")
+    def test_readiness_timeout_retries_without_abandoning_healthy_server(self):
+        real_run = subprocess.run
+        forced = [False]
+
+        def occasionally_slow(argv, *args, **kwargs):
+            if argv[0] == "xdpyinfo" and not forced[0]:
+                forced[0] = True
+                raise subprocess.TimeoutExpired(argv, kwargs.get("timeout", 1))
+            return real_run(argv, *args, **kwargs)
+
+        with mock.patch.object(probe.subprocess, "run", side_effect=occasionally_slow):
+            with probe.private_xvfb() as (_display, _env, _root, server):
+                self.assertIsNone(server.poll())
+        self.assertTrue(forced[0], "timeout test did not exercise retry")
+
     def test_missing_external_tools_fail_explicitly(self):
         with mock.patch.object(probe.shutil, "which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "Xvfb.*xauth.*xdpyinfo"):
@@ -120,12 +136,28 @@ class PrivateDisplaySmokeTest(unittest.TestCase):
                         app.stderr.close()
 
     def test_two_concurrent_displays_cannot_reuse_credentials(self):
-        with probe.private_xvfb() as (a, env_a, _, _proc_a):
+        with probe.private_xvfb() as (a, env_a, root_a, _proc_a):
             with probe.private_xvfb() as (b, env_b, _, _proc_b):
                 self.assertNotEqual(a, b)
                 self.assertEqual(subprocess.run(["xdpyinfo"], env=env_a, capture_output=True, timeout=2).returncode, 0)
                 self.assertEqual(subprocess.run(["xdpyinfo"], env=env_b, capture_output=True, timeout=2).returncode, 0)
-                crossed = dict(env_a, XAUTHORITY=env_b["XAUTHORITY"])
+                # Re-key B's real cookie to display A. This tests cookie rejection,
+                # rather than merely failing because B's authority lacks an A entry.
+                b_cookie_entries = subprocess.run(
+                    ["xauth", "-f", env_b["XAUTHORITY"], "list", b],
+                    capture_output=True, text=True, check=True, timeout=2,
+                ).stdout.strip().splitlines()
+                self.assertEqual(len(b_cookie_entries), 1)
+                b_cookie = b_cookie_entries[0].split()[-1]
+                self.assertEqual(len(b_cookie), 32)
+                crossed_authority = root_a / "crossed-auth"
+                crossed_authority.touch(mode=0o600)
+                crossed_authority.chmod(0o600)
+                subprocess.run(
+                    ["xauth", "-f", str(crossed_authority), "add", a, "MIT-MAGIC-COOKIE-1", b_cookie],
+                    capture_output=True, text=True, check=True, timeout=2,
+                )
+                crossed = dict(env_a, XAUTHORITY=str(crossed_authority))
                 self.assertNotEqual(
                     subprocess.run(["xdpyinfo"], env=crossed, capture_output=True, timeout=2).returncode, 0
                 )
