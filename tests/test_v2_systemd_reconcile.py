@@ -18,6 +18,86 @@ import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
 
 class V2SystemdReconcileTests(unittest.TestCase):
+    def test_newly_disabled_session_does_not_stop_a_nonexistent_target(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            unit = "nas-v2-session-agent.target"
+            manifest = projection / "manifest.json"
+            manifest.write_text(json.dumps({
+                "schemaVersion": 1, "links": [], "quadletLinks": [],
+                "ownedUnits": [unit], "startUnits": [], "stopUnits": [unit],
+                "fingerprints": {},
+            }), encoding="utf-8")
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root)
+            kwargs = dict(manifest=manifest, projection=projection, runtime=runtime,
+                          state=root / "state.json", systemctl=systemctl, log=log)
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+            # Even if another unit changes, an already disabled session still
+            # has no target file; it must never issue a nonexistent stop.
+            state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+            state["startUnits"] = [unit]
+            (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            log.write_text("", encoding="utf-8")
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+
+    def test_session_fingerprint_migration_preserves_unchanged_transients(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            generation = root / "generations" / ("a" * 40) / "systemd"
+            current = root / "systemd"
+            unit = "nas-v2-session-agent.target"
+            for projection in (generation, current):
+                (projection / "units").mkdir(parents=True)
+                (projection / "descriptors").mkdir()
+                (projection / "units" / unit).write_text("[Unit]\nStopWhenUnneeded=yes\n", encoding="utf-8")
+                (projection / "descriptors" / "agent.session.json").write_text(
+                    json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/old:/data"]}),
+                    encoding="utf-8",
+                )
+            manifest = root / "manifest.json"
+            runtime = root / "live-systemd"
+            runtime.mkdir()
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+
+            def run(projection, fingerprint):
+                manifest.write_text(json.dumps({
+                    "schemaVersion": 1,
+                    "links": [{"target": unit, "source": str(projection / "units" / unit)}],
+                    "quadletLinks": [], "ownedUnits": [unit], "startUnits": [],
+                    "stopUnits": [], "fingerprints": {unit: fingerprint},
+                }), encoding="utf-8")
+                return self.run_reconcile(manifest=manifest, projection=projection,
+                                          runtime=runtime, state=state, systemctl=systemctl, log=log)
+
+            run(generation, "legacy-hash")
+            log.write_text("", encoding="utf-8")
+            # New hash format, same descriptor: must not restart/stop.
+            run(current, "full-descriptor-hash")
+            commands = log.read_text(encoding="utf-8")
+            self.assertNotIn("stop " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+            self.assertIn("full-descriptor-hash", state.read_text(encoding="utf-8"))
+
+            # Changed resolved mount argument: stop the target, never
+            # try-restart the old transient command/argv.
+            (current / "descriptors" / "agent.session.json").write_text(
+                json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/new:/data"]}),
+                encoding="utf-8",
+            )
+            log.write_text("", encoding="utf-8")
+            run(current, "path-changed-hash")
+            commands = log.read_text(encoding="utf-8")
+            self.assertIn("stop " + unit, commands)
+            self.assertNotIn("try-restart " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+
     def test_on_demand_restart_failure_preserves_previous_state_and_retry(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
