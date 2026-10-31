@@ -90,6 +90,28 @@ if [[ "${NAS_TEST_SYNCOID_FAIL:-}" == 1 ]]; then exit 21; fi
         self.assertIn("clone dataset already exists", result.stderr)
         self.assertFalse(any(row.startswith(("zfs create", "zfs destroy", "syncoid ")) for row in self.commands()))
 
+    def test_remote_existing_clone_is_rejected_without_remote_cleanup(self) -> None:
+        self._command(
+            "ssh",
+            """#!/bin/bash
+set -euo pipefail
+printf 'ssh %s\\n' "$*" >> "$NAS_TEST_LOG"
+# Remote ZFS helper invokes: ssh -o BatchMode=yes host bash -s -- action name [name].
+if [[ "$1" == -o && "$2" == BatchMode=yes ]]; then shift 3; fi
+exec "$@"
+""",
+        )
+        result = self.run_drill(
+            "syncoid", NAS_SYNCOID_TARGET="remotehost:tank/target",
+            NAS_SYNCOID_REMOTE_CLONE="tank/preexisting",
+            NAS_TEST_EXISTING_CLONE="tank/preexisting",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("clone dataset already exists", result.stderr)
+        rows = self.commands()
+        self.assertTrue(any(row.startswith("ssh ") for row in rows))
+        self.assertFalse(any(row.startswith(("zfs create", "zfs destroy", "syncoid ")) for row in rows))
+
     def test_failed_source_create_does_not_destroy_anything(self) -> None:
         result = self.run_drill("syncoid", NAS_TEST_CREATE_FAIL="1")
         self.assertNotEqual(result.returncode, 0)
