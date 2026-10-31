@@ -17,6 +17,8 @@ class CockpitSocketBoundaryTests(unittest.TestCase):
             'authentikProxyOutpost = pkgs.writeShellScript', 1
         )[0]
         self.assertIn("--local-session", web)
+        self.assertIn('export LISTEN_PID="$BASHPID"', web)
+        self.assertIn("exec ${cockpitPatched}/libexec/cockpit-ws", web)
         self.assertNotIn("--address 127.0.0.1", web)
         self.assertNotIn("--port ${toString cockpitPort}", web)
 
