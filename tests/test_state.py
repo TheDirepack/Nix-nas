@@ -568,8 +568,11 @@ class StateBundleTests(unittest.TestCase):
             with mock.patch.dict(os.environ, self.environment(registry), clear=False):
                 state.export_bundle(bundle, include_sensitive=True)
                 optional.write_text("appeared", encoding="utf-8")
+                public.write_text("live-public", encoding="utf-8")
+                sensitive.write_text("live-sensitive", encoding="utf-8")
                 with (
                     mock.patch.object(state, "DEFAULT_ROLLBACK_ROOT", root / "rollbacks"),
+                    mock.patch.object(state, "apply_extracted", wraps=state.apply_extracted) as apply_spy,
                     mock.patch.object(
                         state,
                         "run_systemctl",
@@ -585,7 +588,14 @@ class StateBundleTests(unittest.TestCase):
                             allow_partial=False,
                             include_sensitive=True,
                         )
+                apply_spy.assert_not_called()
                 self.assertTrue(optional.exists())
+                self.assertEqual(public.read_text(encoding="utf-8"), "live-public")
+                self.assertEqual(sensitive.read_text(encoding="utf-8"), "live-sensitive")
+                self.assertEqual(
+                    json.loads(state.RESTORE_JOURNAL.read_text(encoding="utf-8"))["status"],
+                    "failed-before-apply",
+                )
 
     def test_restore_preserves_existing_subpath_modes_instead_of_flattening_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
