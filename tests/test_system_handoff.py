@@ -43,6 +43,9 @@ class SystemHandoffTests(unittest.TestCase):
                   /nix/store/ci-root \
                   /nix/store/qemu-root \
                   /nix/store/system-only
+                if [[ -n "${FAKE_EXTRA_PATHS_FILE:-}" ]]; then
+                  cat -- "$FAKE_EXTRA_PATHS_FILE"
+                fi
                 ;;
               *)
                 exit 2
@@ -59,10 +62,13 @@ class SystemHandoffTests(unittest.TestCase):
               --export)
                 shift
                 printf '%s\n' "$@" >> "${FAKE_EXPORT_LOG:?}"
+                printf 'export:%s\n' "$#" >> "${FAKE_EXPORT_CALLS:?}"
                 printf 'fake-nix-export\n'
                 ;;
               --import)
-                cat >/dev/null
+                content=$(cat)
+                [[ "$content" == "fake-nix-export" ]] || exit 91
+                printf 'import\n' >> "${FAKE_IMPORT_LOG:?}"
                 ;;
               *)
                 exit 2
@@ -84,6 +90,8 @@ class SystemHandoffTests(unittest.TestCase):
                 "NAS_SYSTEM_HANDOFF_NIX": str(fake_nix),
                 "NAS_SYSTEM_HANDOFF_NIX_STORE": str(fake_store),
                 "FAKE_EXPORT_LOG": str(export_log),
+                "FAKE_EXPORT_CALLS": str(export_log.parent / "export-calls.log"),
+                "FAKE_IMPORT_LOG": str(export_log.parent / "import-calls.log"),
             }
         )
         return env
@@ -106,13 +114,15 @@ class SystemHandoffTests(unittest.TestCase):
         )
 
     def rewrite_checksum(self, handoff: pathlib.Path) -> None:
+        exports = (handoff / "system-closures.exports").read_text(encoding="utf-8").splitlines()
         result = subprocess.run(
             [
                 "sha256sum",
-                "system-closures.nar.gz",
                 "system-closures.paths",
                 "system-closures.delta.paths",
                 "bundle-manifest.tsv",
+                "system-closures.exports",
+                *exports,
             ],
             cwd=handoff,
             text=True,
@@ -168,6 +178,70 @@ class SystemHandoffTests(unittest.TestCase):
             (handoff / "core.nar.gz").write_bytes(b"transport")
             self.run_handoff("import", handoff, env)
             self.assertFalse(any(handoff.glob("*.nar.gz")))
+
+    def test_large_delta_has_complete_independent_export_and_import_streams(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            handoff = root / "handoff"
+            handoff.mkdir()
+            (handoff / "bundle-manifest.tsv").write_text(
+                "core\t/nix/store/base-a\nidentity\t/nix/store/base-b\n",
+                encoding="utf-8",
+            )
+            extra = root / "extra-paths.txt"
+            extra.write_text(
+                "".join(f"/nix/store/test-{index:04d}\n" for index in range(260)),
+                encoding="utf-8",
+            )
+            export_log = root / "export.log"
+            fake_nix, fake_store = self.make_tools(root)
+            env = self.environment(fake_nix, fake_store, export_log)
+            env["FAKE_EXTRA_PATHS_FILE"] = str(extra)
+            self.run_handoff("save", handoff, env)
+            exports = (handoff / "system-closures.exports").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                exports,
+                [
+                    "system-closures.nar.gz",
+                    "system-closures.part-000001.nar.gz",
+                    "system-closures.part-000002.nar.gz",
+                ],
+            )
+            self.assertEqual(
+                (root / "export-calls.log").read_text(encoding="utf-8").splitlines(),
+                ["export:128", "export:128", "export:7"],
+            )
+            self.assertEqual(
+                export_log.read_text(encoding="utf-8").splitlines(),
+                (handoff / "system-closures.delta.paths").read_text(encoding="utf-8").splitlines(),
+            )
+            self.run_handoff("verify", handoff, env)
+            self.run_handoff("import", handoff, env)
+            self.assertEqual(
+                (root / "import-calls.log").read_text(encoding="utf-8").splitlines(),
+                ["import", "import", "import"],
+            )
+            self.assertFalse(list(handoff.glob("*.nar.gz")))
+
+    def test_verify_rejects_missing_or_out_of_order_export_shards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            handoff = root / "handoff"
+            handoff.mkdir()
+            (handoff / "bundle-manifest.tsv").write_text(
+                "core\t/nix/store/base-a\nidentity\t/nix/store/base-b\n",
+                encoding="utf-8",
+            )
+            export_log = root / "export.log"
+            fake_nix, fake_store = self.make_tools(root)
+            env = self.environment(fake_nix, fake_store, export_log)
+            self.run_handoff("save", handoff, env)
+            (handoff / "system-closures.exports").write_text(
+                "system-closures.part-000001.nar.gz\n", encoding="utf-8"
+            )
+            invalid = self.run_handoff("verify", handoff, env, check=False)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("missing or out-of-order export stream", invalid.stderr)
 
     def test_verify_rejects_delta_that_duplicates_bundle_transport(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
