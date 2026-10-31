@@ -121,7 +121,7 @@ export default function App() {
                 <CardTitle>Protected services are locked</CardTitle>
               </CardHeader>
               <CardBody>
-                <Form>
+                <Form onSubmit={(event) => { event.preventDefault(); if (!busy && unlockPassword) void unlock(); }}>
                   <FormGroup label="KeePassXC database password">
                     <TextInput
                       type="password"
