@@ -1,12 +1,62 @@
 from __future__ import annotations
 
+import os
 import pathlib
+import shlex
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class V2SeedOnceContractTests(unittest.TestCase):
+    def test_seed_marker_is_written_only_after_the_exact_dataset_check(self) -> None:
+        source = (ROOT / "modules/nas/config/managed-services-lifecycle.nix").read_text(encoding="utf-8")
+        script = source.split("preStart = lib.mkBefore ''", 1)[1].split("\n        '';", 1)[0]
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = root / "nas-control"
+            desired = authority / "services.yaml"
+            marker = authority / ".managed-services-native-seed-v2"
+            checker = root / "nas-zfs-mount-check"
+            checker.write_text('#!/bin/sh\nexit "$MOUNT_STATUS"\n', encoding="utf-8")
+            checker.chmod(0o755)
+            install = shutil.which("install")
+            assert install is not None
+            coreutils = pathlib.Path(install).parent.parent
+            script = script.replace(
+                "${nasInternal.nasZfsMountCheck}/bin/nas-zfs-mount-check", shlex.quote(str(checker))
+            )
+            script = script.replace("${pkgs.coreutils}", str(coreutils))
+            script = script.replace("${lib.escapeShellArg desiredPath}", shlex.quote(str(desired)))
+            script = script.replace("${lib.escapeShellArg initialSeedMarker}", shlex.quote(str(marker)))
+            script = script.replace("/var/lib/nas-control", shlex.quote(str(authority)))
+            script = script.replace("-o root -g nas-operations", f"-o {os.geteuid()} -g {os.getegid()}")
+
+            def invoke(status: int) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["bash", "-c", "set -euo pipefail\n" + script],
+                    env={**os.environ, "MOUNT_STATUS": str(status)},
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            for status in (1, 75):
+                with self.subTest(status=status):
+                    result = invoke(status)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    self.assertFalse(authority.exists())
+            self.assertEqual(invoke(0).returncode, 0)
+            self.assertTrue(marker.is_file())
+            marker.unlink()
+            desired.write_text("operator-owned\n", encoding="utf-8")
+            self.assertEqual(invoke(0).returncode, 0)
+            self.assertFalse(marker.exists())
+            self.assertEqual(desired.read_text(encoding="utf-8"), "operator-owned\n")
+
     def test_nix_records_missing_authority_before_base_seed_execstart(self) -> None:
         lifecycle = (ROOT / "modules/nas/config/managed-services-lifecycle.nix").read_text(encoding="utf-8")
         self.assertIn('desiredPath = "/var/lib/nas-control/services.yaml";', lifecycle)

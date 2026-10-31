@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, nasInternal, ... }:
 
 let
   desiredPath = "/var/lib/nas-control/services.yaml";
@@ -16,6 +16,7 @@ in
         # oneshot invocation can retry. The bootstrap helper clears it after a
         # successful seed or after detecting a concurrent real authority writer.
         preStart = lib.mkBefore ''
+          ${nasInternal.nasZfsMountCheck}/bin/nas-zfs-mount-check
           if [ ! -e ${lib.escapeShellArg desiredPath} ]; then
             ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g nas-operations /var/lib/nas-control
             : > ${lib.escapeShellArg initialSeedMarker}

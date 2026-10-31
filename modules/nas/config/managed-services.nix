@@ -99,6 +99,9 @@ in
       requires = [ "nas-zfs-mount-guard.service" ];
       after = [ "nas-zfs-mount-guard.service" ];
       unitConfig.RequiresMountsFor = [ cfg.zfsRoot ];
+      # First-start seeds before publishing setup state; only the mounted
+      # dataset, not a completed-setup marker, may gate this unit.
+      unitConfig.ConditionPathIsMountPoint = cfg.zfsRoot;
       serviceConfig = {
         Type = "oneshot";
         ExecStart = seedDesiredState;
