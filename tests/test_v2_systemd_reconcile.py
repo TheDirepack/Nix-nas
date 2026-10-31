@@ -228,6 +228,19 @@ class V2SystemdReconcileTests(unittest.TestCase):
             manifest = root / "manifest.json"
             state = root / "state.json"
             systemctl, log = self.make_systemctl(root)
+            active_marker = root / "active-marker"
+            systemctl.write_text(
+                "#!/bin/sh\n"
+                'printf "%s\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+                'case "$1" in\n'
+                '  is-active)\n'
+                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\n"; else printf "inactive\n"; fi ;;\n'
+                '  stop) rm -f -- "$NAS_V2_ACTIVE_MARKER" ;;\n'
+                '  start) : > "$NAS_V2_ACTIVE_MARKER" ;;\n'
+                "esac\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
 
             def apply(directory, digest):
                 current.unlink()
@@ -255,13 +268,18 @@ class V2SystemdReconcileTests(unittest.TestCase):
                     log=log,
                 )
 
-            apply(old, "v1")
-            before = state.read_bytes()
-            with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("disk full")):
-                with self.assertRaisesRegex(reconcile.SystemdReconcileError, "manual recovery required") as error:
-                    apply(new, "v2")
+            with mock.patch.dict(os.environ, {"NAS_V2_ACTIVE_MARKER": str(active_marker)}):
+                apply(old, "v1")
+                active_marker.touch()
+                before = state.read_bytes()
+                with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("disk full")):
+                    with self.assertRaisesRegex(reconcile.SystemdReconcileError, "manual recovery required") as error:
+                        apply(new, "v2")
             self.assertIn("transient instances may have been terminated", str(error.exception))
-            self.assertIn("stop " + unit, log.read_text(encoding="utf-8"))
+            commands = log.read_text(encoding="utf-8")
+            self.assertIn("stop " + unit, commands)
+            self.assertNotIn("start " + unit, commands)
+            self.assertFalse(active_marker.exists())
             self.assertEqual(before, state.read_bytes())
             self.assertEqual((runtime / unit).resolve(), (old / "units" / unit).resolve())
 
