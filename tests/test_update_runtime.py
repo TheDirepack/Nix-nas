@@ -146,6 +146,46 @@ class UpdateRuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
         self.assertEqual(self.probe_args.read_bytes(), b"failure-control\0")
 
+    def test_preflight_rejects_embedded_nul_before_launch(self):
+        invalid = (
+            [str(self.probe), "bad\u0000tail"],
+            [str(self.probe), ""],
+            [],
+            {"not": "an argv"},
+        )
+        for args in invalid:
+            with self.subTest(args=args):
+                result = self.run_function(
+                    "validate_external_probe_configuration",
+                    inherited=("pkgs.python3",),
+                    NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps(args),
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertFalse(self.trace.exists(), "preflight must not run the probe")
+                self.assertFalse(self.probe_args.exists())
+                if isinstance(args, list) and any("\u0000" in arg for arg in args):
+                    self.assertIn("contains NUL", result.stderr)
+
+    def test_preflight_accepts_literal_backslash_x_without_running_probe(self):
+        result = self.run_function(
+            "validate_external_probe_configuration",
+            inherited=("pkgs.python3",),
+            NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps([str(self.probe), r"\\x00"]),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.trace.exists())
+        self.assertFalse(self.probe_args.exists())
+
+    def test_update_checks_probe_and_profile_before_any_snapshot_or_activation(self):
+        source = text("scripts/update-nas.sh")
+        preflight = source.index('if [[ -z "$old_profile_link" || -z "$old_profile" ]]')
+        probe = source.index("  validate_external_probe_configuration", preflight)
+        snapshot = source.index("  create_state_snapshot", probe)
+        activate = source.index("  nixos-rebuild test --flake", snapshot)
+        self.assertLess(preflight, probe)
+        self.assertLess(probe, snapshot)
+        self.assertLess(snapshot, activate)
+
     def test_invalid_probe_is_rejected_without_launch(self):
         # The Python validator fails first; wait propagates that failure before
         # the later empty-argv safeguard, so it must not print both diagnostics.
