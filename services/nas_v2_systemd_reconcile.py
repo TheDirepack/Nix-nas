@@ -306,7 +306,7 @@ def _discover_quadlet_links(runtime_root: pathlib.Path) -> set[str]:
     return discovered
 
 
-_SESSION_TARGET = re.compile(r"^nas-v2-session-[a-z][a-z0-9-]*\\.target$")
+_SESSION_TARGET = re.compile(r"^nas-v2-session-[a-z][a-z0-9-]*\.target$")
 
 
 def _same_session_descriptor(
