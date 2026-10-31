@@ -529,6 +529,54 @@ class V2BackupRuntimeTests(unittest.TestCase):
             runtime.BACKUP_STAGING_ROOT = original_root
             runtime._run = original_run
 
+    def test_failed_native_stop_preserves_artifact_and_outstanding_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            staging = root / "backup-staging"
+            artifact = staging / "database-artifact"
+            artifact.mkdir(parents=True)
+            sentinel = artifact / "live-dump"
+            sentinel.write_bytes(b"writer must finish before deletion")
+            state_path, paths_path = root / "state.json", root / "paths.txt"
+            entry = {
+                "source": "database",
+                "preparationService": "database-dump",
+                "preparationUnit": "nas-v2-database-dump.service",
+                "artifactResource": "database-artifact",
+                "artifactPath": str(artifact),
+            }
+            state_path.write_text(json.dumps({
+                "schemaVersion": 1, "snapshots": [], "nativeDumps": [entry],
+            }), encoding="utf-8")
+            paths_path.write_text(str(artifact) + "\n", encoding="utf-8")
+            calls = []
+
+            def failing_stop(argv, **kwargs):
+                calls.append((argv, kwargs))
+                raise runtime.BackupRuntimeError("systemd stop timed out")
+
+            with (
+                mock.patch.object(runtime, "BACKUP_STAGING_ROOT", staging),
+                mock.patch.object(runtime, "_run", side_effect=failing_stop),
+            ):
+                with self.assertRaisesRegex(runtime.BackupRuntimeError, "systemd stop timed out"):
+                    runtime.cleanup(
+                        state_path=state_path, paths_path=paths_path, zfs_bin="/bin/zfs",
+                        systemctl_bin="/bin/systemctl",
+                    )
+            self.assertEqual(
+                calls, [(["/bin/systemctl", "stop", "nas-v2-database-dump.service"], {"timeout": 120})]
+            )
+            self.assertEqual(sentinel.read_bytes(), b"writer must finish before deletion")
+            self.assertEqual(json.loads(state_path.read_text())["nativeDumps"], [entry])
+            self.assertTrue(paths_path.exists())
+
+    def test_restic_cleanup_unit_has_no_premature_aggregate_stop_deadline(self):
+        source = (ROOT / "modules/nas/config/storage-monitoring.nix").read_text(encoding="utf-8")
+        unit = source.split("systemd.services.restic-backups-nas-boot-system = ", 1)[1]
+        unit = unit.split("systemd.services.nas-backup-authentik-dump", 1)[0]
+        self.assertIn('serviceConfig.TimeoutStopSec = "infinity";', unit)
+
     def test_repeated_cleanup_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
