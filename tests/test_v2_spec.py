@@ -423,6 +423,40 @@ class ManagedServicesV2SpecTests(unittest.TestCase):
         ):
             self.assertIn(expected, paths)
 
+    def test_same_hostname_different_paths_compile(self):
+        # The Caddy renderer groups by hostname and emits one site per host,
+        # so semantic validation must allow the same hostname with different
+        # paths while still rejecting identical hostname+path pairs.
+        host_a = minimal_service()
+        host_a["routes"] = {
+            "one": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "hostname", "hostnames": ["example.local"], "path": "/one"},
+                "auth": {"mode": "public"},
+            },
+        }
+        host_b = minimal_service()
+        host_b["routes"] = {
+            "two": {
+                "target": {"type": "http", "port": 8082},
+                "exposure": {"type": "hostname", "hostnames": ["example.local"], "path": "/two"},
+                "auth": {"mode": "public"},
+            },
+        }
+        self.compile({"schemaVersion": 3, "services": {"a": host_a, "b": host_b}})
+
+        # Identical hostname+path must still fail closed.
+        dup = minimal_service()
+        dup["routes"] = {
+            "two": {
+                "target": {"type": "http", "port": 8083},
+                "exposure": {"type": "hostname", "hostnames": ["example.local"], "path": "/two"},
+                "auth": {"mode": "public"},
+            },
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route hostname"):
+            self.compile({"schemaVersion": 3, "services": {"a": host_a, "b": host_b, "c": dup}})
+
     def test_systemd_runtime_unit_must_be_a_safe_unit_name(self):
         good = minimal_service()
         self.compile({"schemaVersion": 3, "services": {"example": good}})

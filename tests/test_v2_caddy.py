@@ -425,7 +425,7 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
         self.assertIn('path "/two/"', rendered)
 
     def test_portal_rejects_backslash_and_control_character_paths(self):
-        for bad in ("/\\\\evil.example", "/\\tevil.example", "/\\nevil.example", "//evil.example"):
+        for bad in ("/\\\\evil.example", "/\tevil.example", "/\nevil.example", "//evil.example"):
             with self.subTest(path=bad):
                 self.assertFalse(caddy._safe_portal_path(bad))
         self.assertTrue(caddy._safe_portal_path("/safe/"))
