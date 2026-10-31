@@ -113,6 +113,7 @@ class ZapSourceBuildTests(unittest.TestCase):
         patched_name = "network-beta-0.30.0.zap"
         regular_name = "ordinary-addon.zap"
         (install / "plugin" / patched_name).write_bytes(b"stock equal-version code")
+        (install / "plugin" / regular_name).write_bytes(upstream)
         (compiled / patched_name).write_bytes(patched)
         (source / regular_name).write_bytes(upstream)
         lock = {
@@ -123,7 +124,7 @@ class ZapSourceBuildTests(unittest.TestCase):
         self.assertEqual((install / "plugin" / patched_name).read_bytes(), patched)
         self.assertEqual((output / patched_name).read_bytes(), patched)
         self.assertEqual((output / regular_name).read_bytes(), upstream)
-        self.assertFalse((install / "plugin" / regular_name).exists())
+        self.assertEqual((install / "plugin" / regular_name).read_bytes(), upstream)
 
     def test_canonical_recipe_pins_sources_patch_and_all_three_outputs(self) -> None:
         lock = self.addons.load_lock(ROOT / "scripts/lib/zap-addons.lock.json")
