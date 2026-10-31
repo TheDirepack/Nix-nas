@@ -411,18 +411,50 @@ class ManagedServicesV2CaddyTests(unittest.TestCase):
                 "auth": {"mode": "identity", "capability": "admin"},
             }
         }
+        service["routes"]["web2"] = {
+            "target": {"type": "http", "port": 8081},
+            "exposure": {"type": "hostname", "hostnames": ["example.local"], "path": "/two/"},
+            "auth": {"mode": "identity", "capability": "admin"},
+        }
         effective = self.compile(service)
-        original = effective["derived"]["routes"][0]
-        sibling = dict(original)
-        sibling["route"] = "web2"
-        sibling["exposure"] = {"type": "hostname", "hostnames": ["example.local"], "path": "/two/"}
-        effective["derived"]["routes"].append(sibling)
+        self.assertEqual(len(effective["derived"]["routes"]), 2)
         rendered = caddy.generate_caddyfile(effective)
         self.assertEqual(rendered.count("https://example.local {"), 1)
         self.assertEqual(rendered.count("handle /outpost.goauthentik.io/*"), 1)
         self.assertIn("reverse_proxy 127.0.0.1:9010", rendered)
         self.assertIn('path "/one/"', rendered)
         self.assertIn('path "/two/"', rendered)
+
+    def test_hostname_route_conflicts_are_checked_during_normal_compilation(self):
+        service = self.base_service()
+        service["routes"] = {
+            "web": {
+                "target": {"type": "http", "port": 8080},
+                "exposure": {"type": "hostname", "hostnames": ["Example.local"], "path": "/one/"},
+                "auth": {"mode": "public"},
+            },
+            "web2": {
+                "target": {"type": "http", "port": 8081},
+                "exposure": {"type": "hostname", "hostnames": ["example.LOCAL"], "path": "/one"},
+                "auth": {"mode": "public"},
+            },
+        }
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "Duplicate route hostname\\+path"):
+            self.compile(service)
+
+        service["routes"]["web2"]["exposure"]["path"] = "/"
+        with self.assertRaisesRegex(v2.ManagedServicesV2Error, "overlaps"):
+            self.compile(service)
+
+        service["routes"]["web2"]["exposure"]["path"] = "/one/sub/"
+        effective = self.compile(service)
+        rendered = caddy.generate_caddyfile(effective)
+        self.assertEqual(rendered.count("https://example.local {"), 1)
+        self.assertLess(rendered.index('path "/one/sub/"'), rendered.index('path "/one/"'))
+
+        service["routes"]["web2"]["exposure"]["hostnames"] = ["different.local"]
+        service["routes"]["web2"]["exposure"]["path"] = "/one/"
+        self.assertEqual(len(self.compile(service)["derived"]["routes"]), 2)
 
     def test_portal_rejects_backslash_and_control_character_paths(self):
         for bad in ("/\\\\evil.example", "/\tevil.example", "/\nevil.example", "//evil.example"):
