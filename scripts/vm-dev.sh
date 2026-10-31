@@ -27,12 +27,9 @@ log() { printf '==> %s\n' "$*" >&2; }
 log "Starting the persistent VM (installs on first use)"
 "$ROOT/scripts/vm-start.sh"
 
-SSH_PORT="${NAS_QEMU_SSH_PORT:-2222}"
 HTTPS_PORT="${NAS_QEMU_HTTPS_PORT:-8443}"
-KEY="${NAS_QEMU_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nixos-nas-qemu/state}/installer-admin-ed25519"
 ssh_vm() {
-  ssh -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null -p "$SSH_PORT" admin@127.0.0.1 "$@"
+  "$ROOT/scripts/vm-run.sh" "$@"
 }
 
 log "Waiting for Authentik, the proxy outpost, Caddy, and Cockpit SSO"
@@ -51,13 +48,21 @@ if [[ "$ready" != 1 ]]; then
 fi
 
 log "Probing the Console redirect through Caddy"
+ready=0
 for _ in $(seq 1 30); do
   code="$(curl -ksS -o /dev/null -w '%{http_code}' \
     --resolve "nas-test.local:${HTTPS_PORT}:127.0.0.1" \
     "https://nas-test.local:${HTTPS_PORT}/console/" || true)"
-  [[ "$code" == 302 || "$code" == 200 ]] && break
+  if [[ "$code" == 302 || "$code" == 200 ]]; then
+    ready=1
+    break
+  fi
   sleep 2
 done
+if [[ "$ready" != 1 ]]; then
+  log "Console did not become ready; inspect Caddy and Cockpit SSO"
+  exit 1
+fi
 
 cat <<EOF
 
