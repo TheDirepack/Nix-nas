@@ -1109,14 +1109,17 @@ def _remove_setup_application() -> dict[str, Any]:
                 # 204 No Content on successful deletion, 200 is also treated as success.
                 if response.status in (200, 201, 202, 204):
                     return {"removed": True, "slug": SETUP_APPLICATION_SLUG}
+                last_error = f"HTTP {response.status}"
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                return {"removed": False, "reason": "not-found"}
+                continue
             last_error = f"HTTP {exc.code}"
             continue
         except OSError as exc:
             last_error = str(exc)
             continue
+    if last_error is None:
+        return {"removed": False, "reason": "not-found"}
     raise SetupError(f"Unable to retire the Authentik setup application: {last_error or 'unknown error'}")
 
 
