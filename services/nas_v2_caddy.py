@@ -386,7 +386,7 @@ def _safe_portal_path(value: Any) -> bool:
         isinstance(value, str)
         and value.startswith("/")
         and not value.startswith("//")
-        and "\\\\" not in value
+        and "\\" not in value
         and not any(ord(char) < 32 or ord(char) == 127 for char in value)
     )
 
