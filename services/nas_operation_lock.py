@@ -151,7 +151,7 @@ def _read_metadata(handle: Any) -> dict[str, Any] | None:
         handle.seek(0)
         raw = handle.read(4096)
         value = json.loads(raw) if raw.strip() else None
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -313,7 +313,7 @@ def operation_state() -> dict[str, Any]:
             # The kernel flock is authoritative. Invalid or partially published
             # metadata must not advertise a harmless/no-conflict operation.
             classes = value.get("classes") if isinstance(value, dict) else None
-            valid = (
+            if (
                 isinstance(value, dict)
                 and isinstance(value.get("action"), str)
                 and bool(value["action"])
@@ -325,8 +325,7 @@ def operation_state() -> dict[str, Any]:
                 and isinstance(classes, list)
                 and bool(classes)
                 and all(isinstance(name, str) and name in KNOWN_CLASSES for name in classes)
-            )
-            if valid:
+            ):
                 busy = sorted(set(classes))
                 active = [{"action": value["action"], "classes": busy, "pid": value["pid"]}]
             else:

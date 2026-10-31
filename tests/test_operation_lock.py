@@ -82,6 +82,61 @@ class OperationLockTests(unittest.TestCase):
             finally:
                 os.environ[locks.COORDINATION_TOKEN_ENV] = token
 
+    def test_real_locked_file_with_unreadable_or_malformed_metadata_remains_busy(self) -> None:
+        valid = json.loads(locks._metadata("a" * 32, "backup", ("storage",)))
+        malformed = [
+            b"",
+            b"\xff",
+            b"{",
+            b"[]",
+            b"{}",
+            *(
+                json.dumps({**valid, field: value}).encode()
+                for field, value in (
+                    ("action", ""),
+                    ("action", None),
+                    ("pid", 0),
+                    ("pid", True),
+                    ("classes", []),
+                    ("classes", "storage"),
+                    ("classes", ["unknown"]),
+                    ("classes", ["storage", 7]),
+                )
+            ),
+        ]
+        for payload in malformed:
+            with self.subTest(payload=payload), locks.acquire_operation("backup", ("storage",)):
+                (self.root / locks.LOCK_PATH_NAME).write_bytes(payload)
+                token = os.environ.pop(locks.COORDINATION_TOKEN_ENV)
+                try:
+                    state = locks.operation_state()
+                    self.assertEqual(state["busyClasses"], sorted(locks.KNOWN_CLASSES))
+                    self.assertEqual(
+                        state["active"],
+                        [
+                            {
+                                "action": "unknown-locked-operation",
+                                "classes": sorted(locks.KNOWN_CLASSES),
+                                "pid": None,
+                            }
+                        ],
+                    )
+                    with self.assertRaises(locks.OperationBusyError):
+                        locks.reserve_operation("contender", ("identity",))
+                    with self.assertRaises(locks.OperationBusyError):
+                        with locks.acquire_operation("contender", ("identity",)):
+                            self.fail("locked appliance admitted a replacement")
+                finally:
+                    os.environ[locks.COORDINATION_TOKEN_ENV] = token
+
+    def test_invalid_utf8_in_unlocked_file_does_not_report_a_live_owner(self) -> None:
+        with locks.acquire_operation("backup", ("storage",)):
+            pass
+        (self.root / locks.LOCK_PATH_NAME).write_bytes(b"\xff")
+        state = locks.operation_state()
+        self.assertEqual(state["busyClasses"], [])
+        self.assertEqual(state["active"], [])
+
     def test_nested_child_validation_uses_live_token_and_class_coverage(self) -> None:
         with locks.acquire_operation("outer", ("identity", "runtime")) as outer:
             token = outer.coordination_token
