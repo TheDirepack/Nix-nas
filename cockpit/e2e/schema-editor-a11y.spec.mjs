@@ -126,23 +126,23 @@ test("dynamic map keys commit on blur without dropping typed characters or map v
     required: ["entries"],
   };
   const {pageErrors, consoleErrors} = await openEditor(page, {entries: {alpha: "one", beta: "two"}}, schema);
-  const original = page.getByRole("textbox", {name: "Key for alpha"});
+  const original = page.getByRole("textbox", {name: "Key for alpha", exact: true});
   await expect(original).toHaveValue("alpha");
 
   await original.fill("alpha-renamed");
   await expect(original).toHaveValue("alpha-renamed");
-  await expect(page.getByRole("textbox", {name: "Key for alpha-renamed"})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true})).toHaveCount(0);
   await original.press("Enter");
-  const renamed = page.getByRole("textbox", {name: "Key for alpha-renamed"});
+  const renamed = page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true});
   await expect(renamed).toHaveValue("alpha-renamed");
-  await expect(page.getByRole("textbox", {name: "Key for alpha"})).toHaveCount(0);
-  await expect(page.getByRole("textbox", {name: "Key for beta"})).toHaveValue("beta");
+  await expect(page.getByRole("textbox", {name: "Key for alpha", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveValue("beta");
   await expect(page.getByRole("textbox", {name: "Entry value"}).first()).toHaveValue("one");
 
   await renamed.fill("beta");
   await renamed.press("Tab");
   await expect(renamed).toHaveValue("alpha-renamed");
-  await expect(page.getByRole("textbox", {name: "Key for beta"})).toHaveCount(1);
+  await expect(page.getByRole("textbox", {name: "Key for beta", exact: true})).toHaveCount(1);
 
   await renamed.fill("invalid key");
   await renamed.press("Tab");
