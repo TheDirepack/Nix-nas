@@ -80,11 +80,7 @@ def _listed_nvidia_cdi_devices(nvidia_ctk_bin: str) -> set[str]:
         return set()
     if result.returncode != 0:
         return set()
-    return {
-        name
-        for line in result.stdout.splitlines()
-        if (name := line.strip()).startswith("nvidia.com/gpu=")
-    }
+    return {name for line in result.stdout.splitlines() if (name := line.strip()).startswith("nvidia.com/gpu=")}
 
 
 def _load_base(path: pathlib.Path) -> dict[str, Any]:

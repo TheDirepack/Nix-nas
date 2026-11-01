@@ -129,7 +129,6 @@ class PlatformProbeTests(unittest.TestCase):
                 result["accelerators"]["NVIDIA"]["allSelector"],
             )
 
-
     def test_nonmatching_minors_never_generate_index_based_cdi_selectors(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -144,12 +143,8 @@ class PlatformProbeTests(unittest.TestCase):
             second.mkdir(parents=True)
             uuid_a = "GPU-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
             uuid_b = "GPU-bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-            (first / "information").write_text(
-                f"GPU UUID: {uuid_a}\nDevice Minor: 2\n", encoding="ascii"
-            )
-            (second / "information").write_text(
-                f"GPU UUID: {uuid_b}\nDevice Minor: 0\n", encoding="ascii"
-            )
+            (first / "information").write_text(f"GPU UUID: {uuid_a}\nDevice Minor: 2\n", encoding="ascii")
+            (second / "information").write_text(f"GPU UUID: {uuid_b}\nDevice Minor: 0\n", encoding="ascii")
             result = platform_probe.probe_inventory(
                 {"capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}},
                 sys_class_drm=root / "no-drm",
@@ -183,9 +178,7 @@ class PlatformProbeTests(unittest.TestCase):
             info = proc / "0000:03:00.0"
             info.mkdir(parents=True)
             uuid = "GPU-cccccccc-cccc-cccc-cccc-cccccccccccc"
-            (info / "information").write_text(
-                f"GPU UUID: {uuid}\nDevice Minor: 3\n", encoding="ascii"
-            )
+            (info / "information").write_text(f"GPU UUID: {uuid}\nDevice Minor: 3\n", encoding="ascii")
             base = {"capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}}
             for directory, available in (
                 (root / "missing-proc", {"nvidia.com/gpu=3", "nvidia.com/gpu=all"}),
@@ -252,9 +245,7 @@ class PlatformProbeTests(unittest.TestCase):
             for device in ("0000:01:00.0", "0000:02:00.0"):
                 info = proc / device
                 info.mkdir(parents=True)
-                (info / "information").write_text(
-                    f"GPU UUID: {uuid}\nDevice Minor: 0\n", encoding="ascii"
-                )
+                (info / "information").write_text(f"GPU UUID: {uuid}\nDevice Minor: 0\n", encoding="ascii")
             with self.assertRaisesRegex(platform_probe.PlatformProbeError, "duplicate NVIDIA GPU"):
                 platform_probe.probe_inventory(
                     {"capabilities": {"gpu-nvidia": True, "gpu-nvidia-cdi": True}},
