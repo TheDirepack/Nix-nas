@@ -277,6 +277,14 @@ systemctl start nas-managed-services-seed.service
 [[ -d /tank/nas-control ]] || fail "managed seed did not create control root after mount"
 [[ "$(findmnt -n -o FSTYPE -T /tank/nas-control)" == zfs ]] || \
   fail "managed seed control directory is not on mounted ZFS"
+# Exercise the composed systemd service boundary, not just bootstrap helpers:
+# re-running seed against existing desired state must preserve operator policy.
+[[ -s /var/lib/nas-control/services.yaml ]] || fail "managed seed authority missing after setup"
+seed_authority_before=$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)
+systemctl restart nas-managed-services-seed.service
+[[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$seed_authority_before" ]] || \
+  fail "managed seed overwrote existing operator-owned desired state"
+
 
 [[ "$(zfs get -H -o value encryptionroot tank/nas)" == "tank/nas" ]]
 [[ "$(zfs get -H -o value keyformat tank/nas)" == "hex" ]]
