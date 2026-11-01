@@ -543,6 +543,8 @@ reset_persistent_state() {
   [[ -d "$CACHE_DIR" ]] || { log "Persistent VM state is not present."; return 0; }
   validate_state_path
   require_cache_marker
+  nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+    die "persistent reset cannot run while a shared QEMU operation is active"
   stop_persistent_vm
   rm -rf -- "$STATE_DIR"
   log "Persistent VM state removed; the cached installer ISO was kept."
@@ -552,10 +554,13 @@ run_installer() {
   ensure_host_tools
   ensure_cache_dir
   validate_state_path
+  nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+    die "cannot install or start VM while another operation owns shared QEMU state"
   install -d -m 0755 "$STATE_DIR"
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
   local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
+  local vm_started_by_this_run=false
   local ssh_key ssh_key_dir full_suite_skip_fuzz github_actions=false
   local package_upgrade="${NAS_QEMU_PACKAGE_UPGRADE:-0}" reconfigure_timeout rebuild_timeout
   local -a accel network_args ssh_args
@@ -568,7 +573,13 @@ run_installer() {
   ssh_key="$STATE_DIR/installer-admin-ed25519"
   ssh_key_dir="$STATE_DIR/ssh-key"
 
+  # Reject an active shared VM before any traps, log truncation or disk writes.
+  nas_qemu_guard_shared_installer_state "$pidfile" "$persistent_mode" "$reuse_installed" \
+    "$os_disk" "$data_disk" "$ssh_key" "$install_marker" || die "shared QEMU state is in use"
+
   cleanup_vm() {
+    # Never terminate a VM that existed before this installer was invoked.
+    [[ "$vm_started_by_this_run" == true ]] || return 0
     local cleanup_pidfile="$STATE_DIR/qemu.pid"
     nas_qemu_cleanup_pidfile "$cleanup_pidfile" 20 || {
       local pid_status=$?
@@ -587,6 +598,9 @@ run_installer() {
   fi
 
   source_stage="$(stage_source_tree)"
+  # Source staging may be slow; recheck before any shared disk is replaced.
+  nas_qemu_guard_shared_installer_state "$pidfile" "$persistent_mode" "$reuse_installed" \
+    "$os_disk" "$data_disk" "$ssh_key" "$install_marker" || die "shared QEMU state became active"
   source_id="$(source_fingerprint "$source_stage")"
   marker_id="$(cat "$install_marker" 2>/dev/null || true)"
 
@@ -626,6 +640,7 @@ run_installer() {
     mapfile -t extra_drive_args < <(qemu_extra_drive_args)
     options="$(cat "$boot_dir/options") console=ttyS0,115200n8 systemd.show_status=1"
     log "Installing NixOS NAS into a fresh QEMU disk"
+    vm_started_by_this_run=true
     expect "$ROOT/tests/vm/install.expect" \
       qemu-system-x86_64 \
       "${accel[@]}" \
@@ -650,6 +665,8 @@ run_installer() {
   fi
 
   if [[ "$persistent_mode" != 1 || ! -s "$data_disk" ]]; then
+    nas_qemu_guard_shared_installer_state "$pidfile" "$persistent_mode" "$reuse_installed" \
+      "$os_disk" "$data_disk" "$ssh_key" "$install_marker" || die "refusing live QEMU data-disk replacement"
     rm -f "$data_disk"
     qemu-img create -q -f qcow2 "$data_disk" "${DATA_DISK_GIB}G"
   fi
@@ -668,15 +685,21 @@ run_installer() {
     log "Booting installed NAS in a disposable QEMU VM"
   fi
   if [[ ! -s "$pidfile" ]]; then
-    qemu-system-x86_64 \
-      "${accel[@]}" \
-      -m "$MEMORY_MIB" -smp "$CPUS" \
-      -drive "file=$os_disk,format=qcow2,if=virtio" \
-      -drive "file=$data_disk,format=qcow2,if=virtio" \
-      "${extra_drive_args[@]}" \
-      -device virtio-rng-pci \
-      "${network_args[@]}" \
-      -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
+    vm_started_by_this_run=true
+    (
+      # QEMU -daemonize must never inherit the caller's flock descriptor.
+      # The parent installer still holds it until startup is verified.
+      exec {NAS_QEMU_SHARED_LOCK_FD}>&-
+      qemu-system-x86_64 \
+        "${accel[@]}" \
+        -m "$MEMORY_MIB" -smp "$CPUS" \
+        -drive "file=$os_disk,format=qcow2,if=virtio" \
+        -drive "file=$data_disk,format=qcow2,if=virtio" \
+        "${extra_drive_args[@]}" \
+        -device virtio-rng-pci \
+        "${network_args[@]}" \
+        -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
+    )
   fi
 
   mapfile -t ssh_args < <(ssh_options "$ssh_key")
@@ -822,7 +845,12 @@ case "$MODE" in
     export NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=test NAS_QEMU_REUSE_INSTALLED=1
     run_installer_with_timeout persistent-test
     ;;
-  persistent-stop) validate_state_path; stop_persistent_vm ;;
+  persistent-stop)
+    validate_state_path
+    nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+      die "cannot stop VM while another shared QEMU operation is active"
+    stop_persistent_vm
+    ;;
   persistent-reset) reset_persistent_state ;;
   stage-source)
     ensure_cache_dir
@@ -833,6 +861,8 @@ case "$MODE" in
   clean)
     require_cache_marker
     validate_state_path
+    nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+      die "cannot clean VM cache while another shared QEMU operation is active"
     stop_persistent_vm
     rm -rf -- "$CACHE_DIR"
     log "Removed $CACHE_DIR"
