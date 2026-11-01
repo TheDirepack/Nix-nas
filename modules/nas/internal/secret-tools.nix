@@ -75,7 +75,7 @@ let
           }
         else
           read -r -s -p "KeePass database password: " keepass_password
-          echo
+          echo >&2
         fi
         [[ -n "$keepass_password" ]] || {
           echo "The KeePass database password cannot be empty." >&2

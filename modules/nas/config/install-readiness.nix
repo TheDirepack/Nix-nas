@@ -2,7 +2,28 @@
 
 let
   cfg = config.nas;
-  recoveryUsers = lib.attrValues config.users.users;
+  allowGroups = config.services.openssh.settings.AllowGroups;
+  denyGroups = config.services.openssh.settings.DenyGroups;
+  # OpenSSH's AllowGroups/DenyGroups use case-sensitive '*'/'?' matching,
+  # not shell bracket expressions or Match Group's negated pattern lists.
+  matchesGroup = pattern: group:
+    builtins.match
+      (lib.replaceStrings [ "\\*" "\\?" ] [ ".*" "." ] (lib.escapeRegex pattern))
+      group != null;
+  matchesGroups = patterns: groups:
+    lib.any (pattern: lib.any (matchesGroup pattern) groups)
+      (if patterns == null then [ ] else patterns);
+  userGroups = name: user:
+    lib.optional ((user.group or null) != null) user.group
+    ++ (user.extraGroups or [ ])
+    ++ lib.attrNames (lib.filterAttrs (_: group: lib.elem name (group.members or [ ])) config.users.groups);
+  recoveryUsers = lib.attrValues (lib.filterAttrs (name: user:
+    let groups = userGroups name user;
+    in name != "root"
+      && lib.elem "nas-administrators" groups
+      && (allowGroups == null || allowGroups == [ ] || matchesGroups allowGroups groups)
+      && !matchesGroups denyGroups groups
+  ) config.users.users);
   sshRecoveryConfigured =
     config.services.openssh.enable
     && lib.any (user:
