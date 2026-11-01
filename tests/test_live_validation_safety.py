@@ -1,4 +1,5 @@
 """Command-level safety tests for destructive live drills; no real ZFS/Restic used."""
+
 from __future__ import annotations
 
 import os
@@ -77,7 +78,10 @@ if [[ "${NAS_TEST_SYNCOID_FAIL:-}" == 1 ]]; then exit 21; fi
         return subprocess.run(
             ["bash", str(DRILL), mode],
             env={**self.env, **overrides},
-            capture_output=True, text=True, check=False, timeout=15,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
         )
 
     def commands(self) -> list[str]:
@@ -85,7 +89,8 @@ if [[ "${NAS_TEST_SYNCOID_FAIL:-}" == 1 ]]; then exit 21; fi
 
     def test_preexisting_clone_is_refused_before_any_mutation(self) -> None:
         result = self.run_drill(
-            "syncoid", NAS_SYNCOID_LOCAL_CLONE="tank/preexisting",
+            "syncoid",
+            NAS_SYNCOID_LOCAL_CLONE="tank/preexisting",
             NAS_TEST_EXISTING_CLONE="tank/preexisting",
         )
         self.assertNotEqual(result.returncode, 0)
@@ -104,7 +109,8 @@ exec "$@"
 """,
         )
         result = self.run_drill(
-            "syncoid", NAS_SYNCOID_TARGET="remotehost:tank/target",
+            "syncoid",
+            NAS_SYNCOID_TARGET="remotehost:tank/target",
             NAS_SYNCOID_REMOTE_CLONE="tank/preexisting",
             NAS_TEST_EXISTING_CLONE="tank/preexisting",
         )
