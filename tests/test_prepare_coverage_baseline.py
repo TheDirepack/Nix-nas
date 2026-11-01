@@ -33,6 +33,7 @@ class PrepareCoverageBaselineTests(unittest.TestCase):
                 "scripts/run-unit-tests.py",
                 baseline.RUNNER_EXCLUSION_REPLACEMENT,
             )
+            self.write_fixture(root, "tests/test_update_runtime.py", baseline.PROBE_DIAGNOSTIC_REPLACEMENT)
             self.assertEqual(baseline.prepare(root), 0)
             self.assertEqual(
                 (root / "scripts/run-unit-tests.py").read_text(encoding="utf-8"),
@@ -47,10 +48,25 @@ class PrepareCoverageBaselineTests(unittest.TestCase):
                 "scripts/run-unit-tests.py",
                 baseline.RUNNER_EXCLUSION_STALE,
             )
+            self.write_fixture(root, "tests/test_update_runtime.py", baseline.PROBE_DIAGNOSTIC_REPLACEMENT)
             self.assertEqual(baseline.prepare(root), 1)
             rendered = (root / "scripts/run-unit-tests.py").read_text(encoding="utf-8")
             self.assertEqual(rendered, baseline.RUNNER_EXCLUSION_REPLACEMENT)
             self.assertIn('excluded.add("test_fuzz_custom_inputs.py")', rendered)
+
+    def test_prepare_updates_only_stale_probe_diagnostic_in_main_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.write_fixture(root, "scripts/run-unit-tests.py", baseline.RUNNER_EXCLUSION_REPLACEMENT)
+            self.write_fixture(
+                root,
+                "tests/test_update_runtime.py",
+                baseline.PROBE_DIAGNOSTIC_STALE,
+            )
+            self.assertEqual(baseline.prepare(root), 1)
+            content = (root / "tests/test_update_runtime.py").read_text(encoding="utf-8")
+            self.assertEqual(content, baseline.PROBE_DIAGNOSTIC_REPLACEMENT)
+            self.assertEqual(baseline.prepare(root), 0)
 
     def test_cli_applies_fix_without_traceback(self) -> None:
         stderr = io.StringIO()
@@ -61,6 +77,7 @@ class PrepareCoverageBaselineTests(unittest.TestCase):
                 "scripts/run-unit-tests.py",
                 baseline.RUNNER_EXCLUSION_STALE,
             )
+            self.write_fixture(root, "tests/test_update_runtime.py", baseline.PROBE_DIAGNOSTIC_REPLACEMENT)
             with mock.patch.object(sys, "argv", ["prepare-coverage-baseline.py", tmp]):
                 with contextlib.redirect_stderr(stderr):
                     self.assertEqual(baseline.main(), 0)

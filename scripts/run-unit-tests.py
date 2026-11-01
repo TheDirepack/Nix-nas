@@ -387,6 +387,7 @@ def main() -> int:
             return path, completed, time.monotonic() - file_started, count, output
 
         failures: list[tuple[pathlib.Path, str]] = []
+        timed_out = False
 
         def record(
             result: tuple[pathlib.Path, subprocess.CompletedProcess[str] | None, float, int, str | None],
@@ -398,7 +399,8 @@ def main() -> int:
                 total_errored, \
                 total_skipped, \
                 total_expected, \
-                total_unexpected
+                total_unexpected, \
+                timed_out
             path, completed, elapsed, count, output = result
             relative = path.relative_to(ROOT).as_posix()
             ran, fail_c, err_c, skip_c, exp_c, unexp_c = _parse_counts(output or "")
@@ -406,6 +408,7 @@ def main() -> int:
             if passed_c < 0:
                 passed_c = 0
             if completed is None:
+                timed_out = True
                 total_ran += ran
                 total_failed += fail_c
                 total_errored += err_c
@@ -490,7 +493,7 @@ def main() -> int:
                 f"{total_ran} ran across {len(files)} files with {args.jobs} worker(s) in {time.monotonic() - started:.1f}s",
                 file=sys.stderr,
             )
-            return 124 if any("exceeded" in detail for _, detail in failures) else 1
+            return 124 if timed_out else 1
 
         if args.coverage:
             report = pathlib.Path(args.coverage)

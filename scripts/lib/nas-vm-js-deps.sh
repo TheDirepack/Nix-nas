@@ -38,13 +38,13 @@ nas_vm_js_deps_cleanup() {
 nas_vm_js_deps_prepare() {
   local repo=$1 fast_check_path=${2:-} target
   target="$repo/tests/js-fuzz/node_modules"
-  [[ ! -e "$target" ]] || {
+  [[ ! -e "$target" && ! -L "$target" ]] || {
     printf 'VM suite: dependency directory already exists: %s\n' "$target" >&2
     return 1
   }
+  mkdir -- "$target" || return $?
   NAS_VM_JS_DEPS_PATH="$target"
   NAS_VM_JS_DEPS_OWNED=1
-  mkdir -p "$target"
   if [[ "${NAS_FULL_SUITE_TEST_FAILURE:-}" == after-js-deps-directory ]]; then
     printf 'VM suite: injected failure after dependency directory creation\n' >&2
     return 97
@@ -59,13 +59,13 @@ nas_vm_js_deps_prepare() {
 nas_vm_cockpit_js_deps_prepare() {
   local repo=$1 target
   target="$repo/cockpit/node_modules"
-  [[ ! -e "$target" ]] || {
+  [[ ! -e "$target" && ! -L "$target" ]] || {
     printf 'VM suite: dependency directory already exists: %s\n' "$target" >&2
     return 1
   }
+  mkdir -- "$target" || return $?
   NAS_VM_COCKPIT_JS_DEPS_PATH="$target"
   NAS_VM_COCKPIT_JS_DEPS_OWNED=1
-  mkdir -p "$target"
   if [[ "${NAS_FULL_SUITE_TEST_FAILURE:-}" == after-cockpit-js-deps-directory ]]; then
     printf 'VM suite: injected failure after Cockpit dependency directory creation\n' >&2
     return 97

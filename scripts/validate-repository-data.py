@@ -33,7 +33,10 @@ def main() -> int:
     book = ROOT / "docs/book.toml"
     try:
         parsed = tomllib.loads(book.read_text(encoding="utf-8"))
-        if "multilingual" in parsed.get("book", {}):
+        book_config = parsed.get("book", {})
+        if not isinstance(book_config, dict):
+            raise ValueError("book must be a TOML table")
+        if "multilingual" in book_config:
             raise ValueError("unsupported mdBook field `book.multilingual`")
     except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
         fail(book, exc)
@@ -50,15 +53,21 @@ def main() -> int:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
             if relative.startswith("schemas/"):
+                if not isinstance(value, dict):
+                    raise ValueError("schema must be a JSON object")
                 if value.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
                     raise ValueError("schemas must use JSON Schema draft 2020-12")
                 if value.get("type") != "object" or value.get("additionalProperties") is not False:
                     raise ValueError("top-level schema must be a closed object")
-            if (
-                relative in expected_versions
-                and value.get("properties", {}).get("schemaVersion", {}).get("const") != expected_versions[relative]
-            ):
-                raise ValueError(f"{relative} must require schemaVersion {expected_versions[relative]}")
+            if relative in expected_versions:
+                properties = value.get("properties")
+                if not isinstance(properties, dict):
+                    raise ValueError("schema properties must be a JSON object")
+                version = properties.get("schemaVersion")
+                if not isinstance(version, dict):
+                    raise ValueError("schemaVersion schema must be a JSON object")
+                if version.get("const") != expected_versions[relative]:
+                    raise ValueError(f"{relative} must require schemaVersion {expected_versions[relative]}")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             fail(path, exc)
             errors += 1
