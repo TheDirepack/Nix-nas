@@ -307,7 +307,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("systemctl start nas-managed-services-reconcile.service", guest)
         self.assertIn("wait_oneshot_completed nas-managed-services-reconcile.service", guest)
         self.assertIn("[[ ! -e /run/nas-control/reconcile.pending ]]", guest)
-        self.assertEqual(guest.count("wait_reconciliation_idle"), 3)
+        commands = [line.strip() for line in guest.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        lock_drills = [index for index, command in enumerate(commands) if command == "run_as_admin nas-zfs-lock"]
+        self.assertEqual(len(lock_drills), 2)
+        for index in lock_drills:
+            self.assertEqual(commands[index - 1], "wait_reconciliation_idle")
 
     def test_managed_services_reconciliation_stops_with_protected_storage(self) -> None:
         managed = text("modules/nas/config/managed-services.nix")

@@ -30,6 +30,11 @@ in
 
   assertions = [
     {
+      assertion = config.systemd.services.nas-managed-services-dirty.unitConfig.ConditionPathExists
+        == [ "/run/nas-secret-runtime/live/ready" ];
+      message = "Dirty desired-state markers must not be written before the secret-ready gate is active.";
+    }
+    {
       assertion = config.systemd.services.nas-managed-services-reconcile.unitConfig.ConditionPathExists
         == [ "/run/nas-secret-runtime/live/ready" ];
       message = "Managed Services V2 activation must require active secrets without blocking reconciliation before setup publishes its final state.";
