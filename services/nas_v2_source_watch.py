@@ -28,16 +28,38 @@ def _path_value(value: str) -> str:
 
 def _managed_source(service_id: str, value: str) -> pathlib.Path:
     candidate = pathlib.Path(value)
+    app_root = APP_ROOT / service_id
     try:
+        if not candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError("source must have an absolute path with no parent traversal")
+        candidate.relative_to(app_root)
         resolved = candidate.resolve(strict=True)
-        resolved.relative_to((APP_ROOT / service_id).resolve(strict=False))
+        resolved.relative_to(app_root.resolve(strict=False))
     except (OSError, ValueError) as exc:
         raise SourceWatchProjectionError(
             f"managed source for service {service_id!r} must exist beneath its managed app root"
         ) from exc
     if not resolved.is_file():
         raise SourceWatchProjectionError(f"managed source for service {service_id!r} must name a file")
-    return resolved
+    # Preserve the configured path. Watching only the resolved inode loses the
+    # relationship when a release selector symlink is atomically retargeted.
+    return candidate
+
+
+def _symlink_parent_paths(service_id: str, sources: list[pathlib.Path]) -> list[pathlib.Path]:
+    """Watch directory entry changes for symlinks in configured source paths."""
+    app_root = APP_ROOT / service_id
+    directories: set[pathlib.Path] = set()
+    for path in sources:
+        component = path
+        while component != app_root:
+            if component.is_symlink():
+                directories.add(component.parent)
+            parent = component.parent
+            if parent == component:
+                raise SourceWatchProjectionError("managed source path is outside its app root")
+            component = parent
+    return sorted(directories, key=str)
 
 
 def source_paths(effective: dict[str, Any], service_id: str, service: dict[str, Any]) -> list[pathlib.Path]:
@@ -104,6 +126,9 @@ def augment_projection(
         paths = source_paths(effective, service_id, service)
         if not paths:
             continue
+        # PathChanged on a symlink resolves to its current file. Also watch
+        # the enclosing directory to catch atomic symlink replacement.
+        paths = sorted(set(paths + _symlink_parent_paths(service_id, paths)), key=str)
         unit = f"nas-v2-source-{service_id}.path"
         if unit in known_targets:
             raise SourceWatchProjectionError(f"duplicate systemd source watch target {unit!r}")
