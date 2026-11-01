@@ -119,7 +119,10 @@ class SharedQemuInstallStateTests(unittest.TestCase):
 
             acquired = subprocess.run(
                 ["bash", "-c", contender_script, "contender", str(HELPER), str(lock)],
-                capture_output=True, text=True, check=False, timeout=5,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
             )
             self.assertEqual(acquired.returncode, 0, acquired.stderr)
 
