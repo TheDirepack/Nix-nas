@@ -104,8 +104,12 @@ in
       nvidiaSettings = false;
       powerManagement.enable = false;
     };
-    hardware.nvidia-container-toolkit.enable =
-      hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit;
+    hardware.nvidia-container-toolkit = lib.mkIf (hasNvidiaGpu && cfg.hardware.nvidia.containerToolkit) {
+      enable = true;
+      # V2 selects a physical GPU by UUID; NixOS defaults to index-only CDI
+      # names, which are not interchangeable with /dev/nvidia device minors.
+      device-name-strategy = "uuid";
+    };
     services.xserver = lib.mkIf cfg.desktop.enable {
       enable = true;
       videoDrivers =
