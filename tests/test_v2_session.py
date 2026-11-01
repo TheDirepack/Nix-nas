@@ -140,7 +140,10 @@ class V2SessionRuntimeTests(unittest.TestCase):
                 command,
                 "systemd owns stop/cleanup instead of a Python signal handler",
             )
-            self.assertEqual(command[-2:], ["--user", "alice"])
+            self.assertEqual(payload[-3:], ["example.invalid/agent:1", "agent", "serve"])
+            self.assertNotIn("--user", command)
+            self.assertIn("io.nixos-nas.v2.user=alice", payload)
+            self.assertIn(f"{root / 'users/alice'}:/workspace:rw", payload)
             self.assertFalse(any("session.db" in item for item in command))
 
     def test_descriptor_path_is_derived_from_safe_service_id(self):

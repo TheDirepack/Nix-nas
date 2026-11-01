@@ -306,6 +306,51 @@ def _discover_quadlet_links(runtime_root: pathlib.Path) -> set[str]:
     return discovered
 
 
+_SESSION_TARGET = re.compile(r"^nas-v2-session-[a-z][a-z0-9-]*\.target$")
+
+
+def _same_session_descriptor(
+    unit: str,
+    previous_links: dict[str, Any],
+    current_links: dict[str, str],
+) -> bool:
+    """Migrate legacy session fingerprints only if source descriptors match.
+
+    Older manifests hashed a subset of service settings. Reading both
+    generation-owned descriptors allows an unchanged active session to keep
+    running, without accidentally masking resolved path/credential changes.
+    Missing/malformed descriptions are conservatively treated as changed.
+    """
+    previous_source = previous_links.get(unit)
+    current_source = current_links.get(unit)
+    if not isinstance(previous_source, str) or not isinstance(current_source, str):
+        return False
+    if previous_source == current_source:
+        # There is no separate descriptor to compare when the same path is
+        # reused. Conservatively apply the changed-fingerprint lifecycle.
+        return False
+    name = unit.removeprefix("nas-v2-session-").removesuffix(".target") + ".session.json"
+
+    def read(source: str) -> dict[str, Any] | None:
+        path = pathlib.Path(source)
+        if not path.is_absolute() or path.parent.name != "units" or ".." in path.parts:
+            return None
+        descriptor = path.parent.parent / "descriptors" / name
+        try:
+            if descriptor.is_symlink() or not descriptor.is_file() or descriptor.stat().st_size > 524288:
+                return None
+            result = json.loads(descriptor.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return None
+        if isinstance(result, dict) and result.get("serviceId") == name.removesuffix(".session.json"):
+            return result
+        return None
+
+    previous = read(previous_source)
+    current = read(current_source)
+    return previous is not None and current is not None and previous == current
+
+
 def reconcile(
     *,
     manifest_path: pathlib.Path,
@@ -403,7 +448,22 @@ def reconcile(
             changed_units.add(quadlet_affected[target_rel])
     for unit, digest in fingerprints.items():
         if previous_fingerprints.get(unit) != digest:
+            if (
+                _SESSION_TARGET.fullmatch(unit)
+                and unit in previous_owned
+                and _same_session_descriptor(unit, previous_links_raw, current_links)
+            ):
+                # Hash-format migration, not a changed launch descriptor.
+                continue
             changed_units.add(unit)
+
+    # Session instances are transient systemd-run units. try-restart on their
+    # owning target restarts them with OLD Podman argv. Stop the owner instead;
+    # sessions must be explicitly relaunched from the new descriptor.
+    changed_sessions = {
+        unit for unit in changed_units if _SESSION_TARGET.fullmatch(unit) and unit in previous_links_raw
+    }
+    units_to_stop.update(changed_sessions)
 
     def is_active(unit: str) -> bool | None:
         try:
@@ -414,6 +474,21 @@ def reconcile(
 
     all_units = previous_owned | owned | previous_start | start | stop | units_to_stop | changed_units
     active_snapshot = {unit: is_active(unit) for unit in sorted(all_units)}
+    # A session target can already be active after an interrupted or partially
+    # recorded apply, even if its previous manifest has no installed link.
+    # Stop that target before installing a changed descriptor: try-restart
+    # would relaunch its transient children with stale Podman arguments.
+    # A new inactive target, however, has nothing to stop.
+    active_unlinked_sessions = {
+        unit
+        for unit in changed_units
+        if _SESSION_TARGET.fullmatch(unit)
+        and unit not in previous_links_raw
+        and unit in current_links
+        and active_snapshot.get(unit) is True
+    }
+    changed_sessions.update(active_unlinked_sessions)
+    units_to_stop.update(active_unlinked_sessions)
 
     roots = _projection_roots(projection_root)
     systemd_targets = set(links) | stale_links
@@ -448,7 +523,8 @@ def reconcile(
 
     def rollback_active_state() -> None:
         for unit, was_active in active_snapshot.items():
-            if was_active is None:
+            if was_active is None or unit in disrupted_sessions:
+                # Starting this target cannot recreate its lost transient instances.
                 continue
             now_active = is_active(unit)
             if now_active is None or now_active == was_active:
@@ -458,8 +534,16 @@ def reconcile(
             except SystemdReconcileError:
                 continue
 
+    disrupted_sessions: set[str] = set()
     try:
         for unit in sorted(units_to_stop):
+            if _SESSION_TARGET.fullmatch(unit) and unit not in previous_links_raw and unit not in current_links:
+                # A disabled or retired session has no installed target to stop.
+                continue
+            if _SESSION_TARGET.fullmatch(unit) and (unit in previous_owned or unit in active_unlinked_sessions):
+                # Stopping a target can terminate its transient instances.
+                # Record this before the call, including partial stop failures.
+                disrupted_sessions.add(unit)
             _run_systemctl(systemctl, "stop", unit)
         for unit in sorted(retired_units):
             _run_systemctl(systemctl, "reset-failed", unit, check=False)
@@ -487,6 +571,9 @@ def reconcile(
 
         restarted: set[str] = set()
         for unit in sorted(changed_units & owned):
+            if unit in changed_sessions:
+                # A stopped transient must not be restarted with stale args.
+                continue
             if unit in start:
                 _run_systemctl(systemctl, "restart", unit)
                 restarted.add(unit)
@@ -522,6 +609,13 @@ def reconcile(
             rollback_active_state()
         except Exception as rollback_exc:  # noqa: BLE001
             rollback_error = rollback_exc
+        if disrupted_sessions:
+            details = ", ".join(sorted(disrupted_sessions))
+            rollback_detail = f"; native rollback failed: {rollback_error}" if rollback_error else ""
+            raise SystemdReconcileError(
+                f"systemd reconcile failed: {exc}{rollback_detail}; transient instances may have been "
+                f"terminated under {details} and cannot be recreated by target restart; manual recovery required"
+            ) from exc
         if rollback_error is not None:
             raise SystemdReconcileError(
                 f"systemd reconcile failed: {exc}; rollback failed: {rollback_error}; manual recovery required"

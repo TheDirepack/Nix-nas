@@ -18,6 +18,345 @@ import nas_v2_systemd_reconcile as reconcile  # noqa: E402
 
 
 class V2SystemdReconcileTests(unittest.TestCase):
+    def test_newly_disabled_session_does_not_stop_a_nonexistent_target(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            projection.mkdir()
+            unit = "nas-v2-session-agent.target"
+            manifest = projection / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [unit],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root)
+            kwargs = dict(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=root / "state.json",
+                systemctl=systemctl,
+                log=log,
+            )
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+            # A disabled target has no unit file, even if the old state had
+            # marked it for start.
+            state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+            state["startUnits"] = [unit]
+            (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            log.write_text("", encoding="utf-8")
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [],
+                        "startUnits": [],
+                        "stopUnits": [],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log.write_text("", encoding="utf-8")
+            self.run_reconcile(**kwargs)
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+
+    def test_enabling_previously_disabled_session_never_stops_uninstalled_target(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            unit = "nas-v2-session-agent.target"
+            source = units / unit
+            source.write_text("[Unit]\nDescription=Agent\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root, fail_on={f"stop {unit}"})
+            kwargs = dict(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=root / "state.json",
+                systemctl=systemctl,
+                log=log,
+            )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [unit],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_reconcile(**kwargs)
+            log.write_text("", encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [{"target": unit, "source": str(source)}],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [],
+                        "fingerprints": {unit: "enabled-generation"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_reconcile(**kwargs)
+            self.assertFalse(result["noop"])
+            self.assertEqual((runtime / unit).resolve(), source.resolve())
+            self.assertNotIn("stop " + unit, log.read_text(encoding="utf-8"))
+
+    def test_active_unlinked_session_is_stopped_before_enabling_new_descriptor(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            projection = root / "projection"
+            units = projection / "units"
+            units.mkdir(parents=True)
+            unit = "nas-v2-session-agent.target"
+            source = units / unit
+            source.write_text("[Unit]\nDescription=Agent\n", encoding="utf-8")
+            manifest = projection / "manifest.json"
+            runtime = root / "systemd"
+            runtime.mkdir()
+            systemctl, log = self.make_systemctl(root)
+            kwargs = dict(
+                manifest=manifest,
+                projection=projection,
+                runtime=runtime,
+                state=root / "state.json",
+                systemctl=systemctl,
+                log=log,
+            )
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [unit],
+                        "fingerprints": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_reconcile(**kwargs)
+            # Simulate an orphaned active unit after the disabled generation,
+            # even though the manifest contains no previous target link.
+            systemctl.write_text(
+                '#!/bin/sh\nprintf "%s\\\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+                'if [ "$1" = is-active ]; then printf "active\\\\n"; fi\n'
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            log.write_text("", encoding="utf-8")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "links": [{"target": unit, "source": str(source)}],
+                        "quadletLinks": [],
+                        "ownedUnits": [unit],
+                        "startUnits": [],
+                        "stopUnits": [],
+                        "fingerprints": {unit: "new-descriptor"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_reconcile(**kwargs)
+            commands = log.read_text(encoding="utf-8").splitlines()
+            self.assertIn("stop " + unit, commands)
+            self.assertNotIn("try-restart " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+            self.assertEqual(result["stopped"], [unit])
+            self.assertEqual((runtime / unit).resolve(), source.resolve())
+            self.assertEqual(
+                json.loads((root / "state.json").read_text(encoding="utf-8"))["fingerprints"][unit],
+                "new-descriptor",
+            )
+
+    def test_session_fingerprint_migration_preserves_unchanged_transients(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            generation = root / "generations" / ("a" * 40) / "systemd"
+            current = root / "generations" / ("b" * 40) / "systemd"
+            changed = root / "generations" / ("c" * 40) / "systemd"
+            projection_link = root / "current"
+            unit = "nas-v2-session-agent.target"
+            for projection in (generation, current, changed):
+                (projection / "units").mkdir(parents=True)
+                (projection / "descriptors").mkdir()
+                (projection / "units" / unit).write_text("[Unit]\nStopWhenUnneeded=yes\n", encoding="utf-8")
+                (projection / "descriptors" / "agent.session.json").write_text(
+                    json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/old:/data"]}),
+                    encoding="utf-8",
+                )
+            projection_link.symlink_to(generation)
+            manifest = root / "manifest.json"
+            runtime = root / "live-systemd"
+            runtime.mkdir()
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+
+            def run(projection, fingerprint):
+                projection_link.unlink()
+                projection_link.symlink_to(projection)
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "links": [{"target": unit, "source": str(projection / "units" / unit)}],
+                            "quadletLinks": [],
+                            "ownedUnits": [unit],
+                            "startUnits": [],
+                            "stopUnits": [],
+                            "fingerprints": {unit: fingerprint},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return self.run_reconcile(
+                    manifest=manifest,
+                    projection=projection_link,
+                    runtime=runtime,
+                    state=state,
+                    systemctl=systemctl,
+                    log=log,
+                )
+
+            run(generation, "legacy-hash")
+            log.write_text("", encoding="utf-8")
+            # A digest-format change with an identical launch descriptor
+            # must preserve running sessions.
+            run(current, "full-descriptor-hash")
+            commands = log.read_text(encoding="utf-8")
+            self.assertNotIn("stop " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+            self.assertIn("full-descriptor-hash", state.read_text(encoding="utf-8"))
+
+            # Changed mount arguments must stop the target rather than
+            # restarting running transient units with stale arguments.
+            (changed / "descriptors" / "agent.session.json").write_text(
+                json.dumps({"serviceId": "agent", "runArgs": ["--volume=/srv/new:/data"]}),
+                encoding="utf-8",
+            )
+            log.write_text("", encoding="utf-8")
+            run(changed, "path-changed-hash")
+            commands = log.read_text(encoding="utf-8")
+            self.assertIn("stop " + unit, commands)
+            self.assertNotIn("try-restart " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+
+    def test_failed_reconcile_reports_transient_loss_instead_of_false_rollback(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            old = root / "generations" / ("a" * 40) / "systemd"
+            new = root / "generations" / ("b" * 40) / "systemd"
+            unit = "nas-v2-session-agent.target"
+            for directory, image in ((old, "v1"), (new, "v2")):
+                (directory / "units").mkdir(parents=True)
+                (directory / "descriptors").mkdir()
+                (directory / "units" / unit).write_text("[Unit]\\n", encoding="utf-8")
+                (directory / "descriptors" / "agent.session.json").write_text(
+                    json.dumps({"serviceId": "agent", "image": image}),
+                    encoding="utf-8",
+                )
+            current = root / "current"
+            current.symlink_to(old)
+            runtime = root / "systemd"
+            runtime.mkdir()
+            manifest = root / "manifest.json"
+            state = root / "state.json"
+            systemctl, log = self.make_systemctl(root)
+            active_marker = root / "active-marker"
+            systemctl.write_text(
+                "#!/bin/sh\n"
+                'printf "%s\\n" "$*" >> "$NAS_V2_SYSTEMCTL_LOG"\n'
+                'case "$1" in\n'
+                "  is-active)\n"
+                '    if [ -e "$NAS_V2_ACTIVE_MARKER" ]; then printf "active\\n"; else printf "inactive\\n"; fi ;;\n'
+                '  stop) rm -f -- "$NAS_V2_ACTIVE_MARKER" ;;\n'
+                '  start) : > "$NAS_V2_ACTIVE_MARKER" ;;\n'
+                "esac\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+
+            def apply(directory, digest):
+                current.unlink()
+                current.symlink_to(directory)
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "links": [{"target": unit, "source": str(directory / "units" / unit)}],
+                            "quadletLinks": [],
+                            "ownedUnits": [unit],
+                            "startUnits": [],
+                            "stopUnits": [],
+                            "fingerprints": {unit: digest},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return self.run_reconcile(
+                    manifest=manifest,
+                    projection=current,
+                    runtime=runtime,
+                    state=state,
+                    systemctl=systemctl,
+                    log=log,
+                )
+
+            with mock.patch.dict(os.environ, {"NAS_V2_ACTIVE_MARKER": str(active_marker)}):
+                apply(old, "v1")
+                log.write_text("", encoding="utf-8")
+                active_marker.touch()
+                before = state.read_bytes()
+                with mock.patch.object(reconcile, "_atomic_json", side_effect=OSError("disk full")):
+                    with self.assertRaisesRegex(reconcile.SystemdReconcileError, "manual recovery required") as error:
+                        apply(new, "v2")
+            self.assertIn("transient instances may have been terminated", str(error.exception))
+            commands = log.read_text(encoding="utf-8").splitlines()
+            self.assertIn("stop " + unit, commands)
+            self.assertNotIn("start " + unit, commands)
+            self.assertNotIn("restart " + unit, commands)
+            self.assertNotIn("try-restart " + unit, commands)
+            self.assertFalse(active_marker.exists())
+            self.assertEqual(before, state.read_bytes())
+            self.assertEqual((runtime / unit).resolve(), (old / "units" / unit).resolve())
+
     def test_on_demand_restart_failure_preserves_previous_state_and_retry(self):
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
