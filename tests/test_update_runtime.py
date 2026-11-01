@@ -159,6 +159,31 @@ class UpdateRuntimeTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("external probe command must be a nonempty JSON string array", result.stderr)
+                self.assertNotIn("External management probe command is empty.", result.stderr)
+                self.assertFalse(self.trace.exists())
+                self.assertFalse(self.probe_args.exists())
+
+    def test_malformed_probe_json_is_rejected_without_traceback_or_launch(self):
+        for raw in ("[", '{"command":', "not-json"):
+            with self.subTest(raw=raw):
+                result = self.run_function("external_management_probe", NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=raw)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("external probe command must be valid JSON", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertNotIn("External management probe command is empty.", result.stderr)
+                self.assertFalse(self.trace.exists())
+                self.assertFalse(self.probe_args.exists())
+
+    def test_unencodable_probe_arguments_are_rejected_without_traceback_or_launch(self):
+        for argument in ("\ud800", "\udfff"):
+            with self.subTest(argument=ascii(argument)):
+                result = self.run_function(
+                    "external_management_probe",
+                    NAS_UPDATE_EXTERNAL_PROBE_COMMAND_JSON=json.dumps([str(self.probe), argument]),
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("external probe argument must be UTF-8 encodable", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
                 self.assertFalse(self.trace.exists())
                 self.assertFalse(self.probe_args.exists())
 
