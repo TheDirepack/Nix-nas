@@ -361,6 +361,8 @@ def _run(argv: list[str], timeout: int = 60) -> str:
         result = subprocess.run(argv, check=False, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise BackupRuntimeError(f"native backup command timed out after {timeout}s: {' '.join(argv)}") from exc
+    except OSError as exc:
+        raise BackupRuntimeError(f"unable to execute native backup command {' '.join(argv)}: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}"
         raise BackupRuntimeError(f"native backup command failed: {detail}")
@@ -374,6 +376,9 @@ def _zfs_snapshot_exists(zfs_bin: str, reference: str) -> bool:
     try:
         _run([zfs_bin, "list", reference])
     except BackupRuntimeError as exc:
+        # An execution failure says nothing about whether the snapshot exists.
+        if isinstance(exc.__cause__, OSError):
+            raise
         if any(marker in str(exc).lower() for marker in _ABSENCE_MARKERS):
             return False
         raise

@@ -218,12 +218,22 @@ run_http_adversarial_contracts() {
   trap 'rm -f -- "$body"' RETURN
 
   probe_not_5xx() {
+    local curl_status
     label=$1
     url=$2
     shift 2
+    # Clear response body before each probe to prevent stale content after transport failures
+    : > "$body"
     code="$(curl --insecure --silent --show-error --output "$body" --write-out '%{http_code}' \
-      --connect-timeout 5 --max-time 20 "$@" "$url" || true)"
-    [[ "$code" =~ ^[0-9]{3}$ ]] || die "$label did not return an HTTP status"
+      --connect-timeout 5 --max-time 20 "$@" "$url")" || {
+      curl_status=$?
+      cat "$body" >&2 || true
+      die "$label curl failed (exit $curl_status, HTTP ${code:-none})"
+    }
+    [[ "$code" =~ ^[1-5][0-9]{2}$ ]] || {
+      cat "$body" >&2 || true
+      die "$label did not return a valid HTTP status: ${code:-none}"
+    }
     [[ "$code" != 5* ]] || {
       cat "$body" >&2 || true
       die "$label returned server error HTTP $code"
@@ -233,6 +243,9 @@ run_http_adversarial_contracts() {
 
   probe_blocked() {
     path=$1
+    # Clear response body before each probe to prevent stale content after transport failures
+    : > "$body"
+    local curl_status=0
     code="$(curl --insecure --silent --show-error --output "$body" --write-out '%{http_code}' \
       --connect-timeout 5 --max-time 20 \
       --resolve "nas-test.local:$HTTPS_PORT:127.0.0.1" \
@@ -240,7 +253,11 @@ run_http_adversarial_contracts() {
       -H 'Remote-Groups: nas_admin,nas_allow_files,nas_allow_ai' \
       -H 'X-authentik-username: akadmin' \
       -H 'X-authentik-groups: nas_admin' \
-      "https://nas-test.local:$HTTPS_PORT$path" || true)"
+      "https://nas-test.local:$HTTPS_PORT$path")" || curl_status=$?
+    (( curl_status == 0 )) || {
+      cat "$body" >&2 || true
+      die "probe_blocked curl transport failed for $path (exit $curl_status, HTTP ${code:-none})"
+    }
     case "$code" in
       301|302|303|307|308|401|403|404) ;;
       *)

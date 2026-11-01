@@ -78,7 +78,16 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
                     mock.patch.object(control, "set_service_mode", return_value={"ok": True}) as single,
                     mock.patch.object(control, "set_service_modes", return_value={"ok": True}) as many,
                     mock.patch.object(control, "_reconcile") as reconciler,
-                    mock.patch.object(control, "status", side_effect=control.ControlError("bus unavailable")),
+                    mock.patch.object(
+                        control,
+                        "desired_status",
+                        return_value={"services": [{"id": "demo", "units": [{"unit": "demo.service"}]}]},
+                    ),
+                    mock.patch.object(
+                        control,
+                        "run_command",
+                        return_value=mock.Mock(returncode=1, stderr="bus unavailable", stdout=""),
+                    ) as native,
                 ):
                     if action == "single":
                         result = control.set_mode("demo", "always")
@@ -89,6 +98,7 @@ class ManagedServicesV2ControlTests(unittest.TestCase):
                     else:
                         result = control.reconcile()
                     reconciler.assert_called_once()
+                    native.assert_called_once()
                     self.assertTrue(result["ok"])
                     self.assertEqual(result["statusError"], "bus unavailable")
                     self.assertEqual(result["status"], {"ok": False, "error": "bus unavailable"})

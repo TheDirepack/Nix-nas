@@ -21,6 +21,7 @@ import socketserver
 import struct
 import threading
 import time
+import tempfile
 
 import sys
 import syslog
@@ -304,13 +305,13 @@ def update_status() -> dict[str, Any]:
     return base
 
 
-def operation_state() -> dict[str, Any]:
+def operation_state(managed: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         value = shared_operation_state()
     except OSError as exc:
         value = {"busyClasses": [], "active": [], "error": str(exc)}
     busy = set(value.get("busyClasses", []))
-    job_rows = managed_job_rows()
+    job_rows = managed_job_rows(managed)
     value.update(
         {
             "conflictsByAction": {
@@ -323,9 +324,10 @@ def operation_state() -> dict[str, Any]:
     return value
 
 
-def managed_job_rows() -> list[dict[str, Any]]:
+def managed_job_rows(status: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Return enabled V2 jobs that Cockpit may launch through their owner unit."""
-    status = managed_services_status()
+    if status is None:
+        status = managed_services_status()
     rows = status.get("services") if isinstance(status, dict) else None
     if not isinstance(rows, list):
         return []
@@ -681,7 +683,7 @@ def overview() -> dict[str, Any]:
         "setup": results["setup"],
         "managedServices": managed,
         "update": results["update"],
-        "operations": operation_state(),
+        "operations": operation_state(managed),
         "services": results["services"],
         "zfs": {
             "healthy": isinstance(zpool, CommandResult) and zpool.returncode == 0,
@@ -802,6 +804,7 @@ SETUP_SOCKET_TIMEOUT_SECONDS = 30.0
 SETUP_CAPABILITY_INACTIVITY_SECONDS = 30 * 60
 SETUP_CAPABILITY_LIFETIME_SECONDS = 24 * 60 * 60
 _SETUP_CAPABILITY_THREAD_LOCK = threading.RLock()
+_SETUP_SUBMISSION_THREAD_LOCK = threading.Lock()
 
 
 class SetupApiError(ApiError):
@@ -849,20 +852,17 @@ def _setup_capability_guard():
 def _write_private_replace(path: pathlib.Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
-    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(tmp, flags, 0o600)
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = pathlib.Path(name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception:
+        os.replace(tmp, path)
+    finally:
         with contextlib.suppress(OSError):
             tmp.unlink()
-        raise
-    os.replace(tmp, path)
-    os.chmod(path, 0o600)
 
 
 def _issue_setup_capability_record(record: dict[str, Any]) -> str:
@@ -1063,6 +1063,28 @@ def clear_active_setup_job() -> None:
         SETUP_ACTIVE_JOB_PATH.unlink()
 
 
+@contextlib.contextmanager
+def _setup_submission_guard():
+    """Claim HTTP setup/tracking transitions without reserving the worker's appliance lock."""
+    if not _SETUP_SUBMISSION_THREAD_LOCK.acquire(blocking=False):
+        raise SetupApiError("Another setup request is in progress; resume the active job", status=409)
+    try:
+        root = SETUP_ACTIVE_JOB_PATH.parent
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(root, 0o700)
+        descriptor = os.open(root / ".submission.lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise SetupApiError("Another setup request is in progress; resume the active job", status=409) from exc
+            yield
+        finally:
+            os.close(descriptor)
+    finally:
+        _SETUP_SUBMISSION_THREAD_LOCK.release()
+
+
 def reboot_after_first_start(request: dict[str, Any]) -> dict[str, bool]:
     if not _setup_complete():
         raise ApiError("Reboot is only offered after first-start setup completes")
@@ -1152,17 +1174,9 @@ class SetupApiUnixServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
             raise
 
     def process_request_thread(self, request: socket.socket, client_address: Any) -> None:
-        def expire_request() -> None:
-            with contextlib.suppress(OSError):
-                request.shutdown(socket.SHUT_RDWR)
-
-        deadline = threading.Timer(SETUP_SOCKET_TIMEOUT_SECONDS, expire_request)
-        deadline.daemon = True
-        deadline.start()
         try:
             super().process_request_thread(request, client_address)
         finally:
-            deadline.cancel()
             self._connection_gate.release()
 
 
@@ -1177,6 +1191,39 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
     """
 
     server_version = "nas-setup-api/1"
+
+    def setup(self) -> None:
+        super().setup()
+        self._request_read_lock = threading.Lock()
+        self._request_read_expired = False
+        self._request_read_timer: threading.Timer | None = threading.Timer(
+            SETUP_SOCKET_TIMEOUT_SECONDS, self._expire_request_read
+        )
+        self._request_read_timer.daemon = True
+        self._request_read_timer.start()
+
+    def _expire_request_read(self) -> None:
+        with self._request_read_lock:
+            if self._request_read_timer is not None:
+                self._request_read_expired = True
+                self._request_read_timer = None
+                with contextlib.suppress(OSError):
+                    self.connection.shutdown(socket.SHUT_RDWR)
+
+    def _finish_request_read(self) -> None:
+        with self._request_read_lock:
+            if self._request_read_expired:
+                raise SetupApiError("Request could not be read within the connection deadline", status=408)
+            if self._request_read_timer is not None:
+                self._request_read_timer.cancel()
+                self._request_read_timer = None
+
+    def finish(self) -> None:
+        with self._request_read_lock:
+            if self._request_read_timer is not None:
+                self._request_read_timer.cancel()
+                self._request_read_timer = None
+        super().finish()
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -1243,6 +1290,7 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - http.server naming
         try:
             self._read_bounded_json()
+            self._finish_request_read()
             if self.path == "/setup/api/first-start":
                 self._send_json(200, first_start_status())
                 return
@@ -1256,59 +1304,72 @@ class SetupApiHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server naming
         try:
             request = self._read_bounded_json()
-            if self.path == "/setup/api/first-run":
-                result = start_first_start(request)
-                if result.get("status") == "submitted" and isinstance(result.get("jobId"), str):
-                    revoke_all_setup_capabilities()
-                    record_active_setup_job(result["jobId"])
-                    result = {**result, "capability": issue_setup_capability(result["jobId"])}
-                elif result.get("status") in {"complete", "complete-unverified"}:
-                    revoke_all_setup_capabilities()
-                    clear_active_setup_job()
-                    result = {**result, "capability": issue_completed_setup_capability(result)}
-                self._send_json(200, result)
-                return
-            if self.path == "/setup/api/first-start/resume":
-                job_id = read_active_setup_job()
-                if job_id is None:
-                    try:
-                        status = first_start_status()
-                    except (ApiError, OSError, ValueError):
-                        status = {}
-                    if status.get("status") in {"complete", "complete-unverified"}:
-                        revoke_all_setup_capabilities()
-                        self._send_json(200, {**status, "capability": issue_completed_setup_capability(status)})
-                        return
-                    self._send_json(404, {"error": "No resumable setup state"})
-                    return
-                try:
-                    status = first_start_job_status(job_id)
-                except ApiError:
-                    clear_active_setup_job()
-                    revoke_job_capabilities(job_id)
-                    self._send_json(404, {"error": "No active setup job"})
-                    return
-                revoke_job_capabilities(job_id)
-                self._send_json(200, {**status, "capability": issue_setup_capability(job_id)})
-                return
-            if self.path == "/setup/api/reboot":
-                job_id = self._authorize_reboot()
-                if job_id is None:
-                    if not _setup_complete():
-                        raise SetupApiError("Completed setup state is no longer valid", status=401)
-                    completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
-                    if completed.returncode != 0:
-                        raise ApiError("Unable to schedule the reboot")
-                    result = {"rebooting": True}
-                else:
-                    result = reboot_after_first_start({"jobId": job_id})
-                revoke_all_setup_capabilities()
-                clear_active_setup_job()
-                self._send_json(200, result)
-                return
-            self._send_json(404, {"error": "Not found"})
+            self._finish_request_read()
+            with _setup_submission_guard():
+                self._handle_post(request)
         except (ApiError, OSError, ValueError) as exc:
             self._api_error(exc)
+
+    def _handle_post(self, request: dict[str, Any]) -> None:
+        if self.path == "/setup/api/first-run":
+            active_job = read_active_setup_job()
+            if active_job is not None and first_start_job_status(active_job).get("status") not in {
+                "failed",
+                "cancelled",
+                "complete",
+                "complete-unverified",
+            }:
+                raise SetupApiError("A first-start job is already active; resume it instead", status=409)
+            result = start_first_start(request)
+            if result.get("status") == "submitted" and isinstance(result.get("jobId"), str):
+                revoke_all_setup_capabilities()
+                record_active_setup_job(result["jobId"])
+                result = {**result, "capability": issue_setup_capability(result["jobId"])}
+            elif result.get("status") in {"complete", "complete-unverified"}:
+                revoke_all_setup_capabilities()
+                clear_active_setup_job()
+                result = {**result, "capability": issue_completed_setup_capability(result)}
+            self._send_json(200, result)
+            return
+        if self.path == "/setup/api/first-start/resume":
+            job_id = read_active_setup_job()
+            if job_id is None:
+                try:
+                    status = first_start_status()
+                except (ApiError, OSError, ValueError):
+                    status = {}
+                if status.get("status") in {"complete", "complete-unverified"}:
+                    revoke_all_setup_capabilities()
+                    self._send_json(200, {**status, "capability": issue_completed_setup_capability(status)})
+                    return
+                self._send_json(404, {"error": "No resumable setup state"})
+                return
+            try:
+                status = first_start_job_status(job_id)
+            except ApiError:
+                clear_active_setup_job()
+                revoke_job_capabilities(job_id)
+                self._send_json(404, {"error": "No active setup job"})
+                return
+            revoke_job_capabilities(job_id)
+            self._send_json(200, {**status, "capability": issue_setup_capability(job_id)})
+            return
+        if self.path == "/setup/api/reboot":
+            job_id = self._authorize_reboot()
+            if job_id is None:
+                if not _setup_complete():
+                    raise SetupApiError("Completed setup state is no longer valid", status=401)
+                completed = run(["systemctl", "reboot"], check=False, timeout_seconds=30)
+                if completed.returncode != 0:
+                    raise ApiError("Unable to schedule the reboot")
+                result = {"rebooting": True}
+            else:
+                result = reboot_after_first_start({"jobId": job_id})
+            revoke_all_setup_capabilities()
+            clear_active_setup_job()
+            self._send_json(200, result)
+            return
+        self._send_json(404, {"error": "Not found"})
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
         syslog.syslog(syslog.LOG_INFO, f"nas-setup-api {self.command} {_route_label(self.path)}")

@@ -111,10 +111,15 @@ def desired_applications(effective: dict[str, Any], *, public_host: str) -> dict
     routes = derived.get("routes") if isinstance(derived, dict) else None
     if not isinstance(services, dict) or not isinstance(routes, list):
         raise AuthentikBlueprintError("compiled effective state is missing services or routes")
+    if any(not isinstance(route, dict) for route in routes):
+        raise AuthentikBlueprintError("compiled routes must contain objects")
 
     apps: dict[str, dict[str, str]] = {}
-    for route in sorted(routes, key=lambda item: (str(item.get("service")), str(item.get("route")))):
-        if not isinstance(route, dict) or route.get("authMode") != "identity":
+    for route in sorted(
+        routes,
+        key=lambda item: (str(item.get("service")), str(item.get("route"))),
+    ):
+        if route.get("authMode") != "identity":
             continue
         service_id = route.get("service")
         route_id = route.get("route")
@@ -317,6 +322,7 @@ def commit_manifest(*, next_manifest_path: pathlib.Path, manifest_path: pathlib.
     next_manifest = _json_object(next_manifest_path)
     if next_manifest.get("schemaVersion") != 1:
         raise AuthentikBlueprintError("next Authentik manifest is invalid")
+    _previous_objects(next_manifest)
     _atomic_write(
         manifest_path,
         (json.dumps(next_manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"),

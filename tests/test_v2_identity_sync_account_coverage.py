@@ -338,7 +338,9 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
             def request(path: str, *, method: str = "GET", body: object = None) -> object:
                 if path.endswith("/OLD") and method == "DELETE":
                     raise sync.SyncError("HTTP 409 still referenced")
-                if path in {"/rest/config/folders", "/rest/config/devices"}:
+                if path == "/rest/config/devices":
+                    return [{"deviceID": "OLD", "name": "Old"}]
+                if path == "/rest/config/folders":
                     return []
                 if path == "/rest/config/restart-required":
                     return {"requiresRestart": False}
@@ -354,6 +356,180 @@ class IdentitySyncAccountCoverageTests(unittest.TestCase):
                 result = sync.reconcile_syncthing(identity)
             self.assertEqual(result["removedDevices"], 0)
             self.assertEqual(json.loads(state.read_text(encoding="utf-8"))["devices"], ["OLD"])
+
+    def test_reconcile_skips_deletion_of_owned_objects_already_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state, journal = root / "state.json", root / "journal.json"
+            state.write_text('{"folders":["missing"],"devices":["MISSING"]}', encoding="utf-8")
+
+            def request(path: str, *, method: str = "GET", body: object = None) -> object:
+                if method == "DELETE":
+                    self.fail("absent objects must not receive DELETE")
+                if path in {"/rest/config/folders", "/rest/config/devices"}:
+                    return []
+                return {"requiresRestart": False}
+
+            with (
+                mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                mock.patch.object(sync, "STATE_PATH", state),
+                mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal),
+                mock.patch.object(sync, "desired_syncthing", return_value=({}, {})),
+                mock.patch.object(sync, "syncthing_request", side_effect=request),
+            ):
+                sync.reconcile_syncthing(identity_model.IdentityModel((), (), ("admin",)))
+            self.assertEqual(json.loads(state.read_text())["folders"], [])
+            self.assertEqual(json.loads(state.read_text())["devices"], [])
+            self.assertFalse(journal.exists())
+
+    def test_reconcile_recovers_after_state_commit_before_journal_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            state, journal = root / "state.json", root / "journal.json"
+            original_write = sync.atomic_write_json
+
+            def fail_commit(path, value):
+                if path == journal and value.get("phase") == "committed":
+                    raise OSError("interrupted journal commit")
+                return original_write(path, value)
+
+            def request(path: str, **_kwargs: Any) -> object:
+                return [] if path in {"/rest/config/folders", "/rest/config/devices"} else {}
+
+            with (
+                mock.patch.object(sync, "SYNCTHING_ENABLED", True),
+                mock.patch.object(sync, "STATE_PATH", state),
+                mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal),
+                mock.patch.object(sync, "desired_syncthing", return_value=({}, {})),
+                mock.patch.object(sync, "syncthing_request", side_effect=request),
+            ):
+                model = identity_model.IdentityModel((), (), ("admin",))
+                with mock.patch.object(sync, "atomic_write_json", side_effect=fail_commit):
+                    with self.assertRaisesRegex(OSError, "interrupted journal commit"):
+                        sync.reconcile_syncthing(model)
+                self.assertTrue(state.exists())
+                self.assertEqual(json.loads(journal.read_text())["phase"], "mutated")
+                result = sync.reconcile_syncthing(model)
+                self.assertEqual(result["folders"], 0)
+                self.assertFalse(journal.exists())
+
+    def test_matching_generation_does_not_hide_malformed_journal_or_wrong_ownership(self) -> None:
+        generation = sync.syncthing_generation({}, {})
+        state = {"schemaVersion": 2, "generation": generation, "folders": [], "devices": []}
+        for desired, folders in ((None, []), ({"folders": {}, "devices": {}}, ["unexpected"])):
+            with self.subTest(desired=desired, folders=folders), tempfile.TemporaryDirectory() as raw:
+                journal = pathlib.Path(raw) / "journal.json"
+                payload = {
+                    "schemaVersion": 1,
+                    "phase": "mutated",
+                    "generation": generation,
+                    "previousState": {},
+                    "desired": desired,
+                    "retainedDevices": [],
+                }
+                journal.write_text(json.dumps(payload), encoding="utf-8")
+                with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal):
+                    with self.assertRaises(sync.SyncError):
+                        sync.interrupted_syncthing_ownership({**state, "folders": folders})
+                self.assertEqual(json.loads(journal.read_text()), payload)
+
+    def test_recovery_succeeds_with_retained_device_in_state(self) -> None:
+        """Recovery must succeed when retainedDevices contains a device present in the committed state."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["OLD", "d"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "mutated",
+            "generation": generation,
+            "previousState": {},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": ["OLD"],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                folders, devices = sync.interrupted_syncthing_ownership(state)
+                self.assertEqual(folders, set())
+                self.assertEqual(devices, set())
+            self.assertFalse(journal_path.exists())
+
+    def test_prepared_phase_mismatched_previous_state_remains_fatal(self) -> None:
+        """A prepared-phase journal with mismatched previousState must stay fatal."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["d"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "prepared",
+            "generation": generation,
+            "previousState": {"schemaVersion": 2, "generation": generation, "folders": [], "devices": []},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": [],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                with self.assertRaisesRegex(sync.SyncError, "does not match committed ownership state"):
+                    sync.interrupted_syncthing_ownership(state)
+
+    def test_non_string_retained_devices_entry_remains_fatal(self) -> None:
+        """A non-string entry in retainedDevices must stay fatal."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["d", "OLD"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "mutated",
+            "generation": generation,
+            "previousState": {},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": ["OLD", 123],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                with self.assertRaisesRegex(sync.SyncError, "does not match committed ownership state"):
+                    sync.interrupted_syncthing_ownership(state)
+
+    def test_mutated_journal_missing_retained_device_in_state_remains_fatal(self) -> None:
+        """A mutated journal whose state omits a retained device must stay fatal."""
+        generation = sync.syncthing_generation({"f": {}}, {"d": {}})
+        state = {
+            "schemaVersion": 2,
+            "generation": generation,
+            "folders": ["f"],
+            "devices": ["d"],
+        }
+        journal = {
+            "schemaVersion": 1,
+            "phase": "mutated",
+            "generation": generation,
+            "previousState": {},
+            "desired": {"folders": {"f": {}}, "devices": {"d": {}}},
+            "retainedDevices": ["OLD"],
+        }
+        with tempfile.TemporaryDirectory() as raw:
+            journal_path = pathlib.Path(raw) / "journal.json"
+            journal_path.write_text(json.dumps(journal), encoding="utf-8")
+            with mock.patch.object(sync, "SYNCTHING_JOURNAL_PATH", journal_path):
+                with self.assertRaisesRegex(sync.SyncError, "does not match committed ownership state"):
+                    sync.interrupted_syncthing_ownership(state)
 
     def test_reconcile_syncthing_rejects_unmanaged_collisions_before_mutation(self) -> None:
         identity = identity_model.IdentityModel((), (), ("admin",))
