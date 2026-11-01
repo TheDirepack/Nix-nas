@@ -47,18 +47,33 @@ def _managed_source(service_id: str, value: str) -> pathlib.Path:
 
 
 def _symlink_parent_paths(service_id: str, sources: list[pathlib.Path]) -> list[pathlib.Path]:
-    """Watch directory entry changes for symlinks in configured source paths."""
+    """Watch in-root symlink parents, including links reached through another link's target."""
     app_root = APP_ROOT / service_id
     directories: set[pathlib.Path] = set()
-    for path in sources:
-        component = path
-        while component != app_root:
-            if component.is_symlink():
-                directories.add(component.parent)
-            parent = component.parent
-            if parent == component:
-                raise SourceWatchProjectionError("managed source path is outside its app root")
-            component = parent
+    seen: set[pathlib.Path] = set()
+    pending = list(sources)
+    try:
+        resolved_root = app_root.resolve(strict=True)
+        for source in sources:
+            source.relative_to(app_root)
+        while pending:
+            path = pending.pop()
+            for component in (path, *path.parents):
+                if component in (app_root, resolved_root):
+                    break
+                if not component.is_symlink():
+                    continue
+                link = component.parent.resolve(strict=True) / component.name
+                if link in seen:
+                    continue
+                seen.add(link)
+                if link.is_relative_to(resolved_root):
+                    directories.add(link.parent)
+                # Resolving the whole target here would hide intermediate release selectors.
+                target = link.readlink()
+                pending.append(target if target.is_absolute() else link.parent / target)
+    except (OSError, ValueError) as exc:
+        raise SourceWatchProjectionError("unable to inspect managed source symlink parents") from exc
     return sorted(directories, key=str)
 
 
