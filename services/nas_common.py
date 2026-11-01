@@ -255,8 +255,6 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError(f"effective state top-level must be object, got {type(data).__name__}")
-    if isinstance(data, list):
-        raise ValueError("effective state top-level must be object, not list")
     schema_version = data.get("schemaVersion")
     if schema_version not in {2, 3}:
         raise ValueError(f"effective state has unsupported schemaVersion {schema_version!r}")
@@ -275,27 +273,69 @@ def load_effective_authority(path: pathlib.Path | None = None) -> dict[str, Any]
         caps = entry.get("capabilities")
         if caps is not None and not isinstance(caps, dict):
             raise ValueError(f"authorization capabilities for {svc_id!r} must be object")
+        if isinstance(caps, dict):
+            for capability, group in caps.items():
+                if group != application_capability_group(svc_id, capability):
+                    raise ValueError(
+                        f"authorization capability {svc_id!r}/{capability!r} must map to its canonical group"
+                    )
     return data
 
 
 def resolve_v2_service_capability(
     service_env: str, capability_env: str, fallback_service: str, fallback_capability: str
-) -> tuple[str, str] | None:  # pragma: no cover - V2 integration branch, exercised in VM
+) -> tuple[str, str] | None:
+    """Resolve capabilities only from a validated compiled authority.
+
+    Before initial compilation, absence of the file preserves the bootstrap
+    defaults. Once a file exists, any malformed or missing authorization must
+    fail closed instead of granting a synthetic default capability.
+    """
     service = os.environ.get(service_env, fallback_service)
     capability = os.environ.get(capability_env, fallback_capability)
-    effective_path = os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json")
+    effective_path = pathlib.Path(os.environ.get("NAS_V2_EFFECTIVE", "/run/nas-control/effective.json"))
     try:
-        data = json.loads(pathlib.Path(effective_path).read_text(encoding="utf-8"))
-        derived = data.get("derived", {}).get("authorization", {})
-        if not isinstance(derived, dict):
-            raise ValueError("derived.authorization is not a dict")
-        caps = derived.get(service, {}).get("capabilities", {}) if isinstance(derived.get(service), dict) else {}
-        if isinstance(caps, dict) and capability in caps:
+        data = load_effective_authority(effective_path)
+    except FileNotFoundError:
+        # ENOENT can name a dangling ancestor, not an unpublished authority.
+        for candidate in (effective_path, *effective_path.parents):
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            if candidate == effective_path:
+                return None
+            try:
+                candidate.resolve(strict=True)
+            except OSError:
+                return None
             return service, capability
-        if isinstance(derived, dict) and derived:
-            return None
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
+        return None
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        return None
+    service_entry = data["services"].get(service)
+    if not isinstance(service_entry, dict):
+        return None
+    declared_authorization = service_entry.get("authorization")
+    if not isinstance(declared_authorization, dict):
+        return None
+    declared = declared_authorization.get("capabilities")
+    if not isinstance(declared, list) or not all(
+        isinstance(item, dict) and isinstance(item.get("id"), str) and _CAPABILITY_ID_RE.fullmatch(item["id"])
+        for item in declared
+    ):
+        return None
+    if capability != "access" and not any(item["id"] == capability for item in declared):
+        return None
+    authorization = data["derived"]["authorization"]
+    entry = authorization.get(service)
+    if not isinstance(entry, dict):
+        return None
+    caps = entry.get("capabilities")
+    if not isinstance(caps, dict) or capability not in caps:
+        return None
     return service, capability
 
 
