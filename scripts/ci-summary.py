@@ -43,7 +43,12 @@ def expected_jobs(
     # fast dispatch tier skips only the expensive Nix/VM work inside prepare.
     expected = set(BASE_JOBS)
 
-    if event_name == "pull_request" and base_ref == "main":
+    # Stacked fixes still compare against main; do not silently skip the
+    # coverage gate while the common CI repair is the pull-request base.
+    if event_name == "pull_request" and base_ref in {
+        "main",
+        "fix/shared-pr-qualification-probe-contract",
+    }:
         expected.add("coverage-diff")
 
     # Full-stack QEMU and the official-ISO install tier qualify every commit.

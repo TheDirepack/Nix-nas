@@ -75,6 +75,7 @@ config_dir="$(pwd -P)"
 active_config_dir="$config_dir"
 deployment_dir="$config_dir"
 candidate_worktree=""
+candidate_root=""
 candidate_commit=""
 source_promoted=false
 original_source_commit=""
@@ -109,6 +110,10 @@ cleanup_candidate() {
   if [[ -n "$candidate_worktree" ]]; then
     git_safe -C "$active_config_dir" worktree remove --force "$candidate_worktree" >/dev/null 2>&1 || rm -rf "$candidate_worktree"
     candidate_worktree=""
+  fi
+  if [[ -n "$candidate_root" ]]; then
+    rm -rf -- "$candidate_root"
+    candidate_root=""
   fi
 }
 trap cleanup_candidate EXIT
@@ -188,8 +193,8 @@ if $sync; then
     echo "Approved update is not a fast-forward descendant of the active revision." >&2
     exit 1
   }
-  candidate_worktree="$(mktemp -d /var/tmp/nas-update-candidate.XXXXXX)"
-  rmdir "$candidate_worktree"
+  candidate_root="$(mktemp -d /var/tmp/nas-update-candidate.XXXXXX)"
+  candidate_worktree="$candidate_root/source"
   git_safe worktree add --detach "$candidate_worktree" "$candidate_commit" >/dev/null
   deployment_dir="$candidate_worktree"
 fi

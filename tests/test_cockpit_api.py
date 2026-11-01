@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import concurrent.futures
+import fcntl
 import grp
 import importlib.util
 import io
@@ -87,6 +89,50 @@ class CockpitApiTests(unittest.TestCase):
         with mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": ["runtime"], "active": []}):
             value = api.operation_state()
         self.assertEqual(value["managedServicesConflicts"], ["runtime"])
+
+    def test_overview_uses_one_managed_status_snapshot_for_operation_rows(self) -> None:
+        def snapshot(identifier):
+            return {
+                "services": [
+                    {
+                        "id": identifier,
+                        "managed": True,
+                        "effective": True,
+                        "available": True,
+                        "runtimeAvailable": True,
+                        "verified": True,
+                        "workloadKind": "job",
+                        "units": [{"unit": identifier + ".service", "role": "owner"}],
+                    }
+                ]
+            }
+
+        for first in (snapshot("first"), {"services": []}, {}):
+            with (
+                self.subTest(first=first),
+                mock.patch.object(api, "managed_services_status", side_effect=[first, snapshot("second")]) as managed,
+                mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": [], "active": []}),
+                mock.patch.object(api, "setup_status", return_value={}),
+                mock.patch.object(api, "update_status", return_value={}),
+                mock.patch.object(api, "service_states", return_value={}),
+                mock.patch.object(api, "run", return_value=self.completed()),
+                mock.patch.object(api, "portal_entries", return_value=[]),
+                mock.patch.object(api, "read_optional_text", return_value=None),
+            ):
+                result = api.overview()
+            managed.assert_called_once_with()
+            self.assertIs(result["managedServices"], first)
+            expected = {"protected-restart", *[row["id"] for row in first.get("services", [])]}
+            self.assertEqual(set(result["operations"]["conflictsByAction"]), expected)
+
+    def test_standalone_operations_and_job_rows_still_fetch_status(self) -> None:
+        with (
+            mock.patch.object(api, "managed_services_status", return_value={"services": []}) as managed,
+            mock.patch.object(api, "shared_operation_state", return_value={"busyClasses": [], "active": []}),
+        ):
+            self.assertEqual(api.managed_job_rows(), [])
+            self.assertEqual(api.operation_state()["managedServicesConflicts"], [])
+        self.assertEqual(managed.call_count, 2)
 
     def test_unknown_action_fails_before_subprocess(self) -> None:
         with (
@@ -395,6 +441,22 @@ class SetupApiTransportTests(unittest.TestCase):
                 finally:
                     client.close()
 
+    def test_slow_status_preparation_outlives_read_deadline_and_returns_response(self) -> None:
+        finished = threading.Event()
+
+        def prepare():
+            time.sleep(0.3)
+            finished.set()
+            return {"status": "ready"}
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(api, "SETUP_SOCKET_TIMEOUT_SECONDS", 0.1):
+            _, socket_path = self.live_server(directory)
+            with mock.patch.object(api, "first_start_status", side_effect=prepare):
+                response = self.raw_exchange(socket_path, b"GET /setup/api/first-start HTTP/1.0\r\n\r\n")
+                self.assertTrue(finished.wait(2))
+        self.assertIn(b"200", response.partition(b"\r\n")[0])
+        self.assertEqual(json.loads(response.partition(b"\r\n\r\n")[2]), {"status": "ready"})
+
     def test_trickle_headers_and_body_cannot_hold_connection_slots_past_wall_clock_deadline(self) -> None:
         prefixes = (
             b"POST /setup/api/nope HTTP/1.1\r\nHost: x\r\nX-Trickle: ",
@@ -632,16 +694,18 @@ class SetupApiCapabilityTests(unittest.TestCase):
             )
             self.assertIn(b"401", status)
 
-    def test_submit_mints_capability_and_supersedes_previous(self) -> None:
+    def test_terminal_job_can_be_superseded_with_a_fresh_capability(self) -> None:
         submitted = {"schemaVersion": 1, "jobId": "a" * 24, "status": "submitted"}
         with tempfile.TemporaryDirectory() as directory:
             _, socket_path = self.live_server(directory)
             with (
                 mock.patch.object(api, "start_first_start", return_value=dict(submitted)) as submit,
-                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}) as job_status,
             ):
                 _, first = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                job_status.return_value = {"status": "failed"}
                 _, second = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                job_status.return_value = {"status": "running"}
                 self.assertEqual(submit.call_count, 2)
                 for response in (first, second):
                     self.assertRegex(response["capability"], r"^[0-9a-f]{48}$")
@@ -662,6 +726,107 @@ class SetupApiCapabilityTests(unittest.TestCase):
                 self.assertIn(b"200", new_status)
                 self.assertEqual(body["status"], "running")
             self.assertEqual(api.read_active_setup_job(), "a" * 24)
+
+    def test_slow_submission_returns_job_and_capability_after_read_deadline(self) -> None:
+        finished = threading.Event()
+
+        def submit(_request):
+            time.sleep(0.3)
+            finished.set()
+            return {"schemaVersion": 1, "status": "submitted", "jobId": "a" * 24}
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(api, "SETUP_SOCKET_TIMEOUT_SECONDS", 0.1):
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(api, "start_first_start", side_effect=submit),
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+            ):
+                status, body = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                self.assertTrue(finished.wait(2))
+                self.assertIn(b"200", status)
+                self.assertEqual(body["jobId"], "a" * 24)
+                self.assertEqual(api.lookup_setup_capability(body["capability"]), "a" * 24)
+
+    def test_concurrent_submission_does_not_replace_running_job_tracking(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+        call_lock = threading.Lock()
+
+        def submit(_request):
+            with call_lock:
+                job_id = ("a" if not calls else "b") * 24
+                calls.append(job_id)
+            if job_id == "a" * 24:
+                entered.set()
+                release.wait(3)
+            return {"schemaVersion": 1, "status": "submitted", "jobId": job_id}
+
+        with tempfile.TemporaryDirectory() as directory:
+            _, socket_path = self.live_server(directory)
+            with (
+                mock.patch.object(api, "start_first_start", side_effect=submit),
+                mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}),
+                concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor,
+            ):
+                first = executor.submit(self.exchange, socket_path, "POST", "/setup/api/first-run", body={})
+                try:
+                    self.assertTrue(entered.wait(2))
+                    second_status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                finally:
+                    release.set()
+                first_status, first_body = first.result(timeout=3)
+                self.assertIn(b"409", second_status)
+                self.assertIn(b"200", first_status)
+                self.assertEqual(calls, ["a" * 24])
+                self.assertEqual(api.read_active_setup_job(), "a" * 24)
+                self.assertEqual(api.lookup_setup_capability(first_body["capability"]), "a" * 24)
+
+    def test_running_or_pending_job_rejects_new_submission_without_revoking_capability(self) -> None:
+        for state in ("pending", "submitted", "running", "unknown"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                _, socket_path = self.live_server(directory)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    token = api.issue_setup_capability("a" * 24)
+                api.record_active_setup_job("a" * 24)
+                with (
+                    mock.patch.object(api, "first_start_job_status", return_value={"status": state}),
+                    mock.patch.object(
+                        api, "start_first_start", return_value={"status": "submitted", "jobId": "b" * 24}
+                    ) as submit,
+                ):
+                    status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+                self.assertIn(b"409", status)
+                submit.assert_not_called()
+                self.assertEqual(api.read_active_setup_job(), "a" * 24)
+                with mock.patch.object(api, "first_start_job_status", return_value={"status": "running"}):
+                    self.assertEqual(api.lookup_setup_capability(token), "a" * 24)
+
+    def test_submission_obeys_process_shared_claim_lock(self) -> None:
+        lock_path = self.active_job.parent / ".submission.lock"
+        with lock_path.open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with tempfile.TemporaryDirectory() as directory:
+                _, socket_path = self.live_server(directory)
+                with mock.patch.object(
+                    api, "start_first_start", return_value={"status": "submitted", "jobId": "a" * 24}
+                ) as submit:
+                    status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"409", status)
+            submit.assert_not_called()
+        self.assertIsNone(api.read_active_setup_job())
+
+    def test_failed_launch_does_not_replace_previous_terminal_job(self) -> None:
+        api.record_active_setup_job("a" * 24)
+        with mock.patch.object(api, "first_start_job_status", return_value={"status": "failed"}):
+            token = api.issue_setup_capability("a" * 24)
+            with tempfile.TemporaryDirectory() as directory:
+                _, socket_path = self.live_server(directory)
+                with mock.patch.object(api, "start_first_start", side_effect=api.ApiError("launch failed")):
+                    status, _ = self.exchange(socket_path, "POST", "/setup/api/first-run", body={})
+            self.assertIn(b"400", status)
+            self.assertEqual(api.read_active_setup_job(), "a" * 24)
+            self.assertEqual(api.lookup_setup_capability(token), "a" * 24)
 
     def test_completed_submission_returns_no_capability(self) -> None:
         prepared = {
@@ -788,6 +953,43 @@ class SetupApiCapabilityTests(unittest.TestCase):
             self.assertTrue(records)
             for record in records:
                 self.assertNotIn(token, record)
+
+
+class PrivateReplacementTests(unittest.TestCase):
+    def test_concurrent_replacements_use_distinct_private_temporary_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "active-job.json"
+            barrier = threading.Barrier(2)
+            original_replace = os.replace
+            temporary_paths = []
+
+            def replace(source, destination):
+                temporary_paths.append(pathlib.Path(source))
+                self.assertEqual(pathlib.Path(source).stat().st_mode & 0o777, 0o600)
+                barrier.wait(timeout=2)
+                original_replace(source, destination)
+
+            with mock.patch.object(api.os, "replace", side_effect=replace):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(api._write_private_replace, target, content) for content in ("first", "second")
+                    ]
+                    errors = [future.exception(timeout=3) for future in futures]
+            self.assertEqual(errors, [None, None])
+            self.assertEqual(len(set(temporary_paths)), 2)
+            self.assertIn(target.read_text(), {"first", "second"})
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(target.parent.iterdir()), [target])
+
+    def test_failed_replacement_preserves_destination_and_removes_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "active-job.json"
+            target.write_text("previous")
+            with mock.patch.object(api.os, "replace", side_effect=OSError("replacement failed")):
+                with self.assertRaisesRegex(OSError, "replacement failed"):
+                    api._write_private_replace(target, "new")
+            self.assertEqual(target.read_text(), "previous")
+            self.assertEqual(list(target.parent.iterdir()), [target])
 
 
 if __name__ == "__main__":
