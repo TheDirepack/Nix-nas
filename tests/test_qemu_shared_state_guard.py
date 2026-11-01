@@ -88,10 +88,7 @@ class SharedQemuInstallStateTests(unittest.TestCase):
                 'printf "locked\\n"; '
                 'while [[ ! -e "$3" ]]; do sleep 0.05; done'
             )
-            contender_script = (
-                'set -euo pipefail; source "$1"; '
-                'nas_qemu_acquire_shared_state_lock "$2"'
-            )
+            contender_script = 'set -euo pipefail; source "$1"; nas_qemu_acquire_shared_state_lock "$2"'
             holder = subprocess.Popen(
                 ["bash", "-c", holder_script, "holder", str(HELPER), str(lock), str(release)],
                 stdout=subprocess.PIPE,
@@ -133,8 +130,8 @@ class SharedQemuInstallStateTests(unittest.TestCase):
             install.index("nas_qemu_acquire_shared_state_lock"),
             install.index('rm -f "$os_disk" "$data_disk"'),
         )
-        self.assertIn('exec {NAS_QEMU_SHARED_LOCK_FD}>&-', install)
-        self.assertIn('persistent-stop)\\n    validate_state_path\\n    nas_qemu_acquire_shared_state_lock', source)
+        self.assertIn("exec {NAS_QEMU_SHARED_LOCK_FD}>&-", install)
+        self.assertIn("persistent-stop)\\n    validate_state_path\\n    nas_qemu_acquire_shared_state_lock", source)
         self.assertIn("cannot clean VM cache while another shared QEMU operation is active", source)
         self.assertIn("persistent reset cannot run while a shared QEMU operation is active", source)
 
