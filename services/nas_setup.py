@@ -1384,7 +1384,37 @@ def setup_state_matches(report: Mapping[str, Any]) -> bool:
     return current == report
 
 
+def reject_completed_first_run() -> None:
+    """A completed first-run is not a request to initialize the appliance again.
+
+    The direct CLI and detached worker must obey the same completion boundary
+    as Cockpit admission. Check both durable authorities: the final state can
+    be missing after a crash while the journal is already complete, or the
+    state can be published just before the journal's completion record.
+    """
+    for path, kind in ((STATE_PATH, "state"), (JOURNAL_PATH, "journal")):
+        try:
+            record = load_json(path)
+        except (JournalError, UnicodeError) as exc:
+            raise SetupError(f"Cannot verify first-run {kind} safety at {path}: {exc}") from exc
+        if record is None:
+            continue
+        if kind == "state":
+            status = record.get("status")
+            if not isinstance(status, str) or status not in {"complete", "complete-unverified"}:
+                raise SetupError(f"Cannot verify first-run state safety at {path}: unsupported status")
+            completed = True
+        else:
+            completed = record.get("workflow") == "first-run-v2" and record.get("status") == "complete"
+        if completed:
+            raise SetupError(
+                "Appliance first-run already completed; refusing to recreate the KeePassXC database "
+                "or replay initial identity/storage mutations. Use normal administration or explicit recovery."
+            )
+
+
 def _first_run_locked(args: argparse.Namespace) -> dict[str, Any]:
+    reject_completed_first_run()
     args.encrypt_storage = bool(getattr(args, "encrypt_storage", ZFS_ENCRYPTION))
     if args.encrypt_storage and not ZFS_ENCRYPTION:
         raise SetupError("This system build does not include KeePassXC-backed ZFS encryption support")
