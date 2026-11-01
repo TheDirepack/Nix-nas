@@ -54,19 +54,22 @@ class V2GenericListenerTests(unittest.TestCase):
 
         self.assertTrue(requires_firewalld(effective))
         files, manifest = firewalld.compile_projection(effective, lan_zone="trusted")
-        target = f"policies/{firewalld.listener_policy_name('custom-discovery')}"
+        target = f"policies/{firewalld.host_listener_policy_name()}"
         policy = files[target]
 
+        self.assertEqual((policy["target"], policy["ingress"], policy["egress"]), ("DROP", "trusted", "HOST"))
+        self.assertEqual(policy["priority"], -50)
         self.assertIn(["17321", "tcp"], policy["ports"])
         self.assertIn(["17322", "udp"], policy["ports"])
         self.assertIn(["17330-17339", "udp"], policy["ports"])
         self.assertNotIn(["17340", "udp"], policy["ports"])
+        self.assertNotIn(["17340", "tcp"], policy["ports"])
         self.assertEqual(
             sorted(manifest["owners"], key=lambda x: x["target"]),
             sorted(
                 [
                     {"service": "_remote-admin", "target": f"policies/{firewalld.remote_admin_policy_name()}"},
-                    {"service": "custom-discovery", "target": target},
+                    {"service": "_host-listeners", "target": target},
                 ],
                 key=lambda x: x["target"],
             ),
@@ -96,8 +99,10 @@ class V2GenericListenerTests(unittest.TestCase):
         effective = {"schemaVersion": 3, "services": {"custom-daemon": service}, "networkProfiles": {}}
 
         files, _manifest = firewalld.compile_projection(effective, lan_zone="trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('custom-daemon')}"]
+        policy = files[f"policies/{firewalld.host_listener_policy_name()}"]
+        self.assertEqual((policy["target"], policy["ingress"], policy["egress"]), ("DROP", "trusted", "HOST"))
         self.assertIn(["137", "udp", "10137"], policy["forwardPorts"])
+        self.assertNotIn(["137", "udp"], policy["ports"])
 
     def test_arbitrary_isolated_oci_service_publishes_listener_without_app_branching(self):
         service = {

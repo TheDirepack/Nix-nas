@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
-import os
 import pathlib
 import re
 from typing import Any
@@ -223,6 +222,13 @@ def listener_policy_name(service_id: str) -> str:
     return f"nv2i{_digest(service_id)}"
 
 
+def host_listener_policy_name() -> str:
+    """A single default-deny policy for every enabled host-mode listener."""
+    # Reserve a distinct namespace: user-controlled service IDs may contain
+    # "combined-host-listeners" and must never overwrite isolated policies.
+    return f"nv2a{_digest('combined-host-listeners')}"
+
+
 def remote_admin_policy_name() -> str:
     return f"nv2m{_digest('remote-admin')}"
 
@@ -233,16 +239,10 @@ _REMOTE_ADMIN_PRIORITY = "-300"
 _WORLD_POLICY_PRIORITY = "50"
 
 
-def _remote_admin_ports() -> list[tuple[str, str]]:  # pragma: no cover - V2 integration
-    cockpit_port = os.environ.get("NAS_V2_COCKPIT_PORT", "9092")
-    try:
-        port_int = int(cockpit_port)
-        if not 1 <= port_int <= 65535:
-            raise ValueError
-        cockpit_port = str(port_int)
-    except (ValueError, TypeError):
-        cockpit_port = "9092"
-    return [("22", "tcp"), (cockpit_port, "tcp"), ("443", "tcp")]
+def _remote_admin_ports() -> list[tuple[str, str]]:
+    # The root Cockpit session is a Caddy-group Unix socket (see #177), not
+    # a direct LAN service. Never advertise the old 9092 listener as admin.
+    return [("22", "tcp"), ("443", "tcp")]
 
 
 _REMOTE_ADMIN_PORTS: list[tuple[str, str]] = _remote_admin_ports()
@@ -408,6 +408,8 @@ def compile_application_projection(
     _validate_lan_zone(lan_zone)
     objects: dict[str, dict[str, Any]] = {}
     owners: list[dict[str, str]] = []
+    host_listener_ports: set[tuple[str, str]] = set()
+    host_listener_forwards: set[tuple[str, str, str]] = set()
     services = effective.get("services")
     if not isinstance(services, dict):
         raise FirewalldProjectionError("compiled effective state is missing services")
@@ -475,15 +477,10 @@ def compile_application_projection(
                 )
         elif mode == "host":
             host_ports, forward_ports = _host_listener_rules(service)
-            if host_ports or forward_ports:
-                name = listener_policy_name(service_id)
-                generated[f"policies/{name}"] = _allow_policy(
-                    name,
-                    ingress=lan_zone,
-                    egress="HOST",
-                    ports=host_ports,
-                    forward_ports=forward_ports,
-                )
+            # Separate LAN -> HOST DROP policies can preempt one another.
+            # Combine their allow rules; preserve the final DROP boundary.
+            host_listener_ports.update(host_ports)
+            host_listener_forwards.update(forward_ports)
         elif mode == "none":
             if _listener_ports(service):
                 raise FirewalldProjectionError(f"network=none service {service_id!r} cannot expose listeners")
@@ -494,6 +491,17 @@ def compile_application_projection(
                 raise FirewalldProjectionError(f"duplicate generated firewalld target {target!r}")
             objects[target] = value
             owners.append({"service": service_id, "target": target})
+    if host_listener_ports or host_listener_forwards:
+        name = host_listener_policy_name()
+        target = f"policies/{name}"
+        objects[target] = _allow_policy(
+            name,
+            ingress=lan_zone,
+            egress="HOST",
+            ports=sorted(host_listener_ports),
+            forward_ports=sorted(host_listener_forwards),
+        )
+        owners.append({"service": "_host-listeners", "target": target})
     return objects, {
         "schemaVersion": 2,
         "objects": [objects[target] for target in sorted(objects)],
@@ -531,6 +539,7 @@ __all__ = [
     "compile_projection",
     "compile_remote_admin_projection",
     "host_policy_name",
+    "host_listener_policy_name",
     "lan_policy_name",
     "listener_policy_name",
     "materialize_projection",

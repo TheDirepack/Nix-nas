@@ -101,9 +101,11 @@ class V2VlanAndDirectListenerTests(unittest.TestCase):
             }
         }
         files, _manifest = firewalld.compile_projection(effective, lan_zone="nas-trusted")
-        policy = files[f"policies/{firewalld.listener_policy_name('tftp')}"]
+        policy = files[f"policies/{firewalld.host_listener_policy_name()}"]
+        self.assertEqual((policy["target"], policy["ingress"], policy["egress"]), ("DROP", "nas-trusted", "HOST"))
         self.assertIn(["69", "udp", "3969"], policy["forwardPorts"])
         self.assertIn(["40000-40099", "udp"], policy["ports"])
+        self.assertNotIn(["69", "udp"], policy["ports"])
 
     def test_application_listener_rules_are_not_hard_coded_in_host_firewall_baseline(self) -> None:
         firewall_module = (ROOT / "modules" / "nas" / "config" / "network-firewall.nix").read_text(encoding="utf-8")
