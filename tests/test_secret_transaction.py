@@ -447,6 +447,46 @@ nas_secret_tx_init "$PWD/root" "$PWD/tx/transaction.1/new" "$PWD/tx/transaction.
         )
         self.assert_ok(result)
 
+    def test_stage_cleanup_failure_restarts_safely_restored_consumers(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_MV_FAIL_AT=2
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e; nas_secret_tx_swap; swap_rc=$?; set -e
+            [[ $swap_rc -eq 74 ]]
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_STAGE" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 88 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && "$NAS_SECRET_TX_PHASE" == rollback-incomplete ]]
+            [[ -f root/old && -f root/ready && -f stage/new && ! -e previous ]]
+            grep -q '^start nas-protected-services.target$' systemctl.log
+            grep -Fq "$PWD/stage" recovery.log
+            """
+        )
+        self.assert_ok(result)
+
+    def test_stage_cleanup_without_a_prior_tree_reports_the_remaining_stage(self) -> None:
+        result = self.run_scenario(
+            """
+            export NAS_TX_ACTIVE=0 NAS_TX_MV_FAIL_AT=1
+            rm -rf root
+            nas_secret_tx_init "$PWD/root" "$PWD/stage" "$PWD/previous"
+            set +e; nas_secret_tx_swap; swap_rc=$?; set -e
+            [[ $swap_rc -eq 74 ]]
+            rm() {
+              if [[ "${@: -1}" == "$NAS_SECRET_TX_STAGE" ]]; then return 74; fi
+              command rm "$@"
+            }
+            set +e; nas_secret_tx_cleanup 89 2>recovery.log; rc=$?; set -e
+            [[ $rc -eq 125 && -f stage/new && ! -e root && ! -e previous ]]
+            ! grep -q '^start ' systemctl.log
+            grep -Fq "$PWD/stage" recovery.log
+            """
+        )
+        self.assert_ok(result)
+
 
 if __name__ == "__main__":
     unittest.main()

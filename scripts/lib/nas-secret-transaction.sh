@@ -220,7 +220,7 @@ nas_secret_tx_remove_directory() {
 }
 
 nas_secret_tx_rollback() {
-  local failed=false
+  local failed=false recovery
   [[ "${NAS_SECRET_TX_COMMITTED:-false}" != true ]] || {
     printf 'nas-secret-transaction: refusing rollback after commit\n' >&2
     return 1
@@ -252,7 +252,6 @@ nas_secret_tx_rollback() {
       failed=true
     fi
   fi
-  nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_STAGE" || failed=true
   if [[ "$NAS_SECRET_TX_WAS_ACTIVE" == true && "$failed" == false ]]; then
     if nas_secret_tx_privileged test -f "$NAS_SECRET_TX_ROOT/ready" && nas_secret_tx_privileged test ! -L "$NAS_SECRET_TX_ROOT/ready"; then
       nas_secret_tx_systemctl start "$NAS_SECRET_TX_TARGET" >/dev/null 2>&1 || failed=true
@@ -261,13 +260,19 @@ nas_secret_tx_rollback() {
       failed=true
     fi
   fi
+  nas_secret_tx_privileged rm -rf -- "$NAS_SECRET_TX_STAGE" || failed=true
   if ! "$failed"; then
     nas_secret_tx_remove_directory || failed=true
   fi
   if "$failed"; then
     NAS_SECRET_TX_PHASE=rollback-incomplete
-    printf 'nas-secret-transaction: rollback was incomplete; inspect systemd, %s and retained recovery tree %s\n' \
-      "$NAS_SECRET_TX_ROOT" "${NAS_SECRET_TX_DIRECTORY:-$NAS_SECRET_TX_PREVIOUS}" >&2
+    printf 'nas-secret-transaction: rollback was incomplete; inspect systemd and %s\n' "$NAS_SECRET_TX_ROOT" >&2
+    for recovery in "${NAS_SECRET_TX_DIRECTORY:-}" "$NAS_SECRET_TX_STAGE" "$NAS_SECRET_TX_PREVIOUS"; do
+      [[ -n "$recovery" ]] || continue
+      if nas_secret_tx_privileged test -e "$recovery" || nas_secret_tx_privileged test -L "$recovery"; then
+        printf 'nas-secret-transaction: retained recovery tree %s\n' "$recovery" >&2
+      fi
+    done
     return 1
   fi
   NAS_SECRET_TX_PHASE=rolled-back
