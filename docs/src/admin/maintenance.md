@@ -22,6 +22,38 @@ For direct diagnosis, use the generated command reference and systemd journal ra
 
 For offline checks before installation or while debugging, use `nas-v2 validate`, `nas-v2 effective`, and `nas-v2 plan` with `--spec`, `--schema`, and `--platform` overrides as needed. `nas-v2 apply` delegates to the same finite reconciliation entry point used by systemd.
 
+## Failed identity account-plan recovery
+
+An interrupted \`nas-identity-sync apply-accounts\` can leave the durable
+account-plan journal in \`failed\` status. A corrected plan with a different
+fingerprint is intentionally blocked until the operator reviews the partial
+changes: some earlier Authentik user or password operations may already have
+succeeded, even when the entire plan failed.
+
+Inspect the password-free journal summary and the live Authentik accounts
+before proceeding:
+
+\`\`\`bash
+sudo nas-identity-sync account-journal
+sudo nas-identity-sync status
+\`\`\`
+
+Only after reviewing the completed and failed steps, explicitly abandon the
+**failed** journal using the exact fingerprint reported above and a note:
+
+\`\`\`bash
+sudo nas-identity-sync cancel-failed-accounts \
+  --fingerprint FINGERPRINT_FROM_ACCOUNT_JOURNAL \
+  --note "Reviewed partial account changes and prepared a corrected plan"
+\`\`\`
+
+Cancellation preserves an owner-private archived journal under
+\`/var/lib/nas-identity-sync/account-plan-history/\`. It does **not** undo
+any Authentik changes, restore passwords, delete identities, or automatically
+replay the plan. Running, ambiguous, completed, and manual-recovery-required
+journals cannot be cancelled by this command. After cancellation, preview
+the corrected plan and apply it deliberately using the normal workflow.
+
 ## Updates
 
 `nas-update` separates review/validation from deployment. It validates the candidate checkout, tests and builds the target generation, records update state, and retains NixOS rollback behavior.
