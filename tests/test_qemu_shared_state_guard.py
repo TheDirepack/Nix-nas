@@ -75,6 +75,57 @@ class SharedQemuInstallStateTests(unittest.TestCase):
         missing = self.guard(pid_exists=False, status=0, persistent=False, reuse=False, complete=False)
         self.assertEqual(missing.returncode, 0, missing.stderr)
 
+    def test_competing_installer_and_persistent_start_are_excluded_by_flock(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            lock = root / "cache.shared-qemu.lock"
+            release = root / "release"
+            holder_script = (
+                'set -euo pipefail; source "$1"; '
+                'nas_qemu_acquire_shared_state_lock "$2"; '
+                'printf "locked\\n"; '
+                'while [[ ! -e "$3" ]]; do sleep 0.05; done'
+            )
+            contender_script = (
+                'set -euo pipefail; source "$1"; '
+                'nas_qemu_acquire_shared_state_lock "$2"'
+            )
+            holder = subprocess.Popen(
+                ["bash", "-c", holder_script, "holder", str(HELPER), str(lock), str(release)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "locked")
+                blocked = subprocess.run(
+                    ["bash", "-c", contender_script, "contender", str(HELPER), str(lock)],
+                    capture_output=True, text=True, check=False, timeout=5,
+                )
+                self.assertNotEqual(blocked.returncode, 0)
+                self.assertIn("already owned", blocked.stderr)
+                self.assertTrue(lock.exists(), "lock inode must outlive the disposable VM cache")
+            finally:
+                release.touch()
+                stdout, stderr = holder.communicate(timeout=5)
+                self.assertEqual(holder.returncode, 0, stdout + stderr)
+
+            acquired = subprocess.run(
+                ["bash", "-c", contender_script, "contender", str(HELPER), str(lock)],
+                capture_output=True, text=True, check=False, timeout=5,
+            )
+            self.assertEqual(acquired.returncode, 0, acquired.stderr)
+
+    def test_all_shared_state_mutations_acquire_lock_before_touching_disks(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        install = source.split("run_installer() {", 1)[1].split("run_installer_with_timeout() {", 1)[0]
+        self.assertLess(
+            install.index("nas_qemu_acquire_shared_state_lock"),
+            install.index('rm -f "$os_disk" "$data_disk"'),
+        )
+        self.assertIn('exec {NAS_QEMU_SHARED_LOCK_FD}>&-', install)
+        self.assertIn('persistent-stop)\\n    validate_state_path\\n    nas_qemu_acquire_shared_state_lock', source)
+        self.assertIn("cannot clean VM cache while another shared QEMU operation is active", source)
+        self.assertIn("persistent reset cannot run while a shared QEMU operation is active", source)
+
     def test_guard_precedes_installer_cleanup_and_disk_replacement(self):
         source = RUNNER.read_text(encoding="utf-8")
         begin = source.index("run_installer() {")
