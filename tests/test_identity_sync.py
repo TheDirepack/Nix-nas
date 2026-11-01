@@ -90,6 +90,13 @@ class IdentityModelTests(unittest.TestCase):
                     authentik_list.side_effect = [users, groups]
                     with self.assertRaisesRegex(sync.SyncError, "enabled explicit member"):
                         sync.retire_bootstrap_administrator("bootstrap-token", "replacement")
+                self.assertEqual(
+                    authentik_list.call_args_list,
+                    [
+                        mock.call("bootstrap-token", "core/users/?include_groups=true"),
+                        mock.call("bootstrap-token", "core/groups/?include_users=true"),
+                    ],
+                )
                 request.assert_not_called()
 
     def test_portal_proxy_requires_a_valid_public_host(self) -> None:

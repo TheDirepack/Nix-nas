@@ -33,6 +33,7 @@ class HttpAdversarialTransportTests(unittest.TestCase):
     esac
     shift
   done
+  [[ ! -s "$output" ]] || { printf 'stale probe body detected\\n' >&2; return 91; }
   printf 'fixture-response-body\\n' > "$output"
   if ((blocked)); then printf 403; return 0; fi
   printf '%s' "$FIXTURE_HTTP_CODE"
@@ -139,6 +140,7 @@ class HttpAdversarialTransportTests(unittest.TestCase):
     esac
     shift
   done
+  [[ ! -s "$output" ]] || { printf 'stale probe body detected\\n' >&2; return 91; }
   printf 'blocked-body\\n' > "$output"
   if ((blocked)); then
     # Simulate transport failure (timeout) after HTTP 403 would be returned
