@@ -543,6 +543,8 @@ reset_persistent_state() {
   [[ -d "$CACHE_DIR" ]] || { log "Persistent VM state is not present."; return 0; }
   validate_state_path
   require_cache_marker
+  nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+    die "persistent reset cannot run while a shared QEMU operation is active"
   stop_persistent_vm
   rm -rf -- "$STATE_DIR"
   log "Persistent VM state removed; the cached installer ISO was kept."
@@ -552,6 +554,8 @@ run_installer() {
   ensure_host_tools
   ensure_cache_dir
   validate_state_path
+  nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+    die "cannot install or start VM while another operation owns shared QEMU state"
   install -d -m 0755 "$STATE_DIR"
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
@@ -682,6 +686,10 @@ run_installer() {
   fi
   if [[ ! -s "$pidfile" ]]; then
     vm_started_by_this_run=true
+    (
+      # QEMU -daemonize must never inherit the caller's flock descriptor.
+      # The parent installer still holds it until startup is verified.
+      exec {NAS_QEMU_SHARED_LOCK_FD}>&-
     qemu-system-x86_64 \
       "${accel[@]}" \
       -m "$MEMORY_MIB" -smp "$CPUS" \
@@ -691,6 +699,7 @@ run_installer() {
       -device virtio-rng-pci \
       "${network_args[@]}" \
       -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
+    )
   fi
 
   mapfile -t ssh_args < <(ssh_options "$ssh_key")
@@ -836,7 +845,12 @@ case "$MODE" in
     export NAS_QEMU_PERSISTENT_MODE=1 NAS_QEMU_PERSISTENT_ACTION=test NAS_QEMU_REUSE_INSTALLED=1
     run_installer_with_timeout persistent-test
     ;;
-  persistent-stop) validate_state_path; stop_persistent_vm ;;
+  persistent-stop)
+    validate_state_path
+    nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+      die "cannot stop VM while another shared QEMU operation is active"
+    stop_persistent_vm
+    ;;
   persistent-reset) reset_persistent_state ;;
   stage-source)
     ensure_cache_dir
@@ -847,6 +861,8 @@ case "$MODE" in
   clean)
     require_cache_marker
     validate_state_path
+    nas_qemu_acquire_shared_state_lock "${CACHE_DIR}.shared-qemu.lock" ||
+      die "cannot clean VM cache while another shared QEMU operation is active"
     stop_persistent_vm
     rm -rf -- "$CACHE_DIR"
     log "Removed $CACHE_DIR"
