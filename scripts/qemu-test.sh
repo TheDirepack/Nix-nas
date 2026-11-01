@@ -556,6 +556,7 @@ run_installer() {
   local iso boot_dir os_disk data_disk install_log boot_log pidfile install_marker source_stage source_id marker_id options pid
   local persistent_mode="${NAS_QEMU_PERSISTENT_MODE:-0}"
   local reuse_installed="${NAS_QEMU_REUSE_INSTALLED:-0}"
+  local vm_started_by_this_run=false
   local ssh_key ssh_key_dir full_suite_skip_fuzz github_actions=false
   local package_upgrade="${NAS_QEMU_PACKAGE_UPGRADE:-0}" reconfigure_timeout rebuild_timeout
   local -a accel network_args ssh_args
@@ -568,7 +569,13 @@ run_installer() {
   ssh_key="$STATE_DIR/installer-admin-ed25519"
   ssh_key_dir="$STATE_DIR/ssh-key"
 
+  # Reject an active shared VM before any traps, log truncation or disk writes.
+  nas_qemu_guard_shared_installer_state "$pidfile" "$persistent_mode" "$reuse_installed" \
+    "$os_disk" "$data_disk" "$ssh_key" "$install_marker" || die "shared QEMU state is in use"
+
   cleanup_vm() {
+    # Never terminate a VM that existed before this installer was invoked.
+    [[ "$vm_started_by_this_run" == true ]] || return 0
     local cleanup_pidfile="$STATE_DIR/qemu.pid"
     nas_qemu_cleanup_pidfile "$cleanup_pidfile" 20 || {
       local pid_status=$?
@@ -587,6 +594,9 @@ run_installer() {
   fi
 
   source_stage="$(stage_source_tree)"
+  # Source staging may be slow; recheck before any shared disk is replaced.
+  nas_qemu_guard_shared_installer_state "$pidfile" "$persistent_mode" "$reuse_installed" \
+    "$os_disk" "$data_disk" "$ssh_key" "$install_marker" || die "shared QEMU state became active"
   source_id="$(source_fingerprint "$source_stage")"
   marker_id="$(cat "$install_marker" 2>/dev/null || true)"
 
@@ -626,6 +636,7 @@ run_installer() {
     mapfile -t extra_drive_args < <(qemu_extra_drive_args)
     options="$(cat "$boot_dir/options") console=ttyS0,115200n8 systemd.show_status=1"
     log "Installing NixOS NAS into a fresh QEMU disk"
+    vm_started_by_this_run=true
     expect "$ROOT/tests/vm/install.expect" \
       qemu-system-x86_64 \
       "${accel[@]}" \
@@ -650,6 +661,8 @@ run_installer() {
   fi
 
   if [[ "$persistent_mode" != 1 || ! -s "$data_disk" ]]; then
+    nas_qemu_guard_shared_installer_state "$pidfile" "$persistent_mode" "$reuse_installed" \
+      "$os_disk" "$data_disk" "$ssh_key" "$install_marker" || die "refusing live QEMU data-disk replacement"
     rm -f "$data_disk"
     qemu-img create -q -f qcow2 "$data_disk" "${DATA_DISK_GIB}G"
   fi
@@ -668,6 +681,7 @@ run_installer() {
     log "Booting installed NAS in a disposable QEMU VM"
   fi
   if [[ ! -s "$pidfile" ]]; then
+    vm_started_by_this_run=true
     qemu-system-x86_64 \
       "${accel[@]}" \
       -m "$MEMORY_MIB" -smp "$CPUS" \
