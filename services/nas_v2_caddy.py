@@ -381,7 +381,6 @@ class PortalProjectionError(RuntimeError):
     """Raised when portal metadata cannot be projected safely."""
 
 
-
 def _safe_portal_path(value: Any) -> TypeGuard[str]:
     return (
         isinstance(value, str)
