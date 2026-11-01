@@ -1399,11 +1399,13 @@ def reject_completed_first_run() -> None:
             raise SetupError(f"Cannot verify first-run {kind} safety at {path}: {exc}") from exc
         if record is None:
             continue
-        completed = (
-            record.get("status") in {"complete", "complete-unverified"}
-            if kind == "state"
-            else record.get("workflow") == "first-run-v2" and record.get("status") == "complete"
-        )
+        if kind == "state":
+            status = record.get("status")
+            if not isinstance(status, str) or status not in {"complete", "complete-unverified"}:
+                raise SetupError(f"Cannot verify first-run state safety at {path}: unsupported status")
+            completed = True
+        else:
+            completed = record.get("workflow") == "first-run-v2" and record.get("status") == "complete"
         if completed:
             raise SetupError(
                 "Appliance first-run already completed; refusing to recreate the KeePassXC database "
