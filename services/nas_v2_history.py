@@ -125,7 +125,7 @@ def _bootstrap_baseline_locked(
     ).stdout.strip()
     tree = _run(
         [git_bin, f"--git-dir={repository}", "mktree"],
-        input_text=f"100640 blob {blob}\t{authority.name}\n",
+        input_text=f"100644 blob {blob}\t{authority.name}\n",
     ).stdout.strip()
     commit = _run(
         [

@@ -106,6 +106,23 @@ class V2HistoryTests(unittest.TestCase):
             with self.assertRaisesRegex(history.DesiredStateHistoryError, "no applied revision"):
                 history.ensure_bootstrap_applied(authority=authority, repository=repository)
 
+    def test_bootstrap_tree_passes_strict_git_integrity_without_changing_authority_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = pathlib.Path(raw)
+            authority = self.write_authority(root, "schemaVersion: 3\nservices: {}\n")
+            authority.chmod(0o640)
+            repository = root / "history.git"
+            history.ensure_bootstrap_applied(authority=authority, repository=repository)
+            result = subprocess.run(
+                ["git", "-c", "fsck.badFilemode=error", f"--git-dir={repository}", "fsck", "--strict", "--full"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("badFilemode", result.stdout + result.stderr)
+            self.assertEqual(authority.stat().st_mode & 0o777, 0o640)
+
     def test_bootstrap_cli_creates_the_baseline_before_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
