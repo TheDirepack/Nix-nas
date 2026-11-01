@@ -57,7 +57,7 @@ class ManagedFileContractTests(unittest.TestCase):
 
     def test_legacy_specs_continue_compiling_without_file_declarations(self) -> None:
         effective = self.compile(self.doc())
-        self.assertEqual(effective["services"]["demo"]["files"], [])
+        self.assertNotIn("files", effective["services"]["demo"])
         self.assertEqual(effective["derived"]["runtime"]["demo"]["ownerUnit"], "nas-v2-demo.service")
 
     def test_explicit_empty_file_list_remains_a_noop(self) -> None:
