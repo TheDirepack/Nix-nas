@@ -123,12 +123,20 @@ systemctl start nas-managed-services-authentik-reconcile.service
   fail "managed Authentik projection executed before unlock"
 [[ "$(systemctl show nas-managed-services-authentik-reconcile.service --property=ActiveState --value)" == inactive ]] || \
   fail "managed Authentik projection is not inactive while locked"
-
 for _ in $(seq 1 60); do
   [[ -b "$ZFS_DEVICE" ]] && break
   sleep 1
 done
 [[ -b "$ZFS_DEVICE" ]] || fail "ZFS test disk did not appear: $ZFS_DEVICE"
+
+[[ ! -e /run/nas-control/reconcile.pending ]] || fail "dirty marker exists before secret activation"
+systemctl start nas-managed-services-dirty.service
+[[ "$(systemctl show nas-managed-services-dirty.service --property=ConditionResult --value)" == no ]] || \
+  fail "dirty marker service was not condition-skipped while locked"
+[[ "$(systemctl show nas-managed-services-dirty.service --property=ExecMainStartTimestampMonotonic --value)" == 0 ]] || \
+  fail "dirty marker service executed before secret activation"
+[[ ! -e /run/nas-control/reconcile.pending ]] || fail "dirty marker service queued reconciliation while locked"
+pass "dirty marker service does not execute or queue work before secret activation"
 
 log "Run first-time setup through the encrypted-ZFS path"
 install -d -m 0700 -o admin -g users /var/lib/nas-test/setup
@@ -252,6 +260,17 @@ wait_oneshot_completed nas-managed-services-authentik-reconcile.service
   fail "managed Authentik projection was skipped after secret activation"
 [[ -s /var/lib/nas-control/authentik-v2-objects.json ]] || fail "managed Authentik projection did not commit its object manifest"
 pass "managed Authentik projection executes after secret activation"
+systemctl stop nas-managed-services-reconcile.path
+wait_reconciliation_idle
+systemctl start nas-managed-services-dirty.service
+[[ "$(systemctl show nas-managed-services-dirty.service --property=ConditionResult --value)" == yes ]] || \
+  fail "dirty marker service was skipped after secret activation"
+[[ "$(systemctl show nas-managed-services-dirty.service --property=ExecMainStartTimestampMonotonic --value)" != 0 ]] || \
+  fail "dirty marker service did not execute after secret activation"
+[[ -f /run/nas-control/reconcile.pending ]] || fail "dirty marker service did not queue reconciliation after activation"
+wait_reconciliation_idle
+systemctl start nas-managed-services-reconcile.path
+pass "dirty marker is queued after activation and acknowledged by the real reconciliation transaction"
 [[ "$(getent passwd akadmin)" == "" ]] || fail "bootstrap administrator was not retired after first run"
 # Capability bytes must never reach backend or proxy logs.
 if journalctl -u nas-setup-api --no-pager 2>/dev/null | grep -Eo '[0-9a-f]{48}' | grep -q .; then
