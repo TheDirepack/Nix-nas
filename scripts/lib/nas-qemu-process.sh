@@ -48,3 +48,31 @@ nas_qemu_cleanup_pidfile() {
 nas_qemu_disarm_cleanup() {
   trap - EXIT INT TERM
 }
+
+# Refuse to reuse or replace a disk owned by a running, separately managed VM.
+# Exit 1: legitimate QEMU conflicts with this operation. Exit 2: PID belongs
+# to a different process (never trust it as permission to delete any disks).
+# Exit 0: no running owner, or an intentionally reused complete persistent VM.
+nas_qemu_guard_shared_installer_state() {
+  local pidfile=$1 persistent_mode=$2 reuse_installed=$3 os_disk=$4 data_disk=$5 ssh_key=$6 install_marker=$7
+  local status
+  [[ -s "$pidfile" ]] || return 0
+  if nas_qemu_pid_from_pidfile "$pidfile"; then
+    if [[ "$persistent_mode" != 1 ]]; then
+      printf 'error: installer cannot use shared QEMU disks while a persistent VM is running: %s\n' "$pidfile" >&2
+      return 1
+    fi
+    if [[ "$reuse_installed" != 1 || ! -s "$os_disk" || ! -s "$data_disk" || ! -s "$ssh_key" || ! -s "$install_marker" ]]; then
+      printf 'error: active persistent VM has incomplete or non-reusable state; stop it before reinstalling: %s\n' "$pidfile" >&2
+      return 1
+    fi
+    return 0
+  else
+    status=$?
+    if (( status == 2 )); then
+      printf 'error: refusing installer state with foreign PID owner: %s\n' "$pidfile" >&2
+      return 2
+    fi
+  fi
+  return 0
+}
