@@ -309,7 +309,7 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       unitConfig.RequiresMountsFor = [ restoreVerifyPath ]
-        ++ lib.optional (cfg.backup.repositoryFile == "") localResticRepository;
+        ++ lib.optional (cfg.backup.repositoryFile == "" && !remoteEnabled) localResticRepository;
       serviceConfig = {
         Type = "oneshot";
         Nice = 15;
@@ -317,7 +317,12 @@ in
         TimeoutStartSec = "6h";
         UMask = "0077";
       };
-      path = [ pkgs.coreutils ];
+      path = [ pkgs.coreutils ] ++ lib.optional remoteEnabled pkgs.rclone;
+      environment = lib.mkIf remoteEnabled (
+        lib.optionalAttrs (cfg.backup.remote.rcloneConfigFile != "") {
+          RCLONE_CONFIG = cfg.backup.remote.rcloneConfigFile;
+        }
+      );
       script = ''
         set -euo pipefail
         verify_root=${lib.escapeShellArg restoreVerifyPath}
@@ -344,8 +349,8 @@ in
           --pg-restore ${config.services.postgresql.package}/bin/pg_restore
 
         # These are host recovery substrate rather than application resources.
-        [[ -s "$restore_root${cfg.secrets.keepassDatabase}" ]]
-        [[ -d "$restore_root/var/lib/nas-control" ]]
+        [[ -s "$restore_root"${lib.escapeShellArg cfg.secrets.keepassDatabase} ]]
+        [[ -d "$restore_root"${lib.escapeShellArg "${cfg.zfsRoot}/nas-control"} ]]
       '';
     };
 
