@@ -1666,9 +1666,13 @@ def main() -> int:
     sub.add_parser("status", help="Report the current Authentik identity model")
     sub.add_parser("capabilities", help="Report Authentik-owned Managed Services V2 application assignments")
     sub.add_parser("account-journal", help="Inspect failed account-plan recovery metadata without credentials")
-    cancel_parser = sub.add_parser("cancel-failed-accounts", help="Acknowledge a failed account plan and archive its journal")
+    cancel_parser = sub.add_parser(
+        "cancel-failed-accounts", help="Acknowledge a failed account plan and archive its journal"
+    )
     cancel_parser.add_argument("--fingerprint", required=True, help="Exact fingerprint printed by account-journal")
-    cancel_parser.add_argument("--note", required=True, help="Operator statement acknowledging possible partial account changes")
+    cancel_parser.add_argument(
+        "--note", required=True, help="Operator statement acknowledging possible partial account changes"
+    )
     apply_parser = sub.add_parser("apply-accounts", help="Create/update Authentik accounts from a transient JSON plan")
     apply_parser.add_argument("source", help="JSON file or - for stdin")
     apply_parser.add_argument(
