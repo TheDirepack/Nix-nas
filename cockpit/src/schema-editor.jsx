@@ -93,7 +93,15 @@ function ScalarEditor({root, schema, value, onChange, id, label}) {
   }
   const text = typeof value === "string" ? value : "";
   if ((resolved.maxLength || 0) > 256 || resolved.format === "textarea") {
-    return <TextArea id={id} aria-label={label} value={text} onChange={(_event, next) => onChange(next)} rows={4} />;
+    return (
+      <TextArea
+        id={id}
+        aria-label={label}
+        value={text}
+        onChange={(_event, next) => onChange(next)}
+        rows={4}
+      />
+    );
   }
   return (
     <TextInput
@@ -183,7 +191,11 @@ function MapKeyInput({name, names, pattern, onRename}) {
           }
         }}
       />
-      {error ? <span id={errorId} className="nas-schema-error" role="alert">{error}</span> : null}
+      {error ? (
+        <span id={errorId} className="nas-schema-error" role="alert">
+          {error}
+        </span>
+      ) : null}
     </>
   );
 }
@@ -375,7 +387,14 @@ function SchemaNode({root, schema, value, onChange, path, label, required = fals
       ) : type === "array" ? (
         <ArrayEditor root={root} schema={active} value={value} onChange={onChange} path={path} />
       ) : (
-        <ScalarEditor root={root} schema={active} value={value} onChange={onChange} id={id} label={titleFor(active, label)} />
+        <ScalarEditor
+          root={root}
+          schema={active}
+          value={value}
+          onChange={onChange}
+          id={id}
+          label={titleFor(active, label)}
+        />
       )}
     </fieldset>
   );

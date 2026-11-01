@@ -113,7 +113,9 @@ test("optional-field add flow reports no serious or critical axe violations", as
   expect(blocking).toEqual([]);
 });
 
-test("dynamic map keys commit on blur without dropping typed characters or map values", async ({page}) => {
+test("dynamic map keys commit on blur without dropping typed characters or map values", async ({
+  page,
+}) => {
   const schema = {
     type: "object",
     properties: {
@@ -125,13 +127,19 @@ test("dynamic map keys commit on blur without dropping typed characters or map v
     },
     required: ["entries"],
   };
-  const {pageErrors, consoleErrors} = await openEditor(page, {entries: {alpha: "one", beta: "two"}}, schema);
+  const {pageErrors, consoleErrors} = await openEditor(
+    page,
+    {entries: {alpha: "one", beta: "two"}},
+    schema,
+  );
   const original = page.getByRole("textbox", {name: "Key for alpha", exact: true});
   await expect(original).toHaveValue("alpha");
 
   await original.fill("alpha-renamed");
   await expect(original).toHaveValue("alpha-renamed");
-  await expect(page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true})).toHaveCount(
+    0,
+  );
   await original.press("Enter");
   const renamed = page.getByRole("textbox", {name: "Key for alpha-renamed", exact: true});
   await expect(renamed).toHaveValue("alpha-renamed");
@@ -155,7 +163,9 @@ test("dynamic map keys commit on blur without dropping typed characters or map v
   await renamed.press("Tab");
   await expect(page.getByRole("alert")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
-  expect(consoleErrors.filter((message) => message.includes("requires either an id or aria-label"))).toEqual([]);
+  expect(
+    consoleErrors.filter((message) => message.includes("requires either an id or aria-label")),
+  ).toEqual([]);
 });
 
 test("untouched padded keys retain their exact identity on blur", async ({page}) => {
@@ -171,7 +181,9 @@ test("untouched padded keys retain their exact identity on blur", async ({page})
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("IME Enter does not commit a dynamic key and rename preserves a pending Remove click", async ({page}) => {
+test("IME Enter does not commit a dynamic key and rename preserves a pending Remove click", async ({
+  page,
+}) => {
   const schema = {
     type: "object",
     additionalProperties: {type: "string"},
@@ -180,9 +192,15 @@ test("IME Enter does not commit a dynamic key and rename preserves a pending Rem
   const key = page.getByRole("textbox", {name: "Key for alpha", exact: true});
   await key.fill("gamma");
   await key.focus();
-  await key.evaluate((element) => element.dispatchEvent(new KeyboardEvent("keydown", {
-    key: "Enter", isComposing: true, bubbles: true,
-  })));
+  await key.evaluate((element) =>
+    element.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: true,
+        bubbles: true,
+      }),
+    ),
+  );
   await expect(key).toBeFocused();
   await expect(page.getByRole("textbox", {name: "Key for gamma", exact: true})).toHaveCount(0);
   const row = page.locator(".nas-schema-map-entry", {has: key});
