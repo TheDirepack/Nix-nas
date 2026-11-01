@@ -119,7 +119,11 @@ ss -tln | grep -Eq '127\.0\.0\.1:9092[[:space:]]' || fail "Cockpit SSO session i
 # A skipped mount guard is not sufficient: the seed itself must refuse to
 # create /tank/nas-control on the root filesystem before encrypted ZFS mounts.
 systemctl start nas-managed-services-seed.service >/dev/null 2>&1 || true
-[[ ! -e /tank/nas-control ]] || fail "managed seed wrote below unmounted /tank"
+# tmpfiles may create the directory itself before mount. The seed must
+# not populate its authority or marker on that backing filesystem.
+[[ ! -e /tank/nas-control/services.yaml ]] || fail "managed seed wrote desired state before ZFS mount"
+[[ ! -e /tank/nas-control/.managed-services-native-seed-v2 ]] || \
+  fail "managed seed wrote bootstrap marker before ZFS mount"
 ! systemctl is-active --quiet nas-managed-services-seed.service || \
   fail "managed seed became active before the encrypted dataset mounted"
 
@@ -280,6 +284,9 @@ systemctl start nas-managed-services-seed.service
 # Exercise the composed systemd service boundary, not just bootstrap helpers:
 # re-running seed against existing desired state must preserve operator policy.
 [[ -s /var/lib/nas-control/services.yaml ]] || fail "managed seed authority missing after setup"
+# A valid operator-authored YAML comment must survive a seed restart;
+# checking an unmodified default would not detect accidental re-seeding.
+printf '\\n# operator-owned-preservation-probe\\n' >> /var/lib/nas-control/services.yaml
 seed_authority_before=$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)
 systemctl restart nas-managed-services-seed.service
 [[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$seed_authority_before" ]] || \
