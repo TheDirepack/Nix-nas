@@ -42,6 +42,9 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    import re
+    import shlex
+
     machine.wait_for_unit("multi-user.target")
     machine.succeed("busctl --system call org.freedesktop.UDisks2 /org/freedesktop/UDisks2 org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null")
     machine.succeed("test $(systemctl show -p Result --value nas-vm-test-repository.service) = success")
@@ -58,6 +61,16 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl is-active --quiet nas-firewall-baseline.service")
     machine.succeed("firewall-cmd --state")
     machine.succeed("timeout --verbose --signal=TERM --kill-after=${toString outerKillAfter}s ${toString guestWatchdog}s nas-vm-guest-test /dev/vdb")
+    telegraf_environment = shlex.split(machine.succeed("systemctl show telegraf.service --property=Environment --value"))
+    telegraf_path = next(value.removeprefix("PATH=") for value in telegraf_environment if value.startswith("PATH="))
+    smart_rule = machine.succeed("sudo -n -l -U telegraf")
+    smart_match = re.search(r"/nix/store/[A-Za-z0-9-]+-nas-smartctl-readonly", smart_rule)
+    assert smart_match is not None, "Telegraf sudo policy is missing its read-only SMART wrapper"
+    smart_wrapper = smart_match.group(0)
+    smart_command = "runuser -u telegraf -- env " + shlex.quote("PATH=" + telegraf_path) + " sh -c "
+    machine.succeed(smart_command + shlex.quote('test "$(command -v sudo)" = /run/wrappers/bin/sudo && sudo -n "$1" --scan') + " _ " + shlex.quote(smart_wrapper))
+    machine.succeed(smart_command + shlex.quote('sudo -n "$1" --set=on /dev/vdb; test "$?" = 64') + " _ " + shlex.quote(smart_wrapper))
+    machine.fail("runuser -u telegraf -- /run/wrappers/bin/sudo -n /run/current-system/sw/bin/true")
     machine.succeed("test $(zfs get -H -o value encryption tank/nas) = off")
     machine.succeed("timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.secretAdversarial}s nas-vm-secret-adversarial")
     machine.succeed("NAS_INSTALLED_FUZZ_SMOKE=1 timeout --signal=TERM --kill-after=${toString outerKillAfter}s ${toString timeoutBudget.timeouts.installedSmoke}s python3 /var/lib/nas-test/repo/tests/vm/adversarial-installed.py >/tmp/nas-installed-command-smoke.json")

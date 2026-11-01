@@ -14,6 +14,12 @@
       "reason": "The upstream Telegraf unit grants CAP_NET_RAW for the ping input; this configuration has no ping input and explicitly removes the unused ambient capability."
     },
     {
+      "path": "modules/nas/config/observability.nix",
+      "setting": "environment.PATH",
+      "count": 1,
+      "reason": "Telegraf's SMART input must resolve sudo through NixOS's setuid /run/wrappers/bin/sudo, not the unprivileged Nix-store binary from the upstream service PATH."
+    },
+    {
       "path": "modules/nas/config/host-platform.nix",
       "setting": "nixpkgs.config.allowUnfreePredicate",
       "count": 1,
