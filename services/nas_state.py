@@ -308,7 +308,7 @@ def ensure_safe_tree(path: pathlib.Path) -> None:
             raise StateError(f"State authority contains an unsupported object: {child}")
 
 
-def hash_path(path: pathlib.Path) -> str:
+def hash_path(path: pathlib.Path, *, root_name: str | None = None) -> str:
     ensure_safe_tree(path)
     digest = hashlib.sha256()
     mode = path.lstat().st_mode
@@ -316,7 +316,7 @@ def hash_path(path: pathlib.Path) -> str:
     paths = [path] if stat.S_ISREG(mode) else [path, *sorted(path.rglob("*"))]
     for item in paths:
         metadata = item.lstat()
-        relative = item.relative_to(root).as_posix()
+        relative = root_name if root_name is not None and stat.S_ISREG(mode) else item.relative_to(root).as_posix()
         kind = "d" if stat.S_ISDIR(metadata.st_mode) else "f"
         digest.update(f"{kind}\0{relative}\0{stat.S_IMODE(metadata.st_mode) & 0o777:o}\0".encode())
         if stat.S_ISREG(metadata.st_mode):
@@ -1195,7 +1195,7 @@ def compare_bundle(bundle: pathlib.Path) -> tuple[dict[str, Any], bool]:
                 row_status = "match" if current == entry["comparisonDigest"] else "drift"
             else:
                 source = pathlib.Path(authority.source)
-                current = hash_path(source) if lstat_type(source) != 0 else None
+                current = hash_path(source, root_name=authority.name) if lstat_type(source) != 0 else None
                 row_status = "match" if current == entry["digest"] else "drift"
             if row_status == "drift":
                 comparison = "drift"
@@ -1345,15 +1345,25 @@ def canonical_apply_entries(manifest: Mapping[str, Any]) -> list[Mapping[str, An
     return [by_name[authority.name] for authority in authorities()]
 
 
+def preflight_restore_absence(manifest: Mapping[str, Any], *, restore_absence: bool) -> None:
+    """Reject absence conflicts before any authority is changed."""
+    if restore_absence:
+        return
+    registry = {item.name: item for item in authorities()}
+    for entry in canonical_apply_entries(manifest):
+        authority = registry[entry["name"]]
+        if entry["status"] == "absent" and authority.kind == "path" and lstat_type(pathlib.Path(authority.source)) != 0:
+            raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
+
+
 def apply_extracted(staging: pathlib.Path, manifest: dict[str, Any], *, restore_absence: bool = False) -> None:
+    preflight_restore_absence(manifest, restore_absence=restore_absence)
     registry = {item.name: item for item in authorities()}
     for entry in canonical_apply_entries(manifest):
         authority = registry[entry["name"]]
         if entry["status"] == "absent":
             destination = pathlib.Path(authority.source)
             if authority.kind == "path" and lstat_type(destination) != 0:
-                if not restore_absence:
-                    raise StateError(f"Restoring absence for {authority.name} requires --restore-absence")
                 remove_path(destination)
             continue
         if entry["status"] != "captured":
@@ -1387,7 +1397,9 @@ def _dir_content_digest(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def verify_restored_state(staging: pathlib.Path, manifest: dict[str, Any]) -> None:
+def verify_restored_state(
+    staging: pathlib.Path, manifest: dict[str, Any], *, kinds: frozenset[str] | None = None
+) -> None:
     """Post-restore validation: re-hash each restored authority and compare to manifest.
 
     Re-hashes the live filesystem/database state and compares it to the
@@ -1404,6 +1416,8 @@ def verify_restored_state(staging: pathlib.Path, manifest: dict[str, Any]) -> No
         if entry["status"] != "captured":
             continue
         authority = registry[entry["name"]]
+        if kinds is not None and authority.kind not in kinds:
+            continue
         if authority.kind == "database":
             current = database_comparison_digest()
             if current != entry["comparisonDigest"]:
@@ -1638,26 +1652,28 @@ def restore_bundle(
         prune_rollbacks()
         rollback = DEFAULT_ROLLBACK_ROOT / f"rollback-{int(time.time())}-{secrets.token_hex(4)}.tar.gz"
         unit_snapshot = capture_unit_state(restore_units())
-        # BUG 2 fix: capture rollback BEFORE quiescing. Services that finalize
-        # writes on shutdown would otherwise leave a post-stop quiesced baseline
-        # in the rollback instead of the true pre-restore state. We export
-        # with quiesce=False while units are still running (mildly incoherent
-        # snapshot) and then stop; post-restore digest validation (BUG 1) covers
-        # incoherence by failing the restore before it is marked committed.
-        rollback_ready = False
+        # Retain the pre-stop baseline; shutdown hooks may change authority data.
+        state_mutated = False
         try:
             export_bundle(rollback, include_sensitive=True, quiesce=False)
-            rollback_ready = True
             restore_journal_update("rollback-captured", rollbackBundle=str(rollback))
+            # Reject absence conflicts before stopping any runtime consumers.
+            # With CleanupOnExit=yes, stopping firewalld flushes its rules;
+            # failing before the stop preserves firewall continuity.
+            preflight_restore_absence(manifest, restore_absence=restore_absence)
             stop_active_units(unit_snapshot)
             restore_journal_update("quiesced", unitSnapshot=unit_snapshot)
+            state_mutated = True
             apply_extracted(staging, manifest, restore_absence=restore_absence)
             restore_journal_update("state-applied")
+            # Writers must not change restored files before path verification.
+            verify_restored_state(staging, manifest, kinds=frozenset({"path"}))
             reapply_runtime_consumers(unit_snapshot)
-            verify_restored_state(staging, manifest)
+            # Database comparison needs PostgreSQL available again.
+            verify_restored_state(staging, manifest, kinds=frozenset({"database"}))
             restore_journal_update("committed", completedAt=int(time.time()))
         except Exception as original:
-            if not rollback_ready:
+            if not state_mutated:
                 try:
                     restore_unit_state(unit_snapshot)
                 except Exception as unit_error:
@@ -1674,6 +1690,8 @@ def restore_bundle(
                 raise
             restore_journal_update("rolling-back", primaryError=str(original))
             try:
+                # A failure after reactivation must not overwrite live writers.
+                stop_active_units(capture_unit_state(restore_units()))
                 with state_temporary_directory("nas-state-rollback.") as rollback_temp:
                     rollback_staging = pathlib.Path(rollback_temp)
                     extract_bundle(rollback, rollback_staging)
