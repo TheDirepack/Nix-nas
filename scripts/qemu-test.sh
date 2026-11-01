@@ -690,15 +690,15 @@ run_installer() {
       # QEMU -daemonize must never inherit the caller's flock descriptor.
       # The parent installer still holds it until startup is verified.
       exec {NAS_QEMU_SHARED_LOCK_FD}>&-
-    qemu-system-x86_64 \
-      "${accel[@]}" \
-      -m "$MEMORY_MIB" -smp "$CPUS" \
-      -drive "file=$os_disk,format=qcow2,if=virtio" \
-      -drive "file=$data_disk,format=qcow2,if=virtio" \
-      "${extra_drive_args[@]}" \
-      -device virtio-rng-pci \
-      "${network_args[@]}" \
-      -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
+      qemu-system-x86_64 \
+        "${accel[@]}" \
+        -m "$MEMORY_MIB" -smp "$CPUS" \
+        -drive "file=$os_disk,format=qcow2,if=virtio" \
+        -drive "file=$data_disk,format=qcow2,if=virtio" \
+        "${extra_drive_args[@]}" \
+        -device virtio-rng-pci \
+        "${network_args[@]}" \
+        -display none -serial "file:$boot_log" -daemonize -pidfile "$pidfile"
     )
   fi
 
