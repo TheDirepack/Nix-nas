@@ -192,6 +192,8 @@ async function installCockpitMock(page, behavior = {}) {
       globalThis.__nas_spawn_calls = [];
       const response = structuredClone(payload);
       const overviewOutputs = [...(configuredBehavior.overviewOutputs || [])];
+      const firstStartResponses = [...(configuredBehavior.firstStartResponses || [])];
+      let firstStartJob = null;
       const rejected = (message) => {
         const promise = Promise.reject(new Error(message));
         promise.input = () => {};
@@ -222,7 +224,30 @@ async function installCockpitMock(page, behavior = {}) {
           ) {
             return rejected(configuredBehavior.actionError);
           }
+          if (
+            args[0] === "nas-cockpit-api" &&
+            args[1] === "first-start" &&
+            firstStartResponses.length
+          ) {
+            const next = firstStartResponses.shift();
+            if (next.error) return rejected(next.error);
+            firstStartJob = next.value || {status: "submitted", jobId: "a".repeat(24)};
+            const output = JSON.stringify(firstStartJob);
+            const promise = new Promise((resolve) => {
+              if (next.hold) {
+                globalThis.__nas_release_first_start = () => resolve(output);
+              } else {
+                setTimeout(() => resolve(output), next.delayMs || 0);
+              }
+            });
+            promise.input = () => {};
+            promise.stream = () => promise;
+            return promise;
+          }
           let value = {ok: true};
+          if (args[0] === "nas-cockpit-api" && args[1] === "first-start-job-status") {
+            value = {...firstStartJob, status: "running"};
+          }
           if (args[0] === "nas-cockpit-api" && args[1] === "overview") value = response;
           if (args[0] === "nas-cockpit-api" && args[1] === "feature")
             value = {ok: true, feature: args[2], mode: args[3]};
@@ -265,6 +290,22 @@ async function installCockpitMock(page, behavior = {}) {
           return promise;
         },
       };
+      if (configuredBehavior.holdSystemdAfterFirstStart) {
+        const pendingSystemd = [];
+        globalThis.__nas_systemd_pending = 0;
+        globalThis.__nas_release_systemd = () => {
+          pendingSystemd.splice(0).forEach((resolve) => resolve([[]]));
+          globalThis.__nas_systemd_pending = 0;
+        };
+        globalThis.cockpit.dbus = () => ({
+          call() {
+            if (!firstStartJob) return Promise.resolve([[]]);
+            globalThis.__nas_systemd_pending += 1;
+            return new Promise((resolve) => pendingSystemd.push(resolve));
+          },
+          close() {},
+        });
+      }
     },
     {payload: data, configuredBehavior: behavior},
   );
@@ -563,4 +604,171 @@ test("confirmation dialog supports keyboard cancellation", async ({page}) => {
     () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "action").length,
   );
   expect(actionCalls).toBe(0);
+});
+
+test("first-start form cannot submit twice while pending and does not report completion early", async ({
+  page,
+}) => {
+  const payload = overview();
+  payload.setup.firstStart = {
+    status: "ready",
+    message: "Ready for initial setup",
+    planDigest: "a".repeat(64),
+    storage: {devices: []},
+  };
+  payload.setup.setupState = {status: "ready"};
+  await openApp(page, {
+    payload,
+    firstStartResponses: [{hold: true, value: {status: "submitted", jobId: "a".repeat(24)}}],
+  });
+  await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
+  await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
+  await page.getByLabel("Confirm KeePassXC database password").fill("test-keystore-key");
+  await page.getByLabel("Administrator username").fill("operator");
+  await page.getByLabel("Administrator name").fill("Operator");
+  await page.getByLabel("Administrator email").fill("operator@example.invalid");
+  await page.getByLabel("Administrator password").fill("long-test-password");
+  const start = page.getByRole("button", {name: "Start", exact: true});
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(start).toBeDisabled();
+  await expect(page.getByText("Operation completed.")).toHaveCount(0);
+  const job = page.locator(".pf-v6-c-card").filter({
+    has: page.getByText("First-start job", {exact: true}),
+  });
+  await expect(job).toHaveCount(0);
+  const countCalls = () =>
+    page.evaluate(
+      () =>
+        globalThis.__nas_spawn_calls.filter(
+          (parts) => parts[0] === "nas-cockpit-api" && parts[1] === "first-start",
+        ).length,
+    );
+  expect(await countCalls()).toBe(1);
+  // Even a second dispatched activation must not submit while the first
+  // promise is pending. The button remains disabled in normal UI interaction.
+  await start.dispatchEvent("click");
+  expect(await countCalls()).toBe(1);
+  await page.evaluate(() => globalThis.__nas_release_first_start());
+  await expect(job).toBeVisible();
+  await expect(job.locator("pre")).toContainText(`"jobId": "${"a".repeat(24)}"`);
+  await expect(job.locator("pre")).not.toContainText('"status": "complete"');
+  expect(await countCalls()).toBe(1);
+  await expect(page.getByText("Operation completed.")).toHaveCount(0);
+});
+
+test("accepted first-start job is tracked while systemd refresh remains pending", async ({
+  page,
+}) => {
+  const payload = overview();
+  payload.setup.firstStart = {
+    status: "ready",
+    message: "Ready for initial setup",
+    planDigest: "a".repeat(64),
+    storage: {devices: []},
+  };
+  payload.setup.setupState = {status: "ready"};
+  const jobId = "c".repeat(24);
+  await openApp(page, {
+    payload,
+    holdSystemdAfterFirstStart: true,
+    firstStartResponses: [{value: {status: "submitted", jobId}}],
+  });
+  await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
+  await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
+  await page.getByLabel("Confirm KeePassXC database password").fill("test-keystore-key");
+  await page.getByLabel("Administrator username").fill("operator");
+  await page.getByLabel("Administrator name").fill("Operator");
+  await page.getByLabel("Administrator email").fill("operator@example.invalid");
+  await page.getByLabel("Administrator password").fill("long-test-password");
+  const start = page.getByRole("button", {name: "Start", exact: true});
+  await start.click();
+  await expect.poll(() => page.evaluate(() => globalThis.__nas_systemd_pending)).toBeGreaterThan(0);
+  try {
+    const job = page.locator(".pf-v6-c-card").filter({
+      has: page.getByText("First-start job", {exact: true}),
+    });
+    await expect(job).toBeVisible();
+    await expect(job.locator("pre")).toContainText(`"jobId": "${jobId}"`);
+    await expect(job.locator("pre")).toContainText('"status": "running"');
+    await expect(page.getByLabel("KeePassXC database password", {exact: true})).toHaveValue("");
+    await expect(page.getByLabel("Confirm KeePassXC database password")).toHaveValue("");
+    await expect(page.getByLabel("Administrator password")).toHaveValue("");
+    await expect(start).toBeDisabled();
+    await start.dispatchEvent("click");
+    expect(
+      await page.evaluate(
+        () => globalThis.__nas_spawn_calls.filter((args) => args[1] === "first-start").length,
+      ),
+    ).toBe(1);
+    expect(await page.evaluate(() => globalThis.__nas_systemd_pending)).toBeGreaterThan(0);
+    await expect(page.getByText("Operation completed.")).toHaveCount(0);
+  } finally {
+    await page.evaluate(() => globalThis.__nas_release_systemd());
+  }
+});
+
+test("failed first-start submission reports its error and allows a retry", async ({page}) => {
+  const payload = overview();
+  payload.setup.firstStart = {
+    status: "ready",
+    message: "Ready for initial setup",
+    planDigest: "a".repeat(64),
+    storage: {devices: []},
+  };
+  payload.setup.setupState = {status: "ready"};
+  await openApp(page, {
+    payload,
+    firstStartResponses: [
+      {error: "simulated first-start submission failure"},
+      {value: {status: "submitted", jobId: "b".repeat(24)}},
+    ],
+  });
+  await page.locator(".pf-v6-c-nav").getByText("First start", {exact: true}).click();
+  await page.getByLabel("KeePassXC database password", {exact: true}).fill("test-keystore-key");
+  await page.getByLabel("Confirm KeePassXC database password").fill("test-keystore-key");
+  await page.getByLabel("Administrator username").fill("operator");
+  await page.getByLabel("Administrator name").fill("Operator");
+  await page.getByLabel("Administrator email").fill("operator@example.invalid");
+  await page.getByLabel("Administrator password").fill("long-test-password");
+  const start = page.getByRole("button", {name: "Start", exact: true});
+  await start.click();
+  await expect(page.getByText("simulated first-start submission failure")).toBeVisible();
+  const job = page.locator(".pf-v6-c-card").filter({
+    has: page.getByText("First-start job", {exact: true}),
+  });
+  await expect(job).toHaveCount(0);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(job).toBeVisible();
+  await expect(job.locator("pre")).toContainText(`"jobId": "${"b".repeat(24)}"`);
+  await expect(job.locator("pre")).not.toContainText('"status": "complete"');
+  await expect(page.getByText("Operation completed.")).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        globalThis.__nas_spawn_calls.filter(
+          (args) => args[0] === "nas-cockpit-api" && args[1] === "first-start",
+        ).length,
+    ),
+  ).toBe(2);
+});
+
+test("locked-screen Enter unlocks exactly once without navigating away", async ({page}) => {
+  const payload = overview();
+  payload.protectedReady = false;
+  await openApp(page, {payload});
+  const input = page.locator(".nas-page form").first().locator('input[type="password"]');
+  await input.fill("unlock-on-enter");
+  await input.press("Enter");
+  await expect(page.getByText("Runtime secrets activated.")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        globalThis.__nas_spawn_calls.filter(
+          (args) => args[0] === "nas-secrets" && args[1] === "activate-stdin",
+        ).length,
+    ),
+  ).toBe(1);
+  expect(new URL(page.url()).pathname).toBe("/index.html");
 });

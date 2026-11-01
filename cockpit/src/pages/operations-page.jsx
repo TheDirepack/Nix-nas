@@ -101,7 +101,7 @@ export function OperationsPage({data, mutate, busy}) {
             substrate — the minimum needed to restore the Authentik remote sign-in route. All also
             includes V2 app data emitted via <code>storageResources</code>.
           </p>
-          <Form>
+          <Form onSubmit={(event) => event.preventDefault()}>
             <FormGroup label="Provider">
               <FormSelect
                 aria-label="Backup provider"

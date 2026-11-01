@@ -42,16 +42,26 @@ export function SetupPage({data, mutate, busy}) {
   const devices = Array.isArray(model.storage?.devices) ? model.storage.devices : [];
 
   const submit = async () => {
-    const value = await startFirstRun(password, administrator, {
-      planDigest: model.planDigest,
-      devices: selectedDevices,
-      allowDestructiveStorage: allowDestructive,
-      confirmPasswordReapply,
-    });
-    setPassword("");
-    setPasswordConfirm("");
-    setAdministrator({...administrator, password: ""});
-    setJob(value);
+    try {
+      await mutate(
+        async () => {
+          const value = await startFirstRun(password, administrator, {
+            planDigest: model.planDigest,
+            devices: selectedDevices,
+            allowDestructiveStorage: allowDestructive,
+            confirmPasswordReapply,
+          });
+          setPassword("");
+          setPasswordConfirm("");
+          setAdministrator({...administrator, password: ""});
+          setJob(value);
+          return value;
+        },
+        {successNotice: null},
+      );
+    } catch (_reason) {
+      // useMutation already presents the failure and clears busy state.
+    }
   };
 
   useEffect(() => {
