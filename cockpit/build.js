@@ -3,8 +3,9 @@ import {copyFileSync, existsSync, mkdirSync, readFileSync, rmSync} from "node:fs
 import {join, resolve} from "node:path";
 import {createRequire} from "node:module";
 import process from "node:process";
+import {fileURLToPath} from "node:url";
 
-const root = resolve(import.meta.dirname);
+const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const source = join(root, "src");
 const output = join(root, "dist");
 const mode = process.argv[2] || "build";
