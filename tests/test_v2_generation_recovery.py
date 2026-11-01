@@ -136,8 +136,10 @@ class PublicationCleanupSeparationTests(unittest.TestCase):
             self.assertIn("V2 generation pruning deferred:", diagnostics.getvalue())
             removed: list[pathlib.Path] = []
 
-            def _record_prune(*args: object, **kwargs: object) -> list[pathlib.Path]:
-                paths = generation.prune_generations(*args, **kwargs)
+            def _record_prune(
+                generation_root: pathlib.Path, *, current_link: pathlib.Path, retain: int = 3
+            ) -> list[pathlib.Path]:
+                paths = generation.prune_generations(generation_root, current_link=current_link, retain=retain)
                 removed.extend(paths)
                 return paths
 
