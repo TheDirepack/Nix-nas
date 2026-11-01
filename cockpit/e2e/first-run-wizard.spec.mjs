@@ -219,7 +219,9 @@ test("refreshing an already approved destructive plan requires fresh consent", a
   expect(submissions).toHaveLength(0);
 });
 
-test("refreshing an identical storage plan still invalidates destructive consent", async ({page}) => {
+test("refreshing an identical storage plan still invalidates destructive consent", async ({
+  page,
+}) => {
   let refreshes = 0;
   const submissions = [];
   await mockSetupApi(page, async ({request, pathname}) => {
