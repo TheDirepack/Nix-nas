@@ -85,33 +85,57 @@ bundle_refs() {
 }
 
 bundle_out_paths() {
-  local ref
+  # Do not emit a partial set of roots if any evaluation fails.
+  local ref out
+  local -a outs=()
   while IFS= read -r ref; do
-    "$NIX" eval --raw "${ref}.outPath"
-    printf '\n'
+    if ! out="$("$NIX" eval --raw "${ref}.outPath")"; then
+      printf '%s: could not evaluate Nix root %s\n' "$PROG" "$ref" >&2
+      return 1
+    fi
+    if [[ -z $out || $out != /* || $out == *$'\n'* ]]; then
+      printf '%s: invalid Nix store root for %s\n' "$PROG" "$ref" >&2
+      return 1
+    fi
+    outs+=("$out")
   done < <(bundle_refs "$1")
+  (("${#outs[@]}" > 0)) || return 1
+  printf '%s\n' "${outs[@]}"
 }
 
 bundle_hash() {
-  local name=$1 out
-  local -a hashes=()
-  if [[ $name != core ]]; then
-    while IFS= read -r out; do
-      if [[ -n $out ]]; then
-        hashes+=("$(basename "$out" | cut -d- -f1)")
-        break
-      fi
-    done < <(bundle_out_paths core)
+  local name=$1 dep out paths store_name
+  local -a hashes=() dependencies=()
+  # vm-drivers is a delta against core plus every application closure, so
+  # every root influencing that subtraction must be in its cache key.
+  if [[ $name == vm-drivers ]]; then
+    dependencies=(core identity observability storage vm-drivers)
+  elif [[ $name == core ]]; then
+    dependencies=(core)
+  else
+    dependencies=(core "$name")
   fi
-  while IFS= read -r out; do
-    hashes+=("$(basename "$out" | cut -d- -f1)")
-  done < <(bundle_out_paths "$name")
+  for dep in "${dependencies[@]}"; do
+    paths="$(bundle_out_paths "$dep")" || return 1
+    while IFS= read -r out; do
+      store_name="${out##*/}"
+      if [[ $store_name != *-* || -z ${store_name%%-*} ]]; then
+        printf '%s: invalid Nix store root name for %s: %s\n' "$PROG" "$dep" "$out" >&2
+        return 1
+      fi
+      hashes+=("${store_name%%-*}")
+    done <<< "$paths"
+  done
+  (("${#hashes[@]}" > 0)) || return 1
   (IFS=-; printf '%s\n' "${hashes[*]}")
 }
 
 closure() {
+  local paths
   local -a outs=()
-  mapfile -t outs < <(bundle_out_paths "$1")
+  paths="$(bundle_out_paths "$1")" || die "failed to evaluate bundle roots for $1"
+  mapfile -t outs <<< "$paths"
+  (("${#outs[@]}" > 0)) || die "empty Nix bundle roots for $1"
   "$NIX" path-info -r "${outs[@]}" | sort -u
 }
 
