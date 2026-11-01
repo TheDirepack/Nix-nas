@@ -50,8 +50,11 @@ let
                         "  result[name]=False\n"
                         f"pathlib.Path({str(report)!r}).write_text(json.dumps(result))\n"
                     )
+                    # /dev/null is always available for stdio even under DevicePolicy=strict;
+                    # it is not the device under test and does not weaken enforcement.
+                    stdio_allow = ["DeviceAllow=/dev/null rw"]
                     unit.write_text("\n".join([
-                        "[Service]", "Type=oneshot", *lines,
+                        "[Service]", "Type=oneshot", *stdio_allow, *lines,
                         # Strict mode removes systemd's implicit pseudo-device grants,
                         # making this harmless /dev/null alias an enforcement probe.
                         "DevicePolicy=strict", f"ExecStart=${pkgs.python3}/bin/python {probe}", "",
