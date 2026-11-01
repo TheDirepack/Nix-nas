@@ -18,8 +18,16 @@ RUNNER_EXCLUSION_REPLACEMENT = """    excluded = set(args.exclude)
     files = sorted(path for path in TESTS.glob(args.pattern) if path.name not in excluded)
 """
 
+# Main has the stale probe expectation until the shared CI fix is merged.
+# The source validation already fails closed; coverage must use the same test
+# oracle as the current branch, without changing main or excluding this test.
+PROBE_DIAGNOSTIC_STALE = '        self.assertIn("External management probe command is empty", result.stderr)\n'
+PROBE_DIAGNOSTIC_REPLACEMENT = "        # The validator failure preempts the secondary empty-argv check.\n"
+
+
 FIXES: tuple[tuple[str, str, str], ...] = (
     ("scripts/run-unit-tests.py", RUNNER_EXCLUSION_STALE, RUNNER_EXCLUSION_REPLACEMENT),
+    ("tests/test_update_runtime.py", PROBE_DIAGNOSTIC_STALE, PROBE_DIAGNOSTIC_REPLACEMENT),
 )
 
 
@@ -34,8 +42,6 @@ def prepare(root: Path) -> int:
             raise ValueError(f"{relative}: expected at most one stale fixture, found {count}")
         if count == 1:
             stale_fixes.append((path, stale, replacement))
-    if stale_fixes and len(stale_fixes) != len(FIXES):
-        raise ValueError(f"baseline is partially corrected: found {len(stale_fixes)} of {len(FIXES)} stale fixtures")
     for path, stale, replacement in stale_fixes:
         sources[path] = sources[path].replace(stale, replacement)
     for path in {path for path, _stale, _replacement in stale_fixes}:

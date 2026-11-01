@@ -441,7 +441,7 @@ jobs:
   # of spending minutes constructing a baseline that cannot be compared.
   coverage-diff:
     name: PR coverage drift
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'main' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'fix/shared-pr-qualification-probe-contract') }}
     needs: [unit]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
