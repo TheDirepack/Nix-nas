@@ -308,7 +308,18 @@ def verify_services(stage: str) -> None:
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9093/-/ready"), "Alertmanager")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3000/api/health"), "Grafana")
     wait_http(("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:2586/v1/health"), "ntfy")
-    wait_http(("curl", "--fail", "--silent", "--show-error", "--unix-socket", "/run/nas-cockpit-sso/ws.sock", "http://localhost/console/"), "Cockpit")
+    wait_http(
+        (
+            "curl",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--unix-socket",
+            "/run/nas-cockpit-sso/ws.sock",
+            "http://localhost/console/",
+        ),
+        "Cockpit",
+    )
     wait_http(
         ("curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:9010/outpost.goauthentik.io/ping"),
         "Authentik proxy outpost",

@@ -87,7 +87,7 @@ class Alpha20CockpitContracts(unittest.TestCase):
         self.assertIn("respond @missingCockpitAdmin 403", console)
         self.assertNotIn("--address 127.0.0.1", application)
         self.assertIn('ListenStream = "/run/nas-cockpit-sso/ws.sock";', application)
-        self.assertIn('SocketGroup = config.services.caddy.group;', application)
+        self.assertIn("SocketGroup = config.services.caddy.group;", application)
         self.assertIn('SocketMode = "0660";', application)
         self.assertIn('SocketBindDeny = "any";', application)
         self.assertIn("reverse_proxy unix//run/nas-cockpit-sso/ws.sock", bootstrap)
