@@ -131,7 +131,7 @@ class SharedQemuInstallStateTests(unittest.TestCase):
             install.index('rm -f "$os_disk" "$data_disk"'),
         )
         self.assertIn("exec {NAS_QEMU_SHARED_LOCK_FD}>&-", install)
-        self.assertIn("persistent-stop)\\n    validate_state_path\\n    nas_qemu_acquire_shared_state_lock", source)
+        self.assertIn("persistent-stop)\n    validate_state_path\n    nas_qemu_acquire_shared_state_lock", source)
         self.assertIn("cannot clean VM cache while another shared QEMU operation is active", source)
         self.assertIn("persistent reset cannot run while a shared QEMU operation is active", source)
 
