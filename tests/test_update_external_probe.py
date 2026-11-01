@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -113,6 +114,20 @@ class ExternalProbeTests(unittest.TestCase):
         )
         self.assert_blocked(result, 47)
         self.assertIn("decoder failed", result.stderr)
+
+    def test_recursive_json_decoder_failure_has_no_traceback_or_launch(self):
+        # Python 3.14's C decoder is iterative; exercise the recursive stdlib decoder too.
+        setup = (
+            "import json, json.scanner, sys; "
+            "json._default_decoder.scan_once = json.scanner.py_make_scanner(json._default_decoder); "
+            "sys.argv = sys.argv[1:]; exec(compile(sys.stdin.read(), '<probe-validator>', 'exec'))"
+        )
+        raw = "[" + json.dumps(str(self.probe)) + "," + "[" * 2000 + "0" + "]" * 2000 + "]"
+        result = self.run_probe(raw, decoder=f'exec {shlex.quote(sys.executable)} -c {shlex.quote(setup)} "$@"\n')
+        self.assert_blocked(result, 1)
+        self.assertIn("external probe command must be valid JSON", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("External management probe command is empty.", result.stderr)
 
     def test_decoder_failure_without_output_preserves_native_exit(self):
         result = self.run_probe("[]", decoder="exit 47\n")

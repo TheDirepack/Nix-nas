@@ -254,7 +254,7 @@ import json
 import sys
 try:
     value = json.loads(sys.argv[1])
-except json.JSONDecodeError:
+except (json.JSONDecodeError, RecursionError):
     raise SystemExit("external probe command must be valid JSON") from None
 if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
     raise SystemExit("external probe command must be a nonempty JSON string array")
