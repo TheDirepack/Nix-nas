@@ -11,6 +11,40 @@ NAMES = ("authentik", "postgresql", "nas-secrets")
 
 
 class BootstrapRelinkTests(unittest.TestCase):
+    def test_boot_tmpfiles_and_selector_compose_without_populating_legacy_data(self) -> None:
+        self.make_paths()
+        source = (ROOT / "modules/nas/config/managed-services-authentik-blueprint.nix").read_text(encoding="utf-8")
+        rules = source.split("systemd.tmpfiles.rules = [", 1)[1].split("]", 1)[0]
+        paths = {
+            "${blueprintDir}": self.homes / "authentik/blueprints",
+            "${nasInternal.bootstrapAuthentikDataDir}": self.target / "authentik",
+        }
+        rendered = []
+        for line in rules.splitlines():
+            if not line.strip():
+                continue
+            self.assertTrue(line.strip().startswith('"d '))
+            rule = line.strip()[1:-1]
+            for expression, path in paths.items():
+                virtual_path = "/" + str(path.relative_to(self.root))
+                rule = rule.replace(expression, virtual_path.replace(" ", r"\x20"))
+            self.assertNotIn("${", rule)
+            rendered.append(rule.replace("authentik authentik", f"{os.getuid()} {os.getgid()}"))
+        configuration = self.root / "boot.conf"
+        configuration.write_text("\n".join(rendered) + "\n", encoding="utf-8")
+        created = subprocess.run(
+            ["systemd-tmpfiles", "--root", str(self.root), "--create", str(configuration)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+        result = self.run_relink()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_linked()
+        self.assertTrue((self.homes / "authentik/blueprints").is_dir())
+
     def make_paths(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
