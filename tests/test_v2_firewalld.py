@@ -177,9 +177,7 @@ class V2FirewalldTests(unittest.TestCase):
                     "allowedHostPorts": [],
                     "allowedEgress": [],
                 },
-                "listeners": {
-                    "server": {"protocol": "tcp", "exposure": {"port": port}, "firewall": True}
-                },
+                "listeners": {"server": {"protocol": "tcp", "exposure": {"port": port}, "firewall": True}},
             }
         services["api"]["listeners"]["forwarded"] = {
             "protocol": "udp",
