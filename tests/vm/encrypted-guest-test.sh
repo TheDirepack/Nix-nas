@@ -286,7 +286,7 @@ systemctl start nas-managed-services-seed.service
 [[ -s /var/lib/nas-control/services.yaml ]] || fail "managed seed authority missing after setup"
 # A valid operator-authored YAML comment must survive a seed restart;
 # checking an unmodified default would not detect accidental re-seeding.
-printf '\\n# operator-owned-preservation-probe\\n' >> /var/lib/nas-control/services.yaml
+printf '\n# operator-owned-preservation-probe\n' >> /var/lib/nas-control/services.yaml
 seed_authority_before=$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)
 systemctl restart nas-managed-services-seed.service
 [[ "$(sha256sum /var/lib/nas-control/services.yaml | cut -d ' ' -f1)" == "$seed_authority_before" ]] || \
