@@ -257,6 +257,40 @@ class CommonPolicyTests(unittest.TestCase):
                             ("demo", capability),
                         )
 
+    def test_implicit_access_without_a_compiled_grant_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            with mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}):
+                for authorization in (
+                    {},
+                    {"demo": {}},
+                    {"demo": {"capabilities": None}},
+                    {"demo": {"capabilities": {}}},
+                ):
+                    with self.subTest(authorization=authorization):
+                        effective.write_text(
+                            json.dumps(
+                                {
+                                    "schemaVersion": 3,
+                                    "services": {"demo": {}},
+                                    "derived": {"authorization": authorization},
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        self.assertIsNone(
+                            common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "access")
+                        )
+
+    def test_authority_lstat_failure_cannot_enable_bootstrap_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            effective = pathlib.Path(raw) / "effective.json"
+            with (
+                mock.patch.dict("os.environ", {"NAS_V2_EFFECTIVE": str(effective)}),
+                mock.patch.object(pathlib.Path, "lstat", side_effect=PermissionError("authority parent is unreadable")),
+            ):
+                self.assertIsNone(common.resolve_v2_service_capability("NO_SERVICE", "NO_CAP", "demo", "access"))
+
     def test_load_effective_authority_validates_shape_and_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = pathlib.Path(raw)
