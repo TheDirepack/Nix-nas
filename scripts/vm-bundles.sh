@@ -152,14 +152,22 @@ build_bundles() {
 }
 
 keys() {
-  local dir=${1:-} name
+  local dir=${1:-} name hash i
+  local -a names=() hashes=()
+  # Resolve every key before publishing any cache output; partial keys are unsafe.
   while IFS= read -r name; do
-    printf 'key_%s=%s\n' "${name//-/_}" "$(bundle_hash "$name")"
-    if [[ -n "$dir" ]]; then
-      mkdir -p "$dir"
-      printf '%s\n' "$(bundle_hash "$name")" > "$dir/$name.key"
-    fi
+    hash="$(bundle_hash "$name")" || die "failed to compute bundle key for $name"
+    [[ -n "$hash" ]] || die "empty bundle key for $name"
+    names+=("$name")
+    hashes+=("$hash")
   done < <(list_bundles)
+  [[ -z "$dir" ]] || mkdir -p "$dir"
+  for i in "${!names[@]}"; do
+    name="${names[i]}"
+    hash="${hashes[i]}"
+    printf 'key_%s=%s\n' "${name//-/_}" "$hash"
+    [[ -z "$dir" ]] || printf '%s\n' "$hash" > "$dir/$name.key"
+  done
 }
 
 save() {
@@ -201,14 +209,20 @@ save() {
     while IFS= read -r manifest_name; do
       case "$manifest_name" in
         core) closure_cached core > "$dir/.manifest.paths" ;;
-        vm-drivers) comm -23 <(closure_cached vm-drivers) "$base_file" > "$dir/.manifest.paths" ;;
-        *) comm -23 <(closure_cached "$manifest_name") "$core_file" > "$dir/.manifest.paths" ;;
+        vm-drivers)
+          closure_cached vm-drivers > "$dir/.manifest.full.paths"
+          comm -23 "$dir/.manifest.full.paths" "$base_file" > "$dir/.manifest.paths"
+          ;;
+        *)
+          closure_cached "$manifest_name" > "$dir/.manifest.full.paths"
+          comm -23 "$dir/.manifest.full.paths" "$core_file" > "$dir/.manifest.paths"
+          ;;
       esac
       while IFS= read -r manifest_path; do
         [[ -n "$manifest_path" ]] && printf '%s\t%s\n' "$manifest_name" "$manifest_path" >> "$manifest"
       done < "$dir/.manifest.paths"
     done < <(list_bundles)
-    rm -f "$dir/.manifest.paths"
+    rm -f "$dir/.manifest.paths" "$dir/.manifest.full.paths"
   }
 
   if [[ $only_missing == 1 ]]; then
