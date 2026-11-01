@@ -245,9 +245,9 @@ test("hostile anonymous login values stay inert", async ({page}) => {
     "../../../../etc/passwd",
     "\r\nX-Injected: yes",
   ];
-  for (const payload of payloads) {
-    await page.context().clearCookies();
-    await page.goto("/console/");
+  await page.goto("/console/");
+  for (const [index, payload] of payloads.entries()) {
+    if (index > 0) await page.getByRole("link", {name: "Not you?", exact: true}).click();
     await expectLogin(page);
     await submitUsername(page, payload);
     const pass = page.getByRole("textbox", {name: "Password", exact: true});
